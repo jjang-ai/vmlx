@@ -463,6 +463,9 @@ class CacheStats:
     cache_misses: int = 0
     cow_copies: int = 0
     evictions: int = 0
+    # L2 disk cache stats
+    disk_hits: int = 0
+    disk_misses: int = 0
 
 
 # =============================================================================
@@ -491,10 +494,13 @@ class PagedCacheManager:
         block_size: int = 64,
         max_blocks: int = 1000,
         enable_caching: bool = True,
+        disk_store: "Optional[Any]" = None,
     ):
         self.block_size = block_size
         self.max_blocks = max_blocks
         self.enable_caching = enable_caching
+        # Optional L2 disk store for block persistence (BlockDiskStore)
+        self._disk_store = disk_store
 
         # Create all blocks
         self.blocks: List[CacheBlock] = [
@@ -609,6 +615,7 @@ class PagedCacheManager:
     def _maybe_evict_cached_block(self, block: CacheBlock) -> bool:
         """
         Evict a block from the hash cache if present.
+        If a disk store is configured, persist the block before freeing RAM.
 
         Args:
             block: Block to evict
@@ -622,6 +629,16 @@ class PagedCacheManager:
         evicted = self.cached_block_hash_to_block.pop(block.block_hash, block.block_id)
 
         if evicted:
+            # Persist to disk L2 before freeing tensor memory
+            if (
+                self._disk_store is not None
+                and block.cache_data is not None
+                and block.block_hash is not None
+            ):
+                self._disk_store.write_block_async(
+                    block.block_hash, block.cache_data, block.token_count
+                )
+
             # Also remove from legacy hash index
             if block.hash_value and block.hash_value in self.hash_to_block:
                 if self.hash_to_block[block.hash_value] == block.block_id:
@@ -863,10 +880,23 @@ class PagedCacheManager:
                 # Compute expected hash
                 block_hash = compute_block_hash(parent_hash, block_tokens)
 
-                # Look up in cache
+                # Look up in L1 cache
                 cached_block = self.cached_block_hash_to_block.get_block(block_hash)
+                if cached_block is None and self._disk_store is not None:
+                    # L1 miss — check L2 disk cache
+                    disk_data = self._disk_store.read_block(block_hash)
+                    if disk_data is not None:
+                        # Promote from disk to L1: allocate a RAM block
+                        promoted = self._promote_from_disk(
+                            block_hash, disk_data, len(block_tokens)
+                        )
+                        if promoted is not None:
+                            cached_block = promoted
+                            self.stats.disk_hits += 1
                 if cached_block is None:
                     self.stats.cache_misses += 1
+                    if self._disk_store is not None:
+                        self.stats.disk_misses += 1
                     break  # Cache miss, stop here
 
                 cached_blocks.append(cached_block)
@@ -875,6 +905,62 @@ class PagedCacheManager:
                 self.stats.cache_hits += 1
 
             return cached_blocks, num_cached_tokens
+
+    # =========================================================================
+    # Disk L2 promotion
+    # =========================================================================
+
+    def _promote_from_disk(
+        self,
+        block_hash: BlockHash,
+        cache_data: List[Tuple[Any, ...]],
+        token_count: int,
+    ) -> Optional[CacheBlock]:
+        """
+        Promote a block from disk L2 into L1 RAM.
+
+        Allocates a new CacheBlock, populates it with the loaded tensor data,
+        and registers it in the hash cache so future lookups are L1 hits.
+
+        Args:
+            block_hash: Chain hash for this block
+            cache_data: Deserialized cache data from disk
+            token_count: Number of tokens in the block
+
+        Returns:
+            The promoted CacheBlock, or None if allocation failed.
+        """
+        if self.free_block_queue.num_free_blocks == 0:
+            return None
+
+        block = self.free_block_queue.popleft()
+
+        # If the free block had old cached data, evict it (but don't re-save to disk)
+        if block.block_hash is not None:
+            self.cached_block_hash_to_block.pop(block.block_hash, block.block_id)
+            if block.hash_value and block.hash_value in self.hash_to_block:
+                if self.hash_to_block[block.hash_value] == block.block_id:
+                    del self.hash_to_block[block.hash_value]
+
+        # Populate
+        block.ref_count = 1
+        block.block_hash = block_hash
+        block.cache_data = cache_data
+        block.token_count = token_count
+        block.touch()
+        self.allocated_blocks[block.block_id] = block
+
+        # Register in hash cache
+        self.cached_block_hash_to_block.insert(block_hash, block)
+
+        self.stats.allocated_blocks += 1
+        self.stats.free_blocks -= 1
+
+        logger.debug(
+            f"Promoted block from disk: id={block.block_id}, "
+            f"hash={block_hash.hex()[:12]}, tokens={token_count}"
+        )
+        return block
 
     # =========================================================================
     # Legacy hash methods (for backwards compatibility)
