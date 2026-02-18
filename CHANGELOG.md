@@ -1,0 +1,280 @@
+# Changelog
+
+All notable changes to vLLM-MLX will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+#### GLM-4.7 / GPT-OSS Harmony Protocol Support
+- **GLM-4.7 Flash and GLM-4.7** now use `openai_gptoss` reasoning parser (Harmony protocol: `<|channel|>analysis/final`)
+- Previously mapped to `deepseek_r1` which caused leaked `<|start|>assistant<|channel|>analysis<|message|>` tokens in chat
+- `think_in_template=False` for GLM Flash — uses channel markers instead of `<think>` prefix injection
+- Reasoning effort selector (Low/Med/High) only appears when GPT-OSS/Harmony parser is active
+
+#### Expanded Model Registry
+- **Devstral** and **Codestral** added to both TS and Python registries (don't match `/mistral/i` by name)
+- Unified GPT-OSS dropdown label: "GPT-OSS / Harmony — GLM-4.7, GLM-4.7 Flash, GLM-Z1, GPT-OSS-20B/120B"
+
+#### Client-Side Content Cleanup
+- **Harmony protocol tokens** (`<|start|>`, `<|channel|>`, `<|message|>`) added to TEMPLATE_STOP_TOKENS fallback
+- **Hallucinated tool calls** from Anthropic-trained models (`<read_file>`, `<write_file>`, `<run_command>`, etc.) stripped from content
+- Both streaming buffering (line-start pattern) and final cleanup (regex) catch these patterns
+- Abort path applies identical cleanup to prevent partial tool XML in saved messages
+
+#### Bundled Python Distribution
+- `panel/scripts/bundle-python.sh` creates relocatable Python 3.12 + all deps for standalone distribution
+- App checks bundled Python first, falls back to system vllm-mlx binary
+- Bundled spawn uses `python3 -m vllm_mlx.cli serve` (avoids shebang issues)
+- Engine auto-update on startup: compares installed vs source `pyproject.toml` version
+- Setup screen skipped entirely when bundled Python detected
+
+### Fixed
+
+#### GLM-4.7 Flash Reasoning Leak (Critical)
+- GLM Flash was configured with `deepseek_r1` parser and `think_in_template=true`
+- Model actually uses Harmony/GPT-OSS protocol (`<|channel|>analysis/final`), NOT `<think>` tags
+- All reasoning content and raw protocol tokens leaked into visible chat output
+- Fixed by switching to `openai_gptoss` parser with `think_in_template=false`
+
+#### Reasoning Effort Visibility
+- Low/Med/High reasoning effort buttons appeared for ALL models when thinking was enabled
+- Only GPT-OSS/Harmony models support `reasoning_effort` parameter
+- Now conditionally rendered only when `reasoningParser === 'openai_gptoss'`
+
+### Previously Added
+
+#### Universal Thinking/Reasoning Toggle
+- **Per-chat toggle** in Chat Settings (💡 Enable Thinking checkbox) to turn reasoning on/off
+- **Default: ON** — matches current behavior, models produce `<think>` blocks
+- **When OFF**: `enable_thinking=False` passed to chat template; models skip reasoning for faster, direct responses
+- **Pipeline**: UI toggle → `ChatOverrides` DB → request body → `ChatCompletionRequest` → server → engine `apply_chat_template`
+- **Compatible models**: Qwen3, DeepSeek-R1, MiniMax M2/M2.5, GLM-4.7, StepFun, and any model with `enable_thinking` template support
+- **Server override**: Streaming handler respects the toggle — when OFF, `think_in_template` is forced false (no `<think>` prefix injection)
+
+#### MiniMax M2/M2.5 Model Support
+- **New Tool Parser**: `minimax` parser for MiniMax's unique XML tool calling format (`<minimax:tool_call><invoke><parameter>`)
+- **Model Config**: Registered `minimax-m2.5` (priority 5) and `minimax-m2` (priority 10) families
+  - EOS token: `[e~[]` (ID 200020)
+  - Reasoning: `qwen3` parser (standard `<think>` tags)
+  - Native tool format: Enabled (chat template handles `role="tool"` natively)
+- **Auto-Detection**: MiniMax models auto-detected by model name pattern
+- **Streaming**: Added `<minimax:tool_call>` to streaming tool call markers for proper buffer-then-parse behavior
+- **16 new tests**: Comprehensive parser tests covering single/multi tool calls, streaming, type conversion, think tags
+- **UI**: Added `minimax` to tool parser dropdown in Session Config
+
+#### Chat Scroll Behavior Fix
+- **Issue**: Auto-scroll always yanked user to bottom during streaming, preventing scroll-up to read earlier content
+- **Fix**: Added `isNearBottom` detection in `MessageList.tsx` — only auto-scrolls when user is within 100px of bottom
+- **UX**: Users can now scroll up freely during streaming; scroll resumes when they return to bottom
+
+#### Full Pipeline Audit — Verified Working
+- **Qwen hybrid Mamba+KV cache**: Auto-detected in scheduler, auto-switches to paged cache; cache hits work correctly
+- **Chat template application**: `apply_chat_template` passes `tools` + `enable_thinking` kwargs with `TypeError` fallback for unsupported templates
+- **Tool parser auto-detect**: Model name pattern → `ModelConfigRegistry.get_tool_parser()` → correct parser (all 14 parsers verified)
+- **Reasoning parser auto-detect**: Model name pattern → `ModelConfigRegistry.get_reasoning_parser()` → correct parser (`qwen3`, `deepseek_r1`)
+- **API completions (non-streaming)**: `/v1/chat/completions` returns correct OpenAI-spec response format
+- **API completions (streaming SSE)**: `choices[0].delta.content` + `usage` fields parsed correctly by Electron panel
+- **API responses wire format**: `/v1/responses` SSE events (`response.output_text.delta`, `response.completed`) parsed correctly
+- **Stop button**: `chat:abort` handler aborts SSE stream + sends `POST /v1/chat/completions/{id}/cancel` for server-side GPU release
+- **Reasoning box**: `max-h-[300px] overflow-y-auto` independently scrollable; auto-expands on stream, auto-collapses 1s after done
+- **Tool call display**: `ToolCallStatus` component — collapsible, grouped by tool, args+result shown on expand, not spammed
+- **Loop prevention**: `MAX_TOOL_ITERATIONS` defaults to 10 (configurable via ChatSettings slider); auto-continue capped at 2 rounds
+- **Agentic tool flow**: Full cycle verified — model → `tool_calls` → execute (MCP or builtin) → push results → follow-up request → stream
+- **Streaming stats**: TTFT, TGS, PPS computed from SSE stream in `chat.ts:emitDelta()` — generation-only time (gaps >2s excluded)
+- **EOS token handling**: Model-specific EOS tokens flow from `ModelConfig` → `MLXLanguageModel.load()` → tokenizer
+- **Native tool format**: `SUPPORTS_NATIVE_TOOL_FORMAT` flag preserves `role="tool"` messages through pipeline for models that support it
+- **Model selection**: Electron panel scans local filesystem for MLX models; `/v1/models` returns the loaded model
+- **Session config UI**: All parser dropdowns (tool + reasoning) list all available parsers with auto-detect default
+
+#### Request Cancellation (OpenAI-Compatible)
+- **Feature**: Stop ongoing inference requests to save GPU compute
+- **Endpoints**:
+  - `POST /v1/chat/completions/{request_id}/cancel`
+  - `POST /v1/completions/{request_id}/cancel`
+- **Auto-Detection**: Automatically abort when client closes stream connection
+- **Unified Request ID**: Response ID (chatcmpl-xxx) is the request ID
+- **Compatibility**: Works seamlessly with exploit.bot cancel button (no frontend changes needed)
+- **Documentation**: Complete API docs at `docs/api/cancellation.md`
+- **Benefits**:
+  - Immediate GPU compute savings when user clicks stop
+  - Partial responses preserved (no data loss)
+  - Works with `reader.cancel()` pattern (auto-detect)
+  - Optional explicit API call for programmatic control
+  - < 10ms cancel latency
+
+### Fixed
+
+#### Streaming Unicode Character Corruption (Critical)
+- **Issue**: Emoji, CJK (Chinese/Japanese/Korean), Arabic, and other multi-byte UTF-8 characters displayed as replacement characters (`�`) during streaming responses
+- **Root Cause**: Single-token decoding split multi-byte characters across tokens, producing incomplete byte sequences
+- **Fix**: Integrated `StreamingDetokenizer` from mlx-lm into both `scheduler.py` and `mllm_scheduler.py`
+  - Per-request detokenizer pool buffers partial characters
+  - Only emits text when complete UTF-8 codepoints are assembled
+  - Automatically uses optimized BPE detokenizer when available
+  - Falls back to `NaiveStreamingDetokenizer` for compatibility
+- **Impact**: All streaming clients (vMLX panel, OpenAI SDK, curl) now correctly display multi-byte characters
+- **Verification**: 827 tests passing, extensive live server testing with emoji/CJK/Arabic confirmed clean output
+
+#### Hybrid Model Cache Reconstruction (Qwen3-Coder-Next, Nemotron)
+- **Issue**: Models with mixed cache types (MambaCache + KVCache) produced null/empty content on cache hits
+- **Root Cause**: Two issues:
+  1. **KV duplication**: Storing N tokens but re-feeding last token created duplicate with wrong positional encoding
+  2. **MambaCache state mismatch**: Cumulative state from post-generation included output tokens
+- **Fix**:
+  - **N-1 truncation**: Cache stores N-1 tokens so last prompt token can be re-fed for generation kickoff
+  - **Prefill-only forward pass**: For hybrid models, runs `model(prompt[:-1])` separately to get clean cache state
+  - **Auto-detection**: Hybrid models automatically switch to paged cache (MambaCache can't be truncated)
+  - **Cache-hit skip optimization**: Skips redundant prefill on repeated prompts
+- **Files Modified**:
+  - `scheduler.py`: Added `_is_hybrid`, `_prefill_for_prompt_only_cache()`, modified cache extraction
+  - `prefix_cache.py`: Block hashing uses FULL prompt (N tokens), cache DATA has N-1 tokens
+  - `paged_cache.py`: Partial block matching for short prompts
+- **Impact**: Cache reuse works correctly for all model architectures (pure KVCache, RotatingKVCache, hybrid MambaCache+KVCache)
+
+#### Memory-Aware Cache System
+- **Issue**: Cache eviction needed better memory management for large contexts (100k+ tokens)
+- **Fixes**:
+  - `cache_memory_percent` set to 30% of available RAM (was hardcoded limits)
+  - Per-entry size limit is 95% of max_memory (prevents single-entry domination)
+  - `_evict_lru()` no longer calls `gc.collect()`/`mx.clear_memory_cache()` during eviction loop
+  - Store path removed `mx.clear_memory_cache()` to avoid GPU operation interference
+  - Scheduler guards `mx.clear_memory_cache()` with `not self.running` check
+  - Memory-aware cache stores raw KVCache object references (not extracted dicts)
+- **Impact**: Stable memory usage for long-running servers with large context windows
+
+#### Metal GPU Timeout Prevention
+- **Issue**: macOS kills processes when GPU operations exceed ~20-30s
+- **Fix**:
+  - `mx.eval()` after KV concatenation in `reconstruct_cache()` materializes lazy ops
+  - `BatchGenerator.prefill_step_size=2048` controls chunking (safe for Metal timeout)
+  - Scheduler memory multiplier reduced to 1.5x (was 2.5x which was too conservative)
+- **Impact**: Stable inference for 50K+ token contexts without GPU timeout crashes
+
+### Added
+
+#### Production Readiness Features
+- **Streaming detokenizer pool**: Per-request UTF-8-aware token decoding
+- **Comprehensive emoji support**: All emoji types verified working:
+  - ✅ Basic emoji (🌟 🎯 🔥 🚀 🐍)
+  - ✅ Skin tone modifiers (👋🏻 👋🏼 👋🏽 👋🏾 👋🏿)
+  - ✅ Family/relationship (👨‍👩‍👧‍👦 👨‍👨‍👦)
+  - ✅ Flag emoji (🇺🇸 🇬🇧 🇯🇵 🇧🇷 🇮🇳)
+  - ✅ ZWJ sequences (🏳️‍🌈 👩‍💻 👨‍🚀 🧑‍⚕️)
+  - ✅ High codepoints (🦀 🦐 🦒 🧀 🧑 🧠)
+  - ✅ Ultra-high codepoints (🪐 🪑 🪒 🫀 🫁 🫂)
+- **Hybrid model auto-detection**: Automatically switches to paged cache for MambaCache+KVCache models
+- **Cache type detection**: Robust detection supporting all cache types:
+  - Fully supported: KVCache, RotatingKVCache, MambaCache, ArraysCache, CacheList
+  - Partially supported: QuantizedKVCache (detected but no BatchQuantizedKVCache)
+- **Memory-aware caching**: Intelligent eviction based on RAM availability
+- **Extensive test coverage**: 827 tests covering all cache types, streaming, and emoji scenarios
+
+#### Documentation
+- **MEMORY.md**: Comprehensive project memory with all cache system details
+  - KV Cache tensor dimensionality handling (3D vs 4D)
+  - mlx-lm BatchGenerator cache flow
+  - Model config registry patterns
+  - Cache system design decisions
+  - Hybrid model cache architecture
+  - Metal GPU timeout prevention strategies
+
+### Changed
+
+#### Cache Storage Strategy
+- **Block hashing**: Uses FULL prompt tokens (N) for matching
+- **Cache data**: Stores N-1 tokens to prevent duplication
+- **Paged cache**: Default for hybrid models (auto-enabled)
+- **Memory-aware cache**: Default for pure KVCache models
+- **Forward prefix matching**: Works for multi-turn chat (each turn extends previous)
+
+#### Scheduler Improvements
+- **Detokenizer lifecycle**: Created on first request, cleaned up on finish, cleared on reset
+- **Cache extraction**: Per-layer error handling prevents one bad layer from killing all
+- **Prefill optimization**: Skips re-extraction on cache-hit requests
+- **Chunked prefill**: 2048 token chunks prevent Metal GPU timeout
+
+### Technical Details
+
+#### Cache Key and Value Truncation
+- **Store key**: Prompt tokens only (not prompt+output) for exact matching
+- **Cache value**: Must be truncated to N-1 tokens before storing
+  - N-1 because on cache hit, last prompt token is re-fed for generation kickoff
+  - If stored at N tokens, last token's KV is duplicated with wrong positional encoding
+- **Hybrid models**: `_prefill_for_prompt_only_cache(prompt[:-1])` runs separate forward pass
+- **Cache-hit skip**: Blocks already exist from cold store, no redundant prefill needed
+
+#### KV Cache Tensor Dimensionality
+- **3D tensors**: `(n_kv_heads, seq, dim)` - Qwen3-Coder-Next and others
+- **4D tensors**: `(batch, n_kv_heads, seq, dim)` - BatchGenerator always produces 4D
+- **Detection**: Uses `ndim` check before slicing: `seq_dim = 1 if ndim == 3 else 2`
+- **Concatenation**: Axis adapts: `axis=1` for 3D, `axis=2` for 4D
+- **Fallback check**: `_is_positional_cache` uses `len(shape) in (3, 4)` not just `== 4`
+
+#### Streaming Detokenizer Implementation
+```python
+# Per-request detokenizer pool
+self._detokenizer_pool: Dict[str, Any] = {}
+
+def _get_detokenizer(self, request_id: str) -> Any:
+    if request_id not in self._detokenizer_pool:
+        # Prefer tokenizer's optimized detokenizer
+        if hasattr(self._actual_tokenizer, "detokenizer"):
+            detok = self._actual_tokenizer.detokenizer
+        else:
+            detok = NaiveStreamingDetokenizer(self._actual_tokenizer)
+        detok.reset()
+        self._detokenizer_pool[request_id] = detok
+    return self._detokenizer_pool[request_id]
+
+# In _process_batch_responses():
+detok = self._get_detokenizer(request_id)
+detok.add_token(response.token)
+new_text = detok.last_segment  # Only emits complete UTF-8 codepoints
+
+# On finish:
+detok.finalize()
+output.output_text = detok.text
+```
+
+### Compatibility
+
+#### Model Architecture Support
+- **Pure KVCache**: Llama, Mistral, Qwen (non-Next) - uses memory-aware cache
+- **RotatingKVCache**: Models with sliding window attention
+- **Hybrid (MambaCache + KVCache)**: Qwen3-Coder-Next (36 Mamba + 12 KV layers), Nemotron
+- **ArraysCache**: Alternative cache implementations
+- **CacheList**: Composite cache structures
+
+#### Chat Template Compatibility
+- All models: Native format support
+- Mistral: Fixed tool calling template error with native format
+- Qwen, DeepSeek, Granite, Nemotron: Added tool call parsers
+- MedGemma: MLLM detection patterns updated
+
+### Testing
+
+#### Test Coverage
+- **827 tests passing** across all modules
+  - 14 comprehensive emoji tests (all categories verified)
+- **Streaming detokenizer tests**: 13 tests covering emoji, CJK, Arabic, cache hits
+- **Cache system tests**: All cache types (KV, RotatingKV, Mamba, Arrays, CacheList)
+- **Live server tests**: Extensive emoji/unicode streaming verification
+- **Integration tests**: Multi-turn conversations, system prompts, cache reuse
+
+#### Verified Scenarios
+- ✅ Emoji streaming (no replacement characters)
+- ✅ CJK (Chinese/Japanese/Korean) streaming
+- ✅ Arabic and RTL text streaming
+- ✅ Cache hits producing correct content
+- ✅ Hybrid model cache reconstruction
+- ✅ Multi-turn conversations with cache
+- ✅ 100k+ token contexts without GPU timeout
+- ✅ Memory-aware cache eviction under pressure
+
+## [0.2.5] - Previous Release
+
+(Previous changelog entries would go here)
