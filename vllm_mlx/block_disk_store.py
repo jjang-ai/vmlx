@@ -27,11 +27,11 @@ Supported cache_data tuple types (from prefix_cache.py):
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import sqlite3
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -55,7 +55,7 @@ class BlockDiskStore:
 
     Args:
         cache_dir: Directory to store cache files.
-        max_size_gb: Maximum total cache size in GB. LRU eviction when exceeded.
+        max_size_gb: Maximum total cache size in GB. 0 = unlimited.
         write_through: If True, write blocks on store (not just on eviction).
     """
 
@@ -68,14 +68,15 @@ class BlockDiskStore:
         self.cache_dir = Path(cache_dir)
         self.blocks_dir = self.cache_dir / "blocks"
         self.blocks_dir.mkdir(parents=True, exist_ok=True)
-        self.max_size_bytes = int(max_size_gb * 1024**3)
+        self.max_size_bytes = int(max(0.0, max_size_gb) * 1024**3)
         self.write_through = write_through
 
         # SQLite index
         self._db_path = self.cache_dir / "block_index.db"
         self._init_db()
 
-        # Stats
+        # Stats (protected by _stats_lock for cross-thread accuracy)
+        self._stats_lock = threading.Lock()
         self.disk_hits = 0
         self.disk_misses = 0
         self.disk_writes = 0
@@ -101,39 +102,43 @@ class BlockDiskStore:
     def _init_db(self) -> None:
         """Create SQLite index with WAL mode."""
         conn = sqlite3.connect(str(self._db_path))
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS blocks (
-                block_hash    TEXT PRIMARY KEY,
-                file_name     TEXT NOT NULL,
-                num_tokens    INTEGER NOT NULL,
-                num_layers    INTEGER NOT NULL,
-                dtype         TEXT NOT NULL,
-                file_size     INTEGER NOT NULL,
-                created_at    REAL NOT NULL,
-                last_accessed REAL NOT NULL,
-                access_count  INTEGER DEFAULT 0
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS blocks (
+                    block_hash    TEXT PRIMARY KEY,
+                    file_name     TEXT NOT NULL,
+                    num_tokens    INTEGER NOT NULL,
+                    num_layers    INTEGER NOT NULL,
+                    dtype         TEXT NOT NULL,
+                    file_size     INTEGER NOT NULL,
+                    created_at    REAL NOT NULL,
+                    last_accessed REAL NOT NULL,
+                    access_count  INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_blocks_lru ON blocks(last_accessed ASC)"
             )
-        """)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_blocks_lru ON blocks(last_accessed ASC)"
-        )
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
     def _count_entries(self) -> int:
         conn = sqlite3.connect(str(self._db_path))
-        count = conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
-        conn.close()
-        return count
+        try:
+            return conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
+        finally:
+            conn.close()
 
     def _total_size(self) -> int:
         conn = sqlite3.connect(str(self._db_path))
-        size = conn.execute(
-            "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
-        ).fetchone()[0]
-        conn.close()
-        return size
+        try:
+            return conn.execute(
+                "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
+            ).fetchone()[0]
+        finally:
+            conn.close()
 
     def _hash_to_path(self, hash_hex: str) -> Path:
         """Shard by first 2 chars for filesystem efficiency."""
@@ -150,6 +155,9 @@ class BlockDiskStore:
         """
         Read a block from disk by its chain hash.
 
+        This method is read-only on the main thread — access metadata updates
+        are deferred to the background writer to avoid blocking inference.
+
         Args:
             block_hash: The BlockHash (SHA-256 chain hash bytes)
 
@@ -162,47 +170,57 @@ class BlockDiskStore:
 
         hash_hex = block_hash.hex()
 
-        conn = sqlite3.connect(str(self._db_path))
-        row = conn.execute(
-            "SELECT file_name, dtype FROM blocks WHERE block_hash = ?",
-            (hash_hex,)
-        ).fetchone()
+        conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+        try:
+            row = conn.execute(
+                "SELECT file_name, dtype FROM blocks WHERE block_hash = ?",
+                (hash_hex,)
+            ).fetchone()
 
-        if row is None:
+            if row is None:
+                with self._stats_lock:
+                    self.disk_misses += 1
+                return None
+
+            file_name, dtype = row
+        finally:
             conn.close()
-            self.disk_misses += 1
-            return None
 
-        file_name, dtype = row
         file_path = self.cache_dir / file_name
 
         if not file_path.exists():
-            # Stale index entry
-            conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
-            conn.commit()
-            conn.close()
-            self.disk_misses += 1
+            # Stale index entry — queue cleanup to background writer
+            self._queue_index_cleanup(hash_hex)
+            with self._stats_lock:
+                self.disk_misses += 1
             return None
-
-        # Update access metadata
-        conn.execute(
-            "UPDATE blocks SET last_accessed = ?, access_count = access_count + 1 "
-            "WHERE block_hash = ?",
-            (time.time(), hash_hex)
-        )
-        conn.commit()
-        conn.close()
 
         try:
             data = mx.load(str(file_path))
             cache_data = _deserialize_block(data, dtype)
-            self.disk_hits += 1
+            with self._stats_lock:
+                self.disk_hits += 1
+            # Queue access metadata update to background (non-blocking)
+            self._queue_access_update(hash_hex)
             logger.debug(f"Disk cache hit: {hash_hex[:12]} ({dtype}, {len(cache_data)} layers)")
             return cache_data
         except Exception as e:
             logger.warning(f"Failed to load block {hash_hex[:12]}: {e}")
-            self.disk_misses += 1
+            # Corrupt file — queue removal
+            self._queue_index_cleanup(hash_hex)
+            with self._stats_lock:
+                self.disk_misses += 1
             return None
+
+    def _queue_access_update(self, hash_hex: str) -> None:
+        """Queue an access time update for the background writer."""
+        with self._write_lock:
+            self._write_queue.append(("__access__", hash_hex, time.time()))
+
+    def _queue_index_cleanup(self, hash_hex: str) -> None:
+        """Queue a stale index entry cleanup for the background writer."""
+        with self._write_lock:
+            self._write_queue.append(("__cleanup__", hash_hex, 0))
 
     # =========================================================================
     # Write (async)
@@ -236,15 +254,59 @@ class BlockDiskStore:
                 batch = self._write_queue[:]
                 self._write_queue.clear()
 
-            for block_hash, cache_data, token_count in batch:
+            for item in batch:
                 try:
-                    self._write_block(block_hash, cache_data, token_count)
+                    if item[0] == "__access__":
+                        # Access time update
+                        _, hash_hex, ts = item
+                        self._update_access(hash_hex, ts)
+                    elif item[0] == "__cleanup__":
+                        # Stale index cleanup
+                        _, hash_hex, _ = item
+                        self._cleanup_entry(hash_hex)
+                    else:
+                        # Normal block write
+                        block_hash, cache_data, token_count = item
+                        self._write_block(block_hash, cache_data, token_count)
                 except Exception as e:
-                    h = block_hash.hex()[:12] if isinstance(block_hash, bytes) else "?"
-                    logger.warning(f"Failed to write block {h}: {e}")
+                    h = item[0] if isinstance(item[0], str) else (
+                        item[0].hex()[:12] if isinstance(item[0], bytes) else "?"
+                    )
+                    logger.warning(f"Background writer error ({h}): {e}")
 
             # Evict if over budget
             self._maybe_evict()
+
+    def _update_access(self, hash_hex: str, ts: float) -> None:
+        """Update last_accessed time in the index (background thread only)."""
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        try:
+            conn.execute(
+                "UPDATE blocks SET last_accessed = ?, access_count = access_count + 1 "
+                "WHERE block_hash = ?",
+                (ts, hash_hex)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _cleanup_entry(self, hash_hex: str) -> None:
+        """Remove a stale index entry and its file (background thread only)."""
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        try:
+            row = conn.execute(
+                "SELECT file_name FROM blocks WHERE block_hash = ?", (hash_hex,)
+            ).fetchone()
+            if row:
+                file_path = self.cache_dir / row[0]
+                try:
+                    file_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
+                conn.commit()
+        finally:
+            conn.close()
 
     def _write_block(
         self,
@@ -259,42 +321,54 @@ class BlockDiskStore:
         hash_hex = block_hash.hex()
 
         # Skip if already on disk
-        conn = sqlite3.connect(str(self._db_path))
-        exists = conn.execute(
-            "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
-        ).fetchone()
-        if exists:
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
+            ).fetchone()
+            if exists:
+                return
+
+            # Serialize
+            tensors, dtype, num_layers = _serialize_block(cache_data)
+            if num_layers == 0:
+                return  # No actual tensor data to persist (all skip layers)
+
+            # Atomic write: write to temp file then rename
+            file_path = self._hash_to_path(hash_hex)
+            rel_path = file_path.relative_to(self.cache_dir)
+            # mx.save_safetensors appends .safetensors if not already present,
+            # so use a .tmp.safetensors name to keep it from adding a double suffix.
+            tmp_path = file_path.with_name(file_path.stem + ".tmp.safetensors")
+
+            try:
+                mx.save_safetensors(str(tmp_path), tensors)
+                os.rename(str(tmp_path), str(file_path))
+            except Exception:
+                # Clean up partial file
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
+
+            file_size = file_path.stat().st_size
+            now = time.time()
+
+            conn.execute(
+                """INSERT OR IGNORE INTO blocks
+                   (block_hash, file_name, num_tokens, num_layers, dtype,
+                    file_size, created_at, last_accessed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (hash_hex, str(rel_path), token_count, num_layers, dtype,
+                 file_size, now, now)
+            )
+            conn.commit()
+        finally:
             conn.close()
-            return
 
-        # Serialize
-        tensors, dtype, num_layers = _serialize_block(cache_data)
-        if not tensors:
-            conn.close()
-            return
-
-        # Save as safetensors
-        file_path = self._hash_to_path(hash_hex)
-        rel_path = file_path.relative_to(self.cache_dir)
-
-        mx.save_safetensors(str(file_path), tensors)
-        mx.metal.clear_cache()  # Don't let serialization buffers linger
-
-        file_size = file_path.stat().st_size
-        now = time.time()
-
-        conn.execute(
-            """INSERT OR IGNORE INTO blocks
-               (block_hash, file_name, num_tokens, num_layers, dtype,
-                file_size, created_at, last_accessed)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (hash_hex, str(rel_path), token_count, num_layers, dtype,
-             file_size, now, now)
-        )
-        conn.commit()
-        conn.close()
-
-        self.disk_writes += 1
+        with self._stats_lock:
+            self.disk_writes += 1
         logger.debug(
             f"Disk cache write: {hash_hex[:12]} ({dtype}, {num_layers} layers, "
             f"{file_size / 1024:.1f}KB, {token_count} tokens)"
@@ -309,43 +383,45 @@ class BlockDiskStore:
         if self.max_size_bytes <= 0:
             return
 
-        conn = sqlite3.connect(str(self._db_path))
-        total = conn.execute(
-            "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
-        ).fetchone()[0]
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        try:
+            total = conn.execute(
+                "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
+            ).fetchone()[0]
 
-        if total <= self.max_size_bytes:
+            if total <= self.max_size_bytes:
+                return
+
+            target = int(self.max_size_bytes * 0.8)  # Free down to 80%
+            rows = conn.execute(
+                "SELECT block_hash, file_name, file_size FROM blocks "
+                "ORDER BY last_accessed ASC"
+            ).fetchall()
+
+            evicted = 0
+            for hash_hex, file_name, file_size in rows:
+                if total <= target:
+                    break
+                file_path = self.cache_dir / file_name
+                try:
+                    file_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
+                total -= file_size
+                evicted += 1
+
+            conn.commit()
+
+            if evicted:
+                with self._stats_lock:
+                    self.disk_evictions += evicted
+                logger.info(
+                    f"Disk cache eviction: removed {evicted} blocks "
+                    f"(now {total / 1024**3:.2f}GB)"
+                )
+        finally:
             conn.close()
-            return
-
-        target = int(self.max_size_bytes * 0.8)  # Free down to 80%
-        rows = conn.execute(
-            "SELECT block_hash, file_name, file_size FROM blocks "
-            "ORDER BY last_accessed ASC"
-        ).fetchall()
-
-        evicted = 0
-        for hash_hex, file_name, file_size in rows:
-            if total <= target:
-                break
-            file_path = self.cache_dir / file_name
-            try:
-                file_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
-            total -= file_size
-            evicted += 1
-
-        conn.commit()
-        conn.close()
-
-        if evicted:
-            self.disk_evictions += evicted
-            logger.info(
-                f"Disk cache eviction: removed {evicted} blocks "
-                f"(now {total / 1024**3:.2f}GB)"
-            )
 
     # =========================================================================
     # Management
@@ -354,55 +430,69 @@ class BlockDiskStore:
     def has_block(self, block_hash: bytes) -> bool:
         """Check if a block exists on disk without loading it."""
         hash_hex = block_hash.hex()
-        conn = sqlite3.connect(str(self._db_path))
-        exists = conn.execute(
-            "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
-        ).fetchone()
-        conn.close()
-        return exists is not None
+        conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
+            ).fetchone()
+            return exists is not None
+        finally:
+            conn.close()
 
     def get_stats(self) -> Dict[str, Any]:
         """Return cache statistics."""
-        conn = sqlite3.connect(str(self._db_path))
-        row = conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(file_size), 0), "
-            "COALESCE(SUM(access_count), 0) FROM blocks"
-        ).fetchone()
-        conn.close()
-        return {
-            "blocks_on_disk": row[0],
-            "disk_size_bytes": row[1],
-            "disk_size_gb": round(row[1] / 1024**3, 3),
-            "total_accesses": row[2],
-            "disk_hits": self.disk_hits,
-            "disk_misses": self.disk_misses,
-            "disk_writes": self.disk_writes,
-            "disk_evictions": self.disk_evictions,
-        }
+        conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(file_size), 0), "
+                "COALESCE(SUM(access_count), 0) FROM blocks"
+            ).fetchone()
+        finally:
+            conn.close()
+        with self._stats_lock:
+            return {
+                "blocks_on_disk": row[0],
+                "disk_size_bytes": row[1],
+                "disk_size_gb": round(row[1] / 1024**3, 3),
+                "total_accesses": row[2],
+                "disk_hits": self.disk_hits,
+                "disk_misses": self.disk_misses,
+                "disk_writes": self.disk_writes,
+                "disk_evictions": self.disk_evictions,
+            }
 
     def clear(self) -> None:
         """Clear all cached blocks from disk."""
         import shutil
+        # Pause writer by draining its queue first
+        with self._write_lock:
+            self._write_queue.clear()
         if self.blocks_dir.exists():
             shutil.rmtree(self.blocks_dir)
             self.blocks_dir.mkdir(parents=True)
-        conn = sqlite3.connect(str(self._db_path))
-        conn.execute("DELETE FROM blocks")
-        conn.commit()
-        conn.close()
+        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        try:
+            conn.execute("DELETE FROM blocks")
+            conn.commit()
+        finally:
+            conn.close()
         logger.info("Disk cache cleared")
 
     def shutdown(self) -> None:
         """Stop background writer and flush pending writes."""
         self._stop_event.set()
         self._writer_thread.join(timeout=5.0)
-        # Flush remaining
+        if self._writer_thread.is_alive():
+            logger.warning("BlockDiskStore writer thread did not stop in time, skipping flush")
+            return
+        # Flush remaining (safe because writer thread has stopped)
         with self._write_lock:
             remaining = self._write_queue[:]
             self._write_queue.clear()
-        for block_hash, cache_data, token_count in remaining:
+        for item in remaining:
             try:
-                self._write_block(block_hash, cache_data, token_count)
+                if isinstance(item[0], bytes):
+                    self._write_block(item[0], item[1], item[2])
             except Exception:
                 pass
 
@@ -417,6 +507,9 @@ def _serialize_block(
     """
     Convert CacheBlock.cache_data to a flat dict of named tensors for safetensors.
 
+    Per-layer type tags are stored in metadata so deserialization can handle
+    mixed-type blocks (e.g. hybrid Mamba-Transformer models).
+
     The naming convention encodes layer index and tensor role:
       layer_{i}_keys, layer_{i}_values          — standard kv
       layer_{i}_keys_data, _scales, _zeros       — quantized kv
@@ -430,10 +523,9 @@ def _serialize_block(
         return {}, "unknown", 0
 
     tensors: Dict[str, Any] = {}
-    dtype = "kv"
     num_layers = 0
-    # Metadata stored as a JSON string in a special key
-    meta: Dict[str, Any] = {}
+    # Per-layer metadata including type tags for mixed-type block support
+    meta: Dict[str, Any] = {"__layer_types__": {}}
 
     for i, layer_data in enumerate(cache_data):
         tag = layer_data[0]
@@ -442,6 +534,7 @@ def _serialize_block(
             continue
 
         num_layers += 1
+        meta["__layer_types__"][str(i)] = tag
 
         if tag == "kv":
             _, keys, values = layer_data
@@ -450,7 +543,6 @@ def _serialize_block(
 
         elif tag == "quantized_kv":
             _, keys_tuple, values_tuple, layer_meta = layer_data
-            dtype = "quantized_kv"
             tensors[f"layer_{i}_keys_data"] = keys_tuple[0]
             tensors[f"layer_{i}_keys_scales"] = keys_tuple[1]
             tensors[f"layer_{i}_keys_zeros"] = keys_tuple[2]
@@ -458,31 +550,35 @@ def _serialize_block(
             tensors[f"layer_{i}_values_scales"] = values_tuple[1]
             tensors[f"layer_{i}_values_zeros"] = values_tuple[2]
             if layer_meta:
-                meta[str(i)] = layer_meta
+                meta[str(i)] = {"quant_meta": layer_meta}
 
         elif tag == "rotating_kv":
             _, keys, values, max_size, keep = layer_data
-            dtype = "rotating_kv"
             tensors[f"layer_{i}_keys"] = keys
             tensors[f"layer_{i}_values"] = values
-            # Store scalar params as 1-element arrays
             tensors[f"layer_{i}_max_size"] = mx.array([max_size], dtype=mx.int32)
             tensors[f"layer_{i}_keep"] = mx.array([keep], dtype=mx.int32)
 
         elif tag == "cumulative":
             _, state_list, layer_meta, class_name = layer_data
-            dtype = "cumulative"
-            # state_list can be various structures — store each array
             if isinstance(state_list, (list, tuple)):
                 for j, arr in enumerate(state_list):
                     if hasattr(arr, "shape"):
                         tensors[f"layer_{i}_cumulative_{j}"] = arr
             meta[str(i)] = {"class_name": class_name, "meta": layer_meta}
 
-    # Store metadata as a serialized JSON tensor if non-empty
+    # Determine dominant dtype for the DB index (informational only)
+    type_set = set(meta["__layer_types__"].values())
+    if len(type_set) == 1:
+        dtype = type_set.pop()
+    elif type_set:
+        dtype = "mixed"
+    else:
+        dtype = "kv"
+
+    # Store metadata as a serialized JSON tensor
     if meta:
         meta_bytes = json.dumps(meta).encode("utf-8")
-        # Store as uint8 array so it survives safetensors round-trip
         tensors["__metadata__"] = mx.array(
             list(meta_bytes), dtype=mx.uint8
         )
@@ -497,17 +593,24 @@ def _deserialize_block(
     """
     Reconstruct CacheBlock.cache_data from loaded safetensors dict.
 
-    Handles all tuple types: kv, quantized_kv, rotating_kv, cumulative, skip.
+    Uses per-layer type tags from metadata for mixed-type block support.
+    Falls back to the dtype field for backward compatibility with blocks
+    serialized before per-layer tags were added.
     """
     # Extract metadata if present
     meta: Dict[str, Any] = {}
-    if "__metadata__" in data:
+    meta_arr = data.get("__metadata__")
+    if meta_arr is not None:
         try:
-            meta_arr = data.pop("__metadata__")
             meta_bytes = bytes(meta_arr.tolist())
             meta = json.loads(meta_bytes.decode("utf-8"))
         except Exception:
             pass
+    # Remove from data dict so it's not picked up as a layer
+    data.pop("__metadata__", None)
+
+    # Per-layer type map (new format with __layer_types__)
+    layer_types = meta.get("__layer_types__", {})
 
     # Find all layer indices
     layer_indices: Dict[int, str] = {}
@@ -524,7 +627,6 @@ def _deserialize_block(
     if not layer_indices:
         return []
 
-    # Determine max layer index to reconstruct in order
     max_layer = max(layer_indices.keys())
     cache_data: List[Tuple] = []
 
@@ -533,7 +635,10 @@ def _deserialize_block(
             cache_data.append(("skip",))
             continue
 
-        if dtype == "kv":
+        # Determine this layer's type: prefer per-layer tag, fallback to global dtype
+        layer_type = layer_types.get(str(i), _infer_layer_type(data, i, dtype))
+
+        if layer_type == "kv":
             keys = data.get(f"layer_{i}_keys")
             values = data.get(f"layer_{i}_values")
             if keys is not None and values is not None:
@@ -541,7 +646,7 @@ def _deserialize_block(
             else:
                 cache_data.append(("skip",))
 
-        elif dtype == "quantized_kv":
+        elif layer_type == "quantized_kv":
             try:
                 keys_tuple = (
                     data[f"layer_{i}_keys_data"],
@@ -553,12 +658,13 @@ def _deserialize_block(
                     data[f"layer_{i}_values_scales"],
                     data[f"layer_{i}_values_zeros"],
                 )
-                layer_meta = meta.get(str(i), {})
+                layer_meta_dict = meta.get(str(i), {})
+                layer_meta = layer_meta_dict.get("quant_meta", layer_meta_dict.get("meta", {}))
                 cache_data.append(("quantized_kv", keys_tuple, values_tuple, layer_meta))
             except KeyError:
                 cache_data.append(("skip",))
 
-        elif dtype == "rotating_kv":
+        elif layer_type == "rotating_kv":
             keys = data.get(f"layer_{i}_keys")
             values = data.get(f"layer_{i}_values")
             max_size_arr = data.get(f"layer_{i}_max_size")
@@ -570,11 +676,10 @@ def _deserialize_block(
             else:
                 cache_data.append(("skip",))
 
-        elif dtype == "cumulative":
+        elif layer_type == "cumulative":
             layer_meta_dict = meta.get(str(i), {})
             class_name = layer_meta_dict.get("class_name", "")
             layer_meta_val = layer_meta_dict.get("meta", "")
-            # Reconstruct state list from indexed arrays
             state_arrays = []
             j = 0
             while f"layer_{i}_cumulative_{j}" in data:
@@ -588,3 +693,22 @@ def _deserialize_block(
             cache_data.append(("skip",))
 
     return cache_data
+
+
+def _infer_layer_type(data: Dict[str, Any], layer_idx: int, fallback_dtype: str) -> str:
+    """Infer a layer's type from its tensor keys (backward compat for old blocks)."""
+    prefix = f"layer_{layer_idx}_"
+    has_keys_data = f"{prefix}keys_data" in data
+    has_cumulative = f"{prefix}cumulative_0" in data
+    has_max_size = f"{prefix}max_size" in data
+    has_keys = f"{prefix}keys" in data
+
+    if has_keys_data:
+        return "quantized_kv"
+    if has_cumulative:
+        return "cumulative"
+    if has_max_size and has_keys:
+        return "rotating_kv"
+    if has_keys:
+        return "kv"
+    return fallback_dtype
