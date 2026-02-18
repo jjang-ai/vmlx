@@ -212,15 +212,13 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           >
             ⚙ Chat
           </button>
-          {!isRemote && (
-            <button
-              onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) setShowSettings(false) }}
-              className={`text-sm px-2 py-1 rounded ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
-              title="Server Settings"
-            >
-              ⚙ Server
-            </button>
-          )}
+          <button
+            onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) setShowSettings(false) }}
+            className={`text-sm px-2 py-1 rounded ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
+            title={isRemote ? 'Connection Settings' : 'Server Settings'}
+          >
+            {isRemote ? '⚙ Connection' : '⚙ Server'}
+          </button>
           {session.status === 'running' && (
             <>
               {isRemote && (
@@ -300,6 +298,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         {showServerSettings && (
           <ServerSettingsDrawer
             session={session}
+            isRemote={isRemote}
             onClose={() => setShowServerSettings(false)}
             onSessionUpdate={async () => {
               const s = await window.api.sessions.get(sessionId)

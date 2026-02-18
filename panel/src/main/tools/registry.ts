@@ -403,6 +403,196 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         required: ['path']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'insert_text',
+      description: 'Insert text at a specific line number in a file. The new text is inserted BEFORE the specified line. Use read_file first to see line numbers.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to working directory' },
+          line: { type: 'integer', description: 'Line number to insert before (1-based). Use 0 to append at end of file.' },
+          text: { type: 'string', description: 'Text to insert (can be multiple lines)' }
+        },
+        required: ['path', 'line', 'text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'replace_lines',
+      description: 'Replace a range of lines in a file with new content. Use read_file first to see line numbers.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to working directory' },
+          start_line: { type: 'integer', description: 'First line to replace (1-based, inclusive)' },
+          end_line: { type: 'integer', description: 'Last line to replace (1-based, inclusive)' },
+          text: { type: 'string', description: 'Replacement text (can be more or fewer lines than the replaced range)' }
+        },
+        required: ['path', 'start_line', 'end_line', 'text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_tree',
+      description: 'Get a project directory tree respecting .gitignore rules. Shows the hierarchical file and directory structure.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory path relative to working directory. Default: "."' },
+          max_depth: { type: 'integer', description: 'Maximum depth to traverse. Default: 4' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'apply_regex',
+      description: 'Apply a regex find-and-replace across one or more files. Returns the number of replacements made per file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'JavaScript regex pattern to search for' },
+          replacement: { type: 'string', description: 'Replacement string (supports $1, $2 capture group references)' },
+          path: { type: 'string', description: 'File or directory path relative to working directory' },
+          glob: { type: 'string', description: 'File glob filter when path is a directory (e.g., "*.ts", "*.py")' }
+        },
+        required: ['pattern', 'replacement', 'path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_image',
+      description: 'Read an image file and return its base64-encoded data with MIME type. Supports png, jpg, gif, webp, svg. Max 10MB.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Image file path relative to working directory' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'spawn_process',
+      description: 'Start a long-running background process (e.g., dev server, watcher). Returns a process ID for checking output later. Auto-kills after 5 minutes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to execute' }
+        },
+        required: ['command']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_process_output',
+      description: 'Read stdout/stderr from a previously spawned background process. Returns latest output and whether the process is still running.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pid: { type: 'string', description: 'Process ID returned by spawn_process' }
+        },
+        required: ['pid']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ask_user',
+      description: 'Ask the user a question and wait for their response. Use when you need clarification, confirmation, or user input to proceed with a task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'The question to ask the user' }
+        },
+        required: ['question']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'diff_files',
+      description: 'Show a unified diff between two files, or between a file and its git HEAD version (if path_b is omitted).',
+      parameters: {
+        type: 'object',
+        properties: {
+          path_a: { type: 'string', description: 'First file path (or the only path when comparing against git HEAD)' },
+          path_b: { type: 'string', description: 'Second file path. Omit to diff against git HEAD.' }
+        },
+        required: ['path_a']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'count_tokens',
+      description: 'Estimate the token count of a text string using character and word heuristics.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Text to estimate token count for' }
+        },
+        required: ['text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'clipboard_read',
+      description: 'Read the current contents of the system clipboard.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'clipboard_write',
+      description: 'Write text to the system clipboard.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Text to write to the clipboard' }
+        },
+        required: ['text']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git',
+      description: 'Run git commands in the working directory. Supports status, diff, log, blame, add, commit, branch, checkout, stash, show, and more. Blocks destructive operations (push --force, reset --hard).',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Git subcommand and arguments (e.g., "status", "diff src/", "log --oneline -10", "commit -m \\"fix: typo\\"", "blame file.ts")' }
+        },
+        required: ['command']
+      }
+    }
   }
 ]
 
@@ -425,24 +615,39 @@ File I/O:
   read_file(path, offset?, limit?) — read file with line numbers (paginated, 2000 lines max per call)
   write_file(path, content) — create or overwrite a file
   edit_file(path, search_text, replacement_text, replace_all?) — find-and-replace (ALWAYS read_file first). Set replace_all=true for renaming.
+  insert_text(path, line, text) — insert text before a specific line number
+  replace_lines(path, start_line, end_line, text) — replace a range of lines with new content
   patch_file(path, patch) — apply a unified diff patch for complex multi-hunk edits
   batch_edit(path, edits[]) — multiple find-and-replace edits in one call
+  apply_regex(pattern, replacement, path, glob?) — regex find-and-replace across files (supports capture groups $1, $2)
   copy_file(source, destination) — copy a file
   move_file(source, destination) — move/rename a file or directory
   delete_file(path) — delete a file or empty directory
   create_directory(path) — create directories recursively
   file_info(path) — get size, type, modified time, permissions
+  read_image(path) — read image as base64 (png, jpg, gif, webp, svg)
 Search & Navigate:
   list_directory(path, recursive?) — list files/dirs with sizes
+  get_tree(path?, max_depth?) — project tree respecting .gitignore (default depth 4)
   search_files(pattern, path?, glob?) — search file contents (regex, ripgrep)
   find_files(pattern, path?) — find files by name (glob)
+  diff_files(path_a, path_b?) — diff two files, or diff against git HEAD
   get_diagnostics(path?, tool?) — run type checking / linting (auto-detects tsc, eslint, python)
 Terminal:
   run_command(command) — execute a shell command (60s timeout)
+  spawn_process(command) — start a background process, get PID for later output checks
+  get_process_output(pid) — read stdout/stderr from a spawned background process
+Git:
+  git(command) — run git commands (status, diff, log, blame, add, commit, branch, checkout, stash, show)
 Web:
   ddg_search(query, count?) — search the web (DuckDuckGo, free, no key needed)
   web_search(query, count?) — search the web (Brave Search, requires API key)
   fetch_url(url, max_length?) — fetch a URL and return text content
+Utilities:
+  count_tokens(text) — estimate token count of text
+  clipboard_read() — read system clipboard
+  clipboard_write(text) — write to system clipboard
+  ask_user(question) — ask the user a question and wait for their response
 
 RULES:
 - Don't narrate actions before doing them. Just make the tool call.
@@ -452,5 +657,8 @@ RULES:
 - Prefer batch_edit for multiple edits to the same file. Use patch_file for complex multi-hunk changes.
 - Use edit_file with replace_all=true when renaming variables, functions, or classes across a file.
 - Use search_files to find code patterns instead of reading entire files.
+- Use get_tree for a quick project overview instead of recursive list_directory.
 - Use get_diagnostics after making code changes to catch errors early.
+- Use ask_user when you need clarification — don't guess.
+- Use spawn_process for dev servers or watchers; get_process_output to check them.
 - After ALL tool calls are complete, ALWAYS write a clear, helpful response summarizing your findings or explaining what you did.`

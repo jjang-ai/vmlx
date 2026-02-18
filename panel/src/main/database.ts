@@ -86,6 +86,9 @@ export interface ChatOverrides {
   fileToolsEnabled?: boolean
   searchToolsEnabled?: boolean
   shellEnabled?: boolean
+  toolResultMaxChars?: number
+  gitEnabled?: boolean
+  utilityToolsEnabled?: boolean
 }
 
 class DatabaseManager {
@@ -250,6 +253,15 @@ class DatabaseManager {
     }
     if (!overrideColumns.find(c => c.name === 'brave_search_enabled')) {
       this.db.exec('ALTER TABLE chat_overrides ADD COLUMN brave_search_enabled INTEGER DEFAULT 0')
+    }
+    if (!overrideColumns.find(c => c.name === 'tool_result_max_chars')) {
+      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN tool_result_max_chars INTEGER')
+    }
+    if (!overrideColumns.find(c => c.name === 'git_enabled')) {
+      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN git_enabled INTEGER')
+    }
+    if (!overrideColumns.find(c => c.name === 'utility_tools_enabled')) {
+      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN utility_tools_enabled INTEGER')
     }
 
     // Fix: older migration used DEFAULT 1 for enable_thinking, corrupting existing
@@ -447,8 +459,9 @@ class DatabaseManager {
        builtin_tools_enabled, working_directory, enable_thinking, reasoning_effort,
        hide_tool_status,
        web_search_enabled, brave_search_enabled, fetch_url_enabled, file_tools_enabled,
-       search_tools_enabled, shell_enabled)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       search_tools_enabled, shell_enabled, tool_result_max_chars,
+       git_enabled, utility_tools_enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     // enable_thinking tri-state: undefined/null → NULL (Auto), true → 1, false → 0
     const enableThinkingVal = overrides.enableThinking === true ? 1
@@ -476,7 +489,10 @@ class DatabaseManager {
       overrides.fetchUrlEnabled === false ? 0 : 1,
       overrides.fileToolsEnabled === false ? 0 : 1,
       overrides.searchToolsEnabled === false ? 0 : 1,
-      overrides.shellEnabled === false ? 0 : 1
+      overrides.shellEnabled === false ? 0 : 1,
+      overrides.toolResultMaxChars || null,
+      overrides.gitEnabled === false ? 0 : 1,
+      overrides.utilityToolsEnabled === false ? 0 : 1
     )
   }
 
@@ -512,7 +528,10 @@ class DatabaseManager {
       fetchUrlEnabled: row.fetch_url_enabled !== 0,
       fileToolsEnabled: row.file_tools_enabled !== 0,
       searchToolsEnabled: row.search_tools_enabled !== 0,
-      shellEnabled: row.shell_enabled !== 0
+      shellEnabled: row.shell_enabled !== 0,
+      toolResultMaxChars: row.tool_result_max_chars || undefined,
+      gitEnabled: row.git_enabled !== 0,
+      utilityToolsEnabled: row.utility_tools_enabled !== 0
     }
   }
 
