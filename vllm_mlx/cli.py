@@ -179,6 +179,10 @@ def serve_command(args):
             disk_cache_dir=args.disk_cache_dir,
             disk_cache_max_gb=args.disk_cache_max_gb,
             model_path=args.model,
+            # Block-level disk cache (L2 for paged cache)
+            enable_block_disk_cache=args.enable_block_disk_cache,
+            block_disk_cache_dir=args.block_disk_cache_dir,
+            block_disk_cache_max_gb=args.block_disk_cache_max_gb,
         )
 
         print("Mode: Continuous batching (for multiple concurrent users)")
@@ -187,6 +191,8 @@ def serve_command(args):
             print(
                 f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
             )
+            if args.enable_block_disk_cache:
+                print(f"Block disk cache: max={args.block_disk_cache_max_gb}GB")
         elif enable_prefix_cache and not args.no_memory_aware_cache:
             cache_info = (
                 f"{args.cache_memory_mb}MB"
@@ -196,6 +202,8 @@ def serve_command(args):
             print(f"Memory-aware cache: {cache_info}")
         elif enable_prefix_cache:
             print(f"Prefix cache: max_entries={args.prefix_cache_size}")
+        if not args.use_paged_cache and args.enable_block_disk_cache:
+            print("  WARNING: --enable-block-disk-cache requires --use-paged-cache, ignoring")
         if args.kv_cache_quantization != "none":
             print(f"KV cache quantization: {args.kv_cache_quantization} (group_size={args.kv_cache_group_size})")
     else:
@@ -261,6 +269,10 @@ def bench_command(args):
             kv_cache_quantization=args.kv_cache_quantization,
             kv_cache_group_size=args.kv_cache_group_size,
             model_path=args.model,
+            # Block disk cache (L2 for paged cache)
+            enable_block_disk_cache=getattr(args, 'enable_block_disk_cache', False),
+            block_disk_cache_dir=getattr(args, 'block_disk_cache_dir', None),
+            block_disk_cache_max_gb=getattr(args, 'block_disk_cache_max_gb', 10.0),
         )
         engine_config = EngineConfig(
             model_name=args.model,
@@ -590,6 +602,26 @@ Examples:
         type=float,
         default=10.0,
         help="Maximum disk cache size in GB. 0 = unlimited (default: 10)",
+    )
+    # Block-level disk cache (L2 for paged cache)
+    serve_parser.add_argument(
+        "--enable-block-disk-cache",
+        action="store_true",
+        help="Enable block-level disk persistence for paged KV cache. "
+             "Saves individual cache blocks to SSD for reuse across evictions and restarts. "
+             "Requires --use-paged-cache.",
+    )
+    serve_parser.add_argument(
+        "--block-disk-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for block disk cache (default: ~/.cache/vllm-mlx/block-cache/<model_hash>)",
+    )
+    serve_parser.add_argument(
+        "--block-disk-cache-max-gb",
+        type=float,
+        default=10.0,
+        help="Maximum block disk cache size in GB. 0 = unlimited (default: 10)",
     )
     # MCP options
     serve_parser.add_argument(

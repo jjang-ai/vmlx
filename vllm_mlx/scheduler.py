@@ -22,6 +22,7 @@ from mlx_lm.generate import BatchGenerator
 from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
 
+from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
 from .paged_cache import PagedCacheManager
@@ -103,6 +104,11 @@ class SchedulerConfig:
     disk_cache_dir: Optional[str] = None  # None = ~/.cache/vllm-mlx/prompt-cache/<model_hash>
     disk_cache_max_gb: float = 10.0  # 0 = unlimited
     model_path: Optional[str] = None  # Used to scope disk cache per model
+
+    # Block-level disk cache (L2 for paged cache blocks)
+    enable_block_disk_cache: bool = False
+    block_disk_cache_dir: Optional[str] = None  # None = ~/.cache/vllm-mlx/block-cache/<model_hash>
+    block_disk_cache_max_gb: float = 10.0  # 0 = unlimited
 
 
 @dataclass
@@ -217,10 +223,38 @@ class Scheduler:
 
         if self.config.enable_prefix_cache:
             if self.config.use_paged_cache:
+                # Create optional block-level disk store (L2)
+                block_disk_store = None
+                if self.config.enable_block_disk_cache:
+                    cache_dir = self.config.block_disk_cache_dir
+                    if cache_dir is None and self.config.model_path:
+                        import hashlib
+                        model_hash = hashlib.sha256(
+                            self.config.model_path.encode()
+                        ).hexdigest()[:12]
+                        cache_dir = os.path.join(
+                            os.path.expanduser("~"),
+                            ".cache", "vllm-mlx", "block-cache", model_hash,
+                        )
+                    elif cache_dir is None:
+                        cache_dir = os.path.join(
+                            os.path.expanduser("~"),
+                            ".cache", "vllm-mlx", "block-cache", "default",
+                        )
+                    block_disk_store = BlockDiskStore(
+                        cache_dir=cache_dir,
+                        max_size_gb=self.config.block_disk_cache_max_gb,
+                    )
+                    logger.info(
+                        f"Block disk cache enabled: dir={cache_dir}, "
+                        f"max={self.config.block_disk_cache_max_gb}GB"
+                    )
+
                 # Use paged cache for memory efficiency
                 self.paged_cache_manager = PagedCacheManager(
                     block_size=self.config.paged_cache_block_size,
                     max_blocks=self.config.max_cache_blocks,
+                    disk_store=block_disk_store,
                 )
                 self.block_aware_cache = BlockAwarePrefixCache(
                     model=model,

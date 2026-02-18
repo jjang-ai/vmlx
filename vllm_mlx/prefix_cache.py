@@ -547,6 +547,20 @@ class BlockAwarePrefixCache:
         # Allocate blocks for new tokens
         num_new_blocks = (len(new_tokens) + self.block_size - 1) // self.block_size
 
+        # For disk write-through, compute chain hashes over the full token sequence.
+        # Reconstruct parent_hash from existing blocks (if any).
+        from .paged_cache import compute_block_hash as _compute_chain_hash
+        parent_hash = None
+        if existing_tokens > 0:
+            # Recompute chain hash up to where the existing blocks end
+            num_existing_full = existing_tokens // self.block_size
+            for eb_idx in range(num_existing_full):
+                eb_start = eb_idx * self.block_size
+                eb_end = eb_start + self.block_size
+                parent_hash = _compute_chain_hash(parent_hash, tokens[eb_start:eb_end])
+
+        disk_store = self.paged_cache._disk_store  # May be None
+
         for i in range(num_new_blocks):
             start_idx = i * self.block_size
             end_idx = min(start_idx + self.block_size, len(new_tokens))
@@ -556,6 +570,9 @@ class BlockAwarePrefixCache:
             global_start = existing_tokens + start_idx
             global_end = existing_tokens + end_idx
 
+            # Compute chain hash for this block
+            block_chain_hash = _compute_chain_hash(parent_hash, block_tokens)
+
             # Check if this block already exists (deduplication)
             existing_block = self.paged_cache.find_cached_block(block_tokens)
             if existing_block:
@@ -563,6 +580,7 @@ class BlockAwarePrefixCache:
                 self.paged_cache.increment_ref(existing_block.block_id)
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
+                parent_hash = block_chain_hash
                 continue
 
             # Allocate new block
@@ -581,6 +599,9 @@ class BlockAwarePrefixCache:
             block_table.block_ids.append(block.block_id)
             block_table.num_tokens += len(block_tokens)
 
+            # Set chain hash on the block (for L1 dedup and L2 disk addressing)
+            block.block_hash = block_chain_hash
+
             # Extract and store actual tensor slices for this block
             if is_tensor_data and HAS_MLX:
                 is_last = (i == num_new_blocks - 1)
@@ -595,10 +616,20 @@ class BlockAwarePrefixCache:
                         f"{' (includes cumulative states)' if is_last else ''}"
                     )
 
-            # Register hash for blocks (for deduplication)
-            # Hash both full AND partial blocks so that shorter prompts
-            # (< block_size) can still get cache hits
+                    # Write-through to disk L2 (async, non-blocking)
+                    if disk_store is not None:
+                        disk_store.write_block_async(
+                            block_chain_hash, block_kv_data, len(block_tokens)
+                        )
+
+            # Register in hash caches (both chain hash and legacy)
+            self.paged_cache.cached_block_hash_to_block.insert(
+                block_chain_hash, block
+            )
+            # Legacy hash for deduplication via find_cached_block
             self.paged_cache.register_block_hash(block, block_tokens)
+
+            parent_hash = block_chain_hash
 
         # Update prefix index
         self._update_prefix_index(tokens, block_table.block_ids)

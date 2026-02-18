@@ -1095,6 +1095,17 @@ export class SessionManager extends EventEmitter {
       }
     }
 
+    // Block-level disk cache (L2 for paged cache blocks)
+    if (config.usePagedCache && config.enableBlockDiskCache) {
+      args.push('--enable-block-disk-cache')
+      if (config.blockDiskCacheDir) {
+        args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
+      }
+      if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) {
+        args.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
+      }
+    }
+
     // Performance
     if (config.streamInterval && config.streamInterval > 0) {
       args.push('--stream-interval', config.streamInterval.toString())
