@@ -1,0 +1,222 @@
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { join } from 'path'
+import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { registerSessionHandlers } from './ipc/sessions'
+import { registerChatHandlers } from './ipc/chat'
+import { registerModelHandlers } from './ipc/models'
+import { registerVllmHandlers } from './ipc/vllm'
+import { sessionManager } from './sessions'
+import { db } from './database'
+import { checkEngineVersion, installVllmStreaming } from './vllm-manager'
+
+let mainWindow: BrowserWindow | null = null
+let handlersRegistered = false
+let isQuitting = false
+
+// Global crash handlers — prevent unhandled errors from silently crashing the app
+process.on('uncaughtException', (error) => {
+  console.error('[CRASH] Uncaught exception:', error)
+  // Kill all Python processes to prevent orphans
+  try { sessionManager.stopAll().catch(() => {}) } catch (_) {}
+  try {
+    dialog.showErrorBox(
+      'Unexpected Error',
+      `vMLX encountered an error:\n\n${error.message}\n\nThe app will attempt to continue. If issues persist, restart the app.`
+    )
+  } catch (_) { /* dialog may fail if app is in bad state */ }
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRASH] Unhandled promise rejection:', reason)
+})
+
+// Prevent multiple instances — second instance would corrupt SQLite
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // Focus existing window when user tries to open a second instance
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
+}
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 15, y: 15 }
+  })
+
+  // Register IPC handlers only once — pass getter to avoid stale window references on macOS recreation
+  if (!handlersRegistered) {
+    registerSessionHandlers(() => mainWindow)
+    registerChatHandlers(() => mainWindow)
+    registerModelHandlers()
+    registerVllmHandlers(() => mainWindow)
+
+    // Folder picker for built-in tools working directory
+    ipcMain.handle('dialog:openDirectory', async () => {
+      return dialog.showOpenDialog({
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Select Working Directory'
+      })
+    })
+
+    // App-level settings (API keys, preferences)
+    ipcMain.handle('settings:get', (_e, key: string) => {
+      return db.getSetting(key) ?? null
+    })
+    ipcMain.handle('settings:set', (_e, key: string, value: string) => {
+      db.setSetting(key, value)
+      return { success: true }
+    })
+    ipcMain.handle('settings:delete', (_e, key: string) => {
+      db.deleteSetting(key)
+      return { success: true }
+    })
+
+    handlersRegistered = true
+  }
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.show()
+  })
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else {
+    mainWindow.loadFile(join(__dirname, '../../out/renderer/index.html'))
+  }
+}
+
+// App ready
+app.whenReady().then(async () => {
+  electronApp.setAppUserModelId('com.ericjang.vmlx')
+
+  app.on('browser-window-created', (_, window) => {
+    optimizer.watchWindowShortcuts(window)
+  })
+
+  createWindow()
+
+  // Notify user if database was recovered from corruption
+  if (db.recoveryBackupPath && mainWindow) {
+    mainWindow.once('ready-to-show', () => {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'warning',
+        title: 'Database Recovered',
+        message: 'Your chat database was corrupted and has been recreated.',
+        detail: `Your previous data has been backed up to:\n${db.recoveryBackupPath}`,
+        buttons: ['OK']
+      })
+    })
+  }
+
+  // Check if bundled engine needs updating (source version != installed version)
+  try {
+    const versionInfo = checkEngineVersion()
+    if (versionInfo.needsUpdate) {
+      console.log(`[STARTUP] Engine update needed: ${versionInfo.current} -> ${versionInfo.bundled}`)
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          installVllmStreaming(
+            'bundled-update',
+            'install',
+            undefined,
+            (data) => console.log('[ENGINE UPDATE]', data.trimEnd()),
+            (result) => {
+              if (result.success) {
+                console.log('[STARTUP] Engine updated successfully')
+              } else {
+                console.error('[STARTUP] Engine update failed:', result.error)
+              }
+              resolve()
+            }
+          )
+        }),
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            console.error('[STARTUP] Engine update timed out after 30s, continuing with existing version')
+            resolve()
+          }, 30000)
+        })
+      ])
+    }
+  } catch (e) {
+    console.error('[STARTUP] Error checking engine version:', e)
+  }
+
+  // Detect and adopt existing vllm-mlx processes on startup
+  try {
+    const adopted = await sessionManager.detectAndAdoptAll()
+    if (adopted.length > 0) {
+      console.log(`[STARTUP] Adopted ${adopted.length} vllm-mlx process(es):`)
+      for (const s of adopted) {
+        console.log(`  - ${s.modelName || s.modelPath} on port ${s.port} (PID ${s.pid})`)
+      }
+    } else {
+      console.log('[STARTUP] No existing vllm-mlx processes found')
+    }
+  } catch (e) {
+    console.error('[STARTUP] Error during process detection:', e)
+  }
+
+  // Start global health monitor for all sessions
+  sessionManager.startGlobalMonitor()
+
+  app.on('activate', function () {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+    }
+  })
+})
+
+// Kill all vllm-mlx processes on quit — with timeout to prevent hanging
+app.on('before-quit', async (e) => {
+  if (isQuitting) return
+  isQuitting = true
+  e.preventDefault()
+  try {
+    sessionManager.stopGlobalMonitor()
+    // B15: Timeout stopAll to prevent app from hanging on quit
+    await Promise.race([
+      sessionManager.stopAll(),
+      new Promise(resolve => setTimeout(resolve, 15000))
+    ])
+    console.log('[QUIT] All vllm-mlx processes stopped')
+  } catch (err) {
+    console.error('[QUIT] Error stopping processes:', err)
+  }
+  try {
+    db.close()
+    console.log('[QUIT] Database closed')
+  } catch (err) {
+    console.error('[QUIT] Error closing database:', err)
+  }
+  app.exit(0)
+})
+
+// Quit when all windows are closed, except on macOS
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
