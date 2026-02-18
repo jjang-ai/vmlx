@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, net } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { db, Chat, Message, Folder } from '../database'
 import { readFileSync, existsSync } from 'fs'
@@ -40,6 +40,14 @@ const TEMPLATE_TOKEN_REGEX = new RegExp(
   TEMPLATE_STOP_TOKENS.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
   'g'
 )
+
+/**
+ * Use Electron's net.fetch for remote sessions (Chromium's network stack handles
+ * SSE streaming properly with immediate chunk delivery), fall back to Node.js
+ * fetch for local sessions (loopback is fast enough and avoids Chromium overhead).
+ */
+const remoteFetch: typeof globalThis.fetch = (input, init?) => net.fetch(input as any, init as any)
+const selectFetch = (isRemote: boolean): typeof globalThis.fetch => isRemote ? remoteFetch : globalThis.fetch
 
 // Tool category definitions for per-category filtering
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'patch_file', 'batch_edit', 'copy_file', 'move_file', 'delete_file', 'create_directory', 'list_directory', 'insert_text', 'replace_lines', 'apply_regex', 'read_image'])
@@ -385,6 +393,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       if (Object.keys(authHeaders).length > 0) activeEntry.authHeaders = authHeaders
     }
 
+    // Select fetch implementation: Chromium net.fetch for remote (better SSE streaming),
+    // Node.js fetch for local (fast loopback, no Chromium overhead)
+    const doFetch = selectFetch(isRemote)
+
     // Health check with retry — wait for server to become ready instead of
     // failing immediately. This prevents orphaned user messages and allows
     // chatting as soon as the server finishes loading.
@@ -395,7 +407,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     console.log(`[CHAT] Health check URL: ${healthUrl}`)
     for (let attempt = 0; attempt < maxHealthRetries; attempt++) {
       try {
-        const healthRes = await fetch(healthUrl, { headers: authHeaders, signal: AbortSignal.timeout(5000) })
+        const healthRes = await doFetch(healthUrl, { headers: authHeaders, signal: AbortSignal.timeout(5000) })
         if (healthRes.ok) {
           healthOk = true
           console.log(`[CHAT] Health check passed on attempt ${attempt + 1}`)
@@ -619,7 +631,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       }
 
       fetchStartTime = Date.now() // Capture just before fetch for accurate TTFT
-      const response = await fetch(apiUrl, {
+      const response = await doFetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1063,7 +1075,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         const url = useResponsesApi
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`
-        const res = await fetch(url, {
+        const res = await doFetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
