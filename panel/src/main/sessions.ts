@@ -1096,7 +1096,8 @@ export class SessionManager extends EventEmitter {
     }
 
     // Block-level disk cache (L2 for paged cache blocks)
-    if (config.usePagedCache && config.enableBlockDiskCache) {
+    // Must mirror the paged cache guard condition above
+    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
       args.push('--enable-block-disk-cache')
       if (config.blockDiskCacheDir) {
         args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
