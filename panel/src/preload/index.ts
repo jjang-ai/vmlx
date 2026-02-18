@@ -80,6 +80,15 @@ const api = {
     abort: (chatId: string) => ipcRenderer.invoke('chat:abort', chatId),
     clearAllLocks: () => ipcRenderer.invoke('chat:clearAllLocks'),
 
+    // ask_user tool: model asks user a question mid-tool-loop
+    onAskUser: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('chat:askUser', handler)
+      return () => { ipcRenderer.removeListener('chat:askUser', handler) }
+    },
+    answerUser: (chatId: string, answer: string) =>
+      ipcRenderer.send('chat:answerUser', chatId, answer),
+
     // Overrides
     setOverrides: (chatId: string, overrides: any) =>
       ipcRenderer.invoke('chat:setOverrides', chatId, overrides),
