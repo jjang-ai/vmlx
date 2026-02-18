@@ -1,0 +1,10 @@
+[tools]
+python = "3.12"
+
+[tasks.serve]
+description = "Start the vllm-mlx server"
+run = "python -m vllm_mlx.server"
+
+[tasks.test]
+description = "Run tests"
+run = "pytest"

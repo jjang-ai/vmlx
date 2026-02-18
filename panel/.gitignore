@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+release/
+bundled-python/
+*.tar.gz
+.DS_Store
+.env
+.claude/
+test-*.js
+theme-preview.html
