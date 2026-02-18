@@ -113,7 +113,7 @@ class EngineCore:
         logger.info("Engine started")
 
     async def stop(self) -> None:
-        """Stop the engine loop."""
+        """Stop the engine loop and flush caches."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -122,6 +122,9 @@ class EngineCore:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # Flush disk caches before exit
+        if hasattr(self, 'scheduler'):
+            self.scheduler.shutdown()
         logger.info("Engine stopped")
 
     def is_running(self) -> bool:
