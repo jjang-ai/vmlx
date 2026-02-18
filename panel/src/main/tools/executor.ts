@@ -5,8 +5,21 @@
 
 import { readFileSync, writeFileSync, copyFileSync, renameSync, unlinkSync, rmdirSync, mkdirSync, readdirSync, statSync, existsSync, realpathSync } from 'fs'
 import { resolve, relative, dirname, basename, isAbsolute, join } from 'path'
-import { execSync, execFileSync } from 'child_process'
+import { execSync, execFileSync, spawn, ChildProcess } from 'child_process'
+import { clipboard } from 'electron'
 import { db } from '../database'
+
+// ─── Spawned Process Tracking ────────────────────────────────────────────────
+
+interface SpawnedEntry {
+  proc: ChildProcess
+  stdout: string
+  stderr: string
+  running: boolean
+  startedAt: number
+}
+
+const spawnedProcesses = new Map<string, SpawnedEntry>()
 
 export interface ToolResult {
   content: string
@@ -41,11 +54,12 @@ function resolvePath(workingDir: string, userPath: string): string {
 
 // ─── Tool Result Limits ──────────────────────────────────────────────────────
 
-const MAX_TOOL_RESULT_CHARS = 50000 // ~50KB — prevents context overflow on large files/outputs
+const DEFAULT_MAX_TOOL_RESULT_CHARS = 50000 // ~50KB — prevents context overflow on large files/outputs
 
-function truncateResult(content: string): string {
-  if (content.length <= MAX_TOOL_RESULT_CHARS) return content
-  return content.slice(0, MAX_TOOL_RESULT_CHARS) + `\n\n[Truncated — showing first ${MAX_TOOL_RESULT_CHARS} of ${content.length} characters]`
+function truncateResult(content: string, maxChars?: number): string {
+  const limit = maxChars && maxChars > 0 ? maxChars : DEFAULT_MAX_TOOL_RESULT_CHARS
+  if (content.length <= limit) return content
+  return content.slice(0, limit) + `\n\n[Truncated — showing first ${limit} of ${content.length} characters]`
 }
 
 // ─── Main Entry ──────────────────────────────────────────────────────────────
@@ -53,7 +67,8 @@ function truncateResult(content: string): string {
 export async function executeBuiltinTool(
   toolName: string,
   args: Record<string, any>,
-  workingDir: string
+  workingDir: string,
+  maxResultChars?: number
 ): Promise<ToolResult> {
   try {
     let result: ToolResult
@@ -94,11 +109,36 @@ export async function executeBuiltinTool(
         result = await webSearch(args.query, args.count); break
       case 'fetch_url':
         result = await fetchUrl(args.url, args.max_length); break
+      case 'insert_text':
+        result = insertText(args.path, args.line, args.text, workingDir); break
+      case 'replace_lines':
+        result = replaceLines(args.path, args.start_line, args.end_line, args.text, workingDir); break
+      case 'get_tree':
+        result = getTree(args.path || '.', args.max_depth || 4, workingDir); break
+      case 'apply_regex':
+        result = applyRegex(args.pattern, args.replacement, args.path, args.glob, workingDir); break
+      case 'read_image':
+        result = readImage(args.path, workingDir); break
+      case 'spawn_process':
+        result = spawnProcess(args.command, workingDir); break
+      case 'get_process_output':
+        result = getProcessOutput(args.pid); break
+      case 'diff_files':
+        result = diffFiles(args.path_a, args.path_b, workingDir); break
+      case 'count_tokens':
+        result = countTokens(args.text); break
+      case 'clipboard_read':
+        result = clipboardRead(); break
+      case 'clipboard_write':
+        result = clipboardWrite(args.text); break
+      case 'git':
+        result = gitCommand(args.command, workingDir); break
+      // ask_user is handled in chat.ts (needs IPC to renderer), not here
       default:
         return { content: `Unknown tool: ${toolName}`, is_error: true }
     }
     // Truncate large results to prevent context overflow in follow-up requests
-    result.content = truncateResult(result.content)
+    result.content = truncateResult(result.content, maxResultChars)
     return result
   } catch (err: any) {
     return { content: err.message || String(err), is_error: true }
@@ -841,6 +881,358 @@ async function ddgSearch(query: string, count?: number): Promise<ToolResult> {
     return { content: `DuckDuckGo: "${query}" (${results.length} results)\n\n${formatted}`, is_error: false }
   } catch (err: any) {
     return { content: `DuckDuckGo search failed: ${err.message}`, is_error: true }
+  }
+}
+
+// ─── Line-Based Editing ──────────────────────────────────────────────────────
+
+function insertText(path: string, line: number, text: string, workingDir: string): ToolResult {
+  if (!path) return { content: 'Missing required parameter: path', is_error: true }
+  if (text === undefined || text === null) return { content: 'Missing required parameter: text', is_error: true }
+  const fullPath = resolvePath(workingDir, path)
+  if (!existsSync(fullPath)) return { content: `File not found: ${path}`, is_error: true }
+
+  const content = readFileSync(fullPath, 'utf-8')
+  const lines = content.split('\n')
+  const insertIdx = (line <= 0 || line > lines.length) ? lines.length : line - 1
+  const newLines = text.split('\n')
+  lines.splice(insertIdx, 0, ...newLines)
+  writeFileSync(fullPath, lines.join('\n'), 'utf-8')
+  return { content: `Inserted ${newLines.length} line(s) at line ${insertIdx + 1} in ${path}`, is_error: false }
+}
+
+function replaceLines(path: string, startLine: number, endLine: number, text: string, workingDir: string): ToolResult {
+  if (!path) return { content: 'Missing required parameter: path', is_error: true }
+  const fullPath = resolvePath(workingDir, path)
+  if (!existsSync(fullPath)) return { content: `File not found: ${path}`, is_error: true }
+
+  const content = readFileSync(fullPath, 'utf-8')
+  const lines = content.split('\n')
+  if (startLine < 1 || startLine > lines.length) {
+    return { content: `start_line ${startLine} out of range (file has ${lines.length} lines)`, is_error: true }
+  }
+  if (endLine < startLine || endLine > lines.length) {
+    return { content: `end_line ${endLine} out of range (start_line=${startLine}, file has ${lines.length} lines)`, is_error: true }
+  }
+
+  const newLines = text.split('\n')
+  const removedCount = endLine - startLine + 1
+  lines.splice(startLine - 1, removedCount, ...newLines)
+  writeFileSync(fullPath, lines.join('\n'), 'utf-8')
+  return { content: `Replaced lines ${startLine}-${endLine} (${removedCount} lines) with ${newLines.length} line(s) in ${path}`, is_error: false }
+}
+
+// ─── Project Tree ────────────────────────────────────────────────────────────
+
+function getTree(path: string, maxDepth: number, workingDir: string): ToolResult {
+  const dir = resolvePath(workingDir, path)
+  if (!existsSync(dir)) return { content: `Directory not found: ${path}`, is_error: true }
+
+  // Try git ls-files for .gitignore-aware listing
+  try {
+    const output = execFileSync('git', ['ls-files', '--others', '--cached', '--exclude-standard'], {
+      cwd: dir, encoding: 'utf-8', timeout: 10000
+    })
+    if (output.trim()) {
+      const files = output.trim().split('\n').sort()
+      const tree = buildTreeFromPaths(files, maxDepth)
+      return { content: `Project tree: ${path}\n\n${tree}`, is_error: false }
+    }
+  } catch { /* not a git repo - fallback */ }
+
+  // Fallback: manual tree walk
+  const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv', '.tox', 'dist', 'build', '.next', '.cache', '.DS_Store'])
+  const treeLines: string[] = [path + '/']
+  let count = 0
+  const MAX = 500
+
+  function walk(d: string, prefix: string, depth: number): void {
+    if (depth > maxDepth || count >= MAX) return
+    let items: any[]
+    try { items = readdirSync(d, { withFileTypes: true }) as any[] } catch { return }
+    items = items.filter(i => !SKIP_DIRS.has(i.name) && (!i.name.startsWith('.') || i.name === '.env'))
+    items.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1
+      if (!a.isDirectory() && b.isDirectory()) return 1
+      return a.name.localeCompare(b.name)
+    })
+    for (let i = 0; i < items.length && count < MAX; i++) {
+      const item = items[i]
+      const isLast = i === items.length - 1
+      count++
+      if (item.isDirectory()) {
+        treeLines.push(`${prefix}${isLast ? '└── ' : '├── '}${item.name}/`)
+        walk(join(d, item.name), prefix + (isLast ? '    ' : '│   '), depth + 1)
+      } else {
+        treeLines.push(`${prefix}${isLast ? '└── ' : '├── '}${item.name}`)
+      }
+    }
+    if (count >= MAX) treeLines.push(`${prefix}... (truncated at ${MAX} entries)`)
+  }
+
+  walk(dir, '', 1)
+  return { content: treeLines.join('\n'), is_error: false }
+}
+
+function buildTreeFromPaths(files: string[], maxDepth: number): string {
+  const root: Record<string, any> = {}
+  for (const file of files) {
+    const parts = file.split('/')
+    let node = root
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1) { node[parts[i]] = null }
+      else { if (!node[parts[i]]) node[parts[i]] = {}; node = node[parts[i]] }
+    }
+  }
+
+  const renderLines: string[] = ['.']
+  function render(node: Record<string, any>, prefix: string, depth: number): void {
+    if (depth > maxDepth) { renderLines.push(`${prefix}...`); return }
+    const entries = Object.keys(node).sort((a, b) => {
+      const aDir = node[a] !== null, bDir = node[b] !== null
+      if (aDir && !bDir) return -1
+      if (!aDir && bDir) return 1
+      return a.localeCompare(b)
+    })
+    for (let i = 0; i < entries.length; i++) {
+      const name = entries[i]
+      const isLast = i === entries.length - 1
+      const connector = isLast ? '└── ' : '├── '
+      const extension = isLast ? '    ' : '│   '
+      if (node[name] !== null) {
+        renderLines.push(`${prefix}${connector}${name}/`)
+        render(node[name], prefix + extension, depth + 1)
+      } else {
+        renderLines.push(`${prefix}${connector}${name}`)
+      }
+    }
+  }
+  render(root, '', 1)
+  return renderLines.join('\n')
+}
+
+// ─── Regex Replace ───────────────────────────────────────────────────────────
+
+function applyRegex(pattern: string, replacement: string, path: string, glob: string | undefined, workingDir: string): ToolResult {
+  if (!pattern) return { content: 'Missing required parameter: pattern', is_error: true }
+  if (replacement === undefined) return { content: 'Missing required parameter: replacement', is_error: true }
+
+  const fullPath = resolvePath(workingDir, path)
+  if (!existsSync(fullPath)) return { content: `Path not found: ${path}`, is_error: true }
+
+  let regex: RegExp
+  try { regex = new RegExp(pattern, 'g') } catch (e) {
+    return { content: `Invalid regex: ${(e as Error).message}`, is_error: true }
+  }
+
+  const stat = statSync(fullPath)
+  const targetFiles: string[] = []
+  if (stat.isFile()) {
+    targetFiles.push(fullPath)
+  } else {
+    try {
+      const fdArgs = ['--color=never', '--type', 'f']
+      if (glob) fdArgs.push('--glob', glob)
+      fdArgs.push(fullPath)
+      const output = execFileSync('fd', fdArgs, { encoding: 'utf-8', timeout: 10000 })
+      targetFiles.push(...output.trim().split('\n').filter(Boolean))
+    } catch {
+      try {
+        const findArgs = [fullPath, '-type', 'f', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*']
+        if (glob) findArgs.push('-name', glob)
+        const output = execFileSync('find', findArgs, { encoding: 'utf-8', timeout: 10000 })
+        targetFiles.push(...output.trim().split('\n').filter(Boolean))
+      } catch (e) {
+        return { content: `Failed to find files: ${(e as Error).message}`, is_error: true }
+      }
+    }
+  }
+
+  const results: string[] = []
+  let totalReplacements = 0
+  for (const file of targetFiles) {
+    try {
+      const content = readFileSync(file, 'utf-8')
+      const matches = content.match(regex)
+      if (matches && matches.length > 0) {
+        writeFileSync(file, content.replace(regex, replacement), 'utf-8')
+        results.push(`${relative(workingDir, file)}: ${matches.length} replacement(s)`)
+        totalReplacements += matches.length
+      }
+    } catch { /* skip binary/unreadable files */ }
+  }
+
+  if (totalReplacements === 0) {
+    return { content: `No matches found for /${pattern}/ in ${path}${glob ? ` (${glob})` : ''}`, is_error: false }
+  }
+  return { content: `Applied /${pattern}/: ${totalReplacements} replacement(s) in ${results.length} file(s)\n\n${results.join('\n')}`, is_error: false }
+}
+
+// ─── Image Reading ───────────────────────────────────────────────────────────
+
+function readImage(path: string, workingDir: string): ToolResult {
+  if (!path) return { content: 'Missing required parameter: path', is_error: true }
+  const fullPath = resolvePath(workingDir, path)
+  if (!existsSync(fullPath)) return { content: `File not found: ${path}`, is_error: true }
+
+  const ext = path.toLowerCase().split('.').pop()
+  const mimeTypes: Record<string, string> = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml'
+  }
+  const mime = mimeTypes[ext || '']
+  if (!mime) return { content: `Unsupported image format: .${ext}. Supported: png, jpg, gif, webp, svg`, is_error: true }
+
+  const stat = statSync(fullPath)
+  if (stat.size > 10 * 1024 * 1024) return { content: `Image too large: ${formatBytes(stat.size)} (max 10MB)`, is_error: true }
+
+  const base64 = readFileSync(fullPath).toString('base64')
+  return { content: `Image: ${path} (${mime}, ${formatBytes(stat.size)})\ndata:${mime};base64,${base64}`, is_error: false }
+}
+
+// ─── Background Process ──────────────────────────────────────────────────────
+
+function spawnProcess(command: string, workingDir: string): ToolResult {
+  if (!command) return { content: 'Missing required parameter: command', is_error: true }
+  const id = `proc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+  const proc = spawn('/bin/sh', ['-c', command], {
+    cwd: workingDir,
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+
+  const entry: SpawnedEntry = { proc, stdout: '', stderr: '', running: true, startedAt: Date.now() }
+  proc.stdout?.on('data', (d: Buffer) => {
+    entry.stdout += d.toString()
+    if (entry.stdout.length > 100000) entry.stdout = entry.stdout.slice(-50000)
+  })
+  proc.stderr?.on('data', (d: Buffer) => {
+    entry.stderr += d.toString()
+    if (entry.stderr.length > 100000) entry.stderr = entry.stderr.slice(-50000)
+  })
+  proc.on('close', () => { entry.running = false })
+  proc.on('error', (err: Error) => { entry.stderr += `\nProcess error: ${err.message}`; entry.running = false })
+
+  // Auto-kill after 5 minutes
+  setTimeout(() => { if (entry.running) { try { proc.kill() } catch {} } }, 300000)
+  spawnedProcesses.set(id, entry)
+
+  return { content: `Started process: ${command}\nPID: ${id}\nUse get_process_output(pid="${id}") to check output.`, is_error: false }
+}
+
+function getProcessOutput(pid: string): ToolResult {
+  if (!pid) return { content: 'Missing required parameter: pid', is_error: true }
+  const entry = spawnedProcesses.get(pid)
+  if (!entry) return { content: `Process not found: ${pid}. It may have been cleaned up or never existed.`, is_error: true }
+
+  const status = entry.running ? 'RUNNING' : 'STOPPED'
+  const elapsed = ((Date.now() - entry.startedAt) / 1000).toFixed(1)
+  let output = `Process ${pid} - ${status} (${elapsed}s elapsed)\n`
+  if (entry.stdout) output += `\nSTDOUT:\n${entry.stdout.slice(-20000)}`
+  if (entry.stderr) output += `\nSTDERR:\n${entry.stderr.slice(-10000)}`
+  if (!entry.stdout && !entry.stderr) output += '\n(no output yet)'
+  return { content: output, is_error: false }
+}
+
+// ─── Diff ────────────────────────────────────────────────────────────────────
+
+function diffFiles(pathA: string, pathB: string | undefined, workingDir: string): ToolResult {
+  if (!pathA) return { content: 'Missing required parameter: path_a', is_error: true }
+
+  if (pathB) {
+    const fullA = resolvePath(workingDir, pathA)
+    const fullB = resolvePath(workingDir, pathB)
+    if (!existsSync(fullA)) return { content: `File not found: ${pathA}`, is_error: true }
+    if (!existsSync(fullB)) return { content: `File not found: ${pathB}`, is_error: true }
+    try {
+      const output = execFileSync('diff', ['-u', fullA, fullB], {
+        encoding: 'utf-8', timeout: 10000, maxBuffer: 5 * 1024 * 1024
+      })
+      return { content: output || `Files are identical: ${pathA} and ${pathB}`, is_error: false }
+    } catch (err: any) {
+      if (err.status === 1 && err.stdout) {
+        return { content: `Diff: ${pathA} vs ${pathB}\n\n${err.stdout}`, is_error: false }
+      }
+      return { content: `Diff failed: ${err.message}`, is_error: true }
+    }
+  } else {
+    try {
+      const output = execFileSync('git', ['diff', 'HEAD', '--', pathA], {
+        cwd: workingDir, encoding: 'utf-8', timeout: 10000
+      })
+      return { content: output || `No changes from HEAD: ${pathA}`, is_error: false }
+    } catch (err: any) {
+      if (err.stdout) return { content: `Git diff: ${pathA}\n\n${err.stdout}`, is_error: false }
+      return { content: `Git diff failed (not a git repo?): ${err.message}`, is_error: true }
+    }
+  }
+}
+
+// ─── Token Estimation ────────────────────────────────────────────────────────
+
+function countTokens(text: string): ToolResult {
+  if (!text) return { content: 'Missing required parameter: text', is_error: true }
+  const charEstimate = Math.ceil(text.length / 4)
+  const words = text.split(/\s+/).filter(Boolean).length
+  const wordEstimate = Math.ceil(words * 1.3)
+  const estimate = Math.ceil((charEstimate + wordEstimate) / 2)
+  return {
+    content: `Text: ${text.length} chars, ${words} words\nEstimated tokens: ~${estimate} (char-based: ~${charEstimate}, word-based: ~${wordEstimate})`,
+    is_error: false
+  }
+}
+
+// ─── Clipboard ───────────────────────────────────────────────────────────────
+
+function clipboardRead(): ToolResult {
+  const text = clipboard.readText()
+  if (!text) return { content: '(clipboard is empty)', is_error: false }
+  return { content: `Clipboard (${text.length} chars):\n\n${text}`, is_error: false }
+}
+
+function clipboardWrite(text: string): ToolResult {
+  if (text === undefined || text === null) return { content: 'Missing required parameter: text', is_error: true }
+  clipboard.writeText(text)
+  return { content: `Written ${text.length} characters to clipboard.`, is_error: false }
+}
+
+// ─── Git ─────────────────────────────────────────────────────────────────────
+
+function gitCommand(command: string, workingDir: string): ToolResult {
+  if (!command) return { content: 'Missing required parameter: command', is_error: true }
+
+  // Block destructive operations
+  const dangerous = [
+    /push\s+.*--force/, /push\s+-f\b/,
+    /reset\s+--hard/,
+    /clean\s+-f/, /clean\s+.*-fd/,
+    /branch\s+-D\b/
+  ]
+  for (const re of dangerous) {
+    if (re.test(command)) {
+      return { content: `Blocked: "git ${command}" is a destructive operation. Use run_command if you really need this.`, is_error: true }
+    }
+  }
+
+  // Use execFileSync with shell args split for simple commands, fall back to shell for complex ones
+  // Git commands often need shell features (quotes in commit messages, pipes, etc.)
+  try {
+    const output = execFileSync('git', command.split(/\s+/), {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024
+    })
+    return { content: `$ git ${command}\n\n${output}`, is_error: false }
+  } catch (err: any) {
+    const stdout = err.stdout?.toString() || ''
+    const stderr = err.stderr?.toString() || ''
+    const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
+    if (err.status === 1 && command.startsWith('diff')) {
+      return { content: `$ git ${command}\n\n${combined}`, is_error: false }
+    }
+    return { content: `$ git ${command}\n\nExit code: ${err.status ?? 'unknown'}\n\n${combined}`, is_error: true }
   }
 }
 

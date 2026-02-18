@@ -507,7 +507,7 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
   { value: 'glm47', label: 'GLM / GPT-OSS — GLM-4, GLM-4.7 9B, GLM-4.7 Flash, GLM-Z1, GPT-OSS-20B/120B', format: '<tool_call>name\n<arg_key>key</arg_key><arg_value>val</arg_value>\n</tool_call>' },
   { value: 'granite', label: 'Granite — IBM Granite 3.0/3.1/3.2/3.3, Granite-Code 3B/8B/20B/34B', format: '<|tool_call|>[{"name":"fn","arguments":{...}}]' },
   { value: 'functionary', label: 'Functionary — MeetKai Functionary v2/v3/v4r (7B/8B/70B)', format: '<|from|>assistant\n<|recipient|>fn\n<|content|>{"arg":"val"}' },
-  { value: 'minimax', label: 'MiniMax — MiniMax-M1 40B, M2, M2.5 230B MoE, Prism Pro', format: '<minimax:tool_call><invoke name="fn"><parameter name="arg">val</parameter></invoke></minimax:tool_call>' },
+  { value: 'minimax', label: 'MiniMax — MiniMax-M1 40B, M2, M2.5 230B MoE', format: '<minimax:tool_call><invoke name="fn"><parameter name="arg">val</parameter></invoke></minimax:tool_call>' },
   { value: 'xlam', label: 'xLAM — Salesforce xLAM-v2, xLAM-1B/7B/8x7B/8x22B', format: '[{"name":"fn","arguments":{...}}]' },
   { value: 'kimi', label: 'Kimi — Kimi-K2 1T MoE, K2.5, Moonshot-v1', format: '<|tool_calls_section_begin|><|tool_call_begin|>fn<|tool_call_argument_begin|>{...}<|tool_call_end|>' },
   { value: 'step3p5', label: 'StepFun — Step-3.5 Flash 8B MoE, Step-3.5', format: '<tool_call><function=fn><parameter=arg>val</parameter></function></tool_call>' },
