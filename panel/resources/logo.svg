@@ -1,0 +1,39 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1319"/>
+      <stop offset="50%" stop-color="#0a0c10"/>
+      <stop offset="100%" stop-color="#0d1017"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="35%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.18"/>
+      <stop offset="60%" stop-color="#3b82f6" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="textGlow">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="12" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.231  0 0 0 0 0.510  0 0 0 0 0.965  0 0 0 0.5 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Rounded square background -->
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <!-- Subtle border -->
+  <rect x="1" y="1" width="1022" height="1022" rx="229" fill="none" stroke="#1e2330" stroke-width="2" opacity="0.5"/>
+  <!-- Radial glow behind text -->
+  <rect width="1024" height="1024" rx="230" fill="url(#glow)"/>
+  <!-- vMLX text with glow -->
+  <text
+    x="512"
+    y="620"
+    font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Helvetica Neue', sans-serif"
+    font-size="320"
+    font-weight="800"
+    text-anchor="middle"
+    letter-spacing="-8"
+    filter="url(#textGlow)"
+  ><tspan fill="#3b82f6">v</tspan><tspan fill="#e2e4ea">MLX</tspan></text>
+</svg>

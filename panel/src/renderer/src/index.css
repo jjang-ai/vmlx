@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Midnight Steel theme — dark blue + charcoal grey
+       Values are RGB triplets for Tailwind opacity support (bg-primary/90 etc) */
+    --background: 10 12 16;          /* #0a0c10 */
+    --foreground: 226 228 234;       /* #e2e4ea */
+    --card: 17 20 25;               /* #111419 */
+    --card-foreground: 226 228 234;  /* #e2e4ea */
+    --popover: 24 28 36;            /* #181c24 */
+    --popover-foreground: 226 228 234; /* #e2e4ea */
+    --primary: 59 130 246;          /* #3b82f6 */
+    --primary-foreground: 255 255 255; /* #ffffff */
+    --secondary: 24 28 36;          /* #181c24 */
+    --secondary-foreground: 226 228 234; /* #e2e4ea */
+    --muted: 30 35 48;              /* #1e2330 */
+    --muted-foreground: 139 144 160; /* #8b90a0 */
+    --accent: 37 44 59;             /* #252c3b */
+    --accent-foreground: 255 255 255; /* #ffffff */
+    --destructive: 239 68 68;       /* #ef4444 */
+    --destructive-foreground: 255 255 255; /* #ffffff */
+    --border: 30 35 48;             /* #1e2330 */
+    --input: 37 44 59;              /* #252c3b */
+    --ring: 59 130 246;             /* #3b82f6 */
+    --warning: 245 158 11;          /* #f59e0b */
+    --warning-foreground: 255 255 255; /* #ffffff */
+    --radius: 10px;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .cfg-input {
+    @apply w-full mt-1 px-2 py-1.5 bg-background border border-input rounded text-sm;
+  }
+}
+
+/* Custom range slider styling */
+input[type="range"].cfg-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  background: rgb(30 35 48);
+}
+
+input[type="range"].cfg-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgb(var(--primary));
+  cursor: pointer;
+  border: 2px solid rgb(var(--background));
+  box-shadow: 0 0 0 1px rgb(var(--primary) / 0.3);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+input[type="range"].cfg-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  box-shadow: 0 0 0 4px rgb(var(--primary) / 0.15);
+}
+
+input[type="range"].cfg-slider:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgb(var(--primary) / 0.3);
+}
+
+input[type="range"].cfg-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+input[type="range"].cfg-slider:disabled::-webkit-slider-thumb {
+  cursor: not-allowed;
+}
+
+/* Window dragging for frameless window */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Ensure buttons and inputs are not draggable */
+button, input, select, textarea, a {
+  -webkit-app-region: no-drag;
+}
+
+/* Prose overrides for Midnight Steel theme (requires @tailwindcss/typography) */
+.prose {
+  --tw-prose-body: #e2e4ea;
+  --tw-prose-headings: #ffffff;
+  --tw-prose-lead: #8b90a0;
+  --tw-prose-links: #60a5fa;
+  --tw-prose-bold: #ffffff;
+  --tw-prose-counters: #8b90a0;
+  --tw-prose-bullets: #8b90a0;
+  --tw-prose-hr: #1e2330;
+  --tw-prose-quotes: #e2e4ea;
+  --tw-prose-quote-borders: #3b82f6;
+  --tw-prose-captions: #8b90a0;
+  --tw-prose-code: #60a5fa;
+  --tw-prose-pre-code: #e2e4ea;
+  --tw-prose-pre-bg: #0a0c10;
+  --tw-prose-th-borders: #1e2330;
+  --tw-prose-td-borders: #1e2330;
+  /* Invert variants for prose-invert */
+  --tw-prose-invert-body: #e2e4ea;
+  --tw-prose-invert-headings: #ffffff;
+  --tw-prose-invert-lead: #8b90a0;
+  --tw-prose-invert-links: #60a5fa;
+  --tw-prose-invert-bold: #ffffff;
+  --tw-prose-invert-counters: #8b90a0;
+  --tw-prose-invert-bullets: #8b90a0;
+  --tw-prose-invert-hr: #1e2330;
+  --tw-prose-invert-quotes: #e2e4ea;
+  --tw-prose-invert-quote-borders: #3b82f6;
+  --tw-prose-invert-captions: #8b90a0;
+  --tw-prose-invert-code: #60a5fa;
+  --tw-prose-invert-pre-code: #e2e4ea;
+  --tw-prose-invert-pre-bg: #0a0c10;
+  --tw-prose-invert-th-borders: #1e2330;
+  --tw-prose-invert-td-borders: #1e2330;
+}
+
+/* Code block styling — positioned relative for copy button overlay */
+.prose pre {
+  position: relative;
+  border: 1px solid rgb(30 35 48);
+  border-radius: 8px;
+}
+
+/* Inline code styling */
+.prose :not(pre) > code {
+  background: rgb(24 28 36);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+
+/* Code block copy button */
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #8b90a0;
+  background: rgb(17 20 25 / 0.8);
+  border: 1px solid rgb(30 35 48);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.prose pre:hover .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { color: #e2e4ea; background: rgb(24 28 36); }
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(30 35 48); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(85 91 110); }

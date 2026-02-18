@@ -1,0 +1,190 @@
+# SPDX-License-Identifier: Apache-2.0
+"""
+Tokenizer utilities with fallback support for non-standard tokenizers.
+
+Some models (e.g., Nemotron) use non-standard tokenizer configurations
+that transformers doesn't recognize. This module provides fallback loading
+directly from tokenizer.json.
+"""
+
+import json
+import logging
+from pathlib import Path
+
+from .chat_templates import DEFAULT_CHATML_TEMPLATE, NEMOTRON_CHAT_TEMPLATE
+
+logger = logging.getLogger(__name__)
+
+# Models that require tokenizer fallback
+FALLBACK_MODELS = [
+    "nemotron",
+    "NVIDIA-Nemotron",
+]
+
+
+def _get_model_type_from_config(model_name: str) -> str | None:
+    """Read model_type from config.json if model_name is a local directory."""
+    model_path = Path(model_name)
+    if model_path.is_dir():
+        config_path = model_path / "config.json"
+        if config_path.exists():
+            try:
+                with open(config_path) as f:
+                    config = json.load(f)
+                return config.get("model_type", "").lower() or None
+            except Exception:
+                pass
+    return None
+
+
+# model_type values that do NOT need tokenizer fallback (standard architectures)
+_STANDARD_ARCHITECTURES = {
+    "qwen3", "qwen3_moe", "qwen3_vl", "qwen2", "qwen2_moe", "qwen2_vl",
+    "llama", "mistral", "mixtral", "pixtral", "gemma", "gemma2", "gemma3",
+    "phi3", "phi4", "deepseek_v2", "deepseek_v3", "chatglm", "glm4",
+    "glm4_moe", "glm4_moe_lite", "gpt_oss", "cohere", "cohere2", "granite",
+    "mamba", "falcon_mamba", "jamba", "rwkv",
+}
+
+
+def _needs_tokenizer_fallback(model_name: str) -> bool:
+    """Check if model needs tokenizer fallback.
+
+    Reads config.json first for authoritative architecture detection.
+    A Qwen3 fine-tune named "Nemotron-Orchestrator" should NOT get the
+    Nemotron tokenizer fallback — its real architecture is Qwen3.
+    """
+    # 1. Authoritative: read config.json model_type if local directory
+    model_type = _get_model_type_from_config(model_name)
+    if model_type:
+        if model_type in _STANDARD_ARCHITECTURES:
+            logger.info(
+                f"config.json model_type='{model_type}' is standard — "
+                f"skipping tokenizer fallback for {model_name}"
+            )
+            return False
+        if model_type == "nemotron":
+            return True
+
+    # 2. Try registry (name-based pattern matching)
+    try:
+        from ..model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        config = registry.lookup(model_name)
+        if config.family_name != "unknown":
+            return config.tokenizer_fallback
+    except Exception:
+        pass  # Fall through to pattern matching
+
+    model_lower = model_name.lower()
+    return any(pattern.lower() in model_lower for pattern in FALLBACK_MODELS)
+
+
+def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
+    """
+    Load model and tokenizer with fallback for non-standard tokenizers.
+
+    Args:
+        model_name: HuggingFace model name or local path
+        tokenizer_config: Optional tokenizer configuration
+
+    Returns:
+        Tuple of (model, tokenizer)
+    """
+    from mlx_lm import load
+
+    tokenizer_config = tokenizer_config or {}
+
+    # Check if model needs fallback (e.g., Nemotron)
+    if _needs_tokenizer_fallback(model_name):
+        logger.info(
+            f"Model {model_name} requires tokenizer fallback, loading directly..."
+        )
+        return _load_with_tokenizer_fallback(model_name)
+
+    # Check if local path exists before loading
+    model_path = Path(model_name)
+    if model_path.is_absolute() and not model_path.exists():
+        raise FileNotFoundError(
+            f"Model path does not exist: {model_name}. "
+            f"Check that the model directory is available."
+        )
+
+    try:
+        return load(model_name, tokenizer_config=tokenizer_config)
+    except ValueError as e:
+        # Fallback for models with non-standard tokenizers
+        if "TokenizersBackend" in str(e) or "Tokenizer class" in str(e):
+            logger.warning(f"Standard tokenizer loading failed, using fallback: {e}")
+            return _load_with_tokenizer_fallback(model_name)
+        else:
+            raise
+
+
+def _load_with_tokenizer_fallback(model_name: str):
+    """Load model with fallback tokenizer for non-standard models like Nemotron."""
+    from mlx_lm.utils import load_model
+
+    logger.info("Loading with tokenizer fallback...")
+
+    # Get model path: use local directory directly, or download from HuggingFace
+    local_path = Path(model_name)
+    if local_path.is_dir():
+        model_path = local_path
+    else:
+        from huggingface_hub import snapshot_download
+        model_path = Path(snapshot_download(model_name))
+
+    # Load model
+    model, _ = load_model(model_path)
+
+    # Try to load tokenizer from tokenizer.json directly
+    tokenizer_json = model_path / "tokenizer.json"
+    if tokenizer_json.exists():
+        from tokenizers import Tokenizer
+        from transformers import PreTrainedTokenizerFast
+
+        logger.info("Loading tokenizer from tokenizer.json")
+        base_tokenizer = Tokenizer.from_file(str(tokenizer_json))
+
+        # Read tokenizer_config.json for special tokens and chat template
+        tokenizer_config_path = model_path / "tokenizer_config.json"
+        bos_token = "<s>"
+        eos_token = "</s>"
+        unk_token = "<unk>"
+        chat_template = None
+
+        if tokenizer_config_path.exists():
+            with open(tokenizer_config_path) as f:
+                config = json.load(f)
+                bos_token = config.get("bos_token", bos_token)
+                eos_token = config.get("eos_token", eos_token)
+                unk_token = config.get("unk_token", unk_token)
+                chat_template = config.get("chat_template")
+
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_object=base_tokenizer,
+            bos_token=bos_token,
+            eos_token=eos_token,
+            unk_token=unk_token,
+            pad_token="<pad>",
+        )
+
+        # Set chat template if available
+        if chat_template:
+            tokenizer.chat_template = chat_template
+            logger.info("Chat template loaded from tokenizer_config.json")
+        elif _needs_tokenizer_fallback(model_name):
+            # Use official Nemotron chat template with thinking support
+            tokenizer.chat_template = NEMOTRON_CHAT_TEMPLATE
+            logger.info("Using official Nemotron chat template with thinking support")
+        else:
+            # Default simple ChatML format for other models
+            tokenizer.chat_template = DEFAULT_CHATML_TEMPLATE
+            logger.info("Using default ChatML chat template")
+
+        logger.info("Tokenizer loaded via fallback successfully")
+        return model, tokenizer
+    else:
+        raise ValueError(f"No tokenizer.json found in {model_path}")

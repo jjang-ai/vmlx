@@ -1,0 +1,178 @@
+# vMLX Agent Rules — Model Integration Checklist
+
+## ⚠️ AUTO-UPDATE RULE
+Whenever making changes or fixes to any part of the codebase, **always automatically update** this rules file, CHANGELOG.md, and any relevant workflows or docs. Do NOT wait for the user to ask. This applies to:
+- New features → add to CHANGELOG, add gotchas if relevant
+- Bug fixes → add to CHANGELOG, update relevant checklists
+- New patterns → add to Critical Gotchas
+- Build/deploy → use `/build` workflow
+- New files/modules → document in relevant section
+
+## Architecture Summary
+- **Frontend**: Electron + React + TypeScript + Tailwind (panel/)
+- **Backend**: Python `vllm_mlx` package (FastAPI, MLX, mlx-lm/mlx-vlm)
+- **Engines**: SimpleEngine (direct mlx-lm wrapper), BatchedEngine (continuous batching via EngineCore)
+
+## When Adding a New Model Family
+
+### 1. Research Phase
+- [ ] Verify `mlx-lm` architecture support (check `auto_map` in config.json if custom)
+- [ ] Identify cache type: `kv`, `rotating_kv`, `mamba`, `hybrid`, `arrays`
+- [ ] Identify tool calling format (XML tags, JSON, bracket-style, etc.)
+- [ ] Identify reasoning format (`<think>` tags? custom tags?)
+- [ ] Check EOS token (may differ from tokenizer default)
+- [ ] Check if model is multimodal (is_mllm flag)
+- [ ] Review chat template Jinja for: tools injection, role="tool" support, enable_thinking
+- [ ] Confirm recommended sampling parameters (temperature, top_p, top_k)
+
+### 2. Model Config Registration (model_configs.py)
+- [ ] Add `ModelConfig` entry with correct `family_name`, `pattern`, `cache_type`
+- [ ] Set `tool_parser` to correct parser name
+- [ ] Set `reasoning_parser` (usually `qwen3` for `<think>` tags)
+- [ ] Set `think_in_template` if model uses `enable_thinking` in chat template
+- [ ] Set `eos_tokens` if different from tokenizer default
+- [ ] Set `supports_native_tools` and `preserve_native_tool_format` if chat template handles role="tool"
+- [ ] Use appropriate `priority` (1-5 specific, 10-20 family, 30+ generic)
+- [ ] Add specific variant config (priority 5) and catch-all family config (priority 10+)
+
+### 3. Tool Parser (if unique format)
+- [ ] Create `{model}_tool_parser.py` in `vllm_mlx/tool_parsers/`
+- [ ] Implement `extract_tool_calls()` — handle parameter type conversion
+- [ ] Implement `extract_tool_calls_streaming()` — marker detect → accumulate → parse
+- [ ] Set `SUPPORTS_NATIVE_TOOL_FORMAT = True` if chat template handles role="tool" natively
+- [ ] Register with `@ToolParserManager.register_module(["name1", "name2"])`
+- [ ] Add import and export in `__init__.py`
+
+### 4. Server Integration (server.py)
+- [ ] Add tool call opening tag to `_TOOL_CALL_MARKERS` list (line ~1734)
+  - This is CRITICAL for streaming — without it, tool calls leak as raw text
+- [ ] Verify auto-detection flow: model name → ModelConfigRegistry.get_tool_parser() → parser
+- [ ] Verify `_detect_native_tool_support()` returns True for models with native tool templates
+
+### 5. Auto Tool Parser (auto_tool_parser.py)
+- [ ] Add detection step in the cascade (order matters: more specific patterns first)
+- [ ] Test that auto-parser detects the new format without explicit --tool-call-parser flag
+
+### 6. Testing
+- [ ] Add parser unit tests in `tests/test_tool_parsers.py`
+  - Single call, multiple calls, streaming, think tags, type conversion, edge cases
+- [ ] Update `TestToolParserManager` registry expectations
+- [ ] Run existing test suites: `test_tool_parsers.py`, `test_model_config_registry.py`
+- [ ] Verify no regressions in existing parsers
+
+### 7. Pipeline Compatibility Checklist
+- [ ] **Prefix caching**: Verify cache_type is correct (trie cache operates on token IDs, architecture-agnostic)
+- [ ] **Memory/context**: Large models may need memory-aware cache settings
+- [ ] **Chat template**: Verify `apply_chat_template` handles `tools`, `enable_thinking` without errors
+  - SimpleEngine (simple.py:401-416) passes these with TypeError fallback
+- [ ] **MCP tools merge**: Verify user + MCP tools combine correctly (server.py:1218-1226)
+- [ ] **Streaming stats**: TTFT/TPS/PPS computed in chat.ts — model-agnostic
+- [ ] **Reasoning box**: `ReasoningBox` component renders from `reasoning` field in SSE chunks
+- [ ] **EOS handling**: eos_tokens from ModelConfig flows to MLXLanguageModel.load() → tokenizer_config
+
+### 8. Documentation
+- [ ] Update CHANGELOG.md with model support entry
+- [ ] Verify panel/CHANGELOG.md if frontend changes needed
+- [ ] Update README.md supported models list if applicable
+
+## Critical Gotchas
+1. **_TOOL_CALL_MARKERS must include new tool call tags** — otherwise streaming tool calls emit as content text
+2. **SUPPORTS_NATIVE_TOOL_FORMAT** — if True, role="tool" messages and tool_calls fields are preserved; if False, they're converted to plain text
+3. **think_in_template** — if True, model generates `<think>` blocks without explicit prompting; the streaming handler prepends `<think>` tag on first token
+4. **EOS token override** — must match the model's actual EOS, not just tokenizer default (e.g., MiniMax uses `[e~[` not `<|im_end|>`)
+5. **Chat template TypeError fallback** — SimpleEngine catches TypeError and retries without `tools`/`enable_thinking` kwargs for templates that don't support them
+6. **Hybrid cache models** — auto-detected and use paged cache; pure KV models use memory-aware cache
+7. **Streaming detokenizer** — per-request UTF-8-aware decoding handles multi-byte chars correctly for all models
+8. **Tool parser dropdown** — when adding a new parser, also add `<option>` in `SessionConfigForm.tsx` (line ~287-301)
+9. **Thinking toggle** — `enable_thinking` flows from `ChatOverrides.enableThinking` → request body → `ChatCompletionRequest.enable_thinking` → engine kwargs → `apply_chat_template`. If `None`, auto-detects from `ModelConfig.think_in_template`
+10. **Override inheritance** — when adding a new field to `ChatOverrides`, it MUST also be added to the inheritance block in `chat:create` handler (`chat.ts` ~line 117-132), otherwise new chats won't inherit the setting from sibling chats
+11. **Tool call history** — tool calls/results are NOT stored in the DB. The agentic loop runs in-memory during streaming. On chat resume, only `role` + `content` are reconstructed. This is by design.
+
+## Chat Resume & Settings Enforcement
+
+### Context Reconstruction (chat.ts ~line 302-324)
+- `db.getMessages(chatId)` loads all stored messages
+- `db.getChatOverrides(chatId)` loads per-chat settings
+- System prompt injected first (from overrides or AGENTIC_SYSTEM_PROMPT)
+- Existing system messages skipped to avoid duplicates
+- Messages sent as `{ role, content }` — tool_calls not persisted
+
+### Settings Applied to Request Body (3 places)
+All three request construction points MUST include ALL override fields:
+1. **Initial request (Responses API)** — lines ~383-399
+2. **Initial request (Chat Completions)** — lines ~401-416
+3. **Follow-up body builder** — lines ~676-692
+
+| Setting | Field | Default |
+|---------|-------|---------|
+| Temperature | `temperature` | 0.7 |
+| Top P | `top_p` | 0.9 |
+| Max Tokens | `max_tokens` / `max_output_tokens` | config.maxTokens ?? 2048 |
+| Top K | `top_k` | only sent when > 0 |
+| Min P | `min_p` | only sent when > 0 |
+| Repeat Penalty | `repetition_penalty` | only sent when ≠ 1.0 |
+| Stop Sequences | `stop` | only sent when user-set |
+| Wire API | `wireApi` | 'completions' |
+| Enable Thinking | `enable_thinking` | true |
+| Tools | `tools` | only when builtinToolsEnabled |
+| Max Tool Iterations | in-memory cap | 10 |
+
+### Override Inheritance (chat:create, chat.ts ~line 107-159)
+- New chats inherit overrides from most recent sibling chat (same modelPath)
+- Fallback: reads `generation_config.json` for sampling defaults
+- **ALL ChatOverrides fields must be listed** in the inheritance block
+
+### Abort/Stop Behavior (chat.ts ~line 887-949)
+- Partial content saved with `[Generation interrupted]` suffix
+- Real metrics computed (not zeros)
+- Server-side cancel sent via `POST /v1/chat/completions/{id}/cancel`
+- Chat and messages preserved — content shows up to the interruption point
+
+## UI / Pipeline Runtime Verification Checklist
+
+### Chat & Scrolling
+- [ ] `MessageList.tsx`: `isNearBottom` ref tracks if user is within 100px of bottom
+- [ ] Auto-scroll only fires when `isNewMessage` or `isNearBottomRef.current`
+- [ ] `behavior: 'auto'` during streaming (instant), `'smooth'` for new messages
+- [ ] `ReasoningBox`: `max-h-[300px] overflow-y-auto` — independently scrollable
+- [ ] ReasoningBox auto-expands on stream start, auto-collapses 1s after done
+
+### Stop Button / Request Cancellation
+- [ ] `chat:abort` handler in `chat.ts` aborts `AbortController` (kills SSE stream)
+- [ ] Sends `POST /v1/chat/completions/{id}/cancel` to server for GPU release
+- [ ] `activeRequests` Map tracks per-chat AbortController + response ID + endpoint
+- [ ] Stale lock recovery: if request age > timeout + 30s buffer, auto-clears lock
+
+### Tool Call Display
+- [ ] `ToolCallStatus` component: groups by tool call (each `calling` starts new group)
+- [ ] Collapsible: shows tool name + phase (detected/running/done/failed), expand for args+result
+- [ ] Args: `max-h-[100px]` scrollable, JSON pretty-printed
+- [ ] Results: `max-h-[400px]` scrollable, whitespace-pre-wrap
+- [ ] Multiple `processing` events collapsed into one (no spam)
+
+### Agentic Loop & Loop Prevention
+- [ ] `MAX_TOOL_ITERATIONS`: defaults to 10, configurable via `ChatSettings.tsx` slider → `overrides.maxToolIterations`
+- [ ] Auto-continue: capped at `MAX_AUTO_CONTINUES=2` — only triggers when `tokenCount < 100` and `toolIteration > 0`
+- [ ] Tool execution: `executeToolCalls()` handles both builtin tools (local exec) and MCP tools (server `/v1/mcp/execute`)
+- [ ] Follow-up: `sendFollowUp()` re-sends messages + tool results → new SSE stream through `processLine()`
+- [ ] Loop exit: breaks when no tool calls, auto-continue exhausted, or iteration limit hit
+
+### Streaming Stats
+- [ ] TTFT: `firstTokenTime - startTime` (ms), displayed as seconds
+- [ ] TGS: `tokenCount / generationSeconds` — uses generation-only time (gaps >2s excluded from `generationMs`)
+- [ ] PPS: `promptTokens / ttft` when `ttft > 0.001` (avoids Infinity)
+- [ ] Server usage: if server sends `usage.completion_tokens` in SSE chunks, `serverSendsUsage=true` overrides client count
+- [ ] Emitted via `chat:stream` IPC event with full `metrics` object
+
+### API Wire Formats
+- [ ] Chat Completions (default): `POST /v1/chat/completions` — `choices[0].delta` SSE parsing
+- [ ] Responses API: `POST /v1/responses` — event-based SSE (`response.created`, `response.output_text.delta`, `response.completed`)
+- [ ] Wire format selected by `overrides.wireApi` (default: `'completions'`)
+- [ ] Both formats support `stream_options: { include_usage: true }` for token counts
+
+### Parser Registration
+- [ ] Tool parsers: all registered via `@ToolParserManager.register_module` — verify with `ToolParserManager.list_registered()`
+- [ ] Reasoning parsers: registered in `reasoning/__init__.py:_register_builtin_parsers()` — verify with `list_parsers()`
+- [ ] Auto-detect: `server.py:2435-2488` — flows through `ModelConfigRegistry.get_tool_parser()` / `.get_reasoning_parser()`
+- [ ] Session config dropdowns: `SessionConfigForm.tsx` tool dropdown (lines 287-302) and reasoning dropdown (lines 305-311) must list all parsers
+

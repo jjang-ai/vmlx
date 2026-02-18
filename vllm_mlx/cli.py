@@ -1,0 +1,802 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""
+CLI for vllm-mlx.
+
+Commands:
+    vllm-mlx serve <model> --port 8000    Start OpenAI-compatible server
+    vllm-mlx bench <model>                Run benchmark
+
+Usage:
+    vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+    vllm-mlx bench mlx-community/Llama-3.2-1B-Instruct-4bit --num-prompts 10
+"""
+
+import argparse
+import os
+import sys
+
+
+def serve_command(args):
+    """Start the OpenAI-compatible server."""
+    import logging
+    import os
+    import sys
+
+    import uvicorn
+
+    # Import unified server
+    from . import server
+    from .scheduler import SchedulerConfig
+    from .server import RateLimiter, app, load_model
+
+    logger = logging.getLogger(__name__)
+
+    # Default tool call parser to "auto" when --enable-auto-tool-choice is used without --tool-call-parser
+    if args.enable_auto_tool_choice and not args.tool_call_parser:
+        args.tool_call_parser = "auto"
+
+    # Auto-detect parsers from model name using registry
+    from .model_config_registry import get_model_config_registry
+    registry = get_model_config_registry()
+    model_name = args.model or ""
+
+    # Resolve "auto" tool call parser to model-specific parser
+    if args.enable_auto_tool_choice and args.tool_call_parser == "auto":
+        detected_tool = registry.get_tool_parser(model_name)
+        if detected_tool:
+            args.tool_call_parser = detected_tool
+            logger.info(f"Auto-detected tool call parser: {detected_tool} (from model name)")
+        else:
+            logger.info("Tool call parser 'auto': no specific parser detected, using generic")
+            args.tool_call_parser = None  # Fall through to generic parser
+
+    # Configure server security settings
+    server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
+    server._default_timeout = args.timeout
+    if args.rate_limit > 0:
+        server._rate_limiter = RateLimiter(
+            requests_per_minute=args.rate_limit, enabled=True
+        )
+
+    # Configure tool calling
+    if args.enable_auto_tool_choice and args.tool_call_parser:
+        server._enable_auto_tool_choice = True
+        server._tool_call_parser = args.tool_call_parser
+    else:
+        server._enable_auto_tool_choice = False
+        server._tool_call_parser = None
+
+    # Configure generation defaults
+    if getattr(args, 'default_temperature', None) is not None:
+        server._default_temperature = args.default_temperature
+    if getattr(args, 'default_top_p', None) is not None:
+        server._default_top_p = args.default_top_p
+
+    # Configure reasoning parser (resolve "auto" or auto-detect from model config)
+    parser_name = getattr(args, 'reasoning_parser', None)
+    # Auto-detect from model config if not explicitly set
+    if not parser_name:
+        detected = registry.get_reasoning_parser(model_name)
+        if detected:
+            parser_name = detected
+            logger.info(f"Auto-detected reasoning parser: {parser_name} (from model config)")
+    elif parser_name == "auto":
+        detected = registry.get_reasoning_parser(model_name)
+        if detected:
+            parser_name = detected
+            logger.info(f"Auto-detected reasoning parser: {parser_name} (from model name)")
+        else:
+            logger.info("Reasoning parser 'auto': no parser detected for this model")
+            parser_name = None
+
+    if parser_name:
+        try:
+            from .reasoning import get_parser
+            parser_cls = get_parser(parser_name)
+            server._reasoning_parser = parser_cls()
+            logger.info(f"Reasoning parser enabled: {parser_name}")
+        except KeyError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        except ImportError as e:
+            print(f"Error: Failed to import reasoning module: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(
+                f"Error: Failed to initialize reasoning parser "
+                f"'{parser_name}': {e}"
+            )
+            sys.exit(1)
+    else:
+        server._reasoning_parser = None
+
+    # Security summary at startup
+    print("=" * 60)
+    print("SECURITY CONFIGURATION")
+    print("=" * 60)
+    if args.api_key:
+        print("  Authentication: ENABLED (API key required)")
+    else:
+        print("  Authentication: DISABLED - Use --api-key to enable")
+    if args.rate_limit > 0:
+        print(f"  Rate limiting: ENABLED ({args.rate_limit} req/min)")
+    else:
+        print("  Rate limiting: DISABLED - Use --rate-limit to enable")
+    print(f"  Request timeout: {args.timeout}s")
+    if args.enable_auto_tool_choice:
+        print(f"  Tool calling: ENABLED (parser: {args.tool_call_parser})")
+    else:
+        print("  Tool calling: Use --enable-auto-tool-choice to enable")
+    if server._reasoning_parser:
+        parser_display = type(server._reasoning_parser).__name__
+        print(f"  Reasoning: ENABLED (parser: {parser_display})")
+    elif getattr(args, 'reasoning_parser', None):
+        print(f"  Reasoning: requested '{args.reasoning_parser}' but no parser matched")
+    else:
+        print("  Reasoning: Use --reasoning-parser to enable")
+    print("=" * 60)
+
+    print(f"Loading model: {args.model}")
+    print(f"Default max tokens: {args.max_tokens}")
+
+    # Store MCP config path for FastAPI startup
+    if args.mcp_config:
+        print(f"MCP config: {args.mcp_config}")
+        os.environ["VLLM_MLX_MCP_CONFIG"] = args.mcp_config
+
+    # Pre-load embedding model if specified
+    if args.embedding_model:
+        print(f"Pre-loading embedding model: {args.embedding_model}")
+        server.load_embedding_model(args.embedding_model, lock=True)
+        print(f"Embedding model loaded: {args.embedding_model}")
+
+    # Build scheduler config for batched mode
+    scheduler_config = None
+    if args.continuous_batching:
+        # Handle prefix cache flags
+        enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
+
+        scheduler_config = SchedulerConfig(
+            max_num_seqs=args.max_num_seqs,
+            prefill_batch_size=args.prefill_batch_size,
+            completion_batch_size=args.completion_batch_size,
+            enable_prefix_cache=enable_prefix_cache,
+            prefix_cache_size=args.prefix_cache_size,
+            # Memory-aware cache options
+            use_memory_aware_cache=not args.no_memory_aware_cache,
+            cache_memory_mb=args.cache_memory_mb,
+            cache_memory_percent=args.cache_memory_percent,
+            # Paged cache options
+            use_paged_cache=args.use_paged_cache,
+            paged_cache_block_size=args.paged_cache_block_size,
+            max_cache_blocks=args.max_cache_blocks,
+            # KV cache quantization
+            kv_cache_quantization=args.kv_cache_quantization,
+            kv_cache_group_size=args.kv_cache_group_size,
+            # Disk cache
+            enable_disk_cache=args.enable_disk_cache,
+            disk_cache_dir=args.disk_cache_dir,
+            disk_cache_max_gb=args.disk_cache_max_gb,
+            model_path=args.model,
+        )
+
+        print("Mode: Continuous batching (for multiple concurrent users)")
+        print(f"Stream interval: {args.stream_interval} tokens")
+        if args.use_paged_cache:
+            print(
+                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
+            )
+        elif enable_prefix_cache and not args.no_memory_aware_cache:
+            cache_info = (
+                f"{args.cache_memory_mb}MB"
+                if args.cache_memory_mb
+                else f"{args.cache_memory_percent*100:.0f}% of RAM"
+            )
+            print(f"Memory-aware cache: {cache_info}")
+        elif enable_prefix_cache:
+            print(f"Prefix cache: max_entries={args.prefix_cache_size}")
+        if args.kv_cache_quantization != "none":
+            print(f"KV cache quantization: {args.kv_cache_quantization} (group_size={args.kv_cache_group_size})")
+    else:
+        print("Mode: Simple (maximum throughput)")
+        # Warn about settings that require continuous batching
+        ignored = []
+        if args.kv_cache_quantization != "none":
+            ignored.append(f"--kv-cache-quantization {args.kv_cache_quantization}")
+        if args.use_paged_cache:
+            ignored.append("--use-paged-cache")
+        if args.enable_prefix_cache and not args.disable_prefix_cache:
+            ignored.append("--enable-prefix-cache")
+        if ignored:
+            print(f"  NOTE: These settings require --continuous-batching and will be ignored: {', '.join(ignored)}")
+
+    # Load model with unified server
+    load_model(
+        args.model,
+        use_batching=args.continuous_batching,
+        scheduler_config=scheduler_config,
+        stream_interval=args.stream_interval if args.continuous_batching else 1,
+        max_tokens=args.max_tokens,
+    )
+
+    # Start server
+    print(f"Starting server at http://{args.host}:{args.port}")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+def bench_command(args):
+    """Run benchmark."""
+    import asyncio
+    import time
+
+    from mlx_lm import load
+
+    from .engine_core import AsyncEngineCore, EngineConfig
+    from .request import SamplingParams
+    from .scheduler import SchedulerConfig
+
+    # Handle prefix cache flags
+    enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
+
+    async def run_benchmark():
+        print(f"Loading model: {args.model}")
+        model, tokenizer = load(args.model)
+
+        scheduler_config = SchedulerConfig(
+            max_num_seqs=args.max_num_seqs,
+            prefill_batch_size=args.prefill_batch_size,
+            completion_batch_size=args.completion_batch_size,
+            enable_prefix_cache=enable_prefix_cache,
+            prefix_cache_size=args.prefix_cache_size,
+            # Memory-aware cache options
+            use_memory_aware_cache=not args.no_memory_aware_cache,
+            cache_memory_mb=args.cache_memory_mb,
+            cache_memory_percent=args.cache_memory_percent,
+            # Paged cache options
+            use_paged_cache=args.use_paged_cache,
+            paged_cache_block_size=args.paged_cache_block_size,
+            max_cache_blocks=args.max_cache_blocks,
+            # KV cache quantization
+            kv_cache_quantization=args.kv_cache_quantization,
+            kv_cache_group_size=args.kv_cache_group_size,
+            model_path=args.model,
+        )
+        engine_config = EngineConfig(
+            model_name=args.model,
+            scheduler_config=scheduler_config,
+        )
+
+        if args.use_paged_cache:
+            print(
+                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
+            )
+
+        # Generate prompts
+        prompts = [
+            f"Write a short poem about {topic}."
+            for topic in [
+                "nature",
+                "love",
+                "technology",
+                "space",
+                "music",
+                "art",
+                "science",
+                "history",
+                "food",
+                "travel",
+            ][: args.num_prompts]
+        ]
+
+        params = SamplingParams(
+            max_tokens=args.max_tokens,
+            temperature=0.7,
+        )
+
+        print(
+            f"\nRunning benchmark with {len(prompts)} prompts, max_tokens={args.max_tokens}"
+        )
+        print("-" * 50)
+
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+
+        async with AsyncEngineCore(model, tokenizer, engine_config) as engine:
+            await asyncio.sleep(0.1)  # Warm up
+
+            start_time = time.perf_counter()
+
+            # Add all requests
+            request_ids = []
+            for prompt in prompts:
+                rid = await engine.add_request(prompt, params)
+                request_ids.append(rid)
+
+            # Collect all outputs
+            async def get_output(rid):
+                async for out in engine.stream_outputs(rid, timeout=120):
+                    if out.finished:
+                        return out
+                return None
+
+            results = await asyncio.gather(*[get_output(r) for r in request_ids])
+
+            total_time = time.perf_counter() - start_time
+
+        # Calculate stats
+        for r in results:
+            if r:
+                total_prompt_tokens += r.prompt_tokens
+                total_completion_tokens += r.completion_tokens
+
+        total_tokens = total_prompt_tokens + total_completion_tokens
+
+        print("\nResults:")
+        print(f"  Total time: {total_time:.2f}s")
+        print(f"  Prompts: {len(prompts)}")
+        print(f"  Prompts/second: {len(prompts)/total_time:.2f}")
+        print(f"  Total prompt tokens: {total_prompt_tokens}")
+        print(f"  Total completion tokens: {total_completion_tokens}")
+        print(f"  Total tokens: {total_tokens}")
+        print(f"  Tokens/second: {total_completion_tokens/total_time:.2f}")
+        print(f"  Throughput: {total_tokens/total_time:.2f} tok/s")
+
+    asyncio.run(run_benchmark())
+
+
+def bench_detok_command(args):
+    """Benchmark streaming detokenizer optimization."""
+    import statistics
+    import time
+
+    from mlx_lm import load
+    from mlx_lm.generate import generate
+
+    print("=" * 70)
+    print(" Streaming Detokenizer Benchmark")
+    print("=" * 70)
+    print()
+
+    print(f"Loading model: {args.model}")
+    model, tokenizer = load(args.model)
+
+    # Generate tokens for benchmark
+    prompt = "Write a detailed explanation of how machine learning works and its applications in modern technology."
+    print(f"Generating tokens with prompt: {prompt[:50]}...")
+
+    output = generate(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=prompt,
+        max_tokens=2000,
+        verbose=False,
+    )
+
+    prompt_tokens = tokenizer.encode(prompt)
+    all_tokens = tokenizer.encode(output)
+    generated_tokens = all_tokens[len(prompt_tokens) :]
+    print(f"Generated {len(generated_tokens)} tokens for benchmark")
+    print()
+
+    iterations = args.iterations
+
+    # Benchmark naive decode (old method)
+    print("Benchmarking Naive Decode (OLD method)...")
+    naive_times = []
+    for _ in range(iterations):
+        start = time.perf_counter()
+        for t in generated_tokens:
+            _ = tokenizer.decode([t])
+        elapsed = time.perf_counter() - start
+        naive_times.append(elapsed)
+
+    naive_mean = statistics.mean(naive_times) * 1000
+
+    # Benchmark streaming decode (new method)
+    print("Benchmarking Streaming Detokenizer (NEW method)...")
+    streaming_times = []
+    detok_class = tokenizer._detokenizer_class
+    for _ in range(iterations):
+        detok = detok_class(tokenizer)
+        detok.reset()
+        start = time.perf_counter()
+        for t in generated_tokens:
+            detok.add_token(t)
+            _ = detok.last_segment
+        detok.finalize()
+        elapsed = time.perf_counter() - start
+        streaming_times.append(elapsed)
+
+    streaming_mean = statistics.mean(streaming_times) * 1000
+
+    # Results
+    speedup = naive_mean / streaming_mean
+    time_saved = naive_mean - streaming_mean
+
+    print()
+    print("=" * 70)
+    print(f" RESULTS: {len(generated_tokens)} tokens, {iterations} iterations")
+    print("=" * 70)
+    print(f"{'Method':<25} {'Time':>12} {'Speedup':>10}")
+    print("-" * 70)
+    print(f"{'Naive decode():':<25} {naive_mean:>10.2f}ms {'1.00x':>10}")
+    print(f"{'Streaming detokenizer:':<25} {streaming_mean:>10.2f}ms {speedup:>9.2f}x")
+    print("-" * 70)
+    print(f"{'Time saved per request:':<25} {time_saved:>10.2f}ms")
+    print(
+        f"{'Per-token savings:':<25} {(time_saved/len(generated_tokens)*1000):>10.1f}µs"
+    )
+    print()
+
+    # Verify correctness (strip for BPE edge cases with leading/trailing spaces)
+    print("Verifying correctness...")
+    detok = detok_class(tokenizer)
+    detok.reset()
+    for t in generated_tokens:
+        detok.add_token(t)
+    detok.finalize()
+
+    batch_result = tokenizer.decode(generated_tokens)
+    # BPE tokenizers may have minor edge case differences with spaces
+    # Compare stripped versions for functional correctness
+    streaming_stripped = detok.text.strip()
+    batch_stripped = batch_result.strip()
+    if streaming_stripped == batch_stripped:
+        print("  ✓ Streaming output matches batch decode")
+    elif streaming_stripped in batch_stripped or batch_stripped in streaming_stripped:
+        print("  ✓ Streaming output matches (minor BPE edge case)")
+    else:
+        # Check if most of the content matches (BPE edge cases at boundaries)
+        common_len = min(len(streaming_stripped), len(batch_stripped)) - 10
+        if (
+            common_len > 0
+            and streaming_stripped[:common_len] == batch_stripped[:common_len]
+        ):
+            print("  ✓ Streaming output matches (BPE boundary difference)")
+        else:
+            print("  ✗ MISMATCH! Results differ")
+            print(f"    Streaming: {repr(detok.text[:100])}...")
+            print(f"    Batch: {repr(batch_result[:100])}...")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="vllm-mlx: Apple Silicon MLX backend for vLLM",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+  vllm-mlx bench mlx-community/Llama-3.2-1B-Instruct-4bit --num-prompts 10
+        """,
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Serve command
+    serve_parser = subparsers.add_parser("serve", help="Start OpenAI-compatible server")
+    serve_parser.add_argument("model", type=str, help="Model to serve")
+    serve_parser.add_argument(
+        "--host", type=str, default="0.0.0.0", help="Host to bind"
+    )
+    serve_parser.add_argument("--port", type=int, default=8000, help="Port to bind")
+    serve_parser.add_argument(
+        "--max-num-seqs", type=int, default=256, help="Max concurrent sequences"
+    )
+    serve_parser.add_argument(
+        "--prefill-batch-size", type=int, default=8, help="Prefill batch size"
+    )
+    serve_parser.add_argument(
+        "--completion-batch-size", type=int, default=32, help="Completion batch size"
+    )
+    serve_parser.add_argument(
+        "--enable-prefix-cache",
+        action="store_true",
+        default=True,
+        help="Enable prefix caching for repeated prompts (default: enabled)",
+    )
+    serve_parser.add_argument(
+        "--disable-prefix-cache",
+        action="store_true",
+        help="Disable prefix caching",
+    )
+    serve_parser.add_argument(
+        "--prefix-cache-size",
+        type=int,
+        default=100,
+        help="Max entries in prefix cache (default: 100, legacy mode only)",
+    )
+    # Memory-aware cache options (recommended for large models)
+    serve_parser.add_argument(
+        "--cache-memory-mb",
+        type=int,
+        default=None,
+        help="Cache memory limit in MB (default: auto-detect ~30%% of RAM)",
+    )
+    serve_parser.add_argument(
+        "--cache-memory-percent",
+        type=float,
+        default=0.30,
+        help="Fraction of available RAM for cache if auto-detecting (default: 0.30)",
+    )
+    serve_parser.add_argument(
+        "--no-memory-aware-cache",
+        action="store_true",
+        help="Disable memory-aware cache, use legacy entry-count based cache",
+    )
+    serve_parser.add_argument(
+        "--stream-interval",
+        type=int,
+        default=1,
+        help="Tokens to batch before streaming (1=smooth, higher=throughput)",
+    )
+    serve_parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=32768,
+        help="Default max tokens for generation (default: 32768)",
+    )
+    serve_parser.add_argument(
+        "--continuous-batching",
+        action="store_true",
+        help="Enable continuous batching for multiple concurrent users (slower for single user)",
+    )
+    # Paged cache options (experimental)
+    serve_parser.add_argument(
+        "--use-paged-cache",
+        action="store_true",
+        help="Use paged KV cache for memory efficiency (experimental)",
+    )
+    serve_parser.add_argument(
+        "--paged-cache-block-size",
+        type=int,
+        default=64,
+        help="Tokens per cache block (default: 64)",
+    )
+    serve_parser.add_argument(
+        "--max-cache-blocks",
+        type=int,
+        default=1000,
+        help="Maximum number of cache blocks (default: 1000)",
+    )
+    # KV cache quantization
+    serve_parser.add_argument(
+        "--kv-cache-quantization",
+        type=str,
+        default="none",
+        choices=["none", "q4", "q8"],
+        help="Quantize KV cache to reduce GPU memory (~2-4x). q8=8-bit, q4=4-bit (default: none)",
+    )
+    serve_parser.add_argument(
+        "--kv-cache-group-size",
+        type=int,
+        default=64,
+        help="Group size for KV cache quantization (default: 64)",
+    )
+    # Disk cache options
+    serve_parser.add_argument(
+        "--enable-disk-cache",
+        action="store_true",
+        help="Save prompt caches to disk for reuse across server restarts. "
+             "Acts as L2 cache behind the in-memory prefix cache.",
+    )
+    serve_parser.add_argument(
+        "--disk-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for disk cache files (default: ~/.cache/vllm-mlx/prompt-cache)",
+    )
+    serve_parser.add_argument(
+        "--disk-cache-max-gb",
+        type=float,
+        default=10.0,
+        help="Maximum disk cache size in GB. 0 = unlimited (default: 10)",
+    )
+    # MCP options
+    serve_parser.add_argument(
+        "--mcp-config",
+        type=str,
+        default=None,
+        help="Path to MCP configuration file (JSON/YAML) for tool integration",
+    )
+    # Security options
+    serve_parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="API key for authentication (if not set, no auth required)",
+    )
+    serve_parser.add_argument(
+        "--rate-limit",
+        type=int,
+        default=0,
+        help="Rate limit requests per minute per client (0 = disabled)",
+    )
+    serve_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="Default request timeout in seconds (default: 300)",
+    )
+    # Tool calling options
+    serve_parser.add_argument(
+        "--enable-auto-tool-choice",
+        action="store_true",
+        help="Enable auto tool choice for supported models. Use --tool-call-parser to specify which parser to use.",
+    )
+    serve_parser.add_argument(
+        "--tool-call-parser",
+        type=str,
+        default=None,
+        choices=[
+            "auto",
+            "mistral",
+            "qwen",
+            "llama",
+            "hermes",
+            "deepseek",
+            "kimi",
+            "granite",
+            "nemotron",
+            "minimax",
+            "xlam",
+            "functionary",
+            "glm47",
+            "step3p5",
+        ],
+        help=(
+            "Select the tool call parser for the model. Options: "
+            "auto (auto-detect), mistral, qwen, llama, hermes, deepseek, "
+            "kimi, granite, nemotron, minimax, xlam, functionary, glm47, step3p5. "
+            "Required for --enable-auto-tool-choice."
+        ),
+    )
+    # Reasoning parser options - choices loaded dynamically from registry
+    from .reasoning import list_parsers
+
+    reasoning_choices = list_parsers()
+    serve_parser.add_argument(
+        "--reasoning-parser",
+        type=str,
+        default=None,
+        choices=["auto"] + reasoning_choices,
+        help=(
+            "Enable reasoning content extraction with specified parser. "
+            "Use 'auto' to detect from model name. "
+            f"Options: auto, {', '.join(reasoning_choices)}."
+        ),
+    )
+    # Embedding model option
+    serve_parser.add_argument(
+        "--embedding-model",
+        type=str,
+        default=None,
+        help="Pre-load an embedding model at startup (e.g. mlx-community/embeddinggemma-300m-6bit)",
+    )
+    serve_parser.add_argument(
+        "--default-temperature",
+        type=float,
+        default=None,
+        help="Default temperature for generation (overrides per-request if set)",
+    )
+    serve_parser.add_argument(
+        "--default-top-p",
+        type=float,
+        default=None,
+        help="Default top_p for generation",
+    )
+    # Bench command
+    bench_parser = subparsers.add_parser("bench", help="Run benchmark")
+    bench_parser.add_argument("model", type=str, help="Model to benchmark")
+    bench_parser.add_argument(
+        "--num-prompts", type=int, default=10, help="Number of prompts"
+    )
+    bench_parser.add_argument(
+        "--max-tokens", type=int, default=100, help="Max tokens per prompt"
+    )
+    bench_parser.add_argument(
+        "--max-num-seqs", type=int, default=32, help="Max concurrent sequences"
+    )
+    bench_parser.add_argument(
+        "--prefill-batch-size", type=int, default=8, help="Prefill batch size"
+    )
+    bench_parser.add_argument(
+        "--completion-batch-size", type=int, default=16, help="Completion batch size"
+    )
+    bench_parser.add_argument(
+        "--enable-prefix-cache",
+        action="store_true",
+        default=True,
+        help="Enable prefix caching (default: enabled)",
+    )
+    bench_parser.add_argument(
+        "--disable-prefix-cache",
+        action="store_true",
+        help="Disable prefix caching",
+    )
+    bench_parser.add_argument(
+        "--prefix-cache-size",
+        type=int,
+        default=100,
+        help="Max entries in prefix cache (default: 100, legacy mode only)",
+    )
+    # Memory-aware cache options (recommended for large models)
+    bench_parser.add_argument(
+        "--cache-memory-mb",
+        type=int,
+        default=None,
+        help="Cache memory limit in MB (default: auto-detect ~30%% of RAM)",
+    )
+    bench_parser.add_argument(
+        "--cache-memory-percent",
+        type=float,
+        default=0.30,
+        help="Fraction of available RAM for cache if auto-detecting (default: 0.30)",
+    )
+    bench_parser.add_argument(
+        "--no-memory-aware-cache",
+        action="store_true",
+        help="Disable memory-aware cache, use legacy entry-count based cache",
+    )
+    # Paged cache options (experimental)
+    bench_parser.add_argument(
+        "--use-paged-cache",
+        action="store_true",
+        help="Use paged KV cache for memory efficiency (experimental)",
+    )
+    bench_parser.add_argument(
+        "--paged-cache-block-size",
+        type=int,
+        default=64,
+        help="Tokens per cache block (default: 64)",
+    )
+    bench_parser.add_argument(
+        "--max-cache-blocks",
+        type=int,
+        default=1000,
+        help="Maximum number of cache blocks (default: 1000)",
+    )
+    # KV cache quantization
+    bench_parser.add_argument(
+        "--kv-cache-quantization",
+        type=str,
+        default="none",
+        choices=["none", "q4", "q8"],
+        help="Quantize KV cache to reduce GPU memory (~2-4x). q8=8-bit, q4=4-bit (default: none)",
+    )
+    bench_parser.add_argument(
+        "--kv-cache-group-size",
+        type=int,
+        default=64,
+        help="Group size for KV cache quantization (default: 64)",
+    )
+
+    # Detokenizer benchmark
+    detok_parser = subparsers.add_parser(
+        "bench-detok", help="Benchmark streaming detokenizer optimization"
+    )
+    detok_parser.add_argument(
+        "model",
+        type=str,
+        nargs="?",
+        default="mlx-community/Qwen3-0.6B-8bit",
+        help="Model to use for tokenizer (default: mlx-community/Qwen3-0.6B-8bit)",
+    )
+    detok_parser.add_argument(
+        "--iterations", type=int, default=5, help="Benchmark iterations (default: 5)"
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "serve":
+        serve_command(args)
+    elif args.command == "bench":
+        bench_command(args)
+    elif args.command == "bench-detok":
+        bench_detok_command(args)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
