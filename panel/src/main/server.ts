@@ -40,6 +40,11 @@ export interface ServerConfig {
   diskCacheDir?: string
   diskCacheMaxGb?: number
 
+  // Block-level disk cache (L2 for paged cache blocks)
+  enableBlockDiskCache?: boolean
+  blockDiskCacheDir?: string
+  blockDiskCacheMaxGb?: number
+
   // Performance
   streamInterval: number
   maxTokens?: number
