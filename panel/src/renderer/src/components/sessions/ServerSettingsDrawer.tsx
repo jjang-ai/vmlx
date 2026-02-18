@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
+import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
 
 interface Session {
   id: string
@@ -14,11 +14,12 @@ interface Session {
 
 interface ServerSettingsDrawerProps {
   session: Session
+  isRemote?: boolean
   onClose: () => void
   onSessionUpdate?: () => void
 }
 
-export function ServerSettingsDrawer({ session, onClose, onSessionUpdate }: ServerSettingsDrawerProps) {
+export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpdate }: ServerSettingsDrawerProps) {
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -81,7 +82,7 @@ export function ServerSettingsDrawer({ session, onClose, onSessionUpdate }: Serv
         const isRunning = session.status === 'running' || session.status === 'loading'
         setMessage({
           type: 'success',
-          text: isRunning ? 'Saved. Restart to apply.' : 'Settings saved.'
+          text: isRemote ? 'Saved. Applies to next request.' : (isRunning ? 'Saved. Restart to apply.' : 'Settings saved.')
         })
         onSessionUpdate?.()
       } else {
@@ -155,7 +156,7 @@ export function ServerSettingsDrawer({ session, onClose, onSessionUpdate }: Serv
     <div className="w-96 h-full border-l border-border bg-card flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
-        <span className="font-medium text-sm">Server Settings</span>
+        <span className="font-medium text-sm">{isRemote ? 'Connection Settings' : 'Server Settings'}</span>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm px-1">
           ✕
         </button>
@@ -173,14 +174,32 @@ export function ServerSettingsDrawer({ session, onClose, onSessionUpdate }: Serv
           </div>
         )}
 
-        {isRunning && !restarting && (
+        {isRunning && !restarting && !isRemote && (
           <div className="p-2 bg-warning/10 border border-warning/30 rounded text-xs text-warning">
             Session is running. Save & Restart to apply changes.
           </div>
         )}
 
-        {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} />
+        {/* Config Form — remote sessions only show timeout */}
+        {isRemote ? (
+          <div className="space-y-3">
+            <SliderField
+              label="Request Timeout (seconds)"
+              tooltip="Maximum time to wait for a response from the remote server before timing out. Increase this for slow models, long generations, or high-latency connections. Default 300s (5 minutes)."
+              value={config.timeout}
+              onChange={v => handleChange('timeout', v)}
+              min={10}
+              max={3600}
+              step={10}
+              defaultValue={DEFAULT_CONFIG.timeout}
+              allowUnlimited
+              unlimitedValue={0}
+              unlimitedLabel="No limit"
+            />
+          </div>
+        ) : (
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} />
+        )}
       </div>
 
       {/* Footer Actions */}
@@ -192,7 +211,7 @@ export function ServerSettingsDrawer({ session, onClose, onSessionUpdate }: Serv
         >
           {saving && !restarting ? 'Saving...' : 'Save'}
         </button>
-        {isRunning && (
+        {isRunning && !isRemote && (
           <button
             onClick={handleSaveAndRestart}
             disabled={saving || restarting}

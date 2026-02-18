@@ -23,6 +23,9 @@ interface ChatOverrides {
   fileToolsEnabled?: boolean
   searchToolsEnabled?: boolean
   shellEnabled?: boolean
+  toolResultMaxChars?: number
+  gitEnabled?: boolean
+  utilityToolsEnabled?: boolean
 }
 
 interface SessionInfo {
@@ -88,6 +91,9 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
     if (overrides.shellEnabled != null) preserved.shellEnabled = overrides.shellEnabled
     if (overrides.wireApi) preserved.wireApi = overrides.wireApi
     if (overrides.hideToolStatus != null) preserved.hideToolStatus = overrides.hideToolStatus
+    if (overrides.toolResultMaxChars != null) preserved.toolResultMaxChars = overrides.toolResultMaxChars
+    if (overrides.gitEnabled != null) preserved.gitEnabled = overrides.gitEnabled
+    if (overrides.utilityToolsEnabled != null) preserved.utilityToolsEnabled = overrides.utilityToolsEnabled
 
     // Re-read model's generation_config.json for recommended inference defaults
     // Use atomic upsert (INSERT OR REPLACE) instead of clear-then-set
@@ -456,6 +462,42 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
                       onChange={v => update('fetchUrlEnabled', v)}
                       help="fetch and read web page content"
                     />
+                    <ToolToggle
+                      label="Git"
+                      checked={overrides.gitEnabled !== false}
+                      onChange={v => update('gitEnabled', v)}
+                      help="git status, diff, log, blame, commit, branch, stash"
+                    />
+                    <ToolToggle
+                      label="Utilities"
+                      checked={overrides.utilityToolsEnabled !== false}
+                      onChange={v => update('utilityToolsEnabled', v)}
+                      help="token count, clipboard read/write, ask user"
+                    />
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <label className="text-sm font-medium">Tool Result Limit</label>
+                    <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+                      Max characters per tool result. Lower values reduce context usage. Default 50,000 (~12k tokens).
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={500}
+                        max={50000}
+                        step={500}
+                        value={overrides.toolResultMaxChars ?? 50000}
+                        onChange={e => {
+                          const v = Number(e.target.value)
+                          update('toolResultMaxChars', v >= 50000 ? undefined : v)
+                        }}
+                        className="flex-1 accent-primary"
+                      />
+                      <span className="text-xs font-mono w-16 text-right tabular-nums text-muted-foreground">
+                        {overrides.toolResultMaxChars ? `${(overrides.toolResultMaxChars / 1000).toFixed(1)}k` : '50k'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
