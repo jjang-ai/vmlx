@@ -237,18 +237,29 @@ class Scheduler:
                             ".cache", "vllm-mlx", "block-cache", model_hash,
                         )
                     elif cache_dir is None:
+                        logger.warning(
+                            "Block disk cache: model_path not set, using shared 'default' dir. "
+                            "Different models will share cache — this may cause issues."
+                        )
                         cache_dir = os.path.join(
                             os.path.expanduser("~"),
                             ".cache", "vllm-mlx", "block-cache", "default",
                         )
-                    block_disk_store = BlockDiskStore(
-                        cache_dir=cache_dir,
-                        max_size_gb=self.config.block_disk_cache_max_gb,
-                    )
-                    logger.info(
-                        f"Block disk cache enabled: dir={cache_dir}, "
-                        f"max={self.config.block_disk_cache_max_gb}GB"
-                    )
+                    try:
+                        block_disk_store = BlockDiskStore(
+                            cache_dir=cache_dir,
+                            max_size_gb=self.config.block_disk_cache_max_gb,
+                        )
+                        logger.info(
+                            f"Block disk cache enabled: dir={cache_dir}, "
+                            f"max={self.config.block_disk_cache_max_gb}GB"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to initialize block disk cache at {cache_dir}: {e}. "
+                            "Continuing without disk cache."
+                        )
+                        block_disk_store = None
 
                 # Use paged cache for memory efficiency
                 self.paged_cache_manager = PagedCacheManager(
@@ -1250,6 +1261,15 @@ class Scheduler:
     def get_num_running(self) -> int:
         """Get number of running requests."""
         return len(self.running)
+
+    def shutdown(self) -> None:
+        """Shutdown the scheduler and flush disk caches."""
+        if hasattr(self, 'paged_cache_manager') and self.paged_cache_manager:
+            disk_store = getattr(self.paged_cache_manager, '_disk_store', None)
+            if disk_store is not None:
+                logger.info("Shutting down block disk cache...")
+                disk_store.shutdown()
+                logger.info("Block disk cache shutdown complete")
 
     def _schedule_waiting(self) -> List[Request]:
         """

@@ -630,11 +630,7 @@ class PagedCacheManager:
 
         if evicted:
             # Persist to disk L2 before freeing tensor memory
-            if (
-                self._disk_store is not None
-                and block.cache_data is not None
-                and block.block_hash is not None
-            ):
+            if self._disk_store is not None and block.cache_data is not None:
                 self._disk_store.write_block_async(
                     block.block_hash, block.cache_data, block.token_count
                 )
@@ -865,46 +861,55 @@ class PagedCacheManager:
         if not self.enable_caching:
             return [], 0
 
-        with self._lock:
-            cached_blocks = []
-            parent_hash = None
-            num_cached_tokens = 0
+        cached_blocks = []
+        parent_hash = None
+        num_cached_tokens = 0
 
-            num_full_blocks = len(token_ids) // self.block_size
+        num_full_blocks = len(token_ids) // self.block_size
 
-            for i in range(num_full_blocks):
-                start = i * self.block_size
-                end = start + self.block_size
-                block_tokens = token_ids[start:end]
+        for i in range(num_full_blocks):
+            start = i * self.block_size
+            end = start + self.block_size
+            block_tokens = token_ids[start:end]
 
-                # Compute expected hash
-                block_hash = compute_block_hash(parent_hash, block_tokens)
+            # Compute expected hash
+            block_hash = compute_block_hash(parent_hash, block_tokens)
 
-                # Look up in L1 cache
+            # Look up in L1 cache (under lock)
+            with self._lock:
                 cached_block = self.cached_block_hash_to_block.get_block(block_hash)
-                if cached_block is None and self._disk_store is not None:
-                    # L1 miss — check L2 disk cache
-                    disk_data = self._disk_store.read_block(block_hash)
-                    if disk_data is not None:
-                        # Promote from disk to L1: allocate a RAM block
-                        promoted = self._promote_from_disk(
-                            block_hash, disk_data, len(block_tokens)
-                        )
-                        if promoted is not None:
-                            cached_block = promoted
-                            self.stats.disk_hits += 1
-                if cached_block is None:
+                if cached_block is not None:
+                    cached_block.touch()  # Update LRU position
+
+            if cached_block is None and self._disk_store is not None:
+                # L1 miss — check L2 disk cache (outside lock to avoid blocking)
+                disk_data = self._disk_store.read_block(block_hash)
+                if disk_data is not None:
+                    with self._lock:
+                        # Re-check L1 after releasing lock (another thread may have promoted)
+                        cached_block = self.cached_block_hash_to_block.get_block(block_hash)
+                        if cached_block is None:
+                            promoted = self._promote_from_disk(
+                                block_hash, disk_data, len(block_tokens)
+                            )
+                            if promoted is not None:
+                                cached_block = promoted
+                                self.stats.disk_hits += 1
+
+            if cached_block is None:
+                with self._lock:
                     self.stats.cache_misses += 1
                     if self._disk_store is not None:
                         self.stats.disk_misses += 1
-                    break  # Cache miss, stop here
+                break  # Cache miss, stop here
 
-                cached_blocks.append(cached_block)
-                parent_hash = block_hash
-                num_cached_tokens += self.block_size
+            cached_blocks.append(cached_block)
+            parent_hash = block_hash
+            num_cached_tokens += self.block_size
+            with self._lock:
                 self.stats.cache_hits += 1
 
-            return cached_blocks, num_cached_tokens
+        return cached_blocks, num_cached_tokens
 
     # =========================================================================
     # Disk L2 promotion
@@ -935,12 +940,20 @@ class PagedCacheManager:
 
         block = self.free_block_queue.popleft()
 
-        # If the free block had old cached data, evict it (but don't re-save to disk)
+        # If the free block had old cached data, persist to disk before freeing RAM
         if block.block_hash is not None:
             self.cached_block_hash_to_block.pop(block.block_hash, block.block_id)
+            # Persist to disk L2 before discarding tensor memory
+            if self._disk_store is not None and block.cache_data is not None:
+                self._disk_store.write_block_async(
+                    block.block_hash, block.cache_data, block.token_count
+                )
             if block.hash_value and block.hash_value in self.hash_to_block:
                 if self.hash_to_block[block.hash_value] == block.block_id:
                     del self.hash_to_block[block.hash_value]
+            block.reset_hash()
+            block.cache_data = None
+            self.stats.evictions += 1
 
         # Populate
         block.ref_count = 1

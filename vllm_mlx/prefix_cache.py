@@ -573,11 +573,50 @@ class BlockAwarePrefixCache:
             # Compute chain hash for this block
             block_chain_hash = _compute_chain_hash(parent_hash, block_tokens)
 
-            # Check if this block already exists (deduplication)
-            existing_block = self.paged_cache.find_cached_block(block_tokens)
+            # Check if this block already exists via chain hash (deduplication)
+            # IMPORTANT: lookup + ref bump must be atomic under _lock to prevent
+            # the block from being freed between get_block and increment_ref.
+            reused = False
+            with self.paged_cache._lock:
+                existing_block = self.paged_cache.cached_block_hash_to_block.get_block(
+                    block_chain_hash
+                )
+                if existing_block:
+                    existing_block.ref_count += 1
+                    existing_block.touch()
+                    if existing_block.ref_count == 2:
+                        self.paged_cache.stats.shared_blocks += 1
+                    reused = True
+            if reused:
+                block_table.block_ids.append(existing_block.block_id)
+                block_table.num_tokens += len(block_tokens)
+                parent_hash = block_chain_hash
+                continue
+
+            # Also check legacy hash for blocks stored before chain hashing.
+            # find_cached_block already holds _lock internally, but we need to
+            # do the ref bump under the same lock to avoid the same race.
+            with self.paged_cache._lock:
+                hash_value = self.paged_cache.compute_block_hash(block_tokens)
+                existing_block = None
+                if hash_value in self.paged_cache.hash_to_block:
+                    bid = self.paged_cache.hash_to_block[hash_value]
+                    if bid in self.paged_cache.allocated_blocks:
+                        existing_block = self.paged_cache.allocated_blocks[bid]
+                        existing_block.ref_count += 1
+                        existing_block.touch()
+                        if existing_block.ref_count == 2:
+                            self.paged_cache.stats.shared_blocks += 1
+                        self.paged_cache.stats.cache_hits += 1
+                        # Set chain hash on the existing block if it doesn't have one
+                        if existing_block.block_hash is None:
+                            existing_block.block_hash = block_chain_hash
+                            self.paged_cache.cached_block_hash_to_block.insert(
+                                block_chain_hash, existing_block
+                            )
+                if existing_block is None:
+                    self.paged_cache.stats.cache_misses += 1
             if existing_block:
-                # Reuse existing block
-                self.paged_cache.increment_ref(existing_block.block_id)
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
                 parent_hash = block_chain_hash
@@ -622,11 +661,11 @@ class BlockAwarePrefixCache:
                             block_chain_hash, block_kv_data, len(block_tokens)
                         )
 
-            # Register in hash caches (both chain hash and legacy)
-            self.paged_cache.cached_block_hash_to_block.insert(
-                block_chain_hash, block
-            )
-            # Legacy hash for deduplication via find_cached_block
+            # Register in hash caches under lock (both chain hash and legacy)
+            with self.paged_cache._lock:
+                self.paged_cache.cached_block_hash_to_block.insert(
+                    block_chain_hash, block
+                )
             self.paged_cache.register_block_hash(block, block_tokens)
 
             parent_hash = block_chain_hash
