@@ -42,11 +42,13 @@ const TEMPLATE_TOKEN_REGEX = new RegExp(
 )
 
 // Tool category definitions for per-category filtering
-const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'patch_file', 'batch_edit', 'copy_file', 'move_file', 'delete_file', 'create_directory', 'list_directory'])
-const SEARCH_TOOLS = new Set(['search_files', 'find_files', 'file_info', 'get_diagnostics'])
-const SHELL_TOOLS = new Set(['run_command'])
+const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'patch_file', 'batch_edit', 'copy_file', 'move_file', 'delete_file', 'create_directory', 'list_directory', 'insert_text', 'replace_lines', 'apply_regex', 'read_image'])
+const SEARCH_TOOLS = new Set(['search_files', 'find_files', 'file_info', 'get_diagnostics', 'get_tree', 'diff_files'])
+const SHELL_TOOLS = new Set(['run_command', 'spawn_process', 'get_process_output'])
 const DDG_SEARCH_TOOLS = new Set(['ddg_search'])
 const FETCH_TOOLS = new Set(['fetch_url'])
+const GIT_TOOLS = new Set(['git'])
+const UTILITY_TOOLS = new Set(['count_tokens', 'clipboard_read', 'clipboard_write', 'ask_user'])
 
 /** Filter BUILTIN_TOOLS based on per-category toggle overrides */
 function filterTools(overrides: any): any[] {
@@ -56,6 +58,8 @@ function filterTools(overrides: any): any[] {
   if (overrides.shellEnabled === false) SHELL_TOOLS.forEach(t => disabled.add(t))
   if (overrides.webSearchEnabled === false) DDG_SEARCH_TOOLS.forEach(t => disabled.add(t))
   if (overrides.fetchUrlEnabled === false) FETCH_TOOLS.forEach(t => disabled.add(t))
+  if (overrides.gitEnabled === false) GIT_TOOLS.forEach(t => disabled.add(t))
+  if (overrides.utilityToolsEnabled === false) UTILITY_TOOLS.forEach(t => disabled.add(t))
   // Brave web_search requires API key — always disable if no key configured
   // (user must explicitly enable Brave search via braveSearchEnabled toggle)
   if (overrides.braveSearchEnabled === false) {
@@ -200,7 +204,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               fetchUrlEnabled: sibOverrides.fetchUrlEnabled,
               fileToolsEnabled: sibOverrides.fileToolsEnabled,
               searchToolsEnabled: sibOverrides.searchToolsEnabled,
-              shellEnabled: sibOverrides.shellEnabled
+              shellEnabled: sibOverrides.shellEnabled,
+              toolResultMaxChars: sibOverrides.toolResultMaxChars,
+              gitEnabled: sibOverrides.gitEnabled,
+              utilityToolsEnabled: sibOverrides.utilityToolsEnabled
             })
             console.log(`[CHAT] Inherited overrides from chat ${sib.id} for ${chat.id}`)
             inherited = true
@@ -1123,14 +1130,37 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             }
             emitToolStatus('executing', tc.function.name, undefined, toolIteration)
 
-            if (isBuiltinTool(tc.function.name)) {
+            if (tc.function.name === 'ask_user') {
+              // Special handling: ask_user needs IPC to renderer, not executor
+              const question = toolArgs.question || 'What would you like to do?'
+              emitToolStatus('asking', 'ask_user', question, toolIteration)
+              resultText = await new Promise<string>((resolve) => {
+                const win = getWindow()
+                if (!win || win.isDestroyed()) { resolve('(User interface not available)'); return }
+                win.webContents.send('chat:askUser', { chatId, question })
+                let resolved = false
+                const handler = (_: any, respondChatId: string, answer: string) => {
+                  if (respondChatId === chatId && !resolved) {
+                    resolved = true
+                    ipcMain.removeListener('chat:answerUser', handler)
+                    clearTimeout(askTimeout)
+                    resolve(answer)
+                  }
+                }
+                ipcMain.on('chat:answerUser', handler)
+                const askTimeout = setTimeout(() => {
+                  if (!resolved) { resolved = true; ipcMain.removeListener('chat:answerUser', handler); resolve('(User did not respond within 5 minutes)') }
+                }, 300000)
+              })
+              emitToolStatus('result', 'ask_user', resultText, toolIteration)
+            } else if (isBuiltinTool(tc.function.name)) {
               const workDir = overrides?.workingDirectory
               if (!workDir) {
                 resultText = 'Error: Working directory not set. Configure it in Chat Settings.'
                 emitToolStatus('error', tc.function.name, resultText, toolIteration)
               } else {
                 console.log(`[CHAT] Builtin tool: ${tc.function.name}`)
-                const result = await executeBuiltinTool(tc.function.name, toolArgs, workDir)
+                const result = await executeBuiltinTool(tc.function.name, toolArgs, workDir, overrides?.toolResultMaxChars)
                 resultText = result.content
                 emitToolStatus(result.is_error ? 'error' : 'result', tc.function.name, resultText, toolIteration)
               }

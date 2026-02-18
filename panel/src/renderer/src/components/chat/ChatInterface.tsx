@@ -58,6 +58,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
   const [toolStatusMap, setToolStatusMap] = useState<Record<string, Array<{ phase: string; toolName: string; detail?: string; iteration?: number; timestamp: number }>>>({})
   // Per-chat setting: hide tool status display
   const [hideToolStatus, setHideToolStatus] = useState(false)
+  // ask_user tool: question from model and input state
+  const [askUserQuestion, setAskUserQuestion] = useState<string | null>(null)
+  const [askUserInput, setAskUserInput] = useState('')
 
   // Load messages and set up stream listeners when chat changes
   useEffect(() => {
@@ -186,12 +189,20 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
       }))
     }
 
+    // ask_user tool: model asks user a question mid-tool-loop
+    const handleAskUser = (data: any) => {
+      if (data.chatId !== chatId) return
+      setAskUserQuestion(data.question)
+      setAskUserInput('')
+    }
+
     // Store individual cleanup functions (avoids removeAllListeners race conditions)
     const cleanupTyping = window.api.chat.onTyping(handleTyping)
     const cleanupStream = window.api.chat.onStream(handleStream)
     const cleanupComplete = window.api.chat.onComplete(handleComplete)
     const cleanupReasoningDone = window.api.chat.onReasoningDone(handleReasoningDone)
     const cleanupToolStatus = window.api.chat.onToolStatus(handleToolStatus)
+    const cleanupAskUser = window.api.chat.onAskUser(handleAskUser)
 
     return () => {
       // Abort any active generation when switching chats to prevent stuck locks
@@ -203,9 +214,11 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
       cleanupComplete()
       cleanupReasoningDone()
       cleanupToolStatus()
+      cleanupAskUser()
       setReasoningMap({})
       setReasoningDoneMap({})
       setToolStatusMap({})
+      setAskUserQuestion(null)
     }
   }, [chatId])
 
@@ -315,6 +328,49 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
         toolStatusMap={toolStatusMap}
         hideToolStatus={hideToolStatus}
       />
+      {/* ask_user tool: inline question from model */}
+      {askUserQuestion && chatId && (
+        <div className="border-t border-border bg-card px-4 py-3">
+          <div className="max-w-2xl mx-auto">
+            <div className="text-xs font-medium text-primary mb-1.5">Model is asking:</div>
+            <div className="text-sm mb-2 whitespace-pre-wrap">{askUserQuestion}</div>
+            <form onSubmit={e => {
+              e.preventDefault()
+              if (!askUserInput.trim()) return
+              window.api.chat.answerUser(chatId, askUserInput.trim())
+              setAskUserQuestion(null)
+              setAskUserInput('')
+            }} className="flex gap-2">
+              <input
+                type="text"
+                value={askUserInput}
+                onChange={e => setAskUserInput(e.target.value)}
+                placeholder="Type your answer..."
+                autoFocus
+                className="flex-1 px-3 py-1.5 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <button
+                type="submit"
+                disabled={!askUserInput.trim()}
+                className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40"
+              >
+                Reply
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.api.chat.answerUser(chatId, '(User skipped this question)')
+                  setAskUserQuestion(null)
+                  setAskUserInput('')
+                }}
+                className="px-3 py-1.5 text-sm border border-border rounded hover:bg-accent"
+              >
+                Skip
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
       <InputBox
         onSend={handleSend}
         onAbort={handleAbort}
