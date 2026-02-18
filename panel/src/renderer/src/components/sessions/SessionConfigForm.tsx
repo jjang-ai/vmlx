@@ -23,6 +23,9 @@ export interface SessionConfig {
   enableDiskCache: boolean
   diskCacheMaxGb: number
   diskCacheDir: string
+  enableBlockDiskCache: boolean
+  blockDiskCacheMaxGb: number
+  blockDiskCacheDir: string
   streamInterval: number
   maxTokens: number
   mcpConfig: string
@@ -55,6 +58,9 @@ export const DEFAULT_CONFIG: SessionConfig = {
   enableDiskCache: false,
   diskCacheMaxGb: 10,
   diskCacheDir: '',
+  enableBlockDiskCache: false,
+  blockDiskCacheMaxGb: 10,
+  blockDiskCacheDir: '',
   streamInterval: 1,
   maxTokens: 32768,
   mcpConfig: '',
@@ -270,6 +276,37 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel="No limit"
             />
+            <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} />
+            {config.enableBlockDiskCache && (
+              <>
+                <SliderField
+                  label="Block Cache Max (GB)"
+                  tooltip="Maximum disk space for cached blocks. Oldest blocks are evicted when exceeded. Each block is small (~100KB-1MB), so 10GB can hold tens of thousands of blocks. Set to 0 for unlimited."
+                  value={config.blockDiskCacheMaxGb}
+                  onChange={v => onChange('blockDiskCacheMaxGb', v)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  defaultValue={10}
+                  allowUnlimited
+                  unlimitedValue={0}
+                  unlimitedLabel="Unlimited"
+                />
+                <div className="block">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Block Cache Directory
+                    <Tooltip text="Directory for block-level disk cache files. A model-specific subdirectory is created automatically. Leave empty for default (~/.cache/vllm-mlx/block-cache/<model_hash>/)." />
+                  </span>
+                  <input
+                    type="text"
+                    value={config.blockDiskCacheDir || ''}
+                    onChange={e => onChange('blockDiskCacheDir', e.target.value)}
+                    placeholder="~/.cache/vllm-mlx/block-cache"
+                    className="cfg-input text-xs"
+                  />
+                </div>
+              </>
+            )}
           </>
         )}
       </Section>
