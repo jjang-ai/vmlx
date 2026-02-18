@@ -1,0 +1,126 @@
+interface Session {
+  id: string
+  modelPath: string
+  modelName?: string
+  host: string
+  port: number
+  pid?: number
+  status: 'running' | 'stopped' | 'error' | 'loading'
+  config: string
+  createdAt: number
+  updatedAt: number
+  lastStartedAt?: number
+  lastStoppedAt?: number
+  type?: 'local' | 'remote'
+  remoteUrl?: string
+  remoteModel?: string
+}
+
+interface SessionCardProps {
+  session: Session
+  onOpen: (sessionId: string) => void
+  onConfigure: (sessionId: string) => void
+  onStart: (sessionId: string) => void
+  onStop: (sessionId: string) => void
+  onDelete: (sessionId: string) => void
+}
+
+const statusColors: Record<string, string> = {
+  running: 'bg-primary',
+  stopped: 'bg-muted-foreground',
+  error: 'bg-destructive',
+  loading: 'bg-warning'
+}
+
+const statusLabels: Record<string, string> = {
+  running: 'Running',
+  stopped: 'Stopped',
+  error: 'Error',
+  loading: 'Loading...'
+}
+
+export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onDelete }: SessionCardProps) {
+  const isRemote = session.type === 'remote'
+  const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 transition-colors">
+      {/* Header */}
+      <div className="flex items-start justify-between mb-3">
+        <div className="flex-1 min-w-0 mr-2">
+          <div className="flex items-center gap-1.5">
+            {isRemote && <span className="text-xs bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded flex-shrink-0">Remote</span>}
+            <h3 className="font-semibold text-sm truncate" title={session.modelPath}>
+              {shortName}
+            </h3>
+          </div>
+          <p className="text-xs text-muted-foreground truncate mt-0.5" title={isRemote ? session.remoteUrl : session.modelPath}>
+            {isRemote ? session.remoteUrl : session.modelPath}
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <span className={`w-2 h-2 rounded-full ${statusColors[session.status]}`} />
+          <span className="text-xs text-muted-foreground">{statusLabels[session.status]}</span>
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="flex gap-4 text-xs text-muted-foreground mb-3">
+        {isRemote
+          ? <span>{session.remoteUrl ? new URL(session.remoteUrl).host : session.host}</span>
+          : <span>{session.host}:{session.port}</span>
+        }
+        {!isRemote && session.pid && <span>PID {session.pid}</span>}
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        {session.status === 'running' && (
+          <button
+            onClick={() => onOpen(session.id)}
+            className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:bg-primary/90"
+          >
+            Open
+          </button>
+        )}
+
+        {session.status === 'stopped' || session.status === 'error' ? (
+          <button
+            onClick={() => onStart(session.id)}
+            className="flex-1 px-3 py-1.5 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700"
+          >
+            {isRemote ? 'Connect' : 'Start'}
+          </button>
+        ) : null}
+
+        {!isRemote && (
+          <button
+            onClick={() => onConfigure(session.id)}
+            className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
+            title="Configure session settings"
+          >
+            ⚙
+          </button>
+        )}
+
+        {(session.status === 'running' || session.status === 'loading') && (
+          <button
+            onClick={() => onStop(session.id)}
+            className="px-3 py-1.5 bg-destructive text-destructive-foreground text-sm rounded hover:bg-destructive/90"
+          >
+            {isRemote ? 'Disconnect' : 'Stop'}
+          </button>
+        )}
+
+        {(session.status === 'stopped' || session.status === 'error') && (
+          <button
+            onClick={() => onDelete(session.id)}
+            className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
