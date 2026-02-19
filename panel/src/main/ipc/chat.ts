@@ -1042,6 +1042,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               // Track status for truncation detection
               const respStatus = parsed.response?.status
               if (respStatus === 'incomplete') lastFinishReason = 'length'
+              else if (respStatus === 'completed') lastFinishReason = 'stop'
               else if (respStatus) lastFinishReason = respStatus
             }
             if (currentEventType === 'response.completed' && respUsage) {
@@ -1163,7 +1164,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         currentEventType = ''
         // Reset fetchStartTime so TTFT for follow-up is measured correctly
         fetchStartTime = Date.now()
-        firstTokenTime = 0
+        firstTokenTime = null
         // Use the same wire API format as the initial request
         const url = useResponsesApi
           ? `${baseUrl}/v1/responses`
@@ -1634,6 +1635,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               messageId: assistantMessage.id,
               content: assistantMessage.content,
               reasoningContent: reasoningContent || undefined,
+              finishReason: lastFinishReason,
               metrics: abortMetrics
             })
           }
