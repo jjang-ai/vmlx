@@ -158,6 +158,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Concurrent Processing */}
       <Section title="Concurrent Processing" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')}>
+        <PerformanceHint text="Controls how many requests your server handles at once. Higher values = more users simultaneously, but more RAM used. For personal use, the defaults are fine." />
         <SliderField
           label="Max Concurrent Sequences"
           tooltip="Maximum number of sequences (requests) that can be processed simultaneously. Higher values allow more parallel users but consume more memory. For single-user local use, 1-4 is sufficient. For multi-user servers, 16-256 depending on available RAM."
@@ -198,6 +199,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel="No limit"
         />
         <CheckField label="Continuous Batching" tooltip="When enabled, new requests can join an ongoing batch without waiting for the current batch to complete. This significantly improves throughput when serving multiple concurrent users. Has minimal overhead for single-user use. Required for: prefix caching, paged KV cache, KV cache quantization, and disk caching." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={isVLM} />
+        <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
         {isVLM && <IncompatWarning text="Vision/multimodal models require SimpleEngine (RotatingKVCache). Continuous batching, paged cache, and KV cache quantization are all unavailable for VLM models — this is a hardware-level limitation of multimodal processing and cannot be changed." />}
         {!isVLM && !config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
@@ -209,6 +211,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Prefix Cache */}
       <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')}>
+        <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />
         {batchingOff && !isVLM && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
         {batchingOff && isVLM && <IncompatWarning text="Prefix cache is unavailable for vision/multimodal models (SimpleEngine does not support it)." />}
         <CheckField label="Enable Prefix Caching" tooltip="Caches computed attention states for common prompt prefixes (like system prompts). When multiple requests share the same prefix, the cached state is reused, dramatically reducing time-to-first-token. Recommended to keep enabled. Requires continuous batching." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={effectivelyNoBatching} />
@@ -279,6 +282,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Paged Cache */}
       <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')}>
+        <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />
         {isVLM && <IncompatWarning text="Vision/multimodal models require SimpleEngine — paged cache is unavailable. This is a hardware limitation of multimodal processing and cannot be changed." />}
         {!isVLM && batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
@@ -345,6 +349,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* KV Cache Quantization */}
       <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')}>
+        <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />
         {isVLM && <IncompatWarning text="Vision/multimodal models use SimpleEngine — KV cache quantization is not supported." />}
         {!isVLM && batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && isMambaCache && <IncompatWarning text="KV cache quantization is not supported for Mamba/SSM models." />}
@@ -376,6 +381,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Disk Cache (L2 Persistent) */}
       <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')}>
+        <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />
         {isVLM && <IncompatWarning text="Disk cache is unavailable for vision/multimodal models (SimpleEngine does not support it)." />}
         {!isVLM && batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
@@ -414,6 +420,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Performance */}
       <Section title="Performance & Generation" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')}>
+        <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
         <SliderField
           label="Stream Interval"
           tooltip="Controls how often streaming tokens are sent to the client. A value of 1 sends each token immediately (smoothest streaming). Higher values batch multiple tokens together, which improves throughput but makes streaming feel chunkier. Set to 1 for chat use, higher for batch processing."
@@ -441,6 +448,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Tool Integration */}
       <Section title="Tool Integration (MCP)" expanded={expandedSections.tools} onToggle={() => toggleSection('tools')}>
+        <PerformanceHint text="Lets the model call external tools (web search, code execution, etc.) during conversations. Requires a model that supports tool calling." />
         <Field label="MCP Config File" tooltip="Path to a JSON config file defining MCP (Model Context Protocol) tool servers. When configured, the model can call external tools during generation. The config file defines tool server endpoints, authentication, and available capabilities.">
           <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder="/path/to/mcp-config.json" className="cfg-input" />
         </Field>
@@ -611,6 +619,14 @@ function IncompatWarning({ text }: { text: string }) {
 function InfoNote({ text }: { text: string }) {
   return (
     <div className="px-2 py-1.5 mb-1 rounded text-[11px] bg-primary/10 border border-primary/30 text-primary leading-tight">
+      {text}
+    </div>
+  )
+}
+
+function PerformanceHint({ text }: { text: string }) {
+  return (
+    <div className="px-2 py-1 rounded text-[10px] text-muted-foreground/70 italic leading-snug">
       {text}
     </div>
   )

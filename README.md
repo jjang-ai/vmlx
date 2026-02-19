@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://vmlx.net/logos/png/wordmark-dark-600x150.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://vmlx.net/logos/png/wordmark-light-600x150.png">
+    <img alt="vMLX" src="https://vmlx.net/logos/png/wordmark-transparent-600x150.png" width="400">
+  </picture>
+</p>
+
 # vLLM-MLX
 
 **vLLM-like inference for Apple Silicon** - GPU-accelerated Text, Image, Video & Audio on Mac
@@ -159,8 +167,9 @@ print("Answer:", response.choices[0].message.content)
 **Supported Parsers:**
 | Parser | Models | Description |
 |--------|--------|-------------|
-| `qwen3` | Qwen3 series | Requires both `<think>` and `</think>` tags |
-| `deepseek_r1` | DeepSeek-R1 | Handles implicit `<think>` tag |
+| `qwen3` | Qwen3, Qwen3-Coder, QwQ, MiniMax, StepFun | Strict `<think>`/`</think>` tags |
+| `deepseek_r1` | DeepSeek-R1, Gemma 3, GLM-4.7, GLM-Z1, Phi-4 Reasoning | Lenient `<think>` (handles missing open tag) |
+| `openai_gptoss` | GLM-4.7 Flash, GPT-OSS | Harmony `<\|channel\|>analysis/final` protocol |
 
 ### Embeddings
 
