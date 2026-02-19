@@ -13,6 +13,7 @@ The scheduler follows vLLM's design with:
 
 import logging
 import os
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -87,6 +88,7 @@ class SchedulerConfig:
     use_memory_aware_cache: bool = True  # Use memory-based eviction
     cache_memory_mb: Optional[int] = None  # None = auto-detect (30% of available RAM)
     cache_memory_percent: float = 0.20  # Fraction of available RAM if auto-detecting
+    cache_ttl_minutes: float = 0  # Cache entry TTL in minutes (0 = no expiration)
 
     # Paged cache settings (experimental - for memory efficiency)
     use_paged_cache: bool = (
@@ -280,6 +282,7 @@ class Scheduler:
                 cache_config = MemoryCacheConfig(
                     max_memory_mb=self.config.cache_memory_mb,
                     max_memory_percent=self.config.cache_memory_percent,
+                    ttl_minutes=self.config.cache_ttl_minutes,
                 )
                 self.memory_aware_cache = MemoryAwarePrefixCache(
                     model=model,
@@ -340,6 +343,14 @@ class Scheduler:
         self.num_requests_processed = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+
+        # Periodic Metal memory cache cleanup timer.
+        # During sustained multi-request traffic, self.running is never empty
+        # so _cleanup_finished's mx.clear_memory_cache() never triggers.
+        # This timer ensures Metal's internal allocator cache gets flushed
+        # periodically (every 60s) even during continuous load.
+        self._last_metal_gc_time = time.monotonic()
+        self._metal_gc_interval = 60.0  # seconds
 
     @staticmethod
     def _is_hybrid_model(model: Any) -> bool:
@@ -1213,7 +1224,11 @@ class Scheduler:
 
     def abort_request(self, request_id: str) -> bool:
         """
-        Abort a request.
+        Abort a request, cleaning up all associated resources.
+
+        This mirrors the cleanup done in _cleanup_finished() to prevent
+        resource leaks (paged cache block tables, detokenizer state,
+        extracted KV caches, Metal memory cache).
 
         Args:
             request_id: The request ID to abort
@@ -1240,12 +1255,32 @@ class Scheduler:
             del self.uid_to_request_id[uid]
             del self.request_id_to_uid[request.request_id]
 
+        # Clean up paged cache tracking (prevent block table leaks)
+        if self.block_aware_cache is not None:
+            self.block_aware_cache._request_tables.pop(request_id, None)
+            self.block_aware_cache.paged_cache.detach_request(request_id)
+
+        # Clear extracted cache reference to help GC
+        if hasattr(request, '_extracted_cache'):
+            request._extracted_cache = None
+
+        # Clean up streaming detokenizer
+        self._cleanup_detokenizer(request_id)
+
         if request_id in self.running:
             del self.running[request_id]
 
         # Mark as aborted
         request.set_finished(RequestStatus.FINISHED_ABORTED)
         self.finished_req_ids.add(request_id)
+
+        # Clear Metal memory cache if no other requests are running
+        if not self.running:
+            try:
+                import mlx.core as mx
+                mx.clear_memory_cache()
+            except Exception:
+                pass
 
         logger.debug(f"Aborted request {request_id}")
         return True
@@ -1896,6 +1931,20 @@ class Scheduler:
 
         # Clear finished tracking for next step
         self.finished_req_ids = set()
+
+        # Periodic Metal memory cache cleanup during sustained traffic.
+        # When requests are always running, _cleanup_finished never calls
+        # mx.clear_memory_cache(). This timer ensures periodic cleanup
+        # to prevent Metal's internal allocator cache from growing unbounded.
+        now = time.monotonic()
+        if now - self._last_metal_gc_time > self._metal_gc_interval:
+            self._last_metal_gc_time = now
+            try:
+                import mlx.core as mx
+                mx.clear_memory_cache()
+                logger.debug("Periodic Metal memory cache cleanup")
+            except Exception:
+                pass
 
         return output
 

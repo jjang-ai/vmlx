@@ -149,7 +149,6 @@ def _resolve_top_p(request_value: float | None) -> float:
 
 # Global MCP manager
 _mcp_manager = None
-_mcp_executor = None
 
 # Global embedding engine (lazy loaded)
 _embedding_engine = None
@@ -1771,7 +1770,8 @@ def _extract_text_from_content(content) -> str:
 
 
 def _responses_input_to_messages(
-    input_data: str | list, instructions: str | None = None
+    input_data: str | list, instructions: str | None = None,
+    preserve_multimodal: bool = False,
 ) -> list[dict]:
     """Convert Responses API input to chat messages format.
 
@@ -1780,7 +1780,24 @@ def _responses_input_to_messages(
     - {"type": "message", "role": "...", "content": [...]} → message with content parts
     - {"type": "function_call", "name": "...", "call_id": "...", "arguments": "..."} → tool call
     - {"type": "function_call_output", "call_id": "...", "output": "..."} → tool result
+
+    Args:
+        preserve_multimodal: When True (MLLM models), preserve content arrays with
+            image_url/video_url parts instead of extracting text only. MLLM engines
+            extract images from message content internally.
     """
+    def _resolve_content(raw_content):
+        """Resolve content: preserve arrays for MLLM, extract text for LLM."""
+        if preserve_multimodal and isinstance(raw_content, list):
+            # Check if any part has image/video — if so, preserve the full array
+            has_media = any(
+                isinstance(p, dict) and p.get("type") in ("image_url", "image", "video_url", "video")
+                for p in raw_content
+            )
+            if has_media:
+                return raw_content
+        return _extract_text_from_content(raw_content)
+
     messages = []
 
     # Add system/instructions message
@@ -1801,7 +1818,7 @@ def _responses_input_to_messages(
         if not isinstance(item, dict):
             if hasattr(item, "role"):
                 raw = item.content if hasattr(item, "content") else ""
-                messages.append({"role": item.role, "content": _extract_text_from_content(raw)})
+                messages.append({"role": item.role, "content": _resolve_content(raw)})
             continue
 
         item_type = item.get("type", "")
@@ -1845,7 +1862,7 @@ def _responses_input_to_messages(
         # message type with content parts
         if item_type == "message":
             role = item.get("role", "user")
-            content = _extract_text_from_content(item.get("content", ""))
+            content = _resolve_content(item.get("content", ""))
             messages.append({"role": role, "content": content})
         # Standard role-based message (no type field, or type is not a special one)
         elif "role" in item:
@@ -1865,7 +1882,7 @@ def _responses_input_to_messages(
                     "tool_calls": item["tool_calls"],
                 })
             else:
-                content = _extract_text_from_content(item.get("content", ""))
+                content = _resolve_content(item.get("content", ""))
                 messages.append({"role": role, "content": content})
         # Skip unknown item types (e.g. reasoning, web_search_call, etc.)
 
@@ -1910,7 +1927,12 @@ async def create_response(
     engine = get_engine()
 
     # Convert Responses API input to chat messages
-    messages = _responses_input_to_messages(request.input, request.instructions)
+    # For MLLM models, preserve content arrays with image/video parts — MLLM engines
+    # extract images from message content internally (same as Chat Completions path)
+    messages = _responses_input_to_messages(
+        request.input, request.instructions,
+        preserve_multimodal=engine.is_mllm,
+    )
 
     # Handle text format (json_object / json_schema) — translate to response_format
     if request.text and isinstance(request.text, dict) and request.text.get("type") != "text":
@@ -3060,16 +3082,14 @@ async def stream_responses_api(
 
 async def init_mcp(config_path: str):
     """Initialize MCP manager from config file."""
-    global _mcp_manager, _mcp_executor
+    global _mcp_manager
 
     try:
-        from vllm_mlx.mcp import MCPClientManager, ToolExecutor, load_mcp_config
+        from vllm_mlx.mcp import MCPClientManager, load_mcp_config
 
         config = load_mcp_config(config_path)
         _mcp_manager = MCPClientManager(config)
         await _mcp_manager.start()
-
-        _mcp_executor = ToolExecutor(_mcp_manager)
 
         logger.info(f"MCP initialized with {len(_mcp_manager.get_all_tools())} tools")
 

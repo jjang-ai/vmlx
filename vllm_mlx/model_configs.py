@@ -410,6 +410,21 @@ def register_all(registry=None):
         priority=5,
     ))
 
+    # gemma3-text: text-only Gemma 3 (detected via config.json model_type="gemma3_text")
+    # Shares parsers with gemma3 but is NOT multimodal — supports batching, paged cache, KV quant
+    _register(ModelConfig(
+        family_name="gemma3-text",
+        pattern=r"(?i)gemma[\-_.]?3[\-_.]?text",
+        cache_type="kv",
+        tool_parser="hermes",
+        reasoning_parser="deepseek_r1",
+        think_in_template=True,
+        supports_native_tools=True,
+        is_mllm=False,
+        description="Google Gemma 3 (text-only, tool calling, thinking)",
+        priority=8,
+    ))
+
     _register(ModelConfig(
         family_name="gemma3",
         pattern=r"(?i)gemma[\-_.]?3",

@@ -325,14 +325,12 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
 
         <div className="border-t border-border" />
 
-        {/* System Prompt */}
+        {/* System Prompt with Templates */}
         <div>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">System Prompt</h3>
-          <textarea
+          <PromptTemplateSelector
             value={overrides.systemPrompt ?? ''}
-            onChange={e => update('systemPrompt', e.target.value || undefined)}
-            placeholder="You are a helpful assistant..."
-            className="w-full h-24 resize-none px-3 py-2 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            onChange={(prompt) => update('systemPrompt', prompt || undefined)}
           />
           <p className="text-xs text-muted-foreground mt-1">Injected as the first message in each request.</p>
         </div>
@@ -412,7 +410,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
                     />
                     <button
                       onClick={async () => {
-                        const result = await (window as any).electron.ipcRenderer.invoke('dialog:openDirectory')
+                        const result = await window.api.chat.openDirectory()
                         if (result && !result.canceled && result.filePaths?.[0]) {
                           update('workingDirectory', result.filePaths[0])
                         }
@@ -667,5 +665,122 @@ function ToolToggle({ label, checked, onChange, help }: {
         <span className="block text-xs text-muted-foreground">{help}</span>
       </span>
     </label>
+  )
+}
+
+// ─── Prompt Template Selector (backed by SQLite prompt_templates table) ──────
+
+interface PromptTemplate {
+  id: string
+  name: string
+  content: string
+  category: string
+  isBuiltin: boolean
+}
+
+function PromptTemplateSelector({ value, onChange }: { value: string; onChange: (prompt: string) => void }) {
+  const [templates, setTemplates] = useState<PromptTemplate[]>([])
+  const [saveName, setSaveName] = useState('')
+  const [showSave, setShowSave] = useState(false)
+
+  useEffect(() => {
+    window.api.templates.list().then(setTemplates).catch(() => {})
+  }, [])
+
+  const builtins = templates.filter(t => t.isBuiltin)
+  const customs = templates.filter(t => !t.isBuiltin)
+
+  const handleSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value
+    if (id === '__none__') { onChange(''); return }
+    const tmpl = templates.find(t => t.id === id)
+    if (tmpl) onChange(tmpl.content)
+  }
+
+  const handleSave = async () => {
+    const name = saveName.trim()
+    if (!name || !value.trim()) return
+    const id = `custom-${Date.now()}`
+    await window.api.templates.save({ id, name, content: value, category: 'custom' })
+    setTemplates(await window.api.templates.list())
+    setSaveName('')
+    setShowSave(false)
+  }
+
+  const handleDeleteCustom = async (id: string) => {
+    await window.api.templates.delete(id)
+    setTemplates(await window.api.templates.list())
+  }
+
+  const currentMatch = templates.find(t => t.content === value)
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <select
+          value={currentMatch?.id ?? '__custom__'}
+          onChange={handleSelect}
+          className="flex-1 text-xs px-2 py-1.5 bg-background border border-input rounded focus:outline-none focus:ring-1 focus:ring-ring"
+        >
+          <option value="__none__">(No template)</option>
+          {builtins.length > 0 && (
+            <optgroup label="Built-in">
+              {builtins.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </optgroup>
+          )}
+          {customs.length > 0 && (
+            <optgroup label="Custom">
+              {customs.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </optgroup>
+          )}
+          {!currentMatch && value && <option value="__custom__">(Custom)</option>}
+        </select>
+        <button
+          onClick={() => setShowSave(!showSave)}
+          className="text-xs px-2 py-1 border border-border rounded hover:bg-accent"
+          title="Save current prompt as template"
+        >
+          Save
+        </button>
+      </div>
+
+      {showSave && (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={saveName}
+            onChange={e => setSaveName(e.target.value)}
+            placeholder="Template name..."
+            className="flex-1 text-xs px-2 py-1 bg-background border border-input rounded focus:outline-none focus:ring-1 focus:ring-ring"
+            onKeyDown={e => e.key === 'Enter' && handleSave()}
+          />
+          <button onClick={handleSave} className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90">
+            Save
+          </button>
+        </div>
+      )}
+
+      <textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder="You are a helpful assistant..."
+        className="w-full h-24 resize-none px-3 py-2 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+      />
+
+      {customs.length > 0 && (
+        <div className="flex gap-1 flex-wrap">
+          {customs.map(t => (
+            <span key={t.id} className="text-xs bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
+              {t.name}
+              <button onClick={() => handleDeleteCustom(t.id)} className="text-destructive hover:text-destructive/80">x</button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

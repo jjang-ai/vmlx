@@ -14,6 +14,7 @@ export interface SessionConfig {
   prefixCacheSize: number
   cacheMemoryMb: number
   cacheMemoryPercent: number
+  cacheTtlMinutes: number
   noMemoryAwareCache: boolean
   usePagedCache: boolean
   pagedCacheBlockSize: number
@@ -49,6 +50,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   prefixCacheSize: 100,
   cacheMemoryMb: 0,
   cacheMemoryPercent: 20,
+  cacheTtlMinutes: 0,
   noMemoryAwareCache: false,
   usePagedCache: true,
   pagedCacheBlockSize: 64,
@@ -76,9 +78,11 @@ interface SessionConfigFormProps {
   onReset?: () => void
   /** Detected model cache type ('kv', 'mamba', etc.) for feature gating */
   detectedCacheType?: string
+  /** Whether the model is a vision/multimodal model (disables batching/paged cache) */
+  isMultimodal?: boolean
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, isMultimodal }: SessionConfigFormProps) {
   const [expandedSections, setExpandedSections] = useState({
     server: true,
     concurrent: false,
@@ -98,6 +102,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const batchingOff = !config.continuousBatching
   // Feature gating: KV cache quantization doesn't work with Mamba/SSM cache types
   const isMambaCache = detectedCacheType === 'mamba'
+  // Feature gating: MLLM/VLM models use SimpleEngine — no batching, paged cache, or KV quant
+  const isVLM = !!isMultimodal
+  // Effective batching state — VLM always forces SimpleEngine regardless of checkbox
+  // Backend silently strips --continuous-batching for VLM models (buildArgs line 1045)
+  const effectivelyNoBatching = batchingOff || isVLM
 
   return (
     <div className="space-y-0">
@@ -124,10 +133,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           tooltip="Maximum number of API requests allowed per minute. Set to 0 to disable rate limiting. Useful when exposing the server to multiple users or external applications to prevent overloading."
           value={config.rateLimit}
           onChange={v => onChange('rateLimit', v)}
-          min={0}
+          min={1}
           max={1000}
           step={10}
-          defaultValue={DEFAULT_CONFIG.rateLimit}
+          defaultValue={60}
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Disabled"
@@ -188,23 +197,30 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="No limit"
         />
-        <CheckField label="Continuous Batching" tooltip="When enabled, new requests can join an ongoing batch without waiting for the current batch to complete. This significantly improves throughput when serving multiple concurrent users. Has minimal overhead for single-user use." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
-        {!config.continuousBatching && config.enablePrefixCache && (
-          <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache is on." />
+        <CheckField label="Continuous Batching" tooltip="When enabled, new requests can join an ongoing batch without waiting for the current batch to complete. This significantly improves throughput when serving multiple concurrent users. Has minimal overhead for single-user use. Required for: prefix caching, paged KV cache, KV cache quantization, and disk caching." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={isVLM} />
+        {isVLM && <IncompatWarning text="Vision/multimodal models require SimpleEngine (RotatingKVCache). Continuous batching, paged cache, and KV cache quantization are all unavailable for VLM models — this is a hardware-level limitation of multimodal processing and cannot be changed." />}
+        {!isVLM && !config.continuousBatching && config.enablePrefixCache && (
+          <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
+        )}
+        {!isVLM && !config.continuousBatching && (
+          <InfoNote text="Turning this off disables: prefix caching, paged KV cache, KV cache quantization, and disk caching. Enable it to unlock these features." />
         )}
       </Section>
 
       {/* Prefix Cache */}
       <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')}>
-        {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching to be enabled." />}
-        <CheckField label="Enable Prefix Caching" tooltip="Caches computed attention states for common prompt prefixes (like system prompts). When multiple requests share the same prefix, the cached state is reused, dramatically reducing time-to-first-token. Recommended to keep enabled." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={batchingOff} />
+        {batchingOff && !isVLM && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
+        {batchingOff && isVLM && <IncompatWarning text="Prefix cache is unavailable for vision/multimodal models (SimpleEngine does not support it)." />}
+        <CheckField label="Enable Prefix Caching" tooltip="Caches computed attention states for common prompt prefixes (like system prompts). When multiple requests share the same prefix, the cached state is reused, dramatically reducing time-to-first-token. Recommended to keep enabled. Requires continuous batching." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={effectivelyNoBatching} />
         {config.enablePrefixCache && (
           <>
-            <CheckField label="Legacy Entry-Count Cache" tooltip="Switches from the default memory-aware cache to a simpler cache that limits by number of entries rather than memory usage. Only use this if you're experiencing issues with the memory-aware cache or need deterministic cache eviction behavior." checked={config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} />
+            <CheckField label="Legacy Entry-Count Cache" tooltip="Switches from memory-aware cache (which uses Cache Memory %, Cache Memory Limit, and Cache TTL controls) to a simpler entry-count cache. When ON: you control cache by max entries only. When OFF: you get fine-grained memory budget controls (% of RAM, MB limit, TTL expiration). Memory-aware mode is recommended for most users." checked={config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} />
             {config.noMemoryAwareCache ? (
+              <>
+              <InfoNote text="Legacy mode active — Cache Memory %, Cache Memory Limit, and Cache TTL are hidden. Turn off 'Legacy Entry-Count Cache' above to use memory-aware caching with those controls." />
               <SliderField
                 label="Max Cache Entries"
-                tooltip="Maximum number of prefix cache entries to store when using legacy entry-count mode. Each entry stores the KV cache for one unique prefix. Higher values cache more prefixes but use more memory."
+                tooltip="Maximum number of prefix cache entries to store when using legacy entry-count mode. Each entry stores the KV cache for one unique prefix. Higher values cache more prefixes but use more memory. For finer control over memory usage, switch to memory-aware mode by unchecking 'Legacy Entry-Count Cache' above."
                 value={config.prefixCacheSize}
                 onChange={v => onChange('prefixCacheSize', v)}
                 min={1}
@@ -215,30 +231,45 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 unlimitedValue={0}
                 unlimitedLabel="No limit"
               />
+              </>
             ) : (
               <>
                 <SliderField
                   label="Cache Memory Limit (MB)"
-                  tooltip="Hard limit on memory used by the prefix cache in megabytes. Set to 0 to let the system auto-detect based on available RAM and the percentage setting below. Set an explicit value if you need to reserve memory for other applications."
+                  tooltip="Hard limit on memory used by the prefix cache in megabytes. Set to 'Auto-detect' to let the system auto-detect based on available RAM and the percentage setting below. Set an explicit value if you need to reserve memory for other applications."
                   value={config.cacheMemoryMb}
                   onChange={v => onChange('cacheMemoryMb', v)}
-                  min={0}
+                  min={256}
                   max={65536}
                   step={256}
-                  defaultValue={DEFAULT_CONFIG.cacheMemoryMb}
+                  defaultValue={4096}
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="Auto-detect"
                 />
                 <SliderField
                   label="Cache Memory %"
-                  tooltip="Percentage of available system RAM to allocate for the prefix cache. Only used when Cache Memory Limit is 0 (auto-detect). Default 20% is a good balance. Increase for workloads with many shared prefixes, decrease if running other memory-intensive apps."
+                  tooltip="Percentage of available system RAM to allocate for the prefix cache. Only used when Cache Memory Limit is set to 'Auto-detect'. Default 20% is a good balance — lower this for large models that leave little headroom (e.g. 10-15% for 120GB+ models on 256GB systems). Higher values cache more prefixes but risk memory pressure during long generations."
                   value={config.cacheMemoryPercent}
                   onChange={v => onChange('cacheMemoryPercent', v)}
                   min={1}
                   max={100}
                   step={1}
                   defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
+                />
+                {config.usePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
+                <SliderField
+                  label="Cache TTL (minutes)"
+                  tooltip="Time-to-live for memory-aware cache entries. Entries not accessed within this window are evicted to free memory. 'No expiration' means entries are only evicted by memory pressure. Note: this setting has no effect when Paged KV Cache is enabled (paged cache uses its own LRU eviction based on Max Cache Blocks)."
+                  value={config.cacheTtlMinutes}
+                  onChange={v => onChange('cacheTtlMinutes', v)}
+                  min={1}
+                  max={120}
+                  step={5}
+                  defaultValue={30}
+                  allowUnlimited
+                  unlimitedValue={0}
+                  unlimitedLabel="No expiration"
                 />
               </>
             )}
@@ -248,9 +279,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Paged Cache */}
       <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')}>
-        {batchingOff && <IncompatWarning text="Paged cache requires continuous batching to be enabled." />}
-        {config.enableDiskCache && <IncompatWarning text="Paged cache is not compatible with disk cache. Enabling paged cache will disable disk cache." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Enables paged attention, which allocates KV cache memory in fixed-size blocks instead of one large contiguous allocation. This reduces memory fragmentation and allows the model to handle longer contexts with less total memory. Recommended for models with long context windows." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff} />
+        {isVLM && <IncompatWarning text="Vision/multimodal models require SimpleEngine — paged cache is unavailable. This is a hardware limitation of multimodal processing and cannot be changed." />}
+        {!isVLM && batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
+        {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
+        <CheckField label="Use Paged KV Cache" tooltip="Allocates KV cache in fixed-size blocks instead of one contiguous allocation. Reduces memory fragmentation, enables prefix sharing between requests, and handles longer contexts more efficiently. Recommended for most models. Not compatible with legacy Disk Cache (use Block Disk Cache L2 instead). For persistent storage, enable 'Block Disk Cache (L2)' below." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={effectivelyNoBatching} />
         {config.usePagedCache && (
           <>
             <SliderField
@@ -313,14 +345,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* KV Cache Quantization */}
       <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')}>
-        {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching to be enabled." />}
-        {isMambaCache && !batchingOff && <IncompatWarning text="KV cache quantization is not supported for Mamba/SSM models." />}
+        {isVLM && <IncompatWarning text="Vision/multimodal models use SimpleEngine — KV cache quantization is not supported." />}
+        {!isVLM && batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
+        {!effectivelyNoBatching && isMambaCache && <IncompatWarning text="KV cache quantization is not supported for Mamba/SSM models." />}
+        <InfoNote text="KV cache quantization compresses entries stored in the prefix cache (completed prompts). It does NOT affect model weights or live generation KV cache, which always run at full precision. RAM savings apply only to cached prompt states." />
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Quantization
             <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy." />
           </span>
-          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={batchingOff || isMambaCache}>
+          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || isMambaCache}>
             <option value="none">None (full precision cache)</option>
             <option value="q8">q8 (8-bit, ~2x cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x cache savings)</option>
@@ -342,9 +376,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Disk Cache (L2 Persistent) */}
       <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')}>
-        {batchingOff && <IncompatWarning text="Disk cache requires continuous batching to be enabled." />}
-        {config.usePagedCache && <IncompatWarning text="Disk cache is not compatible with paged cache. Disable paged cache first, or disk cache will be ignored." />}
-        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled={batchingOff || config.usePagedCache} />
+        {isVLM && <IncompatWarning text="Disk cache is unavailable for vision/multimodal models (SimpleEngine does not support it)." />}
+        {!isVLM && batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
+        {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
+        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled={effectivelyNoBatching || config.usePagedCache} />
         {config.enableDiskCache && (
           <>
             <SliderField

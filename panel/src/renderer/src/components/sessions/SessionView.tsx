@@ -3,6 +3,10 @@ import { ChatInterface } from '../chat/ChatInterface'
 import { ChatList } from '../chat/ChatList'
 import { ChatSettings } from '../chat/ChatSettings'
 import { ServerSettingsDrawer } from './ServerSettingsDrawer'
+import { CachePanel } from './CachePanel'
+import { BenchmarkPanel } from './BenchmarkPanel'
+import { EmbeddingsPanel } from './EmbeddingsPanel'
+import { PerformancePanel } from './PerformancePanel'
 import { useToast } from '../Toast'
 
 interface Session {
@@ -34,6 +38,10 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const [showChatList, setShowChatList] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
+  const [showCache, setShowCache] = useState(false)
+  const [showBenchmark, setShowBenchmark] = useState(false)
+  const [showEmbeddings, setShowEmbeddings] = useState(false)
+  const [showPerformance, setShowPerformance] = useState(false)
   const [effectiveReasoningParser, setEffectiveReasoningParser] = useState<string | undefined>(undefined)
 
   // Load session and its chats
@@ -213,12 +221,44 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             ⚙ Chat
           </button>
           <button
-            onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) setShowSettings(false) }}
+            onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) { setShowSettings(false); setShowCache(false) } }}
             className={`text-sm px-2 py-1 rounded ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
             title={isRemote ? 'Connection Settings' : 'Server Settings'}
           >
             {isRemote ? '⚙ Connection' : '⚙ Server'}
           </button>
+          {!isRemote && session.status === 'running' && (
+            <>
+              <button
+                onClick={() => { setShowCache(!showCache); if (!showCache) { setShowSettings(false); setShowServerSettings(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false) } }}
+                className={`text-sm px-2 py-1 rounded ${showCache ? 'bg-accent' : 'hover:bg-accent'}`}
+                title="Cache Management"
+              >
+                Cache
+              </button>
+              <button
+                onClick={() => { setShowBenchmark(!showBenchmark); if (!showBenchmark) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowEmbeddings(false); setShowPerformance(false) } }}
+                className={`text-sm px-2 py-1 rounded ${showBenchmark ? 'bg-accent' : 'hover:bg-accent'}`}
+                title="Run Benchmark"
+              >
+                Bench
+              </button>
+              <button
+                onClick={() => { setShowEmbeddings(!showEmbeddings); if (!showEmbeddings) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowPerformance(false) } }}
+                className={`text-sm px-2 py-1 rounded ${showEmbeddings ? 'bg-accent' : 'hover:bg-accent'}`}
+                title="Embeddings"
+              >
+                Embed
+              </button>
+              <button
+                onClick={() => { setShowPerformance(!showPerformance); if (!showPerformance) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false) } }}
+                className={`text-sm px-2 py-1 rounded ${showPerformance ? 'bg-accent' : 'hover:bg-accent'}`}
+                title="Performance Monitor"
+              >
+                Perf
+              </button>
+            </>
+          )}
           {session.status === 'running' && (
             <>
               {isRemote && (
@@ -305,6 +345,63 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               if (s) setSession(s)
             }}
           />
+        )}
+        {showCache && (
+          <div className="w-80 border-l border-border bg-card overflow-y-auto flex-shrink-0">
+            <div className="flex items-center justify-between p-3 border-b border-border">
+              <h3 className="text-sm font-medium">Cache Management</h3>
+              <button onClick={() => setShowCache(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+            </div>
+            <div className="p-3">
+              <CachePanel endpoint={{ host: session.host, port: session.port }} sessionStatus={session.status} />
+            </div>
+          </div>
+        )}
+        {showBenchmark && (
+          <div className="w-96 border-l border-border bg-card overflow-y-auto flex-shrink-0">
+            <div className="flex items-center justify-between p-3 border-b border-border">
+              <h3 className="text-sm font-medium">Benchmark</h3>
+              <button onClick={() => setShowBenchmark(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+            </div>
+            <div className="p-3">
+              <BenchmarkPanel
+                sessionId={session.id}
+                endpoint={{ host: session.host, port: session.port }}
+                modelPath={session.modelPath}
+                modelName={session.modelName}
+                sessionStatus={session.status}
+              />
+            </div>
+          </div>
+        )}
+        {showEmbeddings && (
+          <div className="w-80 border-l border-border bg-card overflow-y-auto flex-shrink-0">
+            <div className="flex items-center justify-between p-3 border-b border-border">
+              <h3 className="text-sm font-medium">Embeddings</h3>
+              <button onClick={() => setShowEmbeddings(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+            </div>
+            <div className="p-3">
+              <EmbeddingsPanel
+                endpoint={{ host: session.host, port: session.port }}
+                sessionStatus={session.status}
+                sessionId={session.id}
+              />
+            </div>
+          </div>
+        )}
+        {showPerformance && (
+          <div className="w-80 border-l border-border bg-card overflow-y-auto flex-shrink-0">
+            <div className="flex items-center justify-between p-3 border-b border-border">
+              <h3 className="text-sm font-medium">Performance</h3>
+              <button onClick={() => setShowPerformance(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+            </div>
+            <div className="p-3">
+              <PerformancePanel
+                endpoint={{ host: session.host, port: session.port }}
+                sessionStatus={session.status}
+              />
+            </div>
+          </div>
         )}
       </div>
     </div>

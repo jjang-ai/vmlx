@@ -216,10 +216,13 @@ def _make_batch_cache(model: nn.Module, left_padding: List[int]) -> List[Any]:
     Returns:
         List of BatchKVCache objects for each layer
     """
-    from mlx_lm.models.cache import BatchKVCache, KVCache
+    from mlx_lm.models.cache import BatchKVCache, KVCache, RotatingKVCache
+    from mlx_lm.generate import BatchRotatingKVCache
 
     def to_batch_cache(c):
-        if isinstance(c, KVCache):
+        if isinstance(c, RotatingKVCache):
+            return BatchRotatingKVCache(c.max_size, left_padding)
+        elif isinstance(c, KVCache):
             return BatchKVCache(left_padding)
         else:
             raise ValueError(f"{type(c)} does not yet support batching")
@@ -567,8 +570,9 @@ class MLLMBatchGenerator:
         # Build model call kwargs
         kwargs = dict(request.extra_kwargs)
 
-        if request.pixel_values is not None:
-            kwargs["pixel_values"] = request.pixel_values
+        # Always pass pixel_values — MLLM models require it as a positional arg.
+        # For text-only requests, pass None.
+        kwargs["pixel_values"] = request.pixel_values
         if request.attention_mask is not None:
             kwargs["attention_mask"] = request.attention_mask
         if request.image_grid_thw is not None:

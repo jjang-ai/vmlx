@@ -21,7 +21,6 @@ interface SessionDashboardProps {
   onOpenSession: (sessionId: string) => void
   onConfigureSession: (sessionId: string) => void
   onCreateSession: () => void
-  onManageDirectories?: () => void
 }
 
 export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSession }: SessionDashboardProps) {

@@ -99,7 +99,7 @@ class ReasoningParser(ABC):
         """
         pass
 
-    def reset_state(self):  # noqa: B027
+    def reset_state(self, **kwargs):  # noqa: B027
         """
         Reset any internal state for a new request.
 

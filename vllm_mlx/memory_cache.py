@@ -25,9 +25,10 @@ Example:
 from __future__ import annotations
 
 import logging
+import time
 from collections import OrderedDict
 import gc
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -147,12 +148,14 @@ class MemoryCacheConfig:
         max_memory_percent: Fraction of available RAM to use (0.0-1.0).
         max_entries: Hard limit on number of entries (safety net).
         enable_memory_tracking: Whether to track per-entry memory.
+        ttl_minutes: Time-to-live for cache entries in minutes. 0 = no TTL.
     """
 
     max_memory_mb: int | None = None
     max_memory_percent: float = _DEFAULT_MEMORY_PERCENT
     max_entries: int = 1000  # Safety limit
     enable_memory_tracking: bool = True
+    ttl_minutes: float = 0  # 0 = no TTL (unlimited lifetime)
 
     def __post_init__(self) -> None:
         if not 0.0 < self.max_memory_percent <= 1.0:
@@ -161,6 +164,8 @@ class MemoryCacheConfig:
             )
         if self.max_entries < 1:
             raise ValueError(f"max_entries must be >= 1, got {self.max_entries}")
+        if self.ttl_minutes < 0:
+            raise ValueError(f"ttl_minutes must be >= 0, got {self.ttl_minutes}")
 
     def compute_memory_limit(self) -> int:
         """
@@ -221,11 +226,12 @@ class CacheStats:
 
 @dataclass
 class _CacheEntry:
-    """Internal cache entry with memory tracking."""
+    """Internal cache entry with memory tracking and timestamp."""
 
     tokens: tuple[int, ...]
     cache: list[Any]
     memory_bytes: int
+    last_accessed_at: float = field(default_factory=time.monotonic)
 
     @classmethod
     def create(cls, tokens: list[int], cache: list[Any]) -> _CacheEntry:
@@ -235,7 +241,12 @@ class _CacheEntry:
             tokens=tuple(tokens),
             cache=cache,
             memory_bytes=memory,
+            last_accessed_at=time.monotonic(),
         )
+
+    def touch(self) -> None:
+        """Update last accessed timestamp."""
+        self.last_accessed_at = time.monotonic()
 
 
 class MemoryAwarePrefixCache:
@@ -279,13 +290,18 @@ class MemoryAwarePrefixCache:
         self._max_memory = self._config.compute_memory_limit()
         self._current_memory = 0
 
+        # TTL configuration (seconds, 0 = disabled)
+        self._ttl_seconds = self._config.ttl_minutes * 60.0 if self._config.ttl_minutes > 0 else 0.0
+
         # Statistics
         self._stats = CacheStats(max_memory_bytes=self._max_memory)
 
+        ttl_str = f"{self._config.ttl_minutes}min" if self._config.ttl_minutes > 0 else "disabled"
         logger.info(
             f"MemoryAwarePrefixCache initialized: "
             f"max_memory={self._max_memory / _BYTES_PER_MB:.1f}MB, "
-            f"max_entries={self._config.max_entries}"
+            f"max_entries={self._config.max_entries}, "
+            f"ttl={ttl_str}"
         )
 
     @staticmethod
@@ -388,13 +404,18 @@ class MemoryAwarePrefixCache:
             self._stats.misses += 1
             return None, tokens
 
+        # Evict expired entries before lookup
+        if self._ttl_seconds > 0:
+            self._evict_expired()
+
         tokens_key = tuple(tokens)
 
         # Check for exact match
         if tokens_key in self._entries:
             entry = self._entries[tokens_key]
-            # Move to end (most recently used)
+            # Move to end (most recently used) and update access time
             self._entries.move_to_end(tokens_key)
+            entry.touch()
             self._stats.hits += 1
             self._stats.tokens_saved += len(tokens)
             # Return reference directly - MLX arrays are immutable
@@ -431,6 +452,7 @@ class MemoryAwarePrefixCache:
         # Prefer forward match (exact prefix reuse, no truncation needed)
         if best_forward_match is not None:
             self._entries.move_to_end(best_forward_match.tokens)
+            best_forward_match.touch()
             self._stats.hits += 1
             self._stats.tokens_saved += best_forward_length
             remaining = tokens[best_forward_length:]
@@ -441,6 +463,7 @@ class MemoryAwarePrefixCache:
             truncated = self._truncate_cache(best_reverse_match.cache, len(tokens))
             if truncated is not None:
                 self._entries.move_to_end(best_reverse_match.tokens)
+                best_reverse_match.touch()
                 self._stats.hits += 1
                 self._stats.tokens_saved += len(tokens)
                 return truncated, []
@@ -472,6 +495,10 @@ class MemoryAwarePrefixCache:
         if tokens_key in self._entries:
             self._entries.move_to_end(tokens_key)
             return True
+
+        # Evict expired entries first to free space before LRU eviction
+        if self._ttl_seconds > 0:
+            self._evict_expired()
 
         # Create entry and estimate memory
         entry = _CacheEntry.create(tokens, cache)
@@ -540,24 +567,41 @@ class MemoryAwarePrefixCache:
             f"freed {freed_bytes / _BYTES_PER_MB:.2f}MB"
         )
 
-    def remove(self, tokens: list[int]) -> bool:
-        """
-        Remove a specific cache entry.
-
-        Args:
-            tokens: Token sequence to remove.
+    def _evict_expired(self) -> int:
+        """Evict entries that have exceeded their TTL.
 
         Returns:
-            True if entry was found and removed.
+            Number of entries evicted.
         """
-        tokens_key = tuple(tokens)
-        entry = self._entries.pop(tokens_key, None)
-        if entry is not None:
-            self._current_memory -= entry.memory_bytes
+        if self._ttl_seconds <= 0:
+            return 0
+
+        now = time.monotonic()
+        expired_keys = []
+
+        for tokens_key, entry in self._entries.items():
+            if now - entry.last_accessed_at > self._ttl_seconds:
+                expired_keys.append(tokens_key)
+
+        for key in expired_keys:
+            entry = self._entries.pop(key)
+            freed_bytes = entry.memory_bytes
+            if hasattr(entry, 'cache'):
+                del entry.cache
+            del entry
+            self._current_memory -= freed_bytes
+            self._stats.evictions += 1
+
+        if expired_keys:
             self._stats.entry_count = len(self._entries)
             self._stats.current_memory_bytes = self._current_memory
-            return True
-        return False
+            gc.collect()
+            logger.info(
+                f"TTL eviction: removed {len(expired_keys)} expired entries, "
+                f"freed memory, {len(self._entries)} entries remaining"
+            )
+
+        return len(expired_keys)
 
     def clear(self) -> None:
         """Clear all cached entries."""
@@ -569,14 +613,6 @@ class MemoryAwarePrefixCache:
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         return self._stats.to_dict()
-
-    def reset_stats(self) -> None:
-        """Reset statistics while preserving cache contents."""
-        self._stats = CacheStats(
-            max_memory_bytes=self._max_memory,
-            current_memory_bytes=self._current_memory,
-            entry_count=len(self._entries),
-        )
 
     @property
     def memory_usage_mb(self) -> float:

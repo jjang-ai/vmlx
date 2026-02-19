@@ -85,15 +85,6 @@ class TempFileManager:
 _temp_manager = TempFileManager()
 
 
-def cleanup_temp_file(path: str) -> bool:
-    """Clean up a specific temporary file."""
-    return _temp_manager.cleanup(path)
-
-
-def cleanup_all_temp_files() -> int:
-    """Clean up all tracked temporary files. Returns count of cleaned files."""
-    return _temp_manager.cleanup_all()
-
 
 # Video processing constants
 FRAME_FACTOR = 2  # Frames must be divisible by this
@@ -1151,17 +1142,39 @@ class MLXMultimodalLM:
             logger.info(
                 f"  Chat msg {i}: role={cm['role']}, content={content_preview}..."
             )
+        # Pass enable_thinking if provided (Qwen3-VL, etc.)
+        enable_thinking = kwargs.pop("enable_thinking", None)
+        template_kwargs = {}
+        if enable_thinking is True:
+            template_kwargs["enable_thinking"] = True
         try:
             # Use get_chat_template directly since messages are already properly formatted
             formatted_prompt = get_chat_template(
                 self.processor,
                 chat_messages,
                 add_generation_prompt=True,
+                **template_kwargs,
             )
+        except TypeError:
+            # Processor doesn't support enable_thinking kwarg — retry without it
+            try:
+                formatted_prompt = get_chat_template(
+                    self.processor,
+                    chat_messages,
+                    add_generation_prompt=True,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to apply chat template: {e}, using last user message"
+                )
+                formatted_prompt = None
         except Exception as e:
             logger.warning(
                 f"Failed to apply chat template: {e}, using last user message"
             )
+            formatted_prompt = None
+
+        if formatted_prompt is None:
             # Fallback to last user message if template fails
             last_user_msg = ""
             for m in reversed(chat_messages):
@@ -1502,17 +1515,39 @@ class MLXMultimodalLM:
             all_images.extend(frames)
 
         # Apply chat template directly - messages are already properly structured
+        # Pass enable_thinking if provided (Qwen3-VL, etc.)
+        enable_thinking = kwargs.pop("enable_thinking", None)
+        template_kwargs = {}
+        if enable_thinking is True:
+            template_kwargs["enable_thinking"] = True
         try:
             # Use get_chat_template directly since messages are already properly formatted
             formatted_prompt = get_chat_template(
                 self.processor,
                 chat_messages,
                 add_generation_prompt=True,
+                **template_kwargs,
             )
+        except TypeError:
+            # Processor doesn't support enable_thinking kwarg — retry without it
+            try:
+                formatted_prompt = get_chat_template(
+                    self.processor,
+                    chat_messages,
+                    add_generation_prompt=True,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to apply chat template: {e}, using last user message"
+                )
+                formatted_prompt = None
         except Exception as e:
             logger.warning(
                 f"Failed to apply chat template: {e}, using last user message"
             )
+            formatted_prompt = None
+
+        if formatted_prompt is None:
             # Fallback to last user message if template fails
             last_user_msg = ""
             for m in reversed(chat_messages):
@@ -1553,33 +1588,50 @@ class MLXMultimodalLM:
         accumulated_text = ""
         token_count = 0
 
-        for chunk in stream_generate(
-            self.model,
-            self.processor,
-            formatted_prompt,
-            all_images if all_images else None,
-            max_tokens=max_tokens,
-            temp=temperature,
-            prompt_cache=prompt_cache,
-            **kwargs,
-        ):
-            token_count += 1
-            # chunk is a GenerationResult with .text attribute containing the new token
-            new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
-            accumulated_text += new_text
+        try:
+            for chunk in stream_generate(
+                self.model,
+                self.processor,
+                formatted_prompt,
+                all_images if all_images else None,
+                max_tokens=max_tokens,
+                temp=temperature,
+                prompt_cache=prompt_cache,
+                **kwargs,
+            ):
+                token_count += 1
+                # chunk is a GenerationResult with .text attribute containing the new token
+                new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
+                accumulated_text += new_text
 
+                yield MLLMOutput(
+                    text=new_text,  # Just the new token for streaming
+                    finish_reason=None,
+                    prompt_tokens=getattr(chunk, "prompt_tokens", 0),
+                    completion_tokens=token_count,
+                )
+        except Exception as e:
+            # Catch OOM and other generation errors to prevent server crash.
+            # Try to free Metal memory before reporting the error.
+            try:
+                import mlx.core as mx
+                mx.clear_memory_cache()
+            except Exception:
+                pass
+            logger.error(f"VLM stream_generate error: {type(e).__name__}: {e}")
             yield MLLMOutput(
-                text=new_text,  # Just the new token for streaming
-                finish_reason=None,
-                prompt_tokens=getattr(chunk, "prompt_tokens", 0),
+                text=f"\n\n[Generation error: {type(e).__name__}: {e}]",
+                finish_reason="error",
+                prompt_tokens=0,
                 completion_tokens=token_count,
             )
+            return
 
         # Final yield with finish_reason
         yield MLLMOutput(
             text="",
             finish_reason="stop",
-            prompt_tokens=getattr(chunk, "prompt_tokens", 0) if "chunk" in dir() else 0,
+            prompt_tokens=getattr(chunk, "prompt_tokens", 0) if 'chunk' in locals() else 0,
             completion_tokens=token_count,
         )
 

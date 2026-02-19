@@ -33,6 +33,7 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
   const [showNewFolder, setShowNewFolder] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Chat[] | null>(null)
+  const [exportingId, setExportingId] = useState<string | null>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
 
   const loadChats = async () => {
@@ -123,8 +124,30 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
   }
 
   const handleMoveToFolder = async (chatId: string, folderId: string | undefined) => {
-    await window.api.chat.update(chatId, { folderId, updatedAt: Date.now() })
+    await window.api.chat.update(chatId, { folderId: folderId ?? null, updatedAt: Date.now() })
     setChats(prev => prev.map(c => c.id === chatId ? { ...c, folderId, updatedAt: Date.now() } : c))
+  }
+
+  const handleExport = async (chatId: string, format: 'json' | 'markdown' | 'sharegpt', e: React.MouseEvent) => {
+    e.stopPropagation()
+    setExportingId(null)
+    try {
+      await window.api.chat.export(chatId, format)
+    } catch (err) {
+      console.error('Export failed:', err)
+    }
+  }
+
+  const handleImport = async () => {
+    try {
+      const result = await window.api.chat.import(modelPath)
+      if (result.success && result.chatId) {
+        await loadChats()
+        onChatSelect(result.chatId)
+      }
+    } catch (err) {
+      console.error('Import failed:', err)
+    }
   }
 
   const handleSearch = async (query: string) => {
@@ -201,6 +224,22 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
             >
               ✏️
             </button>
+            <div className="relative">
+              <button
+                onClick={(e) => { e.stopPropagation(); setExportingId(exportingId === chat.id ? null : chat.id) }}
+                className="text-xs hover:text-foreground"
+                title="Export"
+              >
+                ↗
+              </button>
+              {exportingId === chat.id && (
+                <div className="absolute right-0 top-6 z-20 bg-popover border border-border rounded shadow-lg py-1 min-w-[100px]">
+                  <button onClick={e => handleExport(chat.id, 'json', e)} className="w-full text-left px-3 py-1 text-xs hover:bg-accent">JSON</button>
+                  <button onClick={e => handleExport(chat.id, 'markdown', e)} className="w-full text-left px-3 py-1 text-xs hover:bg-accent">Markdown</button>
+                  <button onClick={e => handleExport(chat.id, 'sharegpt', e)} className="w-full text-left px-3 py-1 text-xs hover:bg-accent">ShareGPT</button>
+                </div>
+              )}
+            </div>
             {folders.length > 0 && (
               <select
                 value={chat.folderId || ''}
@@ -231,12 +270,21 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
   return (
     <div className="flex flex-col h-full">
       <div className="p-2 space-y-2">
-        <button
-          onClick={onNewChat}
-          className="w-full px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium"
-        >
-          + New Chat
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onNewChat}
+            className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium"
+          >
+            + New Chat
+          </button>
+          <button
+            onClick={handleImport}
+            className="px-3 py-2 border border-border rounded hover:bg-accent text-sm"
+            title="Import chat from file"
+          >
+            Import
+          </button>
+        </div>
 
         {/* Search */}
         <input

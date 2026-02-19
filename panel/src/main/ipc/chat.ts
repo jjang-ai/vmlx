@@ -1,24 +1,116 @@
 import { ipcMain, BrowserWindow, net } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
+import { request as httpsRequest } from 'node:https'
+import { request as httpRequest } from 'node:http'
 import { db, Chat, Message, Folder } from '../database'
-import { readFileSync, existsSync } from 'fs'
-import { join } from 'path'
-import { app } from 'electron'
 import { sessionManager, resolveUrl } from '../sessions'
 import { BUILTIN_TOOLS, isBuiltinTool, AGENTIC_SYSTEM_PROMPT } from '../tools/registry'
 import { executeBuiltinTool } from '../tools/executor'
 import { readGenerationDefaults } from './models'
 import { detectModelConfigFromDir } from '../model-config-registry'
 
-const CONFIG_DIR = join(app.getPath('userData'), 'config')
-const CONFIG_FILE = join(CONFIG_DIR, 'server-config.json')
+// Default connection config (fallback values)
+const DEFAULT_HOST = '127.0.0.1'
+const DEFAULT_PORT = 8093
 
-// Default config if file doesn't exist
-const DEFAULT_CONFIG = {
-  host: '127.0.0.1',
-  port: 8093,
-  apiKey: '',
-  maxTokens: 4096
+/**
+ * SSE-streaming fetch using Node.js http/https directly.
+ * Electron 28's global fetch() uses Chromium's net module which buffers
+ * SSE chunks instead of delivering them immediately. Node.js http/https
+ * streams data as it arrives from the socket.
+ */
+async function streamingFetch(url: string, init: {
+  method: string
+  headers: Record<string, string>
+  body: string
+  signal?: AbortSignal
+}): Promise<{ ok: boolean; status: number; statusText: string; body: ReadableStream<Uint8Array> | null; text: () => Promise<string> }> {
+  const parsed = new URL(url)
+  const isHttps = parsed.protocol === 'https:'
+  const reqFn = isHttps ? httpsRequest : httpRequest
+  const bodyBuf = Buffer.from(init.body, 'utf-8')
+
+  return new Promise((resolve, reject) => {
+    if (init.signal?.aborted) {
+      reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }))
+      return
+    }
+
+    let settled = false
+    const settle = (fn: () => void) => { if (!settled) { settled = true; fn() } }
+
+    const req = reqFn({
+      hostname: parsed.hostname,
+      port: parsed.port || (isHttps ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: init.method,
+      // Disable connection pooling — each SSE stream gets a fresh TCP connection.
+      // Prevents stale keep-alive connections from causing ECONNRESET/"aborted" errors.
+      agent: false,
+      headers: {
+        ...init.headers,
+        'Content-Length': bodyBuf.length.toString()
+      }
+    }, (res) => {
+      const ok = (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300
+
+      if (!ok) {
+        let data = ''
+        res.on('data', (chunk) => { data += chunk.toString() })
+        res.on('end', () => {
+          settle(() => resolve({
+            ok, status: res.statusCode ?? 0, statusText: res.statusMessage ?? '',
+            body: null, text: () => Promise.resolve(data)
+          }))
+        })
+        res.on('error', () => {
+          settle(() => resolve({
+            ok, status: res.statusCode ?? 0, statusText: res.statusMessage ?? '',
+            body: null, text: () => Promise.resolve(data)
+          }))
+        })
+        return
+      }
+
+      // Wrap Node.js stream in Web ReadableStream for compatibility with streamSSE
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          res.on('data', (chunk: Buffer) => { controller.enqueue(new Uint8Array(chunk)) })
+          res.on('end', () => { try { controller.close() } catch (_) {} })
+          res.on('error', (err) => {
+            console.error(`[streamingFetch] stream error: message="${(err as any)?.message}" code="${(err as any)?.code}"`)
+            try { controller.error(err) } catch (_) {}
+          })
+          // Handle premature close (server drops connection before response completes)
+          res.on('close', () => {
+            if (!res.complete) {
+              try { controller.error(new Error('Connection closed before response completed')) } catch (_) {}
+            }
+          })
+        },
+        cancel() { res.destroy() }
+      })
+
+      settle(() => resolve({
+        ok: true, status: res.statusCode ?? 200, statusText: res.statusMessage ?? 'OK',
+        body: stream, text: () => Promise.reject(new Error('Cannot read text from streaming response'))
+      }))
+    })
+
+    req.on('error', (err) => {
+      settle(() => reject(err))
+    })
+
+    if (init.signal) {
+      const onAbort = () => {
+        req.destroy()
+        settle(() => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })))
+      }
+      init.signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    req.end(bodyBuf)
+  })
 }
 
 // Common chat template stop tokens that models may generate
@@ -42,12 +134,12 @@ const TEMPLATE_TOKEN_REGEX = new RegExp(
 )
 
 /**
- * Use Electron's net.fetch for remote sessions (Chromium's network stack handles
- * SSE streaming properly with immediate chunk delivery), fall back to Node.js
- * fetch for local sessions (loopback is fast enough and avoids Chromium overhead).
+ * Use Electron's net.fetch for remote sessions — Chromium's network stack handles
+ * HTTPS certificates, system proxies, and SSE streaming properly.
+ * Local sessions use streamingFetch (Node.js http/https) to avoid Electron 28's
+ * global fetch buffering SSE chunks.
  */
 const remoteFetch: typeof globalThis.fetch = (input, init?) => net.fetch(input as any, init as any)
-const selectFetch = (isRemote: boolean): typeof globalThis.fetch => isRemote ? remoteFetch : globalThis.fetch
 
 // Tool category definitions for per-category filtering
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'patch_file', 'batch_edit', 'copy_file', 'move_file', 'delete_file', 'create_directory', 'list_directory', 'insert_text', 'replace_lines', 'apply_regex', 'read_image'])
@@ -134,15 +226,7 @@ async function resolveServerEndpoint(modelPath?: string): Promise<ResolvedEndpoi
     return { host: '127.0.0.1', port: healthy.port }
   }
 
-  // 3. Fallback to config file
-  try {
-    if (existsSync(CONFIG_FILE)) {
-      const config = JSON.parse(readFileSync(CONFIG_FILE, 'utf-8'))
-      return { host: config.host || '127.0.0.1', port: config.port || 8093 }
-    }
-  } catch (_) { }
-
-  return { host: '127.0.0.1', port: 8093 }
+  return { host: DEFAULT_HOST, port: DEFAULT_PORT }
 }
 
 export function registerChatHandlers(getWindow: () => BrowserWindow | null): void {
@@ -294,7 +378,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
   // Send message and get streaming response
   // Optional 4th arg: endpoint override { host, port } for multi-server support
-  ipcMain.handle('chat:sendMessage', async (_, chatId: string, content: string, endpoint?: { host: string; port: number }) => {
+  // Optional 5th arg: image attachments for vision/multimodal models
+  ipcMain.handle('chat:sendMessage', async (_, chatId: string, content: string, endpoint?: { host: string; port: number }, attachments?: Array<{ dataUrl: string; name: string }>) => {
     // B6: Concurrency guard — reject if a request is already active for this chat
     // B6: Concurrency guard with stale lock recovery
     const existing = activeRequests.get(chatId)
@@ -348,31 +433,19 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     const fetchTimeout = setTimeout(() => { timedOut = true; abortController.abort() }, timeoutSeconds * 1000)
     activeRequests.set(chatId, { controller: abortController, startedAt: Date.now(), timeoutMs: timeoutSeconds * 1000, endpoint: undefined, responseId: undefined })
 
-    // Get config from file or defaults
-    let config = DEFAULT_CONFIG
-    try {
-      if (existsSync(CONFIG_FILE)) {
-        config = { ...DEFAULT_CONFIG, ...JSON.parse(readFileSync(CONFIG_FILE, 'utf-8')) }
-      }
-    } catch (e) {
-      console.log('[CHAT] Using default config:', e)
-    }
-
-    // Resolve actual server endpoint: explicit endpoint > session by modelPath > detect > config
+    // Resolve actual server endpoint: explicit endpoint > session by modelPath > detect > default
     // CRITICAL: When endpoint is passed from the renderer, attach the chatSession
     // so remote sessions get proper remoteUrl, auth headers, and health check path.
     const resolved = endpoint
       ? { host: endpoint.host, port: endpoint.port, session: chatSession } as ResolvedEndpoint
       : await resolveServerEndpoint(chat.modelPath)
-    const server = resolved
-    config = { ...config, host: server.host, port: server.port }
 
     // Detect remote session and compute base URL + auth headers
     const resolvedSession = resolved.session
     const isRemote = resolvedSession?.type === 'remote'
     const rawBaseUrl = isRemote && resolvedSession?.remoteUrl
       ? resolvedSession.remoteUrl.replace(/\/+$/, '')
-      : `http://${config.host}:${config.port}`
+      : `http://${resolved.host}:${resolved.port}`
     // Resolve .local mDNS hostnames to IPv4 — Node.js fetch resolves them to
     // unreachable IPv6 link-local addresses (fe80::...) causing "fetch failed"
     const baseUrl = await resolveUrl(rawBaseUrl)
@@ -383,8 +456,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       if (resolvedSession.remoteOrganization) {
         authHeaders['OpenAI-Organization'] = resolvedSession.remoteOrganization
       }
-    } else if (config.apiKey) {
-      authHeaders['Authorization'] = `Bearer ${config.apiKey}`
     }
     // Update active request entry with resolved baseUrl and auth for cancel support
     const activeEntry = activeRequests.get(chatId)
@@ -393,52 +464,75 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       if (Object.keys(authHeaders).length > 0) activeEntry.authHeaders = authHeaders
     }
 
-    // Select fetch implementation: Chromium net.fetch for remote (better SSE streaming),
-    // Node.js fetch for local (fast loopback, no Chromium overhead)
-    const doFetch = selectFetch(isRemote)
-
     // Health check with retry — wait for server to become ready instead of
     // failing immediately. This prevents orphaned user messages and allows
     // chatting as soon as the server finishes loading.
-    const maxHealthRetries = 5
-    const healthRetryDelay = 2000  // 2 seconds between retries
-    let healthOk = false
-    const healthUrl = isRemote ? `${baseUrl}/v1/models` : `${baseUrl}/health`
-    console.log(`[CHAT] Health check URL: ${healthUrl}`)
-    for (let attempt = 0; attempt < maxHealthRetries; attempt++) {
-      try {
-        const healthRes = await doFetch(healthUrl, { headers: authHeaders, signal: AbortSignal.timeout(5000) })
-        if (healthRes.ok) {
-          healthOk = true
-          console.log(`[CHAT] Health check passed on attempt ${attempt + 1}`)
-          break
-        }
-        // Server responded but not healthy — wait and retry
-        if (attempt < maxHealthRetries - 1) {
-          console.log(`[CHAT] Server not ready (HTTP ${healthRes.status}), retrying in ${healthRetryDelay}ms...`)
-          await new Promise(r => setTimeout(r, healthRetryDelay))
-        }
-      } catch (healthErr: any) {
-        // Connection failed — wait and retry
-        console.log(`[CHAT] Health check failed (attempt ${attempt + 1}/${maxHealthRetries}): ${healthErr.message || healthErr.cause?.message || healthErr}`)
-        if (attempt < maxHealthRetries - 1) {
-          await new Promise(r => setTimeout(r, healthRetryDelay))
+    //
+    // OPTIMIZATION: If the global health monitor confirmed this session healthy
+    // within the last 15 seconds, skip the per-message health check entirely.
+    // The global monitor runs every 5s, so 15s gives a generous window.
+    // This avoids adding 100-500ms+ RTT on every single message for remote sessions.
+    const recentlyHealthy = resolvedSession?.id
+      ? (Date.now() - sessionManager.getLastHealthyAt(resolvedSession.id) < 15_000)
+      : false
+
+    // Remote sessions: 1 quick attempt then proceed (the request itself has a timeout).
+    // Local sessions: 5 retries with 2s delays (server may still be loading).
+    const maxHealthRetries = isRemote ? 1 : 5
+    const healthRetryDelay = isRemote ? 500 : 2000
+    let healthOk = recentlyHealthy
+    if (recentlyHealthy) {
+      console.log(`[CHAT] Skipping health check — global monitor confirmed healthy within 15s`)
+    } else {
+      const healthUrl = isRemote ? `${baseUrl}/v1/models` : `${baseUrl}/health`
+      console.log(`[CHAT] Health check URL: ${healthUrl} (${isRemote ? 'remote' : 'local'}, max ${maxHealthRetries} attempts)`)
+      for (let attempt = 0; attempt < maxHealthRetries; attempt++) {
+        try {
+          const healthRes = await fetch(healthUrl, { headers: authHeaders, signal: AbortSignal.timeout(isRemote ? 3000 : 5000) })
+          if (healthRes.ok) {
+            healthOk = true
+            console.log(`[CHAT] Health check passed on attempt ${attempt + 1}`)
+            break
+          }
+          if (attempt < maxHealthRetries - 1) {
+            console.log(`[CHAT] Server not ready (HTTP ${healthRes.status}), retrying in ${healthRetryDelay}ms...`)
+            await new Promise(r => setTimeout(r, healthRetryDelay))
+          }
+        } catch (healthErr: any) {
+          console.log(`[CHAT] Health check failed (attempt ${attempt + 1}/${maxHealthRetries}): ${healthErr.message || healthErr.cause?.message || healthErr}`)
+          if (attempt < maxHealthRetries - 1) {
+            await new Promise(r => setTimeout(r, healthRetryDelay))
+          }
         }
       }
+    }
+    // For remote sessions: proceed even if health check failed — the request has
+    // its own timeout and the server may just be busy with another generation.
+    if (!healthOk && isRemote) {
+      console.log(`[CHAT] Remote health check failed but proceeding anyway — request will use its own timeout`)
+      healthOk = true
     }
     if (!healthOk) {
       activeRequests.delete(chatId)
       clearTimeout(fetchTimeout)
-      throw new Error(`Cannot reach server${isRemote ? ' at ' + baseUrl : ' on port ' + config.port} after ${maxHealthRetries} attempts. Make sure the session is started and the model is loaded.`)
+      throw new Error(`Cannot reach server on port ${resolved.port} after ${maxHealthRetries} attempts. Make sure the session is started and the model is loaded.`)
     }
 
     // Add user message AFTER health check passes — this prevents orphaned
     // user messages when the server isn't ready yet.
+    // When images are attached, store content as JSON array of content parts
+    const hasAttachments = attachments && attachments.length > 0
+    const userContentForDb = hasAttachments
+      ? JSON.stringify([
+          ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
+          ...(content.trim() ? [{ type: 'text', text: content }] : [])
+        ])
+      : content
     const userMessage: Message = {
       id: uuidv4(),
       chatId,
       role: 'user',
-      content,
+      content: userContentForDb,
       timestamp: Date.now()
     }
     db.addMessage(userMessage)
@@ -487,9 +581,20 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     }
 
     // Add conversation messages (skip any existing system messages to avoid duplicates)
+    // Messages with JSON content arrays (multimodal) are parsed back to content parts for the API
     for (const m of messages) {
       if (m.role === 'system' && (hasSystemPrompt || overrides?.builtinToolsEnabled)) continue
-      requestMessages.push({ role: m.role, content: m.content })
+      let msgContent: any = m.content
+      // Detect JSON content arrays (multimodal messages with images)
+      if (m.role === 'user' && m.content.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(m.content)
+          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type) {
+            msgContent = parsed
+          }
+        } catch { /* not JSON, use as plain string */ }
+      }
+      requestMessages.push({ role: m.role, content: msgContent })
     }
 
     // Prepare assistant message placeholder
@@ -515,8 +620,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // Uses actual token count deltas for accurate throughput — handles multi-token SSE chunks
     // correctly (e.g., reasoning batches where each chunk may contain 2+ tokens).
     const TPS_BUFFER_SIZE = 30
-    const tpsSnapshots: Array<[number, number]> = [] // [timestamp, cumulative tokenCount]
+    const tpsSnapshots: Array<[number, number]> = [] // [timestamp, relative tokenCount]
     let liveTps = 0
+    let tpsTokenBase = 0 // re-anchor point for tpsSnapshots after iteration reset
     // Throttle IPC emission to renderer (~30 fps for smooth streaming)
     let lastStreamEmitTime = 0
     const STREAM_THROTTLE_MS = 32
@@ -529,6 +635,41 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // Per-iteration token count for auto-continue threshold (tokenCount is cumulative)
     let iterationTokenCount = 0
     let iterationTokenBase = 0 // tokenCount at start of iteration (for server-usage delta)
+    // Cumulative token offset: tracks total tokens from completed iterations.
+    // Server restarts completion_tokens from 0 on each new HTTP request, so
+    // raw tokenCount only reflects the current iteration. This offset + iterationTokenCount
+    // gives the true total across all tool iterations.
+    let cumulativeTokenOffset = 0
+    // Collect tool statuses for DB persistence (mirrors what's emitted to renderer)
+    const collectedToolStatuses: Array<{ phase: string; toolName: string; detail?: string; iteration?: number; contentOffset?: number }> = []
+    // Declared outside try so catch block can access it for reasoningDone on error
+    let isReasoning = false
+    // Periodic DB save interval — saves content every 5s so it survives navigation/crashes
+    let periodicSaveInterval: ReturnType<typeof setInterval> | null = null
+
+    // Pre-insert assistant message to DB immediately so periodic updates have a row to update.
+    // Uses INSERT OR REPLACE so the final addMessage at completion overwrites cleanly.
+    db.addMessage(assistantMessage)
+
+    const startPeriodicSave = () => {
+      if (periodicSaveInterval) return
+      periodicSaveInterval = setInterval(() => {
+        const saveContent = allGeneratedContent
+          ? (fullContent.trim() ? allGeneratedContent + '\n\n' + fullContent.trim() : allGeneratedContent)
+          : fullContent
+        if (saveContent || reasoningContent) {
+          try {
+            db.updateMessageContent(assistantMessage.id, saveContent, reasoningContent || undefined)
+          } catch (_) { }
+        }
+      }, 5000)
+    }
+    const stopPeriodicSave = () => {
+      if (periodicSaveInterval) {
+        clearInterval(periodicSaveInterval)
+        periodicSaveInterval = null
+      }
+    }
 
     try {
       // Determine wire format: 'responses' or 'completions' (default)
@@ -562,84 +703,74 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         ? overrides.stopSequences.split(',').map((s: string) => s.trim()).filter(Boolean)
         : undefined
 
-      // Build request body based on wire format
-      let requestBody: string
-      if (useResponsesApi) {
-        // Responses API format: separate instructions from input messages
-        // Use overrides system prompt, or extract system messages from conversation history
-        const systemMessages = requestMessages.filter(m => m.role === 'system')
-        const instructions = overrides?.systemPrompt || (systemMessages.length > 0 ? systemMessages.map(m => m.content).join('\n') : undefined)
-        // Filter out system messages (instructions are separate in Responses API)
-        const inputMessages = requestMessages.filter(m => m.role !== 'system')
-        const responsesObj: Record<string, any> = {
-          model: modelName,
-          input: inputMessages,
-          instructions,
-          temperature: overrides?.temperature ?? 0.7,
-          top_p: overrides?.topP ?? 0.9,
-          max_output_tokens: overrides?.maxTokens ?? config.maxTokens ?? 4096,
-          stream: true,
-          stream_options: { include_usage: true }
+      // Build request body — shared between initial request and tool follow-ups
+      const buildRequestBody = (): Record<string, any> => {
+        if (useResponsesApi) {
+          const systemMessages = requestMessages.filter((m: any) => m.role === 'system')
+          const instructions = overrides?.systemPrompt || (systemMessages.length > 0 ? systemMessages.map((m: any) => m.content).join('\n') : undefined)
+          const inputMessages = requestMessages.filter((m: any) => m.role !== 'system')
+          const obj: Record<string, any> = {
+            model: modelName,
+            input: inputMessages,
+            instructions,
+            temperature: overrides?.temperature ?? 0.7,
+            top_p: overrides?.topP ?? 0.9,
+            max_output_tokens: overrides?.maxTokens ?? 4096,
+            stream: true,
+            stream_options: { include_usage: true }
+          }
+          if (stopSequences) obj.stop = stopSequences
+          if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
+          if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
+          if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
+          if (overrides?.builtinToolsEnabled) obj.tools = filterTools(overrides)
+          // enable_thinking: sent to both local and remote (some providers support it)
+          obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
+          // chat_template_kwargs: local only (vLLM-MLX internal, no remote provider supports this)
+          if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+          if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
+          return obj
+        } else {
+          const obj: Record<string, any> = {
+            model: modelName,
+            messages: requestMessages,
+            temperature: overrides?.temperature ?? 0.7,
+            top_p: overrides?.topP ?? 0.9,
+            max_tokens: overrides?.maxTokens ?? 4096,
+            stream: true,
+            stream_options: { include_usage: true }
+          }
+          if (stopSequences) obj.stop = stopSequences
+          if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
+          if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
+          if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
+          if (overrides?.builtinToolsEnabled) obj.tools = filterTools(overrides)
+          // enable_thinking: sent to both local and remote (some providers support it)
+          obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
+          // chat_template_kwargs: local only (vLLM-MLX internal, no remote provider supports this)
+          if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+          if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
+          return obj
         }
-        if (stopSequences) responsesObj.stop = stopSequences
-        if (overrides?.topK != null && overrides.topK > 0) responsesObj.top_k = overrides.topK
-        if (overrides?.minP != null && overrides.minP > 0) responsesObj.min_p = overrides.minP
-        if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) responsesObj.repetition_penalty = overrides.repeatPenalty
-        if (overrides?.builtinToolsEnabled) {
-          responsesObj.tools = filterTools(overrides)
-        }
-        // enable_thinking & reasoning_effort are vllm-mlx extensions — only send to local,
-        // or when user explicitly enables them for a remote endpoint
-        if (!isRemote) {
-          responsesObj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-          responsesObj.chat_template_kwargs = { enable_thinking: responsesObj.enable_thinking }
-          if (overrides?.reasoningEffort) responsesObj.reasoning_effort = overrides.reasoningEffort
-        } else if (overrides?.enableThinking != null) {
-          // User explicitly toggled thinking for remote — send it (some providers support it)
-          responsesObj.enable_thinking = overrides.enableThinking
-          if (overrides?.reasoningEffort) responsesObj.reasoning_effort = overrides.reasoningEffort
-        }
-        requestBody = JSON.stringify(responsesObj)
-      } else {
-        const bodyObj: Record<string, any> = {
-          model: modelName,
-          messages: requestMessages,
-          temperature: overrides?.temperature ?? 0.7,
-          top_p: overrides?.topP ?? 0.9,
-          max_tokens: overrides?.maxTokens ?? config.maxTokens ?? 4096,
-          stream: true,
-          stream_options: { include_usage: true }
-        }
-        if (stopSequences) bodyObj.stop = stopSequences
-        if (overrides?.topK != null && overrides.topK > 0) bodyObj.top_k = overrides.topK
-        if (overrides?.minP != null && overrides.minP > 0) bodyObj.min_p = overrides.minP
-        if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) bodyObj.repetition_penalty = overrides.repeatPenalty
-        if (overrides?.builtinToolsEnabled) {
-          bodyObj.tools = filterTools(overrides)
-        }
-        // enable_thinking & reasoning_effort are vllm-mlx extensions — only send to local,
-        // or when user explicitly enables them for a remote endpoint
-        if (!isRemote) {
-          bodyObj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-          bodyObj.chat_template_kwargs = { enable_thinking: bodyObj.enable_thinking }
-          if (overrides?.reasoningEffort) bodyObj.reasoning_effort = overrides.reasoningEffort
-        } else if (overrides?.enableThinking != null) {
-          bodyObj.enable_thinking = overrides.enableThinking
-          if (overrides?.reasoningEffort) bodyObj.reasoning_effort = overrides.reasoningEffort
-        }
-        requestBody = JSON.stringify(bodyObj)
       }
+      const requestBody = JSON.stringify(buildRequestBody())
 
       fetchStartTime = Date.now() // Capture just before fetch for accurate TTFT
-      const response = await doFetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders
-        },
-        body: requestBody,
-        signal: abortController.signal
-      })
+      // Remote: use Electron's net.fetch (Chromium stack — proper HTTPS certs, proxies, SSE).
+      // Local: use streamingFetch (Node.js http/https) to avoid Electron 28's SSE buffering bug.
+      const response = isRemote
+        ? await remoteFetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+            body: requestBody,
+            signal: abortController.signal
+          })
+        : await streamingFetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+            body: requestBody,
+            signal: abortController.signal
+          })
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -650,11 +781,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       reader = response.body?.getReader()
       if (!reader) throw new Error('Response body is null')
 
-      const decoder = new TextDecoder()
       fullContent = ''
       reasoningContent = ''
-      let isReasoning = false
-      let lineBuffer = '' // Buffer for incomplete SSE lines across chunks
+      isReasoning = false
       let currentEventType = '' // Track SSE event type for Responses API
 
       // Track whether server sends real token counts (via usage in each SSE chunk)
@@ -662,12 +791,27 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
       // Track tool calls received during streaming for MCP auto-execution
       let receivedToolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = []
+      // Track finish_reason from server to detect truncation (length), content filter, etc.
+      let lastFinishReason: string | undefined
       // Track tool iteration count (declared here so processLine closure can access it)
       const MAX_TOOL_ITERATIONS = overrides?.maxToolIterations ?? 10
       let toolIteration = 0
 
+      // Track the length of content last emitted to renderer (for inline tool call positioning)
+      let lastEmittedContentLength = 0
+
       // Helper: emit tool call status to renderer (separate from content stream)
       const emitToolStatus = (phase: string, toolName: string, detail?: string, iteration?: number) => {
+        const contentOffset = phase === 'calling' ? lastEmittedContentLength : undefined
+        // Collect for persistence — include detail for calling, result, and error phases
+        // so tool results are visible after reload (truncate large results to 4KB)
+        const persistDetail = (phase === 'calling' || phase === 'result' || phase === 'error')
+          ? (detail && detail.length > 4096 ? detail.slice(0, 4096) + '...' : detail)
+          : undefined
+        collectedToolStatuses.push({
+          phase, toolName, iteration, contentOffset,
+          detail: persistDetail
+        })
         try {
           const win = getWindow()
           if (win && !win.isDestroyed()) {
@@ -677,7 +821,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               phase,
               toolName,
               detail,
-              iteration
+              iteration,
+              contentOffset
             })
           }
         } catch (_) { }
@@ -722,7 +867,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
         // === State updates (always, no throttle) ===
         const now = Date.now()
-        if (firstTokenTime === null) firstTokenTime = now
+        if (firstTokenTime === null) { firstTokenTime = now; startPeriodicSave() }
         // Track generation-only time: count time between consecutive tokens.
         // Gaps > 5s (e.g., tool execution, follow-up PP) are excluded.
         // Threshold is 5s (not 2s) to handle slow big models at ~0.5 tok/s.
@@ -746,21 +891,26 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             } catch (_) { }
           }
           fullContent += delta
+          // Update content offset immediately (not throttled) for accurate tool call positioning
+          lastEmittedContentLength = allGeneratedContent
+            ? allGeneratedContent.length + 2 + fullContent.length
+            : fullContent.length
         }
         // Client-side counting (fallback when server doesn't send usage in each chunk).
         // Must happen BEFORE TPS snapshot so the rolling window uses accurate counts.
         if (!serverSendsUsage) { tokenCount++; iterationTokenCount++ }
 
-        // Rolling TPS: snapshot (timestamp, tokenCount) for accurate throughput.
-        // Uses real token count deltas — handles multi-token SSE chunks correctly
-        // (e.g., reasoning batches where server sends 2+ tokens per chunk).
-        tpsSnapshots.push([now, tokenCount])
+        // Rolling TPS: snapshot (timestamp, relative tokenCount) for accurate throughput.
+        // Uses tpsTokenBase-relative count to avoid negative deltas at iteration boundaries
+        // (server restarts completion_tokens from 0 on each new HTTP request).
+        tpsSnapshots.push([now, tokenCount - tpsTokenBase])
         if (tpsSnapshots.length > TPS_BUFFER_SIZE) tpsSnapshots.shift()
         if (tpsSnapshots.length >= 2) {
           const [oldT, oldN] = tpsSnapshots[0]
           const [newT, newN] = tpsSnapshots[tpsSnapshots.length - 1]
           const span = (newT - oldT) / 1000
-          liveTps = span > 0.01 ? (newN - oldN) / span : liveTps
+          const tpsDelta = newN - oldN
+          liveTps = (span > 0.01 && tpsDelta > 0) ? tpsDelta / span : (tpsDelta <= 0 ? 0 : liveTps)
         }
 
         // Suppress rendering (but not counting/TPS) when tool call content is detected
@@ -768,8 +918,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
         // === Throttled IPC emission (~31 fps, STREAM_THROTTLE_MS=32ms) ===
         // First token always emits immediately; subsequent tokens throttled to STREAM_THROTTLE_MS
-        const isFirstContent = now - (firstTokenTime || now) < 50
-        if (!isFirstContent && now - lastStreamEmitTime < STREAM_THROTTLE_MS) return
+        if (now - lastStreamEmitTime < STREAM_THROTTLE_MS) return
         lastStreamEmitTime = now
 
         // Live generation TPS from rolling window (real-time speed of incoming tokens).
@@ -796,7 +945,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               fullContent: displayContent,
               isReasoning: isReasoningDelta,
               metrics: {
-                tokenCount,
+                tokenCount: cumulativeTokenOffset + iterationTokenCount,
                 promptTokens,
                 tokensPerSecond: streamTps.toFixed(1),
                 ppSpeed,
@@ -817,7 +966,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         }
         if (!trimmed || !trimmed.startsWith('data: ')) return
         const data = trimmed.slice(6)
-        if (data === '[DONE]') return
+        if (data === '[DONE]') { currentEventType = ''; return }
 
         try {
           const parsed = JSON.parse(data)
@@ -831,7 +980,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               const entry = activeRequests.get(chatId)
               if (entry && !entry.responseId) {
                 entry.responseId = respId
-                entry.endpoint = { host: config.host, port: config.port }
+                entry.endpoint = { host: resolved.host, port: resolved.port }
               }
             }
 
@@ -875,7 +1024,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             if (currentEventType === 'response.usage' && parsed.usage) {
               if (parsed.usage.output_tokens != null) {
                 tokenCount = parsed.usage.output_tokens
-                iterationTokenCount = tokenCount - iterationTokenBase
+                // Detect server token count restart (new HTTP request resets completion_tokens to 0)
+                if (tokenCount < iterationTokenBase) iterationTokenBase = 0
+                iterationTokenCount = Math.max(0, tokenCount - iterationTokenBase)
+                // Clear contaminated client-counted entries when transitioning to server usage
+                if (!serverSendsUsage) { tpsSnapshots.length = 0; tpsTokenBase = tokenCount }
                 serverSendsUsage = true
               }
               if (parsed.usage.input_tokens != null) promptTokens = parsed.usage.input_tokens
@@ -885,10 +1038,18 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             // Final usage from response.completed event
             // Server wraps in { response: { usage: { input_tokens, output_tokens } } }
             const respUsage = parsed.response?.usage || parsed.usage
+            if (currentEventType === 'response.completed') {
+              // Track status for truncation detection
+              const respStatus = parsed.response?.status
+              if (respStatus === 'incomplete') lastFinishReason = 'length'
+              else if (respStatus) lastFinishReason = respStatus
+            }
             if (currentEventType === 'response.completed' && respUsage) {
               if (respUsage.output_tokens != null) {
                 tokenCount = respUsage.output_tokens
-                iterationTokenCount = tokenCount - iterationTokenBase
+                if (tokenCount < iterationTokenBase) iterationTokenBase = 0
+                iterationTokenCount = Math.max(0, tokenCount - iterationTokenBase)
+                if (!serverSendsUsage) { tpsSnapshots.length = 0; tpsTokenBase = tokenCount }
                 serverSendsUsage = true
               }
               if (respUsage.input_tokens != null) promptTokens = respUsage.input_tokens
@@ -903,7 +1064,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               const entry = activeRequests.get(chatId)
               if (entry && !entry.responseId) {
                 entry.responseId = parsed.id
-                entry.endpoint = { host: config.host, port: config.port }
+                entry.endpoint = { host: resolved.host, port: resolved.port }
               }
             }
 
@@ -911,12 +1072,20 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             if (parsed.usage) {
               if (parsed.usage.completion_tokens != null) {
                 tokenCount = parsed.usage.completion_tokens
-                iterationTokenCount = tokenCount - iterationTokenBase
+                // Detect server token count restart (new HTTP request resets completion_tokens to 0)
+                if (tokenCount < iterationTokenBase) iterationTokenBase = 0
+                iterationTokenCount = Math.max(0, tokenCount - iterationTokenBase)
+                // Clear contaminated client-counted entries when transitioning to server usage
+                if (!serverSendsUsage) { tpsSnapshots.length = 0; tpsTokenBase = tokenCount }
                 serverSendsUsage = true
               }
               if (parsed.usage.prompt_tokens != null) promptTokens = parsed.usage.prompt_tokens
               if (parsed.usage.prompt_tokens_details?.cached_tokens) cachedTokens = parsed.usage.prompt_tokens_details.cached_tokens
             }
+
+            // Track finish_reason (length = truncated, content_filter = filtered)
+            const finishReason = parsed.choices?.[0]?.finish_reason
+            if (finishReason) lastFinishReason = finishReason
 
             // Handle reasoning_content from reasoning parser
             const reasoning = choice?.reasoning_content || choice?.reasoning
@@ -964,135 +1133,60 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         }
       }
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value, { stream: true })
-        lineBuffer += chunk
-        const lines = lineBuffer.split('\n')
-
-        // Keep the last element as it may be incomplete
-        lineBuffer = lines.pop() || ''
-
-        for (const line of lines) {
-          processLine(line.trim())
-        }
-      }
-
-      // Flush remaining decoder bytes and process any leftover buffer
-      const remaining = decoder.decode()
-      if (remaining) lineBuffer += remaining
-      if (lineBuffer.trim()) {
-        processLine(lineBuffer.trim())
-      }
-
       // ─── Helper: stream SSE response through processLine ──────────────
-      const streamSSE = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
+      const streamSSE = async (rdr: ReadableStreamDefaultReader<Uint8Array>) => {
         const dec = new TextDecoder()
         let buf = ''
         while (true) {
-          const { done, value } = await reader.read()
+          const { done, value } = await rdr.read()
           if (done) break
           buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n')
           buf = lines.pop() || ''
           for (const line of lines) processLine(line.trim())
         }
-        const rem = dec.decode()
+        const rem = dec.decode() // flush TextDecoder streaming buffer
         if (rem) buf += rem
-        if (buf.trim()) processLine(buf.trim())
-      }
-
-      // ─── Helper: build follow-up request body ──────────────────────────
-      const buildFollowUpBody = (): Record<string, any> => {
-        if (useResponsesApi) {
-          // Responses API format
-          const systemMessages = requestMessages.filter((m: any) => m.role === 'system')
-          const instructions = overrides?.systemPrompt || (systemMessages.length > 0 ? systemMessages.map((m: any) => m.content).join('\n') : undefined)
-          const inputMessages = requestMessages.filter((m: any) => m.role !== 'system')
-          const obj: Record<string, any> = {
-            model: modelName,
-            input: inputMessages,
-            instructions,
-            temperature: overrides?.temperature ?? 0.7,
-            top_p: overrides?.topP ?? 0.9,
-            max_output_tokens: overrides?.maxTokens ?? config.maxTokens ?? 4096,
-            stream: true,
-            stream_options: { include_usage: true }
+        // Process remaining lines (may contain multiple newline-separated events)
+        if (buf.trim()) {
+          for (const line of buf.split('\n')) {
+            if (line.trim()) processLine(line.trim())
           }
-          if (stopSequences) obj.stop = stopSequences
-          if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
-          if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
-          if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
-          if (overrides?.builtinToolsEnabled) {
-            obj.tools = filterTools(overrides)
-          }
-          if (!isRemote) {
-            obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-            obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
-            if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
-          } else if (overrides?.enableThinking != null) {
-            obj.enable_thinking = overrides.enableThinking
-            if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
-          }
-          return obj
-        } else {
-          // Chat Completions format
-          const obj: Record<string, any> = {
-            model: modelName,
-            messages: requestMessages,
-            temperature: overrides?.temperature ?? 0.7,
-            top_p: overrides?.topP ?? 0.9,
-            max_tokens: overrides?.maxTokens ?? config.maxTokens ?? 4096,
-            stream: true,
-            stream_options: { include_usage: true }
-          }
-          if (stopSequences) obj.stop = stopSequences
-          if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
-          if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
-          if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
-          if (overrides?.builtinToolsEnabled) {
-            obj.tools = filterTools(overrides)
-          }
-          if (!isRemote) {
-            obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-            obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
-            if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
-          } else if (overrides?.enableThinking != null) {
-            obj.enable_thinking = overrides.enableThinking
-            if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
-          }
-          return obj
         }
       }
+
+      await streamSSE(reader)
 
       // ─── Helper: send follow-up request and stream response ────────────
       const sendFollowUp = async (): Promise<boolean> => {
         // Reset SSE parser state from previous stream
         currentEventType = ''
+        // Reset fetchStartTime so TTFT for follow-up is measured correctly
+        fetchStartTime = Date.now()
+        firstTokenTime = 0
         // Use the same wire API format as the initial request
         const url = useResponsesApi
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`
-        const res = await doFetch(url, {
+        // Remote: net.fetch (Chromium); Local: streamingFetch (Node.js)
+        const followUpInit = {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...authHeaders
-          },
-          body: JSON.stringify(buildFollowUpBody()),
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify(buildRequestBody()),
           signal: abortController.signal
-        })
+        }
+        const res = isRemote
+          ? await remoteFetch(url, followUpInit)
+          : await streamingFetch(url, followUpInit as any)
         if (!res.ok) {
           const errText = await res.text()
           console.log(`[CHAT] Follow-up failed: ${res.status} ${errText}`)
           emitToolStatus('error', '', `Follow-up error: ${res.status} ${errText}`, toolIteration)
           return false
         }
-        const reader = res.body?.getReader()
-        if (!reader) return false
-        await streamSSE(reader)
+        const followUpReader = res.body?.getReader()
+        if (!followUpReader) return false
+        await streamSSE(followUpReader)
         return true
       }
 
@@ -1230,6 +1324,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       const MAX_AUTO_CONTINUES = 3
       let autoContinueCount = 0
       while (toolIteration < MAX_TOOL_ITERATIONS) {
+        // Compact sparse array: parallel tool calls at non-contiguous indices create holes
+        // that for...of silently skips. Filter to only real entries.
+        if (receivedToolCalls.length > 0) {
+          receivedToolCalls = receivedToolCalls.filter(Boolean)
+        }
         if (receivedToolCalls.length > 0) {
           // ── Model made tool calls: execute and send follow-up ──
           toolIteration++
@@ -1249,7 +1348,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                 fullContent: allGeneratedContent,
                 isReasoning: false,
                 metrics: {
-                  tokenCount,
+                  tokenCount: cumulativeTokenOffset + iterationTokenCount,
                   promptTokens,
                   tokensPerSecond: liveTps.toFixed(1),
                   ttft: firstTokenTime ? ((firstTokenTime - fetchStartTime) / 1000).toFixed(2) : '0',
@@ -1262,10 +1361,16 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           receivedToolCalls = []
           fullContent = ''
           rawAccumulated = ''
+          lastFinishReason = undefined // Reset for next iteration
+          // Reset content offset tracker to match the accumulated content position
+          lastEmittedContentLength = allGeneratedContent.length ? allGeneratedContent.length + 2 : 0
           clientToolCallBuffering = false
+          cumulativeTokenOffset += iterationTokenCount // Save completed iteration tokens for cumulative total
           iterationTokenBase = tokenCount // Save cumulative base for server-usage delta
           iterationTokenCount = 0
-          tpsSnapshots.length = 0; liveTps = 0 // Reset rolling TPS for fresh generation phase
+          tpsSnapshots.length = 0; liveTps = 0; tpsTokenBase = tokenCount // Reset rolling TPS for fresh generation phase
+          serverSendsUsage = false // Re-detect for new HTTP request (server restarts completion_tokens from 1)
+          isReasoning = false // Reset reasoning state for new iteration
           emitToolStatus('processing', '', undefined, toolIteration)
           if (!await sendFollowUp()) break
 
@@ -1283,19 +1388,31 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           console.log(`[CHAT] Auto-continue ${autoContinueCount}/${MAX_AUTO_CONTINUES}: model stopped with ${iterationTokenCount} tokens (iteration), content=${hasContent}`)
           if (hasContent) {
             allGeneratedContent += (allGeneratedContent ? '\n\n' : '') + fullContent.trim()
-            requestMessages.push({ role: 'assistant', content: fullContent })
+            if (useResponsesApi) {
+              requestMessages.push({ type: 'output_text', text: fullContent })
+            } else {
+              requestMessages.push({ role: 'assistant', content: fullContent })
+            }
           }
-          requestMessages.push({
-            role: 'user',
-            content: 'Based on the tool results above, provide your complete response. Summarize what you found, explain the results, and address my original request.'
-          })
+          const continuePrompt = 'Based on the tool results above, provide your complete response. Summarize what you found, explain the results, and address my original request.'
+          if (useResponsesApi) {
+            requestMessages.push({ type: 'message', role: 'user', content: continuePrompt })
+          } else {
+            requestMessages.push({ role: 'user', content: continuePrompt })
+          }
           fullContent = ''
           rawAccumulated = ''
+          lastFinishReason = undefined // Reset for next iteration
           clientToolCallBuffering = false
           receivedToolCalls = []
+          // Reset content offset tracker to match the accumulated content position
+          lastEmittedContentLength = allGeneratedContent.length ? allGeneratedContent.length + 2 : 0
+          cumulativeTokenOffset += iterationTokenCount // Save completed iteration tokens for cumulative total
           iterationTokenBase = tokenCount // Save cumulative base for server-usage delta
           iterationTokenCount = 0
-          tpsSnapshots.length = 0; liveTps = 0 // Reset rolling TPS for fresh generation phase
+          tpsSnapshots.length = 0; liveTps = 0; tpsTokenBase = tokenCount // Reset rolling TPS for fresh generation phase
+          serverSendsUsage = false // Re-detect for new HTTP request (server restarts completion_tokens from 1)
+          isReasoning = false // Reset reasoning state for new iteration
           emitToolStatus('processing', '', 'Generating response...', toolIteration)
           if (!await sendFollowUp()) break
 
@@ -1309,6 +1426,18 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         emitToolStatus('done', '', undefined, toolIteration)
       }
 
+      // Fire reasoningDone if stream ended while still in reasoning mode
+      // (e.g., model only produced analysis channel, never transitioned to final)
+      if (isReasoning) {
+        isReasoning = false
+        try {
+          const win = getWindow()
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('chat:reasoningDone', { chatId, messageId: assistantMessage.id, reasoningContent })
+          }
+        } catch (_) { }
+      }
+
       // Calculate final metrics — use generation-only time for t/s, fallback to wall clock
       const totalTime = (Date.now() - startTime) / 1000
       const genTimeSec = generationMs > 0 ? generationMs / 1000 : 0
@@ -1316,7 +1445,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         ? (lastTokenTime - firstTokenTime) / 1000
         : (firstTokenTime ? (Date.now() - firstTokenTime) / 1000 : totalTime)
       const finalGenSec = genTimeSec > 0.05 ? genTimeSec : wallTimeSec
-      const finalTps = finalGenSec > 0 ? tokenCount / finalGenSec : 0
+      // Use cumulative total across all tool iterations (server restarts completion_tokens per request)
+      const totalTokenCount = cumulativeTokenOffset + iterationTokenCount
+      const finalTps = finalGenSec > 0 ? totalTokenCount / finalGenSec : 0
       // TTFT measured from fetchStartTime (excludes health check and message building overhead)
       const ttft = Math.max(0, firstTokenTime ? (firstTokenTime - fetchStartTime) / 1000 : 0)
       // Guard against Infinity when TTFT is near zero (e.g., prefix cache hit)
@@ -1350,17 +1481,19 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // Strip leaked Harmony protocol channel markers (GLM, GPT-OSS)
       fullContent = fullContent.replace(/<\|start\|>assistant/g, '')
       fullContent = fullContent.replace(/<\|channel\|>(?:analysis|final)<\|message\|>/g, '')
+      stopPeriodicSave() // Stop periodic saves — final save below overwrites with complete content
       fullContent = fullContent.trim()
-      // If no main content but reasoning was produced, use reasoning as content
-      // (e.g., model only produced <think>...</think> without content after)
+      // If no main content but reasoning was produced, keep them separate.
+      // Reasoning stays in reasoningContent for the reasoning box; content stays empty.
+      // (Previously this did fullContent = reasoningContent which triggered the anti-dup
+      // check in MessageBubble, hiding the reasoning box.)
       if (!fullContent && reasoningContent) {
-        fullContent = reasoningContent
-        console.log(`[CHAT] No main content produced — using reasoning content as fallback (${reasoningContent.length} chars)`)
+        console.log(`[CHAT] No main content — reasoning only (${reasoningContent.length} chars)`)
       }
       assistantMessage.content = fullContent
-      assistantMessage.tokens = tokenCount
+      assistantMessage.tokens = totalTokenCount
       assistantMessage.metricsJson = JSON.stringify({
-        tokenCount,
+        tokenCount: totalTokenCount,
         promptTokens: promptTokens || undefined,
         cachedTokens: cachedTokens || undefined,
         tokensPerSecond: finalTps.toFixed(1),
@@ -1368,6 +1501,12 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         ttft: ttft.toFixed(2),
         totalTime: totalTime.toFixed(1)
       })
+      if (collectedToolStatuses.length > 0) {
+        assistantMessage.toolCallsJson = JSON.stringify(collectedToolStatuses)
+      }
+      if (reasoningContent) {
+        assistantMessage.reasoningContent = reasoningContent
+      }
       db.addMessage(assistantMessage)
 
       // Send final metrics
@@ -1378,8 +1517,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             chatId,
             messageId: assistantMessage.id,
             content: fullContent,
+            reasoningContent: reasoningContent || undefined,
+            finishReason: lastFinishReason,
             metrics: {
-              tokenCount,
+              tokenCount: totalTokenCount,
               promptTokens,
               cachedTokens,
               tokensPerSecond: finalTps.toFixed(1),
@@ -1391,22 +1532,47 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         }
       } catch (_) { }
 
-      console.log(`[CHAT] Response complete: ${tokenCount} tokens in ${totalTime.toFixed(1)}s (${finalTps.toFixed(1)} t/s, live=${liveTps.toFixed(1)} t/s, TTFT: ${ttft.toFixed(2)}s${promptTokens ? `, pp: ${promptTokens} tokens${cachedTokens ? ` (${cachedTokens} cached)` : ''}, ${finalPpSpeed} pp/s` : ''}, usage=${serverSendsUsage ? 'server' : 'client'})`)
+      console.log(`[CHAT] Response complete: ${totalTokenCount} tokens in ${totalTime.toFixed(1)}s (${finalTps.toFixed(1)} t/s, live=${liveTps.toFixed(1)} t/s, TTFT: ${ttft.toFixed(2)}s${promptTokens ? `, pp: ${promptTokens} tokens${cachedTokens ? ` (${cachedTokens} cached)` : ''}, ${finalPpSpeed} pp/s` : ''}, usage=${serverSendsUsage ? 'server' : 'client'})`)
 
       return assistantMessage
     } catch (error) {
+      stopPeriodicSave()
       // Release the SSE reader if it was acquired
       try { reader?.cancel() } catch (_) { }
 
-      console.error('[CHAT] Error:', error)
+      const _err = error as any
+      console.error('[CHAT] Error caught:', {
+        message: _err?.message,
+        name: _err?.name,
+        code: _err?.code,
+        type: _err?.constructor?.name,
+        stack: _err?.stack?.split('\n').slice(0, 5).join('\n'),
+        abortSignal: abortController.signal.aborted,
+        timedOut,
+        fullContentLen: fullContent?.length,
+        readerAcquired: !!reader
+      })
 
-      // Save partial response if any content or reasoning was generated before the error.
-      // Use allGeneratedContent (content from before tool iterations) as fallback when
-      // fullContent is empty (e.g., abort during tool execution resets fullContent to '').
-      let partialContent = fullContent.trim()
-      if (!partialContent && allGeneratedContent.trim()) {
+      // Fire reasoningDone if interrupted during reasoning mode
+      if (isReasoning) {
+        isReasoning = false
+        try {
+          const win = getWindow()
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('chat:reasoningDone', { chatId, messageId: assistantMessage.id, reasoningContent })
+          }
+        } catch (_) { }
+      }
+
+      // Save partial response: combine all content from previous tool iterations + current.
+      // allGeneratedContent holds text from completed iterations; fullContent has current iteration.
+      let partialContent = ''
+      if (allGeneratedContent.trim() && fullContent.trim()) {
+        partialContent = allGeneratedContent.trim() + '\n\n' + fullContent.trim()
+      } else if (allGeneratedContent.trim()) {
         partialContent = allGeneratedContent.trim()
-        console.log(`[CHAT] Using pre-tool-iteration content as fallback (${partialContent.length} chars)`)
+      } else {
+        partialContent = fullContent.trim()
       }
       if (partialContent) {
         partialContent = partialContent.replace(TEMPLATE_TOKEN_REGEX, '')
@@ -1421,20 +1587,19 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         partialContent = partialContent.replace(/<\|channel\|>(?:analysis|final)<\|message\|>/g, '')
         partialContent = partialContent.trim()
       }
-      if (!partialContent && reasoningContent.trim()) {
-        partialContent = reasoningContent.trim()
-        console.log(`[CHAT] No content on abort — using reasoning as fallback (${partialContent.length} chars)`)
-      }
-
-      if (partialContent) {
-        assistantMessage.content = partialContent + '\n\n[Generation interrupted]'
-        assistantMessage.tokens = tokenCount
+      // Save message if we have any content OR reasoning (reasoning stays separate)
+      if (partialContent || reasoningContent.trim()) {
+        assistantMessage.content = partialContent
+          ? partialContent + '\n\n[Generation interrupted]'
+          : '[Generation interrupted]'
+        const abortTotalTokens = cumulativeTokenOffset + iterationTokenCount
+        assistantMessage.tokens = abortTotalTokens
 
         // Calculate real metrics for the partial generation (not hardcoded zeros)
         const abortTotalTime = (Date.now() - startTime) / 1000
         const abortGenSec = generationMs > 50 ? generationMs / 1000
           : (firstTokenTime ? (Date.now() - firstTokenTime) / 1000 : abortTotalTime)
-        const abortTps = (abortGenSec > 0 && tokenCount > 0) ? tokenCount / abortGenSec : 0
+        const abortTps = (abortGenSec > 0 && abortTotalTokens > 0) ? abortTotalTokens / abortGenSec : 0
         // Use fetchStartTime for TTFT (consistent with non-abort path)
         const abortTtft = firstTokenTime ? (firstTokenTime - fetchStartTime) / 1000 : 0
         const abortPpSpeed = (promptTokens > 0 && abortTtft > 0.001)
@@ -1442,7 +1607,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           : undefined
 
         const abortMetrics = {
-          tokenCount,
+          tokenCount: abortTotalTokens,
           promptTokens: promptTokens || undefined,
           cachedTokens: cachedTokens || undefined,
           tokensPerSecond: abortTps.toFixed(1),
@@ -1453,6 +1618,12 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
         // Persist metricsJson to DB so reloading the chat shows real stats
         assistantMessage.metricsJson = JSON.stringify(abortMetrics)
+        if (collectedToolStatuses.length > 0) {
+          assistantMessage.toolCallsJson = JSON.stringify(collectedToolStatuses)
+        }
+        if (reasoningContent) {
+          assistantMessage.reasoningContent = reasoningContent
+        }
         db.addMessage(assistantMessage)
 
         try {
@@ -1462,10 +1633,14 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               chatId,
               messageId: assistantMessage.id,
               content: assistantMessage.content,
+              reasoningContent: reasoningContent || undefined,
               metrics: abortMetrics
             })
           }
         } catch (_) { }
+      } else {
+        // No content generated — remove the pre-inserted empty placeholder row
+        try { db.deleteMessage(assistantMessage.id) } catch (_) { }
       }
 
       // Distinguish timeout from user-initiated abort for better error messages.
@@ -1481,14 +1656,22 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         // User-initiated abort: return normally so the renderer's success path handles it.
         // Content (if any) was already saved to DB and chat:complete event sent above.
         console.log(`[CHAT] Abort complete — saved ${partialContent ? partialContent.length : 0} chars`)
-        return partialContent ? assistantMessage : null
+        return (partialContent || reasoningContent.trim()) ? assistantMessage : null
       }
-      if (errMsg === 'terminated' || errMsg.includes('ECONNREFUSED') || errMsg.includes('ECONNRESET')) {
+      // Check both error message AND error code — Node.js ConnResetException has
+      // message "aborted" but code "ECONNRESET", which the message-only check missed.
+      const errCode = (error as any)?.code || ''
+      if (errMsg === 'terminated' || errMsg === 'aborted'
+          || errMsg.includes('ECONNREFUSED') || errMsg.includes('ECONNRESET')
+          || errCode === 'ECONNRESET' || errCode === 'ECONNREFUSED'
+          || errMsg.includes('Connection closed before response completed')
+          || errMsg.includes('socket hang up')) {
         throw new Error(`Server connection lost. The model server may have crashed or stopped. Try restarting the session.`)
       }
       throw new Error(`Failed to send message: ${errMsg}`)
     } finally {
-      // Always clean up the active request tracker
+      // Always clean up the active request tracker and periodic save
+      stopPeriodicSave()
       clearTimeout(fetchTimeout)
       activeRequests.delete(chatId)
     }

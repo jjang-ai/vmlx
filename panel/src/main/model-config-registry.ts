@@ -21,6 +21,7 @@ interface ModelConfig {
   reasoningParser?: string
   usePagedCache?: boolean
   enableAutoToolChoice?: boolean
+  isMultimodal?: boolean
   description: string
   priority: number
 }
@@ -32,16 +33,17 @@ export interface DetectedConfig {
   cacheType: string
   usePagedCache: boolean
   enableAutoToolChoice: boolean
+  isMultimodal: boolean
   description: string
 }
 
 const MODEL_CONFIGS = [
   // Qwen family
   { familyName: 'qwen3-next', pattern: /qwen[\-_.]?3[\-_.]?(?:coder[\-_.]?)?next/i, cacheType: 'mamba', toolParser: 'qwen', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 },
-  { familyName: 'qwen3-vl', pattern: /qwen[\-_.]?3.*VL/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 Vision-Language', priority: 5 },
+  { familyName: 'qwen3-vl', pattern: /qwen[\-_.]?3.*VL/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 },
   { familyName: 'qwen3-moe', pattern: /qwen[\-_.]?3.*(?:moe|MoE)/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 },
   { familyName: 'qwen3', pattern: /qwen[\-_.]?3/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3', priority: 10 },
-  { familyName: 'qwen2-vl', pattern: /qwen[\-_.]?2.*VL/i, cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2 Vision-Language', priority: 10 },
+  { familyName: 'qwen2-vl', pattern: /qwen[\-_.]?2.*VL/i, cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 },
   { familyName: 'qwen2', pattern: /qwen[\-_.]?2/i, cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 },
   { familyName: 'qwen-mamba', pattern: /qwen.*mamba/i, cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 },
 
@@ -53,12 +55,12 @@ const MODEL_CONFIGS = [
   // Mistral/Mixtral/Devstral/Codestral
   { familyName: 'devstral', pattern: /devstral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Devstral (Mistral coding)', priority: 5 },
   { familyName: 'codestral', pattern: /codestral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Codestral (Mistral coding)', priority: 5 },
-  { familyName: 'pixtral', pattern: /pixtral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Pixtral Vision', priority: 5 },
+  { familyName: 'pixtral', pattern: /pixtral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, isMultimodal: true, description: 'Pixtral Vision', priority: 5 },
   { familyName: 'mixtral', pattern: /mixtral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mixtral MoE', priority: 10 },
   { familyName: 'mistral', pattern: /mistral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral', priority: 20 },
 
   // DeepSeek
-  { familyName: 'deepseek-vl', pattern: /deepseek[\-_.]?vl/i, cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek-VL vision-language', priority: 5 },
+  { familyName: 'deepseek-vl', pattern: /deepseek[\-_.]?vl/i, cacheType: 'kv', toolParser: 'deepseek', isMultimodal: true, description: 'DeepSeek-VL vision-language', priority: 5 },
   { familyName: 'deepseek-r1', pattern: /deepseek[\-_.]?r1/i, cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek R1', priority: 5 },
   { familyName: 'deepseek-v3', pattern: /deepseek[\-_.]?v3/i, cacheType: 'kv', toolParser: 'deepseek', enableAutoToolChoice: true, description: 'DeepSeek V3', priority: 5 },
   { familyName: 'deepseek-v2', pattern: /deepseek[\-_.]?v2/i, cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek V2', priority: 10 },
@@ -75,13 +77,20 @@ const MODEL_CONFIGS = [
   { familyName: 'glm4', pattern: /glm[\-_.]?4/i, cacheType: 'kv', toolParser: 'glm47', enableAutoToolChoice: true, description: 'GLM-4 (tools only)', priority: 20 },
 
   // Gemma
-  { familyName: 'gemma3', pattern: /gemma[\-_.]?3/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Gemma 3', priority: 10 },
+  { familyName: 'medgemma', pattern: /medgemma/i, cacheType: 'kv', isMultimodal: true, description: 'Google MedGemma (medical multimodal)', priority: 3 },
+  { familyName: 'paligemma', pattern: /paligemma/i, cacheType: 'kv', isMultimodal: true, description: 'Google PaliGemma', priority: 5 },
+  { familyName: 'gemma3', pattern: /gemma[\-_.]?3/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 },
+  // gemma3-text: text-only Gemma 3 (detected via config.json model_type="gemma3_text")
+  // Shares parsers with gemma3 but is NOT multimodal — supports batching, paged cache, KV quant
+  { familyName: 'gemma3-text', pattern: /gemma[\-_.]?3[\-_.]?text/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 },
   { familyName: 'gemma2', pattern: /gemma[\-_.]?2/i, cacheType: 'kv', description: 'Gemma 2', priority: 15 },
   { familyName: 'gemma', pattern: /gemma/i, cacheType: 'kv', description: 'Gemma', priority: 30 },
 
   // Phi
   { familyName: 'phi4-reasoning', pattern: /phi[\-_.]?4.*(?:reason|think)/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Phi 4 Reasoning', priority: 2 },
+  { familyName: 'phi4-multimodal', pattern: /phi[\-_.]?4.*(?:vision|multimodal|vlm)/i, cacheType: 'kv', isMultimodal: true, description: 'Phi 4 Multimodal', priority: 2 },
   { familyName: 'phi4', pattern: /phi[\-_.]?4/i, cacheType: 'kv', toolParser: 'hermes', enableAutoToolChoice: true, description: 'Phi 4', priority: 10 },
+  { familyName: 'phi3-vision', pattern: /phi[\-_.]?3[\-_.]?(?:vision|v)/i, cacheType: 'kv', isMultimodal: true, description: 'Phi 3 Vision', priority: 8 },
   { familyName: 'phi3', pattern: /phi[\-_.]?3/i, cacheType: 'kv', description: 'Phi 3', priority: 20 },
 
   // Hermes
@@ -136,6 +145,18 @@ const MODEL_CONFIGS = [
   // Baichuan (no tool support — do NOT map to qwen2)
   { familyName: 'baichuan', pattern: /baichuan/i, cacheType: 'kv', description: 'Baichuan', priority: 30 },
 
+  // Vision-Language / Multimodal (MLLM) models
+  { familyName: 'yi-vl', pattern: /yi[\-_.].*(?:vl|vision)/i, cacheType: 'kv', isMultimodal: true, description: 'Yi Vision-Language', priority: 15 },
+  { familyName: 'llava', pattern: /llava/i, cacheType: 'kv', isMultimodal: true, description: 'LLaVA vision-language', priority: 20 },
+  { familyName: 'idefics', pattern: /idefics/i, cacheType: 'kv', isMultimodal: true, description: 'Idefics vision-language', priority: 5 },
+  { familyName: 'molmo', pattern: /molmo/i, cacheType: 'kv', isMultimodal: true, description: 'Molmo multimodal', priority: 20 },
+  { familyName: 'cogvlm', pattern: /cogvlm/i, cacheType: 'kv', isMultimodal: true, description: 'CogVLM vision-language', priority: 20 },
+  { familyName: 'internvl', pattern: /internvl/i, cacheType: 'kv', isMultimodal: true, description: 'InternVL vision-language', priority: 15 },
+  { familyName: 'minicpm-v', pattern: /minicpm[\-_.]?v/i, cacheType: 'kv', isMultimodal: true, description: 'MiniCPM-V vision', priority: 20 },
+  { familyName: 'florence', pattern: /florence/i, cacheType: 'kv', isMultimodal: true, description: 'Florence vision', priority: 20 },
+  { familyName: 'smolvlm', pattern: /smol[\-_.]?vlm/i, cacheType: 'kv', isMultimodal: true, description: 'SmolVLM', priority: 20 },
+  { familyName: 'internlm-xcomposer', pattern: /internlm[\-_.]?xcomposer/i, cacheType: 'kv', isMultimodal: true, description: 'InternLM-XComposer', priority: 8 },
+
   // Pure SSM / Mamba-architecture models
   { familyName: 'falcon-mamba', pattern: /falcon[\-_.]?mamba/i, cacheType: 'mamba', usePagedCache: true, description: 'Falcon Mamba (SSM)', priority: 5 },
   { familyName: 'mamba', pattern: /(?:^|\/)mamba[\-_.]/i, cacheType: 'mamba', usePagedCache: true, description: 'Mamba SSM', priority: 30 },
@@ -187,6 +208,9 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── DeepSeek family ──
   'deepseek_v3': 'deepseek-v3',
   'deepseek_v2': 'deepseek-v2',
+  'deepseek_vl': 'deepseek-vl',
+  'deepseek_vl2': 'deepseek-vl',
+  'deepseek_vl_v2': 'deepseek-vl',
   'deepseek2': 'deepseek',
   'deepseek': 'deepseek',
   // ── GLM family ──
@@ -204,12 +228,13 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma': 'gemma',
   'gemma2': 'gemma2',
   'gemma3': 'gemma3',
-  'gemma3_text': 'gemma3',
+  'gemma3_text': 'gemma3-text',
   // ── Phi family ──
   'phi3': 'phi3',
+  'phi3v': 'phi3-vision',
   'phi3small': 'phi3',
   'phi4': 'phi4',
-  'phi4mm': 'phi4',
+  'phi4mm': 'phi4-multimodal',
   'phi4flash': 'phi4',
   'phi4_reasoning': 'phi4-reasoning',
   'phi': 'phi3',
@@ -244,12 +269,28 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── OLMo ──
   'olmo': 'olmo',
   'olmo2': 'olmo',
+  // ── Gemma extras ──
+  'paligemma': 'paligemma',
+  'paligemma2': 'paligemma',
+  // ── MLLM / Vision-Language ──
+  'llava': 'llava',
+  'llava_next': 'llava',
+  'idefics2': 'idefics',
+  'idefics3': 'idefics',
+  'cogvlm': 'cogvlm',
+  'cogvlm2': 'cogvlm',
+  'florence2': 'florence',
+  'molmo': 'molmo',
+  'minicpmv': 'minicpm-v',
+  'smolvlm': 'smolvlm',
+  'internvl_chat': 'internvl',
   // ── Others (architecture-compatible mappings) ──
   'starcoder2': 'starcoder',
   'stablelm': 'stablelm',
   'baichuan': 'baichuan',
   'internlm2': 'internlm',
   'internlm3': 'internlm3',
+  'internlm_xcomposer2': 'internlm-xcomposer',
   'yi': 'llama3',
   'orion': 'llama3',
 }
@@ -259,6 +300,7 @@ const DEFAULT_CONFIG: DetectedConfig = {
   cacheType: 'kv',
   usePagedCache: true,
   enableAutoToolChoice: false,
+  isMultimodal: false,
   description: 'Unknown model'
 }
 
@@ -270,6 +312,7 @@ function configToDetected(config: ModelConfig): DetectedConfig {
     cacheType: config.cacheType,
     usePagedCache: config.usePagedCache ?? true,
     enableAutoToolChoice: config.enableAutoToolChoice ?? false,
+    isMultimodal: config.isMultimodal ?? false,
     description: config.description
   }
 }
@@ -279,7 +322,7 @@ function configToDetected(config: ModelConfig): DetectedConfig {
  * Fast path (sync, no I/O) — uses regex pattern matching only.
  * For authoritative detection that reads config.json, use detectModelConfigFromDir().
  */
-export function detectModelConfig(modelPath: string): DetectedConfig {
+function detectModelConfig(modelPath: string): DetectedConfig {
   const modelName = modelPath.split('/').pop() || modelPath
 
   for (const config of MODEL_CONFIGS) {

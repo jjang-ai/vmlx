@@ -2,9 +2,11 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import DOMPurify from 'dompurify'
-import { useState, useMemo, useRef, useCallback, memo } from 'react'
+import { useState, useMemo, useCallback, memo } from 'react'
 import { ReasoningBox } from './ReasoningBox'
 import { ToolCallStatus } from './ToolCallStatus'
+import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
+import { TTSPlayer } from './VoiceChat'
 
 interface MessageMetrics {
   tokenCount: number
@@ -63,23 +65,53 @@ function sanitizeHtml(html: string): string {
   })
 }
 
+/** Try to parse a JSON content array (multimodal message). Returns null if not a content array. */
+function parseContentArray(content: string): Array<{ type: string; text?: string; image_url?: { url: string } }> | null {
+  if (!content.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(content)
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type) return parsed
+  } catch { /* not JSON */ }
+  return null
+}
+
+/** Group tool statuses into tool call groups. Each 'calling' phase starts a new group.
+ *  Also extracts contentOffset for inline positioning. */
+function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOffsets: boolean; processingStatus?: any; doneStatus?: any } {
+  const groups: InlineToolGroup[] = []
+  let current: InlineToolGroup | null = null
+  let hasOffsets = false
+  let processingStatus: any = null
+  let doneStatus: any = null
+
+  for (const s of statuses) {
+    if (s.phase === 'calling') {
+      current = { name: s.toolName, statuses: [s], contentOffset: s.contentOffset }
+      if (s.contentOffset !== undefined) hasOffsets = true
+      groups.push(current)
+    } else if (s.phase === 'processing') {
+      processingStatus = s
+      current = null
+    } else if (s.phase === 'done') {
+      doneStatus = s
+      current = null
+    } else if (current) {
+      current.statuses.push(s)
+    }
+  }
+
+  return { groups, hasOffsets, processingStatus, doneStatus }
+}
+
 export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
-  const proseRef = useRef<HTMLDivElement>(null)
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null)
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
-
-  // Always render markdown — including during streaming so formatting stays
-  // consistent and doesn't "break" when generation completes. marked.parse()
-  // is fast enough (<5ms) for typical streaming rates.
-  const renderedHtml = useMemo(() => {
-    if (message.role !== 'assistant' || !message.content) return null
-    return sanitizeHtml(marked.parse(message.content) as string)
-  }, [message.role, message.content])
 
   // Event delegation for code-copy buttons (DOMPurify strips onclick attributes)
   const handleProseClick = useCallback((e: React.MouseEvent) => {
@@ -93,26 +125,129 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     }
   }, [])
 
-  const renderContent = () => {
-    if (message.role === 'user') {
-      return <p className="whitespace-pre-wrap">{message.content}</p>
-    }
+  // Group tool statuses for inline rendering
+  const toolGroups = useMemo(() => {
+    if (!toolStatuses || toolStatuses.length === 0) return null
+    return groupToolStatuses(toolStatuses)
+  }, [toolStatuses])
 
-    if (!message.content) return null
+  // Render markdown segment from a content substring
+  const renderMarkdownSegment = useCallback((text: string, key: string) => {
+    if (!text) return null
+    const html = sanitizeHtml(marked.parse(text) as string)
+    return (
+      <div
+        key={key}
+        className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all"
+        dangerouslySetInnerHTML={{ __html: html }}
+        onClick={handleProseClick}
+      />
+    )
+  }, [handleProseClick])
 
-    // Render markdown for all assistant messages (streaming and completed)
-    if (renderedHtml) {
+  const renderUserContent = () => {
+    // Check for multimodal content (images + text stored as JSON content array)
+    const contentParts = parseContentArray(message.content)
+    if (contentParts) {
+      const images = contentParts.filter(p => p.type === 'image_url' && p.image_url?.url)
+      const textParts = contentParts.filter(p => p.type === 'text' && p.text)
       return (
-        <div
-          ref={proseRef}
-          className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all"
-          dangerouslySetInnerHTML={{ __html: renderedHtml }}
-          onClick={handleProseClick}
-        />
+        <div>
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {images.map((img, i) => (
+                <img
+                  key={i}
+                  src={img.image_url!.url}
+                  alt={`Attached image ${i + 1}`}
+                  className="max-w-[300px] max-h-[200px] rounded border border-primary-foreground/20 cursor-pointer hover:opacity-90 transition-opacity object-contain"
+                  onClick={() => setZoomedImage(img.image_url!.url)}
+                />
+              ))}
+            </div>
+          )}
+          {textParts.map((p, i) => (
+            <p key={i} className="whitespace-pre-wrap">{p.text}</p>
+          ))}
+        </div>
       )
     }
+    return <p className="whitespace-pre-wrap">{message.content}</p>
+  }
 
-    return null
+  /** Render assistant content with inline tool calls interleaved at their content offsets */
+  const renderInlineContent = () => {
+    if (!message.content && (!toolGroups || toolGroups.groups.length === 0)) return null
+
+    const content = message.content || ''
+
+    // If we have tool groups with content offsets, split content and interleave
+    if (toolGroups && toolGroups.hasOffsets && toolGroups.groups.length > 0) {
+      // Sort groups by contentOffset ascending
+      const sorted = [...toolGroups.groups]
+        .filter(g => (g as any).contentOffset !== undefined)
+        .sort((a, b) => ((a as any).contentOffset || 0) - ((b as any).contentOffset || 0))
+
+      if (sorted.length > 0) {
+        const elements: JSX.Element[] = []
+        let lastOffset = 0
+
+        for (let i = 0; i < sorted.length; i++) {
+          const group = sorted[i]
+          const offset = (group as any).contentOffset || 0
+
+          // Render text segment before this tool call
+          if (offset > lastOffset) {
+            const segment = content.slice(lastOffset, offset).trim()
+            if (segment) {
+              elements.push(renderMarkdownSegment(segment, `seg-${i}`) as JSX.Element)
+            }
+          }
+
+          // Render inline tool call
+          elements.push(
+            <InlineToolCall
+              key={`tool-${i}`}
+              group={group}
+              isStreaming={!!isStreaming}
+            />
+          )
+
+          lastOffset = Math.max(lastOffset, offset)
+        }
+
+        // Render remaining text after last tool call
+        if (lastOffset < content.length) {
+          const remaining = content.slice(lastOffset).trim()
+          if (remaining) {
+            elements.push(renderMarkdownSegment(remaining, 'seg-last') as JSX.Element)
+          }
+        }
+
+        // Show processing/done status
+        if (toolGroups.processingStatus && isStreaming) {
+          elements.push(
+            <div key="processing" className="flex items-center gap-2 text-muted-foreground text-xs py-1">
+              <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse" />
+              <span>Processing tool results...</span>
+            </div>
+          )
+        }
+
+        return <>{elements}</>
+      }
+    }
+
+    // Fallback: render all content then tool calls at bottom (legacy behavior)
+    if (!content) return null
+    const html = sanitizeHtml(marked.parse(content) as string)
+    return (
+      <div
+        className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all"
+        dangerouslySetInnerHTML={{ __html: html }}
+        onClick={handleProseClick}
+      />
+    )
   }
 
   const renderMetrics = () => {
@@ -190,12 +325,15 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
           </span>
 
           {message.role === 'assistant' && !isStreaming && (
-            <button
-              onClick={() => copyToClipboard(message.content)}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              {copied ? 'copied' : 'copy'}
-            </button>
+            <div className="flex items-center gap-1">
+              <TTSPlayer text={message.content} />
+              <button
+                onClick={() => copyToClipboard(message.content)}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                {copied ? 'copied' : 'copy'}
+              </button>
+            </div>
           )}
         </div>
 
@@ -210,10 +348,14 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
           />
         )}
 
-        {renderContent()}
+        {message.role === 'user' && renderUserContent()}
 
-        {/* Tool call status indicators */}
-        {message.role === 'assistant' && toolStatuses && toolStatuses.length > 0 && (
+        {/* Inline tool calls: interleave content segments with tool call widgets */}
+        {message.role === 'assistant' && renderInlineContent()}
+
+        {/* Fallback: legacy tool call display at bottom (no contentOffset data) */}
+        {message.role === 'assistant' && toolStatuses && toolStatuses.length > 0 &&
+         !(toolGroups && toolGroups.hasOffsets) && (
           <ToolCallStatus statuses={toolStatuses} isStreaming={!!isStreaming} />
         )}
 
@@ -230,6 +372,27 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
 
         {renderMetrics()}
       </div>
+
+      {/* Image zoom overlay */}
+      {zoomedImage && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer"
+          onClick={() => setZoomedImage(null)}
+        >
+          <img
+            src={zoomedImage}
+            alt="Zoomed"
+            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
+            onClick={e => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setZoomedImage(null)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl font-bold"
+          >
+            x
+          </button>
+        </div>
+      )}
     </div>
   )
 })

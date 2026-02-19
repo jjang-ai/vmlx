@@ -57,6 +57,9 @@ export interface ServerConfig {
   // Reasoning
   reasoningParser?: string
 
+  // Cache TTL
+  cacheTtlMinutes?: number
+
   // Additional
   additionalArgs?: string
 
