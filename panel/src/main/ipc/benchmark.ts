@@ -108,18 +108,21 @@ async function runSingleBenchmark(
       try {
         const parsed = JSON.parse(data)
 
-        // Usage info (final chunk with usage)
+        // Usage info (final chunk with usage) — server count is authoritative
+        let serverUsageThisChunk = false
         if (parsed.usage) {
           promptTokens = parsed.usage.prompt_tokens || promptTokens
-          tokenCount = parsed.usage.completion_tokens || tokenCount
+          if (parsed.usage.completion_tokens != null) {
+            tokenCount = parsed.usage.completion_tokens
+            serverUsageThisChunk = true
+          }
         }
 
-        // Content delta
+        // Content delta — only client-count when server didn't provide usage this chunk
         const delta = parsed.choices?.[0]?.delta
         if (delta?.content) {
           if (!firstTokenTime) firstTokenTime = Date.now()
-          // Count tokens approximately by content presence
-          tokenCount = Math.max(tokenCount, (tokenCount || 0) + 1)
+          if (!serverUsageThisChunk) tokenCount++
         }
       } catch { /* ignore parse errors */ }
     }
