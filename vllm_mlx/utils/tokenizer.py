@@ -37,13 +37,44 @@ def _get_model_type_from_config(model_name: str) -> str | None:
     return None
 
 
-# model_type values that do NOT need tokenizer fallback (standard architectures)
+# model_type values that do NOT need tokenizer fallback (standard architectures).
+# Must stay in sync with MODEL_TYPE_TO_FAMILY in panel/src/main/model-config-registry.ts.
+# Notably EXCLUDES nemotron/nemotron_h which DO need tokenizer fallback.
 _STANDARD_ARCHITECTURES = {
-    "qwen3", "qwen3_moe", "qwen3_vl", "qwen2", "qwen2_moe", "qwen2_vl",
-    "llama", "mistral", "mixtral", "pixtral", "gemma", "gemma2", "gemma3",
-    "phi3", "phi4", "deepseek_v2", "deepseek_v3", "chatglm", "glm4",
-    "glm4_moe", "glm4_moe_lite", "gpt_oss", "cohere", "cohere2", "granite",
-    "mamba", "falcon_mamba", "jamba", "rwkv",
+    # Qwen
+    "qwen3", "qwen3_moe", "qwen3_vl", "qwen3_vl_moe", "qwen3_next",
+    "qwen2", "qwen2_moe", "qwen2_vl", "qwen2_5_vl", "qwen", "qwen_mamba",
+    # Llama
+    "llama", "llama4",
+    # Mistral
+    "mistral", "mixtral", "pixtral", "codestral", "devstral", "codestral_mamba",
+    # DeepSeek
+    "deepseek_v2", "deepseek_v3", "deepseek_vl", "deepseek_vl2", "deepseek_vl_v2",
+    "deepseek2", "deepseek",
+    # GLM / GPT-OSS
+    "chatglm", "glm4", "glm4_moe", "glm4_moe_lite", "glm", "gpt_oss",
+    # StepFun
+    "step3p5", "step",
+    # Gemma
+    "gemma", "gemma2", "gemma3", "gemma3_text", "paligemma", "paligemma2",
+    # Phi
+    "phi3", "phi3v", "phi3small", "phi4", "phi4mm", "phi4flash", "phi4_reasoning", "phi",
+    # MiniMax
+    "minimax", "minimax_m2", "minimax_m2_5",
+    # Jamba / Mamba / SSM
+    "jamba", "mamba", "mamba2", "falcon_mamba", "rwkv", "rwkv5", "rwkv6",
+    # IBM Granite
+    "granite", "granite_moe",
+    # Cohere
+    "cohere", "cohere2",
+    # Others
+    "hermes", "kimi_k2", "exaone", "exaone3", "olmo", "olmo2",
+    "starcoder2", "stablelm", "baichuan",
+    "internlm2", "internlm3", "internlm_xcomposer2",
+    "yi", "orion",
+    # MLLM
+    "llava", "llava_next", "idefics2", "idefics3", "cogvlm", "cogvlm2",
+    "florence2", "molmo", "minicpmv", "smolvlm", "internvl_chat",
 }
 
 

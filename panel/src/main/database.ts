@@ -52,6 +52,8 @@ export interface Message {
   timestamp: number
   tokens?: number
   metricsJson?: string  // JSON-serialized MessageMetrics
+  toolCallsJson?: string  // JSON-serialized tool call statuses for inline display
+  reasoningContent?: string  // Reasoning/thinking content (from <think> tags or similar)
 }
 
 export interface Folder {
@@ -60,6 +62,15 @@ export interface Folder {
   parentId?: string
   color?: string
   icon?: string
+  createdAt: number
+}
+
+export interface BenchmarkResult {
+  id: string
+  sessionId: string
+  modelPath: string
+  modelName?: string
+  resultsJson: string // JSON array of per-prompt results
   createdAt: number
 }
 
@@ -194,6 +205,17 @@ class DatabaseManager {
         last_stopped_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+
+      CREATE TABLE IF NOT EXISTS benchmarks (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        model_path TEXT NOT NULL,
+        model_name TEXT,
+        results_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_benchmarks_session ON benchmarks(session_id);
+      CREATE INDEX IF NOT EXISTS idx_benchmarks_model ON benchmarks(model_path);
     `)
 
     // Safe migration: add model_path column to chats if missing
@@ -207,6 +229,12 @@ class DatabaseManager {
     const msgColumns = this.db.pragma('table_info(messages)') as { name: string }[]
     if (!msgColumns.find(c => c.name === 'metrics_json')) {
       this.db.exec('ALTER TABLE messages ADD COLUMN metrics_json TEXT')
+    }
+    if (!msgColumns.find(c => c.name === 'tool_calls_json')) {
+      this.db.exec('ALTER TABLE messages ADD COLUMN tool_calls_json TEXT')
+    }
+    if (!msgColumns.find(c => c.name === 'reasoning_content')) {
+      this.db.exec('ALTER TABLE messages ADD COLUMN reasoning_content TEXT')
     }
 
     // Safe migration: add new chat_overrides columns if missing
@@ -298,6 +326,37 @@ class DatabaseManager {
     if (!sessionColumns.find(c => c.name === 'remote_organization')) {
       this.db.exec('ALTER TABLE sessions ADD COLUMN remote_organization TEXT')
     }
+
+    // Prompt templates table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS prompt_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'custom',
+        is_builtin INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      )
+    `)
+
+    // Seed built-in templates (only if table is empty)
+    const templateCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM prompt_templates WHERE is_builtin = 1').get() as any).cnt
+    if (templateCount === 0) {
+      const builtins = [
+        { id: 'builtin-coder', name: 'Coding Assistant', category: 'development', content: 'You are an expert software engineer. Write clean, efficient, well-documented code. Explain your reasoning. When debugging, think step-by-step. Prefer simple solutions.' },
+        { id: 'builtin-writer', name: 'Creative Writer', category: 'creative', content: 'You are a skilled creative writer. Write vivid, engaging prose. Vary sentence structure and length. Show, don\'t tell. Use sensory details and strong verbs.' },
+        { id: 'builtin-analyst', name: 'Data Analyst', category: 'analysis', content: 'You are a data analyst. Provide clear, data-driven insights. Use precise numbers. Structure your analysis with sections. Highlight key findings and actionable recommendations.' },
+        { id: 'builtin-tutor', name: 'Patient Tutor', category: 'education', content: 'You are a patient, encouraging tutor. Explain concepts from first principles. Use analogies and examples. Check understanding. Adapt your explanations to the student\'s level.' },
+        { id: 'builtin-concise', name: 'Concise Responder', category: 'general', content: 'Be extremely concise. Answer in as few words as possible while remaining accurate and helpful. No unnecessary elaboration. Bullet points preferred.' },
+        { id: 'builtin-socratic', name: 'Socratic Guide', category: 'education', content: 'Guide through questions rather than direct answers. Ask thought-provoking questions that lead to understanding. Help the user discover the answer themselves.' },
+        { id: 'builtin-reviewer', name: 'Code Reviewer', category: 'development', content: 'You are a thorough code reviewer. Check for bugs, security issues, performance problems, and style. Be specific about line numbers. Suggest concrete improvements. Rate severity.' },
+      ]
+      const ins = this.db.prepare('INSERT INTO prompt_templates (id, name, content, category, is_builtin, created_at) VALUES (?, ?, ?, ?, 1, ?)')
+      const now = Date.now()
+      for (const t of builtins) {
+        ins.run(t.id, t.name, t.content, t.category, now)
+      }
+    }
   }
 
   // Folders
@@ -332,7 +391,7 @@ class DatabaseManager {
       INSERT INTO chats (id, title, folder_id, created_at, updated_at, model_id, model_path)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
-    stmt.run(chat.id, chat.title, chat.folderId, chat.createdAt, chat.updatedAt, chat.modelId, chat.modelPath)
+    stmt.run(chat.id, chat.title, chat.folderId ?? null, chat.createdAt, chat.updatedAt, chat.modelId || 'default', chat.modelPath ?? null)
   }
 
   getChats(folderId?: string): Chat[] {
@@ -423,13 +482,26 @@ class DatabaseManager {
   // Messages
   addMessage(message: Message): void {
     const stmt = this.db.prepare(`
-      INSERT INTO messages (id, chat_id, role, content, timestamp, tokens, metrics_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO messages (id, chat_id, role, content, timestamp, tokens, metrics_json, tool_calls_json, reasoning_content)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
-    stmt.run(message.id, message.chatId, message.role, message.content, message.timestamp, message.tokens, message.metricsJson)
+    stmt.run(message.id, message.chatId, message.role, message.content, message.timestamp, message.tokens, message.metricsJson, message.toolCallsJson, message.reasoningContent)
 
     // Update chat's updatedAt
     this.updateChat(message.chatId, { updatedAt: message.timestamp })
+  }
+
+  /** Update an existing message's content in-place (for incremental persistence during streaming) */
+  updateMessageContent(messageId: string, content: string, reasoningContent?: string): void {
+    const stmt = this.db.prepare(`
+      UPDATE messages SET content = ?, reasoning_content = ? WHERE id = ?
+    `)
+    stmt.run(content, reasoningContent || null, messageId)
+  }
+
+  /** Delete a message by ID (used to clean up empty pre-inserted placeholders on error) */
+  deleteMessage(messageId: string): void {
+    this.db.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
   }
 
   getMessages(chatId: string): Message[] {
@@ -441,13 +513,10 @@ class DatabaseManager {
       content: row.content,
       timestamp: row.timestamp,
       tokens: row.tokens,
-      metricsJson: row.metrics_json
+      metricsJson: row.metrics_json,
+      toolCallsJson: row.tool_calls_json,
+      reasoningContent: row.reasoning_content
     }))
-  }
-
-  deleteMessage(id: string): void {
-    const stmt = this.db.prepare('DELETE FROM messages WHERE id = ?')
-    stmt.run(id)
   }
 
   // Chat Overrides
@@ -596,13 +665,6 @@ class DatabaseManager {
     return this.mapSessionRow(row)
   }
 
-  getSessionByPort(port: number): Session | undefined {
-    const stmt = this.db.prepare('SELECT * FROM sessions WHERE port = ? AND status IN (\'running\', \'loading\')')
-    const row = stmt.get(port) as any
-    if (!row) return undefined
-    return this.mapSessionRow(row)
-  }
-
   updateSession(id: string, updates: Partial<Session>): void {
     const fields: string[] = []
     const values: any[] = []
@@ -675,6 +737,58 @@ class DatabaseManager {
   deleteSetting(key: string): void {
     const stmt = this.db.prepare('DELETE FROM settings WHERE key = ?')
     stmt.run(key)
+  }
+
+  // Benchmarks
+  saveBenchmark(b: BenchmarkResult): void {
+    const stmt = this.db.prepare(
+      'INSERT INTO benchmarks (id, session_id, model_path, model_name, results_json, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+    )
+    stmt.run(b.id, b.sessionId, b.modelPath, b.modelName || null, b.resultsJson, b.createdAt)
+  }
+
+  getBenchmarks(modelPath?: string): BenchmarkResult[] {
+    const query = modelPath
+      ? 'SELECT * FROM benchmarks WHERE model_path = ? ORDER BY created_at DESC LIMIT 50'
+      : 'SELECT * FROM benchmarks ORDER BY created_at DESC LIMIT 50'
+    const stmt = this.db.prepare(query)
+    const rows = (modelPath ? stmt.all(modelPath) : stmt.all()) as any[]
+    return rows.map(r => ({
+      id: r.id,
+      sessionId: r.session_id,
+      modelPath: r.model_path,
+      modelName: r.model_name,
+      resultsJson: r.results_json,
+      createdAt: r.created_at
+    }))
+  }
+
+  deleteBenchmark(id: string): void {
+    const stmt = this.db.prepare('DELETE FROM benchmarks WHERE id = ?')
+    stmt.run(id)
+  }
+
+  // Prompt Templates
+  getPromptTemplates(): Array<{ id: string; name: string; content: string; category: string; isBuiltin: boolean; createdAt: number }> {
+    const rows = this.db.prepare('SELECT * FROM prompt_templates ORDER BY is_builtin DESC, name ASC').all() as any[]
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      content: r.content,
+      category: r.category,
+      isBuiltin: !!r.is_builtin,
+      createdAt: r.created_at
+    }))
+  }
+
+  savePromptTemplate(t: { id: string; name: string; content: string; category: string }): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO prompt_templates (id, name, content, category, is_builtin, created_at) VALUES (?, ?, ?, ?, 0, ?)'
+    ).run(t.id, t.name, t.content, t.category, Date.now())
+  }
+
+  deletePromptTemplate(id: string): void {
+    this.db.prepare('DELETE FROM prompt_templates WHERE id = ? AND is_builtin = 0').run(id)
   }
 
   close(): void {

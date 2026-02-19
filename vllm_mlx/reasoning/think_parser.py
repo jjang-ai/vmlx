@@ -45,7 +45,7 @@ class BaseThinkingReasoningParser(ReasoningParser):
         super().__init__(tokenizer)
         self._think_in_prompt = False  # Set via reset_state() when <think> is in the prompt
 
-    def reset_state(self, think_in_prompt: bool = False):
+    def reset_state(self, think_in_prompt: bool = False, **kwargs):
         """Reset state for a new streaming request.
 
         Args:

@@ -22,6 +22,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
+  const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
@@ -499,10 +500,11 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                         try {
                           const stored = JSON.parse(existing.config)
                           setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
-                          // Still detect cache type for UI gating (Mamba vs KV)
+                          // Still detect cache type for UI gating (Mamba vs KV, VLM)
                           try {
                             const det = await window.api.models.detectConfig(model.path)
                             if (det?.cacheType) setDetectedCacheType(det.cacheType)
+                            setDetectedIsMultimodal(!!det?.isMultimodal)
                           } catch (_) {}
                           setStep(2)
                           return // skip auto-detect for config — existing config already has everything
@@ -521,6 +523,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                           usePagedCache: detected.usePagedCache,
                         }))
                         setDetectedCacheType(detected.cacheType || 'kv')
+                        setDetectedIsMultimodal(!!detected.isMultimodal)
                       }
                     } catch (_) {
                       // Auto-detect failed — user can configure manually
@@ -629,7 +632,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
         </div>
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} isMultimodal={detectedIsMultimodal} />
 
         {/* Launch */}
         <div className="flex gap-3 mt-6 pb-6">
