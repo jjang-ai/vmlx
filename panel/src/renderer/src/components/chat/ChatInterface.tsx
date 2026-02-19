@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { MessageList } from './MessageList'
-import { InputBox } from './InputBox'
+import { InputBox, ImageAttachment } from './InputBox'
 import { useToast } from '../Toast'
 
 interface MessageMetrics {
@@ -23,6 +23,7 @@ interface Message {
   tokens?: number
   metrics?: MessageMetrics
   metricsJson?: string
+  toolCallsJson?: string
   reasoningContent?: string
   reasoningDone?: boolean
 }
@@ -55,7 +56,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
   const [reasoningMap, setReasoningMap] = useState<Record<string, string>>({})
   const [reasoningDoneMap, setReasoningDoneMap] = useState<Record<string, boolean>>({})
   // Tool call status: track per-message tool call phases
-  const [toolStatusMap, setToolStatusMap] = useState<Record<string, Array<{ phase: string; toolName: string; detail?: string; iteration?: number; timestamp: number }>>>({})
+  const [toolStatusMap, setToolStatusMap] = useState<Record<string, Array<{ phase: string; toolName: string; detail?: string; iteration?: number; contentOffset?: number; timestamp: number }>>>({})
   // Per-chat setting: hide tool status display
   const [hideToolStatus, setHideToolStatus] = useState(false)
   // ask_user tool: question from model and input state
@@ -69,8 +70,38 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
       return
     }
 
-    // Load existing messages (hydrate persisted metrics)
-    window.api.chat.getMessages(chatId).then(msgs => setMessages(hydrateMessages(msgs)))
+    // Load existing messages (hydrate persisted metrics, tool calls, reasoning)
+    window.api.chat.getMessages(chatId).then(msgs => {
+      setMessages(hydrateMessages(msgs))
+      // Hydrate tool status map from persisted tool_calls_json
+      const restoredTools: Record<string, any[]> = {}
+      const restoredReasoning: Record<string, string> = {}
+      const restoredReasoningDone: Record<string, boolean> = {}
+      for (const m of msgs) {
+        if (m.toolCallsJson) {
+          try {
+            const parsed = JSON.parse(m.toolCallsJson)
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              restoredTools[m.id] = parsed.map((s: any) => ({
+                ...s,
+                timestamp: s.timestamp || m.timestamp
+              }))
+            }
+          } catch { /* ignore bad json */ }
+        }
+        if (m.reasoningContent) {
+          restoredReasoning[m.id] = m.reasoningContent
+          restoredReasoningDone[m.id] = true
+        }
+      }
+      if (Object.keys(restoredTools).length > 0) {
+        setToolStatusMap(restoredTools)
+      }
+      if (Object.keys(restoredReasoning).length > 0) {
+        setReasoningMap(restoredReasoning)
+        setReasoningDoneMap(restoredReasoningDone)
+      }
+    })
 
     // Load hideToolStatus from chat overrides
     window.api.chat.getOverrides(chatId).then((o: any) => {
@@ -148,17 +179,27 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
 
     const handleComplete = (data: any) => {
       if (data.chatId !== chatId) return
+      // Append truncation warning if server indicated max_tokens was hit
+      let finalContent = data.content || ''
+      if (data.finishReason === 'length' && finalContent) {
+        finalContent += '\n\n---\n*[Output truncated — max tokens reached. Increase "Default Max Tokens" in session settings or send a follow-up message to continue.]*'
+      }
       setMessages(prev => prev.map(m =>
         m.id === data.messageId
           ? {
               ...m,
-              // Use provided content if available (abort saves final content with [Generation interrupted])
-              content: data.content || m.content,
+              content: finalContent || m.content,
               tokens: data.metrics?.tokenCount,
               metrics: data.metrics
             }
           : m
       ))
+      // Finalize reasoning state from completion event (ensures reasoning box persists
+      // even if chat:reasoningDone was missed due to event ordering)
+      if (data.reasoningContent) {
+        setReasoningMap(prev => ({ ...prev, [data.messageId]: data.reasoningContent }))
+        setReasoningDoneMap(prev => ({ ...prev, [data.messageId]: true }))
+      }
       setStreamingMessageId(null)
       setCurrentMetrics(null)
     }
@@ -183,6 +224,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
             toolName: data.toolName || '',
             detail: data.detail,
             iteration: data.iteration,
+            contentOffset: data.contentOffset,
             timestamp: Date.now()
           }
         ]
@@ -205,10 +247,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
     const cleanupAskUser = window.api.chat.onAskUser(handleAskUser)
 
     return () => {
-      // Abort any active generation when switching chats to prevent stuck locks
-      if (chatId) {
-        window.api.chat.abort(chatId).catch(() => {})
-      }
+      // Do NOT abort active generation when navigating away — the user explicitly
+      // wants generation to continue in the background. Only clean up event listeners.
+      // The abort button in InputBox handles explicit user cancellation.
       cleanupTyping()
       cleanupStream()
       cleanupComplete()
@@ -231,12 +272,20 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
     }
   }
 
-  const handleSend = async (content: string) => {
-    if (!chatId || !content.trim()) return
+  const handleSend = async (content: string, attachments?: ImageAttachment[]) => {
+    if (!chatId || (!content.trim() && (!attachments || attachments.length === 0))) return
 
     setLoading(true)
     setStreamingMessageId(null)
     setCurrentMetrics(null)
+
+    // Build display content for user message: if images attached, store as JSON content array
+    const displayContent = attachments && attachments.length > 0
+      ? JSON.stringify([
+          ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
+          ...(content.trim() ? [{ type: 'text', text: content }] : [])
+        ])
+      : content
 
     // Add temp user message for instant UI feedback
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -244,7 +293,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
       id: tempId,
       chatId,
       role: 'user',
-      content,
+      content: displayContent,
       timestamp: Date.now()
     }
     setMessages(prev => [...prev, tempUserMessage])
@@ -253,7 +302,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
       // sendMessage persists user msg to DB and streams assistant response.
       // Returns: assistant message object (success or abort with content), or null (abort before content).
       // Only throws on real errors (timeout, connection lost, API errors).
-      const result = await window.api.chat.sendMessage(chatId, content, sessionEndpoint)
+      const result = await window.api.chat.sendMessage(chatId, content, sessionEndpoint, attachments)
       const assistantId = result?.id
 
       // Replace the temp user message with the real one from DB, but keep
@@ -268,7 +317,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
           const hydrated = hydrateMessages(freshMessages)
           return hydrated.map(m => {
             if (m.id === streamedAssistant.id) {
-              return { ...streamedAssistant, tokens: m.tokens, metrics: m.metrics || streamedAssistant.metrics, metricsJson: m.metricsJson }
+              return { ...streamedAssistant, tokens: m.tokens, metrics: m.metrics || streamedAssistant.metrics, metricsJson: m.metricsJson, toolCallsJson: m.toolCallsJson, reasoningContent: m.reasoningContent }
             }
             return m
           })
@@ -376,6 +425,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
         onAbort={handleAbort}
         disabled={loading}
         loading={loading}
+        sessionEndpoint={sessionEndpoint}
       />
     </div>
   )

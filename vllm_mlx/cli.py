@@ -167,6 +167,7 @@ def serve_command(args):
             use_memory_aware_cache=not args.no_memory_aware_cache,
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
+            cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
             # Paged cache options
             use_paged_cache=args.use_paged_cache,
             paged_cache_block_size=args.paged_cache_block_size,
@@ -261,6 +262,7 @@ def bench_command(args):
             use_memory_aware_cache=not args.no_memory_aware_cache,
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
+            cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
             # Paged cache options
             use_paged_cache=args.use_paged_cache,
             paged_cache_block_size=args.paged_cache_block_size,
@@ -536,6 +538,12 @@ Examples:
         help="Disable memory-aware cache, use legacy entry-count based cache",
     )
     serve_parser.add_argument(
+        "--cache-ttl-minutes",
+        type=float,
+        default=0,
+        help="Cache entry time-to-live in minutes. Entries not accessed within this window are evicted. 0=disabled (default: 0)",
+    )
+    serve_parser.add_argument(
         "--stream-interval",
         type=int,
         default=1,
@@ -768,6 +776,12 @@ Examples:
         "--no-memory-aware-cache",
         action="store_true",
         help="Disable memory-aware cache, use legacy entry-count based cache",
+    )
+    bench_parser.add_argument(
+        "--cache-ttl-minutes",
+        type=float,
+        default=0,
+        help="Cache entry time-to-live in minutes. 0=disabled (default: 0)",
     )
     # Paged cache options (experimental)
     bench_parser.add_argument(

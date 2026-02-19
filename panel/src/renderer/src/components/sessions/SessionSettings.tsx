@@ -19,76 +19,120 @@ interface SessionSettingsProps {
   onBack: () => void
 }
 
-/** Build a preview of the CLI command from config (client-side mirror of server buildArgs) */
-function buildCommandPreview(modelPath: string, config: SessionConfig, detected?: { toolParser?: string; reasoningParser?: string } | null): string {
+/**
+ * Build a preview of the CLI command from config.
+ * This MUST mirror the logic in sessions.ts buildArgs() exactly.
+ * When editing buildArgs(), update this function too (and vice versa).
+ */
+function buildCommandPreview(
+  modelPath: string,
+  config: SessionConfig,
+  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string } | null
+): string {
   const parts = ['vllm-mlx serve', modelPath]
+  const isVLM = !!detected?.isMultimodal
 
+  // Server settings
   parts.push('--host', config.host)
   parts.push('--port', config.port.toString())
-  parts.push('--timeout', (config.timeout || 300).toString())
+  parts.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
 
-  if (config.apiKey) parts.push('--api-key', '***')
-  if (config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
+  if (config.apiKey) parts.push('# VLLM_API_KEY=*** (env var)')
+  if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
 
-  if (config.maxNumSeqs > 0) parts.push('--max-num-seqs', config.maxNumSeqs.toString())
-  if (config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
-  if (config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
-  if (config.continuousBatching) parts.push('--continuous-batching')
+  // Concurrent processing
+  if (config.maxNumSeqs && config.maxNumSeqs > 0) parts.push('--max-num-seqs', config.maxNumSeqs.toString())
+  if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
+  if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
-  if (!config.enablePrefixCache) {
+  // VLM models: backend strips --continuous-batching (RotatingKVCache incompatible)
+  if (config.continuousBatching && !isVLM) parts.push('--continuous-batching')
+
+  // Parser resolution: detected ALWAYS wins (mirrors buildArgs lines 1052-1062)
+  const effectiveToolParser = config.toolCallParser === ''
+    ? undefined
+    : detected?.toolParser
+      || (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser : undefined)
+  const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
+  const effectiveReasoningParser = config.reasoningParser === ''
+    ? undefined
+    : detected?.reasoningParser
+      || (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser : undefined)
+
+  // Prefix cache (mirrors buildArgs lines 1077-1114)
+  const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
+  const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
+
+  if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
   } else {
-    // Auto-enable continuous batching
-    if (!config.continuousBatching) parts.push('--continuous-batching')
+    // Auto-enable continuous batching (except VLM)
+    if (isVLM) {
+      parts.push('# VLM: --continuous-batching skipped (SimpleEngine)')
+    } else if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
+      parts.push('--continuous-batching')
+    }
     // Safe prefill default
-    if ((!config.prefillBatchSize || config.prefillBatchSize === 0) && !parts.includes('--prefill-batch-size')) {
+    if ((!config.prefillBatchSize || config.prefillBatchSize === 0) && !parts.some(a => a === '--prefill-batch-size')) {
       parts.push('--prefill-batch-size', '4096')
     }
 
     if (config.noMemoryAwareCache) {
       parts.push('--no-memory-aware-cache')
-      if (config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
+      if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
     } else {
-      if (config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
-      if (config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
+      if (config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
+      if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
+      if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
     }
   }
 
-  if (config.usePagedCache) {
+  // Paged cache (mirrors buildArgs line 1119) — requires prefix cache ON + NOT VLM
+  if (!prefixCacheOff && !isVLM && (config.usePagedCache ?? detected?.usePagedCache)) {
     parts.push('--use-paged-cache')
-    if (config.pagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
-    if (config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
+    if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
+    if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
   }
 
-  if (config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+  // KV cache quantization (mirrors buildArgs line 1138) — requires prefix cache ON, NOT VLM, NOT Mamba
+  if (!prefixCacheOff && !isVLM && detected?.cacheType !== 'mamba' && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
     if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
       parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
     }
   }
 
-  if (config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())
-  if (config.maxTokens > 0) {
+  // Disk cache (mirrors buildArgs line 1138) — requires prefix cache ON
+  if (!prefixCacheOff && config.enableDiskCache) {
+    parts.push('--enable-disk-cache')
+    if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
+    if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
+  }
+
+  // Block disk cache (mirrors buildArgs line 1150) — requires prefix cache ON + NOT VLM + paged cache ON
+  if (!prefixCacheOff && !isVLM && (config.usePagedCache ?? detected?.usePagedCache) && config.enableBlockDiskCache) {
+    parts.push('--enable-block-disk-cache')
+    if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
+    if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
+  }
+
+  // Performance
+  if (config.streamInterval && config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())
+  if (config.maxTokens && config.maxTokens > 0) {
     parts.push('--max-tokens', config.maxTokens.toString())
   } else {
     parts.push('--max-tokens', '1000000')
   }
 
+  // Tool integration
   if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
-  // Resolve "auto" using detected values (mirrors buildArgs backend logic)
-  const effectiveToolParser = (config.toolCallParser && config.toolCallParser !== 'auto')
-    ? config.toolCallParser
-    : detected?.toolParser
-  const effectiveReasoningParser = (config.reasoningParser && config.reasoningParser !== 'auto')
-    ? config.reasoningParser
-    : detected?.reasoningParser
-  if (config.enableAutoToolChoice) {
+  if (effectiveAutoTool) {
     parts.push('--enable-auto-tool-choice')
     if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
   }
   if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
 
-  if (config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
+  if (config.additionalArgs && config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
 
   return parts.join(' \\\n  ')
 }
@@ -101,7 +145,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string } | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -245,6 +289,14 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
+          // VLM models: disable features incompatible with SimpleEngine
+          if (detected.isMultimodal) {
+            base.continuousBatching = false
+            base.usePagedCache = false
+            base.kvCacheQuantization = 'none'
+            base.enableDiskCache = false
+            base.enableBlockDiskCache = false
+          }
         }
       } catch (_) {}
     }
@@ -312,7 +364,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} isMultimodal={detectedConfig?.isMultimodal} />
 
         {/* Command Preview */}
         <div className="mt-4">

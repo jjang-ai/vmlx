@@ -52,8 +52,19 @@ function estimateModelMemory(modelPath: string): number {
  * Node.js/undici's fetch resolves .local to IPv6 link-local (fe80::...)
  * which is unreachable without a zone ID, causing "fetch failed".
  * This replaces the hostname with the resolved IPv4 address.
+ *
+ * Results are cached for 60s to avoid redundant DNS lookups on every
+ * message send and health check (previously added 50-100ms per call).
  */
+const resolvedUrlCache = new Map<string, { url: string; timestamp: number }>()
+const RESOLVE_URL_CACHE_TTL = 60_000 // 60 seconds
+
 export async function resolveUrl(url: string): Promise<string> {
+  const cached = resolvedUrlCache.get(url)
+  if (cached && Date.now() - cached.timestamp < RESOLVE_URL_CACHE_TTL) {
+    return cached.url
+  }
+
   try {
     const parsed = new URL(url)
     if (parsed.hostname.endsWith('.local')) {
@@ -65,11 +76,13 @@ export async function resolveUrl(url: string): Promise<string> {
       parsed.hostname = ip
       const resolved = parsed.toString().replace(/\/+$/, '')
       console.log(`[DNS] Resolved .local: ${url} → ${resolved}`)
+      resolvedUrlCache.set(url, { url: resolved, timestamp: Date.now() })
       return resolved
     }
   } catch (e) {
     console.log(`[DNS] Failed to resolve ${url}:`, e)
   }
+  resolvedUrlCache.set(url, { url, timestamp: Date.now() })
   return url
 }
 
@@ -79,6 +92,8 @@ export class SessionManager extends EventEmitter {
   private failCounts = new Map<string, number>()
   /** Per-session operation lock to prevent concurrent start/stop races */
   private operationLocks = new Map<string, Promise<void>>()
+  /** Timestamp of last successful health check per session (used to skip redundant per-message checks) */
+  private lastHealthyAt = new Map<string, number>()
   // Allow up to 60 consecutive health check failures (5s * 60 = 5 min)
   // before marking session as down. Long prefill operations (e.g. 44k+
   // tokens) can block the server's event loop for 30+ seconds.
@@ -86,6 +101,11 @@ export class SessionManager extends EventEmitter {
 
   constructor() {
     super()
+  }
+
+  /** Get timestamp of last successful health check for a session (0 if never checked) */
+  getLastHealthyAt(sessionId: string): number {
+    return this.lastHealthyAt.get(sessionId) || 0
   }
 
   /**
@@ -206,11 +226,14 @@ export class SessionManager extends EventEmitter {
     // Check if session already exists for this model path
     const existing = db.getSessionByModelPath(modelPath)
     if (existing) {
-      // Update config AND sync host/port columns
+      // Merge new config into existing (don't overwrite unspecified fields)
+      let existingConfig: Record<string, any> = {}
+      try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) {}
       const host = (config.host as string) || existing.host
       const port = (config.port as number) || existing.port
+      const merged = { ...existingConfig, ...config, modelPath, host, port }
       db.updateSession(existing.id, {
-        config: JSON.stringify({ ...config, modelPath, host, port }),
+        config: JSON.stringify(merged),
         host,
         port
       })
@@ -272,7 +295,7 @@ export class SessionManager extends EventEmitter {
       host,
       port,
       status: 'stopped',
-      config: JSON.stringify({}),
+      config: JSON.stringify({ timeout: 300 }),
       createdAt: now,
       updatedAt: now,
       type: 'remote',
@@ -418,6 +441,10 @@ export class SessionManager extends EventEmitter {
     })
     proc.stderr?.on('data', (data) => {
       const text = data.toString()
+      // Log errors to main console for diagnostics
+      if (text.includes('ERROR') || text.includes('Traceback') || text.includes('Exception')) {
+        console.error(`[SERVER] ${text.trimEnd()}`)
+      }
       this.emit('session:log', { sessionId, data: text })
       // Capture last meaningful stderr line for error reporting
       const managed = this.processes.get(sessionId)
@@ -506,6 +533,7 @@ export class SessionManager extends EventEmitter {
 
         console.log(`[SESSION] Remote connected: ${url} (attempt ${attempt})`)
         db.updateSession(session.id, { status: 'running' })
+        this.lastHealthyAt.set(session.id, Date.now())
         this.emit('session:ready', { sessionId: session.id, port: session.port })
         return
       } catch (err) {
@@ -586,11 +614,17 @@ export class SessionManager extends EventEmitter {
       if (config.port < 1024 || config.port > 65535) {
         throw new Error(`Invalid port ${config.port}. Must be between 1024 and 65535.`)
       }
-      // Check for port conflicts with ALL other sessions (not just running ones)
+      // Check for port conflicts with other LOCAL sessions (remote sessions don't bind ports).
+      // Only block if another session is actually running or loading on that port.
       const allSessions = db.getSessions()
-      const conflicting = allSessions.find(s => s.port === config.port && s.id !== sessionId)
+      const conflicting = allSessions.find(s =>
+        s.port === config.port &&
+        s.id !== sessionId &&
+        s.type === 'local' &&
+        (s.status === 'running' || s.status === 'loading')
+      )
       if (conflicting) {
-        throw new Error(`Port ${config.port} is already used by session "${conflicting.modelName || conflicting.modelPath}".`)
+        throw new Error(`Port ${config.port} is in use by running session "${conflicting.modelName || conflicting.modelPath}".`)
       }
     }
 
@@ -644,7 +678,7 @@ export class SessionManager extends EventEmitter {
           maxNumSeqs: 256,
           prefillBatchSize: 512,
           completionBatchSize: 512,
-          continuousBatching: false,
+          continuousBatching: true,
           enablePrefixCache: true,
           prefixCacheSize: 100,
           cacheMemoryMb: 0,
@@ -732,6 +766,7 @@ export class SessionManager extends EventEmitter {
             const remoteBase = session.remoteUrl.replace(/\/+$/, '')
             const remoteHeaders: Record<string, string> = {}
             if (session.remoteApiKey) remoteHeaders['Authorization'] = `Bearer ${session.remoteApiKey}`
+            if (session.remoteOrganization) remoteHeaders['OpenAI-Organization'] = session.remoteOrganization
             const resolvedHealthUrl = await resolveUrl(`${remoteBase}/v1/models`)
             const pingStart = Date.now()
             const res = await fetch(resolvedHealthUrl, {
@@ -741,6 +776,7 @@ export class SessionManager extends EventEmitter {
             const latencyMs = Date.now() - pingStart
             if (res.ok) {
               this.failCounts.delete(session.id)
+              this.lastHealthyAt.set(session.id, Date.now())
               if (session.status === 'loading') {
                 db.updateSession(session.id, { status: 'running' })
                 this.emit('session:ready', { sessionId: session.id, port: session.port })
@@ -785,6 +821,7 @@ export class SessionManager extends EventEmitter {
             const data = await res.json()
             // Reset fail counter on success
             this.failCounts.delete(session.id)
+            this.lastHealthyAt.set(session.id, Date.now())
             if (data.model_name && data.model_name !== session.modelName) {
               db.updateSession(session.id, { modelName: data.model_name })
             }
@@ -879,11 +916,15 @@ export class SessionManager extends EventEmitter {
     const session = db.getSession(sessionId)
     if (session && (session.status === 'running' || session.status === 'loading')) {
       if (session.type === 'remote') {
-        // Remote sessions: no process to kill, but notify that active inference
-        // should be aborted. The 'session:down' event is consumed by ipc/sessions.ts
-        // to call abortByEndpoint before the session is marked stopped.
-        console.log(`[SESSIONS] handleSessionDown: remote session ${sessionId} ("${session.modelName}") marked down`)
-        this.emit('session:abortInference', { sessionId, host: session.host, port: session.port })
+        // Remote sessions: do NOT abort active inference. The remote server is
+        // likely just busy with a long generation (prefill or decode), causing
+        // health checks to time out. Aborting would kill perfectly valid in-flight
+        // requests. Instead, just log and let the request's own timeout handle it.
+        // The session stays 'running' — the health monitor will eventually reconnect.
+        console.log(`[SESSIONS] handleSessionDown: remote session ${sessionId} ("${session.modelName}") health check failed — NOT aborting (server likely busy)`)
+        // Reset fail count so the monitor keeps trying
+        this.failCounts.delete(sessionId)
+        return  // Do NOT mark session as stopped or abort inference
       } else {
         // Kill the process before marking stopped — without this, the Python
         // process continues running as an orphan consuming RAM/CPU.
@@ -909,6 +950,10 @@ export class SessionManager extends EventEmitter {
         this.processes.delete(sessionId)
       }
       this.failCounts.delete(sessionId)
+      // Abort any in-flight SSE streams before marking stopped
+      if (session.host && session.port) {
+        this.emit('session:abortInference', { sessionId, host: session.host, port: session.port })
+      }
       db.updateSession(sessionId, {
         status: 'stopped',
         pid: undefined,
@@ -997,12 +1042,14 @@ export class SessionManager extends EventEmitter {
     if (config.completionBatchSize && config.completionBatchSize > 0) {
       args.push('--completion-batch-size', config.completionBatchSize.toString())
     }
-    if (config.continuousBatching) args.push('--continuous-batching')
 
     // Auto-detect tool/reasoning parser from model's config.json (authoritative) first,
     // then fall back to name-based regex matching. This prevents misdetection of fine-tunes
     // (e.g., a Qwen3 model named "Nemotron-Orchestrator" getting hybrid cache config).
     const detected = detectModelConfigFromDir(config.modelPath)
+
+    // MLLM/VLM models must NOT use continuous batching (RotatingKVCache incompatible)
+    if (config.continuousBatching && !detected.isMultimodal) args.push('--continuous-batching')
 
     // Parser resolution: detection ALWAYS wins when available.
     // This prevents stale session configs (from older registry versions) from overriding
@@ -1040,8 +1087,13 @@ export class SessionManager extends EventEmitter {
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
     } else {
-      // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx)
-      if (!config.continuousBatching && !args.includes('--continuous-batching')) {
+      // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx).
+      // EXCEPTION: MLLM/VLM models use RotatingKVCache which doesn't support BatchGenerator.
+      // They must use SimpleEngine (no --continuous-batching) to avoid "RotatingKVCache does not
+      // yet support batching" errors that silently hang the generation.
+      if (detected.isMultimodal) {
+        console.log(`[SESSION] Skipping continuous batching for MLLM model (${detected.family}) — RotatingKVCache not compatible`)
+      } else if (!config.continuousBatching && !args.includes('--continuous-batching')) {
         args.push('--continuous-batching')
       }
       // Set safe prefill batch size to prevent Metal GPU crashes with large contexts
@@ -1061,12 +1113,17 @@ export class SessionManager extends EventEmitter {
         if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) {
           args.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
         }
+        // Cache TTL (time-to-live for cache entries) — only meaningful for memory-aware cache
+        if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0) {
+          args.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
+        }
       }
     }
 
     // Paged cache (auto-detect from model family if not explicitly configured)
     // Paged cache is a prefix cache backend — skip when prefix cache is disabled
-    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache)) {
+    // Also skip for MLLM models (they use SimpleEngine which doesn't support paged cache)
+    if (!prefixCacheOff && !detected.isMultimodal && (config.usePagedCache ?? detected.usePagedCache)) {
       args.push('--use-paged-cache')
       if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) {
         args.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
@@ -1077,7 +1134,8 @@ export class SessionManager extends EventEmitter {
     }
 
     // KV cache quantization — only meaningful when prefix cache is active
-    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+    // Skip for MLLM/VLM models (SimpleEngine) and Mamba/SSM models (incompatible cache type)
+    if (!prefixCacheOff && !detected.isMultimodal && detected.cacheType !== 'mamba' && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
         args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
@@ -1097,7 +1155,7 @@ export class SessionManager extends EventEmitter {
 
     // Block-level disk cache (L2 for paged cache blocks)
     // Must mirror the paged cache guard condition above
-    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
+    if (!prefixCacheOff && !detected.isMultimodal && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
       args.push('--enable-block-disk-cache')
       if (config.blockDiskCacheDir) {
         args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
