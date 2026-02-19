@@ -13,6 +13,8 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
   const [showEntries, setShowEntries] = useState(false)
   const [warming, setWarming] = useState(false)
   const [clearing, setClearing] = useState(false)
+  const [warmInput, setWarmInput] = useState('')
+  const [showWarmInput, setShowWarmInput] = useState(false)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const fetchStats = async () => {
@@ -51,12 +53,16 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
   }
 
   const handleWarm = async () => {
-    const prompt = window.prompt('Enter system prompt to warm cache with:')
-    if (!prompt) return
+    if (!warmInput.trim()) {
+      setShowWarmInput(true)
+      return
+    }
     setWarming(true)
     try {
-      await window.api.cache.warm([prompt], endpoint)
+      await window.api.cache.warm([warmInput.trim()], endpoint)
       await fetchStats()
+      setWarmInput('')
+      setShowWarmInput(false)
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -106,17 +112,17 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
             {schedulerCache.hit_rate != null && (
               <StatCard label="Hit Rate" value={`${(schedulerCache.hit_rate * 100).toFixed(1)}%`} />
             )}
-            {schedulerCache.entries != null && (
-              <StatCard label="Entries" value={String(schedulerCache.entries)} />
+            {(schedulerCache.entry_count ?? schedulerCache.entries) != null && (
+              <StatCard label="Entries" value={String(schedulerCache.entry_count ?? schedulerCache.entries)} />
             )}
-            {schedulerCache.memory_mb != null && (
-              <StatCard label="Memory" value={`${schedulerCache.memory_mb.toFixed(1)} MB`} />
+            {(schedulerCache.current_memory_mb ?? schedulerCache.memory_mb) != null && (
+              <StatCard label="Memory" value={`${(schedulerCache.current_memory_mb ?? schedulerCache.memory_mb).toFixed(1)} MB`} />
             )}
             {schedulerCache.hits != null && (
               <StatCard label="Hits / Misses" value={`${schedulerCache.hits} / ${schedulerCache.misses || 0}`} />
             )}
-            {schedulerCache.total_cached_tokens != null && (
-              <StatCard label="Cached Tokens" value={schedulerCache.total_cached_tokens.toLocaleString()} />
+            {(schedulerCache.tokens_saved ?? schedulerCache.total_cached_tokens) != null && (
+              <StatCard label="Cached Tokens" value={(schedulerCache.tokens_saved ?? schedulerCache.total_cached_tokens).toLocaleString()} />
             )}
             {schedulerCache.evictions != null && (
               <StatCard label="Evictions" value={String(schedulerCache.evictions)} />
@@ -180,6 +186,27 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Warm Cache Input */}
+      {showWarmInput && (
+        <div className="flex gap-2 items-center">
+          <input
+            type="text"
+            value={warmInput}
+            onChange={e => setWarmInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && warmInput.trim()) handleWarm() }}
+            placeholder="Enter system prompt to warm cache with..."
+            autoFocus
+            className="flex-1 px-2 py-1.5 text-xs bg-background border border-input rounded focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          <button
+            onClick={() => { setShowWarmInput(false); setWarmInput('') }}
+            className="px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Cancel
+          </button>
         </div>
       )}
 

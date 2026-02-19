@@ -1,10 +1,49 @@
-# vMLX — vLLM-MLX Instance Manager
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://vmlx.net/logos/png/wordmark-dark-600x150.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://vmlx.net/logos/png/wordmark-light-600x150.png">
+    <img alt="vMLX" src="https://vmlx.net/logos/png/wordmark-transparent-600x150.png" width="400">
+  </picture>
+</p>
 
-**A native macOS app for managing multiple vLLM-MLX inference servers simultaneously**
+<p align="center">
+  <strong>A native macOS app for running LLMs on Apple Silicon</strong>
+</p>
 
-Run multiple models on different ports, each with full configuration control, persistent chat history per model, and real-time health monitoring.
+<p align="center">
+  Manage multiple vLLM-MLX inference servers, chat with models, benchmark performance,<br>
+  and configure every parameter — all from a single desktop app.
+</p>
+
+<p align="center">
+  <a href="https://vmlx.net">Website</a> &bull;
+  <a href="https://github.com/vmlxllm/vmlx">GitHub</a> &bull;
+  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#features">Features</a>
+</p>
 
 ---
+
+## Features
+
+- **Multi-Model Management** — Run multiple models on different ports simultaneously, each with independent configuration
+- **Full Chat Interface** — Streaming responses, markdown rendering, code highlighting, reasoning boxes, tool call widgets
+- **Reasoning Models** — Thinking/reasoning extraction with auto-scroll, collapsible reasoning boxes (Qwen3, DeepSeek-R1, GLM-4.7, GPT-OSS, Phi-4, Gemma 3)
+- **Tool Calling (MCP)** — Integrated tool execution with inline result widgets, auto-continue for multi-step tool chains
+- **Paged KV Cache** — Memory-efficient caching with prefix sharing and block-level disk persistence (L2 cache)
+- **KV Cache Quantization** — q4/q8 compression of cached prompts for reduced RAM usage
+- **Prefix Cache** — Memory-aware or entry-count based, with TTL expiration and warm-up support
+- **Disk Cache** — Persistent prompt caches that survive server restarts (both legacy and block-based L2)
+- **Continuous Batching** — High throughput for multiple concurrent users
+- **Benchmarks** — Built-in benchmark suite measuring TTFT, TPS, prompt processing speed, with history tracking
+- **Cache Inspector** — Real-time prefix cache stats, entry browser, warm-up, and cache management
+- **Chat Export/Import** — Export chats as JSON or Markdown, import from ChatGPT/Claude/vMLX formats
+- **Remote Sessions** — Connect to any OpenAI-compatible endpoint (not just local vLLM-MLX)
+- **Per-Chat Overrides** — Temperature, top_p, max_tokens, system prompt, stop sequences per conversation
+- **Bundled Python** — Optional self-contained Python distribution for zero-dependency deployment
+- **Auto-Detection** — Model architecture, parser, and cache type detected from config.json
+- **Vision/Multimodal** — Image and video input for VLM models (Qwen-VL, Gemma 3, LLaVA, etc.)
+- **Performance Hints** — User-friendly explanations alongside every server setting
 
 ## Quick Start
 
@@ -18,6 +57,9 @@ npm run dev
 # Build + package for production
 npm run build
 npx electron-builder --mac --dir
+
+# Install to Applications
+cp -R release/mac-arm64/vMLX.app /Applications/
 ```
 
 ---
@@ -26,7 +68,7 @@ npx electron-builder --mac --dir
 
 ### 1. First Launch — Setup
 
-On first launch, vMLX checks for a vLLM-MLX installation. If not found, it offers **one-click install** via `uv` (preferred) or `pip3` (Python 3.10+ required). You can also install manually and click "Check Again".
+On first launch, vMLX checks for a vLLM-MLX installation. If not found, it offers **one-click install** via `uv` (preferred) or `pip3` (Python 3.10+ required). Optionally bundles a self-contained Python 3.12 distribution with all dependencies.
 
 ### 2. Dashboard — See All Sessions
 
@@ -38,32 +80,36 @@ If vLLM-MLX is already running (started from terminal), click **Detect Processes
 
 Click **New Session** to launch the two-step wizard:
 
-1. **Select Model** — Scans configured directories for MLX-format models. Add custom model directories in the directory manager.
-2. **Configure Server** — Every vLLM-MLX parameter is exposed:
+1. **Select Model** — Scans configured directories for MLX-format models. Auto-detects architecture, parser, and cache type from config.json.
+2. **Configure Server** — Every vLLM-MLX parameter is exposed with detailed tooltips and plain-language performance hints:
    - **Server**: host, port (auto-assigned), API key, rate limit, timeout
    - **Concurrent Processing**: max sequences, prefill/completion batch sizes, continuous batching
-   - **Prefix Cache**: enable/disable, memory-aware vs entry-count, memory limits
-   - **Paged KV Cache**: block size, max blocks
+   - **Prefix Cache**: enable/disable, memory-aware vs entry-count, memory limits, TTL
+   - **Paged KV Cache**: block size, max blocks, block disk cache (L2)
+   - **KV Cache Quantization**: q4/q8 with configurable group size
+   - **Disk Cache**: legacy and block-based persistent caching
    - **Performance**: stream interval, max tokens
-   - **Tools**: MCP config, auto tool choice, parser
+   - **Tools (MCP)**: MCP config, auto tool choice, tool call parser, reasoning parser
    - **Additional**: raw CLI arguments
 
 Click **Launch** — the app spawns `vllm-mlx serve` and shows live server logs. When the health endpoint responds OK, you're taken into the session.
 
-### 4. Inside a Session — Chat + API Info
+### 4. Inside a Session — Chat + Panels
 
 Each session shows:
-- **Header**: model name, `host:port`, PID, health status, Stop button
-- **Chat**: full conversational interface with streaming, markdown, code highlighting, metrics (tokens/sec, prompt processing speed, TTFT)
+- **Header**: model name, `host:port`, PID, health status, TPS counter, Stop button
+- **Chat**: full conversational interface with streaming, markdown, code highlighting, reasoning boxes, tool call widgets
 - **Chat History**: persisted per model path — unload a model today, reload it tomorrow, your chats are still there
-- **Chat Settings** (gear icon): side drawer with per-chat inference parameters — temperature, top_p, max_tokens, system prompt, stop sequences
-- **Server Settings** (gear icon): inline drawer or full-page server configuration editor
+- **Chat Settings** (gear icon): per-chat inference parameters — temperature, top_p, max_tokens, system prompt, stop sequences, reasoning toggle
+- **Server Settings** (gear icon): inline server configuration editor with all parameters
+- **Cache Panel**: real-time prefix cache stats, entry browser, warm-up, clear controls
+- **Benchmark Panel**: run built-in benchmark suite, view history, compare runs
 
 Multiple sessions can run simultaneously on different ports.
 
 ### 5. About — vLLM-MLX Management
 
-Access via the **About** button in the title bar. Check for vLLM-MLX updates, install/upgrade with streaming terminal output, and view release notes.
+Access via the **About** button in the title bar. Check for vLLM-MLX updates, install/upgrade with streaming terminal output, and view release notes. Auto-updates the bundled engine when source version changes.
 
 ---
 
@@ -76,7 +122,9 @@ App.tsx (view routing)
 ├── CreateSession       → Two-step wizard (model picker → config → launch)
 ├── SessionView         → Header + ChatInterface + Settings drawers (per-session)
 │   ├── ChatSettings    → Per-chat inference params drawer
-│   └── ServerSettings  → Inline server config drawer
+│   ├── ServerSettings  → Inline server config drawer
+│   ├── CachePanel      → Real-time cache stats + management
+│   └── BenchmarkPanel  → Performance benchmarking suite
 ├── SessionSettings     → Full-page vLLM-MLX server config editor
 └── About               → UpdateManager + app info
 ```
@@ -88,11 +136,13 @@ App.tsx (view routing)
 │  Renderer (React + TypeScript + Tailwind)        │
 │  SetupScreen / SessionDashboard / CreateSession  │
 │  SessionView / ChatInterface / UpdateManager     │
+│  CachePanel / BenchmarkPanel / ReasoningBox      │
 └────────────────────┬────────────────────────────┘
                      │  IPC (contextBridge)
 ┌────────────────────┴────────────────────────────┐
 │  Preload (preload/index.ts)                      │
 │  window.api.sessions / chat / models / vllm      │
+│  window.api.cache / benchmark / export           │
 └────────────────────┬────────────────────────────┘
                      │  ipcMain.handle
 ┌────────────────────┴────────────────────────────┐
@@ -101,6 +151,7 @@ App.tsx (view routing)
 │  DatabaseManager → SQLite WAL (chats, sessions)  │
 │  VllmManager     → install/update/detect vLLM-MLX│
 │  IPC Handlers    → sessions, chat, models, vllm  │
+│                  → cache, benchmark, export       │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -108,20 +159,25 @@ App.tsx (view routing)
 
 | File | Purpose |
 |------|---------|
-| `src/main/sessions.ts` | `SessionManager` — multi-instance lifecycle, process detection, health monitoring (3-strike retry) |
-| `src/main/database.ts` | SQLite WAL schema + CRUD for sessions, chats, messages, folders, overrides, settings |
+| `src/main/sessions.ts` | `SessionManager` — multi-instance lifecycle, process detection, health monitoring, buildArgs |
+| `src/main/database.ts` | SQLite WAL schema + CRUD for sessions, chats, messages, folders, overrides, benchmarks, settings |
 | `src/main/vllm-manager.ts` | vLLM-MLX detection, install (uv/pip streaming), update, version checking |
 | `src/main/ipc/sessions.ts` | IPC handlers: list, get, create, start, stop, delete, detect, update |
-| `src/main/ipc/chat.ts` | Chat handlers: create, sendMessage (SSE streaming), abort, getByModel |
-| `src/main/ipc/models.ts` | Model scanning, directory management |
+| `src/main/ipc/chat.ts` | Chat handlers: sendMessage (dual API SSE streaming), tool calls, abort, TPS tracking |
+| `src/main/ipc/models.ts` | Model scanning, directory management, config.json detection |
+| `src/main/ipc/benchmark.ts` | Benchmark suite: TTFT, TPS, prompt processing speed, history |
+| `src/main/ipc/cache.ts` | Cache management: stats, entries, warm, clear |
+| `src/main/ipc/export.ts` | Chat export (JSON/Markdown) and import (ChatGPT/Claude/vMLX) |
 | `src/main/ipc/vllm.ts` | vLLM install/update IPC handlers with streaming log output |
-| `src/main/index.ts` | App lifecycle: startup adoption, global monitor, graceful quit (8s timeout) |
+| `src/main/index.ts` | App lifecycle: startup adoption, global monitor, graceful quit |
 | `src/preload/index.ts` | IPC bridge exposing `window.api` to renderer |
-| `src/renderer/src/App.tsx` | View routing: setup / dashboard / create / session / sessionSettings / about |
-| `src/renderer/src/components/setup/SetupScreen.tsx` | First-run vLLM-MLX installer gate |
-| `src/renderer/src/components/sessions/` | Dashboard, Card, Create, View, Settings, ConfigForm, ServerSettingsDrawer |
-| `src/renderer/src/components/chat/` | ChatInterface, ChatList, ChatSettings, MessageList, MessageBubble |
-| `src/renderer/src/components/update/UpdateManager.tsx` | vLLM-MLX update checker and installer |
+| `src/renderer/src/App.tsx` | View routing: setup / dashboard / create / session / settings / about |
+| `src/renderer/src/components/sessions/SessionConfigForm.tsx` | Full server config form with tooltips + performance hints |
+| `src/renderer/src/components/sessions/CachePanel.tsx` | Real-time cache stats, entry browser, warm/clear controls |
+| `src/renderer/src/components/sessions/BenchmarkPanel.tsx` | Benchmark runner and history viewer |
+| `src/renderer/src/components/chat/ChatInterface.tsx` | Main chat UI: streaming, tool widgets, reasoning boxes |
+| `src/renderer/src/components/chat/ReasoningBox.tsx` | Collapsible thinking/reasoning content display |
+| `src/renderer/src/components/chat/ToolCallWidget.tsx` | Inline tool call + result display |
 
 ### Database Schema
 
@@ -132,35 +188,22 @@ sessions (id, model_path UNIQUE, model_name, host, port, pid, status, config JSO
 -- Chats: tied to model_path for per-model history
 chats (id, title, folder_id, model_id, model_path, timestamps)
 
--- Messages, folders, chat_overrides, settings: supporting tables
+-- Messages: with reasoning content support
+messages (id, chat_id, role, content, reasoning_content, tool_calls, metrics, timestamps)
+
+-- Benchmarks: performance history per model
+benchmarks (id, session_id, model_path, model_name, results_json, created_at)
+
+-- chat_overrides, folders, settings: supporting tables
 ```
 
-### IPC Channels
+### Dual API Support
 
-**Session Management:**
-| Channel | Description |
-|---------|-------------|
-| `sessions:list/get/create/start/stop/delete/detect/update` | Full session CRUD + lifecycle |
-| `session:starting/ready/stopped/error/health/log/created/deleted` | Real-time events |
+vMLX supports both OpenAI APIs:
+- **Chat Completions API** (`/v1/chat/completions`) — Standard chat with streaming
+- **Responses API** (`/v1/responses`) — Extended format with reasoning events
 
-**Chat:**
-| Channel | Description |
-|---------|-------------|
-| `chat:create/get/getAll/getByModel/getMessages/sendMessage/delete/search` | Chat CRUD |
-| `chat:abort` | Cancel active generation |
-| `chat:stream/complete` | SSE streaming events |
-
-**vLLM-MLX Management:**
-| Channel | Description |
-|---------|-------------|
-| `vllm:check-installation/detect-installers/check-updates` | Detection |
-| `vllm:install-streaming/cancel-install/update` | Install/update with streaming output |
-| `vllm:install-log/install-complete` | Streaming events |
-
-**Models:**
-| Channel | Description |
-|---------|-------------|
-| `models:scan/info/getDirectories/addDirectory/removeDirectory/browseDirectory` | Model management |
+Both APIs support: streaming, tool calls, reasoning extraction, usage tracking, and abort.
 
 ---
 
@@ -173,6 +216,29 @@ chats (id, title, folder_id, model_id, model_path, timestamps)
 
 ---
 
+## Supported Models
+
+vMLX auto-detects model architecture and selects the appropriate parser configuration:
+
+| Model Family | Tool Parser | Reasoning Parser |
+|-------------|-------------|-----------------|
+| Qwen3 / Qwen3-Coder / QwQ | `qwen` | `qwen3` |
+| Llama 4 / 3.x / Yi | `llama` | — |
+| Mistral / Mixtral / Pixtral | `mistral` | — |
+| Gemma 3 | `hermes` | `deepseek_r1` |
+| DeepSeek-R1 / V3 | `deepseek` | `deepseek_r1` |
+| GLM-4.7 / GLM-Z1 | `glm47` | `deepseek_r1` |
+| GLM-4.7 Flash / GPT-OSS | `glm47` | `openai_gptoss` |
+| Phi-4 Mini/Medium/Reasoning | `hermes` | `deepseek_r1` |
+| MiniMax M1/M2/M2.5 | `minimax` | `qwen3` |
+| Granite 3.x | `granite` | — |
+| Nemotron | `nemotron` | — |
+| Kimi-K2 | `kimi` | — |
+| xLAM | `xlam` | — |
+| StepFun Step-3.5 | `step3p5` | `qwen3` |
+
+---
+
 ## Development
 
 ```bash
@@ -181,6 +247,15 @@ npm run build        # Build for production
 npm run typecheck    # TypeScript validation
 npm run lint         # ESLint
 ```
+
+### Build & Install Script
+
+```bash
+# Full build pipeline with pre-flight checks
+./scripts/build-and-install.sh
+```
+
+The build script runs TypeScript checks, Python syntax validation, registry sync verification, and API parity checks before building.
 
 ### Project Structure
 
@@ -191,19 +266,23 @@ src/
 │   ├── sessions.ts                 # SessionManager (multi-instance)
 │   ├── database.ts                 # SQLite WAL schema + queries
 │   ├── vllm-manager.ts            # vLLM-MLX install/update/detect
-│   ├── server.ts                   # Legacy ServerManager (reference only)
 │   └── ipc/
 │       ├── sessions.ts             # Session IPC handlers
-│       ├── chat.ts                 # Chat IPC + SSE streaming + abort
+│       ├── chat.ts                 # Chat IPC + dual-API SSE streaming + abort
 │       ├── models.ts               # Model scanning + directories
-│       └── vllm.ts                 # vLLM-MLX install/update handlers
+│       ├── benchmark.ts            # Benchmark runner + history
+│       ├── cache.ts                # Cache stats/entries/warm/clear
+│       ├── export.ts               # Chat export/import
+│       └── vllm.ts                 # vLLM install/update handlers
 ├── renderer/                       # React UI
 │   └── src/
 │       ├── App.tsx                 # View routing
 │       ├── components/
 │       │   ├── setup/              # SetupScreen (first-run installer)
-│       │   ├── sessions/           # Dashboard, Card, Create, View, Settings, ConfigForm, ServerSettingsDrawer
-│       │   ├── chat/               # ChatInterface, ChatList, ChatSettings, Messages
+│       │   ├── sessions/           # Dashboard, Card, Create, View, Settings,
+│       │   │                       # ConfigForm, CachePanel, BenchmarkPanel
+│       │   ├── chat/               # ChatInterface, ChatList, ChatSettings,
+│       │   │                       # Messages, ReasoningBox, ToolCallWidget
 │       │   └── update/             # UpdateManager
 │       └── index.css               # Tailwind + custom classes
 └── preload/
@@ -255,12 +334,20 @@ Add custom model directories via the directory manager in the Create Session wiz
 - The process must respond to `/health` endpoint
 - Only processes running `vllm-mlx serve` are detected
 
+### Vision models using SimpleEngine
+- VLM/multimodal models automatically use SimpleEngine (no batching, paged cache, or KV quant)
+- This is a hardware limitation of multimodal processing on Apple Silicon
+- Text-only models get full BatchedEngine features
+
 ---
 
 ## Credits
 
-- **vLLM-MLX** by [ml-explore](https://github.com/ml-explore/vllm-mlx)
-- **Electron** by OpenJS Foundation
+- **[vLLM-MLX](https://github.com/waybarrios/vllm-mlx)** — Apple Silicon inference engine
+- **[MLX](https://github.com/ml-explore/mlx)** — Apple's ML framework
+- **[mlx-lm](https://github.com/ml-explore/mlx-lm)** — LLM inference
+- **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** — Vision-language models
+- **[Electron](https://www.electronjs.org/)** — Desktop app framework
 
 ---
 
