@@ -325,6 +325,7 @@ class SimpleEngine(BaseEngine):
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    top_p=top_p,
                     **kwargs,
                 )
                 text = clean_output_text(output.text)
@@ -354,8 +355,9 @@ class SimpleEngine(BaseEngine):
                     tpl_kwargs = {
                         "tokenize": False,
                         "add_generation_prompt": not skip_gen_prompt,
-                        "enable_thinking": thinking_enabled,
                     }
+                    if thinking_enabled is True:
+                        tpl_kwargs["enable_thinking"] = True
                     if template_tools:
                         tpl_kwargs["tools"] = template_tools
                     if reasoning_effort:
@@ -435,9 +437,15 @@ class SimpleEngine(BaseEngine):
 
         # Build prompt using tokenizer
         if self._is_mllm:
-            # For MLLM, use stream_chat which yields tokens incrementally
+            # For MLLM, use stream_chat which yields tokens incrementally.
+            # Must hold _generation_lock to prevent concurrent Metal operations.
             accumulated_text = ""
             token_count = 0
+
+            # Pass enable_thinking to MLLM for models that support it (Qwen3-VL, etc.)
+            mllm_kwargs = dict(kwargs)
+            if thinking_enabled is True:
+                mllm_kwargs["enable_thinking"] = True
 
             # Run stream_chat in thread pool since it's synchronous
             def run_stream():
@@ -446,30 +454,51 @@ class SimpleEngine(BaseEngine):
                         messages=messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
-                        **kwargs,
+                        top_p=top_p,
+                        **mllm_kwargs,
                     )
                 )
 
-            chunks = await asyncio.to_thread(run_stream)
+            async with self._generation_lock:
+                try:
+                    chunks = await asyncio.to_thread(run_stream)
+                except Exception as e:
+                    # Catch MLLM generation errors (OOM, Metal errors, etc.)
+                    # to prevent server crash. Return error as text.
+                    logger.error(f"MLLM stream_chat failed: {type(e).__name__}: {e}")
+                    try:
+                        import mlx.core as mx
+                        mx.clear_memory_cache()
+                    except Exception:
+                        pass
+                    yield GenerationOutput(
+                        text=f"[Generation error: {type(e).__name__}: {e}]",
+                        new_text=f"[Generation error: {type(e).__name__}: {e}]",
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        finished=True,
+                        finish_reason="error",
+                    )
+                    return
 
-            for chunk in chunks:
-                token_count += 1
-                new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
-                accumulated_text += new_text
+                for chunk in chunks:
+                    token_count += 1
+                    new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
+                    accumulated_text += new_text
 
-                finished = chunk.finish_reason is not None
+                    finished = chunk.finish_reason is not None
 
-                yield GenerationOutput(
-                    text=accumulated_text,
-                    new_text=new_text,
-                    prompt_tokens=getattr(chunk, "prompt_tokens", 0),
-                    completion_tokens=token_count,
-                    finished=finished,
-                    finish_reason=chunk.finish_reason if finished else None,
-                )
+                    yield GenerationOutput(
+                        text=accumulated_text,
+                        new_text=new_text,
+                        prompt_tokens=getattr(chunk, "prompt_tokens", 0),
+                        completion_tokens=token_count,
+                        finished=finished,
+                        finish_reason=chunk.finish_reason if finished else None,
+                    )
 
-                if finished:
-                    break
+                    if finished:
+                        break
             return
 
         # For LLM, apply chat template and stream
@@ -494,8 +523,11 @@ class SimpleEngine(BaseEngine):
             template_kwargs = {
                 "tokenize": False,
                 "add_generation_prompt": not skip_gen_prompt,
-                "enable_thinking": thinking_enabled,
             }
+            # Only include enable_thinking when explicitly enabled — many templates
+            # (Gemma, Llama, etc.) don't support this kwarg and would raise TypeError
+            if thinking_enabled is True:
+                template_kwargs["enable_thinking"] = True
             if template_tools:
                 template_kwargs["tools"] = template_tools
             if reasoning_effort:

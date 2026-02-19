@@ -50,8 +50,8 @@ const api = {
     getMessages: (chatId: string) => ipcRenderer.invoke('chat:getMessages', chatId),
     addMessage: (chatId: string, role: string, content: string) =>
       ipcRenderer.invoke('chat:addMessage', chatId, role, content),
-    sendMessage: (chatId: string, content: string, endpoint?: { host: string; port: number }) =>
-      ipcRenderer.invoke('chat:sendMessage', chatId, content, endpoint),
+    sendMessage: (chatId: string, content: string, endpoint?: { host: string; port: number }, attachments?: Array<{ dataUrl: string; name: string }>) =>
+      ipcRenderer.invoke('chat:sendMessage', chatId, content, endpoint, attachments),
     onStream: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
       ipcRenderer.on('chat:stream', handler)
@@ -89,11 +89,21 @@ const api = {
     answerUser: (chatId: string, answer: string) =>
       ipcRenderer.send('chat:answerUser', chatId, answer),
 
+    // Image picker for vision/multimodal input
+    pickImages: () => ipcRenderer.invoke('dialog:pickImages') as Promise<Array<{ dataUrl: string; name: string }>>,
+    openDirectory: () => ipcRenderer.invoke('dialog:openDirectory') as Promise<{ canceled: boolean; filePaths: string[] }>,
+
     // Overrides
     setOverrides: (chatId: string, overrides: any) =>
       ipcRenderer.invoke('chat:setOverrides', chatId, overrides),
     getOverrides: (chatId: string) => ipcRenderer.invoke('chat:getOverrides', chatId),
-    clearOverrides: (chatId: string) => ipcRenderer.invoke('chat:clearOverrides', chatId)
+    clearOverrides: (chatId: string) => ipcRenderer.invoke('chat:clearOverrides', chatId),
+
+    // Export/Import
+    export: (chatId: string, format: 'json' | 'markdown' | 'sharegpt') =>
+      ipcRenderer.invoke('chat:export', chatId, format),
+    import: (modelPath?: string) =>
+      ipcRenderer.invoke('chat:import', modelPath)
   },
 
   // vLLM-MLX management
@@ -114,6 +124,63 @@ const api = {
       ipcRenderer.on('vllm:install-complete', handler)
       return () => { ipcRenderer.removeListener('vllm:install-complete', handler) }
     }
+  },
+
+  // Cache management
+  cache: {
+    stats: (endpoint?: { host: string; port: number }) =>
+      ipcRenderer.invoke('cache:stats', endpoint),
+    entries: (endpoint?: { host: string; port: number }) =>
+      ipcRenderer.invoke('cache:entries', endpoint),
+    warm: (prompts: string[], endpoint?: { host: string; port: number }) =>
+      ipcRenderer.invoke('cache:warm', prompts, endpoint),
+    clear: (cacheType: string, endpoint?: { host: string; port: number }) =>
+      ipcRenderer.invoke('cache:clear', cacheType, endpoint)
+  },
+
+  // Audio: STT and TTS
+  audio: {
+    transcribe: (opts: { audioBase64: string; model?: string; language?: string; endpoint?: { host: string; port: number } }) =>
+      ipcRenderer.invoke('audio:transcribe', opts),
+    speak: (opts: { text: string; model?: string; voice?: string; speed?: number; endpoint?: { host: string; port: number } }) =>
+      ipcRenderer.invoke('audio:speak', opts) as Promise<string>,
+    voices: (opts: { model?: string; endpoint?: { host: string; port: number } }) =>
+      ipcRenderer.invoke('audio:voices', opts) as Promise<{ voices: string[] }>
+  },
+
+  // Benchmark
+  benchmark: {
+    run: (sessionId: string, endpoint: { host: string; port: number }, modelPath: string, modelName?: string, options?: { flushCache?: boolean }) =>
+      ipcRenderer.invoke('benchmark:run', sessionId, endpoint, modelPath, modelName, options),
+    history: (modelPath?: string) =>
+      ipcRenderer.invoke('benchmark:history', modelPath),
+    delete: (id: string) =>
+      ipcRenderer.invoke('benchmark:delete', id),
+    onProgress: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('benchmark:progress', handler)
+      return () => { ipcRenderer.removeListener('benchmark:progress', handler) }
+    }
+  },
+
+  // Embeddings
+  embeddings: {
+    embed: (texts: string[], endpoint: { host: string; port: number }, model?: string, sessionId?: string) =>
+      ipcRenderer.invoke('embeddings:embed', texts, endpoint, model, sessionId)
+  },
+
+  // Performance monitoring
+  performance: {
+    health: (endpoint: { host: string; port: number }) =>
+      ipcRenderer.invoke('performance:health', endpoint)
+  },
+
+  // Prompt templates
+  templates: {
+    list: () => ipcRenderer.invoke('templates:list'),
+    save: (template: { id: string; name: string; content: string; category: string }) =>
+      ipcRenderer.invoke('templates:save', template),
+    delete: (id: string) => ipcRenderer.invoke('templates:delete', id)
   },
 
   // App-level settings (API keys, preferences)

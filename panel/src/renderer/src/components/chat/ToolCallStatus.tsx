@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { formatJson } from './InlineToolCall'
 
 export interface ToolStatus {
   phase: 'calling' | 'executing' | 'result' | 'error' | 'processing' | 'done'
@@ -207,10 +208,3 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   )
 }
 
-function formatJson(s: string): string {
-  try {
-    return JSON.stringify(JSON.parse(s), null, 2)
-  } catch {
-    return s
-  }
-}

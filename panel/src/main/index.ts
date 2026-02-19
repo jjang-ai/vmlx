@@ -1,10 +1,17 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { join } from 'path'
+import { readFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerSessionHandlers } from './ipc/sessions'
 import { registerChatHandlers } from './ipc/chat'
 import { registerModelHandlers } from './ipc/models'
 import { registerVllmHandlers } from './ipc/vllm'
+import { registerAudioHandlers } from './ipc/audio'
+import { registerCacheHandlers } from './ipc/cache'
+import { registerBenchmarkHandlers } from './ipc/benchmark'
+import { registerEmbeddingHandlers } from './ipc/embeddings'
+import { registerExportHandlers } from './ipc/export'
+import { registerPerformanceHandlers } from './ipc/performance'
 import { sessionManager } from './sessions'
 import { db } from './database'
 import { checkEngineVersion, installVllmStreaming } from './vllm-manager'
@@ -66,12 +73,40 @@ function createWindow(): void {
     registerChatHandlers(() => mainWindow)
     registerModelHandlers()
     registerVllmHandlers(() => mainWindow)
+    registerAudioHandlers()
+    registerCacheHandlers()
+    registerBenchmarkHandlers(() => mainWindow)
+    registerEmbeddingHandlers()
+    registerExportHandlers()
+    registerPerformanceHandlers()
 
     // Folder picker for built-in tools working directory
     ipcMain.handle('dialog:openDirectory', async () => {
       return dialog.showOpenDialog({
         properties: ['openDirectory', 'createDirectory'],
         title: 'Select Working Directory'
+      })
+    })
+
+    // Image picker for vision/multimodal chat — reads files and returns base64 data URLs
+    ipcMain.handle('dialog:pickImages', async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections'],
+        title: 'Attach Images',
+        filters: [
+          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }
+        ]
+      })
+      if (result.canceled || result.filePaths.length === 0) return []
+      return result.filePaths.map(fp => {
+        const ext = fp.split('.').pop()?.toLowerCase() || 'png'
+        const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+          : ext === 'gif' ? 'image/gif'
+          : ext === 'webp' ? 'image/webp'
+          : 'image/png'
+        const data = readFileSync(fp).toString('base64')
+        const name = fp.split('/').pop() || 'image'
+        return { dataUrl: `data:${mime};base64,${data}`, name }
       })
     })
 
@@ -85,6 +120,17 @@ function createWindow(): void {
     })
     ipcMain.handle('settings:delete', (_e, key: string) => {
       db.deleteSetting(key)
+      return { success: true }
+    })
+
+    // Prompt templates
+    ipcMain.handle('templates:list', () => db.getPromptTemplates())
+    ipcMain.handle('templates:save', (_e, template: { id: string; name: string; content: string; category: string }) => {
+      db.savePromptTemplate(template)
+      return { success: true }
+    })
+    ipcMain.handle('templates:delete', (_e, id: string) => {
+      db.deletePromptTemplate(id)
       return { success: true }
     })
 

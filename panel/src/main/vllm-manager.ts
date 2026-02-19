@@ -1,6 +1,6 @@
 import { exec as execCallback, spawn, execSync, ChildProcess } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, realpathSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { app } from 'electron'
@@ -137,7 +137,7 @@ function detectInstallMethod(path: string): InstallMethod {
   // Check if this is a uv-managed binary (symlink in ~/.local/bin pointing to uv/tools)
   if (path.includes('.local/bin') || path.includes('.local\\bin')) {
     try {
-      const resolved = require('fs').realpathSync(path)
+      const resolved = realpathSync(path)
       if (resolved.includes('uv/tools') || resolved.includes('uv\\tools')) {
         return 'uv'
       }

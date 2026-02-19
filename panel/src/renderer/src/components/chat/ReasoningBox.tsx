@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 interface ReasoningBoxProps {
   content: string
@@ -6,8 +8,19 @@ interface ReasoningBoxProps {
   isDone: boolean
 }
 
+/** Sanitize HTML via DOMPurify — same config as MessageBubble for XSS safety */
+function sanitizeHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    ADD_TAGS: ['pre', 'code'],
+    ADD_ATTR: ['class']
+  })
+}
+
 export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps) {
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const userScrolledUp = useRef(false)
 
   // Auto-expand when streaming starts
   useEffect(() => {
@@ -24,6 +37,45 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
     }
     return undefined
   }, [isDone, isStreaming])
+
+  // Auto-scroll to bottom when new content arrives (unless user scrolled up)
+  useEffect(() => {
+    if (!userScrolledUp.current && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [content])
+
+  // Reset scroll tracking when streaming starts
+  useEffect(() => {
+    if (isStreaming && !isDone) {
+      userScrolledUp.current = false
+    }
+  }, [isStreaming, isDone])
+
+  const handleScroll = () => {
+    if (!scrollRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
+    const atBottom = scrollHeight - scrollTop - clientHeight < 30
+    userScrolledUp.current = !atBottom
+  }
+
+  // Render markdown with code highlighting (reuses global marked config from MessageBubble)
+  const renderedHtml = useMemo(() => {
+    if (!content) return ''
+    return sanitizeHtml(marked.parse(content) as string)
+  }, [content])
+
+  // Handle copy button clicks inside code blocks (same as MessageBubble)
+  const handleProseClick = useCallback((e: React.MouseEvent) => {
+    const btn = (e.target as HTMLElement).closest('.code-copy-btn') as HTMLElement | null
+    if (!btn) return
+    const code = btn.closest('pre')?.querySelector('code')
+    if (code) {
+      navigator.clipboard.writeText(code.textContent || '')
+      btn.textContent = 'Copied!'
+      setTimeout(() => { btn.textContent = 'Copy' }, 1500)
+    }
+  }, [])
 
   if (!content) return null
 
@@ -56,10 +108,16 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
 
       {!isCollapsed && (
         <div
-          className="px-3 py-2 border-t border-border text-xs text-muted-foreground whitespace-pre-wrap max-h-[300px] overflow-y-auto"
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="px-3 py-2 border-t border-border text-xs text-muted-foreground max-h-[300px] overflow-y-auto"
           style={{ lineHeight: '1.6' }}
         >
-          {content}
+          <div
+            className="prose prose-invert prose-xs max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_pre]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_pre]:my-1.5 [&_pre]:rounded [&_blockquote]:my-1"
+            dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            onClick={handleProseClick}
+          />
           {isStreaming && !isDone && (
             <span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
           )}
