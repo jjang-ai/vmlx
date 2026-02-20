@@ -138,12 +138,40 @@ class EngineCore:
         stream_interval = self.config.stream_interval
         use_simple_streaming = stream_interval == 1
 
+        # Ghost request detection: tracks consecutive orphan outputs
+        # (outputs with no matching collector). If this exceeds a threshold,
+        # those requests are aborted to prevent a permanent spin loop.
+        orphan_counts: dict[str, int] = {}
+        _ORPHAN_ABORT_THRESHOLD = 10  # abort after 10 consecutive orphan outputs
+
+        # Periodic check for scheduler/collector mismatch (ghost requests
+        # in scheduler.running with no output collector). Runs every N steps.
+        _GHOST_CHECK_INTERVAL = 500  # check every 500 steps
+        _ghost_check_counter = 0
+
         while self._running:
             try:
                 if self.scheduler.has_requests():
                     # Run one generation step
                     output = self.scheduler.step()
                     self._steps_executed += 1
+
+                    # Periodic ghost request detection: find requests in
+                    # scheduler.running that have no output collector.
+                    # These are "ghost" requests that will spin forever.
+                    _ghost_check_counter += 1
+                    if _ghost_check_counter >= _GHOST_CHECK_INTERVAL:
+                        _ghost_check_counter = 0
+                        ghost_ids = [
+                            rid for rid in self.scheduler.running
+                            if rid not in self._output_collectors
+                        ]
+                        for rid in ghost_ids:
+                            logger.warning(
+                                f"Aborting ghost request {rid}: in scheduler.running "
+                                f"but no output collector"
+                            )
+                            self.scheduler.abort_request(rid)
 
                     # Fast path: distribute outputs to collectors
                     outputs = output.outputs
@@ -157,6 +185,8 @@ class EngineCore:
                             collector = collectors.get(rid)
 
                             if collector is not None:
+                                # Has a consumer — clear orphan tracking
+                                orphan_counts.pop(rid, None)
                                 # Optimized: skip stream_interval check when interval=1
                                 if use_simple_streaming:
                                     collector.put(req_output)
@@ -168,8 +198,20 @@ class EngineCore:
                                     ):
                                         collector.put(req_output)
                                         state.mark_sent(req_output.completion_tokens)
+                            else:
+                                # No collector — ghost/orphan request
+                                count = orphan_counts.get(rid, 0) + 1
+                                orphan_counts[rid] = count
+                                if count >= _ORPHAN_ABORT_THRESHOLD:
+                                    logger.warning(
+                                        f"Aborting ghost request {rid}: "
+                                        f"{count} outputs with no consumer"
+                                    )
+                                    self.scheduler.abort_request(rid)
+                                    orphan_counts.pop(rid, None)
 
                             if req_output.finished:
+                                orphan_counts.pop(rid, None)
                                 event = events.get(rid)
                                 if event:
                                     event.set()
@@ -189,6 +231,7 @@ class EngineCore:
                 logger.error(f"Engine loop error: {e}", exc_info=True)
                 # Signal all active requests as failed so consumers don't hang
                 self._fail_active_requests(str(e))
+                orphan_counts.clear()
                 await asyncio.sleep(0.1)
 
     def _fail_active_requests(self, error_msg: str) -> None:
@@ -197,7 +240,12 @@ class EngineCore:
         Called when the engine loop catches an unexpected exception. Creates
         a synthetic error output for each tracked request so stream_outputs()
         and generate() callers receive an error instead of hanging forever.
+
+        Also proactively aborts all requests in the scheduler to prevent
+        ghost requests from lingering in scheduler.running / BatchGenerator,
+        which would cause a permanent spin loop blocking the event loop.
         """
+        # Signal consumers first so they can unblock
         for rid, collector in list(self._output_collectors.items()):
             try:
                 error_output = RequestOutput(
@@ -212,6 +260,22 @@ class EngineCore:
             event = self._finished_events.get(rid)
             if event:
                 event.set()
+
+        # Proactively abort all scheduler requests to prevent ghost entries
+        # in scheduler.running and BatchGenerator. Without this, orphaned
+        # requests cause a tight spin loop doing GPU work with no consumer.
+        try:
+            running_ids = list(self.scheduler.running.keys())
+            waiting_ids = [r.request_id for r in self.scheduler.waiting]
+            for rid in running_ids + waiting_ids:
+                self.scheduler.abort_request(rid)
+            if running_ids or waiting_ids:
+                logger.warning(
+                    f"Aborted {len(running_ids)} running + {len(waiting_ids)} "
+                    f"waiting requests after engine error"
+                )
+        except Exception as e:
+            logger.error(f"Failed to abort scheduler requests: {e}")
 
     async def add_request(
         self,
@@ -267,13 +331,36 @@ class EngineCore:
         return result
 
     def _cleanup_request(self, request_id: str) -> None:
-        """Clean up request tracking."""
+        """Clean up request tracking.
+
+        Uses abort_request() instead of remove_finished_request() to ensure
+        complete cleanup of ALL scheduler state: running dict, BatchGenerator
+        UIDs, paged cache tracking, detokenizer, and UID mappings. Without
+        this, ghost requests can linger in scheduler.running and the
+        BatchGenerator, causing a permanent spin loop that blocks the event
+        loop and makes the API unresponsive.
+        """
         collector = self._output_collectors.pop(request_id, None)
         if collector:
-            collector.clear()
+            # Put a finished sentinel so any consumer blocked in
+            # collector.get() unblocks and exits cleanly. Without this,
+            # cancel API calls while a consumer is waiting hang forever.
+            # Don't call clear() after — let the consumer read the sentinel.
+            # The collector is already popped from _output_collectors so the
+            # engine loop won't send more outputs to it.
+            try:
+                collector.put(RequestOutput(
+                    request_id=request_id,
+                    finished=True,
+                    finish_reason="aborted",
+                ))
+            except Exception:
+                pass
         self._stream_states.pop(request_id, None)
-        self._finished_events.pop(request_id, None)
-        self.scheduler.remove_finished_request(request_id)
+        event = self._finished_events.pop(request_id, None)
+        if event:
+            event.set()
+        self.scheduler.abort_request(request_id)
 
     async def stream_outputs(
         self,

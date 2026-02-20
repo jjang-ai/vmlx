@@ -356,8 +356,8 @@ class SimpleEngine(BaseEngine):
                         "tokenize": False,
                         "add_generation_prompt": not skip_gen_prompt,
                     }
-                    if thinking_enabled is True:
-                        tpl_kwargs["enable_thinking"] = True
+                    if thinking_enabled is not None:
+                        tpl_kwargs["enable_thinking"] = thinking_enabled
                     if template_tools:
                         tpl_kwargs["tools"] = template_tools
                     if reasoning_effort:
@@ -444,8 +444,8 @@ class SimpleEngine(BaseEngine):
 
             # Pass enable_thinking to MLLM for models that support it (Qwen3-VL, etc.)
             mllm_kwargs = dict(kwargs)
-            if thinking_enabled is True:
-                mllm_kwargs["enable_thinking"] = True
+            if thinking_enabled is not None:
+                mllm_kwargs["enable_thinking"] = thinking_enabled
 
             # Run stream_chat in thread pool since it's synchronous
             def run_stream():
@@ -524,10 +524,8 @@ class SimpleEngine(BaseEngine):
                 "tokenize": False,
                 "add_generation_prompt": not skip_gen_prompt,
             }
-            # Only include enable_thinking when explicitly enabled — many templates
-            # (Gemma, Llama, etc.) don't support this kwarg and would raise TypeError
-            if thinking_enabled is True:
-                template_kwargs["enable_thinking"] = True
+            if thinking_enabled is not None:
+                template_kwargs["enable_thinking"] = thinking_enabled
             if template_tools:
                 template_kwargs["tools"] = template_tools
             if reasoning_effort:

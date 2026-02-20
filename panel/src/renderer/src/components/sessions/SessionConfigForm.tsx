@@ -199,7 +199,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedLabel="No limit"
         />
         <CheckField label="Continuous Batching" tooltip="When enabled, new requests can join an ongoing batch without waiting for the current batch to complete. This significantly improves throughput when serving multiple concurrent users. Has minimal overhead for single-user use. Required for: prefix caching, paged KV cache, KV cache quantization, and disk caching." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={isVLM} />
-        <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
+        {!isVLM && <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />}
         {isVLM && <IncompatWarning text="Vision/multimodal models require SimpleEngine (RotatingKVCache). Continuous batching, paged cache, and KV cache quantization are all unavailable for VLM models — this is a hardware-level limitation of multimodal processing and cannot be changed." />}
         {!isVLM && !config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
@@ -211,7 +211,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Prefix Cache */}
       <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')}>
-        <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />
+        {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && !isVLM && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
         {batchingOff && isVLM && <IncompatWarning text="Prefix cache is unavailable for vision/multimodal models (SimpleEngine does not support it)." />}
         <CheckField label="Enable Prefix Caching" tooltip="Caches computed attention states for common prompt prefixes (like system prompts). When multiple requests share the same prefix, the cached state is reused, dramatically reducing time-to-first-token. Recommended to keep enabled. Requires continuous batching." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={effectivelyNoBatching} />
@@ -282,7 +282,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Paged Cache */}
       <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')}>
-        <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />
+        {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
         {isVLM && <IncompatWarning text="Vision/multimodal models require SimpleEngine — paged cache is unavailable. This is a hardware limitation of multimodal processing and cannot be changed." />}
         {!isVLM && batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
@@ -349,17 +349,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* KV Cache Quantization */}
       <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')}>
-        <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />
+        {!effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
         {isVLM && <IncompatWarning text="Vision/multimodal models use SimpleEngine — KV cache quantization is not supported." />}
         {!isVLM && batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
-        {!effectivelyNoBatching && isMambaCache && <IncompatWarning text="KV cache quantization is not supported for Mamba/SSM models." />}
+        {!effectivelyNoBatching && isMambaCache && <PerformanceHint text="Hybrid model detected — KV cache quantization will only compress the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
         <InfoNote text="KV cache quantization compresses entries stored in the prefix cache (completed prompts). It does NOT affect model weights or live generation KV cache, which always run at full precision. RAM savings apply only to cached prompt states." />
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Quantization
             <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy." />
           </span>
-          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || isMambaCache}>
+          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching}>
             <option value="none">None (full precision cache)</option>
             <option value="q8">q8 (8-bit, ~2x cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x cache savings)</option>
@@ -381,7 +381,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Disk Cache (L2 Persistent) */}
       <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')}>
-        <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />
+        {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
         {isVLM && <IncompatWarning text="Disk cache is unavailable for vision/multimodal models (SimpleEngine does not support it)." />}
         {!isVLM && batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
@@ -536,32 +536,79 @@ interface ParserOption {
   value: string
   label: string
   format?: string  // Example of the format for tooltip
+  models?: string[]  // Specific models that use this parser (shown in help panel)
 }
 
 const TOOL_PARSER_OPTIONS: ParserOption[] = [
   { value: 'auto', label: 'Auto-detect (from config.json)' },
   { value: '', label: 'None (disable tool parsing)' },
-  { value: 'qwen', label: 'Qwen — Qwen3, Qwen3-Coder, Qwen3-Next, Qwen2.5, Qwen2, QwQ-32B, Qwen3-MoE, Qwen3-VL', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>' },
-  { value: 'llama', label: 'Llama — Llama 4, Llama 3.3 70B, Llama 3.2 1B/3B/11B/90B, Llama 3.1 8B/70B/405B, Yi (Llama-arch)', format: '<function=name>{"arg":"val"}</function>' },
-  { value: 'mistral', label: 'Mistral — Mistral Large/Small/Nemo/7B, Mixtral 8x7B/8x22B, Pixtral 12B/Large, Codestral 22B, Devstral Small', format: '[TOOL_CALLS][{"name":"fn","arguments":{...}}]' },
-  { value: 'hermes', label: 'Hermes — Gemma 3 (1B–27B), Phi-4 Mini/Medium, Hermes 2/3/4/4.3, Qwen2.5-Hermes, other Hermes fine-tunes', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>' },
-  { value: 'deepseek', label: 'DeepSeek — DeepSeek-V2/V2.5/V3, DeepSeek-R1, Coder-V2 (native 671B only, NOT R1-Distill-Qwen/Llama)', format: '\u{ff5c}<tool_call>name\n{"arg":"val"}</tool_call>\u{ff5c}' },
-  { value: 'nemotron', label: 'Nemotron — NVIDIA Nemotron-3/4 Nano/Super/Ultra (native Nemotron arch only, NOT Llama/Qwen fine-tunes)', format: '<toolcall>{"name":"fn","arguments":{...}}</toolcall>' },
-  { value: 'glm47', label: 'GLM / GPT-OSS — GLM-4, GLM-4.7 9B, GLM-4.7 Flash, GLM-Z1, GPT-OSS-20B/120B', format: '<tool_call>name\n<arg_key>key</arg_key><arg_value>val</arg_value>\n</tool_call>' },
-  { value: 'granite', label: 'Granite — IBM Granite 3.0/3.1/3.2/3.3, Granite-Code 3B/8B/20B/34B', format: '<|tool_call|>[{"name":"fn","arguments":{...}}]' },
-  { value: 'functionary', label: 'Functionary — MeetKai Functionary v2/v3/v4r (7B/8B/70B)', format: '<|from|>assistant\n<|recipient|>fn\n<|content|>{"arg":"val"}' },
-  { value: 'minimax', label: 'MiniMax — MiniMax-M1 40B, M2, M2.5 230B MoE', format: '<minimax:tool_call><invoke name="fn"><parameter name="arg">val</parameter></invoke></minimax:tool_call>' },
-  { value: 'xlam', label: 'xLAM — Salesforce xLAM-v2, xLAM-1B/7B/8x7B/8x22B', format: '[{"name":"fn","arguments":{...}}]' },
-  { value: 'kimi', label: 'Kimi — Kimi-K2 1T MoE, K2.5, Moonshot-v1', format: '<|tool_calls_section_begin|><|tool_call_begin|>fn<|tool_call_argument_begin|>{...}<|tool_call_end|>' },
-  { value: 'step3p5', label: 'StepFun — Step-3.5 Flash 8B MoE, Step-3.5', format: '<tool_call><function=fn><parameter=arg>val</parameter></function></tool_call>' },
+  { value: 'qwen', label: 'Qwen — Qwen3 / Qwen2.5 / QwQ / Qwen3-VL', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
+    'Qwen3 (0.6B\u2013235B)', 'Qwen3-Coder', 'Qwen3-MoE (22B/57B)',
+    'Qwen3-VL (2B/32B/72B)', 'QwQ-32B', 'Qwen2.5 (0.5B\u201372B)', 'Qwen2.5-Coder (0.5B\u201332B)',
+    'Qwen2.5-VL (3B\u201372B)', 'Qwen2 (0.5B\u201372B)', 'Qwen2-VL (2B\u201372B)',
+  ] },
+  { value: 'llama', label: 'Llama — Llama 4 / 3.x / Yi', format: '<function=name>{"arg":"val"}</function>', models: [
+    'Llama 4 Scout (17Bx16E MoE)', 'Llama 4 Maverick (17Bx128E MoE)',
+    'Llama 3.3 (70B)', 'Llama 3.2 (1B/3B/11B/90B)', 'Llama 3.1 (8B/70B/405B)', 'Llama 3 (8B/70B)',
+    'Yi / Yi-1.5 (Llama architecture)',
+  ] },
+  { value: 'mistral', label: 'Mistral — Mistral / Mixtral / Pixtral / Codestral', format: '[TOOL_CALLS][{"name":"fn","arguments":{...}}]', models: [
+    'Mistral Large (123B)', 'Mistral Small 3.1 (24B)', 'Mistral Nemo (12B)', 'Mistral 7B v0.3',
+    'Mixtral 8x7B / 8x22B', 'Pixtral 12B / Pixtral Large', 'Codestral (22B)', 'Devstral Small (24B)',
+  ] },
+  { value: 'hermes', label: 'Hermes — Gemma 3 / Phi-4 / Hermes fine-tunes', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
+    'Gemma 3 (1B/4B/12B/27B)', 'Gemma 3n (E2B/E4B)', 'Phi-4 Mini (3.8B)', 'Phi-4 Medium (14B)',
+    'Phi-4 Reasoning (14B)', 'Hermes 2 / 3 / 4', 'Any Hermes-format fine-tune',
+  ] },
+  { value: 'deepseek', label: 'DeepSeek — V2/V2.5/V3/R1 (native arch only)', format: '\u{ff5c}<tool_call>name\n{"arg":"val"}</tool_call>\u{ff5c}', models: [
+    'DeepSeek-V3 (671B MoE)', 'DeepSeek-V2.5 (236B MoE)', 'DeepSeek-V2 (236B MoE)',
+    'DeepSeek-R1 (671B native)', 'DeepSeek-Coder-V2 (236B)',
+    '\u26A0 R1-Distill-Qwen/Llama use qwen/llama parsers',
+  ] },
+  { value: 'nemotron', label: 'Nemotron — Nemotron / Qwen3-Next', format: '<tool_call><function=fn><parameter=p>val</parameter></function></tool_call>', models: [
+    'Nemotron-H (8B/47B/56B)', 'Nemotron-4 Nano/Super/Ultra',
+    'Qwen3-Next / Qwen3-Coder-Next (hybrid Mamba)',
+    '\u26A0 Llama/Qwen fine-tunes named "Nemotron" use their base parser',
+  ] },
+  { value: 'glm47', label: 'GLM / GPT-OSS — GLM-4 / GLM-4.7 / GLM-Z1', format: '<tool_call>name\n<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>', models: [
+    'GLM-4 (9B)', 'GLM-4.7 (9B)', 'GLM-4.7 Flash (9B MoE)', 'GLM-Z1 (32B)', 'GPT-OSS-20B/120B',
+  ] },
+  { value: 'granite', label: 'Granite — IBM Granite 3.x / Granite-Code', format: '<|tool_call|>[{"name":"fn","arguments":{...}}]', models: [
+    'Granite 3.0/3.1/3.2/3.3 (2B/8B)', 'Granite-Code (3B/8B/20B/34B)',
+  ] },
+  { value: 'functionary', label: 'Functionary — MeetKai Functionary v2/v3/v4r', format: '<|from|>assistant\n<|recipient|>fn\n<|content|>{"arg":"val"}', models: [
+    'Functionary v2 (7B)', 'Functionary v3 (8B/70B)', 'Functionary v4r (8B)',
+  ] },
+  { value: 'minimax', label: 'MiniMax — MiniMax-M1 / M2 / M2.5', format: '<minimax:tool_call><invoke name="fn"><parameter name="arg">val</parameter></invoke></minimax:tool_call>', models: [
+    'MiniMax-M1 (40B MoE)', 'MiniMax-M2 (230B MoE)', 'MiniMax-M2.5 (230B MoE)',
+  ] },
+  { value: 'xlam', label: 'xLAM — Salesforce xLAM-v2 series', format: '[{"name":"fn","arguments":{...}}]', models: [
+    'xLAM-1B', 'xLAM-7B', 'xLAM-v2 (8x7B/8x22B)',
+  ] },
+  { value: 'kimi', label: 'Kimi — Kimi-K2 / Moonshot', format: '<|tool_calls_section_begin|><|tool_call_begin|>fn<|tool_call_argument_begin|>{...}<|tool_call_end|>', models: [
+    'Kimi-K2 (1T MoE)', 'Kimi-K2.5', 'Moonshot-v1',
+  ] },
+  { value: 'step3p5', label: 'StepFun — Step-3.5 Flash / Step-3.5', format: '<tool_call><function=fn><parameter=arg>val</parameter></function></tool_call>', models: [
+    'Step-3.5 Flash (8B MoE)', 'Step-3.5',
+  ] },
 ]
 
 const REASONING_PARSER_OPTIONS: ParserOption[] = [
   { value: 'auto', label: 'Auto-detect (from config.json)' },
   { value: '', label: 'None (disable reasoning extraction)' },
-  { value: 'qwen3', label: 'Qwen3 — Qwen3, Qwen3-Coder, Qwen3-Next, QwQ-32B, StepFun Step-3.5, MiniMax-M2/M2.5', format: '<think>...reasoning...</think>content  (strict: requires both tags)' },
-  { value: 'deepseek_r1', label: 'DeepSeek R1 — DeepSeek-R1/R1-Distill/R1-0528, Gemma 3, GLM-4.7, GLM-Z1, Phi-4 Reasoning', format: '<think>...reasoning...</think>content  (lenient: handles missing <think> tag)' },
-  { value: 'openai_gptoss', label: 'GPT-OSS / Harmony — GLM-4.7 Flash, GPT-OSS-20B/120B', format: '<|channel|>analysis<|message|>reasoning...<|channel|>final<|message|>content' },
+  { value: 'qwen3', label: 'Qwen3 — strict <think> tags', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
+    'Qwen3 (all sizes, thinking mode)', 'Qwen3-Coder', 'QwQ-32B',
+    'StepFun Step-3.5 (all variants)', 'MiniMax-M2 / M2.5',
+  ] },
+  { value: 'deepseek_r1', label: 'DeepSeek R1 — lenient <think> tags', format: '<think>...reasoning...</think>content  (lenient: handles missing <think>)', models: [
+    'DeepSeek-R1 (671B native)', 'DeepSeek-R1-0528',
+    'Gemma 3 (1B/4B/12B/27B, thinking mode)', 'GLM-4.7 (9B) \u2014 NOT GLM-4.7 Flash',
+    'GLM-Z1 (32B)', 'Phi-4 Reasoning / Reasoning Plus (14B)',
+    '\u26A0 R1-Distill-Qwen/Llama: select this manually (auto-detect picks no reasoning)',
+  ] },
+  { value: 'openai_gptoss', label: 'GPT-OSS / Harmony — <|channel|> protocol', format: '<|channel|>analysis<|message|>reasoning...<|channel|>final<|message|>content', models: [
+    'GLM-4.7 Flash (9B MoE) \u2014 uses this, NOT deepseek_r1', 'GPT-OSS-20B', 'GPT-OSS-120B',
+  ] },
 ]
 
 function ParserField({ label, tooltip, value, onChange, options }: {
@@ -579,7 +626,7 @@ function ParserField({ label, tooltip, value, onChange, options }: {
           type="button"
           onClick={() => setShowHelp(!showHelp)}
           className="ml-1 inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-muted text-muted-foreground text-[10px] font-bold cursor-help select-none hover:bg-accent"
-          title="Show format examples"
+          title="Show model compatibility reference"
         >
           ?
         </button>
@@ -590,13 +637,32 @@ function ParserField({ label, tooltip, value, onChange, options }: {
         ))}
       </select>
       {showHelp && (
-        <div className="mt-1.5 bg-background border border-border rounded p-2 text-xs space-y-1.5 max-h-48 overflow-auto">
-          {options.filter(o => o.format).map(o => (
-            <div key={o.value} className={`${o.value === value ? 'text-primary' : 'text-muted-foreground'}`}>
-              <span className="font-medium">{o.label}:</span>
-              <code className="ml-1 text-[10px] bg-muted px-1 py-0.5 rounded break-all">{o.format}</code>
-            </div>
-          ))}
+        <div className="mt-1.5 bg-background border border-border rounded p-2 text-xs max-h-48 overflow-auto space-y-2">
+          {options.filter(o => o.format).map(o => {
+            const isSelected = o.value === value
+            return (
+              <div key={o.value} className={`pl-1.5 border-l-2 ${isSelected ? 'border-primary' : 'border-transparent'}`}>
+                <div className={`font-medium leading-snug ${isSelected ? 'text-primary' : 'text-foreground'}`}>
+                  {o.label}
+                </div>
+                <code className="block mt-0.5 text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded break-all leading-snug">
+                  {o.format}
+                </code>
+                {o.models && o.models.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {o.models.map((m, i) => (
+                      <span key={i} className={`inline-block text-[10px] px-1.5 py-px rounded-sm leading-tight ${
+                        m.startsWith('\u26A0') ? 'bg-warning/15 text-warning border border-warning/30' : 'bg-muted text-muted-foreground'
+                      }`}>{m}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <div className="pt-1 border-t border-border text-[10px] text-muted-foreground/70 italic leading-snug">
+            Fine-tunes inherit the base model&apos;s parser. A Llama fine-tune uses llama, a Qwen fine-tune uses qwen, regardless of its marketing name. When auto-detect fails, select the parser matching the base architecture.
+          </div>
         </div>
       )}
       {selected?.format && !showHelp && (
@@ -626,7 +692,7 @@ function InfoNote({ text }: { text: string }) {
 
 function PerformanceHint({ text }: { text: string }) {
   return (
-    <div className="px-2 py-1 rounded text-[10px] text-muted-foreground/70 italic leading-snug">
+    <div className="px-2 py-1.5 mb-1 rounded text-[11px] text-muted-foreground/70 italic leading-tight">
       {text}
     </div>
   )
