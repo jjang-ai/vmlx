@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { formatJson } from './InlineToolCall'
 
 export interface ToolStatus {
-  phase: 'calling' | 'executing' | 'result' | 'error' | 'processing' | 'done'
+  phase: 'calling' | 'executing' | 'result' | 'error' | 'processing' | 'done' | 'generating' | 'asking'
   toolName: string
   detail?: string
   iteration?: number
@@ -40,6 +40,15 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
       current = { name: s.toolName, statuses: [s] }
       groups.push(current)
       lastProcessingIdx = -1
+    } else if (s.phase === 'generating') {
+      // "Generating tool call..." — show as a standalone spinner before any calling events
+      if (lastProcessingIdx >= 0) {
+        groups[lastProcessingIdx] = { name: '', statuses: [s] }
+      } else {
+        lastProcessingIdx = groups.length
+        groups.push({ name: '', statuses: [s] })
+      }
+      current = null
     } else if (s.phase === 'processing') {
       // Collapse multiple processing events into one
       if (lastProcessingIdx >= 0) {
@@ -70,8 +79,11 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   const isActive = isStreaming && lastStatus.phase !== 'done'
 
   // Build summary text
+  const isGenerating = lastStatus.phase === 'generating'
   const summaryParts: string[] = []
-  if (isActive) {
+  if (isGenerating) {
+    summaryParts.push('Generating tool call...')
+  } else if (isActive) {
     summaryParts.push(`Using ${toolCount} tool${toolCount !== 1 ? 's' : ''}...`)
   } else {
     summaryParts.push(`Used ${toolCount} tool${toolCount !== 1 ? 's' : ''}`)
@@ -93,7 +105,9 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
         onClick={() => setSectionOpen(!sectionOpen)}
         className="w-full px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-accent/30 transition-colors"
       >
-        {isActive ? (
+        {isGenerating ? (
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse flex-shrink-0" />
+        ) : isActive ? (
           <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse flex-shrink-0" />
         ) : errorCount > 0 ? (
           <span className="text-warning flex-shrink-0">&#9888;</span>
@@ -119,6 +133,24 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
       {sectionOpen && (
         <div className="px-3 pb-2 text-xs border-t border-border/50">
           {groups.map((group, gi) => {
+            if (group.statuses[0].phase === 'generating') {
+              return (
+                <div key={gi} className="flex items-center gap-2 text-muted-foreground py-1">
+                  {isActive && lastStatus.phase === 'generating' ? (
+                    <>
+                      <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+                      <span>Generating tool call...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-primary">&#10003;</span>
+                      <span>Tool call generated</span>
+                    </>
+                  )}
+                </div>
+              )
+            }
+
             if (group.statuses[0].phase === 'processing') {
               return (
                 <div key={gi} className="flex items-center gap-2 text-muted-foreground py-1">
