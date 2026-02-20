@@ -16,11 +16,16 @@ declare global {
         searchHF: (query: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
-        cancelDownload: () => Promise<{ success: boolean; error?: string }>
+        cancelDownload: (jobId: string) => Promise<{ success: boolean; error?: string }>
         getDownloadDir: () => Promise<string>
         setDownloadDir: (dir: string) => Promise<{ success: boolean }>
         browseDownloadDir: () => Promise<{ canceled: boolean; path?: string }>
         onDownloadProgress: (callback: (data: { repoId: string; progress: string }) => void) => () => void
+        getDownloadStatus: () => Promise<any>
+        onDownloadStarted: (callback: (data: any) => void) => () => void
+        onDownloadComplete: (callback: (data: any) => void) => () => void
+        onDownloadError: (callback: (data: any) => void) => () => void
+        startDownload: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
       }
       chat: {
         createFolder: (name: string, parentId?: string) => Promise<any>
