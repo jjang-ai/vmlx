@@ -89,6 +89,10 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
       current = { name: s.toolName, statuses: [s], contentOffset: s.contentOffset }
       if (s.contentOffset !== undefined) hasOffsets = true
       groups.push(current)
+    } else if (s.phase === 'generating') {
+      // Tool call generation in progress — just note it, will be replaced by 'calling'
+      processingStatus = s
+      current = null
     } else if (s.phase === 'processing') {
       processingStatus = s
       current = null
@@ -224,12 +228,13 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
           }
         }
 
-        // Show processing/done status
+        // Show generating/processing status
         if (toolGroups.processingStatus && isStreaming) {
+          const isGenerating = toolGroups.processingStatus.phase === 'generating'
           elements.push(
             <div key="processing" className="flex items-center gap-2 text-muted-foreground text-xs py-1">
-              <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse" />
-              <span>Processing tool results...</span>
+              <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isGenerating ? 'bg-primary' : 'bg-warning'}`} />
+              <span>{isGenerating ? 'Generating tool call...' : 'Processing tool results...'}</span>
             </div>
           )
         }

@@ -1098,6 +1098,13 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               emitDelta(choice.content, false)
             }
 
+            // Detect server-side tool call buffering signal (TPS keeps counting, show status)
+            if (parsed.tool_call_generating) {
+              if (!clientToolCallBuffering) clientToolCallBuffering = true
+              console.log(`[CHAT] Server signaled tool call generation in progress`)
+              emitToolStatus('generating', '', 'Generating tool call...', toolIteration)
+            }
+
             // Handle tool_calls from streaming response
             // Supports both complete tool calls (vllm-mlx default) and incremental argument
             // streaming (OpenAI-style: first chunk has name, subsequent chunks append arguments)

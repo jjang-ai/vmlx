@@ -199,7 +199,7 @@ vLLM-MLX is production-ready with all critical fixes verified:
 ✅ **Hybrid Model Cache** - Qwen3-Coder-Next cache reuse works (5-8.5x speedup)
 ✅ **Memory Management** - Stable for 100k+ token contexts
 ✅ **Metal GPU Timeout** - Reliable inference for 50k+ contexts
-✅ **813 Tests Passing** - Comprehensive test coverage
+✅ **827+ Tests Passing** - Comprehensive test coverage
 
 See [PRODUCTION_READY.md](PRODUCTION_READY.md) for deployment guidelines and [CHANGELOG.md](CHANGELOG.md) for detailed fixes.
 

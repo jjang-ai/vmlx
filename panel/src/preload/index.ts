@@ -17,7 +17,9 @@ const api = {
     searchHF: (query: string) => ipcRenderer.invoke('models:searchHF', query),
     getRecommendedModels: () => ipcRenderer.invoke('models:getRecommendedModels'),
     downloadModel: (repoId: string) => ipcRenderer.invoke('models:downloadModel', repoId),
-    cancelDownload: () => ipcRenderer.invoke('models:cancelDownload'),
+    startDownload: (repoId: string) => ipcRenderer.invoke('models:startDownload', repoId),
+    cancelDownload: (jobId?: string) => ipcRenderer.invoke('models:cancelDownload', jobId),
+    getDownloadStatus: () => ipcRenderer.invoke('models:getDownloadStatus'),
     getDownloadDir: () => ipcRenderer.invoke('models:getDownloadDir'),
     setDownloadDir: (dir: string) => ipcRenderer.invoke('models:setDownloadDir', dir),
     browseDownloadDir: () => ipcRenderer.invoke('models:browseDownloadDir'),
@@ -25,6 +27,21 @@ const api = {
       const handler = (_: any, data: any) => callback(data)
       ipcRenderer.on('models:downloadProgress', handler)
       return () => { ipcRenderer.removeListener('models:downloadProgress', handler) }
+    },
+    onDownloadComplete: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('models:downloadComplete', handler)
+      return () => { ipcRenderer.removeListener('models:downloadComplete', handler) }
+    },
+    onDownloadError: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('models:downloadError', handler)
+      return () => { ipcRenderer.removeListener('models:downloadError', handler) }
+    },
+    onDownloadStarted: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('models:downloadStarted', handler)
+      return () => { ipcRenderer.removeListener('models:downloadStarted', handler) }
     }
   },
 

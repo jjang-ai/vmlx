@@ -94,8 +94,9 @@ function buildCommandPreview(
     if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
   }
 
-  // KV cache quantization (mirrors buildArgs line 1138) — requires prefix cache ON, NOT VLM, NOT Mamba
-  if (!prefixCacheOff && !isVLM && detected?.cacheType !== 'mamba' && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+  // KV cache quantization (mirrors buildArgs line 1138) — requires prefix cache ON, NOT VLM
+  // Hybrid/Mamba models allowed — Python scheduler only quantizes KVCache layers
+  if (!prefixCacheOff && !isVLM && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
     if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
       parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())

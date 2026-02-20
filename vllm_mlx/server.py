@@ -2357,6 +2357,7 @@ async def stream_chat_completion(
     # we stop emitting content and buffer the rest. At end of stream, we parse
     # the buffer for tool calls and emit them as proper tool_calls chunks.
     tool_call_buffering = False  # Are we currently buffering for tool calls?
+    tool_call_buffering_notified = False  # Have we sent the buffering signal?
     tool_call_active = _enable_auto_tool_choice or _tool_call_parser is not None
 
     # Track token counts for usage reporting
@@ -2444,9 +2445,25 @@ async def stream_chat_completion(
                             tool_call_buffering = True
 
                 if tool_call_buffering:
-                    # Suppress ALL output during tool call buffering.
-                    # The "reasoning" may actually be tool call text (Qwen case)
-                    # and content is the tool call body. Don't emit either.
+                    # Suppress content during tool call buffering, but emit
+                    # usage-only chunks so the client TPS counter stays alive.
+                    if include_usage:
+                        buf_chunk = ChatCompletionChunk(
+                            id=response_id,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        # Signal the client on first buffering chunk
+                        if not tool_call_buffering_notified:
+                            tool_call_buffering_notified = True
+                            buf_chunk.tool_call_generating = True
+                        yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
                     continue
 
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
@@ -2487,7 +2504,23 @@ async def stream_chat_completion(
                             break
 
                 if tool_call_buffering:
-                    # Don't emit tool call text as content — it will be parsed at end
+                    # Suppress content but emit usage-only chunks for TPS tracking
+                    if include_usage:
+                        buf_chunk = ChatCompletionChunk(
+                            id=response_id,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        if not tool_call_buffering_notified:
+                            tool_call_buffering_notified = True
+                            buf_chunk.tool_call_generating = True
+                        yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
                     continue
 
                 # Add <think> prefix on first content chunk for thinking models

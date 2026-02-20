@@ -45,6 +45,13 @@ try:
 except ImportError:
     HAS_MLX = False
 
+try:
+    import numpy as np
+    from safetensors.numpy import save_file as _save_numpy_safetensors
+    HAS_NUMPY_SAFETENSORS = True
+except ImportError:
+    HAS_NUMPY_SAFETENSORS = False
+
 
 class BlockDiskStore:
     """
@@ -83,7 +90,9 @@ class BlockDiskStore:
         self.disk_evictions = 0
 
         # Background writer thread
-        self._write_queue: List[Tuple[bytes, List[Tuple], int]] = []
+        # Queue items: (block_hash, numpy_tensors_dict, dtype_str, num_layers, token_count)
+        # or special commands: ("__access__", ...) or ("__cleanup__", ...)
+        self._write_queue: list = []
         self._write_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._writer_thread = threading.Thread(
@@ -235,13 +244,49 @@ class BlockDiskStore:
         """
         Queue a block for background writing to disk. Non-blocking.
 
+        IMPORTANT: All MLX operations (serialize + materialize) happen on the
+        calling thread to prevent concurrent GPU access from the background
+        writer. The background thread only does file I/O — no MLX ops.
+
         Args:
             block_hash: Chain hash (BlockHash bytes)
             cache_data: CacheBlock.cache_data — list of typed tuples per layer
             token_count: Number of tokens in this block
         """
+        if not HAS_MLX:
+            return
+
+        # Pre-serialize on the calling (main) thread to avoid MLX GPU ops
+        # on the background writer thread, which causes SIGSEGV from
+        # concurrent Metal command buffer access.
+        try:
+            tensors, dtype, num_layers = _serialize_block(cache_data)
+            if num_layers == 0:
+                return
+
+            # Materialize all lazy MLX arrays on the calling thread.
+            # mx.eval forces GPU computation NOW so the background thread
+            # won't need to trigger any Metal operations.
+            arrays_to_materialize = [v for v in tensors.values() if isinstance(v, mx.array)]
+            if arrays_to_materialize:
+                mx.eval(*arrays_to_materialize)
+
+            # Convert to numpy for thread-safe background write
+            if HAS_NUMPY_SAFETENSORS:
+                np_tensors = {
+                    k: np.array(v) if isinstance(v, mx.array) else v
+                    for k, v in tensors.items()
+                }
+            else:
+                # Fallback: pass pre-materialized MLX arrays (less safe but
+                # still better — save_safetensors won't need GPU computation)
+                np_tensors = tensors
+        except Exception as e:
+            logger.debug(f"Pre-serialize failed for block {block_hash.hex()[:12]}: {e}")
+            return
+
         with self._write_lock:
-            self._write_queue.append((block_hash, cache_data, token_count))
+            self._write_queue.append((block_hash, np_tensors, dtype, num_layers, token_count))
 
     def _background_writer(self) -> None:
         """Background thread: drain write queue and persist blocks."""
@@ -265,9 +310,9 @@ class BlockDiskStore:
                         _, hash_hex, _ = item
                         self._cleanup_entry(hash_hex)
                     else:
-                        # Normal block write
-                        block_hash, cache_data, token_count = item
-                        self._write_block(block_hash, cache_data, token_count)
+                        # Normal block write (pre-serialized numpy tensors)
+                        block_hash, np_tensors, dtype, num_layers, token_count = item
+                        self._write_block(block_hash, np_tensors, dtype, num_layers, token_count)
                 except Exception as e:
                     h = item[0] if isinstance(item[0], str) else (
                         item[0].hex()[:12] if isinstance(item[0], bytes) else "?"
@@ -311,13 +356,17 @@ class BlockDiskStore:
     def _write_block(
         self,
         block_hash: bytes,
-        cache_data: List[Tuple],
+        np_tensors: Dict[str, Any],
+        dtype: str,
+        num_layers: int,
         token_count: int,
     ) -> None:
-        """Write a single block to disk (called from background thread)."""
-        if not HAS_MLX:
-            return
+        """Write a pre-serialized block to disk (called from background thread).
 
+        IMPORTANT: This method must NOT call any MLX operations. All tensor
+        data arrives as numpy arrays (or pre-evaluated MLX arrays as fallback)
+        to prevent SIGSEGV from concurrent Metal GPU access.
+        """
         hash_hex = block_hash.hex()
 
         # Skip if already on disk
@@ -329,20 +378,21 @@ class BlockDiskStore:
             if exists:
                 return
 
-            # Serialize
-            tensors, dtype, num_layers = _serialize_block(cache_data)
-            if num_layers == 0:
-                return  # No actual tensor data to persist (all skip layers)
-
             # Atomic write: write to temp file then rename
             file_path = self._hash_to_path(hash_hex)
             rel_path = file_path.relative_to(self.cache_dir)
-            # mx.save_safetensors appends .safetensors if not already present,
-            # so use a .tmp.safetensors name to keep it from adding a double suffix.
             tmp_path = file_path.with_name(file_path.stem + ".tmp.safetensors")
 
             try:
-                mx.save_safetensors(str(tmp_path), tensors)
+                if HAS_NUMPY_SAFETENSORS:
+                    # Use safetensors.numpy — no MLX operations on this thread
+                    _save_numpy_safetensors(np_tensors, str(tmp_path))
+                elif HAS_MLX:
+                    # Fallback: use mx.save_safetensors on pre-evaluated arrays.
+                    # Less safe but arrays are already materialized.
+                    mx.save_safetensors(str(tmp_path), np_tensors)
+                else:
+                    return
                 os.rename(str(tmp_path), str(file_path))
             except Exception:
                 # Clean up partial file
@@ -492,7 +542,8 @@ class BlockDiskStore:
         for item in remaining:
             try:
                 if isinstance(item[0], bytes):
-                    self._write_block(item[0], item[1], item[2])
+                    # Queue format: (block_hash, np_tensors, dtype, num_layers, token_count)
+                    self._write_block(item[0], item[1], item[2], item[3], item[4])
             except Exception:
                 pass
 

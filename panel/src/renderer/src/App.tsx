@@ -5,6 +5,7 @@ import { SessionView } from './components/sessions/SessionView'
 import { SessionSettings } from './components/sessions/SessionSettings'
 import { SetupScreen } from './components/setup/SetupScreen'
 import { ToastProvider } from './components/Toast'
+import { DownloadStatusBar } from './components/DownloadStatusBar'
 
 type View =
   | { type: 'setup' }
@@ -49,6 +50,9 @@ function App() {
           </button>
         </div>
       </div>
+
+      {/* Global download status bar */}
+      <DownloadStatusBar />
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
