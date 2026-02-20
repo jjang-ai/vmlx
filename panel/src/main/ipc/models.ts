@@ -318,8 +318,231 @@ export function registerModelHandlers(): void {
     return db.getSetting(DOWNLOAD_DIR_KEY) || join(homedir(), '.cache/huggingface/hub')
   }
 
-  // Active download tracking
-  let activeDownload: { process: ChildProcess; repoId: string } | null = null
+  // ─── Download Manager ────────────────────────────────────────────────────────
+
+  interface DownloadProgress {
+    percent: number      // 0-100
+    speed: string        // e.g. "45.2MB/s"
+    downloaded: string   // e.g. "1.2GB"
+    total: string        // e.g. "4.5GB"
+    eta: string          // e.g. "2:30"
+    currentFile: string  // e.g. "model-00001-of-00003.safetensors"
+    filesProgress: string // e.g. "2/15"
+    raw: string          // raw stderr line
+  }
+
+  interface DownloadJob {
+    id: string
+    repoId: string
+    status: 'queued' | 'downloading' | 'complete' | 'cancelled' | 'error'
+    progress?: DownloadProgress
+    error?: string
+    process?: ChildProcess
+    modelDir: string
+    wasCancelled?: boolean
+  }
+
+  let jobIdCounter = 0
+  const downloadQueue: DownloadJob[] = []
+  let activeJob: DownloadJob | null = null
+  const completedJobs: DownloadJob[] = []
+
+  /** Parse HuggingFace tqdm progress from stderr */
+  function parseTqdmProgress(line: string): Partial<DownloadProgress> {
+    const result: Partial<DownloadProgress> = { raw: line.trim() }
+
+    // Match filename from "Downloading <filename>:" or "Fetching N files:" patterns
+    const fileMatch = line.match(/(?:Downloading|Fetching)\s+(.+?)(?:\s*:|\s*\|)/)
+    if (fileMatch) result.currentFile = fileMatch[1].trim()
+
+    // Match tqdm bar: "  45%|████      | 1.2G/4.5G [01:30<02:30, 45.2MB/s]"
+    const tqdmMatch = line.match(/(\d+)%\|[^|]*\|\s*([\d.]+\w*)\/([\d.]+\w*)\s*\[([^\]<]*)<([^\],]*),\s*([^\]]+)\]/)
+    if (tqdmMatch) {
+      result.percent = parseInt(tqdmMatch[1], 10)
+      result.downloaded = tqdmMatch[2]
+      result.total = tqdmMatch[3]
+      result.eta = tqdmMatch[5].trim()
+      result.speed = tqdmMatch[6].trim()
+    } else {
+      // Simpler percent match: "  45%|"
+      const simplePercent = line.match(/\s(\d+)%\|/)
+      if (simplePercent) result.percent = parseInt(simplePercent[1], 10)
+    }
+
+    // Match "Fetching N files:  45%|" for files progress
+    const filesMatch = line.match(/Fetching\s+(\d+)\s+files.*?(\d+)%/)
+    if (filesMatch) result.filesProgress = `${Math.round(parseInt(filesMatch[2]) * parseInt(filesMatch[1]) / 100)}/${filesMatch[1]}`
+
+    return result
+  }
+
+  function emitToRenderer(channel: string, data: any) {
+    try {
+      const win = BrowserWindow.getAllWindows()[0]
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(channel, data)
+      }
+    } catch (_) { }
+  }
+
+  async function getPythonPath(): Promise<string> {
+    const bundledPython = getBundledPythonPath()
+    if (bundledPython) {
+      try {
+        await access(bundledPython)
+        return bundledPython
+      } catch { /* fall through */ }
+    }
+    return 'python3'
+  }
+
+  async function processQueue() {
+    if (activeJob || downloadQueue.length === 0) return
+
+    const job = downloadQueue.shift()!
+    job.status = 'downloading'
+    activeJob = job
+
+    emitToRenderer('models:downloadStarted', { jobId: job.id, repoId: job.repoId })
+
+    const pythonPath = await getPythonPath()
+    const script = [
+      'import sys, json',
+      'from huggingface_hub import snapshot_download',
+      'repo_id = sys.argv[1]',
+      'local_dir = sys.argv[2]',
+      'try:',
+      '    path = snapshot_download(repo_id, local_dir=local_dir)',
+      '    print(json.dumps({"status": "complete", "path": path}), flush=True)',
+      'except KeyboardInterrupt:',
+      '    print(json.dumps({"status": "cancelled"}), flush=True)',
+      '    sys.exit(0)',
+      'except Exception as e:',
+      '    print(json.dumps({"status": "error", "error": str(e)}), flush=True)',
+      '    sys.exit(1)',
+    ].join('\n')
+
+    // Write marker file
+    const markerFile = join(job.modelDir, '.vmlx-downloading')
+    try {
+      await mkdir(job.modelDir, { recursive: true })
+      await writeFile(markerFile, `${job.repoId}\n${Date.now()}`, 'utf-8')
+    } catch (_) { /* dir may already exist */ }
+
+    console.log(`[DOWNLOADS] Starting: ${job.repoId} → ${job.modelDir}`)
+
+    const proc = spawn(pythonPath, ['-u', '-c', script, job.repoId, job.modelDir], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    job.process = proc
+
+    let stdout = ''
+    let lastStderr = ''
+    let lastProgress: Partial<DownloadProgress> = {}
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString()
+    })
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      const line = data.toString()
+      lastStderr = line
+      const parsed = parseTqdmProgress(line)
+      // Merge with last known progress (tqdm lines may only have partial info)
+      lastProgress = { ...lastProgress, ...parsed }
+      job.progress = lastProgress as DownloadProgress
+      emitToRenderer('models:downloadProgress', {
+        jobId: job.id,
+        repoId: job.repoId,
+        progress: lastProgress
+      })
+    })
+
+    proc.on('close', async (code: number | null) => {
+      console.log(`[DOWNLOADS] Process exited: ${job.repoId} code=${code} cancelled=${job.wasCancelled}`)
+
+      if (job.wasCancelled) {
+        job.status = 'cancelled'
+        emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
+      } else if (code === 0) {
+        try { await unlink(markerFile) } catch (_) { }
+        job.status = 'complete'
+        emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'complete', path: job.modelDir })
+      } else {
+        let errorMsg = `Download failed (exit ${code})`
+        try {
+          const lines = stdout.trim().split('\n').filter(Boolean)
+          if (lines.length > 0) {
+            const result = JSON.parse(lines[lines.length - 1])
+            if (result.status === 'cancelled') {
+              job.status = 'cancelled'
+              emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
+              activeJob = null
+              job.process = undefined
+              completedJobs.push(job)
+              processQueue()
+              return
+            }
+            errorMsg = result.error || errorMsg
+          }
+        } catch { }
+        if (!errorMsg.includes(lastStderr.slice(0, 100)) && lastStderr.trim()) {
+          errorMsg += `: ${lastStderr.slice(0, 200)}`
+        }
+        job.status = 'error'
+        job.error = errorMsg
+        emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: errorMsg })
+      }
+
+      activeJob = null
+      job.process = undefined
+      completedJobs.push(job)
+      // Process next in queue
+      processQueue()
+    })
+
+    proc.on('error', (err: Error) => {
+      job.status = 'error'
+      job.error = `Failed to start download: ${err.message}`
+      activeJob = null
+      job.process = undefined
+      completedJobs.push(job)
+      emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: job.error })
+      processQueue()
+    })
+  }
+
+  // ─── Stale marker cleanup on startup ──────────────────────────────────────────
+  async function cleanStaleMarkers() {
+    const dirs = getModelDirectories()
+    for (const baseDir of dirs) {
+      try {
+        const orgs = await readdir(baseDir, { withFileTypes: true })
+        for (const org of orgs) {
+          if (!org.isDirectory()) continue
+          const orgPath = join(baseDir, org.name)
+          try {
+            const models = await readdir(orgPath, { withFileTypes: true })
+            for (const model of models) {
+              if (!model.isDirectory()) continue
+              const markerPath = join(orgPath, model.name, '.vmlx-downloading')
+              try {
+                await access(markerPath)
+                const content = await readFile(markerPath, 'utf-8')
+                const ts = parseInt(content.split('\n')[1], 10)
+                // Remove markers older than 1 hour (stale from crashed downloads)
+                if (!isNaN(ts) && Date.now() - ts > 3600000) {
+                  console.log(`[DOWNLOADS] Removing stale marker: ${markerPath}`)
+                  await unlink(markerPath)
+                }
+              } catch { /* no marker */ }
+            }
+          } catch { /* can't read org dir */ }
+        }
+      } catch { /* base dir doesn't exist */ }
+    }
+  }
+  cleanStaleMarkers().catch(() => {})
 
   // Search HuggingFace for MLX models
   ipcMain.handle('models:searchHF', async (_, query: string) => {
@@ -339,9 +562,9 @@ export function registerModelHandlers(): void {
 
     return models.map((m: any) => ({
       id: m.modelId || m.id,
-      author: m.author,
-      downloads: m.downloads,
-      likes: m.likes,
+      author: m.author || 'Unknown',
+      downloads: m.downloads ?? 0,
+      likes: m.likes ?? 0,
       lastModified: m.lastModified,
       tags: m.tags || [],
       pipelineTag: m.pipeline_tag
@@ -359,152 +582,97 @@ export function registerModelHandlers(): void {
 
     return models.map((m: any) => ({
       id: m.modelId || m.id,
-      author: m.author,
-      downloads: m.downloads,
-      likes: m.likes,
+      author: m.author || 'Unknown',
+      downloads: m.downloads ?? 0,
+      likes: m.likes ?? 0,
       lastModified: m.lastModified,
       tags: m.tags || [],
       pipelineTag: m.pipeline_tag
     }))
   })
 
-  // Download a model from HuggingFace
-  ipcMain.handle('models:downloadModel', async (_, repoId: string) => {
-    if (activeDownload) {
-      throw new Error(`Already downloading ${activeDownload.repoId}`)
-    }
+  // Start a download (non-blocking — returns jobId immediately)
+  ipcMain.handle('models:startDownload', async (_, repoId: string) => {
+    // Check if already queued or downloading
+    if (activeJob?.repoId === repoId) return { jobId: activeJob.id, status: 'already_downloading' }
+    const queued = downloadQueue.find(j => j.repoId === repoId)
+    if (queued) return { jobId: queued.id, status: 'already_queued' }
 
+    const id = `dl_${++jobIdCounter}_${Date.now()}`
     const targetDir = getDownloadDirectory()
     const modelDir = join(targetDir, repoId)
 
-    // Find Python to use (bundled first, fallback to system)
-    const bundledPython = getBundledPythonPath()
-    let pythonPath: string
-    if (bundledPython) {
-      try {
-        await access(bundledPython)
-        pythonPath = bundledPython
-      } catch {
-        pythonPath = 'python3'
-      }
-    } else {
-      pythonPath = 'python3'
-    }
+    const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
+    downloadQueue.push(job)
+    console.log(`[DOWNLOADS] Queued: ${repoId} (${downloadQueue.length} in queue)`)
 
-    const script = [
-      'import sys, json',
-      'from huggingface_hub import snapshot_download',
-      'repo_id = sys.argv[1]',
-      'local_dir = sys.argv[2]',
-      'try:',
-      '    path = snapshot_download(repo_id, local_dir=local_dir)',
-      '    print(json.dumps({"status": "complete", "path": path}), flush=True)',
-      'except KeyboardInterrupt:',
-      '    print(json.dumps({"status": "cancelled"}), flush=True)',
-      '    sys.exit(0)',
-      'except Exception as e:',
-      '    print(json.dumps({"status": "error", "error": str(e)}), flush=True)',
-      '    sys.exit(1)',
-    ].join('\n')
+    // Kick off processing (no-op if already running)
+    processQueue()
 
-    console.log(`[MODELS] Downloading ${repoId} → ${modelDir}`)
-
-    // Write marker file to indicate download in progress (model scanner skips these)
-    const markerFile = join(modelDir, '.vmlx-downloading')
-    try {
-      await mkdir(modelDir, { recursive: true })
-      await writeFile(markerFile, `${repoId}\n${Date.now()}`, 'utf-8')
-    } catch (_) { /* dir may already exist */ }
-
-    return new Promise((resolve, reject) => {
-      let wasCancelled = false
-
-      const proc = spawn(pythonPath, ['-u', '-c', script, repoId, modelDir], {
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-
-      activeDownload = { process: proc, repoId }
-
-      let stdout = ''
-      let lastStderr = ''
-
-      proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString()
-      })
-
-      proc.stderr?.on('data', (data: Buffer) => {
-        const line = data.toString()
-        lastStderr = line
-        // Emit progress to renderer
-        try {
-          const win = BrowserWindow.getAllWindows()[0]
-          if (win && !win.isDestroyed()) {
-            win.webContents.send('models:downloadProgress', {
-              repoId,
-              progress: line.trim()
-            })
-          }
-        } catch (_) { }
-      })
-
-      proc.on('close', async (code: number | null) => {
-        activeDownload = null
-        console.log(`[MODELS] Download process exited with code ${code}, cancelled=${wasCancelled}`)
-
-        // Handle user-initiated cancel (SIGTERM may exit non-zero without writing JSON)
-        if (wasCancelled) {
-          resolve({ status: 'cancelled' })
-          return
-        }
-
-        if (code === 0) {
-          // Remove marker on success
-          try { await unlink(markerFile) } catch (_) { }
-          try {
-            const lines = stdout.trim().split('\n')
-            const result = JSON.parse(lines[lines.length - 1])
-            resolve(result)
-          } catch {
-            resolve({ status: 'complete', path: modelDir })
-          }
-        } else {
-          try {
-            const lines = stdout.trim().split('\n').filter(Boolean)
-            if (lines.length > 0) {
-              const result = JSON.parse(lines[lines.length - 1])
-              if (result.status === 'cancelled') {
-                resolve({ status: 'cancelled' })
-                return
-              }
-              reject(new Error(result.error || `Download failed (exit ${code})`))
-              return
-            }
-          } catch { }
-          reject(new Error(`Download failed (exit ${code}): ${lastStderr.slice(0, 200)}`))
-        }
-      })
-
-      proc.on('error', (err: Error) => {
-        activeDownload = null
-        reject(new Error(`Failed to start download: ${err.message}`))
-      })
-
-      // Expose cancel flag setter for the cancel handler
-      ;(proc as any).__cancelDownload = () => { wasCancelled = true }
-    })
+    return { jobId: id, status: 'queued', queuePosition: downloadQueue.length }
   })
 
-  // Cancel active download
-  ipcMain.handle('models:cancelDownload', async () => {
-    if (activeDownload) {
-      console.log(`[MODELS] Cancelling download: ${activeDownload.repoId}`)
-      // Set cancel flag before killing so close handler knows this was intentional
-      ;(activeDownload.process as any).__cancelDownload?.()
-      activeDownload.process.kill('SIGTERM')
-      activeDownload = null
+  // Cancel a download by jobId (or cancel active if no jobId)
+  ipcMain.handle('models:cancelDownload', async (_, jobId?: string) => {
+    // Cancel from queue first
+    const qIdx = downloadQueue.findIndex(j => jobId ? j.id === jobId : true)
+    if (qIdx >= 0) {
+      const removed = downloadQueue.splice(qIdx, 1)[0]
+      removed.status = 'cancelled'
+      completedJobs.push(removed)
+      console.log(`[DOWNLOADS] Cancelled queued: ${removed.repoId}`)
+      emitToRenderer('models:downloadComplete', { jobId: removed.id, repoId: removed.repoId, status: 'cancelled' })
       return { success: true }
     }
-    return { success: false, error: 'No active download' }
+
+    // Cancel active
+    if (activeJob && (!jobId || activeJob.id === jobId)) {
+      console.log(`[DOWNLOADS] Cancelling active: ${activeJob.repoId}`)
+      activeJob.wasCancelled = true
+      activeJob.process?.kill('SIGTERM')
+      return { success: true }
+    }
+
+    return { success: false, error: 'No matching download found' }
+  })
+
+  // Get current download status (all jobs)
+  ipcMain.handle('models:getDownloadStatus', async () => {
+    return {
+      active: activeJob ? { jobId: activeJob.id, repoId: activeJob.repoId, progress: activeJob.progress } : null,
+      queue: downloadQueue.map(j => ({ jobId: j.id, repoId: j.repoId })),
+      completed: completedJobs.slice(-10).map(j => ({ jobId: j.id, repoId: j.repoId, status: j.status, error: j.error }))
+    }
+  })
+
+  // Legacy blocking download (backward compat — wraps the new queue system)
+  ipcMain.handle('models:downloadModel', async (_, repoId: string) => {
+    // Check if already queued or downloading
+    if (activeJob?.repoId === repoId || downloadQueue.find(j => j.repoId === repoId)) {
+      throw new Error(`Already downloading ${repoId}`)
+    }
+
+    const id = `dl_${++jobIdCounter}_${Date.now()}`
+    const targetDir = getDownloadDirectory()
+    const modelDir = join(targetDir, repoId)
+    const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
+    downloadQueue.push(job)
+    processQueue()
+
+    // Poll for completion
+    return new Promise<any>((resolve, reject) => {
+      const check = () => {
+        const done = completedJobs.find(j => j.id === id)
+        if (done) {
+          if (done.status === 'complete') resolve({ status: 'complete', path: done.modelDir })
+          else if (done.status === 'cancelled') resolve({ status: 'cancelled' })
+          else reject(new Error(done.error || 'Download failed'))
+        } else {
+          setTimeout(check, 500)
+        }
+      }
+      check()
+    })
   })
 
   // Get download directory

@@ -218,24 +218,72 @@ Both APIs support: streaming, tool calls, reasoning extraction, usage tracking, 
 
 ## Supported Models
 
-vMLX auto-detects model architecture and selects the appropriate parser configuration:
+vMLX auto-detects model architecture from `config.json` and selects the appropriate parser configuration. Fine-tunes inherit the base model's parser (e.g., a Llama fine-tune named "Nemotron-Orchestrator" gets `llama` parsers).
 
-| Model Family | Tool Parser | Reasoning Parser |
-|-------------|-------------|-----------------|
-| Qwen3 / Qwen3-Coder / QwQ | `qwen` | `qwen3` |
-| Llama 4 / 3.x / Yi | `llama` | — |
-| Mistral / Mixtral / Pixtral | `mistral` | — |
-| Gemma 3 | `hermes` | `deepseek_r1` |
-| DeepSeek-R1 / V3 | `deepseek` | `deepseek_r1` |
-| GLM-4.7 / GLM-Z1 | `glm47` | `deepseek_r1` |
-| GLM-4.7 Flash / GPT-OSS | `glm47` | `openai_gptoss` |
-| Phi-4 Mini/Medium/Reasoning | `hermes` | `deepseek_r1` |
-| MiniMax M1/M2/M2.5 | `minimax` | `qwen3` |
-| Granite 3.x | `granite` | — |
-| Nemotron | `nemotron` | — |
-| Kimi-K2 | `kimi` | — |
-| xLAM | `xlam` | — |
-| StepFun Step-3.5 | `step3p5` | `qwen3` |
+### Text Models — Tool & Reasoning Parsers
+
+| Model Family | Tool Parser | Reasoning Parser | Notes |
+|-------------|-------------|-----------------|-------|
+| Qwen3 / Qwen3-Coder / QwQ | `qwen` | `qwen3` | 0.6B–235B, MoE variants |
+| Qwen3-Next (hybrid Mamba) | `qwen` | `qwen3` | Mamba + Transformer hybrid |
+| Qwen2.5 / Qwen2.5-Coder / Qwen2 | `qwen` | — | |
+| Llama 4 Scout / Maverick | `llama` | — | MoE architecture |
+| Llama 3.3 / 3.2 / 3.1 / 3 | `llama` | — | Yi uses same parser |
+| Mistral Large/Small/Nemo/7B | `mistral` | — | |
+| Mixtral 8x7B / 8x22B | `mistral` | — | MoE |
+| Codestral / Devstral | `mistral` | — | Coding-focused |
+| Gemma 3 (text-only) | `hermes` | `deepseek_r1` | Supports batching/paged cache |
+| Phi-4 Mini / Medium | `hermes` | — | |
+| Phi-4 Reasoning / Reasoning Plus | `hermes` | `deepseek_r1` | |
+| DeepSeek-R1 (native 671B) | `deepseek` | `deepseek_r1` | R1-Distill uses base arch parser |
+| DeepSeek-V3 / V2.5 / V2 | `deepseek` | — | |
+| GLM-4.7 / GLM-Z1 | `glm47` | `deepseek_r1` | `<think>` tags |
+| GLM-4.7 Flash / GPT-OSS | `glm47` | `openai_gptoss` | Harmony `<\|channel\|>` protocol |
+| GLM-4 | `glm47` | — | Tools only, no reasoning |
+| MiniMax M1 / M2 / M2.5 | `minimax` | `qwen3` | MoE |
+| Granite 3.x / Granite-Code | `granite` | — | IBM |
+| Nemotron (native arch) | `nemotron` | — | Hybrid Mamba+Transformer |
+| Kimi-K2 / Moonshot | `kimi` | — | |
+| xLAM | `xlam` | — | Salesforce |
+| StepFun Step-3.5 | `step3p5` | `qwen3` | |
+| Functionary v2/v3/v4r | `functionary` | — | MeetKai |
+| Hermes fine-tunes | `hermes` | — | NousResearch |
+
+### Vision / Multimodal Models
+
+These use SimpleEngine (no batching, paged cache, or KV quant):
+
+| Model Family | Tool Parser | Notes |
+|-------------|-------------|-------|
+| Qwen3-VL / Qwen2.5-VL / Qwen2-VL | `qwen` | Vision-Language |
+| Gemma 3 (multimodal) | `hermes` | Has `deepseek_r1` reasoning |
+| Pixtral 12B / Large | `mistral` | Mistral vision |
+| Phi-4 Multimodal | — | Vision only |
+| Phi-3 Vision | — | |
+| DeepSeek-VL / VL2 | — | |
+| LLaVA | — | |
+| InternVL | — | |
+| MiniCPM-V | — | |
+| Molmo | — | |
+| PaliGemma / MedGemma | — | Medical / research |
+| SmolVLM | — | HuggingFace |
+| Yi-VL | — | |
+
+### Other Architectures
+
+| Model Family | Cache Type | Notes |
+|-------------|-----------|-------|
+| Jamba | hybrid | Mamba+Transformer |
+| Falcon Mamba | mamba | Pure SSM |
+| RWKV 5/6 | mamba | Recurrent |
+| Command-R / R+ | kv | Cohere |
+| EXAONE | kv | LG AI Research |
+| OLMo / OLMo2 | kv | AI2 |
+| InternLM 3 / InternLM | kv | |
+| Gemma 2 | kv | |
+| StarCoder 2 | kv | Code only |
+| StableLM | kv | |
+| Baichuan | kv | |
 
 ---
 

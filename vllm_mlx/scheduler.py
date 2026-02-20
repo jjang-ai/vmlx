@@ -1226,9 +1226,13 @@ class Scheduler:
         """
         Abort a request, cleaning up all associated resources.
 
-        This mirrors the cleanup done in _cleanup_finished() to prevent
-        resource leaks (paged cache block tables, detokenizer state,
-        extracted KV caches, Metal memory cache).
+        This is the primary cleanup method for ALL request lifecycle paths:
+        normal completion, client disconnect, engine errors, and explicit
+        cancellation. It cleans up: waiting queue, running dict, BatchGenerator
+        UIDs, paged cache tracking, extracted KV cache refs, detokenizer state,
+        Metal memory cache, and the master requests registry.
+
+        Safe to call multiple times (idempotent) — returns False on repeat calls.
 
         Args:
             request_id: The request ID to abort
@@ -1236,7 +1240,7 @@ class Scheduler:
         Returns:
             True if request was found and aborted, False otherwise
         """
-        request = self.requests.get(request_id)
+        request = self.requests.pop(request_id, None)
         if request is None:
             return False
 

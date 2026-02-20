@@ -102,9 +102,9 @@ def register_all(registry=None):
         pattern=r"(?i)qwen[\-_.]?3[\-_.]?(?:coder[\-_.]?)?next",
         cache_type="mamba",
         eos_tokens=["<|im_end|>"],
-        tool_parser="qwen",
-        reasoning_parser="qwen3",
-        think_in_template=True,
+        tool_parser="nemotron",  # XML parameter format: <function=name><parameter=p>v</parameter>
+        # No reasoning_parser — chat template has no thinking support
+        # think_in_template defaults to False
         supports_native_tools=True,
         description="Qwen 3 Coder Next (hybrid Mamba architecture)",
         priority=1,

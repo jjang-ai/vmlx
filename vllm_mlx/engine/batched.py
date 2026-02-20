@@ -374,10 +374,8 @@ class BatchedEngine(BaseEngine):
                 "tokenize": False,
                 "add_generation_prompt": not skip_generation_prompt,
             }
-            # Only include enable_thinking when explicitly enabled — many templates
-            # (Gemma, Llama, etc.) don't support this kwarg and would raise TypeError
-            if enable_thinking is True:
-                template_kwargs["enable_thinking"] = True
+            if enable_thinking is not None:
+                template_kwargs["enable_thinking"] = enable_thinking
             if tools:
                 template_kwargs["tools"] = tools
             # Merge extra chat_template_kwargs (e.g. thinking_budget)
