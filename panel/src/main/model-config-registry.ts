@@ -116,6 +116,7 @@ const MODEL_CONFIGS = [
   { familyName: 'minimax', pattern: /minimax/i, cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 },
 
   // StepFun
+  { familyName: 'step-vl', pattern: /step[\-_.]?(?:1v|vl)/i, cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 },
   { familyName: 'step-3.5-flash', pattern: /step[\-_.]?3[\-_.]?5[\-_.]?flash/i, cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step-3.5-Flash (MoE)', priority: 5 },
   { familyName: 'step', pattern: /(?:^|\/)step[\-_.]/i, cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step models', priority: 30 },
 
@@ -222,6 +223,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── GPT-OSS (Harmony protocol) — needs openai_gptoss reasoning, not deepseek_r1
   'gpt_oss': 'gpt-oss',
   // ── StepFun ──
+  'step1v': 'step-vl',
   'step3p5': 'step-3.5-flash',
   'step': 'step',
   // ── Gemma family ──
