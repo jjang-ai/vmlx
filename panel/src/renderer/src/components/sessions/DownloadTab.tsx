@@ -15,6 +15,7 @@ interface DownloadTabProps {
 }
 
 function formatNumber(n: number): string {
+  if (n === undefined || n === null || isNaN(n)) return '0'
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return n.toString()
@@ -37,16 +38,14 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [loadingRecommended, setLoadingRecommended] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Download state
-  const [downloading, setDownloading] = useState<string | null>(null) // repo ID
-  const [downloadProgress, setDownloadProgress] = useState<string>('')
+  // Download state: track which repos are downloading/queued
+  const [downloadingRepos, setDownloadingRepos] = useState<Set<string>>(new Set())
   const [downloadError, setDownloadError] = useState<string | null>(null)
 
   // Download directory
   const [downloadDir, setDownloadDir] = useState('')
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const progressRef = useRef<HTMLDivElement>(null)
 
   // Load recommended models and download dir on mount
   useEffect(() => {
@@ -55,20 +54,46 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       .then(setRecommended)
       .catch(err => console.error('Failed to load recommended models:', err))
       .finally(() => setLoadingRecommended(false))
+
+    // Check for any in-progress downloads
+    window.api.models.getDownloadStatus().then((status: any) => {
+      const repos = new Set<string>()
+      if (status.active) repos.add(status.active.repoId)
+      for (const q of status.queue || []) repos.add(q.repoId)
+      setDownloadingRepos(repos)
+    }).catch(() => {})
   }, [])
 
-  // Listen for download progress
+  // Listen for download events
   useEffect(() => {
-    const unsub = window.api.models.onDownloadProgress((data) => {
-      setDownloadProgress(data.progress)
+    const unsubStarted = window.api.models.onDownloadStarted((data: any) => {
+      setDownloadingRepos(prev => new Set(prev).add(data.repoId))
     })
-    return unsub
-  }, [])
 
-  // Auto-scroll progress
-  useEffect(() => {
-    progressRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [downloadProgress])
+    const unsubComplete = window.api.models.onDownloadComplete((data: any) => {
+      setDownloadingRepos(prev => {
+        const next = new Set(prev)
+        next.delete(data.repoId)
+        return next
+      })
+      if (data.status === 'complete') onDownloadComplete()
+    })
+
+    const unsubError = window.api.models.onDownloadError((data: any) => {
+      setDownloadingRepos(prev => {
+        const next = new Set(prev)
+        next.delete(data.repoId)
+        return next
+      })
+      setDownloadError(`${data.repoId.split('/').pop()}: ${data.error}`)
+    })
+
+    return () => {
+      unsubStarted()
+      unsubComplete()
+      unsubError()
+    }
+  }, [onDownloadComplete])
 
   // Debounced search
   const handleSearch = useCallback((query: string) => {
@@ -97,30 +122,19 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   }, [])
 
   const handleDownload = async (repoId: string) => {
-    setDownloading(repoId)
-    setDownloadProgress('')
     setDownloadError(null)
+    setDownloadingRepos(prev => new Set(prev).add(repoId))
 
     try {
-      const result = await window.api.models.downloadModel(repoId)
-      if (result.status === 'complete') {
-        setDownloading(null)
-        setDownloadProgress('')
-        onDownloadComplete()
-      } else if (result.status === 'cancelled') {
-        setDownloading(null)
-        setDownloadProgress('')
-      }
+      await window.api.models.startDownload(repoId)
     } catch (err) {
       setDownloadError((err as Error).message)
-      setDownloading(null)
+      setDownloadingRepos(prev => {
+        const next = new Set(prev)
+        next.delete(repoId)
+        return next
+      })
     }
-  }
-
-  const handleCancelDownload = async () => {
-    await window.api.models.cancelDownload()
-    setDownloading(null)
-    setDownloadProgress('')
   }
 
   const handleBrowseDownloadDir = async () => {
@@ -137,7 +151,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Search and download MLX models from HuggingFace.
+        Search and download MLX models from HuggingFace. Downloads run in the background.
       </p>
 
       {/* Download Directory */}
@@ -172,25 +186,6 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         </div>
       )}
 
-      {/* Active Download */}
-      {downloading && (
-        <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium">Downloading: {downloading.split('/').pop()}</span>
-            <button
-              onClick={handleCancelDownload}
-              className="px-2 py-0.5 text-xs text-destructive border border-destructive/30 rounded hover:bg-destructive/10"
-            >
-              Cancel
-            </button>
-          </div>
-          <div className="bg-background/50 rounded p-2 max-h-20 overflow-auto font-mono text-[11px] text-muted-foreground">
-            {downloadProgress || 'Starting download...'}
-            <div ref={progressRef} />
-          </div>
-        </div>
-      )}
-
       {downloadError && (
         <div className="p-2 bg-destructive/10 border border-destructive/30 rounded text-xs text-destructive">
           Download failed: {downloadError}
@@ -212,8 +207,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
               <ModelCard
                 key={model.id}
                 model={model}
-                downloading={downloading === model.id}
-                anyDownloading={!!downloading}
+                isDownloading={downloadingRepos.has(model.id)}
                 onDownload={() => handleDownload(model.id)}
               />
             ))
@@ -224,10 +218,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   )
 }
 
-function ModelCard({ model, downloading, anyDownloading, onDownload }: {
+function ModelCard({ model, isDownloading, onDownload }: {
   model: HFModel
-  downloading: boolean
-  anyDownloading: boolean
+  isDownloading: boolean
   onDownload: () => void
 }) {
   const shortName = model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id
@@ -260,10 +253,10 @@ function ModelCard({ model, downloading, anyDownloading, onDownload }: {
         </div>
         <button
           onClick={onDownload}
-          disabled={anyDownloading}
+          disabled={isDownloading}
           className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap flex-shrink-0"
         >
-          {downloading ? 'Downloading...' : 'Download'}
+          {isDownloading ? 'Downloading...' : 'Download'}
         </button>
       </div>
     </div>

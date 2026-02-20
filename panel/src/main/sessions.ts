@@ -1135,8 +1135,9 @@ export class SessionManager extends EventEmitter {
     }
 
     // KV cache quantization — only meaningful when prefix cache is active
-    // Skip for MLLM/VLM models (SimpleEngine) and Mamba/SSM models (incompatible cache type)
-    if (!prefixCacheOff && !detected.isMultimodal && detected.cacheType !== 'mamba' && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+    // Skip for MLLM/VLM models (SimpleEngine). Hybrid/Mamba models are allowed —
+    // the Python scheduler only quantizes KVCache layers, non-KV layers pass through.
+    if (!prefixCacheOff && !detected.isMultimodal && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
         args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())

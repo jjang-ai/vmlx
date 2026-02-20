@@ -39,7 +39,7 @@ export interface DetectedConfig {
 
 const MODEL_CONFIGS = [
   // Qwen family
-  { familyName: 'qwen3-next', pattern: /qwen[\-_.]?3[\-_.]?(?:coder[\-_.]?)?next/i, cacheType: 'mamba', toolParser: 'qwen', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 },
+  { familyName: 'qwen3-next', pattern: /qwen[\-_.]?3[\-_.]?(?:coder[\-_.]?)?next/i, cacheType: 'mamba', toolParser: 'nemotron', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 },
   { familyName: 'qwen3-vl', pattern: /qwen[\-_.]?3.*VL/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 },
   { familyName: 'qwen3-moe', pattern: /qwen[\-_.]?3.*(?:moe|MoE)/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 },
   { familyName: 'qwen3', pattern: /qwen[\-_.]?3/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3', priority: 10 },

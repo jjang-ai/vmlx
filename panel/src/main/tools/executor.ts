@@ -4,7 +4,7 @@
  */
 
 import { readFileSync, writeFileSync, copyFileSync, renameSync, unlinkSync, rmdirSync, mkdirSync, readdirSync, statSync, existsSync, realpathSync } from 'fs'
-import { resolve, relative, dirname, basename, isAbsolute, join } from 'path'
+import { resolve, relative, dirname, basename, isAbsolute, join, sep } from 'path'
 import { execSync, execFileSync, spawn, ChildProcess } from 'child_process'
 import { clipboard } from 'electron'
 import { db } from '../database'
@@ -46,7 +46,7 @@ function resolvePath(workingDir: string, userPath: string): string {
   }
   const realWorkingDir = realpathSync(workingDir)
   const rel = relative(realWorkingDir, realResolved)
-  if (rel.startsWith('..') || (isAbsolute(rel) && !realResolved.startsWith(realWorkingDir))) {
+  if (rel.startsWith('..') || (isAbsolute(rel) && realResolved !== realWorkingDir && !realResolved.startsWith(realWorkingDir + sep))) {
     throw new Error(`Path escapes working directory: ${userPath}`)
   }
   return realResolved
@@ -104,7 +104,7 @@ export async function executeBuiltinTool(
       case 'copy_file':
         result = copyFile(args.source, args.destination, workingDir); break
       case 'run_command':
-        result = runCommand(args.command, workingDir); break
+        result = await runCommand(args.command, workingDir); break
       case 'web_search':
         result = await webSearch(args.query, args.count); break
       case 'fetch_url':
@@ -173,7 +173,7 @@ function readFile(path: string, workingDir: string, offset?: number, limit?: num
 
   const numbered = slice.map((line, i) => `${String(startLine + i).padStart(5)} | ${line}`).join('\n')
 
-  let header = `File: ${path} (${totalLines} lines)`
+  let header = `File: ${fullPath} (${totalLines} lines)`
   if (startLine > 1 || endLine < totalLines) {
     header += ` — showing lines ${startLine}–${endLine}`
   }
@@ -192,7 +192,7 @@ function writeFile(path: string, content: string, workingDir: string): ToolResul
   writeFileSync(fullPath, content, 'utf-8')
   const lines = content.split('\n').length
   const bytes = Buffer.byteLength(content, 'utf-8')
-  return { content: `Wrote ${path} (${lines} lines, ${bytes} bytes)`, is_error: false }
+  return { content: `Wrote ${fullPath} (${lines} lines, ${bytes} bytes)`, is_error: false }
 }
 
 function editFile(
@@ -417,7 +417,7 @@ function createDirectory(path: string, workingDir: string): ToolResult {
   if (!path) return { content: 'Missing required parameter: path', is_error: true }
   const fullPath = resolvePath(workingDir, path)
   mkdirSync(fullPath, { recursive: true })
-  return { content: `Created directory: ${path}`, is_error: false }
+  return { content: `Created directory: ${fullPath}`, is_error: false }
 }
 
 function deleteFile(path: string, workingDir: string): ToolResult {
@@ -472,26 +472,42 @@ function copyFile(source: string, destination: string, workingDir: string): Tool
   return { content: `Copied ${source} → ${destination}`, is_error: false }
 }
 
-function runCommand(command: string, workingDir: string): ToolResult {
+async function runCommand(command: string, workingDir: string): Promise<ToolResult> {
   if (!command) return { content: 'Missing required parameter: command', is_error: true }
-  try {
-    const output = execSync(command, {
+  return new Promise((resolve) => {
+    let stdout = '', stderr = ''
+    let killed = false
+    const proc = spawn('/bin/sh', ['-c', command], {
       cwd: workingDir,
-      encoding: 'utf-8',
-      shell: '/bin/sh',
-      timeout: 60000,
-      maxBuffer: 10 * 1024 * 1024
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe']
     })
-    return { content: `$ ${command}\n\n${output}`, is_error: false }
-  } catch (err: any) {
-    const stdout = err.stdout?.toString() || ''
-    const stderr = err.stderr?.toString() || ''
-    const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
-    if (err.killed) {
-      return { content: `$ ${command}\n\nCommand timed out after 60 seconds\n\n${combined}`, is_error: true }
-    }
-    return { content: `$ ${command}\n\nExit code: ${err.status ?? 'unknown'}\n\n${combined}`, is_error: true }
-  }
+    proc.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString()
+      if (stdout.length > 10 * 1024 * 1024) { killed = true; proc.kill() }
+    })
+    proc.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString()
+      if (stderr.length > 10 * 1024 * 1024) { killed = true; proc.kill() }
+    })
+    const timer = setTimeout(() => { killed = true; proc.kill() }, 60000)
+    proc.on('close', (code) => {
+      clearTimeout(timer)
+      if (killed) {
+        const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
+        resolve({ content: `$ ${command}\n\nCommand timed out after 60 seconds\n\n${combined}`, is_error: true })
+      } else if (code === 0 || code === null) {
+        resolve({ content: `$ ${command}\n\n${stdout}`, is_error: false })
+      } else {
+        const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
+        resolve({ content: `$ ${command}\n\nExit code: ${code}\n\n${combined}`, is_error: true })
+      }
+    })
+    proc.on('error', (err: Error) => {
+      clearTimeout(timer)
+      resolve({ content: `$ ${command}\n\nProcess error: ${err.message}`, is_error: true })
+    })
+  })
 }
 
 // ─── Patch / Batch / Diagnostics ─────────────────────────────────────────────
