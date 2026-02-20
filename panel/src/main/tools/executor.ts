@@ -5,7 +5,7 @@
 
 import { readFileSync, writeFileSync, copyFileSync, renameSync, unlinkSync, rmdirSync, mkdirSync, readdirSync, statSync, existsSync, realpathSync } from 'fs'
 import { resolve, relative, dirname, basename, isAbsolute, join, sep } from 'path'
-import { execSync, execFileSync, spawn, ChildProcess } from 'child_process'
+import { execFileSync, spawn, ChildProcess } from 'child_process'
 import { clipboard } from 'electron'
 import { db } from '../database'
 
@@ -653,9 +653,9 @@ function getDiagnostics(path: string, tool: string | undefined, workingDir: stri
     if (existsSync(join(workingDir, 'tsconfig.json'))) {
       tool = 'tsc'
     } else if (existsSync(join(workingDir, '.eslintrc.json')) ||
-               existsSync(join(workingDir, '.eslintrc.js')) ||
-               existsSync(join(workingDir, 'eslint.config.js')) ||
-               existsSync(join(workingDir, 'eslint.config.mjs'))) {
+      existsSync(join(workingDir, '.eslintrc.js')) ||
+      existsSync(join(workingDir, 'eslint.config.js')) ||
+      existsSync(join(workingDir, 'eslint.config.mjs'))) {
       tool = 'eslint'
     } else if (path.endsWith('.py') || existsSync(join(workingDir, 'pyproject.toml'))) {
       tool = 'python'
@@ -867,7 +867,7 @@ async function ddgSearch(query: string, count?: number): Promise<ToolResult> {
       const titleMatch = block.match(/class="result__a"[^>]*>([^<]+)</)
       // Extract URL from <a class="result__url" href="...">
       const urlMatch = block.match(/class="result__url"[^>]*href="([^"]*)"/) ||
-                       block.match(/class="result__a"[^>]*href="([^"]*)"/)
+        block.match(/class="result__a"[^>]*href="([^"]*)"/)
       // Extract snippet from <a class="result__snippet" ...>
       const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/)
 
@@ -1131,7 +1131,7 @@ function spawnProcess(command: string, workingDir: string): ToolResult {
   proc.on('error', (err: Error) => { entry.stderr += `\nProcess error: ${err.message}`; entry.running = false })
 
   // Auto-kill after 5 minutes
-  setTimeout(() => { if (entry.running) { try { proc.kill() } catch {} } }, 300000)
+  setTimeout(() => { if (entry.running) { try { proc.kill() } catch { } } }, 300000)
   spawnedProcesses.set(id, entry)
 
   return { content: `Started process: ${command}\nPID: ${id}\nUse get_process_output(pid="${id}") to check output.`, is_error: false }

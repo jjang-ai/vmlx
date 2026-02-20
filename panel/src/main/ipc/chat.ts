@@ -76,15 +76,15 @@ async function streamingFetch(url: string, init: {
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           res.on('data', (chunk: Buffer) => { controller.enqueue(new Uint8Array(chunk)) })
-          res.on('end', () => { try { controller.close() } catch (_) {} })
+          res.on('end', () => { try { controller.close() } catch (_) { } })
           res.on('error', (err) => {
             console.error(`[streamingFetch] stream error: message="${(err as any)?.message}" code="${(err as any)?.code}"`)
-            try { controller.error(err) } catch (_) {}
+            try { controller.error(err) } catch (_) { }
           })
           // Handle premature close (server drops connection before response completes)
           res.on('close', () => {
             if (!res.complete) {
-              try { controller.error(new Error('Connection closed before response completed')) } catch (_) {}
+              try { controller.error(new Error('Connection closed before response completed')) } catch (_) { }
             }
           })
         },
@@ -524,9 +524,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     const hasAttachments = attachments && attachments.length > 0
     const userContentForDb = hasAttachments
       ? JSON.stringify([
-          ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
-          ...(content.trim() ? [{ type: 'text', text: content }] : [])
-        ])
+        ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
+        ...(content.trim() ? [{ type: 'text', text: content }] : [])
+      ])
       : content
     const userMessage: Message = {
       id: uuidv4(),
@@ -760,17 +760,17 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // Local: use streamingFetch (Node.js http/https) to avoid Electron 28's SSE buffering bug.
       const response = isRemote
         ? await remoteFetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders },
-            body: requestBody,
-            signal: abortController.signal
-          })
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: requestBody,
+          signal: abortController.signal
+        })
         : await streamingFetch(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders },
-            body: requestBody,
-            signal: abortController.signal
-          })
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: requestBody,
+          signal: abortController.signal
+        })
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -1146,7 +1146,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         const dec = new TextDecoder()
         let buf = ''
         while (true) {
-          const { done, value } = await rdr.read()
+          const { value, done } = await rdr.read()
           if (done) break
           buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n')
@@ -1574,6 +1574,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
       // Save partial response: combine all content from previous tool iterations + current.
       // allGeneratedContent holds text from completed iterations; fullContent has current iteration.
+      let lastFinishReason: string | null = null
       let partialContent = ''
       if (allGeneratedContent.trim() && fullContent.trim()) {
         partialContent = allGeneratedContent.trim() + '\n\n' + fullContent.trim()
@@ -1671,10 +1672,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // message "aborted" but code "ECONNRESET", which the message-only check missed.
       const errCode = (error as any)?.code || ''
       if (errMsg === 'terminated' || errMsg === 'aborted'
-          || errMsg.includes('ECONNREFUSED') || errMsg.includes('ECONNRESET')
-          || errCode === 'ECONNRESET' || errCode === 'ECONNREFUSED'
-          || errMsg.includes('Connection closed before response completed')
-          || errMsg.includes('socket hang up')) {
+        || errMsg.includes('ECONNREFUSED') || errMsg.includes('ECONNRESET')
+        || errCode === 'ECONNRESET' || errCode === 'ECONNREFUSED'
+        || errMsg.includes('Connection closed before response completed')
+        || errMsg.includes('socket hang up')) {
         throw new Error(`Server connection lost. The model server may have crashed or stopped. Try restarting the session.`)
       }
       throw new Error(`Failed to send message: ${errMsg}`)
