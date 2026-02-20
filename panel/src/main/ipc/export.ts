@@ -48,7 +48,7 @@ export function registerExportHandlers(): void {
           modelPath: chat.modelPath,
           createdAt: chat.createdAt,
           messages: messages.map(m => ({
-            role: m.role,
+            role: m.role as 'system' | 'user' | 'assistant',
             content: m.content,
             timestamp: m.timestamp,
             ...(m.reasoningContent ? { reasoning: m.reasoningContent } : {})
@@ -150,7 +150,7 @@ export function registerExportHandlers(): void {
       db.addMessage({
         id: randomUUID(),
         chatId,
-        role: msg.role,
+        role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
         timestamp: now,
         ...(msg.reasoning ? { reasoningContent: msg.reasoning } : {})

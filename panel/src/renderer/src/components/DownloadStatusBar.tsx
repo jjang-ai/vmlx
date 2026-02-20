@@ -25,14 +25,14 @@ interface QueuedDownload {
 export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
   const [active, setActive] = useState<ActiveDownload | null>(null)
   const [queue, setQueue] = useState<QueuedDownload[]>([])
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed] = useState(false)
 
   // Poll initial status on mount
   useEffect(() => {
     window.api.models.getDownloadStatus().then((status: any) => {
       if (status.active) setActive(status.active)
       if (status.queue) setQueue(status.queue)
-    }).catch(() => {})
+    }).catch(() => { })
   }, [])
 
   // Listen for progress updates
@@ -57,7 +57,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
         if (status.active) setActive(status.active)
         else setActive(null)
         setQueue(status.queue || [])
-      }).catch(() => {})
+      }).catch(() => { })
     })
 
     const unsubError = window.api.models.onDownloadError((data: any) => {
@@ -66,7 +66,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
         if (status.active) setActive(status.active)
         else setActive(null)
         setQueue(status.queue || [])
-      }).catch(() => {})
+      }).catch(() => { })
     })
 
     return () => {
