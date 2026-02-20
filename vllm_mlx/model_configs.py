@@ -908,6 +908,19 @@ def register_all(registry=None):
     # =========================================================================
 
     _register(ModelConfig(
+        family_name="step-vl",
+        pattern=r"(?i)step[\-_.]?(?:1v|vl)",
+        cache_type="kv",
+        tool_parser="step3p5",
+        reasoning_parser="qwen3",
+        think_in_template=True,
+        supports_native_tools=True,
+        is_mllm=True,
+        description="StepFun Step-1V vision-language models",
+        priority=3,
+    ))
+
+    _register(ModelConfig(
         family_name="step-3.5-flash",
         pattern=r"(?i)step[\-_.]?3[\-_.]?5[\-_.]?flash",
         cache_type="kv",
