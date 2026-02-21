@@ -21,8 +21,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
   const [selectedModel, setSelectedModel] = useState<string>('')
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
-  const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
-  const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
+  const [detectedCacheType, setDetectedCacheType] = useState<string | undefined>()
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
@@ -85,7 +84,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
         let port = 8000
         while (usedPorts.has(port)) port++
         setConfig(prev => ({ ...prev, port }))
-      } catch (_) {}
+      } catch (_) { }
     }
     assignPort()
   }, [])
@@ -104,7 +103,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     setConfig(base)
   }
@@ -259,31 +258,28 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
           <div className="flex gap-1 bg-background rounded border border-border p-0.5 mb-4">
             <button
               onClick={() => setSessionType('local')}
-              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${
-                sessionType === 'local'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'hover:bg-accent text-muted-foreground'
-              }`}
+              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${sessionType === 'local'
+                ? 'bg-primary text-primary-foreground'
+                : 'hover:bg-accent text-muted-foreground'
+                }`}
             >
               Local Model
             </button>
             <button
               onClick={() => setSessionType('download')}
-              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${
-                sessionType === 'download'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'hover:bg-accent text-muted-foreground'
-              }`}
+              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${sessionType === 'download'
+                ? 'bg-primary text-primary-foreground'
+                : 'hover:bg-accent text-muted-foreground'
+                }`}
             >
               Download
             </button>
             <button
               onClick={() => setSessionType('remote')}
-              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${
-                sessionType === 'remote'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'hover:bg-accent text-muted-foreground'
-              }`}
+              className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors ${sessionType === 'remote'
+                ? 'bg-primary text-primary-foreground'
+                : 'hover:bg-accent text-muted-foreground'
+                }`}
             >
               Remote Endpoint
             </button>
@@ -360,195 +356,191 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
               </button>
             </div>
           ) : (
-          <>
-          <span className="text-sm text-muted-foreground block mb-4">Select a local MLX model to serve</span>
+            <>
+              <span className="text-sm text-muted-foreground block mb-4">Select a local MLX model to serve</span>
 
-          {/* Search + Actions Row */}
-          <div className="flex items-center gap-2 mb-4">
-            <input
-              type="text"
-              placeholder="Filter models..."
-              value={modelFilter}
-              onChange={(e) => setModelFilter(e.target.value)}
-              className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"
-            />
-            <button
-              onClick={scanModels}
-              disabled={scanLoading}
-              className="px-3 py-2 text-sm border border-border rounded hover:bg-accent disabled:opacity-50 whitespace-nowrap"
-            >
-              {scanLoading ? 'Scanning...' : 'Rescan'}
-            </button>
-            <button
-              onClick={() => setShowDirManager(!showDirManager)}
-              className={`px-3 py-2 text-sm border rounded whitespace-nowrap ${
-                showDirManager ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent'
-              }`}
-            >
-              Directories
-            </button>
-          </div>
-
-          {/* Directory Manager Panel */}
-          {showDirManager && (
-            <div className="mb-4 p-4 bg-card border border-border rounded-lg">
-              <h3 className="text-sm font-semibold mb-3">Model Scan Directories</h3>
-
-              {/* Built-in directories */}
-              {builtinDirs.length > 0 && (
-                <div className="mb-3">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider">Default</span>
-                  {builtinDirs.map(dir => (
-                    <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs text-muted-foreground">
-                      <span className="truncate flex-1" title={dir}>{dir}</span>
-                      <span className="text-xs opacity-50 flex-shrink-0">built-in</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* User directories */}
-              {userDirs.length > 0 && (
-                <div className="mb-3">
-                  <span className="text-xs text-muted-foreground uppercase tracking-wider">Custom</span>
-                  {userDirs.map(dir => (
-                    <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs">
-                      <span className="truncate flex-1" title={dir}>{dir}</span>
-                      <button
-                        onClick={() => handleRemoveDirectory(dir)}
-                        className="text-destructive hover:text-destructive/80 flex-shrink-0"
-                        title="Remove directory"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Add directory */}
-              <div className="flex items-center gap-2 mt-2">
+              {/* Search + Actions Row */}
+              <div className="flex items-center gap-2 mb-4">
                 <input
                   type="text"
-                  placeholder="Enter path or browse..."
-                  value={manualPath}
-                  onChange={(e) => { setManualPath(e.target.value); setDirError(null) }}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleAddManualPath() }}
-                  className="flex-1 px-2 py-1.5 bg-background border border-input rounded text-xs"
+                  placeholder="Filter models..."
+                  value={modelFilter}
+                  onChange={(e) => setModelFilter(e.target.value)}
+                  className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"
                 />
                 <button
-                  onClick={handleAddManualPath}
-                  disabled={!manualPath.trim()}
-                  className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent disabled:opacity-50"
+                  onClick={scanModels}
+                  disabled={scanLoading}
+                  className="px-3 py-2 text-sm border border-border rounded hover:bg-accent disabled:opacity-50 whitespace-nowrap"
                 >
-                  Add
+                  {scanLoading ? 'Scanning...' : 'Rescan'}
                 </button>
                 <button
-                  onClick={handleBrowseDirectory}
-                  className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent"
+                  onClick={() => setShowDirManager(!showDirManager)}
+                  className={`px-3 py-2 text-sm border rounded whitespace-nowrap ${showDirManager ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent'
+                    }`}
                 >
-                  Browse...
+                  Directories
                 </button>
               </div>
-              {dirError && (
-                <p className="text-xs text-destructive mt-1">{dirError}</p>
-              )}
-            </div>
-          )}
 
-          {scanLoading ? (
-            <p className="text-muted-foreground">Scanning for models...</p>
-          ) : filteredModels.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-muted-foreground mb-2">No models found</p>
-              <p className="text-xs text-muted-foreground mb-4">
-                Click "Directories" above to add your model folders,
-                or place models in ~/.lmstudio/models/ or ~/.cache/huggingface/hub/
-              </p>
-              <div className="mb-4 p-3 bg-card border border-border rounded-lg text-left">
-                <p className="text-xs text-muted-foreground mb-2">To download a model, run in Terminal:</p>
-                <div className="p-2 bg-muted rounded font-mono text-[11px] text-foreground select-all">
-                  huggingface-cli download mlx-community/Llama-3.2-3B-Instruct-4bit --local-dir ~/.cache/huggingface/hub/mlx-community/Llama-3.2-3B-Instruct-4bit
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-2">
-                  Browse more MLX models at{' '}
-                  <span className="text-primary select-all">huggingface.co/mlx-community</span>
-                </p>
-              </div>
-              <button
-                onClick={() => setShowDirManager(true)}
-                className="px-4 py-2 text-sm border border-border rounded hover:bg-accent"
-              >
-                Manage Directories
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {filteredModels.map(model => (
-                <button
-                  key={model.path}
-                  onClick={async () => {
-                    setSelectedModel(model.path)
-                    // Pre-populate from existing session config if this model was launched before
-                    try {
-                      const sessions = await window.api.sessions.list()
-                      const normalized = model.path.replace(/\/+$/, '')
-                      const existing = sessions.find((s: any) =>
-                        (s.modelPath || '').replace(/\/+$/, '') === normalized
-                      )
-                      if (existing?.config) {
-                        try {
-                          const stored = JSON.parse(existing.config)
-                          setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
-                          // Still detect cache type for UI gating (Mamba vs KV, VLM)
-                          try {
-                            const det = await window.api.models.detectConfig(model.path)
-                            if (det?.cacheType) setDetectedCacheType(det.cacheType)
-                            setDetectedIsMultimodal(!!det?.isMultimodal)
-                          } catch (_) {}
-                          setStep(2)
-                          return // skip auto-detect for config — existing config already has everything
-                        } catch (_) {}
-                      }
-                    } catch (_) {}
-                    // Fallback: auto-detect model config for fresh sessions
-                    try {
-                      const detected = await window.api.models.detectConfig(model.path)
-                      if (detected && detected.family !== 'unknown') {
-                        setConfig(prev => ({
-                          ...prev,
-                          enableAutoToolChoice: detected.enableAutoToolChoice,
-                          toolCallParser: 'auto',
-                          reasoningParser: 'auto',
-                          usePagedCache: detected.usePagedCache,
-                        }))
-                        setDetectedCacheType(detected.cacheType || 'kv')
-                        setDetectedIsMultimodal(!!detected.isMultimodal)
-                      }
-                    } catch (_) {
-                      // Auto-detect failed — user can configure manually
-                    }
-                    setStep(2)
-                  }}
-                  className={`w-full text-left p-3 rounded border transition-colors ${
-                    selectedModel === model.path
-                      ? 'border-primary bg-primary/10'
-                      : 'border-border hover:border-primary/50 hover:bg-accent'
-                  }`}
-                >
-                  <div className="font-medium text-sm">{model.name}</div>
-                  <div className="text-xs text-muted-foreground truncate">{model.path}</div>
-                  {model.size && (
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {model.size}
-                      {model.quantization && ` · ${model.quantization}`}
+              {/* Directory Manager Panel */}
+              {showDirManager && (
+                <div className="mb-4 p-4 bg-card border border-border rounded-lg">
+                  <h3 className="text-sm font-semibold mb-3">Model Scan Directories</h3>
+
+                  {/* Built-in directories */}
+                  {builtinDirs.length > 0 && (
+                    <div className="mb-3">
+                      <span className="text-xs text-muted-foreground uppercase tracking-wider">Default</span>
+                      {builtinDirs.map(dir => (
+                        <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs text-muted-foreground">
+                          <span className="truncate flex-1" title={dir}>{dir}</span>
+                          <span className="text-xs opacity-50 flex-shrink-0">built-in</span>
+                        </div>
+                      ))}
                     </div>
                   )}
-                </button>
-              ))}
-            </div>
-          )}
-          </>
+
+                  {/* User directories */}
+                  {userDirs.length > 0 && (
+                    <div className="mb-3">
+                      <span className="text-xs text-muted-foreground uppercase tracking-wider">Custom</span>
+                      {userDirs.map(dir => (
+                        <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs">
+                          <span className="truncate flex-1" title={dir}>{dir}</span>
+                          <button
+                            onClick={() => handleRemoveDirectory(dir)}
+                            className="text-destructive hover:text-destructive/80 flex-shrink-0"
+                            title="Remove directory"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Add directory */}
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      type="text"
+                      placeholder="Enter path or browse..."
+                      value={manualPath}
+                      onChange={(e) => { setManualPath(e.target.value); setDirError(null) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddManualPath() }}
+                      className="flex-1 px-2 py-1.5 bg-background border border-input rounded text-xs"
+                    />
+                    <button
+                      onClick={handleAddManualPath}
+                      disabled={!manualPath.trim()}
+                      className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                    <button
+                      onClick={handleBrowseDirectory}
+                      className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent"
+                    >
+                      Browse...
+                    </button>
+                  </div>
+                  {dirError && (
+                    <p className="text-xs text-destructive mt-1">{dirError}</p>
+                  )}
+                </div>
+              )}
+
+              {scanLoading ? (
+                <p className="text-muted-foreground">Scanning for models...</p>
+              ) : filteredModels.length === 0 ? (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground mb-2">No models found</p>
+                  <p className="text-xs text-muted-foreground mb-4">
+                    Click "Directories" above to add your model folders,
+                    or place models in ~/.lmstudio/models/ or ~/.cache/huggingface/hub/
+                  </p>
+                  <div className="mb-4 p-3 bg-card border border-border rounded-lg text-left">
+                    <p className="text-xs text-muted-foreground mb-2">To download a model, run in Terminal:</p>
+                    <div className="p-2 bg-muted rounded font-mono text-[11px] text-foreground select-all">
+                      huggingface-cli download mlx-community/Llama-3.2-3B-Instruct-4bit --local-dir ~/.cache/huggingface/hub/mlx-community/Llama-3.2-3B-Instruct-4bit
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-2">
+                      Browse more MLX models at{' '}
+                      <span className="text-primary select-all">huggingface.co/mlx-community</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowDirManager(true)}
+                    className="px-4 py-2 text-sm border border-border rounded hover:bg-accent"
+                  >
+                    Manage Directories
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {filteredModels.map(model => (
+                    <button
+                      key={model.path}
+                      onClick={async () => {
+                        setSelectedModel(model.path)
+                        // Pre-populate from existing session config if this model was launched before
+                        try {
+                          const sessions = await window.api.sessions.list()
+                          const normalized = model.path.replace(/\/+$/, '')
+                          const existing = sessions.find((s: any) =>
+                            (s.modelPath || '').replace(/\/+$/, '') === normalized
+                          )
+                          if (existing?.config) {
+                            try {
+                              const stored = JSON.parse(existing.config)
+                              setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
+                              // Still detect cache type for UI gating (Mamba vs KV, VLM)
+                              try {
+                                const det = await window.api.models.detectConfig(model.path)
+                                if (det?.cacheType) setDetectedCacheType(det.cacheType)
+                              } catch (_) { }
+                              setStep(2)
+                              return // skip auto-detect for config — existing config already has everything
+                            } catch (_) { }
+                          }
+                        } catch (_) { }
+                        // Fallback: auto-detect model config for fresh sessions
+                        try {
+                          const detected = await window.api.models.detectConfig(model.path)
+                          if (detected && detected.family !== 'unknown') {
+                            setConfig(prev => ({
+                              ...prev,
+                              enableAutoToolChoice: detected.enableAutoToolChoice,
+                              toolCallParser: 'auto',
+                              reasoningParser: 'auto',
+                              usePagedCache: detected.usePagedCache,
+                            }))
+                            setDetectedCacheType(detected.cacheType || 'kv')
+                          }
+                        } catch (_) {
+                          // Auto-detect failed — user can configure manually
+                        }
+                        setStep(2)
+                      }}
+                      className={`w-full text-left p-3 rounded border transition-colors ${selectedModel === model.path
+                        ? 'border-primary bg-primary/10'
+                        : 'border-border hover:border-primary/50 hover:bg-accent'
+                        }`}
+                    >
+                      <div className="font-medium text-sm">{model.name}</div>
+                      <div className="text-xs text-muted-foreground truncate">{model.path}</div>
+                      {model.size && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {model.size}
+                          {model.quantization && ` · ${model.quantization}`}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -632,7 +624,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
         </div>
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} isMultimodal={detectedIsMultimodal} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} />
 
         {/* Launch */}
         <div className="flex gap-3 mt-6 pb-6">
