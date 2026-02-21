@@ -909,7 +909,7 @@ def register_all(registry=None):
 
     _register(ModelConfig(
         family_name="step-vl",
-        pattern=r"(?i)step[\-_.]?(?:1v|vl)",
+        pattern=r"(?i)step[\-_.]?(?:1v|vl)|exploitbot(?i:[\-_.]?v?l?)?",
         cache_type="kv",
         tool_parser="step3p5",
         reasoning_parser="qwen3",
