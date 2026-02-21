@@ -8,6 +8,7 @@ import { BUILTIN_TOOLS, isBuiltinTool, AGENTIC_SYSTEM_PROMPT } from '../tools/re
 import { executeBuiltinTool } from '../tools/executor'
 import { readGenerationDefaults } from './models'
 import { detectModelConfigFromDir } from '../model-config-registry'
+import { getAuthHeaders } from './utils'
 
 // Default connection config (fallback values)
 const DEFAULT_HOST = '127.0.0.1'
@@ -450,13 +451,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // unreachable IPv6 link-local addresses (fe80::...) causing "fetch failed"
     const baseUrl = await resolveUrl(rawBaseUrl)
     console.log(`[CHAT] Endpoint resolution: isRemote=${isRemote}, rawBaseUrl=${rawBaseUrl}, baseUrl=${baseUrl}, session=${resolvedSession?.id ?? 'none'}, type=${resolvedSession?.type ?? 'none'}`)
-    const authHeaders: Record<string, string> = {}
-    if (isRemote && resolvedSession?.remoteApiKey) {
-      authHeaders['Authorization'] = `Bearer ${resolvedSession.remoteApiKey}`
-      if (resolvedSession.remoteOrganization) {
-        authHeaders['OpenAI-Organization'] = resolvedSession.remoteOrganization
-      }
-    }
+    const authHeaders: Record<string, string> = resolvedSession?.id ? getAuthHeaders(resolvedSession.id) : {}
     // Update active request entry with resolved baseUrl and auth for cancel support
     const activeEntry = activeRequests.get(chatId)
     if (activeEntry) {
