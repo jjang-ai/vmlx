@@ -52,12 +52,12 @@ function buildCommandPreview(
   const effectiveToolParser = config.toolCallParser === ''
     ? undefined
     : detected?.toolParser
-      || (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser : undefined)
+    || (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser : undefined)
   const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
   const effectiveReasoningParser = config.reasoningParser === ''
     ? undefined
     : detected?.reasoningParser
-      || (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser : undefined)
+    || (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser : undefined)
 
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
@@ -166,7 +166,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         try {
           const det = await window.api.models.detectConfig(s.modelPath)
           if (det && det.family !== 'unknown') setDetectedConfig(det)
-        } catch (_) {}
+        } catch (_) { }
       }
     }
     load()
@@ -299,7 +299,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
             base.enableBlockDiskCache = false
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     setConfig(base)
     setDirty(true)
@@ -355,17 +355,16 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
 
         {/* Status message */}
         {message && (
-          <div className={`mb-4 p-3 rounded-lg text-sm ${
-            message.type === 'success'
+          <div className={`mb-4 p-3 rounded-lg text-sm ${message.type === 'success'
               ? 'bg-primary/10 border border-primary/30 text-primary'
               : 'bg-destructive/10 border border-destructive/30 text-destructive'
-          }`}>
+            }`}>
             {message.text}
           </div>
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} isMultimodal={detectedConfig?.isMultimodal} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} />
 
         {/* Command Preview */}
         <div className="mt-4">
