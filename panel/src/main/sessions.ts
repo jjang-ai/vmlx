@@ -117,7 +117,7 @@ export class SessionManager extends EventEmitter {
     // Wait for any pending operation on this session to finish
     const pending = this.operationLocks.get(sessionId)
     if (pending) {
-      await pending.catch(() => {})
+      await pending.catch(() => { })
     }
 
     // Create a lock promise that resolves when our operation completes
@@ -164,7 +164,7 @@ export class SessionManager extends EventEmitter {
             healthy = true
             modelName = data.model_name
           }
-        } catch (_) {}
+        } catch (_) { }
 
         detected.push({
           pid: parsed.pid,
@@ -174,7 +174,7 @@ export class SessionManager extends EventEmitter {
           modelName
         })
       }
-    } catch (_) {}
+    } catch (_) { }
 
     return detected
   }
@@ -228,7 +228,7 @@ export class SessionManager extends EventEmitter {
     if (existing) {
       // Merge new config into existing (don't overwrite unspecified fields)
       let existingConfig: Record<string, any> = {}
-      try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) {}
+      try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) { }
       const host = (config.host as string) || existing.host
       const port = (config.port as number) || existing.port
       const merged = { ...existingConfig, ...config, modelPath, host, port }
@@ -453,8 +453,8 @@ export class SessionManager extends EventEmitter {
         if (lastLine) managed.lastStderr = lastLine
       }
     })
-    proc.stdout?.on('error', () => {})
-    proc.stderr?.on('error', () => {})
+    proc.stdout?.on('error', () => { })
+    proc.stderr?.on('error', () => { })
 
     proc.on('exit', (code, signal) => {
       const managed = this.processes.get(sessionId)
@@ -571,13 +571,13 @@ export class SessionManager extends EventEmitter {
       } else if (managed?.adoptedPid) {
         this.killPid(managed.adoptedPid)
         await new Promise(r => setTimeout(r, 1500))
-        try { process.kill(managed.adoptedPid, 0); this.killPid(managed.adoptedPid, 'SIGKILL') } catch (_) {}
+        try { process.kill(managed.adoptedPid, 0); this.killPid(managed.adoptedPid, 'SIGKILL') } catch (_) { }
         this.processes.delete(sessionId)
       } else if (session.pid) {
         // Fallback: kill by stored PID
         this.killPid(session.pid)
         await new Promise(r => setTimeout(r, 1500))
-        try { process.kill(session.pid, 0); this.killPid(session.pid, 'SIGKILL') } catch (_) {}
+        try { process.kill(session.pid, 0); this.killPid(session.pid, 'SIGKILL') } catch (_) { }
       } else {
         // Last resort: kill by port
         await this.killByPort(session.port)
@@ -900,7 +900,7 @@ export class SessionManager extends EventEmitter {
         if (cfg.timeout && cfg.timeout > 0) {
           maxFails = Math.max(60, Math.ceil(cfg.timeout / 5))
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (count >= maxFails) {
@@ -946,7 +946,7 @@ export class SessionManager extends EventEmitter {
           }, 3000)
         } else if (session.port) {
           // Fallback: kill by port
-          this.killByPort(session.port).catch(() => {})
+          this.killByPort(session.port).catch(() => { })
         }
         this.processes.delete(sessionId)
       }
@@ -977,7 +977,7 @@ export class SessionManager extends EventEmitter {
     }
     for (const [, managed] of this.processes) {
       if (managed.process) {
-        try { managed.process.kill('SIGTERM') } catch (_) {}
+        try { managed.process.kill('SIGTERM') } catch (_) { }
       }
     }
 
@@ -985,11 +985,11 @@ export class SessionManager extends EventEmitter {
     if (processes.length > 0 || this.processes.size > 0) {
       await new Promise(r => setTimeout(r, 3000))
       for (const proc of processes) {
-        try { process.kill(proc.pid, 'SIGKILL') } catch (_) {}
+        try { process.kill(proc.pid, 'SIGKILL') } catch (_) { }
       }
       for (const [, managed] of this.processes) {
         if (managed.process) {
-          try { managed.process.kill('SIGKILL') } catch (_) {}
+          try { managed.process.kill('SIGKILL') } catch (_) { }
         }
       }
     }
@@ -1049,8 +1049,7 @@ export class SessionManager extends EventEmitter {
     // (e.g., a Qwen3 model named "Nemotron-Orchestrator" getting hybrid cache config).
     const detected = detectModelConfigFromDir(config.modelPath)
 
-    // MLLM/VLM models must NOT use continuous batching (RotatingKVCache incompatible)
-    if (config.continuousBatching && !detected.isMultimodal) args.push('--continuous-batching')
+    if (config.continuousBatching) args.push('--continuous-batching')
 
     // Parser resolution: detection ALWAYS wins when available.
     // This prevents stale session configs (from older registry versions) from overriding
@@ -1061,13 +1060,13 @@ export class SessionManager extends EventEmitter {
     const effectiveToolParser = userToolParser === ''
       ? undefined                     // User explicitly chose "None" — respect it
       : detected.toolParser           // Auto-detected wins when available
-        || (userToolParser && userToolParser !== 'auto' ? userToolParser : undefined)  // Fallback for unknown models
+      || (userToolParser && userToolParser !== 'auto' ? userToolParser : undefined)  // Fallback for unknown models
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected.enableAutoToolChoice
     const userReasoningParser = config.reasoningParser
     const effectiveReasoningParser = userReasoningParser === ''
       ? undefined                     // User explicitly chose "None" — respect it
       : detected.reasoningParser      // Auto-detected wins when available
-        || (userReasoningParser && userReasoningParser !== 'auto' ? userReasoningParser : undefined)  // Fallback for unknown models
+      || (userReasoningParser && userReasoningParser !== 'auto' ? userReasoningParser : undefined)  // Fallback for unknown models
 
     // Log parser resolution with override warnings
     if (userReasoningParser && userReasoningParser !== 'auto' && detected.reasoningParser && userReasoningParser !== detected.reasoningParser) {
@@ -1089,12 +1088,7 @@ export class SessionManager extends EventEmitter {
       args.push('--disable-prefix-cache')
     } else {
       // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx).
-      // EXCEPTION: MLLM/VLM models use RotatingKVCache which doesn't support BatchGenerator.
-      // They must use SimpleEngine (no --continuous-batching) to avoid "RotatingKVCache does not
-      // yet support batching" errors that silently hang the generation.
-      if (detected.isMultimodal) {
-        console.log(`[SESSION] Skipping continuous batching for MLLM model (${detected.family}) — RotatingKVCache not compatible`)
-      } else if (!config.continuousBatching && !args.includes('--continuous-batching')) {
+      if (!config.continuousBatching && !args.includes('--continuous-batching')) {
         args.push('--continuous-batching')
       }
       // Set safe prefill batch size to prevent Metal GPU crashes with large contexts
@@ -1121,10 +1115,8 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Paged cache (auto-detect from model family if not explicitly configured)
     // Paged cache is a prefix cache backend — skip when prefix cache is disabled
-    // Also skip for MLLM models (they use SimpleEngine which doesn't support paged cache)
-    if (!prefixCacheOff && !detected.isMultimodal && (config.usePagedCache ?? detected.usePagedCache)) {
+    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache)) {
       args.push('--use-paged-cache')
       if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) {
         args.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
@@ -1135,9 +1127,8 @@ export class SessionManager extends EventEmitter {
     }
 
     // KV cache quantization — only meaningful when prefix cache is active
-    // Skip for MLLM/VLM models (SimpleEngine). Hybrid/Mamba models are allowed —
-    // the Python scheduler only quantizes KVCache layers, non-KV layers pass through.
-    if (!prefixCacheOff && !detected.isMultimodal && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+    // The Python scheduler only quantizes KVCache layers, non-KV layers pass through.
+    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
         args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
@@ -1157,7 +1148,7 @@ export class SessionManager extends EventEmitter {
 
     // Block-level disk cache (L2 for paged cache blocks)
     // Must mirror the paged cache guard condition above
-    if (!prefixCacheOff && !detected.isMultimodal && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
+    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
       args.push('--enable-block-disk-cache')
       if (config.blockDiskCacheDir) {
         args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
@@ -1232,7 +1223,7 @@ export class SessionManager extends EventEmitter {
           locations.push(join(pyenvRoot, ver, 'bin', 'vllm-mlx'))
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
     for (const loc of locations) {
       if (existsSync(loc)) return { type: 'system', binaryPath: loc }
@@ -1246,14 +1237,14 @@ export class SessionManager extends EventEmitter {
           { encoding: 'utf-8', timeout: 5000 }
         ).trim()
         if (result && existsSync(result)) return { type: 'system', binaryPath: result }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // Last resort: plain which
     try {
       const result = execSync('which vllm-mlx', { encoding: 'utf-8', timeout: 3000 }).trim()
       if (result && existsSync(result)) return { type: 'system', binaryPath: result }
-    } catch (_) {}
+    } catch (_) { }
     return null
   }
 
@@ -1298,7 +1289,7 @@ export class SessionManager extends EventEmitter {
     // This ensures MCP subprocesses and uvicorn workers are also killed.
     // Falls back to single-PID kill if group kill fails (e.g., not a group leader).
     try { process.kill(-pid, signal) } catch (_) {
-      try { process.kill(pid, signal) } catch (_) {}
+      try { process.kill(pid, signal) } catch (_) { }
     }
   }
 
@@ -1311,7 +1302,7 @@ export class SessionManager extends EventEmitter {
         }
         await new Promise(r => setTimeout(r, 1500))
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   private async killChildProcess(proc: ChildProcess): Promise<void> {
@@ -1320,8 +1311,8 @@ export class SessionManager extends EventEmitter {
       // Escalate to SIGKILL after 10s if SIGTERM doesn't work
       const killTimeout = setTimeout(() => {
         // Kill entire process group (detached spawn)
-        if (pid) { try { process.kill(-pid, 'SIGKILL') } catch (_) {} }
-        try { proc.kill('SIGKILL') } catch (_) {}
+        if (pid) { try { process.kill(-pid, 'SIGKILL') } catch (_) { } }
+        try { proc.kill('SIGKILL') } catch (_) { }
       }, 10000)
 
       // B4: Final safety — resolve after 15s even if process never exits
@@ -1337,7 +1328,7 @@ export class SessionManager extends EventEmitter {
       })
 
       // Send SIGTERM to process group first, then to the process directly
-      if (pid) { try { process.kill(-pid, 'SIGTERM') } catch (_) {} }
+      if (pid) { try { process.kill(-pid, 'SIGTERM') } catch (_) { } }
       try { proc.kill('SIGTERM') } catch (_) {
         clearTimeout(killTimeout)
         clearTimeout(hardTimeout)
@@ -1367,7 +1358,7 @@ export class SessionManager extends EventEmitter {
       try {
         const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1000) })
         if (response.ok) return
-      } catch (_) {}
+      } catch (_) { }
       await new Promise(resolve => setTimeout(resolve, 500))
     }
 
