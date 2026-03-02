@@ -173,6 +173,10 @@ Sampling parameters (temperature, top_p, top_k, min_p, repetition_penalty) follo
 
 The panel app reads `generation_config.json` via `readGenerationDefaults()` and stores values in `chat_overrides` (SQLite). These are sent in every API request body.
 
+## MLLM Batched Sampling
+
+When continuous batching is enabled for multimodal (VLM) models, the `MLLMScheduler` uses per-request sampling parameters from the first waiting request. Each `MLLMBatchRequest` carries its own `temperature`, `top_p`, `top_k`, `min_p`, and `repetition_penalty`. The batch generator is recreated when sampling parameters change between batches.
+
 ## Settings Dependencies
 
 Feature activation follows a dependency chain:
