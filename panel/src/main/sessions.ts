@@ -1049,9 +1049,10 @@ export class SessionManager extends EventEmitter {
     // (e.g., a Qwen3 model named "Nemotron-Orchestrator" getting hybrid cache config).
     const detected = detectModelConfigFromDir(config.modelPath)
 
-    // Explicit UI toggles have highest priority. 
-    // If not set in session config (e.g. older session), fall back to detected values.
-    const isVLM = config.isMultimodal ?? !!detected.isMultimodal
+    // VLM detection: user explicitly checked = always on; otherwise auto-detect from config.json.
+    // DEFAULT_CONFIG has isMultimodal=false, so we can't use ?? (false is not null).
+    // User must explicitly check the VLM box to force it on; otherwise auto-detect wins.
+    const isVLM = config.isMultimodal === true ? true : !!detected.isMultimodal
     if (isVLM) args.push('--is-mllm')
 
     if (config.continuousBatching) args.push('--continuous-batching')
