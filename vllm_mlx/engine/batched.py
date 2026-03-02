@@ -24,65 +24,6 @@ from .base import BaseEngine, GenerationOutput
 logger = logging.getLogger(__name__)
 
 
-def _extract_media_from_messages(messages: list[dict[str, Any]]) -> tuple:
-    """
-    Extract images and videos from OpenAI-format messages.
-
-    Returns:
-        Tuple of (has_media, images_list, videos_list)
-    """
-    images = []
-    videos = []
-
-    for msg in messages:
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-
-        for item in content:
-            # Handle Pydantic models
-            if hasattr(item, "model_dump"):
-                item = item.model_dump()
-            elif hasattr(item, "dict"):
-                item = item.dict()
-
-            if not isinstance(item, dict):
-                continue
-
-            item_type = item.get("type", "")
-
-            if item_type == "image_url":
-                img_url = item.get("image_url", {})
-                if isinstance(img_url, str):
-                    images.append(img_url)
-                elif isinstance(img_url, dict):
-                    url = img_url.get("url", "")
-                    if url:
-                        images.append(url)
-
-            elif item_type == "image":
-                img = item.get("image") or item.get("url", "")
-                if img:
-                    images.append(img)
-
-            elif item_type == "video_url":
-                vid_url = item.get("video_url", {})
-                if isinstance(vid_url, str):
-                    videos.append(vid_url)
-                elif isinstance(vid_url, dict):
-                    url = vid_url.get("url", "")
-                    if url:
-                        videos.append(url)
-
-            elif item_type == "video":
-                vid = item.get("video") or item.get("url", "")
-                if vid:
-                    videos.append(vid)
-
-    has_media = bool(images or videos)
-    return has_media, images, videos
-
-
 class MLLMModelWrapper:
     """
     Wrapper for MLLM models to make them compatible with BatchGenerator.
@@ -323,8 +264,14 @@ class BatchedEngine(BaseEngine):
         """Apply chat template to messages."""
         tokenizer = self.tokenizer
 
-        if self._is_mllm and self._processor:
-            # Use mlx_vlm's chat template for MLLM
+        # Count non-system messages to detect multi-turn conversations
+        non_system_msgs = sum(1 for m in messages if m.get("role") != "system")
+
+        if self._is_mllm and self._processor and not tools and non_system_msgs <= 2:
+            # Use mlx_vlm's chat template for single-turn MLLM (image-aware).
+            # When tools are provided, or for multi-turn conversations (>2 non-system
+            # messages), fall through to standard tokenizer path which properly handles
+            # full conversation history and tool definitions.
             try:
                 from mlx_vlm.prompt_utils import apply_chat_template
                 from mlx_vlm.utils import load_config
@@ -454,6 +401,9 @@ class BatchedEngine(BaseEngine):
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                top_k=kwargs.get("top_k", 0),
+                min_p=kwargs.get("min_p", 0.0),
+                repetition_penalty=kwargs.get("repetition_penalty", 1.0),
             )
 
             return GenerationOutput(
@@ -535,6 +485,9 @@ class BatchedEngine(BaseEngine):
                 temperature=temperature,
                 top_p=top_p,
                 request_id=request_id,
+                top_k=kwargs.get("top_k", 0),
+                min_p=kwargs.get("min_p", 0.0),
+                repetition_penalty=kwargs.get("repetition_penalty", 1.0),
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
@@ -756,8 +709,11 @@ class BatchedEngine(BaseEngine):
 
     def get_cache_stats(self) -> dict[str, Any] | None:
         """Get cache statistics."""
-        if self._mllm_scheduler and self._mllm_scheduler.vision_cache:
-            return self._mllm_scheduler.vision_cache.get_stats()
+        if self._mllm_scheduler:
+            # Return batch generator's vision cache stats (the actually-used cache)
+            if self._mllm_scheduler.batch_generator:
+                return self._mllm_scheduler.batch_generator.get_vision_cache_stats()
+            return None
         elif self._engine:
             return self._engine.get_cache_stats()
         return None

@@ -12,6 +12,7 @@ export interface GenerationDefaults {
   temperature?: number
   topP?: number
   topK?: number
+  minP?: number
   repeatPenalty?: number
 }
 
@@ -26,6 +27,7 @@ export async function readGenerationDefaults(modelPath: string): Promise<Generat
     if (typeof config.temperature === 'number') defaults.temperature = config.temperature
     if (typeof config.top_p === 'number') defaults.topP = config.top_p
     if (typeof config.top_k === 'number') defaults.topK = config.top_k
+    if (typeof config.min_p === 'number') defaults.minP = config.min_p
     if (typeof config.repetition_penalty === 'number') defaults.repeatPenalty = config.repetition_penalty
 
     // Only return if at least one param was found

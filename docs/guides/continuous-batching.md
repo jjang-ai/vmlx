@@ -155,6 +155,19 @@ python tests/test_continuous_batching.py
 python tests/test_prefix_cache.py
 ```
 
+## VLM (Vision-Language) Support
+
+Continuous batching and paged cache work with VLM models (Qwen-VL, Gemma 3, etc.):
+
+```bash
+vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
+  --continuous-batching \
+  --use-paged-cache \
+  --kv-cache-quantization q8
+```
+
+VLM batching uses two-phase execution: vision encoding runs per-request, then language generation is batched via BatchKVCache. Prefix cache stores KV states so repeated image queries skip vision encoding (3-6x speedup on cache hit).
+
 ## When to Use
 
 | Scenario | Mode |
@@ -163,6 +176,7 @@ python tests/test_prefix_cache.py
 | Multiple concurrent users | `--continuous-batching` |
 | Large models (7B+) | `--continuous-batching --cache-memory-mb 2048` |
 | Production with shared prompts | `--continuous-batching --use-paged-cache` |
+| VLM with caching | `--continuous-batching --use-paged-cache --kv-cache-quantization q8` |
 
 ## Production Setup
 

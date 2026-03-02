@@ -42,6 +42,7 @@ def _get_model_type_from_config(model_name: str) -> str | None:
 # Notably EXCLUDES nemotron/nemotron_h which DO need tokenizer fallback.
 _STANDARD_ARCHITECTURES = {
     # Qwen
+    "qwen3_5", "qwen3_5_moe",
     "qwen3", "qwen3_moe", "qwen3_vl", "qwen3_vl_moe", "qwen3_next",
     "qwen2", "qwen2_moe", "qwen2_vl", "qwen2_5_vl", "qwen", "qwen_mamba",
     # Llama
@@ -54,7 +55,7 @@ _STANDARD_ARCHITECTURES = {
     # GLM / GPT-OSS
     "chatglm", "glm4", "glm4_moe", "glm4_moe_lite", "glm", "gpt_oss",
     # StepFun
-    "step3p5", "step",
+    "step3p5", "step", "step1v",
     # Gemma
     "gemma", "gemma2", "gemma3", "gemma3_text", "paligemma", "paligemma2",
     # Phi
@@ -70,7 +71,7 @@ _STANDARD_ARCHITECTURES = {
     # Others
     "hermes", "kimi_k2", "exaone", "exaone3", "olmo", "olmo2",
     "starcoder2", "stablelm", "baichuan",
-    "internlm2", "internlm3", "internlm_xcomposer2",
+    "internlm", "internlm2", "internlm3", "internlm_xcomposer2",
     "yi", "orion",
     # MLLM
     "llava", "llava_next", "idefics2", "idefics3", "cogvlm", "cogvlm2",

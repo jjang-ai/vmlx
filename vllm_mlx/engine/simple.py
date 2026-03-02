@@ -320,13 +320,16 @@ class SimpleEngine(BaseEngine):
             if self._is_mllm:
                 # For MLLM, use the chat method which handles images/videos
                 # Run in thread pool to allow asyncio timeout to work
+                mllm_kwargs = dict(kwargs)
+                if thinking_enabled is not None:
+                    mllm_kwargs["enable_thinking"] = thinking_enabled
                 output = await asyncio.to_thread(
                     self._model.chat,
                     messages=messages,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     top_p=top_p,
-                    **kwargs,
+                    **mllm_kwargs,
                 )
                 text = clean_output_text(output.text)
                 return GenerationOutput(
@@ -437,35 +440,34 @@ class SimpleEngine(BaseEngine):
 
         # Build prompt using tokenizer
         if self._is_mllm:
-            # For MLLM, use stream_chat which yields tokens incrementally.
-            # Must hold _generation_lock to prevent concurrent Metal operations.
+            # For MLLM, stream tokens one at a time via asyncio.to_thread(_next).
+            # This mirrors the LLM stream_generate pattern for true per-token
+            # streaming — each next() call is offloaded individually so the
+            # event loop stays responsive between tokens.
             accumulated_text = ""
             token_count = 0
+            finished = False
+            self._abort_requested = False
 
             # Pass enable_thinking to MLLM for models that support it (Qwen3-VL, etc.)
             mllm_kwargs = dict(kwargs)
             if thinking_enabled is not None:
                 mllm_kwargs["enable_thinking"] = thinking_enabled
 
-            # Run stream_chat in thread pool since it's synchronous
-            def run_stream():
-                return list(
-                    self._model.stream_chat(
-                        messages=messages,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        top_p=top_p,
-                        **mllm_kwargs,
-                    )
-                )
-
             async with self._generation_lock:
                 try:
-                    chunks = await asyncio.to_thread(run_stream)
+                    # Create the synchronous iterator in a thread
+                    stream_iter = await asyncio.to_thread(
+                        lambda: iter(self._model.stream_chat(
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            **mllm_kwargs,
+                        ))
+                    )
                 except Exception as e:
-                    # Catch MLLM generation errors (OOM, Metal errors, etc.)
-                    # to prevent server crash. Return error as text.
-                    logger.error(f"MLLM stream_chat failed: {type(e).__name__}: {e}")
+                    logger.error(f"MLLM stream_chat failed to start: {type(e).__name__}: {e}")
                     try:
                         import mlx.core as mx
                         mx.clear_memory_cache()
@@ -481,7 +483,51 @@ class SimpleEngine(BaseEngine):
                     )
                     return
 
-                for chunk in chunks:
+                # Per-token iteration: offload each next() to thread pool
+                _sentinel = object()
+                def _next():
+                    try:
+                        return next(stream_iter)
+                    except StopIteration:
+                        return _sentinel
+
+                while True:
+                    try:
+                        chunk = await asyncio.to_thread(_next)
+                    except Exception as e:
+                        logger.error(f"MLLM generation error: {type(e).__name__}: {e}")
+                        try:
+                            import mlx.core as mx
+                            mx.clear_memory_cache()
+                        except Exception:
+                            pass
+                        yield GenerationOutput(
+                            text=accumulated_text + f"\n[Generation error: {type(e).__name__}: {e}]",
+                            new_text=f"\n[Generation error: {type(e).__name__}: {e}]",
+                            prompt_tokens=0,
+                            completion_tokens=token_count,
+                            finished=True,
+                            finish_reason="error",
+                        )
+                        return
+
+                    if chunk is _sentinel:
+                        break
+
+                    # Check abort flag between tokens
+                    if self._abort_requested:
+                        self._abort_requested = False
+                        logger.info("SimpleEngine: MLLM generation aborted by request")
+                        yield GenerationOutput(
+                            text=accumulated_text,
+                            new_text="",
+                            prompt_tokens=0,
+                            completion_tokens=token_count,
+                            finished=True,
+                            finish_reason="abort",
+                        )
+                        return
+
                     token_count += 1
                     new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
                     accumulated_text += new_text
@@ -499,6 +545,17 @@ class SimpleEngine(BaseEngine):
 
                     if finished:
                         break
+
+                # If stream ended without explicit finish, emit final chunk
+                if not finished:
+                    yield GenerationOutput(
+                        text=accumulated_text,
+                        new_text="",
+                        prompt_tokens=0,
+                        completion_tokens=token_count,
+                        finished=True,
+                        finish_reason="stop",
+                    )
             return
 
         # For LLM, apply chat template and stream

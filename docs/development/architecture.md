@@ -135,8 +135,8 @@ vllm_mlx/
 ├── models/
 │   ├── llm.py            # MLXLanguageModel
 │   └── mllm.py           # MLXMultimodalLM
-├── tool_parsers/         # Tool call parsers (12 formats)
-├── reasoning/            # Reasoning parsers (qwen3, deepseek_r1)
+├── tool_parsers/         # Tool call parsers (13 formats)
+├── reasoning/            # Reasoning parsers (qwen3, deepseek_r1, openai_gptoss)
 ├── server.py             # FastAPI server
 ├── engine_core.py        # AsyncEngineCore
 ├── scheduler.py          # LLM request scheduler
@@ -148,6 +148,7 @@ vllm_mlx/
 ├── model_registry.py     # Model detection & registry
 ├── model_config_registry.py # Model config registry (parsers, cache types, etc.)
 ├── model_configs.py      # Model family configurations
+├── vision_embedding_cache.py # Vision preprocessing cache (LRU, order-sensitive hashing)
 └── cli.py                # CLI commands
 ```
 
@@ -155,11 +156,53 @@ vllm_mlx/
 
 1. **API Request** → FastAPI endpoint (auth, rate limit)
 2. **Engine Selection** → Simple or Batched based on config
-3. **Template Application** → Chat template formatting (with tool definitions if enabled)
-4. **Generation** → mlx-lm, mlx-vlm, mlx-audio, or mlx-embeddings
-5. **Post-processing** → Tool call parsing, reasoning extraction
-6. **Streaming** → SSE response chunks
-7. **Caching** → KV cache storage for reuse
+3. **Sampling Resolution** → Request params > CLI flags > model defaults (from `generation_config.json`)
+4. **Template Application** → Chat template formatting (with tool definitions if enabled)
+5. **Generation** → mlx-lm, mlx-vlm, mlx-audio, or mlx-embeddings
+6. **Post-processing** → Tool call parsing, reasoning extraction
+7. **Streaming** → SSE response chunks
+8. **Caching** → KV cache storage for reuse
+
+## Sampling Parameter Resolution
+
+Sampling parameters (temperature, top_p, top_k, min_p, repetition_penalty) follow a priority chain:
+
+1. **Request value** — Explicit parameter in API request body
+2. **CLI flag** — Server launch argument (e.g., `--temperature 0.7`)
+3. **Model default** — From `generation_config.json` in the model folder (read at chat creation in the panel app)
+
+The panel app reads `generation_config.json` via `readGenerationDefaults()` and stores values in `chat_overrides` (SQLite). These are sent in every API request body.
+
+## Settings Dependencies
+
+Feature activation follows a dependency chain:
+
+```
+Continuous Batching → Prefix Cache → Paged Cache
+                                   → KV Quantization
+                                   → Disk Cache
+```
+
+- **Paged cache** requires prefix cache ON
+- **KV quantization** requires continuous batching + prefix cache ON
+- **Disk cache** requires continuous batching + prefix cache ON (and is mutually exclusive with paged cache)
+
+## Stop/Cancel Architecture
+
+Two-pronged cancellation:
+
+1. **TCP abort** — `AbortController.abort()` kills the SSE connection immediately
+2. **Engine abort** — POST to `/cancel` endpoint calls `engine.abort_request(request_id)`
+   - SimpleEngine: Sets `_abort_requested = True`, checked between tokens
+   - BatchedEngine: Scheduler removes request from GPU batch immediately
+   - MLLM: Signals asyncio Queue with `None` for immediate unblock
+
+## Streaming Persistence
+
+When user navigates away from a chat:
+- Generation continues in the background (useEffect cleanup does NOT abort)
+- Periodic 5-second DB saves preserve in-progress content
+- When user returns, messages are loaded from DB with latest content
 
 ## Hardware Detection
 
