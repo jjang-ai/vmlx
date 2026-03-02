@@ -133,80 +133,71 @@ function formatSize(bytes: number): string {
 
 async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
   const models: ModelInfo[] = []
+  // Skip common system and git directories. We keep 'snapshots' unskipped so it can descend into standard HF Hub caches if needed.
+  const SKIP_DIRS = ['.locks', 'blobs', 'refs', '.git', '.cache']
 
-  // Skip directories that are not actual models
-  const SKIP_DIRS = ['.locks', 'blobs', 'refs', 'snapshots', '.git', '.cache']
+  async function scanRecursive(currentPath: string, depth: number, maxDepth: number) {
+    if (depth > maxDepth) return
 
-  try {
-    await access(basePath) // Verify path exists
-    const entries = await readdir(basePath, { withFileTypes: true })
+    try {
+      // Check if current directory is a valid MLX model
+      const format = await detectModelFormat(currentPath)
 
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      if (SKIP_DIRS.includes(entry.name)) continue
+      // We only support MLX format (.safetensors + config.json). GGUF and unknown formats are ignored.
+      if (format === 'mlx') {
+        const size = await getDirectorySize(currentPath)
 
-      const modelPath = join(basePath, entry.name)
-
-      // Check for nested structure (org/model-name)
-      try {
-        const subEntries = await readdir(modelPath, { withFileTypes: true })
-        const hasSubDirs = subEntries.some(e => e.isDirectory() && !SKIP_DIRS.includes(e.name))
-
-        if (hasSubDirs) {
-          // Scan subdirectories (likely org/model-name structure)
-          for (const subEntry of subEntries) {
-            if (!subEntry.isDirectory()) continue
-            if (SKIP_DIRS.includes(subEntry.name)) continue
-
-            const subModelPath = join(modelPath, subEntry.name)
-
-            // Skip in-progress downloads
-            try { await access(join(subModelPath, '.vmlx-downloading')); continue } catch (_) { /* not downloading */ }
-
-            const size = await getDirectorySize(subModelPath)
-
-            // Skip empty models
-            if (size < 1024 * 1024) continue // Less than 1 MB
-
-            const format = await detectModelFormat(subModelPath)
-            // Skip GGUF models — vllm-mlx only supports MLX (safetensors)
-            if (format === 'gguf') continue
-
-            models.push({
-              id: `${entry.name}/${subEntry.name}`,
-              name: `${entry.name}/${subEntry.name}`,
-              path: subModelPath,
-              size: formatSize(size),
-              format,
-            })
+        // Skip empty models (less than 1MB)
+        if (size >= 1024 * 1024) {
+          // If the model is a subdirectory, use its relative-ish name (org/model-name)
+          let id = basename(currentPath)
+          if (depth > 1) {
+            const parent = basename(join(currentPath, '..'))
+            if (parent !== basename(basePath)) {
+              id = `${parent}/${id}`
+            }
           }
-        } else {
-          // Single-level model directory
-
-          // Skip in-progress downloads
-          try { await access(join(modelPath, '.vmlx-downloading')); continue } catch (_) { /* not downloading */ }
-
-          const size = await getDirectorySize(modelPath)
-
-          // Skip empty models
-          if (size < 1024 * 1024) continue // Less than 1 MB
-
-          const format = await detectModelFormat(modelPath)
-          // Skip GGUF models — vllm-mlx only supports MLX (safetensors)
-          if (format === 'gguf') continue
 
           models.push({
-            id: entry.name,
-            name: entry.name,
-            path: modelPath,
+            id,
+            name: id,
+            path: currentPath,
             size: formatSize(size),
-            format,
+            format
           })
         }
-      } catch (error) {
-        console.error(`Error scanning ${modelPath}:`, error)
+
+        // Do NOT recurse into a valid model directory. 
+        // This prevents treating a model's subdirectories (like code/) as distinct org parent folders.
+        return
       }
+
+      // If it's not a model, and we haven't reached max depth, recurse into its subdirectories
+      if (depth < maxDepth) {
+        const entries = await readdir(currentPath, { withFileTypes: true })
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue
+          if (SKIP_DIRS.includes(entry.name)) continue
+
+          // Special case: ignore in-progress vmlx downloads
+          try {
+            await access(join(currentPath, entry.name, '.vmlx-downloading'))
+            continue
+          } catch (_) { /* not downloading */ }
+
+          await scanRecursive(join(currentPath, entry.name), depth + 1, maxDepth)
+        }
+      }
+    } catch (e) {
+      // Access errors (restricted permissions, etc) can be ignored safely
     }
+  }
+
+  try {
+    await access(basePath)
+    // Start at depth 0, max depth 3 (allows scanning ~/.cache/huggingface/hub/models.../snapshots/xyz/)
+    // For standard org/model, they are found at depth 2
+    await scanRecursive(basePath, 0, 3)
   } catch (error) {
     // Directory doesn't exist or not accessible — skip silently
   }
@@ -297,11 +288,18 @@ export function registerModelHandlers(): void {
   ipcMain.handle('models:browseDirectory', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
+      securityScopedBookmarks: true,
       title: 'Select Model Directory'
     })
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true }
     }
+
+    // In MacOS App Sandbox, save the security scoped bookmark for future reboots
+    if (result.bookmarks && result.bookmarks.length > 0) {
+      db.saveBookmark(result.filePaths[0], result.bookmarks[0])
+    }
+
     return { canceled: false, path: result.filePaths[0] }
   })
 
@@ -542,7 +540,7 @@ export function registerModelHandlers(): void {
       } catch { /* base dir doesn't exist */ }
     }
   }
-  cleanStaleMarkers().catch(() => {})
+  cleanStaleMarkers().catch(() => { })
 
   // Search HuggingFace for MLX models
   ipcMain.handle('models:searchHF', async (_, query: string) => {
@@ -697,12 +695,19 @@ export function registerModelHandlers(): void {
   ipcMain.handle('models:browseDownloadDir', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
+      securityScopedBookmarks: true,
       title: 'Select Model Download Directory',
       defaultPath: getDownloadDirectory()
     })
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true }
     }
+
+    // In MacOS App Sandbox, save the security scoped bookmark for future reboots
+    if (result.bookmarks && result.bookmarks.length > 0) {
+      db.saveBookmark(result.filePaths[0], result.bookmarks[0])
+    }
+
     return { canceled: false, path: result.filePaths[0] }
   })
 }

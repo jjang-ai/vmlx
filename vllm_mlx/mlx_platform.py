@@ -8,7 +8,6 @@ GPU acceleration.
 """
 
 import logging
-import platform
 import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
@@ -65,6 +64,7 @@ def _is_mlx_available() -> bool:
 
 def _is_apple_silicon() -> bool:
     """Check if running on Apple Silicon."""
+    import platform
     return sys.platform == "darwin" and platform.machine() == "arm64"
 
 

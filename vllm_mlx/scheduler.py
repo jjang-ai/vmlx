@@ -684,20 +684,10 @@ class Scheduler:
         return self._actual_tokenizer.decode(token_ids)
 
     def _get_detokenizer(self, request_id: str) -> Any:
-        """Get or create a streaming detokenizer for a request.
-
-        Streaming detokenizers buffer partial multi-byte characters (e.g. emoji,
-        CJK, Arabic) and only emit text when complete codepoints are available,
-        preventing the U+FFFD replacement character artifacts that occur when
-        decoding one token at a time.
-        """
+        """Get or create a streaming detokenizer for a request."""
         if request_id not in self._detokenizer_pool:
-            tokenizer = self._actual_tokenizer
-            # Prefer the tokenizer's optimized detokenizer if available
-            if hasattr(tokenizer, "detokenizer"):
-                detok = tokenizer.detokenizer
-            else:
-                detok = NaiveStreamingDetokenizer(tokenizer)
+            from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
+            detok = NaiveStreamingDetokenizer(self._actual_tokenizer)
             detok.reset()
             self._detokenizer_pool[request_id] = detok
         return self._detokenizer_pool[request_id]

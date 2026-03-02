@@ -141,7 +141,7 @@ function detectInstallMethod(path: string): InstallMethod {
       if (resolved.includes('uv/tools') || resolved.includes('uv\\tools')) {
         return 'uv'
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   if (path.includes('homebrew') || path.includes('Homebrew')) {
     return 'brew'
@@ -184,7 +184,7 @@ export async function detectAvailableInstallers(): Promise<AvailableInstaller[]>
       if (uvPath) {
         installers.push({ method: 'uv', path: uvPath, label: 'uv (Recommended)' })
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // Check for pip3 with Python >= 3.10
@@ -206,7 +206,7 @@ export async function detectAvailableInstallers(): Promise<AvailableInstaller[]>
             break
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -286,6 +286,15 @@ export function installVllmStreaming(
   onLog: (data: string) => void,
   onComplete: (result: { success: boolean; error?: string }) => void
 ): void {
+  // MAS App Sandbox completely forbids downloading executable dependencies or writing to Contents/Resources
+  if (app.isPackaged && process.mas) {
+    onComplete({
+      success: false,
+      error: 'In-app engine updates are disabled in the Mac App Store version due to App Sandbox constraints. Please update vMLX via the App Store to receive engine updates.'
+    })
+    return
+  }
+
   if (activeInstall) {
     onComplete({ success: false, error: 'An install/update is already in progress' })
     return

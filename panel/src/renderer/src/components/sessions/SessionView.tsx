@@ -281,7 +281,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               )}
               <button
                 onClick={handleStart}
-                className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+                className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
               >
                 {isRemote ? (session.status === 'error' ? 'Reconnect' : 'Connect') : 'Start'}
               </button>

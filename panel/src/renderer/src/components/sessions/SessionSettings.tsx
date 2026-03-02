@@ -30,7 +30,8 @@ function buildCommandPreview(
   detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string } | null
 ): string {
   const parts = ['vllm-mlx serve', modelPath]
-  const isVLM = !!detected?.isMultimodal
+  // Manual config takes priority over auto-detect for VLM mode
+  const isVLM = config.isMultimodal ?? !!detected?.isMultimodal
 
   // Server settings
   parts.push('--host', config.host)
@@ -45,7 +46,8 @@ function buildCommandPreview(
   if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
   if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
-  // VLM models: backend strips --continuous-batching (RotatingKVCache incompatible)
+  // VLM models use internal MLLM scheduler batching; LLMs use --continuous-batching flag
+  if (isVLM) parts.push('--is-mllm')
   if (config.continuousBatching && !isVLM) parts.push('--continuous-batching')
 
   // Parser resolution: detected ALWAYS wins (mirrors buildArgs lines 1052-1062)
@@ -66,10 +68,8 @@ function buildCommandPreview(
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
   } else {
-    // Auto-enable continuous batching (except VLM)
-    if (isVLM) {
-      parts.push('# VLM: --continuous-batching skipped (SimpleEngine)')
-    } else if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
+    // Auto-enable continuous batching for LLMs (VLMs handle batching internally)
+    if (!isVLM && !config.continuousBatching && !parts.includes('--continuous-batching')) {
       parts.push('--continuous-batching')
     }
     // Safe prefill default
@@ -87,16 +87,16 @@ function buildCommandPreview(
     }
   }
 
-  // Paged cache (mirrors buildArgs line 1119) — requires prefix cache ON + NOT VLM
-  if (!prefixCacheOff && !isVLM && (config.usePagedCache ?? detected?.usePagedCache)) {
+  // Paged cache — requires prefix cache ON (works for both LLM and VLM)
+  if (!prefixCacheOff && (config.usePagedCache ?? detected?.usePagedCache)) {
     parts.push('--use-paged-cache')
     if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
     if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
   }
 
-  // KV cache quantization (mirrors buildArgs line 1138) — requires prefix cache ON, NOT VLM
+  // KV cache quantization — requires prefix cache ON (works for both LLM and VLM)
   // Hybrid/Mamba models allowed — Python scheduler only quantizes KVCache layers
-  if (!prefixCacheOff && !isVLM && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+  if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
     if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
       parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
@@ -110,8 +110,8 @@ function buildCommandPreview(
     if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
   }
 
-  // Block disk cache (mirrors buildArgs line 1150) — requires prefix cache ON + NOT VLM + paged cache ON
-  if (!prefixCacheOff && !isVLM && (config.usePagedCache ?? detected?.usePagedCache) && config.enableBlockDiskCache) {
+  // Block disk cache — requires prefix cache ON + paged cache ON (works for both LLM and VLM)
+  if (!prefixCacheOff && (config.usePagedCache ?? detected?.usePagedCache) && config.enableBlockDiskCache) {
     parts.push('--enable-block-disk-cache')
     if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
     if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
@@ -290,13 +290,9 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
-          // VLM models: disable features incompatible with SimpleEngine
+          // VLM models: set isMultimodal flag (all cache features now supported)
           if (detected.isMultimodal) {
-            base.continuousBatching = false
-            base.usePagedCache = false
-            base.kvCacheQuantization = 'none'
-            base.enableDiskCache = false
-            base.enableBlockDiskCache = false
+            base.isMultimodal = true
           }
         }
       } catch (_) { }
@@ -356,8 +352,8 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         {/* Status message */}
         {message && (
           <div className={`mb-4 p-3 rounded-lg text-sm ${message.type === 'success'
-              ? 'bg-primary/10 border border-primary/30 text-primary'
-              : 'bg-destructive/10 border border-destructive/30 text-destructive'
+            ? 'bg-primary/10 border border-primary/30 text-primary'
+            : 'bg-destructive/10 border border-destructive/30 text-destructive'
             }`}>
             {message.text}
           </div>

@@ -10,7 +10,7 @@ BUILD_DATE="20260211"
 ARCH="aarch64-apple-darwin"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PANEL_DIR="$(dirname "$SCRIPT_DIR")"
-REPO_DIR="$(dirname "$PANEL_DIR")"
+REPO_DIR="/Users/eric/mlx/vllm-mlx"
 BUNDLE_DIR="$PANEL_DIR/bundled-python"
 
 echo "==> Bundling Python $PYTHON_VERSION for standalone vMLX distribution"
