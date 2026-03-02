@@ -266,6 +266,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="No expiration"
+                  disabled={config.usePagedCache}
                 />
               </>
             )}
@@ -782,11 +783,13 @@ interface SliderFieldProps {
   allowUnlimited?: boolean
   unlimitedValue?: number
   unlimitedLabel?: string
+  disabled?: boolean
 }
 
 export function SliderField({
   label, tooltip, value, onChange, min, max, step, defaultValue,
-  allowUnlimited = false, unlimitedValue = 0, unlimitedLabel = 'Unlimited'
+  allowUnlimited = false, unlimitedValue = 0, unlimitedLabel = 'Unlimited',
+  disabled = false
 }: SliderFieldProps) {
   const isUnlimited = allowUnlimited && value === unlimitedValue
 
@@ -831,7 +834,7 @@ export function SliderField({
   const sliderValue = isUnlimited ? min : Math.min(Math.max(value, min), max)
 
   return (
-    <div className="block">
+    <div className={`block ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-muted-foreground">
           {label}
@@ -841,6 +844,7 @@ export function SliderField({
           <button
             type="button"
             onClick={toggleUnlimited}
+            disabled={disabled}
             className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${isUnlimited
               ? 'bg-primary/15 border-primary/40 text-primary'
               : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/30'
@@ -859,7 +863,7 @@ export function SliderField({
           step={step}
           value={sliderValue}
           onChange={handleSliderChange}
-          disabled={isUnlimited}
+          disabled={disabled || isUnlimited}
         />
         <input
           type="number"
@@ -868,7 +872,7 @@ export function SliderField({
           onChange={handleInputChange}
           onBlur={handleInputBlur}
           placeholder={isUnlimited ? unlimitedLabel : undefined}
-          disabled={isUnlimited}
+          disabled={disabled || isUnlimited}
           min={min}
           step={step}
         />

@@ -318,6 +318,7 @@ class MLLMBatchGenerator:
         vision_cache_size: int = 100,
         paged_cache_manager: Optional[Any] = None,
         block_aware_cache: Optional[Any] = None,
+        logits_processors: Optional[Any] = None,
     ):
         """
         Initialize MLLM batch generator.
@@ -334,8 +335,9 @@ class MLLMBatchGenerator:
             prefill_step_size: Tokens to process per prefill step
             enable_vision_cache: Enable vision embedding caching
             vision_cache_size: Max entries in vision cache
-            paged_cache_manager: Optional PagedCacheManager 
+            paged_cache_manager: Optional PagedCacheManager
             block_aware_cache: Optional BlockAwarePrefixCache
+            logits_processors: Optional logits processors (e.g., repetition penalty)
         """
         self.model = model
         self.processor = processor
@@ -360,6 +362,7 @@ class MLLMBatchGenerator:
         self.max_tokens = max_tokens
         self.stop_tokens = stop_tokens or set()
         self.sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
+        self.logits_processors = logits_processors
 
         self.prefill_batch_size = prefill_batch_size
         self.completion_batch_size = max(completion_batch_size, prefill_batch_size)
@@ -756,14 +759,30 @@ class MLLMBatchGenerator:
         )
 
     def _make_request_sampler(self, request: MLLMBatchRequest) -> Callable[[mx.array], mx.array]:
-        """Create a sampler for a specific request's sampling parameters."""
+        """Create a sampler for a specific request's sampling parameters.
+
+        Each request can have different temperature/top_p/top_k/min_p.
+        Repetition penalty is applied via logits_processors when set.
+        """
         from mlx_lm.sample_utils import make_sampler
-        return make_sampler(
+        base_sampler = make_sampler(
             temp=request.temperature,
             top_p=request.top_p,
             top_k=request.top_k if request.top_k > 0 else 0,
             min_p=request.min_p if request.min_p > 0 else 0.0,
         )
+
+        # Apply repetition penalty if set for this request
+        rep_penalty = getattr(request, "repetition_penalty", 1.0)
+        if rep_penalty and rep_penalty != 1.0:
+            from mlx_lm.sample_utils import make_logits_processors
+            logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
+            def sampler_with_penalty(logits):
+                processed = logits_procs(logits) if logits_procs else logits
+                return base_sampler(processed)
+            return sampler_with_penalty
+
+        return base_sampler
 
     def _step(
         self, input_tokens: mx.array, cache: List[Any]

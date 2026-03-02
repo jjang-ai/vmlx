@@ -257,8 +257,9 @@ class MLLMScheduler:
         # Get stop tokens from tokenizer
         self.stop_tokens = self._get_stop_tokens()
 
-        # Batch generator (created lazily)
+        # Batch generator (created lazily, recreated on sampler param change)
         self.batch_generator: Optional[MLLMBatchGenerator] = None
+        self._current_sampler_params: tuple = ()
 
         # Request management - following vLLM's design
         self.waiting: deque[MLLMRequest] = deque()  # Waiting queue (FCFS)
@@ -506,27 +507,64 @@ class MLLMScheduler:
 
         return stop_tokens
 
-    def _ensure_batch_generator(self) -> None:
-        """Ensure batch generator exists."""
-        if self.batch_generator is None:
-            from mlx_lm.sample_utils import make_sampler
+    def _ensure_batch_generator(
+        self, sampling_params: Optional[SamplingParams] = None
+    ) -> None:
+        """Ensure batch generator exists with compatible sampling parameters.
 
-            # Default sampler (can be overridden per-request in future)
-            sampler = make_sampler(temp=0.7, top_p=0.9)
+        If sampling_params differ from the current generator's settings,
+        the generator is recreated (unless active requests prevent it).
+        """
+        from mlx_lm.sample_utils import make_sampler
 
-            self.batch_generator = MLLMBatchGenerator(
-                model=self.model,
-                processor=self.processor,
-                mm_processor=self.mm_processor,
-                max_tokens=self.config.default_max_tokens,
-                stop_tokens=self.stop_tokens,
-                sampler=sampler,
-                prefill_batch_size=self.config.prefill_batch_size,
-                completion_batch_size=self.config.completion_batch_size,
-                prefill_step_size=self.config.prefill_step_size,
-                paged_cache_manager=self.paged_cache_manager,
-                block_aware_cache=self.block_aware_cache,
+        # Use provided params or sensible defaults
+        temp = sampling_params.temperature if sampling_params else 0.7
+        top_p = sampling_params.top_p if sampling_params else 0.9
+        top_k = sampling_params.top_k if sampling_params else 0
+        min_p = sampling_params.min_p if sampling_params else 0.0
+        rep_penalty = sampling_params.repetition_penalty if sampling_params else 1.0
+
+        new_params = (temp, top_p, top_k, min_p, rep_penalty)
+
+        if (
+            self.batch_generator is not None
+            and self._current_sampler_params == new_params
+        ):
+            return
+
+        # Can't rebuild if there are active requests
+        if self.batch_generator is not None and self.running:
+            logger.warning(
+                "MLLM sampling parameters changed with active requests. "
+                "New requests will use new parameters after current batch completes."
             )
+            return
+
+        sampler = make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k)
+
+        # Build logits processors for repetition penalty
+        logits_processors = None
+        if rep_penalty and rep_penalty != 1.0:
+            from mlx_lm.sample_utils import make_logits_processors
+            logits_processors = make_logits_processors(
+                repetition_penalty=rep_penalty,
+            )
+
+        self.batch_generator = MLLMBatchGenerator(
+            model=self.model,
+            processor=self.processor,
+            mm_processor=self.mm_processor,
+            max_tokens=self.config.default_max_tokens,
+            stop_tokens=self.stop_tokens,
+            sampler=sampler,
+            logits_processors=logits_processors,
+            prefill_batch_size=self.config.prefill_batch_size,
+            completion_batch_size=self.config.completion_batch_size,
+            prefill_step_size=self.config.prefill_step_size,
+            paged_cache_manager=self.paged_cache_manager,
+            block_aware_cache=self.block_aware_cache,
+        )
+        self._current_sampler_params = new_params
 
     # ========== Sync API (step-based) ==========
 
@@ -652,7 +690,9 @@ class MLLMScheduler:
         Returns:
             List of requests that were scheduled
         """
-        self._ensure_batch_generator()
+        # Use first waiting request's sampling params to configure the generator
+        first_params = self.waiting[0].sampling_params if self.waiting else None
+        self._ensure_batch_generator(first_params)
 
         scheduled = []
         batch_requests = []

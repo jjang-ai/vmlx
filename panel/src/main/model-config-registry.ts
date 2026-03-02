@@ -51,7 +51,7 @@ registerFamily('qwen3-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParse
 registerFamily('qwen3-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 })
 registerFamily('qwen3', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 / QwQ', priority: 10 })
 registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 })
-registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
+registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
 registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
 
 // Llama
@@ -281,6 +281,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'starcoder2': 'starcoder',
   'stablelm': 'stablelm',
   'baichuan': 'baichuan',
+  'internlm': 'internlm',
   'internlm2': 'internlm',
   'internlm3': 'internlm3',
   'internlm_xcomposer2': 'internlm-xcomposer',

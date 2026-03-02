@@ -309,9 +309,21 @@ def register_all(registry=None):
 
     # ── StepFun family ──
 
+    # Step-1V is a vision-language model
+    _register(ModelConfig(
+        family_name="step_vl",
+        model_types=["step1v"],
+        cache_type="kv",
+        tool_parser="step3p5",
+        reasoning_parser="qwen3",
+        think_in_template=True,
+        is_mllm=True,
+        priority=5,
+    ))
+
     _register(ModelConfig(
         family_name="step",
-        model_types=["step3p5", "step", "step1v"],
+        model_types=["step3p5", "step"],
         cache_type="kv",
         tool_parser="step3p5",
         reasoning_parser="qwen3",
@@ -576,7 +588,7 @@ def register_all(registry=None):
 
     _register(ModelConfig(
         family_name="mamba",
-        model_types=["mamba", "mamba2"],
+        model_types=["mamba", "mamba2", "codestral_mamba"],
         cache_type="mamba",
         priority=30,
     ))
