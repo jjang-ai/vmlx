@@ -41,7 +41,7 @@ echo "==> Installing dependencies..."
   "mlx>=0.29.0" "mlx-lm>=0.30.2" "mlx-vlm>=0.1.0" \
   "transformers>=4.40.0" "tokenizers>=0.19.0" "huggingface-hub>=0.23.0" \
   "numpy>=1.24.0" "pillow>=10.0.0" \
-  "opencv-python-headless>=4.8.0" "torchvision>=0.18.0" \
+  "opencv-python-headless>=4.8.0" \
   "fastapi>=0.100.0" "uvicorn>=0.23.0" \
   "mcp>=1.0.0" "jsonschema>=4.0.0" \
   "psutil>=5.9.0" "tqdm>=4.66.0" "pyyaml>=6.0" \
@@ -79,7 +79,12 @@ find "$SITE" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 
 # Packages not needed at runtime (transitive deps / dev-only tools)
-rm -rf "$SITE/torchgen" 2>/dev/null || true           # torch code generation (~2.4 MB)
+# torch/torchvision: vllm-mlx uses MLX, not PyTorch. torch's bundled copy is
+# broken (missing torchgen) and causes ModuleNotFoundError on startup.
+# transformers gracefully degrades without torch via is_torch_available().
+rm -rf "$SITE/torch" "$SITE/torch-"*.dist-info 2>/dev/null || true
+rm -rf "$SITE/torchvision" "$SITE/torchvision-"*.dist-info 2>/dev/null || true
+rm -rf "$SITE/torchgen" "$SITE/torchgen-"*.dist-info 2>/dev/null || true
 rm -rf "$SITE/_soundfile_data" 2>/dev/null || true     # audio sample files (~2.9 MB)
 rm -rf "$SITE/setuptools" 2>/dev/null || true          # build tool, not needed at runtime (~4.2 MB)
 rm -rf "$SITE/setuptools"*.dist-info 2>/dev/null || true
