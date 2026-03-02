@@ -120,8 +120,9 @@ class ModelConfigRegistry:
 
             model_type = None
             try:
+                from pathlib import Path
                 from mlx_lm.utils import load_config
-                model_config = load_config(model_name)
+                model_config = load_config(Path(model_name))
                 model_type = model_config.get("model_type", "").lower()
             except Exception as e:
                 logger.warning(f"Could not load config.json for {model_name} to check model_type: {e}")
