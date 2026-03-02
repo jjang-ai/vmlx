@@ -32,26 +32,10 @@ def serve_command(args):
 
     logger = logging.getLogger(__name__)
 
-    # Default tool call parser to "auto" when --enable-auto-tool-choice is used without --tool-call-parser
-    if args.enable_auto_tool_choice and not args.tool_call_parser:
-        args.tool_call_parser = "auto"
-
-    # Auto-detect parsers from model name using registry
-    from .model_config_registry import get_model_config_registry
-    registry = get_model_config_registry()
-    model_name = args.model or ""
-
-    # Resolve "auto" tool call parser to model-specific parser
-    if args.enable_auto_tool_choice and args.tool_call_parser == "auto":
-        detected_tool = registry.get_tool_parser(model_name)
-        if detected_tool:
-            args.tool_call_parser = detected_tool
-            logger.info(f"Auto-detected tool call parser: {detected_tool} (from model name)")
-        else:
-            logger.info("Tool call parser 'auto': no specific parser detected, using generic")
-            args.tool_call_parser = None  # Fall through to generic parser
-
-    # Configure server security settings
+    # Unified server configuration — explicit args ONLY
+    # If the user (or vMLX frontend) passes --tool-call-parser qwen, we use qwen.
+    # If it's "auto" or empty, we do NOT try to regex match the model name.
+    
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     server._default_timeout = args.timeout
     if args.rate_limit > 0:
@@ -60,7 +44,7 @@ def serve_command(args):
         )
 
     # Configure tool calling
-    if args.enable_auto_tool_choice and args.tool_call_parser:
+    if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser not in ("auto", "none"):
         server._enable_auto_tool_choice = True
         server._tool_call_parser = args.tool_call_parser
     else:
@@ -73,22 +57,10 @@ def serve_command(args):
     if getattr(args, 'default_top_p', None) is not None:
         server._default_top_p = args.default_top_p
 
-    # Configure reasoning parser (resolve "auto" or auto-detect from model config)
+    # Configure reasoning parser (strictly explicit)
     parser_name = getattr(args, 'reasoning_parser', None)
-    # Auto-detect from model config if not explicitly set
-    if not parser_name:
-        detected = registry.get_reasoning_parser(model_name)
-        if detected:
-            parser_name = detected
-            logger.info(f"Auto-detected reasoning parser: {parser_name} (from model config)")
-    elif parser_name == "auto":
-        detected = registry.get_reasoning_parser(model_name)
-        if detected:
-            parser_name = detected
-            logger.info(f"Auto-detected reasoning parser: {parser_name} (from model name)")
-        else:
-            logger.info("Reasoning parser 'auto': no parser detected for this model")
-            parser_name = None
+    if parser_name in ("auto", "none", None) or not parser_name:
+        parser_name = None
 
     if parser_name:
         try:
@@ -385,6 +357,7 @@ def bench_detok_command(args):
         prompt=prompt,
         max_tokens=2000,
         verbose=False,
+        force_mllm=getattr(args, 'is_mllm', False),
     )
 
     prompt_tokens = tokenizer.encode(prompt)
@@ -669,6 +642,7 @@ Examples:
         default=None,
         choices=[
             "auto",
+            "none",
             "mistral",
             "qwen",
             "llama",
@@ -685,7 +659,7 @@ Examples:
         ],
         help=(
             "Select the tool call parser for the model. Options: "
-            "auto (auto-detect), mistral, qwen, llama, hermes, deepseek, "
+            "auto (auto-detect), none, mistral, qwen, llama, hermes, deepseek, "
             "kimi, granite, nemotron, minimax, xlam, functionary, glm47, step3p5. "
             "Required for --enable-auto-tool-choice."
         ),
@@ -698,12 +672,17 @@ Examples:
         "--reasoning-parser",
         type=str,
         default=None,
-        choices=["auto"] + reasoning_choices,
+        choices=["auto", "none"] + reasoning_choices,
         help=(
             "Enable reasoning content extraction with specified parser. "
-            "Use 'auto' to detect from model name. "
-            f"Options: auto, {', '.join(reasoning_choices)}."
+            "Use 'auto' to detect from model name, or 'none' to disable explicitly. "
+            f"Options: auto, none, {', '.join(reasoning_choices)}."
         ),
+    )
+    serve_parser.add_argument(
+        "--is-mllm",
+        action="store_true",
+        help="Explicitly mark the model as a Multimodal Vision/Language Model. Disables auto-detection.",
     )
     # Embedding model option
     serve_parser.add_argument(

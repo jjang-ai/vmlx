@@ -40,7 +40,7 @@ BlockHash = NewType("BlockHash", bytes)
 def compute_block_hash(
     parent_hash: Optional[BlockHash],
     token_ids: List[int],
-    extra_keys: Optional[Tuple[Any, ...]] = None,
+    extra_keys: Optional[Any] = None,
 ) -> BlockHash:
     """
     Compute hash for a block based on its content and parent block.
@@ -51,7 +51,7 @@ def compute_block_hash(
     Args:
         parent_hash: Hash of the previous block, or None for first block
         token_ids: Token IDs in this block
-        extra_keys: Additional keys (e.g., LoRA, multimodal)
+        extra_keys: Additional keys (e.g., LoRA, multimodal arrays)
 
     Returns:
         Content-based hash for this block
@@ -69,8 +69,32 @@ def compute_block_hash(
     hasher.update(bytes(str(tuple(token_ids)), "utf-8"))
 
     # Include extra keys if present
-    if extra_keys:
-        hasher.update(bytes(str(extra_keys), "utf-8"))
+    if extra_keys is not None:
+        import mlx.core as mx
+
+        def _hash_extra(obj):
+            if isinstance(obj, mx.array):
+                # Hash MLX arrays by shape and a fast checksum of data
+                # to avoid slow full-array copies to CPU for hashing
+                shape_bytes = bytes(str(obj.shape), "utf-8")
+                # For deterministic hashing of arrays, we sum them and hash the float
+                # In production, vision embeddings are typically deterministic if the same
+                # image/prompt pair is used.
+                sum_val = mx.sum(obj).item()
+                sum_bytes = bytes(str(sum_val), "utf-8")
+                hasher.update(shape_bytes)
+                hasher.update(sum_bytes)
+            elif isinstance(obj, dict):
+                for k in sorted(obj.keys()):
+                    hasher.update(bytes(str(k), "utf-8"))
+                    _hash_extra(obj[k])
+            elif isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _hash_extra(item)
+            else:
+                hasher.update(bytes(str(obj), "utf-8"))
+
+        _hash_extra(extra_keys)
 
     return BlockHash(hasher.digest())
 

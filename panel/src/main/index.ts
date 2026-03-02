@@ -24,7 +24,7 @@ let isQuitting = false
 process.on('uncaughtException', (error) => {
   console.error('[CRASH] Uncaught exception:', error)
   // Kill all Python processes to prevent orphans
-  try { sessionManager.stopAll().catch(() => {}) } catch (_) {}
+  try { sessionManager.stopAll().catch(() => { }) } catch (_) { }
   try {
     dialog.showErrorBox(
       'Unexpected Error',
@@ -44,7 +44,7 @@ if (!gotTheLock) {
 } else {
   app.on('second-instance', () => {
     // Focus existing window when user tries to open a second instance
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
     }
@@ -82,10 +82,17 @@ function createWindow(): void {
 
     // Folder picker for built-in tools working directory
     ipcMain.handle('dialog:openDirectory', async () => {
-      return dialog.showOpenDialog({
+      const result = await dialog.showOpenDialog({
         properties: ['openDirectory', 'createDirectory'],
+        securityScopedBookmarks: true,
         title: 'Select Working Directory'
       })
+
+      if (!result.canceled && result.filePaths.length > 0 && result.bookmarks && result.bookmarks.length > 0) {
+        db.saveBookmark(result.filePaths[0], result.bookmarks[0])
+      }
+
+      return result
     })
 
     // Image picker for vision/multimodal chat — reads files and returns base64 data URLs
@@ -102,8 +109,8 @@ function createWindow(): void {
         const ext = fp.split('.').pop()?.toLowerCase() || 'png'
         const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
           : ext === 'gif' ? 'image/gif'
-          : ext === 'webp' ? 'image/webp'
-          : 'image/png'
+            : ext === 'webp' ? 'image/webp'
+              : 'image/png'
         const data = readFileSync(fp).toString('base64')
         const name = fp.split('/').pop() || 'image'
         return { dataUrl: `data:${mime};base64,${data}`, name }
@@ -163,16 +170,33 @@ app.whenReady().then(async () => {
 
   createWindow()
 
+  // Restore macOS App Sandbox bookmarks for external directory access
+  try {
+    const bookmarks = db.getAllBookmarks()
+    console.log(`[STARTUP] Restoring ${bookmarks.length} App Sandbox bookmarks`)
+    for (const b of bookmarks) {
+      try {
+        app.startAccessingSecurityScopedResource(b.bookmark)
+      } catch (e) {
+        console.error(`[STARTUP] Failed to restore bookmark for ${b.path}`, e)
+      }
+    }
+  } catch (err) {
+    console.error('[STARTUP] Error fetching bookmarks from DB', err)
+  }
+
   // Notify user if database was recovered from corruption
-  if (db.recoveryBackupPath && mainWindow) {
+  if (db.recoveryBackupPath && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.once('ready-to-show', () => {
-      dialog.showMessageBox(mainWindow!, {
-        type: 'warning',
-        title: 'Database Recovered',
-        message: 'Your chat database was corrupted and has been recreated.',
-        detail: `Your previous data has been backed up to:\n${db.recoveryBackupPath}`,
-        buttons: ['OK']
-      })
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: 'Database Recovered',
+          message: 'Your chat database was corrupted and has been recreated.',
+          detail: `Your previous data has been backed up to:\n${db.recoveryBackupPath}`,
+          buttons: ['OK']
+        }).catch(() => { })
+      }
     })
   }
 

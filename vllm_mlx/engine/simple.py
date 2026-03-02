@@ -45,7 +45,7 @@ class SimpleEngine(BaseEngine):
         self._model_name = model_name
         self._trust_remote_code = trust_remote_code
         self._enable_cache = enable_cache
-        self._is_mllm = force_mllm or is_mllm_model(model_name)
+        self._is_mllm = is_mllm_model(model_name, force_mllm=force_mllm)
 
         self._model = None
         self._loaded = False

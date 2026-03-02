@@ -57,6 +57,9 @@ export interface ServerConfig {
   // Reasoning
   reasoningParser?: string
 
+  // Multimodal (VLM)
+  isMultimodal?: boolean
+
   // Cache TTL
   cacheTtlMinutes?: number
 

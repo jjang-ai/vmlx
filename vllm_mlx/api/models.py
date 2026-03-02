@@ -582,16 +582,8 @@ class ChatCompletionChunkDelta(BaseModel):
 
     role: str | None = None
     content: str | None = None
-    reasoning: str | None = Field(
-        default=None, exclude=True  # Internal storage; excluded from JSON
-    )
+    reasoning_content: str | None = None
     tool_calls: list[dict] | None = None
-
-    @computed_field
-    @property
-    def reasoning_content(self) -> str | None:
-        """OpenAI O1-style reasoning field. Only present when thinking is enabled."""
-        return self.reasoning
 
 
 class ChatCompletionChunkChoice(BaseModel):
