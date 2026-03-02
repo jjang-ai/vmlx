@@ -161,7 +161,7 @@ class BatchedEngine(BaseEngine):
         self._trust_remote_code = trust_remote_code
         self._scheduler_config = scheduler_config
         self._stream_interval = stream_interval
-        self._is_mllm = force_mllm or is_mllm_model(model_name)
+        self._is_mllm = is_mllm_model(model_name, force_mllm=force_mllm)
 
         self._model = None
         self._processor = None  # For MLLM
@@ -234,6 +234,13 @@ class BatchedEngine(BaseEngine):
             completion_batch_size=completion_batch_size,
             enable_vision_cache=True,
             vision_cache_size=100,
+            # Propagate cache settings from user's SchedulerConfig
+            enable_prefix_cache=getattr(self._scheduler_config, "enable_prefix_cache", True),
+            use_paged_cache=getattr(self._scheduler_config, "use_paged_cache", True),
+            paged_cache_block_size=getattr(self._scheduler_config, "paged_cache_block_size", 64),
+            max_cache_blocks=getattr(self._scheduler_config, "max_cache_blocks", 1000),
+            kv_cache_quantization=getattr(self._scheduler_config, "kv_cache_quantization", "none"),
+            kv_cache_group_size=getattr(self._scheduler_config, "kv_cache_group_size", 64),
         )
 
         # Create and start MLLM scheduler
@@ -346,12 +353,17 @@ class BatchedEngine(BaseEngine):
                                     break
                         break
 
-                return apply_chat_template(
+                prompt = apply_chat_template(
                     self._processor,
                     config,
                     text_prompt,
                     num_images=num_images,
                 )
+                if enable_thinking is False and prompt.endswith("<think>\n"):
+                    prompt = prompt[:-8]
+                elif enable_thinking is False and prompt.endswith("<think>"):
+                    prompt = prompt[:-7]
+                return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
                 # Fall through to standard template
@@ -383,7 +395,7 @@ class BatchedEngine(BaseEngine):
                 template_kwargs.update(extra_template_kwargs)
 
             try:
-                return tokenizer.apply_chat_template(messages, **template_kwargs)
+                prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
             except (TypeError, Exception) as template_err:
                 logger.warning(
                     f"Chat template first attempt failed (retrying with fewer kwargs): {template_err}"
@@ -391,7 +403,13 @@ class BatchedEngine(BaseEngine):
                 for key in list(template_kwargs.keys()):
                     if key not in ("tokenize", "add_generation_prompt"):
                         del template_kwargs[key]
-                return tokenizer.apply_chat_template(messages, **template_kwargs)
+                prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                
+            if enable_thinking is False and prompt.endswith("<think>\n"):
+                prompt = prompt[:-8]
+            elif enable_thinking is False and prompt.endswith("<think>"):
+                prompt = prompt[:-7]
+            return prompt
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
             return prompt + "\nassistant:"
@@ -717,6 +735,7 @@ class BatchedEngine(BaseEngine):
             request_id=request_id,
             **kwargs,
         ):
+            print(f"!!! DEBUG_STREAM_CHAT: new_text={repr(output.new_text)}", flush=True)
             yield output
 
     def get_stats(self) -> dict[str, Any]:

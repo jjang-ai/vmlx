@@ -59,7 +59,6 @@ from .utils import (
     is_mllm_model,
     is_vlm_model,
     extract_multimodal_content,
-    MLLM_PATTERNS,
     SPECIAL_TOKENS_PATTERN,
 )
 
@@ -116,7 +115,6 @@ __all__ = [
     "is_mllm_model",
     "is_vlm_model",
     "extract_multimodal_content",
-    "MLLM_PATTERNS",
     "SPECIAL_TOKENS_PATTERN",
     # Tool calling
     "parse_tool_calls",

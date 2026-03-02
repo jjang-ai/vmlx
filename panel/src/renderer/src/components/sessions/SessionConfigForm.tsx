@@ -33,6 +33,7 @@ export interface SessionConfig {
   enableAutoToolChoice: boolean
   toolCallParser: string
   reasoningParser: string
+  isMultimodal?: boolean
   additionalArgs: string
 }
 
@@ -69,6 +70,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   enableAutoToolChoice: false,
   toolCallParser: 'auto',
   reasoningParser: 'auto',
+  isMultimodal: false,
   additionalArgs: ''
 }
 
@@ -92,15 +94,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     tools: false
   })
 
+  const batchingOff = !config.continuousBatching
+  const effectivelyNoBatching = batchingOff
+  const isMambaCache = detectedCacheType === 'mamba'
+
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }))
   }
-
-  // Feature gating: cache features require continuous batching
-  const batchingOff = !config.continuousBatching
-  // Feature gating: KV cache quantization doesn't work with Mamba/SSM cache types
-  const isMambaCache = detectedCacheType === 'mamba'
-  const effectivelyNoBatching = batchingOff
 
   return (
     <div className="space-y-0">
@@ -192,7 +192,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="No limit"
         />
-        <CheckField label="Continuous Batching" tooltip="When enabled, new requests can join an ongoing batch without waiting for the current batch to complete. This significantly improves throughput when serving multiple concurrent users. Has minimal overhead for single-user use. Required for: prefix caching, paged KV cache, KV cache quantization, and disk caching." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
+        <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
         <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
         {!config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
@@ -206,7 +206,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
-        <CheckField label="Enable Prefix Caching" tooltip="Caches computed attention states for common prompt prefixes (like system prompts). When multiple requests share the same prefix, the cached state is reused, dramatically reducing time-to-first-token. Recommended to keep enabled. Requires continuous batching." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={effectivelyNoBatching} />
+        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
         {config.enablePrefixCache && (
           <>
             <CheckField label="Legacy Entry-Count Cache" tooltip="Switches from memory-aware cache (which uses Cache Memory %, Cache Memory Limit, and Cache TTL controls) to a simpler entry-count cache. When ON: you control cache by max entries only. When OFF: you get fine-grained memory budget controls (% of RAM, MB limit, TTL expiration). Memory-aware mode is recommended for most users." checked={config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} />
@@ -277,7 +277,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Allocates KV cache in fixed-size blocks instead of one contiguous allocation. Reduces memory fragmentation, enables prefix sharing between requests, and handles longer contexts more efficiently. Recommended for most models. Not compatible with legacy Disk Cache (use Block Disk Cache L2 instead). For persistent storage, enable 'Block Disk Cache (L2)' below." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={effectivelyNoBatching} />
+        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff} />
         {config.usePagedCache && (
           <>
             <SliderField
@@ -347,7 +347,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Quantization
-            <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy." />
+            <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy. Works with both LLMs and VLMs." />
           </span>
           <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching}>
             <option value="none">None (full precision cache)</option>
@@ -456,6 +456,15 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           onChange={v => onChange('reasoningParser', v)}
           options={REASONING_PARSER_OPTIONS}
         />
+        <CheckField
+          label="Multimodal Support (VLM)"
+          tooltip="Enable Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. This activates the MLLM scheduler which handles image/video inputs alongside text. Auto-detected from config.json (vision_config presence), but you can manually enable it here if auto-detection fails. VLMs fully support prefix cache, paged KV cache, and KV cache quantization."
+          checked={config.isMultimodal ?? false}
+          onChange={v => onChange('isMultimodal', v)}
+        />
+        {config.isMultimodal && (
+          <InfoNote text="VLM mode active — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support. Continuous batching for VLMs is handled internally by the MLLM scheduler." />
+        )}
       </Section>
 
       {/* Additional */}

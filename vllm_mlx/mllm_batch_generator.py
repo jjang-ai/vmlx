@@ -63,6 +63,10 @@ class MLLMBatchRequest:
     vision_encoded: bool = False
     cross_attention_states: Optional[Any] = None  # For models that use cross-attention
     encoder_outputs: Optional[Any] = None  # For encoder-decoder models
+    
+    # Prefix cache state
+    logical_token_blocks: List[Any] = field(default_factory=list)
+    prompt_cache: Optional[List[Any]] = None  # Pre-filled KV cache from Prefix Cache or Disk Cache
 
 
 @dataclass
@@ -79,6 +83,7 @@ class MLLMBatchResponse:
     logprobs: mx.array  # Log probabilities
     finish_reason: Optional[str] = None  # "stop", "length", or None
     prompt_cache: Optional[Callable[[], List[Any]]] = None  # Cache extraction function
+    prompt_token_ids: Optional[List[int]] = None  # Original tokenized prompt for prefix key
 
 
 @dataclass
@@ -205,25 +210,34 @@ class MLLMBatchStats:
         }
 
 
-def _make_batch_cache(model: nn.Module, left_padding: List[int]) -> List[Any]:
+def _make_cache(model: nn.Module, left_padding: List[int], max_kv_size: Optional[int] = None) -> List[Any]:
     """
-    Create batch-aware KV cache for the language model.
-
-    Args:
-        model: The language model (model.language_model from VLM)
-        left_padding: Padding amounts for left-padded prompts
-
-    Returns:
-        List of BatchKVCache objects for each layer
+    Convert a list of regular caches into their corresponding
+    batch-aware caches.
     """
     from mlx_lm.models.cache import BatchKVCache, KVCache, RotatingKVCache
-    from mlx_lm.generate import BatchRotatingKVCache
+    try:
+        from mlx_lm.generate import BatchRotatingKVCache
+    except ImportError:
+        def BatchRotatingKVCache(*args, **kwargs):
+            raise NotImplementedError("BatchRotatingKVCache not available in this mlx_lm version")
 
     def to_batch_cache(c):
-        if isinstance(c, RotatingKVCache):
-            return BatchRotatingKVCache(c.max_size, left_padding)
-        elif isinstance(c, KVCache):
+        if isinstance(c, KVCache) and not isinstance(c, RotatingKVCache):
             return BatchKVCache(left_padding)
+        elif isinstance(c, RotatingKVCache):
+            if c.keep > 0:
+                raise ValueError("RotatingKVCache with keep tokens is not supported.")
+            return BatchRotatingKVCache(c.max_size, left_padding)
+        elif type(c).__name__ in ("ArraysCache", "MambaCache"):
+            # Use BatchMambaCache for proper extract/merge in continuous batching
+            from .utils.mamba_cache import BatchMambaCache
+            num_arrays = len(c.cache) if c.cache else 2
+            return BatchMambaCache(size=num_arrays, left_padding=left_padding)
+        elif type(c).__name__ == "CacheList":
+            # For hybrid models
+            from mlx_lm.models.cache import CacheList
+            return CacheList(*(to_batch_cache(sub_c) for sub_c in c.caches))
         else:
             raise ValueError(f"{type(c)} does not yet support batching")
 
@@ -231,25 +245,64 @@ def _make_batch_cache(model: nn.Module, left_padding: List[int]) -> List[Any]:
         cache = model.make_cache()
         return [to_batch_cache(c) for c in cache]
     else:
+        if max_kv_size is not None:
+            return [
+                BatchRotatingKVCache(max_kv_size, left_padding) for _ in model.layers
+            ]
         return [BatchKVCache(left_padding) for _ in model.layers]
+
+
+def _merge_caches(caches: List[List[Any]]) -> List[Any]:
+    """
+    Merge a list of per-request caches into batch-aware caches.
+
+    Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache,
+    and any type with a compatible .merge() class method.
+    """
+    from mlx_lm.models.cache import BatchKVCache, KVCache
+    try:
+        from mlx_lm.models.cache import MambaCache as _MambaCache
+    except ImportError:
+        from mlx_lm.models.cache import ArraysCache as _MambaCache
+
+    batch_cache = []
+    for i in range(len(caches[0])):
+        layer_cache = caches[0][i]
+        layer_caches = [c[i] for c in caches]
+
+        try:
+            if isinstance(layer_cache, KVCache):
+                batch_cache.append(BatchKVCache.merge(layer_caches))
+            elif isinstance(layer_cache, _MambaCache):
+                from .utils.mamba_cache import BatchMambaCache
+                batch_cache.append(BatchMambaCache.merge(layer_caches))
+            elif hasattr(layer_cache, "merge"):
+                batch_cache.append(type(layer_cache).merge(layer_caches))
+            else:
+                logger.warning(f"Layer {i}: {type(layer_cache).__name__} has no merge(), using empty BatchKVCache")
+                batch_cache.append(BatchKVCache([0] * len(caches)))
+        except Exception as e:
+            logger.warning(f"Layer {i} merge failed ({type(layer_cache).__name__}), using empty BatchKVCache: {e}")
+            batch_cache.append(BatchKVCache([0] * len(caches)))
+    return batch_cache
 
 
 def _left_pad_prompts(
     prompts: List[List[int]], max_length: Optional[int] = None
 ) -> mx.array:
-    """
-    Left-pad prompts to uniform length.
-
-    Args:
-        prompts: List of token lists
-        max_length: Target length (computed if not provided)
-
-    Returns:
-        Padded prompts as mx.array [batch_size, seq_len]
-    """
+    """Left-pad prompts to uniform length."""
     if max_length is None:
         max_length = max(len(p) for p in prompts)
     return mx.array([[0] * (max_length - len(p)) + list(p) for p in prompts])
+
+
+def _right_pad_prompts(
+    prompts: List[List[int]], max_length: Optional[int] = None
+) -> mx.array:
+    """Right-pad prompts to uniform length."""
+    if max_length is None:
+        max_length = max(len(p) for p in prompts)
+    return mx.array([list(p) + [0] * (max_length - len(p)) for p in prompts])
 
 
 class MLLMBatchGenerator:
@@ -292,6 +345,8 @@ class MLLMBatchGenerator:
         prefill_step_size: int = 1024,
         enable_vision_cache: bool = True,
         vision_cache_size: int = 100,
+        paged_cache_manager: Optional[Any] = None,
+        block_aware_cache: Optional[Any] = None,
     ):
         """
         Initialize MLLM batch generator.
@@ -308,10 +363,14 @@ class MLLMBatchGenerator:
             prefill_step_size: Tokens to process per prefill step
             enable_vision_cache: Enable vision embedding caching
             vision_cache_size: Max entries in vision cache
+            paged_cache_manager: Optional PagedCacheManager 
+            block_aware_cache: Optional BlockAwarePrefixCache
         """
         self.model = model
         self.processor = processor
         self.mm_processor = mm_processor
+        self.paged_cache_manager = paged_cache_manager
+        self.block_aware_cache = block_aware_cache
 
         # Get language model for text generation
         self.language_model = getattr(model, "language_model", model)
@@ -381,20 +440,27 @@ class MLLMBatchGenerator:
     def insert(
         self,
         requests: List[MLLMBatchRequest],
+        caches: Optional[List[Optional[List[Any]]]] = None,
     ) -> List[int]:
         """
-        Insert requests for batch processing.
+        Insert requests for batch processing with optional prompt caches.
 
         Args:
             requests: List of MLLMBatchRequest to process
+            caches: Optional list of prompt caches, one per request. None means no cache.
 
         Returns:
             List of UIDs assigned to requests
         """
+        if caches is None:
+            caches = [None] * len(requests)
+            
         uids = []
-        for req in requests:
+        for req, c in zip(requests, caches):
             req.uid = self.uid_counter
             self.uid_counter += 1
+            if c is not None:
+                req.prompt_cache = c
             self.unprocessed_requests.append(req)
             uids.append(req.uid)
 
@@ -554,7 +620,7 @@ class MLLMBatchGenerator:
             f"({processing_time:.2f}s)"
         )
 
-    def _run_vision_encoding(self, request: MLLMBatchRequest) -> mx.array:
+    def _run_vision_encoding(self, request: MLLMBatchRequest, cache: Optional[List[Any]] = None) -> mx.array:
         """
         Run the initial VLM forward pass to encode vision and get first logits.
 
@@ -563,23 +629,21 @@ class MLLMBatchGenerator:
 
         Args:
             request: Preprocessed request with input_ids and pixel_values
+            cache: Optional pre-initialized BatchKVCache list
 
         Returns:
             Logits from the forward pass
         """
-        # Build model call kwargs
         kwargs = dict(request.extra_kwargs)
-
-        # Always pass pixel_values — MLLM models require it as a positional arg.
-        # For text-only requests, pass None.
-        kwargs["pixel_values"] = request.pixel_values
+        if request.pixel_values is not None:
+            kwargs["pixel_values"] = request.pixel_values
         if request.attention_mask is not None:
             kwargs["attention_mask"] = request.attention_mask
         if request.image_grid_thw is not None:
             kwargs["image_grid_thw"] = request.image_grid_thw
+        if cache is not None:
+            kwargs["cache"] = cache
 
-        # Run full VLM forward pass
-        # This processes vision inputs and fills the language model cache
         input_ids = request.input_ids
         if input_ids.ndim == 1:
             input_ids = input_ids[None, :]
@@ -587,31 +651,35 @@ class MLLMBatchGenerator:
         output = self.model(input_ids, **kwargs)
         request.vision_encoded = True
 
-        # Handle LanguageModelOutput or plain tensor
         if hasattr(output, "logits"):
             return output.logits
         return output
 
     def _process_prompts(self, requests: List[MLLMBatchRequest]) -> MLLMBatch:
-        """
-        Process a batch of requests through vision encoding and initial prefill.
-
-        For MLLM, this is more complex than LLM:
-        1. Preprocess each request (tokenize, process images)
-        2. Run vision encoding for each request (cannot batch vision yet)
-        3. Set up BatchKVCache for language model generation
-
-        Args:
-            requests: Requests to process
-
-        Returns:
-            MLLMBatch ready for generation
-        """
         tic = time.perf_counter()
 
-        # Preprocess all requests
         for req in requests:
             self._preprocess_request(req)
+            # After preprocessing, the prompt is fully tokenized including image patches.
+            # Query the BlockAwarePrefixCache for reusable KV blocks.
+            # fetch_cache returns (block_table, remaining_tokens) — NOT cache objects!
+            if self.block_aware_cache is not None and req.prompt_cache is None:
+                if req.input_ids is not None:
+                    try:
+                        token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
+                        if block_table is not None:
+                            # Cache hit! Reconstruct actual KVCache objects from stored block data.
+                            reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
+                            if reconstructed is not None:
+                                req.prompt_cache = reconstructed
+                                logger.info(
+                                    f"VLM prefix cache HIT for {req.request_id}: "
+                                    f"{block_table.num_tokens} cached tokens, "
+                                    f"{len(remaining)} remaining"
+                                )
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch paged cache for {req.request_id}: {e}")
 
         # Get token sequences and lengths
         input_ids_list = [
@@ -624,34 +692,105 @@ class MLLMBatchGenerator:
 
         self._stats.prompt_tokens += sum(lengths)
 
-        # Create batch cache for language model
-        batch_cache = _make_batch_cache(self.language_model, padding)
-
-        # Run vision encoding for each request and fill cache
-        # This must be done per-request because vision inputs differ
+        per_request_caches = []
         first_tokens = []
         all_logprobs = []
 
         for i, req in enumerate(requests):
-            # Run full VLM forward pass for this request
-            # This fills the cache for layer i with this request's KV states
             with mx.stream(MLLMBatchGenerator._stream):
-                logits = self._run_vision_encoding(req)
+                # Per-request prefill uses standard KVCache (integer offsets)
+                # so that mlx_vlm model layers can use cache.offset as a Python int.
+                # After all prefills, we merge into a single BatchKVCache for decode.
+                if req.prompt_cache is not None:
+                    # Pre-filled cache from prefix cache — these are KVCache objects
+                    req_cache = req.prompt_cache
+                else:
+                    # Create fresh per-request cache using model.make_cache()
+                    # This correctly creates KVCache for attention layers and
+                    # MambaCache/ArraysCache for SSM layers in hybrid models.
+                    try:
+                        if hasattr(self.language_model, 'make_cache'):
+                            req_cache = self.language_model.make_cache()
+                        else:
+                            from mlx_lm.models.cache import KVCache
+                            req_cache = [KVCache() for _ in self.language_model.layers]
+                    except Exception as e:
+                        logger.warning(f"model.make_cache() failed, falling back to KVCache: {e}")
+                        from mlx_lm.models.cache import KVCache
+                        req_cache = [KVCache() for _ in self.language_model.layers]
 
-                # Extract last token logits
+                logits = self._run_vision_encoding(req, cache=req_cache)
+                per_request_caches.append(req_cache)
+
                 last_logits = logits[:, -1, :]
                 logprobs = last_logits - mx.logsumexp(
                     last_logits, axis=-1, keepdims=True
                 )
                 sampled = self.sampler(logprobs)
 
-                mx.eval(sampled, logprobs)
+                # Eval all cache states: KVCache has .state, MambaCache has .cache
+                try:
+                    cache_states = []
+                    for c in req_cache:
+                        if hasattr(c, 'state'):
+                            st = c.state
+                            if isinstance(st, (list, tuple)):
+                                cache_states.extend(x for x in st if x is not None)
+                            elif st is not None:
+                                cache_states.append(st)
+                        elif hasattr(c, 'cache'):
+                            cache_states.extend(x for x in c.cache if x is not None)
+                    mx.eval(sampled, logprobs, *cache_states)
+                except Exception as e:
+                    logger.warning(f"Cache state eval error (non-fatal): {e}")
+                    mx.eval(sampled, logprobs)
 
                 first_tokens.append(sampled.item())
                 all_logprobs.append(logprobs.squeeze(0))
 
-        # Create initial y (first generated tokens)
         y = mx.array(first_tokens)
+
+        # Merge per-request caches into batch-aware caches for batched decode.
+        # Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache, etc.
+        try:
+            if len(per_request_caches) == 1:
+                # Single request: convert directly to batch-aware cache (no merge needed)
+                from mlx_lm.models.cache import BatchKVCache, KVCache
+                try:
+                    from mlx_lm.models.cache import MambaCache as _MambaCache
+                except ImportError:
+                    from mlx_lm.models.cache import ArraysCache as _MambaCache
+                batch_cache = []
+                for c in per_request_caches[0]:
+                    try:
+                        if isinstance(c, KVCache):
+                            bkv = BatchKVCache([0])
+                            if hasattr(c, "keys") and c.keys is not None:
+                                bkv.keys = c.keys[None] if c.keys.ndim == 3 else c.keys
+                                bkv.values = c.values[None] if c.values.ndim == 3 else c.values
+                                bkv.offset = mx.array([c.offset])
+                            batch_cache.append(bkv)
+                        elif isinstance(c, _MambaCache):
+                            from .utils.mamba_cache import BatchMambaCache
+                            num_arrays = len(c.cache) if c.cache else 2
+                            bmc = BatchMambaCache(size=num_arrays, left_padding=[0])
+                            bmc.cache = [arr[None] if arr is not None and arr.ndim >= 1 else arr for arr in c.cache]
+                            batch_cache.append(bmc)
+                        else:
+                            # Fallback: try BatchKVCache for unknown types
+                            bkv = BatchKVCache([0])
+                            batch_cache.append(bkv)
+                    except Exception as e:
+                        logger.warning(f"Failed to convert layer cache {type(c).__name__}, using empty BatchKVCache: {e}")
+                        from mlx_lm.models.cache import BatchKVCache
+                        batch_cache.append(BatchKVCache([0]))
+            else:
+                batch_cache = _merge_caches(per_request_caches)
+        except Exception as e:
+            logger.error(f"Cache merge failed, creating fresh batch cache: {e}")
+            from mlx_lm.models.cache import BatchKVCache
+            num_layers = len(per_request_caches[0]) if per_request_caches else len(self.language_model.layers)
+            batch_cache = [BatchKVCache([0] * len(per_request_caches)) for _ in range(num_layers)]
 
         self._stats.prompt_time += time.perf_counter() - tic
 
@@ -791,6 +930,7 @@ class MLLMBatchGenerator:
                     logprobs=logprobs[i],
                     finish_reason=finish_reason,
                     prompt_cache=cache_fn,
+                    prompt_token_ids=req.input_ids.tolist() if req.input_ids is not None else [],
                 )
             )
 

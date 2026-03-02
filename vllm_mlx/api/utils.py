@@ -51,49 +51,39 @@ def clean_output_text(text: str) -> str:
 # Model Detection
 # =============================================================================
 
-# Patterns that indicate a multimodal language model (MLLM/VLM)
-MLLM_PATTERNS = [
-    "-VL-",
-    "-VL/",
-    "VL-",  # Qwen-VL, Qwen2-VL, Qwen3-VL, etc.
-    "llava",
-    "LLaVA",  # LLaVA models
-    "idefics",
-    "Idefics",  # Idefics models
-    "paligemma",
-    "PaliGemma",  # PaliGemma
-    "gemma-3",
-    "gemma3",  # Gemma 3 (multimodal)
-    "medgemma",
-    "MedGemma",  # MedGemma (medical multimodal with SigLIP vision encoder)
-    "pixtral",
-    "Pixtral",  # Pixtral
-    "molmo",
-    "Molmo",  # Molmo
-    "phi3-vision",
-    "phi-3-vision",  # Phi-3 Vision
-    "cogvlm",
-    "CogVLM",  # CogVLM
-    "internvl",
-    "InternVL",  # InternVL
-    "deepseek-vl",
-    "DeepSeek-VL",  # DeepSeek-VL
-]
 
-
-def is_mllm_model(model_name: str) -> bool:
+def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
-    Check if model name indicates a multimodal language model.
+    Check if model is a multimodal language model.
 
-    Uses the model config registry first, falls back to pattern matching.
+    Primary check: force_mllm flag (highest priority)
+    Secondary check: reads the model's config.json for vision_config presence.
+    Fallback: uses the model config registry and pattern matching for remote models.
 
     Args:
         model_name: HuggingFace model name or local path
+        force_mllm: If True, bypass detection and return True immediately
 
     Returns:
         True if model is detected as MLLM/VLM
     """
-    # Try registry first (authoritative source)
+    if force_mllm:
+        return True
+
+    import json
+    import os
+
+    # Primary: check config.json for vision_config (authoritative)
+    config_path = os.path.join(model_name, "config.json")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            return "vision_config" in config
+        except Exception:
+            pass  # Fall through to registry
+
+    # Fallback for remote HuggingFace model names: use registry
     try:
         from ..model_config_registry import get_model_config_registry
 
@@ -104,11 +94,6 @@ def is_mllm_model(model_name: str) -> bool:
     except Exception:
         pass  # Fall through to pattern matching
 
-    # Fallback: pattern-based detection
-    model_lower = model_name.lower()
-    for pattern in MLLM_PATTERNS:
-        if pattern.lower() in model_lower:
-            return True
     return False
 
 

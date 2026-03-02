@@ -718,7 +718,14 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
           if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
           if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
-          if (overrides?.builtinToolsEnabled) obj.tools = filterTools(overrides)
+          if (overrides?.builtinToolsEnabled) {
+            obj.tools = filterTools(overrides).map(t => ({
+              type: 'function',
+              name: t.function.name,
+              description: t.function.description,
+              parameters: t.function.parameters
+            }))
+          }
           // enable_thinking: sent to both local and remote (some providers support it)
           obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
           // chat_template_kwargs: local only (vLLM-MLX internal, no remote provider supports this)
@@ -739,7 +746,14 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
           if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
           if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
-          if (overrides?.builtinToolsEnabled) obj.tools = filterTools(overrides)
+          if (overrides?.builtinToolsEnabled) {
+            obj.tools = filterTools(overrides).map(t => ({
+              type: 'function',
+              name: t.function.name,
+              description: t.function.description,
+              parameters: t.function.parameters
+            }))
+          }
           // enable_thinking: sent to both local and remote (some providers support it)
           obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
           // chat_template_kwargs: local only (vLLM-MLX internal, no remote provider supports this)

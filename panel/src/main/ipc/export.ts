@@ -78,12 +78,22 @@ export function registerExportHandlers(): void {
     const result = await dialog.showOpenDialog({
       title: 'Import Chat',
       filters: [{ name: 'Chat files', extensions: ['json', 'md'] }],
-      properties: ['openFile']
+      properties: ['openFile'],
+      securityScopedBookmarks: true
     })
 
     if (result.canceled || result.filePaths.length === 0) return { success: false }
 
     const filePath = result.filePaths[0]
+
+    if (result.bookmarks && result.bookmarks.length > 0) {
+      import('electron').then(({ app }) => {
+        try {
+          app.startAccessingSecurityScopedResource(result.bookmarks![0])
+        } catch (e) { }
+      })
+    }
+
     const raw = readFileSync(filePath, 'utf-8')
 
     let title = 'Imported Chat'

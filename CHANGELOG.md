@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### VLM Caching Pipeline (Pioneer MLX Feature)
+- **Paged KV Cache for VLMs**: Full integration of `PagedCacheManager` + `BlockAwarePrefixCache` into the MLLM scheduler for Vision-Language Models
+- **Prefix Cache for VLMs**: Token-level prefix matching and cache reuse across VLM requests — stores KV blocks after generation, retrieves on subsequent requests with shared prompt prefixes
+- **KV Cache Quantization for VLMs (Q4/Q8)**: Quantized KV cache storage in prefix cache, reducing VLM cache memory by 2-4x
+  - Init-time head_dim validation, group_size auto-adjustment, and round-trip testing
+  - Quantize on store (`_quantize_cache_for_storage`), dequantize on fetch (`_dequantize_cache_for_use`)
+- **Config Propagation**: `SchedulerConfig` cache settings (`enable_prefix_cache`, `use_paged_cache`, `kv_cache_quantization`, `kv_cache_group_size`, etc.) now properly forwarded to `MLLMSchedulerConfig` via `batched.py`
+- **VLM Cache Architecture**: Per-request prefill uses standard `KVCache` (integer offsets), then converts to `BatchKVCache` (mx.array offsets) for batched autoregressive decode — bridging `mlx_lm` and `mlx_vlm` cache expectations
+- **Mamba Hybrid VLM Support**: Auto-detects VLMs with mixed KVCache + MambaCache/ArraysCache layers (Jamba-VL, VLM-Mamba, MaTVLM). Uses `model.make_cache()` for correct per-layer cache types, `BatchMambaCache` for batched decode, auto-switches to paged cache for Mamba models
+
+### Fixed
+
+#### VLM Cache Crash: `'list' object has no attribute 'offset'` (Critical)
+- **Root Cause**: `BlockAwarePrefixCache.fetch_cache()` returns `(block_table, remaining_tokens)` tuple, but code was assigning this raw tuple as the model cache — passed to every decoder layer as `c` in `zip(layers, cache)`
+- **Fix**: Proper tuple unpacking + `reconstruct_cache()` on cache hits
+- **Additional Fix**: Removed broken `BatchKVCache.offset` monkey-patch (was preventing `BatchKVCache.__init__` from setting its own offset attribute)
+
+#### VLM Cache Merge: `Slice indices must be integers or None`
+- **Root Cause**: Per-request VLM prefill used `BatchKVCache` (which has `mx.array` offsets), but `BatchKVCache.merge()` internally uses `.offset` as a Python slice index
+- **Fix**: Changed prefill to use standard `KVCache` (integer offsets), then convert to `BatchKVCache` after prefill for batched decode
+
 #### GLM-4.7 / GPT-OSS Harmony Protocol Support
 - **GLM-4.7 Flash and GLM-4.7** now use `openai_gptoss` reasoning parser (Harmony protocol: `<|channel|>analysis/final`)
 - Previously mapped to `deepseek_r1` which caused leaked `<|start|>assistant<|channel|>analysis<|message|>` tokens in chat

@@ -64,6 +64,16 @@ class MLLMSchedulerConfig:
     # Maximum video frames
     max_video_frames: int = 128
 
+    # Prefix/Paged cache settings
+    enable_prefix_cache: bool = True
+    use_paged_cache: bool = True
+    paged_cache_block_size: int = 64
+    max_cache_blocks: int = 1000
+
+    # KV cache quantization for prefix cache storage
+    kv_cache_quantization: str = "none"  # "none", "q4", "q8"
+    kv_cache_group_size: int = 64
+
 
 @dataclass
 class MLLMRequest:
@@ -182,6 +192,76 @@ class MLLMScheduler:
                 max_entries=self.config.vision_cache_size
             )
 
+        # Token-level Prefix caching for the language model
+        self.paged_cache_manager = None
+        self.block_aware_cache = None
+
+        # Detect hybrid models (mixed KVCache + MambaCache layers)
+        lang_model = self.model.language_model if hasattr(self.model, "language_model") else self.model
+        self._is_hybrid = False
+        try:
+            self._is_hybrid = self._is_hybrid_model(lang_model)
+        except Exception as e:
+            logger.warning(f"Failed to detect hybrid cache model: {e}")
+
+        if self._is_hybrid:
+            try:
+                from .utils.mamba_cache import ensure_mamba_support
+                ensure_mamba_support()
+                logger.info(
+                    "VLM hybrid model detected (MambaCache + KVCache layers). "
+                    "Mamba batching support enabled."
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enable Mamba batching support: {e}")
+                self._is_hybrid = False  # Fall back to standard KV-only handling
+            # Auto-switch to paged cache (MambaCache can't be truncated by memory-aware cache)
+            if self._is_hybrid and self.config.enable_prefix_cache and not self.config.use_paged_cache:
+                logger.info(
+                    "Auto-switching VLM to paged cache for hybrid model "
+                    "(memory-aware cache can't truncate MambaCache)."
+                )
+                self.config.use_paged_cache = True
+
+        if self.config.enable_prefix_cache and self.config.use_paged_cache:
+            try:
+                from .paged_cache import PagedCacheManager
+                from .prefix_cache import BlockAwarePrefixCache
+                
+                self.paged_cache_manager = PagedCacheManager(
+                    block_size=self.config.paged_cache_block_size,
+                    max_blocks=self.config.max_cache_blocks,
+                )
+                self.block_aware_cache = BlockAwarePrefixCache(
+                    model=lang_model,
+                    paged_cache_manager=self.paged_cache_manager,
+                )
+                logger.info(
+                    f"VLM Paged cache enabled: block_size={self.config.paged_cache_block_size}, "
+                    f"max_blocks={self.config.max_cache_blocks}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to initialize VLM paged cache: {e}")
+                self.paged_cache_manager = None
+                self.block_aware_cache = None
+
+        # KV cache quantization for prefix cache storage (2-4x memory reduction)
+        self._kv_cache_bits = 0
+        self._kv_cache_group_size = 64
+        if self.config.kv_cache_quantization != "none":
+            if self.config.enable_prefix_cache:
+                bits = 4 if self.config.kv_cache_quantization == "q4" else 8
+                self._wrap_make_cache_quantized(bits, self.config.kv_cache_group_size)
+                logger.info(
+                    f"VLM KV cache quantization enabled: {self.config.kv_cache_quantization} "
+                    f"(bits={bits}, group_size={self.config.kv_cache_group_size})"
+                )
+            else:
+                logger.warning(
+                    f"KV cache quantization '{self.config.kv_cache_quantization}' requested "
+                    "but prefix cache is disabled — quantization has no effect without prefix cache"
+                )
+
         # Get stop tokens from tokenizer
         self.stop_tokens = self._get_stop_tokens()
 
@@ -216,10 +296,8 @@ class MLLMScheduler:
     def _get_detokenizer(self, request_id: str, tokenizer: Any) -> Any:
         """Get or create a streaming detokenizer for a request."""
         if request_id not in self._detokenizer_pool:
-            if hasattr(tokenizer, "detokenizer"):
-                detok = tokenizer.detokenizer
-            else:
-                detok = NaiveStreamingDetokenizer(tokenizer)
+            from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
+            detok = NaiveStreamingDetokenizer(tokenizer)
             detok.reset()
             self._detokenizer_pool[request_id] = detok
         return self._detokenizer_pool[request_id]
@@ -227,6 +305,181 @@ class MLLMScheduler:
     def _cleanup_detokenizer(self, request_id: str) -> None:
         """Remove the streaming detokenizer for a finished request."""
         self._detokenizer_pool.pop(request_id, None)
+
+    @staticmethod
+    def _is_hybrid_model(model: Any) -> bool:
+        """Check if VLM language model uses non-standard cache types.
+
+        Returns True for models with mixed KVCache + MambaCache/ArraysCache layers,
+        or pure Mamba/SSM models. These need paged cache (memory-aware cache can't
+        truncate cumulative SSM states).
+        """
+        if not hasattr(model, "make_cache"):
+            return False
+        try:
+            cache = model.make_cache()
+            cache_types = {type(c).__name__ for c in cache}
+            kv_only_types = {"KVCache", "RotatingKVCache", "QuantizedKVCache"}
+            if cache_types and cache_types.issubset(kv_only_types):
+                return False
+            return bool(cache_types - kv_only_types)
+        except Exception:
+            return False
+
+    def _detect_head_dim(self) -> Optional[int]:
+        """Detect the VLM language model's KV head dimension."""
+        try:
+            lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
+            if hasattr(lm, 'args'):
+                args = lm.args
+                if hasattr(args, 'head_dim') and args.head_dim:
+                    return args.head_dim
+                if hasattr(args, 'hidden_size') and hasattr(args, 'num_attention_heads'):
+                    return args.hidden_size // args.num_attention_heads
+            if hasattr(lm, 'config'):
+                config = lm.config
+                if hasattr(config, 'head_dim') and config.head_dim:
+                    return config.head_dim
+                if hasattr(config, 'hidden_size') and hasattr(config, 'num_attention_heads'):
+                    return config.hidden_size // config.num_attention_heads
+        except Exception as e:
+            logger.debug(f"Could not detect VLM head_dim: {e}")
+        return None
+
+    def _wrap_make_cache_quantized(self, bits: int, group_size: int) -> None:
+        """
+        Configure KV cache quantization for VLM prefix cache storage.
+
+        Quantization is applied at the storage/retrieval boundary — full-precision
+        KVCache during generation, quantized storage in prefix cache for 2-4x
+        memory savings. Validates head_dim compatibility and runs round-trip test.
+        """
+        try:
+            from mlx_lm.models.cache import QuantizedKVCache
+            import mlx.core as mx
+        except ImportError:
+            logger.warning(
+                "QuantizedKVCache not available. VLM KV cache quantization disabled."
+            )
+            return
+
+        # Patch QuantizedKVCache.size if needed
+        if not hasattr(QuantizedKVCache, '_size_patched'):
+            needs_patch = True
+            try:
+                test_qkv = QuantizedKVCache(group_size=64, bits=bits)
+                test_qkv.offset = 42
+                if callable(getattr(test_qkv, 'size', None)) and test_qkv.size() == 42:
+                    needs_patch = False
+            except Exception:
+                pass
+            if needs_patch:
+                QuantizedKVCache.size = lambda self: getattr(self, 'offset', 0)
+                logger.debug("Patched QuantizedKVCache.size() to return self.offset")
+            QuantizedKVCache._size_patched = True
+
+        # Validate head_dim compatibility
+        head_dim = self._detect_head_dim()
+        if head_dim is not None and head_dim > 0:
+            if head_dim % group_size != 0:
+                for candidate in [32, 16, 8]:
+                    if head_dim % candidate == 0:
+                        logger.warning(
+                            f"VLM KV quant: group_size={group_size} doesn't divide "
+                            f"head_dim={head_dim}. Auto-adjusting to {candidate}."
+                        )
+                        group_size = candidate
+                        break
+                else:
+                    logger.error(
+                        f"VLM KV quant: no valid group_size for head_dim={head_dim}. Disabled."
+                    )
+                    return
+            logger.info(f"VLM KV quant validated: head_dim={head_dim}, group_size={group_size}")
+
+        # Round-trip test
+        try:
+            test_dim = head_dim or 128
+            test_tensor = mx.random.normal((1, 4, 8, test_dim))
+            quantized = mx.quantize(test_tensor, group_size=group_size, bits=bits)
+            dequantized = mx.dequantize(
+                quantized[0], quantized[1], quantized[2],
+                group_size=group_size, bits=bits,
+            )
+            mx.eval(dequantized)
+            logger.info(f"VLM KV quant round-trip test passed: bits={bits}, group_size={group_size}")
+        except Exception as e:
+            logger.error(f"VLM KV quant round-trip test FAILED: {e}. Disabling.")
+            return
+
+        self._kv_cache_bits = bits
+        self._kv_cache_group_size = group_size
+
+    def _quantize_cache_for_storage(self, cache: List[Any]) -> List[Any]:
+        """
+        Quantize KVCache layers for prefix cache storage (2-4x memory reduction).
+        Preserves non-KVCache layers (MambaCache, etc.).
+        """
+        if not self._kv_cache_bits:
+            return cache
+        try:
+            from mlx_lm.models.cache import QuantizedKVCache
+            import mlx.core as mx
+        except ImportError:
+            return cache
+
+        bits = self._kv_cache_bits
+        group_size = self._kv_cache_group_size
+        result = []
+        for layer_cache in cache:
+            if (
+                type(layer_cache).__name__ == 'KVCache'
+                and layer_cache.keys is not None
+            ):
+                try:
+                    qkv = QuantizedKVCache(group_size=group_size, bits=bits)
+                    qkv.keys = mx.quantize(layer_cache.keys, group_size=group_size, bits=bits)
+                    qkv.values = mx.quantize(layer_cache.values, group_size=group_size, bits=bits)
+                    qkv.offset = layer_cache.offset
+                    result.append(qkv)
+                except Exception:
+                    result.append(layer_cache)
+            else:
+                result.append(layer_cache)
+        return result
+
+    def _dequantize_cache_for_use(self, cache: List[Any]) -> Optional[List[Any]]:
+        """
+        Dequantize stored QuantizedKVCache layers back to KVCache for generation.
+        Returns None on failure (treated as cache miss).
+        """
+        try:
+            from mlx_lm.models.cache import KVCache, QuantizedKVCache
+            import mlx.core as mx
+        except ImportError:
+            return cache
+
+        result = []
+        for layer_cache in cache:
+            if isinstance(layer_cache, QuantizedKVCache) and layer_cache.keys is not None:
+                try:
+                    kv = KVCache()
+                    kv.keys = mx.dequantize(
+                        layer_cache.keys[0], layer_cache.keys[1],
+                        layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
+                    )
+                    kv.values = mx.dequantize(
+                        layer_cache.values[0], layer_cache.values[1],
+                        layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
+                    )
+                    kv.offset = layer_cache.offset
+                    result.append(kv)
+                except Exception as e:
+                    logger.warning(f"VLM cache dequantization failed: {e}")
+                    return None
+            else:
+                result.append(layer_cache)
+        return result
 
     def _get_stop_tokens(self) -> Set[int]:
         """Get stop token IDs from tokenizer."""
@@ -269,6 +522,8 @@ class MLLMScheduler:
                 prefill_batch_size=self.config.prefill_batch_size,
                 completion_batch_size=self.config.completion_batch_size,
                 prefill_step_size=self.config.prefill_step_size,
+                paged_cache_manager=self.paged_cache_manager,
+                block_aware_cache=self.block_aware_cache,
             )
 
     # ========== Sync API (step-based) ==========
@@ -489,6 +744,10 @@ class MLLMScheduler:
 
             # Check if finished
             if response.finish_reason is not None:
+                if getattr(response, "prompt_cache", None) is not None:
+                    request._extracted_cache = response.prompt_cache
+                    request._extracted_tokens = getattr(response, "prompt_token_ids", [])
+
                 if response.finish_reason == "stop":
                     request.status = RequestStatus.FINISHED_STOPPED
                 elif response.finish_reason == "length":
@@ -519,6 +778,24 @@ class MLLMScheduler:
     def _cleanup_finished(self, finished_ids: Set[str]) -> None:
         """Clean up finished requests."""
         for request_id in finished_ids:
+            if self.block_aware_cache is not None:
+                request = self.running.get(request_id)
+                if request is not None and getattr(request, "_extracted_cache", None) is not None:
+                    try:
+                        token_list = getattr(request, "_extracted_tokens", [])
+                        if token_list:
+                            cache_blocks = request._extracted_cache()
+                            # Quantize cache for compact storage (2-4x memory reduction)
+                            cache_blocks = self._quantize_cache_for_storage(cache_blocks)
+                            self.block_aware_cache.store_cache(
+                                request_id, 
+                                token_list,
+                                cache_blocks
+                            )
+                            logger.info(f"VLM Scheduler stored paged Prefix Cache for request {request_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}")
+
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
 
