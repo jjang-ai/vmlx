@@ -47,6 +47,9 @@ class MLLMBatchRequest:
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 0.9
+    top_k: int = 0
+    min_p: float = 0.0
+    repetition_penalty: float = 1.0
 
     # Processed inputs (set after vision preprocessing)
     input_ids: Optional[mx.array] = None
@@ -59,13 +62,10 @@ class MLLMBatchRequest:
     num_tokens: int = 0  # Tokens generated so far
     output_tokens: List[int] = field(default_factory=list)
 
-    # Vision state (populated after initial VLM forward pass)
+    # Vision state
     vision_encoded: bool = False
-    cross_attention_states: Optional[Any] = None  # For models that use cross-attention
-    encoder_outputs: Optional[Any] = None  # For encoder-decoder models
-    
+
     # Prefix cache state
-    logical_token_blocks: List[Any] = field(default_factory=list)
     prompt_cache: Optional[List[Any]] = None  # Pre-filled KV cache from Prefix Cache or Disk Cache
 
 
@@ -129,36 +129,6 @@ class MLLMBatch:
             if hasattr(c, "filter"):
                 c.filter(keep_idx_array)
 
-    def extend(self, other: "MLLMBatch") -> None:
-        """
-        Extend this batch with another batch.
-
-        Args:
-            other: Batch to merge into this one
-        """
-        self.uids.extend(other.uids)
-        self.request_ids.extend(other.request_ids)
-        self.y = mx.concatenate([self.y, other.y])
-        self.logprobs.extend(other.logprobs)
-        self.num_tokens.extend(other.num_tokens)
-        self.max_tokens.extend(other.max_tokens)
-        self.requests.extend(other.requests)
-
-        # Extend cache - handle None and incompatible caches
-        for c, o in zip(self.cache, other.cache):
-            if c is not None and o is not None and hasattr(c, "extend"):
-                try:
-                    # Only extend if both caches have valid keys
-                    if (
-                        hasattr(c, "keys")
-                        and c.keys is not None
-                        and hasattr(o, "keys")
-                        and o.keys is not None
-                    ):
-                        c.extend(o)
-                except Exception as e:
-                    logger.warning(f"Failed to extend cache: {e}")
-
     def extract_cache(self, idx: int) -> List[Any]:
         """
         Extract cache for a single request (for caching).
@@ -169,7 +139,18 @@ class MLLMBatch:
         Returns:
             Cache state for that request
         """
-        return [c.extract(idx) if hasattr(c, "extract") else None for c in self.cache]
+        extracted = []
+        for c in self.cache:
+            if hasattr(c, "extract"):
+                # Batched cache (BatchKVCache, BatchMambaCache) — extract single request
+                extracted.append(c.extract(idx))
+            elif idx == 0:
+                # Unbatched cache (KVCache, ArraysCache) from single-request path —
+                # return the cache itself since there's only one request
+                extracted.append(c)
+            else:
+                extracted.append(None)
+        return extracted
 
 
 class MLLMBatchStats:
@@ -210,60 +191,33 @@ class MLLMBatchStats:
         }
 
 
-def _make_cache(model: nn.Module, left_padding: List[int], max_kv_size: Optional[int] = None) -> List[Any]:
-    """
-    Convert a list of regular caches into their corresponding
-    batch-aware caches.
-    """
-    from mlx_lm.models.cache import BatchKVCache, KVCache, RotatingKVCache
-    try:
-        from mlx_lm.generate import BatchRotatingKVCache
-    except ImportError:
-        def BatchRotatingKVCache(*args, **kwargs):
-            raise NotImplementedError("BatchRotatingKVCache not available in this mlx_lm version")
-
-    def to_batch_cache(c):
-        if isinstance(c, KVCache) and not isinstance(c, RotatingKVCache):
-            return BatchKVCache(left_padding)
-        elif isinstance(c, RotatingKVCache):
-            if c.keep > 0:
-                raise ValueError("RotatingKVCache with keep tokens is not supported.")
-            return BatchRotatingKVCache(c.max_size, left_padding)
-        elif type(c).__name__ in ("ArraysCache", "MambaCache"):
-            # Use BatchMambaCache for proper extract/merge in continuous batching
-            from .utils.mamba_cache import BatchMambaCache
-            num_arrays = len(c.cache) if c.cache else 2
-            return BatchMambaCache(size=num_arrays, left_padding=left_padding)
-        elif type(c).__name__ == "CacheList":
-            # For hybrid models
-            from mlx_lm.models.cache import CacheList
-            return CacheList(*(to_batch_cache(sub_c) for sub_c in c.caches))
-        else:
-            raise ValueError(f"{type(c)} does not yet support batching")
-
-    if hasattr(model, "make_cache"):
-        cache = model.make_cache()
-        return [to_batch_cache(c) for c in cache]
-    else:
-        if max_kv_size is not None:
-            return [
-                BatchRotatingKVCache(max_kv_size, left_padding) for _ in model.layers
-            ]
-        return [BatchKVCache(left_padding) for _ in model.layers]
-
 
 def _merge_caches(caches: List[List[Any]]) -> List[Any]:
     """
     Merge a list of per-request caches into batch-aware caches.
 
-    Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache,
+    Handles KVCache→BatchKVCache, RotatingKVCache→BatchRotatingKVCache,
+    QuantizedKVCache→BatchKVCache (dequantize first),
+    MambaCache/ArraysCache→BatchMambaCache, CacheList (recursive),
     and any type with a compatible .merge() class method.
     """
-    from mlx_lm.models.cache import BatchKVCache, KVCache
+    from mlx_lm.models.cache import BatchKVCache, KVCache, RotatingKVCache, ArraysCache
     try:
         from mlx_lm.models.cache import MambaCache as _MambaCache
     except ImportError:
-        from mlx_lm.models.cache import ArraysCache as _MambaCache
+        _MambaCache = ArraysCache
+    try:
+        from mlx_lm.models.cache import QuantizedKVCache as _QuantizedKVCache
+    except ImportError:
+        _QuantizedKVCache = None
+    try:
+        from mlx_lm.models.cache import CacheList as _CacheList
+    except ImportError:
+        _CacheList = None
+    try:
+        from mlx_lm.generate import BatchRotatingKVCache
+    except ImportError:
+        BatchRotatingKVCache = None
 
     batch_cache = []
     for i in range(len(caches[0])):
@@ -271,11 +225,46 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
         layer_caches = [c[i] for c in caches]
 
         try:
-            if isinstance(layer_cache, KVCache):
+            if _QuantizedKVCache is not None and isinstance(layer_cache, _QuantizedKVCache):
+                # Dequantize all layers before merging as regular KVCache
+                dequantized = []
+                for qkv in layer_caches:
+                    if qkv.keys is None:
+                        dequantized.append(KVCache())
+                    else:
+                        kv = KVCache()
+                        kv.keys = mx.dequantize(
+                            qkv.keys[0], qkv.keys[1], qkv.keys[2],
+                            qkv.group_size, qkv.bits,
+                        )
+                        kv.values = mx.dequantize(
+                            qkv.values[0], qkv.values[1], qkv.values[2],
+                            qkv.group_size, qkv.bits,
+                        )
+                        kv.offset = qkv.offset
+                        dequantized.append(kv)
+                batch_cache.append(BatchKVCache.merge(dequantized))
+            elif isinstance(layer_cache, RotatingKVCache):
+                if BatchRotatingKVCache is not None:
+                    batch_cache.append(BatchRotatingKVCache.merge(layer_caches))
+                else:
+                    logger.warning(f"Layer {i}: RotatingKVCache but BatchRotatingKVCache unavailable")
+                    batch_cache.append(BatchKVCache([0] * len(caches)))
+            elif isinstance(layer_cache, KVCache):
                 batch_cache.append(BatchKVCache.merge(layer_caches))
-            elif isinstance(layer_cache, _MambaCache):
+            elif isinstance(layer_cache, (_MambaCache, ArraysCache)):
                 from .utils.mamba_cache import BatchMambaCache
                 batch_cache.append(BatchMambaCache.merge(layer_caches))
+            elif _CacheList is not None and isinstance(layer_cache, _CacheList):
+                # CacheList: merge each sub-cache independently across requests
+                num_sub = len(layer_cache.caches)
+                merged_subs = []
+                for j in range(num_sub):
+                    # Collect sub-cache j from all requests' CacheList at this layer
+                    sub_caches = [[c.caches[j]] for c in layer_caches]
+                    sub_merged = _merge_caches(sub_caches)[0]
+                    merged_subs.append(sub_merged)
+                batch_cache.append(_CacheList(*merged_subs))
             elif hasattr(layer_cache, "merge"):
                 batch_cache.append(type(layer_cache).merge(layer_caches))
             else:
@@ -285,24 +274,6 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
             logger.warning(f"Layer {i} merge failed ({type(layer_cache).__name__}), using empty BatchKVCache: {e}")
             batch_cache.append(BatchKVCache([0] * len(caches)))
     return batch_cache
-
-
-def _left_pad_prompts(
-    prompts: List[List[int]], max_length: Optional[int] = None
-) -> mx.array:
-    """Left-pad prompts to uniform length."""
-    if max_length is None:
-        max_length = max(len(p) for p in prompts)
-    return mx.array([[0] * (max_length - len(p)) + list(p) for p in prompts])
-
-
-def _right_pad_prompts(
-    prompts: List[List[int]], max_length: Optional[int] = None
-) -> mx.array:
-    """Right-pad prompts to uniform length."""
-    if max_length is None:
-        max_length = max(len(p) for p in prompts)
-    return mx.array([list(p) + [0] * (max_length - len(p)) for p in prompts])
 
 
 class MLLMBatchGenerator:
@@ -638,7 +609,8 @@ class MLLMBatchGenerator:
         if request.pixel_values is not None:
             kwargs["pixel_values"] = request.pixel_values
         if request.attention_mask is not None:
-            kwargs["attention_mask"] = request.attention_mask
+            # VLM models use "mask" parameter (not "attention_mask")
+            kwargs["mask"] = request.attention_mask
         if request.image_grid_thw is not None:
             kwargs["image_grid_thw"] = request.image_grid_thw
         if cache is not None:
@@ -726,7 +698,9 @@ class MLLMBatchGenerator:
                 logprobs = last_logits - mx.logsumexp(
                     last_logits, axis=-1, keepdims=True
                 )
-                sampled = self.sampler(logprobs)
+                # Use per-request sampler based on temperature/top_p
+                req_sampler = self._make_request_sampler(req)
+                sampled = req_sampler(logprobs)
 
                 # Eval all cache states: KVCache has .state, MambaCache has .cache
                 try:
@@ -754,36 +728,12 @@ class MLLMBatchGenerator:
         # Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache, etc.
         try:
             if len(per_request_caches) == 1:
-                # Single request: convert directly to batch-aware cache (no merge needed)
-                from mlx_lm.models.cache import BatchKVCache, KVCache
-                try:
-                    from mlx_lm.models.cache import MambaCache as _MambaCache
-                except ImportError:
-                    from mlx_lm.models.cache import ArraysCache as _MambaCache
-                batch_cache = []
-                for c in per_request_caches[0]:
-                    try:
-                        if isinstance(c, KVCache):
-                            bkv = BatchKVCache([0])
-                            if hasattr(c, "keys") and c.keys is not None:
-                                bkv.keys = c.keys[None] if c.keys.ndim == 3 else c.keys
-                                bkv.values = c.values[None] if c.values.ndim == 3 else c.values
-                                bkv.offset = mx.array([c.offset])
-                            batch_cache.append(bkv)
-                        elif isinstance(c, _MambaCache):
-                            from .utils.mamba_cache import BatchMambaCache
-                            num_arrays = len(c.cache) if c.cache else 2
-                            bmc = BatchMambaCache(size=num_arrays, left_padding=[0])
-                            bmc.cache = [arr[None] if arr is not None and arr.ndim >= 1 else arr for arr in c.cache]
-                            batch_cache.append(bmc)
-                        else:
-                            # Fallback: try BatchKVCache for unknown types
-                            bkv = BatchKVCache([0])
-                            batch_cache.append(bkv)
-                    except Exception as e:
-                        logger.warning(f"Failed to convert layer cache {type(c).__name__}, using empty BatchKVCache: {e}")
-                        from mlx_lm.models.cache import BatchKVCache
-                        batch_cache.append(BatchKVCache([0]))
+                # Single request: keep original per-request caches (KVCache, ArraysCache)
+                # instead of converting to BatchKVCache/BatchMambaCache.
+                # This preserves integer offsets that models like Qwen3.5 require
+                # (Qwen3_5Attention uses cache.offset as Python int for mask slicing).
+                # No filter/extend is needed for single-request batches.
+                batch_cache = per_request_caches[0]
             else:
                 batch_cache = _merge_caches(per_request_caches)
         except Exception as e:
@@ -803,6 +753,16 @@ class MLLMBatchGenerator:
             num_tokens=[0] * len(requests),
             cache=batch_cache,
             requests=requests,
+        )
+
+    def _make_request_sampler(self, request: MLLMBatchRequest) -> Callable[[mx.array], mx.array]:
+        """Create a sampler for a specific request's sampling parameters."""
+        from mlx_lm.sample_utils import make_sampler
+        return make_sampler(
+            temp=request.temperature,
+            top_p=request.top_p,
+            top_k=request.top_k if request.top_k > 0 else 0,
+            min_p=request.min_p if request.min_p > 0 else 0.0,
         )
 
     def _step(
@@ -833,9 +793,17 @@ class MLLMBatchGenerator:
 
         logits = logits[:, -1, :]
 
-        # Sample
+        # Per-request sampling using each request's sampling parameters
         logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        sampled = self.sampler(logprobs)
+        batch = self.active_batch
+        if batch and len(batch.requests) == logprobs.shape[0]:
+            tokens = []
+            for i, req in enumerate(batch.requests):
+                req_sampler = self._make_request_sampler(req)
+                tokens.append(req_sampler(logprobs[i:i+1]))
+            sampled = mx.concatenate(tokens, axis=0)
+        else:
+            sampled = self.sampler(logprobs)
 
         return sampled, list(logprobs)
 
@@ -881,9 +849,9 @@ class MLLMBatchGenerator:
         y = y.tolist()
         toc = time.perf_counter()
 
-        if prompt_processing:
-            self._stats.prompt_time += toc - tic
-        else:
+        # Note: prompt_time is already counted in _process_prompts().
+        # Only count the first decode step after prompt processing as generation time.
+        if not prompt_processing:
             self._stats.generation_time += toc - tic
 
         # Build responses and track finished
@@ -919,8 +887,9 @@ class MLLMBatchGenerator:
                 keep_idx.append(i)
 
             if finish_reason is not None:
-                # Extract cache for this request
-                cache_fn = lambda idx=i: batch.extract_cache(idx)
+                # Extract cache NOW before batch.filter() invalidates indices
+                captured_cache = batch.extract_cache(i)
+                cache_fn = lambda c=captured_cache: c
 
             responses.append(
                 MLLMBatchResponse(
@@ -930,7 +899,11 @@ class MLLMBatchGenerator:
                     logprobs=logprobs[i],
                     finish_reason=finish_reason,
                     prompt_cache=cache_fn,
-                    prompt_token_ids=req.input_ids.tolist() if req.input_ids is not None else [],
+                    prompt_token_ids=(
+                        req.input_ids[0].tolist() if req.input_ids is not None and req.input_ids.ndim > 1
+                        else req.input_ids.tolist() if req.input_ids is not None
+                        else []
+                    ),
                 )
             )
 

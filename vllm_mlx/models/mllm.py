@@ -1602,23 +1602,23 @@ class MLXMultimodalLM:
         accumulated_text = ""
         token_count = 0
 
-        # Ensure processor uses NaiveStreamingDetokenizer for Qwen/Exploitbot models
-        # This prevents infinite buffering bugs in MLX's default streaming detokenizer.
-        if "qwen" in self.model_name.lower() or "exploit" in self.model_name.lower():
-            if not hasattr(self.processor, "_patched_detok"):
-                from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
-            
-                # Monkey-patch NaiveStreamingDetokenizer to accept kwargs from mlx_vlm
-                if not hasattr(NaiveStreamingDetokenizer, "_vml_patched"):
-                    original_add = NaiveStreamingDetokenizer.add_token
-                    def _patched_add(self, token, **kwargs):
-                        return original_add(self, token)
-                    NaiveStreamingDetokenizer.add_token = _patched_add
-                    NaiveStreamingDetokenizer._vml_patched = True
-                    
-                tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
-                self.processor.detokenizer = NaiveStreamingDetokenizer(tokenizer)
-                self.processor._patched_detok = True
+        # Ensure processor uses NaiveStreamingDetokenizer for all MLLM models.
+        # mlx-vlm's default streaming detokenizer can buffer infinitely for some
+        # architectures. NaiveStreamingDetokenizer yields tokens immediately.
+        if not hasattr(self.processor, "_patched_detok"):
+            from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
+
+            # Monkey-patch NaiveStreamingDetokenizer to accept kwargs from mlx_vlm
+            if not hasattr(NaiveStreamingDetokenizer, "_vml_patched"):
+                original_add = NaiveStreamingDetokenizer.add_token
+                def _patched_add(self, token, **kwargs):
+                    return original_add(self, token)
+                NaiveStreamingDetokenizer.add_token = _patched_add
+                NaiveStreamingDetokenizer._vml_patched = True
+
+            tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
+            self.processor.detokenizer = NaiveStreamingDetokenizer(tokenizer)
+            self.processor._patched_detok = True
 
         try:
             for chunk in stream_generate(

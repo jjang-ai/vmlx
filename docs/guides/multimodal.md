@@ -183,6 +183,31 @@ output = mllm.generate(
 )
 ```
 
+## Continuous Batching & Caching
+
+VLM models fully support continuous batching, paged cache, prefix cache, and KV cache quantization:
+
+```bash
+vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
+  --continuous-batching \
+  --use-paged-cache \
+  --kv-cache-quantization q8 \
+  --enable-prefix-cache
+```
+
+### How It Works
+
+VLM continuous batching uses a two-phase approach:
+
+1. **Vision Encoding** (per-request): Each request's images/videos are processed through the vision encoder individually, producing per-request KV caches
+2. **Language Generation** (batched): Per-request caches are merged into a BatchKVCache for efficient batched token generation
+
+### Prefix Cache for VLMs
+
+When enabled, the paged prefix cache stores KV cache states after each request completes. Subsequent requests with the same image+prompt combination reuse the cached states, skipping vision encoding entirely. This provides significant speedups (typically 3-6x) for repeated image queries.
+
+KV cache quantization (q4/q8) reduces memory usage of stored cache blocks by 2-4x with minimal quality impact.
+
 ## Performance Tips
 
 ### Images

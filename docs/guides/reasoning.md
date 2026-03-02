@@ -42,7 +42,9 @@ When you pass `--reasoning-parser auto`, vllm-mlx uses its model config registry
 | Model Pattern | Parser Selected |
 |---------------|----------------|
 | Qwen3 (all variants) | `qwen3` |
-| DeepSeek-R1 | `deepseek_r1` |
+| DeepSeek-R1, DeepSeek-V3 | `deepseek_r1` |
+| GLM-4.7 Flash, GPT-OSS | `openai_gptoss` |
+| GLM-4.7, GLM-Z1 | `deepseek_r1` |
 | Unknown model | No parser (content passed through) |
 
 Auto-detection also works for tool call parsers with `--enable-auto-tool-choice` (defaults to `--tool-call-parser auto`).
@@ -150,9 +152,22 @@ For DeepSeek-R1 models that may omit the opening `<think>` tag.
 - More lenient than Qwen3 parser
 - Handles implicit reasoning mode where `<think>` is injected in the prompt
 - Content before `</think>` is treated as reasoning even without `<think>`
+- Also used for GLM-4.7 and GLM-Z1 (non-Flash variants that use `<think>` tags with `think_in_template=True`)
 
 ```bash
 vllm-mlx serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
+```
+
+### GPT-OSS / Harmony Parser (`openai_gptoss`)
+
+For GLM-4.7 Flash and GPT-OSS models that use the Harmony protocol with channel markers instead of `<think>` tags.
+
+- Uses `<|channel|>analysis` for reasoning and `<|channel|>final` for content
+- Stateful streaming with `_harmony_active`, `_emitted_reasoning`, `_emitted_content` tracking
+- `think_in_template=False` — reasoning is NOT injected in the chat template
+
+```bash
+vllm-mlx serve lmstudio-community/GLM-4.7-Flash-MLX-8bit --reasoning-parser openai_gptoss
 ```
 
 ## How It Works

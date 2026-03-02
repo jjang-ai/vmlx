@@ -36,7 +36,6 @@ from .mllm_batch_generator import (
 )
 from .multimodal_processor import MultimodalProcessor
 from .request import RequestOutput, RequestStatus, SamplingParams
-from .mllm_cache import MLLMCacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -184,13 +183,6 @@ class MLLMScheduler:
             processor=processor,
             config=self.model_config,
         )
-
-        # Vision cache for repeated images
-        self.vision_cache: Optional[MLLMCacheManager] = None
-        if self.config.enable_vision_cache:
-            self.vision_cache = MLLMCacheManager(
-                max_entries=self.config.vision_cache_size
-            )
 
         # Token-level Prefix caching for the language model
         self.paged_cache_manager = None
@@ -448,38 +440,48 @@ class MLLMScheduler:
                 result.append(layer_cache)
         return result
 
-    def _dequantize_cache_for_use(self, cache: List[Any]) -> Optional[List[Any]]:
+    def _extract_cache_states(self, raw_cache: List[Any]) -> List[Dict[str, Any]]:
         """
-        Dequantize stored QuantizedKVCache layers back to KVCache for generation.
-        Returns None on failure (treated as cache miss).
-        """
-        try:
-            from mlx_lm.models.cache import KVCache, QuantizedKVCache
-            import mlx.core as mx
-        except ImportError:
-            return cache
+        Extract actual tensor state from each layer cache for paged storage.
 
-        result = []
-        for layer_cache in cache:
-            if isinstance(layer_cache, QuantizedKVCache) and layer_cache.keys is not None:
-                try:
-                    kv = KVCache()
-                    kv.keys = mx.dequantize(
-                        layer_cache.keys[0], layer_cache.keys[1],
-                        layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
+        Converts raw KVCache/MambaCache objects into state-dict format that
+        BlockAwarePrefixCache.store_cache() expects:
+            {"state": (keys, values), "meta_state": (offset,), "class_name": "KVCache"}
+
+        This is the VLM equivalent of Scheduler._extract_cache_states().
+        """
+        if not raw_cache:
+            return []
+
+        extracted = []
+        for i, layer_cache in enumerate(raw_cache):
+            try:
+                if hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
+                    extracted.append({
+                        "state": layer_cache.state,
+                        "meta_state": layer_cache.meta_state,
+                        "class_name": type(layer_cache).__name__,
+                    })
+                elif hasattr(layer_cache, "cache") and isinstance(
+                    getattr(layer_cache, "cache", None), list
+                ):
+                    # MambaCache/ArraysCache: cumulative state, skip for paged storage
+                    # (cannot be sliced into blocks)
+                    continue
+                else:
+                    logger.debug(
+                        f"VLM cache layer {i} ({type(layer_cache).__name__}) "
+                        f"lacks state/meta_state — skipping"
                     )
-                    kv.values = mx.dequantize(
-                        layer_cache.values[0], layer_cache.values[1],
-                        layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
-                    )
-                    kv.offset = layer_cache.offset
-                    result.append(kv)
-                except Exception as e:
-                    logger.warning(f"VLM cache dequantization failed: {e}")
-                    return None
-            else:
-                result.append(layer_cache)
-        return result
+            except Exception as e:
+                logger.warning(f"Failed to extract VLM cache state from layer {i}: {e}")
+
+        if extracted:
+            logger.debug(
+                f"VLM cache extraction: {len(extracted)}/{len(raw_cache)} layers"
+            )
+
+        return extracted
 
     def _get_stop_tokens(self) -> Set[int]:
         """Get stop token IDs from tokenizer."""
@@ -562,6 +564,9 @@ class MLLMScheduler:
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            top_k=kwargs.get("top_k", 0),
+            min_p=kwargs.get("min_p", 0.0),
+            repetition_penalty=kwargs.get("repetition_penalty", 1.0),
         )
 
         request = MLLMRequest(
@@ -665,6 +670,9 @@ class MLLMScheduler:
                 max_tokens=request.sampling_params.max_tokens,
                 temperature=request.sampling_params.temperature,
                 top_p=request.sampling_params.top_p,
+                top_k=request.sampling_params.top_k,
+                min_p=request.sampling_params.min_p,
+                repetition_penalty=request.sampling_params.repetition_penalty,
             )
             batch_requests.append(batch_req)
 
@@ -785,14 +793,27 @@ class MLLMScheduler:
                         token_list = getattr(request, "_extracted_tokens", [])
                         if token_list:
                             cache_blocks = request._extracted_cache()
-                            # Quantize cache for compact storage (2-4x memory reduction)
-                            cache_blocks = self._quantize_cache_for_storage(cache_blocks)
-                            self.block_aware_cache.store_cache(
-                                request_id, 
-                                token_list,
-                                cache_blocks
-                            )
-                            logger.info(f"VLM Scheduler stored paged Prefix Cache for request {request_id}")
+                            # Quantize first (if KV quant enabled) — converts
+                            # KVCache→QuantizedKVCache for 2-4x memory reduction.
+                            # Must happen BEFORE _extract_cache_states() so that
+                            # extracted state dicts contain quantized tuple tensors.
+                            if getattr(self, '_kv_cache_bits', 0):
+                                cache_blocks = self._quantize_cache_for_storage(cache_blocks)
+                            # Convert raw cache objects to state-dict format
+                            # that BlockAwarePrefixCache.store_cache() expects.
+                            # store_cache checks is_tensor_data which requires
+                            # {"state": ..., "meta_state": ...} dicts.
+                            cache_states = self._extract_cache_states(cache_blocks)
+                            if cache_states:
+                                self.block_aware_cache.store_cache(
+                                    request_id,
+                                    token_list,
+                                    cache_states,
+                                )
+                                logger.info(
+                                    f"VLM Scheduler stored paged Prefix Cache for "
+                                    f"{request_id}: {len(cache_states)} layers"
+                                )
                     except Exception as e:
                         logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}")
 
@@ -815,7 +836,7 @@ class MLLMScheduler:
 
     def step(self) -> MLLMSchedulerOutput:
         """
-        Execute one scheduling step.
+        Execute one scheduling step (no queue pushing — see _step_and_dispatch).
 
         This method:
         1. Schedules waiting requests into the batch
@@ -841,24 +862,84 @@ class MLLMScheduler:
                 outputs, finished_ids = self._process_batch_responses(responses)
                 output.outputs = outputs
                 output.finished_request_ids = finished_ids
-
-                # Push to async queues
-                for req_output in outputs:
-                    queue = self.output_queues.get(req_output.request_id)
-                    if queue is not None:
-                        try:
-                            queue.put_nowait(req_output)
-                            if req_output.finished:
-                                queue.put_nowait(None)  # Signal end
-                        except asyncio.QueueFull:
-                            pass
-
                 self._cleanup_finished(finished_ids)
 
         # Clear finished tracking for next step
         self.finished_req_ids = set()
 
         return output
+
+    def _dispatch_outputs(self, step_output: "MLLMSchedulerOutput") -> None:
+        """Push step outputs to async queues. Must be called on the event loop thread."""
+        if step_output.outputs:
+            for req_output in step_output.outputs:
+                queue = self.output_queues.get(req_output.request_id)
+                if queue is not None:
+                    try:
+                        queue.put_nowait(req_output)
+                        if req_output.finished:
+                            queue.put_nowait(None)  # Signal end
+                    except asyncio.QueueFull:
+                        pass
+
+    def _fail_all_requests(self, error_msg: str) -> None:
+        """Fail all waiting and running requests with an error so callers don't hang."""
+        failed_ids = set()
+        # Fail running requests
+        for req_id, req in list(self.running.items()):
+            req.status = RequestStatus.FINISHED_STOPPED
+            queue = self.output_queues.get(req_id)
+            if queue is not None:
+                try:
+                    queue.put_nowait(RequestOutput(
+                        request_id=req_id,
+                        output_text=f"[Error: {error_msg}]",
+                        finished=True,
+                        finish_reason="error",
+                    ))
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+            failed_ids.add(req_id)
+        # Fail waiting requests
+        for req in list(self.waiting):
+            req_id = req.request_id
+            req.status = RequestStatus.FINISHED_STOPPED
+            queue = self.output_queues.get(req_id)
+            if queue is not None:
+                try:
+                    queue.put_nowait(RequestOutput(
+                        request_id=req_id,
+                        output_text=f"[Error: {error_msg}]",
+                        finished=True,
+                        finish_reason="error",
+                    ))
+                    queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
+            failed_ids.add(req_id)
+        # Cleanup — do NOT pop output_queues here; the error+sentinel are
+        # already enqueued and stream_outputs() will drain them. If we pop
+        # the queue now, stream_outputs() will find no queue and return
+        # empty, losing the error message (user sees 0 tokens instead of error).
+        self.waiting.clear()
+        for req_id in failed_ids:
+            self.running.pop(req_id, None)
+            self.requests.pop(req_id, None)
+            # Leave output_queues[req_id] — stream_outputs reads the error then cleans up
+            self._cleanup_detokenizer(req_id)
+            # Clean up UID mappings
+            uid = self.request_id_to_uid.pop(req_id, None)
+            if uid is not None:
+                self.uid_to_request_id.pop(uid, None)
+        self.finished_req_ids.clear()
+        # Reset batch generator so next request starts fresh
+        if self.batch_generator is not None:
+            try:
+                self.batch_generator.close()
+            except Exception:
+                pass
+            self.batch_generator = None
 
     def get_request(self, request_id: str) -> Optional[MLLMRequest]:
         """Get a request by ID."""
@@ -902,10 +983,11 @@ class MLLMScheduler:
         while self._running:
             try:
                 if self.has_requests():
-                    # Run one step
-                    self.step()
-                    # Yield to other tasks
-                    await asyncio.sleep(0)
+                    # Run step in thread to avoid blocking the event loop
+                    # (batch_generator.next() does heavy MLX computation)
+                    step_output = await asyncio.to_thread(self.step)
+                    # Dispatch outputs on the event loop (asyncio.Queue is not thread-safe)
+                    self._dispatch_outputs(step_output)
                 else:
                     # No work, wait a bit
                     await asyncio.sleep(0.01)
@@ -913,7 +995,10 @@ class MLLMScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in MLLM process loop: {e}")
+                import traceback
+                logger.error(f"Error in MLLM process loop: {e}\n{traceback.format_exc()}")
+                # Fail all waiting+running requests so callers don't hang forever
+                self._fail_all_requests(str(e))
                 await asyncio.sleep(0.1)
 
     async def add_request_async(
@@ -1052,8 +1137,8 @@ class MLLMScheduler:
                 self.batch_generator.get_vision_cache_stats()
             )
 
-        if self.vision_cache:
-            stats["vision_cache"] = self.vision_cache.get_stats()
+        if self.batch_generator:
+            stats["vision_cache"] = self.batch_generator.get_vision_cache_stats()
 
         return stats
 
@@ -1074,5 +1159,4 @@ class MLLMScheduler:
             self.batch_generator.close()
             self.batch_generator = None
 
-        if self.vision_cache:
-            self.vision_cache.clear()
+        # Vision cache is inside batch_generator, already cleaned up above
