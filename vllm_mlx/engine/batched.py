@@ -735,7 +735,6 @@ class BatchedEngine(BaseEngine):
             request_id=request_id,
             **kwargs,
         ):
-            print(f"!!! DEBUG_STREAM_CHAT: new_text={repr(output.new_text)}", flush=True)
             yield output
 
     def get_stats(self) -> dict[str, Any]:
