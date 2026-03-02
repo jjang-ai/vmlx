@@ -606,7 +606,10 @@ def load_model(
     # Log Metal GPU memory after model load
     try:
         import mlx.core as mx
-        if hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
+        if hasattr(mx, "get_active_memory"):
+            active_gb = mx.get_active_memory() / (1024 ** 3)
+            peak_gb = mx.get_peak_memory() / (1024 ** 3)
+        elif hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
             active_gb = mx.metal.get_active_memory() / (1024 ** 3)
             peak_gb = mx.metal.get_peak_memory() / (1024 ** 3)
             logger.info(f"Metal GPU memory after load: {active_gb:.2f}GB active, {peak_gb:.2f}GB peak")
@@ -689,7 +692,11 @@ async def health():
     memory_info = None
     try:
         import mlx.core as mx
-        if hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
+        if hasattr(mx, "get_active_memory"):
+            active = mx.get_active_memory()
+            peak = mx.get_peak_memory()
+            cache = mx.get_cache_memory()
+        elif hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
             active = mx.metal.get_active_memory()
             peak = mx.metal.get_peak_memory()
             cache = mx.metal.get_cache_memory()
