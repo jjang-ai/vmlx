@@ -1049,33 +1049,41 @@ export class SessionManager extends EventEmitter {
     // (e.g., a Qwen3 model named "Nemotron-Orchestrator" getting hybrid cache config).
     const detected = detectModelConfigFromDir(config.modelPath)
 
-    if (config.continuousBatching) args.push('--continuous-batching')
+    // Explicit UI toggles have highest priority. 
+    // If not set in session config (e.g. older session), fall back to detected values.
+    const isVLM = config.isMultimodal ?? !!detected.isMultimodal
+    if (isVLM) args.push('--is-mllm')
 
-    // Parser resolution: detection ALWAYS wins when available.
-    // This prevents stale session configs (from older registry versions) from overriding
-    // correct auto-detected parsers (e.g., GLM-4.7 Flash stuck with deepseek_r1 instead of openai_gptoss).
+    if (config.continuousBatching && !isVLM) args.push('--continuous-batching')
+
+    // Parser resolution: User explicit choice -> Detected config -> Fallback logic
     // Empty string "" = user explicitly chose "None" (disabled) — always respected.
-    // If detection returns nothing (unknown model), fall back to saved session value.
     const userToolParser = config.toolCallParser
     const effectiveToolParser = userToolParser === ''
-      ? undefined                     // User explicitly chose "None" — respect it
-      : detected.toolParser           // Auto-detected wins when available
-      || (userToolParser && userToolParser !== 'auto' ? userToolParser : undefined)  // Fallback for unknown models
+      ? undefined                     // User explicitly chose "None"
+      : (userToolParser && userToolParser !== 'auto' ? userToolParser
+        : detected.toolParser)       // Fallback to detection if auto or missing
+
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected.enableAutoToolChoice
+
     const userReasoningParser = config.reasoningParser
     const effectiveReasoningParser = userReasoningParser === ''
-      ? undefined                     // User explicitly chose "None" — respect it
-      : detected.reasoningParser      // Auto-detected wins when available
-      || (userReasoningParser && userReasoningParser !== 'auto' ? userReasoningParser : undefined)  // Fallback for unknown models
+      ? undefined                     // User explicitly chose "None"
+      : (userReasoningParser && userReasoningParser !== 'auto' ? userReasoningParser
+        : detected.reasoningParser)  // Fallback to detection if auto or missing
 
-    // Log parser resolution with override warnings
-    if (userReasoningParser && userReasoningParser !== 'auto' && detected.reasoningParser && userReasoningParser !== detected.reasoningParser) {
-      console.log(`[SESSION] WARNING: Session had reasoningParser="${userReasoningParser}" but auto-detected "${detected.reasoningParser}" for ${detected.family}. Using detected value.`)
+    // Pass resolved parsers directly to the CLI so backend doesn't guess
+    if (effectiveToolParser) {
+      args.push('--tool-call-parser', effectiveToolParser)
     }
-    if (userToolParser && userToolParser !== 'auto' && detected.toolParser && userToolParser !== detected.toolParser) {
-      console.log(`[SESSION] WARNING: Session had toolCallParser="${userToolParser}" but auto-detected "${detected.toolParser}" for ${detected.family}. Using detected value.`)
+    if (effectiveReasoningParser) {
+      args.push('--reasoning-parser', effectiveReasoningParser)
     }
-    console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool}`)
+    if (effectiveAutoTool) {
+      args.push('--enable-auto-tool-choice')
+    }
+
+    console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
     // Prefix cache — requires --continuous-batching to take effect in vllm-mlx
     // When MCP tools + auto-tool-choice are enabled, force prefix cache ON.
@@ -1088,7 +1096,7 @@ export class SessionManager extends EventEmitter {
       args.push('--disable-prefix-cache')
     } else {
       // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx).
-      if (!config.continuousBatching && !args.includes('--continuous-batching')) {
+      if (!isVLM && !config.continuousBatching && !args.includes('--continuous-batching')) {
         args.push('--continuous-batching')
       }
       // Set safe prefill batch size to prevent Metal GPU crashes with large contexts
@@ -1115,7 +1123,7 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Paged cache is a prefix cache backend — skip when prefix cache is disabled
+    // Paged cache is a prefix cache backend — works for both LLMs and VLMs
     if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache)) {
       args.push('--use-paged-cache')
       if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) {
@@ -1126,7 +1134,7 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // KV cache quantization — only meaningful when prefix cache is active
+    // KV cache quantization — works for both LLMs and VLMs
     // The Python scheduler only quantizes KVCache layers, non-KV layers pass through.
     if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
@@ -1146,7 +1154,7 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Block-level disk cache (L2 for paged cache blocks)
+    // Block-level disk cache (L2 for paged cache blocks) — works for both LLMs and VLMs
     // Must mirror the paged cache guard condition above
     if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
       args.push('--enable-block-disk-cache')

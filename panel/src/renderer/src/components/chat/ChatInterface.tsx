@@ -187,11 +187,11 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
       setMessages(prev => prev.map(m =>
         m.id === data.messageId
           ? {
-              ...m,
-              content: finalContent || m.content,
-              tokens: data.metrics?.tokenCount,
-              metrics: data.metrics
-            }
+            ...m,
+            content: finalContent || m.content,
+            tokens: data.metrics?.tokenCount,
+            metrics: data.metrics
+          }
           : m
       ))
       // Finalize reasoning state from completion event (ensures reasoning box persists
@@ -282,9 +282,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
     // Build display content for user message: if images attached, store as JSON content array
     const displayContent = attachments && attachments.length > 0
       ? JSON.stringify([
-          ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
-          ...(content.trim() ? [{ type: 'text', text: content }] : [])
-        ])
+        ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
+        ...(content.trim() ? [{ type: 'text', text: content }] : [])
+      ])
       : content
 
     // Add temp user message for instant UI feedback

@@ -121,7 +121,7 @@ class DatabaseManager {
         // Also clean up WAL/SHM files
         if (existsSync(`${dbPath}-wal`)) unlinkSync(`${dbPath}-wal`)
         if (existsSync(`${dbPath}-shm`)) unlinkSync(`${dbPath}-shm`)
-      } catch (_) {}
+      } catch (_) { }
       this.db = new Database(dbPath)
       this.initialize()
       this.recoveryBackupPath = backupPath
@@ -155,6 +155,11 @@ class DatabaseManager {
         updated_at INTEGER NOT NULL,
         model_id TEXT NOT NULL,
         FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS bookmarks (
+        path TEXT PRIMARY KEY,
+        bookmark TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS messages (
@@ -535,7 +540,7 @@ class DatabaseManager {
     // enable_thinking tri-state: undefined/null → NULL (Auto), true → 1, false → 0
     const enableThinkingVal = overrides.enableThinking === true ? 1
       : overrides.enableThinking === false ? 0
-      : null  // Auto
+        : null  // Auto
     stmt.run(
       overrides.chatId,
       overrides.temperature,
@@ -737,6 +742,24 @@ class DatabaseManager {
   deleteSetting(key: string): void {
     const stmt = this.db.prepare('DELETE FROM settings WHERE key = ?')
     stmt.run(key)
+  }
+
+  // ─── Sandboxed Bookmarks ────────────────────────────────────────────────────────
+
+  saveBookmark(path: string, bookmark: string): void {
+    const stmt = this.db.prepare('INSERT OR REPLACE INTO bookmarks (path, bookmark) VALUES (?, ?)')
+    stmt.run(path, bookmark)
+  }
+
+  getBookmark(path: string): string | null {
+    const stmt = this.db.prepare('SELECT bookmark FROM bookmarks WHERE path = ?')
+    const result = stmt.get(path) as { bookmark: string } | undefined
+    return result ? result.bookmark : null
+  }
+
+  getAllBookmarks(): { path: string; bookmark: string }[] {
+    const stmt = this.db.prepare('SELECT path, bookmark FROM bookmarks')
+    return stmt.all() as { path: string; bookmark: string }[]
   }
 
   // Benchmarks

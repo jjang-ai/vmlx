@@ -113,7 +113,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold mb-2">Welcome to vMLX</h1>
           <p className="text-muted-foreground">
-            First-time setup: vMLX needs to install its inference engine.
+            First-time setup: vMLX needs to install its inference layer.
             {installers.length > 0
               ? ' Click below to install it automatically.'
               : ' Please install it manually to continue.'}
@@ -149,11 +149,10 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                   <button
                     key={inst.method}
                     onClick={() => setSelectedMethod(inst.method)}
-                    className={`flex-1 p-3 rounded border text-sm font-medium transition-colors ${
-                      selectedMethod === inst.method
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border hover:border-primary/50'
-                    }`}
+                    className={`flex-1 p-3 rounded border text-sm font-medium transition-colors ${selectedMethod === inst.method
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:border-primary/50'
+                      }`}
                   >
                     {inst.label}
                   </button>

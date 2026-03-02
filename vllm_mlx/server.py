@@ -42,8 +42,10 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import secrets
+import subprocess
 import tempfile
 import threading
 import time
@@ -166,7 +168,17 @@ _reasoning_parser = None  # ReasoningParser instance when enabled
 _template_always_thinks_cache: dict[str, bool] = {}
 
 # Tool call markers to detect in streaming output for buffering
-_TOOL_CALL_MARKERS = ["<tool_call>", "[TOOL_CALLS]", "<function=", "<minimax:tool_call>", "[Calling tool:"]
+_TOOL_CALL_MARKERS = [
+    "<tool_call>", 
+    "<|tool_call|>", 
+    "[TOOL_CALLS]", 
+    "<function=", 
+    "<minimax:tool_call>", 
+    "[Calling tool:", 
+    "<|recipient|>",
+    "<|tool_calls_section_begin|>",
+    "<|tool_call_begin|>",
+]
 
 
 def _template_always_thinks(tokenizer, model_name: str) -> bool:
@@ -178,6 +190,11 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
     """
     if model_name in _template_always_thinks_cache:
         return _template_always_thinks_cache[model_name]
+
+    # Qwen models natively inject <think> but they are explicitly patched in batched.py/mllm.py to strip it.
+    if "qwen" in model_name.lower() or "exploit" in model_name.lower():
+        _template_always_thinks_cache[model_name] = False
+        return False
 
     result = False
     try:
@@ -211,6 +228,20 @@ _tool_parser_instance = None  # Instantiated parser
 async def lifespan(app: FastAPI):
     """FastAPI lifespan for startup/shutdown events."""
     global _engine, _mcp_manager
+
+    caffeinate_process = None
+    if platform.system() == "Darwin":
+        try:
+            # -d: Prevent display sleep
+            # -s: Prevent system sleep
+            # -i: Prevent idle sleep
+            # -w: Wait for process to exit
+            caffeinate_process = subprocess.Popen(
+                ["caffeinate", "-s", "-i", "-w", str(os.getpid())]
+            )
+            logger.info(f"Started caffeinate system wake lock for PID {os.getpid()}")
+        except Exception as e:
+            logger.warning(f"Failed to start caffeinate process: {e}")
 
     # Startup: Start engine if loaded (needed for BatchedEngine in uvicorn's event loop)
     if _engine is not None and hasattr(_engine, "_loaded") and not _engine._loaded:
@@ -2321,6 +2352,8 @@ async def stream_chat_completion(
                 has_tool_results = True
                 break
     effective_think_in_template = think_in_template and not has_tool_results
+    if _effective_thinking is False:
+        effective_think_in_template = False
 
     # Track if we need to add <think> prefix for thinking models (when no reasoning parser)
     # The template adds <think> to the prompt, so the model output starts inside the think block
@@ -2469,11 +2502,22 @@ async def stream_chat_completion(
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
 
-                # When reasoning is suppressed, drop it from the chunk
-                emit_reasoning = None if suppress_reasoning else delta_msg.reasoning
-                emit_content = delta_msg.content
+                # When reasoning is suppressed (client requested enable_thinking=False but model forces it),
+                # convert the hidden reasoning stream into standard content stream. This prevents the UI
+                # from hanging/buffering since it expects immediate visible content.
+                if suppress_reasoning:
+                    emit_content = delta_msg.reasoning or delta_msg.content
+                    emit_reasoning = None
+                    if emit_content:
+                        content_was_emitted = True
+                        if delta_msg.reasoning:
+                            # Transfer accumulated text if we shifted reasoning to content
+                            accumulated_content += delta_msg.reasoning
+                else:
+                    emit_reasoning = delta_msg.reasoning
+                    emit_content = delta_msg.content
 
-                # Skip chunks that have nothing to emit after suppression
+                # Skip chunks that have nothing to emit after conversion
                 if not emit_content and not emit_reasoning and not output.finished:
                     continue
 
@@ -2484,14 +2528,17 @@ async def stream_chat_completion(
                         ChatCompletionChunkChoice(
                             delta=ChatCompletionChunkDelta(
                                 content=emit_content,
-                                reasoning=emit_reasoning,
+                                reasoning_content=emit_reasoning,
                             ),
                             finish_reason=output.finish_reason if output.finished else None,
                         )
                     ],
                     usage=chunk_usage,
                 )
-                yield f"data: {_dump_sse_json(chunk)}\n\n"
+                out_j = _dump_sse_json(chunk)
+                import logging
+                logging.getLogger(__name__).warning(f"SSE_JSON_DUMP: {out_j}")
+                yield f"data: {out_j}\n\n"
             else:
                 # Standard path without reasoning parsing
                 content = delta_text
@@ -3222,11 +3269,11 @@ Examples:
         "--reasoning-parser",
         type=str,
         default=None,
-        choices=["auto"] + reasoning_choices,
+        choices=["auto", "none"] + reasoning_choices,
         help=(
             "Enable reasoning content extraction with specified parser. "
-            "Use 'auto' to detect from model name. "
-            f"Options: auto, {', '.join(reasoning_choices)}."
+            "Use 'auto' to detect from model name, or 'none' to disable explicitly. "
+            f"Options: auto, none, {', '.join(reasoning_choices)}."
         ),
     )
     parser.add_argument(
@@ -3314,6 +3361,10 @@ Examples:
         if detected:
             parser_name = detected
             logger.info(f"Auto-detected reasoning parser: {parser_name} (from model config)")
+    elif parser_name == "none":
+        # Explicitly disabled by user
+        parser_name = None
+        logger.info("Reasoning parser explicitly disabled via --reasoning-parser none")
     elif parser_name == "auto":
         detected = registry.get_reasoning_parser(model_name)
         if detected:
@@ -3339,7 +3390,12 @@ Examples:
     if args.enable_auto_tool_choice:
         _enable_auto_tool_choice = True
         _tool_call_parser = args.tool_call_parser or "auto"
-        if _tool_call_parser == "auto":
+        if _tool_call_parser == "none":
+            # Explicitly disabled by user
+            _enable_auto_tool_choice = False
+            _tool_call_parser = None
+            logger.info("Tool calling explicitly disabled via --tool-call-parser none")
+        elif _tool_call_parser == "auto":
             detected_tool = registry.get_tool_parser(model_name)
             if detected_tool:
                 _tool_call_parser = detected_tool

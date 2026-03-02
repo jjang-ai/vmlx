@@ -30,7 +30,7 @@ class ModelConfig:
 
     # Identity
     family_name: str
-    pattern: str  # Regex pattern for model name matching
+    model_types: List[str]  # e.g. ["llama", "qwen2", "mistral"]
 
     # Cache configuration
     cache_type: str = "kv"  # "kv" | "mamba" | "hybrid" | "rotating_kv"
@@ -62,14 +62,11 @@ class ModelConfig:
     description: Optional[str] = None
     priority: int = 100  # Lower = higher priority (matched first)
 
-    # Compiled regex (set by registry)
-    _compiled_pattern: Any = field(default=None, repr=False, compare=False)
-
 
 # Default config for unknown models
 _DEFAULT_CONFIG = ModelConfig(
     family_name="unknown",
-    pattern=".*",
+    model_types=[],
     cache_type="kv",
     description="Default configuration for unknown models",
     priority=999,
@@ -105,14 +102,6 @@ class ModelConfigRegistry:
     def register(self, config: ModelConfig) -> None:
         """Register a model configuration."""
         with self._rlock:
-            try:
-                config._compiled_pattern = re.compile(config.pattern)
-            except re.error as e:
-                raise ValueError(
-                    f"Invalid regex pattern for {config.family_name}: "
-                    f"'{config.pattern}' - {e}"
-                )
-
             self._configs.append(config)
             # Sort by priority (lower = higher priority)
             self._configs.sort(key=lambda c: c.priority)
@@ -121,7 +110,7 @@ class ModelConfigRegistry:
 
     def lookup(self, model_name: str) -> ModelConfig:
         """
-        Look up configuration for a model name.
+        Look up configuration for a model name by reading its config.json.
 
         Returns default config if no match found.
         """
@@ -129,12 +118,19 @@ class ModelConfigRegistry:
             if model_name in self._match_cache:
                 return self._match_cache[model_name]
 
-            for config in self._configs:
-                if config._compiled_pattern and config._compiled_pattern.search(
-                    model_name
-                ):
-                    self._match_cache[model_name] = config
-                    return config
+            model_type = None
+            try:
+                from mlx_lm.utils import load_config
+                model_config = load_config(model_name)
+                model_type = model_config.get("model_type", "").lower()
+            except Exception as e:
+                logger.warning(f"Could not load config.json for {model_name} to check model_type: {e}")
+
+            if model_type:
+                for config in self._configs:
+                    if model_type in config.model_types:
+                        self._match_cache[model_name] = config
+                        return config
 
             self._match_cache[model_name] = _DEFAULT_CONFIG
             return _DEFAULT_CONFIG
