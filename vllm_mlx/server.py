@@ -122,6 +122,7 @@ logger = logging.getLogger(__name__)
 # Global engine instance
 _engine: BaseEngine | None = None
 _model_name: str | None = None
+_model_path: str | None = None  # Full local path for config.json lookups
 _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
@@ -250,7 +251,7 @@ async def lifespan(app: FastAPI):
         # Apply chat template override for BatchedEngine (SimpleEngine does it in load_model)
         try:
             from .model_config_registry import get_model_config_registry
-            _mc = get_model_config_registry().lookup(_model_name or "")
+            _mc = get_model_config_registry().lookup(_model_path or _model_name or "")
             if _mc.chat_template_custom and _engine.tokenizer:
                 _engine.tokenizer.chat_template = _mc.chat_template_custom
                 logger.info(f"Applied custom chat template for {_mc.family_name} model (batched)")
@@ -538,9 +539,10 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _default_max_tokens, _tool_parser_instance
+    global _engine, _model_name, _model_path, _default_max_tokens, _tool_parser_instance
 
     _default_max_tokens = max_tokens
+    _model_path = model_name  # Full path for config.json lookups
     # Normalize model name: extract "org/model" from full local paths
     # e.g. "/Users/eric/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
     #    → "mlx-community/Llama-3.2-3B-Instruct-4bit"
@@ -1609,7 +1611,7 @@ async def create_chat_completion(
     else:
         # Auto-detect from model config + tokenizer fallback
         from .model_config_registry import get_model_config_registry
-        _mc = get_model_config_registry().lookup(_model_name or request.model)
+        _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
         _enable = _mc.think_in_template
         if not _enable:
             # Models with a reasoning_parser are reasoning models — enable thinking
@@ -1639,10 +1641,12 @@ async def create_chat_completion(
     if has_media:
         chat_kwargs["images"] = images if images else None
         chat_kwargs["videos"] = videos if videos else None
-        if request.video_fps:
-            chat_kwargs["video_fps"] = request.video_fps
-        if request.video_max_frames:
-            chat_kwargs["video_max_frames"] = request.video_max_frames
+    # Video controls — passed regardless of has_media since MLLM models
+    # extract media from messages internally (has_media is always False for them)
+    if request.video_fps:
+        chat_kwargs["video_fps"] = request.video_fps
+    if request.video_max_frames:
+        chat_kwargs["video_max_frames"] = request.video_max_frames
 
     # Merge MCP tools with user-provided tools
     all_tools = []
@@ -1727,45 +1731,42 @@ async def create_chat_completion(
         f"Chat completion: {output.completion_tokens} tokens in {elapsed:.2f}s ({tokens_per_sec:.1f} tok/s)"
     )
 
-    # Strip think tags before tool call parsing — reasoning text may precede
-    # tool calls in thinking model output
-    _cc_parse_text = re.sub(r'<think>.*?</think>', '', output.text, flags=re.DOTALL)
-    if _cc_parse_text == output.text and '</think>' in output.text:
-        _, _, _cc_parse_text = output.text.partition('</think>')
+    # Extract reasoning content FIRST from raw output (before stripping tags).
+    # Must happen before tool call parsing since that strips <think> blocks.
+    reasoning_text = None
+    content_for_parsing = output.text
+    if _reasoning_parser:
+        reasoning_text, remaining_text = _reasoning_parser.extract_reasoning(
+            output.text
+        )
+        if remaining_text is not None:
+            content_for_parsing = remaining_text
+        # Suppress reasoning when user explicitly disabled thinking
+        _suppress = request.enable_thinking is False
+        if not _suppress and request.chat_template_kwargs:
+            _suppress = request.chat_template_kwargs.get("enable_thinking") is False
+        if _suppress:
+            reasoning_text = None
+
+    # Strip any residual think tags before tool call parsing
+    _cc_parse_text = re.sub(r'<think>.*?</think>', '', content_for_parsing, flags=re.DOTALL)
+    if _cc_parse_text == content_for_parsing and '</think>' in content_for_parsing:
+        _, _, _cc_parse_text = content_for_parsing.partition('</think>')
     _cc_parse_text = _cc_parse_text.strip()
 
     # Parse tool calls from output using configured parser
-    cleaned_text, tool_calls = _parse_tool_calls_with_parser(_cc_parse_text or output.text, request)
+    cleaned_text, tool_calls = _parse_tool_calls_with_parser(_cc_parse_text or content_for_parsing, request)
 
     # Process response_format if specified
     if response_format and not tool_calls:
         cleaned_text, parsed_json, is_valid, error = parse_json_output(
-            cleaned_text or output.text, response_format
+            cleaned_text or content_for_parsing, response_format
         )
         if parsed_json is not None:
             # Return JSON as string
             cleaned_text = json.dumps(parsed_json)
         if not is_valid:
             logger.warning(f"JSON validation failed: {error}")
-
-    # Extract reasoning content if parser is enabled
-    # Always run reasoning extraction, even when tool calls are present —
-    # thinking models emit <think>reasoning</think> before tool call text
-    reasoning_text = None
-    if _reasoning_parser:
-        text_to_parse = cleaned_text or output.text
-        reasoning_text, remaining_text = _reasoning_parser.extract_reasoning(
-            text_to_parse
-        )
-        if remaining_text is not None:
-            cleaned_text = remaining_text
-        # Suppress reasoning when user explicitly disabled thinking
-        # Check both top-level and chat_template_kwargs
-        _suppress = request.enable_thinking is False
-        if not _suppress and request.chat_template_kwargs:
-            _suppress = request.chat_template_kwargs.get("enable_thinking") is False
-        if _suppress:
-            reasoning_text = None
 
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
@@ -2011,7 +2012,7 @@ async def create_response(
     else:
         # Auto-detect from model config + tokenizer fallback
         from .model_config_registry import get_model_config_registry
-        _mc = get_model_config_registry().lookup(_model_name or request.model)
+        _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
         _enable = _mc.think_in_template
         if not _enable:
             if _mc.reasoning_parser:
@@ -2034,6 +2035,12 @@ async def create_response(
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
+
+    # Video processing controls (MLLM models)
+    if request.video_fps:
+        chat_kwargs["video_fps"] = request.video_fps
+    if request.video_max_frames:
+        chat_kwargs["video_max_frames"] = request.video_max_frames
 
     # Merge MCP tools with user-provided tools
     all_tools = []
@@ -2119,32 +2126,31 @@ async def create_response(
         f"Response: {output.completion_tokens} tokens in {elapsed:.2f}s ({tokens_per_sec:.1f} tok/s)"
     )
 
-    # Strip think tags before tool call parsing — reasoning text may precede
-    # tool calls in thinking model output
-    parse_text = re.sub(r'<think>.*?</think>', '', output.text, flags=re.DOTALL)
-    if parse_text == output.text and '</think>' in output.text:
-        _, _, parse_text = output.text.partition('</think>')
-    parse_text = parse_text.strip()
-
-    # Parse tool calls
-    cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or output.text, request)
-
-    # Extract reasoning if parser is enabled
-    # Always run reasoning extraction, even when tool calls are present —
-    # thinking models emit <think>reasoning</think> before tool call text
+    # Extract reasoning content FIRST from raw output (before stripping tags).
+    # Must happen before tool call parsing since that strips <think> blocks.
     reasoning_text = None
+    content_for_parsing = output.text
     if _reasoning_parser:
-        text_to_parse = cleaned_text or output.text
-        reasoning_text, remaining_text = _reasoning_parser.extract_reasoning(text_to_parse)
+        reasoning_text, remaining_text = _reasoning_parser.extract_reasoning(
+            output.text
+        )
         if remaining_text is not None:
-            cleaned_text = remaining_text
+            content_for_parsing = remaining_text
         # Suppress reasoning when user explicitly disabled thinking
-        # Check both top-level and chat_template_kwargs
         _suppress = request.enable_thinking is False
         if not _suppress and request.chat_template_kwargs:
             _suppress = request.chat_template_kwargs.get("enable_thinking") is False
         if _suppress:
             reasoning_text = None
+
+    # Strip any residual think tags before tool call parsing
+    parse_text = re.sub(r'<think>.*?</think>', '', content_for_parsing, flags=re.DOTALL)
+    if parse_text == content_for_parsing and '</think>' in content_for_parsing:
+        _, _, parse_text = content_for_parsing.partition('</think>')
+    parse_text = parse_text.strip()
+
+    # Parse tool calls
+    cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or content_for_parsing, request)
 
     # Build output array
     output_items = []
@@ -2321,7 +2327,7 @@ async def stream_chat_completion(
     # Check if model's chat template injects <think> in the assistant prefix
     # Use _model_name (actual model path) not request.model (which may be "default")
     from .model_config_registry import get_model_config_registry
-    _model_config = get_model_config_registry().lookup(_model_name or request.model)
+    _model_config = get_model_config_registry().lookup(_model_path or _model_name or request.model)
     think_in_template = _model_config.think_in_template
 
     # Fallback: detect from tokenizer if model config doesn't know this model.
@@ -2542,10 +2548,7 @@ async def stream_chat_completion(
                     ],
                     usage=chunk_usage,
                 )
-                out_j = _dump_sse_json(chunk)
-                import logging
-                logging.getLogger(__name__).warning(f"SSE_JSON_DUMP: {out_j}")
-                yield f"data: {out_j}\n\n"
+                yield f"data: {_dump_sse_json(chunk)}\n\n"
             else:
                 # Standard path without reasoning parsing
                 content = delta_text
@@ -2831,7 +2834,7 @@ async def stream_responses_api(
 
     # Reasoning parser setup (mirrors stream_chat_completion)
     from .model_config_registry import get_model_config_registry
-    _model_config = get_model_config_registry().lookup(_model_name or request.model)
+    _model_config = get_model_config_registry().lookup(_model_path or _model_name or request.model)
     think_in_template = _model_config.think_in_template
 
     # Fallback: detect from tokenizer if model config doesn't know this model

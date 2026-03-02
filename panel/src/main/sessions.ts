@@ -678,14 +678,14 @@ export class SessionManager extends EventEmitter {
           maxNumSeqs: 256,
           prefillBatchSize: 512,
           completionBatchSize: 512,
-          // VLM/MLLM models use SimpleEngine — disable batching features
-          continuousBatching: !detected.isMultimodal,
-          enablePrefixCache: !detected.isMultimodal,
+          // VLM/MLLM models support continuous batching via MLLMScheduler
+          continuousBatching: true,
+          enablePrefixCache: true,
           prefixCacheSize: 100,
           cacheMemoryMb: 0,
           cacheMemoryPercent: 20,
           noMemoryAwareCache: false,
-          usePagedCache: detected.isMultimodal ? false : detected.usePagedCache,
+          usePagedCache: detected.usePagedCache ?? true,
           pagedCacheBlockSize: 64,
           maxCacheBlocks: 1000,
           streamInterval: 1,
@@ -1054,7 +1054,7 @@ export class SessionManager extends EventEmitter {
     const isVLM = config.isMultimodal ?? !!detected.isMultimodal
     if (isVLM) args.push('--is-mllm')
 
-    if (config.continuousBatching && !isVLM) args.push('--continuous-batching')
+    if (config.continuousBatching) args.push('--continuous-batching')
 
     // Parser resolution: User explicit choice -> Detected config -> Fallback logic
     // Empty string "" = user explicitly chose "None" (disabled) — always respected.
@@ -1096,7 +1096,7 @@ export class SessionManager extends EventEmitter {
       args.push('--disable-prefix-cache')
     } else {
       // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx).
-      if (!isVLM && !config.continuousBatching && !args.includes('--continuous-batching')) {
+      if (!config.continuousBatching && !args.includes('--continuous-batching')) {
         args.push('--continuous-batching')
       }
       // Set safe prefill batch size to prevent Metal GPU crashes with large contexts
@@ -1177,15 +1177,8 @@ export class SessionManager extends EventEmitter {
       args.push('--max-tokens', '1000000')
     }
 
-    // Tool integration
+    // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
-    if (effectiveAutoTool) {
-      args.push('--enable-auto-tool-choice')
-      if (effectiveToolParser) args.push('--tool-call-parser', effectiveToolParser)
-    }
-
-    // Reasoning parser
-    if (effectiveReasoningParser) args.push('--reasoning-parser', effectiveReasoningParser)
 
     // Additional arguments
     if (config.additionalArgs) {
