@@ -175,13 +175,13 @@ class Step3p5ToolParser(ToolParser):
                         "arguments": json.dumps(arguments, ensure_ascii=False),
                     }
                 )
-            elif content:
-                # Raw content without parameter tags
+            else:
+                # Raw content without parameter tags, or empty content
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": content,
+                        "arguments": content if content else "{}",
                     }
                 )
 

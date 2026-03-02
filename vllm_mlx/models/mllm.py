@@ -1174,6 +1174,13 @@ class MLXMultimodalLM:
             )
             formatted_prompt = None
 
+        # Ensure stripping of forced reasoning loops for abliterated models
+        if enable_thinking is False and formatted_prompt:
+            if formatted_prompt.endswith("<think>\n"):
+                formatted_prompt = formatted_prompt[:-8]
+            elif formatted_prompt.endswith("<think>"):
+                formatted_prompt = formatted_prompt[:-7]
+
         if formatted_prompt is None:
             # Fallback to last user message if template fails
             last_user_msg = ""
@@ -1547,6 +1554,13 @@ class MLXMultimodalLM:
             )
             formatted_prompt = None
 
+        # Ensure stripping of forced reasoning loops for abliterated models
+        if enable_thinking is False and formatted_prompt:
+            if formatted_prompt.endswith("<think>\n"):
+                formatted_prompt = formatted_prompt[:-8]
+            elif formatted_prompt.endswith("<think>"):
+                formatted_prompt = formatted_prompt[:-7]
+
         if formatted_prompt is None:
             # Fallback to last user message if template fails
             last_user_msg = ""
@@ -1587,6 +1601,24 @@ class MLXMultimodalLM:
         # Stream generate tokens with cache
         accumulated_text = ""
         token_count = 0
+
+        # Ensure processor uses NaiveStreamingDetokenizer for Qwen/Exploitbot models
+        # This prevents infinite buffering bugs in MLX's default streaming detokenizer.
+        if "qwen" in self.model_name.lower() or "exploit" in self.model_name.lower():
+            if not hasattr(self.processor, "_patched_detok"):
+                from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
+            
+                # Monkey-patch NaiveStreamingDetokenizer to accept kwargs from mlx_vlm
+                if not hasattr(NaiveStreamingDetokenizer, "_vml_patched"):
+                    original_add = NaiveStreamingDetokenizer.add_token
+                    def _patched_add(self, token, **kwargs):
+                        return original_add(self, token)
+                    NaiveStreamingDetokenizer.add_token = _patched_add
+                    NaiveStreamingDetokenizer._vml_patched = True
+                    
+                tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
+                self.processor.detokenizer = NaiveStreamingDetokenizer(tokenizer)
+                self.processor._patched_detok = True
 
         try:
             for chunk in stream_generate(

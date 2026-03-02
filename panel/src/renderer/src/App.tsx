@@ -20,96 +20,96 @@ function App() {
 
   // Clear any stale chat locks on app mount (handles window reload recovery)
   useEffect(() => {
-    window.api.chat.clearAllLocks().catch(() => {})
+    window.api.chat.clearAllLocks().catch(() => { })
   }, [])
 
   return (
     <ToastProvider>
-    <div className="flex flex-col h-screen bg-background text-foreground">
-      {/* Window drag bar */}
-      <div className="flex items-center h-8 bg-card border-b border-border flex-shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-        {/* Back button + title in drag bar (no-drag region) — pl-[72px] clears macOS traffic lights */}
-        <div className="flex items-center gap-2 pl-[72px] pr-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          {view.type !== 'dashboard' && view.type !== 'setup' && (
-            <button
-              onClick={() => setView({ type: 'dashboard' })}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              ← Home
-            </button>
-          )}
-        </div>
-        <span className="text-xs text-muted-foreground flex-1 text-center">vMLX</span>
-        {/* About button */}
-        <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} className="px-3">
-          <button
-            onClick={() => setView({ type: 'about' })}
-            className={`text-xs px-2 py-0.5 rounded ${view.type === 'about' ? 'bg-accent' : 'hover:bg-accent'}`}
-          >
-            About
-          </button>
-        </div>
-      </div>
-
-      {/* Global download status bar */}
-      <DownloadStatusBar />
-
-      {/* Main content */}
-      <main className="flex-1 overflow-hidden">
-        {view.type === 'setup' && (
-          <SetupScreen onReady={() => setView({ type: 'dashboard' })} />
-        )}
-
-        {view.type === 'dashboard' && (
-          <SessionDashboard
-            onOpenSession={(sessionId) => setView({ type: 'session', sessionId })}
-            onConfigureSession={(sessionId) => setView({ type: 'sessionSettings', sessionId })}
-            onCreateSession={() => setView({ type: 'create' })}
-          />
-        )}
-
-        {view.type === 'create' && (
-          <CreateSession
-            onBack={() => setView({ type: 'dashboard' })}
-            onCreated={(sessionId) => setView({ type: 'session', sessionId })}
-          />
-        )}
-
-        {view.type === 'session' && (
-          <SessionView
-            sessionId={view.sessionId}
-            onBack={() => setView({ type: 'dashboard' })}
-          />
-        )}
-
-        {view.type === 'sessionSettings' && (
-          <SessionSettings
-            sessionId={view.sessionId}
-            onBack={() => setView({ type: 'dashboard' })}
-          />
-        )}
-
-        {view.type === 'about' && (
-          <div className="p-8 overflow-auto h-full">
-            <div className="max-w-3xl mx-auto space-y-6">
-              <h2 className="text-2xl font-bold">About vMLX</h2>
-              <p className="text-sm text-muted-foreground">
-                A native macOS application for running local AI models on Apple Silicon.
-              </p>
-              <div className="text-xs text-muted-foreground space-y-1">
-                <p>Version 0.1.0</p>
-                <p>&copy; {new Date().getFullYear()} Eric Jang. All rights reserved.</p>
-              </div>
-              <div className="flex gap-4 text-xs">
-                <a href="https://ericjang.com/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
-                <a href="https://github.com/nicholasjng/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
-              </div>
-              <ApiKeysSection />
-            </div>
+      <div className="flex flex-col h-screen bg-background text-foreground">
+        {/* Window drag bar */}
+        <div className="flex items-center h-8 bg-card border-b border-border flex-shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+          {/* Back button + title in drag bar (no-drag region) — pl-[72px] clears macOS traffic lights */}
+          <div className="flex items-center gap-2 pl-[72px] pr-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+            {view.type !== 'dashboard' && view.type !== 'setup' && (
+              <button
+                onClick={() => setView({ type: 'dashboard' })}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← Home
+              </button>
+            )}
           </div>
-        )}
-      </main>
-    </div>
+          <span className="text-xs text-muted-foreground flex-1 text-center font-medium tracking-wide">vMLX</span>
+          {/* About button */}
+          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} className="px-3">
+            <button
+              onClick={() => setView({ type: 'about' })}
+              className={`text-xs px-2 py-0.5 rounded ${view.type === 'about' ? 'bg-accent' : 'hover:bg-accent'}`}
+            >
+              About
+            </button>
+          </div>
+        </div>
+
+        {/* Global download status bar */}
+        <DownloadStatusBar />
+
+        {/* Main content */}
+        <main className="flex-1 overflow-hidden">
+          {view.type === 'setup' && (
+            <SetupScreen onReady={() => setView({ type: 'dashboard' })} />
+          )}
+
+          {view.type === 'dashboard' && (
+            <SessionDashboard
+              onOpenSession={(sessionId) => setView({ type: 'session', sessionId })}
+              onConfigureSession={(sessionId) => setView({ type: 'sessionSettings', sessionId })}
+              onCreateSession={() => setView({ type: 'create' })}
+            />
+          )}
+
+          {view.type === 'create' && (
+            <CreateSession
+              onBack={() => setView({ type: 'dashboard' })}
+              onCreated={(sessionId) => setView({ type: 'session', sessionId })}
+            />
+          )}
+
+          {view.type === 'session' && (
+            <SessionView
+              sessionId={view.sessionId}
+              onBack={() => setView({ type: 'dashboard' })}
+            />
+          )}
+
+          {view.type === 'sessionSettings' && (
+            <SessionSettings
+              sessionId={view.sessionId}
+              onBack={() => setView({ type: 'dashboard' })}
+            />
+          )}
+
+          {view.type === 'about' && (
+            <div className="p-8 overflow-auto h-full">
+              <div className="max-w-3xl mx-auto space-y-6">
+                <h2 className="text-2xl font-bold">About vMLX</h2>
+                <p className="text-sm text-muted-foreground">
+                  A native macOS application for running local AI models on Apple Silicon.
+                </p>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <p>Version 0.1.0</p>
+                  <p>&copy; {new Date().getFullYear()} Eric Jang. All rights reserved.</p>
+                </div>
+                <div className="flex gap-4 text-xs">
+                  <a href="https://ericjang.com/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
+                  <a href="https://github.com/nicholasjng/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
+                </div>
+                <ApiKeysSection />
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
     </ToastProvider>
   )
 }

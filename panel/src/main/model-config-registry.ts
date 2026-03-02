@@ -37,139 +37,126 @@ export interface DetectedConfig {
   description: string
 }
 
-const MODEL_CONFIGS = [
-  // Qwen family
-  { familyName: 'qwen3-next', pattern: /qwen[\-_.]?3[\-_.]?(?:coder[\-_.]?)?next/i, cacheType: 'mamba', toolParser: 'nemotron', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 },
-  { familyName: 'qwen3-vl', pattern: /qwen[\-_.]?3.*VL/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 },
-  { familyName: 'qwen3-moe', pattern: /qwen[\-_.]?3.*(?:moe|MoE)/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 },
-  { familyName: 'qwen3', pattern: /qwen[\-_.]?3/i, cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3', priority: 10 },
-  { familyName: 'qwen2-vl', pattern: /qwen[\-_.]?2.*VL/i, cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 },
-  { familyName: 'qwen2', pattern: /qwen[\-_.]?2/i, cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 },
-  { familyName: 'qwen-mamba', pattern: /qwen.*mamba/i, cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 },
+const CONFIG_BY_FAMILY = new Map<string, Omit<ModelConfig, 'pattern' | 'familyName'>>()
 
-  // Llama family
-  { familyName: 'llama4', pattern: /llama[\-_.]?4/i, cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 4', priority: 5 },
-  { familyName: 'llama3', pattern: /llama[\-_.]?3/i, cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 3', priority: 10 },
-  { familyName: 'llama', pattern: /llama/i, cacheType: 'kv', toolParser: 'llama', description: 'Llama', priority: 50 },
-
-  // Mistral/Mixtral/Devstral/Codestral
-  { familyName: 'devstral', pattern: /devstral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Devstral (Mistral coding)', priority: 5 },
-  { familyName: 'codestral', pattern: /codestral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Codestral (Mistral coding)', priority: 5 },
-  { familyName: 'pixtral', pattern: /pixtral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, isMultimodal: true, description: 'Pixtral Vision', priority: 5 },
-  { familyName: 'mixtral', pattern: /mixtral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mixtral MoE', priority: 10 },
-  { familyName: 'mistral', pattern: /mistral/i, cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral', priority: 20 },
-
-  // DeepSeek
-  { familyName: 'deepseek-vl', pattern: /deepseek[\-_.]?vl/i, cacheType: 'kv', toolParser: 'deepseek', isMultimodal: true, description: 'DeepSeek-VL vision-language', priority: 5 },
-  { familyName: 'deepseek-r1', pattern: /deepseek[\-_.]?r1/i, cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek R1', priority: 5 },
-  { familyName: 'deepseek-v3', pattern: /deepseek[\-_.]?v3/i, cacheType: 'kv', toolParser: 'deepseek', enableAutoToolChoice: true, description: 'DeepSeek V3', priority: 5 },
-  { familyName: 'deepseek-v2', pattern: /deepseek[\-_.]?v2/i, cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek V2', priority: 10 },
-  { familyName: 'deepseek', pattern: /deepseek/i, cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek', priority: 50 },
-
-  // GPT-OSS models (20B, 120B) — Harmony protocol reasoning, same as GLM-4.7 Flash
-  { familyName: 'gpt-oss', pattern: /gpt[\-_.]?oss/i, cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GPT-OSS (Harmony reasoning)', priority: 3 },
-  // GLM-4.7 Flash (MoE, reasoning-capable — must match before glm47)
-  // Uses Harmony/GPT-OSS protocol: <|channel|>analysis/final, NOT <think> tags
-  { familyName: 'glm47-flash', pattern: /glm[\-_.]?4[\-_.]?7[\-_.]?flash/i, cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GLM-4.7 Flash (reasoning)', priority: 3 },
-  // GLM-4.7 / GLM-Z1 uses <think> tags (like DeepSeek R1), NOT Harmony protocol
-  { familyName: 'glm47', pattern: /glm[\-_.]?(?:4\.7|4[\-_]7|z1)/i, cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'GLM-4.7 / GLM-Z1 (reasoning)', priority: 5 },
-  // GLM-4 base (tools only, no reasoning)
-  { familyName: 'glm4', pattern: /glm[\-_.]?4/i, cacheType: 'kv', toolParser: 'glm47', enableAutoToolChoice: true, description: 'GLM-4 (tools only)', priority: 20 },
-
-  // Gemma
-  { familyName: 'medgemma', pattern: /medgemma/i, cacheType: 'kv', isMultimodal: true, description: 'Google MedGemma (medical multimodal)', priority: 3 },
-  { familyName: 'paligemma', pattern: /paligemma/i, cacheType: 'kv', isMultimodal: true, description: 'Google PaliGemma', priority: 5 },
-  { familyName: 'gemma3', pattern: /gemma[\-_.]?3/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 },
-  // gemma3-text: text-only Gemma 3 (detected via config.json model_type="gemma3_text")
-  // Shares parsers with gemma3 but is NOT multimodal — supports batching, paged cache, KV quant
-  { familyName: 'gemma3-text', pattern: /gemma[\-_.]?3[\-_.]?text/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 },
-  { familyName: 'gemma2', pattern: /gemma[\-_.]?2/i, cacheType: 'kv', description: 'Gemma 2', priority: 15 },
-  { familyName: 'gemma', pattern: /gemma/i, cacheType: 'kv', description: 'Gemma', priority: 30 },
-
-  // Phi
-  { familyName: 'phi4-reasoning', pattern: /phi[\-_.]?4.*(?:reason|think)/i, cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Phi 4 Reasoning', priority: 2 },
-  { familyName: 'phi4-multimodal', pattern: /phi[\-_.]?4.*(?:vision|multimodal|vlm)/i, cacheType: 'kv', isMultimodal: true, description: 'Phi 4 Multimodal', priority: 2 },
-  { familyName: 'phi4', pattern: /phi[\-_.]?4/i, cacheType: 'kv', toolParser: 'hermes', enableAutoToolChoice: true, description: 'Phi 4', priority: 10 },
-  { familyName: 'phi3-vision', pattern: /phi[\-_.]?3[\-_.]?(?:vision|v)/i, cacheType: 'kv', isMultimodal: true, description: 'Phi 3 Vision', priority: 8 },
-  { familyName: 'phi3', pattern: /phi[\-_.]?3/i, cacheType: 'kv', description: 'Phi 3', priority: 20 },
-
-  // Hermes
-  { familyName: 'hermes', pattern: /hermes/i, cacheType: 'kv', toolParser: 'hermes', enableAutoToolChoice: true, description: 'Hermes', priority: 30 },
-
-  // Nemotron
-  { familyName: 'nemotron', pattern: /nemotron/i, cacheType: 'hybrid', toolParser: 'nemotron', usePagedCache: true, description: 'Nemotron (Hybrid)', priority: 10 },
-
-  // Jamba
-  { familyName: 'jamba', pattern: /jamba/i, cacheType: 'hybrid', usePagedCache: true, description: 'Jamba (Hybrid)', priority: 10 },
-
-  // Cohere
-  { familyName: 'command-r-plus', pattern: /command[\-_.]?r[\-_.]?\+|command[\-_.]?r[\-_.]?plus/i, cacheType: 'kv', description: 'Command R+', priority: 10 },
-  { familyName: 'command-r', pattern: /command[\-_.]?r/i, cacheType: 'kv', description: 'Command R', priority: 20 },
-
-  // Granite
-  { familyName: 'granite', pattern: /granite/i, cacheType: 'kv', toolParser: 'granite', enableAutoToolChoice: true, description: 'Granite', priority: 20 },
-
-  // Functionary
-  { familyName: 'functionary', pattern: /functionary/i, cacheType: 'kv', toolParser: 'functionary', enableAutoToolChoice: true, description: 'Functionary', priority: 20 },
-
-  // MiniMax
-  { familyName: 'minimax', pattern: /minimax/i, cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 },
-
-  // StepFun
-  { familyName: 'step-vl', pattern: /step[\-_.]?(?:1v|vl)/i, cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 },
-  { familyName: 'step-3.5-flash', pattern: /step[\-_.]?3[\-_.]?5[\-_.]?flash/i, cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step-3.5-Flash (MoE)', priority: 5 },
-  { familyName: 'step', pattern: /(?:^|\/)step[\-_.]/i, cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step models', priority: 30 },
-
-  // xLAM (Salesforce)
-  { familyName: 'xlam', pattern: /xlam/i, cacheType: 'kv', toolParser: 'xlam', enableAutoToolChoice: true, description: 'Salesforce xLAM', priority: 20 },
-
-  // Kimi/Moonshot
-  { familyName: 'kimi-k2', pattern: /kimi[\-_.]?k2/i, cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi K2 (MoE)', priority: 5 },
-  { familyName: 'kimi', pattern: /kimi|moonshot/i, cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi/Moonshot', priority: 20 },
-
-  // InternLM
-  { familyName: 'internlm3', pattern: /internlm[\-_.]?3/i, cacheType: 'kv', description: 'InternLM 3', priority: 10 },
-  { familyName: 'internlm', pattern: /internlm/i, cacheType: 'kv', description: 'InternLM', priority: 30 },
-
-  // EXAONE (LG AI Research)
-  { familyName: 'exaone', pattern: /exaone/i, cacheType: 'kv', description: 'EXAONE', priority: 20 },
-
-  // OLMo (AI2)
-  { familyName: 'olmo', pattern: /olmo/i, cacheType: 'kv', description: 'OLMo', priority: 20 },
-
-  // StarCoder (no tool support — do NOT map to qwen2)
-  { familyName: 'starcoder', pattern: /starcoder/i, cacheType: 'kv', description: 'StarCoder code models', priority: 30 },
-
-  // StableLM (no tool support — do NOT map to qwen2)
-  { familyName: 'stablelm', pattern: /stable[\-_.]?lm/i, cacheType: 'kv', description: 'StableLM', priority: 30 },
-
-  // Baichuan (no tool support — do NOT map to qwen2)
-  { familyName: 'baichuan', pattern: /baichuan/i, cacheType: 'kv', description: 'Baichuan', priority: 30 },
-
-  // Vision-Language / Multimodal (MLLM) models
-  { familyName: 'yi-vl', pattern: /yi[\-_.].*(?:vl|vision)/i, cacheType: 'kv', isMultimodal: true, description: 'Yi Vision-Language', priority: 15 },
-  { familyName: 'llava', pattern: /llava/i, cacheType: 'kv', isMultimodal: true, description: 'LLaVA vision-language', priority: 20 },
-  { familyName: 'idefics', pattern: /idefics/i, cacheType: 'kv', isMultimodal: true, description: 'Idefics vision-language', priority: 5 },
-  { familyName: 'molmo', pattern: /molmo/i, cacheType: 'kv', isMultimodal: true, description: 'Molmo multimodal', priority: 20 },
-  { familyName: 'cogvlm', pattern: /cogvlm/i, cacheType: 'kv', isMultimodal: true, description: 'CogVLM vision-language', priority: 20 },
-  { familyName: 'internvl', pattern: /internvl/i, cacheType: 'kv', isMultimodal: true, description: 'InternVL vision-language', priority: 15 },
-  { familyName: 'minicpm-v', pattern: /minicpm[\-_.]?v/i, cacheType: 'kv', isMultimodal: true, description: 'MiniCPM-V vision', priority: 20 },
-  { familyName: 'florence', pattern: /florence/i, cacheType: 'kv', isMultimodal: true, description: 'Florence vision', priority: 20 },
-  { familyName: 'smolvlm', pattern: /smol[\-_.]?vlm/i, cacheType: 'kv', isMultimodal: true, description: 'SmolVLM', priority: 20 },
-  { familyName: 'internlm-xcomposer', pattern: /internlm[\-_.]?xcomposer/i, cacheType: 'kv', isMultimodal: true, description: 'InternLM-XComposer', priority: 8 },
-
-  // Pure SSM / Mamba-architecture models
-  { familyName: 'falcon-mamba', pattern: /falcon[\-_.]?mamba/i, cacheType: 'mamba', usePagedCache: true, description: 'Falcon Mamba (SSM)', priority: 5 },
-  { familyName: 'mamba', pattern: /(?:^|\/)mamba[\-_.]/i, cacheType: 'mamba', usePagedCache: true, description: 'Mamba SSM', priority: 30 },
-  { familyName: 'rwkv', pattern: /rwkv/i, cacheType: 'mamba', usePagedCache: true, description: 'RWKV', priority: 30 },
-] satisfies ModelConfig[] as ModelConfig[]
-MODEL_CONFIGS.sort((a, b) => a.priority - b.priority)
-
-// Build lookup by familyName for O(1) access from architecture detection
-const CONFIG_BY_FAMILY = new Map<string, ModelConfig>()
-for (const c of MODEL_CONFIGS) {
-  if (!CONFIG_BY_FAMILY.has(c.familyName)) CONFIG_BY_FAMILY.set(c.familyName, c)
+function registerFamily(familyName: string, config: Omit<ModelConfig, 'pattern' | 'familyName'>) {
+  CONFIG_BY_FAMILY.set(familyName, config)
 }
+
+// Qwen
+registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'nemotron', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 })
+registerFamily('qwen3-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 })
+registerFamily('qwen3-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 })
+registerFamily('qwen3', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 / QwQ', priority: 10 })
+registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 })
+registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
+registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
+
+// Llama
+registerFamily('llama4', { cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 4', priority: 5 })
+registerFamily('llama3', { cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 3', priority: 10 })
+registerFamily('llama', { cacheType: 'kv', toolParser: 'llama', description: 'Llama', priority: 50 })
+
+// Mistral/Mixtral/Devstral/Codestral
+registerFamily('devstral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Devstral (Mistral coding)', priority: 5 })
+registerFamily('codestral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Codestral (Mistral coding)', priority: 5 })
+registerFamily('pixtral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, isMultimodal: true, description: 'Pixtral Vision', priority: 5 })
+registerFamily('mixtral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mixtral MoE', priority: 10 })
+registerFamily('mistral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral', priority: 20 })
+
+// DeepSeek
+registerFamily('deepseek-vl', { cacheType: 'kv', toolParser: 'deepseek', isMultimodal: true, description: 'DeepSeek-VL vision-language', priority: 5 })
+registerFamily('deepseek-r1', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek R1', priority: 5 })
+registerFamily('deepseek-v3', { cacheType: 'kv', toolParser: 'deepseek', enableAutoToolChoice: true, description: 'DeepSeek V3', priority: 5 })
+registerFamily('deepseek-v2', { cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek V2', priority: 10 })
+registerFamily('deepseek', { cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek', priority: 50 })
+
+// GLM
+registerFamily('gpt-oss', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GPT-OSS (Harmony reasoning)', priority: 3 })
+registerFamily('glm47-flash', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GLM-4.7 Flash (reasoning)', priority: 3 })
+registerFamily('glm47', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'GLM-4.7 / GLM-Z1 (reasoning)', priority: 5 })
+registerFamily('glm4', { cacheType: 'kv', toolParser: 'glm47', enableAutoToolChoice: true, description: 'GLM-4 (tools only)', priority: 20 })
+
+// Gemma
+registerFamily('medgemma', { cacheType: 'kv', isMultimodal: true, description: 'Google MedGemma (medical multimodal)', priority: 3 })
+registerFamily('paligemma', { cacheType: 'kv', isMultimodal: true, description: 'Google PaliGemma', priority: 5 })
+registerFamily('gemma3', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 })
+registerFamily('gemma3-text', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 })
+registerFamily('gemma2', { cacheType: 'kv', description: 'Gemma 2', priority: 15 })
+registerFamily('gemma', { cacheType: 'kv', description: 'Gemma', priority: 30 })
+
+// Phi
+registerFamily('phi4-reasoning', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Phi 4 Reasoning', priority: 2 })
+registerFamily('phi4-multimodal', { cacheType: 'kv', isMultimodal: true, description: 'Phi 4 Multimodal', priority: 2 })
+registerFamily('phi4', { cacheType: 'kv', toolParser: 'hermes', enableAutoToolChoice: true, description: 'Phi 4', priority: 10 })
+registerFamily('phi3-vision', { cacheType: 'kv', isMultimodal: true, description: 'Phi 3 Vision', priority: 8 })
+registerFamily('phi3', { cacheType: 'kv', description: 'Phi 3', priority: 20 })
+
+// Hermes
+registerFamily('hermes', { cacheType: 'kv', toolParser: 'hermes', enableAutoToolChoice: true, description: 'Hermes', priority: 30 })
+
+// Nemotron
+registerFamily('nemotron', { cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', usePagedCache: true, description: 'Nemotron (Hybrid)', priority: 10 })
+
+// Jamba
+registerFamily('jamba', { cacheType: 'hybrid', usePagedCache: true, description: 'Jamba (Hybrid)', priority: 10 })
+
+// Cohere
+registerFamily('command-r-plus', { cacheType: 'kv', description: 'Command R+', priority: 10 })
+registerFamily('command-r', { cacheType: 'kv', description: 'Command R', priority: 20 })
+
+// Granite
+registerFamily('granite', { cacheType: 'kv', toolParser: 'granite', enableAutoToolChoice: true, description: 'Granite', priority: 20 })
+
+// Functionary
+registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enableAutoToolChoice: true, description: 'Functionary', priority: 20 })
+
+// MiniMax
+registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
+
+// StepFun
+registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
+registerFamily('step-3.5-flash', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step-3.5-Flash (MoE)', priority: 5 })
+registerFamily('step', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step models', priority: 30 })
+
+// xLAM (Salesforce)
+registerFamily('xlam', { cacheType: 'kv', toolParser: 'xlam', enableAutoToolChoice: true, description: 'xLAM', priority: 20 })
+
+// Kimi/Moonshot
+registerFamily('kimi-k2', { cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi K2 (MoE)', priority: 5 })
+registerFamily('kimi', { cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi/Moonshot', priority: 20 })
+
+// InternLM
+registerFamily('internlm3', { cacheType: 'kv', description: 'InternLM 3', priority: 10 })
+registerFamily('internlm', { cacheType: 'kv', description: 'InternLM', priority: 30 })
+
+// EXAONE
+registerFamily('exaone', { cacheType: 'kv', description: 'EXAONE', priority: 20 })
+
+// OLMo
+registerFamily('olmo', { cacheType: 'kv', description: 'OLMo', priority: 20 })
+
+// StarCoder / StableLM / Baichuan
+registerFamily('starcoder', { cacheType: 'kv', description: 'StarCoder', priority: 30 })
+registerFamily('stablelm', { cacheType: 'kv', description: 'StableLM', priority: 30 })
+registerFamily('baichuan', { cacheType: 'kv', description: 'Baichuan', priority: 30 })
+
+// VLM / MLLM models
+registerFamily('yi-vl', { cacheType: 'kv', isMultimodal: true, description: 'Yi Vision-Language', priority: 15 })
+registerFamily('llava', { cacheType: 'kv', isMultimodal: true, description: 'LLaVA vision-language', priority: 20 })
+registerFamily('idefics', { cacheType: 'kv', isMultimodal: true, description: 'Idefics vision-language', priority: 5 })
+registerFamily('molmo', { cacheType: 'kv', isMultimodal: true, description: 'Molmo multimodal', priority: 20 })
+registerFamily('cogvlm', { cacheType: 'kv', isMultimodal: true, description: 'CogVLM vision-language', priority: 20 })
+registerFamily('internvl', { cacheType: 'kv', isMultimodal: true, description: 'InternVL vision-language', priority: 15 })
+registerFamily('minicpm-v', { cacheType: 'kv', isMultimodal: true, description: 'MiniCPM-V vision', priority: 20 })
+registerFamily('florence', { cacheType: 'kv', isMultimodal: true, description: 'Florence vision', priority: 20 })
+registerFamily('smolvlm', { cacheType: 'kv', isMultimodal: true, description: 'SmolVLM', priority: 20 })
+registerFamily('internlm-xcomposer', { cacheType: 'kv', isMultimodal: true, description: 'InternLM-XComposer', priority: 8 })
+
+// Pure SSM
+registerFamily('falcon-mamba', { cacheType: 'mamba', usePagedCache: true, description: 'Falcon Mamba (SSM)', priority: 5 })
+registerFamily('mamba', { cacheType: 'mamba', usePagedCache: true, description: 'Mamba SSM', priority: 30 })
+registerFamily('rwkv', { cacheType: 'mamba', usePagedCache: true, description: 'RWKV', priority: 30 })
 
 /**
  * Map model_type values from config.json to registry family names.
@@ -306,9 +293,9 @@ const DEFAULT_CONFIG: DetectedConfig = {
   description: 'Unknown model'
 }
 
-function configToDetected(config: ModelConfig): DetectedConfig {
+function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 'familyName'>): DetectedConfig {
   return {
-    family: config.familyName,
+    family: family,
     toolParser: config.toolParser,
     reasoningParser: config.reasoningParser,
     cacheType: config.cacheType,
@@ -320,33 +307,10 @@ function configToDetected(config: ModelConfig): DetectedConfig {
 }
 
 /**
- * Detect model configuration from model path or name.
- * Fast path (sync, no I/O) — uses regex pattern matching only.
- * For authoritative detection that reads config.json, use detectModelConfigFromDir().
- */
-function detectModelConfig(modelPath: string): DetectedConfig {
-  const modelName = modelPath.split('/').pop() || modelPath
-
-  for (const config of MODEL_CONFIGS) {
-    if (config.pattern.test(modelName) || config.pattern.test(modelPath)) {
-      return configToDetected(config)
-    }
-  }
-
-  return DEFAULT_CONFIG
-}
-
-/**
- * Detect model configuration by reading the model's config.json first (authoritative),
- * then falling back to name-based regex matching.
- *
- * This prevents misdetection of fine-tunes where the model name doesn't match
- * the actual architecture (e.g., "Nemotron-Orchestrator-8B" is actually Qwen3).
- *
- * Synchronous I/O — suitable for buildArgs() which runs once at session start.
+ * Detect model configuration ONLY by reading the model's config.json.
+ * This is the authoritative way. We no longer guess based on folder name/regex.
  */
 export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
-  // 1. Try reading config.json for authoritative model_type
   try {
     const configPath = join(modelPath, 'config.json')
     if (existsSync(configPath)) {
@@ -358,43 +322,14 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         const familyName = MODEL_TYPE_TO_FAMILY[modelType]
         const config = CONFIG_BY_FAMILY.get(familyName)
         if (config) {
-          const nameDetected = detectModelConfig(modelPath)
-          const result = configToDetected(config)
-
-          // If name-based detection found a more specific family, check if it should win
-          if (nameDetected.family !== 'unknown' && nameDetected.family !== result.family) {
-            const nameConfig = CONFIG_BY_FAMILY.get(nameDetected.family)
-            if (nameConfig) {
-              // Allow name-based refinement in two cases:
-              // 1. Name-detected family maps to the same model_type (exact match)
-              const nameModelType = Object.entries(MODEL_TYPE_TO_FAMILY).find(([, f]) => f === nameDetected.family)?.[0]
-              if (nameModelType === modelType) {
-                console.log(`[MODEL-CONFIG] Architecture: ${modelType}, using specific name match: ${nameDetected.family} (from path)`)
-                return nameDetected
-              }
-              // 2. Name-detected family is more specific (lower priority) within the same
-              //    family tree — e.g., "glm47-flash" (priority 3) refines "glm4" (priority 20)
-              //    This handles GLM-4.7 Flash having model_type "chatglm" but needing openai_gptoss
-              // Strip version suffixes to get family root: 'glm4' → 'glm', 'deepseek-r1' → 'deepseek'
-              // (?:[-_][a-z])? handles separator+letter prefixes like -r1, -v2, -k2
-              const archBase = familyName.replace(/(?:[-_][a-z])?\d.*$/, '').replace(/[-_]+$/, '')
-              const nameBase = nameDetected.family.replace(/(?:[-_][a-z])?\d.*$/, '').replace(/[-_]+$/, '')
-              if (archBase === nameBase && nameConfig.priority < config.priority) {
-                console.log(`[MODEL-CONFIG] Name-based refinement: ${familyName} → ${nameDetected.family} (more specific, same family tree, model_type=${modelType})`)
-                return nameDetected
-              }
-            }
-            console.log(`[MODEL-CONFIG] Architecture override: path suggests "${nameDetected.family}" but config.json model_type="${modelType}" → using "${familyName}"`)
-            if (nameDetected.family === 'nemotron' && familyName !== 'nemotron') {
-              console.log(`[MODEL-CONFIG] Note: Model name contains "Nemotron" but architecture is ${familyName}. This is likely a fine-tune. Using ${familyName} parsers (tool=${config?.toolParser}, reasoning=${config?.reasoningParser})`)
-            }
-          }
-          return result
+          return configToDetected(familyName, config)
         }
       }
     }
-  } catch (_) { /* config.json not readable, fall through to name matching */ }
+  } catch (_) {
+    console.log(`[MODEL-CONFIG] Error reading or parsing config.json at ${modelPath}`)
+  }
 
-  // 2. Fall back to name-based detection
-  return detectModelConfig(modelPath)
+  // Fallback if no matching config.json or model_type is found
+  return DEFAULT_CONFIG
 }
