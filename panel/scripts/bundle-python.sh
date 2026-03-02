@@ -85,13 +85,110 @@ find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 rm -rf "$SITE/torch" "$SITE/torch-"*.dist-info 2>/dev/null || true
 rm -rf "$SITE/torchvision" "$SITE/torchvision-"*.dist-info 2>/dev/null || true
 rm -rf "$SITE/torchgen" "$SITE/torchgen-"*.dist-info 2>/dev/null || true
-rm -rf "$SITE/_soundfile_data" 2>/dev/null || true     # audio sample files (~2.9 MB)
+# soundfile: requires libsndfile.dylib which isn't bundled. Removing the package
+# makes transformers.is_soundfile_available() return False and skip audio imports.
+# mlx_vlm/utils.py is also patched to lazy-import soundfile for defense-in-depth.
+rm -f "$SITE/soundfile.py" 2>/dev/null || true
+rm -rf "$SITE/soundfile-"*.dist-info 2>/dev/null || true
+rm -rf "$SITE/_soundfile"* 2>/dev/null || true
 rm -rf "$SITE/setuptools" 2>/dev/null || true          # build tool, not needed at runtime (~4.2 MB)
 rm -rf "$SITE/setuptools"*.dist-info 2>/dev/null || true
 
 # Keep pip (needed for engine auto-update at runtime via python3 -m pip)
 # Only trim pip's vendored cache module
 rm -rf "$SITE/pip/_vendor/cachecontrol" 2>/dev/null || true
+
+# ====================================================================
+# Patches for bundled dependencies (apply AFTER pip install, AFTER cleanup)
+# These fix issues in transformers/mlx-vlm for torch-free environments.
+# ====================================================================
+echo "==> Applying bundled dependency patches..."
+
+# 1. transformers/processing_utils.py: Allow None sub-processors (video_processor)
+#    Without torchvision, Qwen2VL's video_processor loads as None. The type check
+#    must allow None so image-only VLM usage works.
+sed -i '' 's/if not isinstance(argument, proper_class):/if argument is not None and not isinstance(argument, proper_class):/' \
+  "$SITE/transformers/processing_utils.py"
+
+# 2. transformers/processing_utils.py: Skip ImportError when loading sub-processors
+#    Video processor requires torchvision; gracefully skip when unavailable.
+"$PYTHON" -c "
+import re
+path = '$SITE/transformers/processing_utils.py'
+with open(path, 'r') as f:
+    content = f.read()
+# Wrap the auto_processor_class.from_pretrained call in try/except ImportError
+old = '''            elif is_primary:
+                # Primary non-tokenizer sub-processor: load via Auto class
+                auto_processor_class = MODALITY_TO_AUTOPROCESSOR_MAPPING[sub_processor_type]
+                sub_processor = auto_processor_class.from_pretrained(
+                    pretrained_model_name_or_path, subfolder=subfolder, **kwargs
+                )
+                args.append(sub_processor)'''
+new = '''            elif is_primary:
+                # Primary non-tokenizer sub-processor: load via Auto class
+                auto_processor_class = MODALITY_TO_AUTOPROCESSOR_MAPPING[sub_processor_type]
+                try:
+                    sub_processor = auto_processor_class.from_pretrained(
+                        pretrained_model_name_or_path, subfolder=subfolder, **kwargs
+                    )
+                    args.append(sub_processor)
+                except ImportError:
+                    # Skip sub-processors that need unavailable backends (e.g. video needs torchvision)
+                    pass'''
+if old in content:
+    content = content.replace(old, new)
+    with open(path, 'w') as f:
+        f.write(content)
+    print('  Patched: processing_utils.py sub-processor ImportError handling')
+else:
+    print('  Already patched or structure changed: processing_utils.py sub-processor')
+"
+
+# 3. transformers/models/auto/video_processing_auto.py: Null check for extractors
+#    transformers 5.2.0 bug where extractors can be None
+sed -i '' 's/if class_name in extractors:/if extractors is not None and class_name in extractors:/' \
+  "$SITE/transformers/models/auto/video_processing_auto.py" 2>/dev/null || true
+
+# 4. mlx_vlm/utils.py: Lazy-import soundfile (defense-in-depth)
+#    Even after removing the soundfile package, patch the import to be lazy
+#    in case soundfile gets pulled back in as a transitive dep.
+sed -i '' 's/^import soundfile as sf$/# import soundfile as sf  # lazy-loaded: see _get_sf()/' \
+  "$SITE/mlx_vlm/utils.py" 2>/dev/null || true
+
+# 5. mlx_vlm/models/qwen3_5/language.py: Fix mRoPE dimension mismatch for MoE
+#    mlx-vlm 0.3.12 bug: broadcasting with cos/sin can produce 5D tensors
+"$PYTHON" -c "
+path = '$SITE/mlx_vlm/models/qwen3_5/language.py'
+try:
+    with open(path, 'r') as f:
+        content = f.read()
+    old = '''    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
+    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
+
+    q_embed = mx.concatenate([q_embed, q_pass], axis=-1)'''
+    new = '''    q_embed = (q_rot * cos) + (rotate_half(q_rot) * sin)
+    k_embed = (k_rot * cos) + (rotate_half(k_rot) * sin)
+
+    # Fix mRoPE dimension mismatch for MoE models: broadcasting with cos/sin
+    # can produce 5D tensors when q_pass is 4D (mlx-vlm 0.3.12 bug)
+    if q_embed.ndim > q_pass.ndim and q_embed.ndim == 5:
+        q_embed = q_embed[0]
+        k_embed = k_embed[0]
+
+    q_embed = mx.concatenate([q_embed, q_pass], axis=-1)'''
+    if old in content:
+        content = content.replace(old, new)
+        with open(path, 'w') as f:
+            f.write(content)
+        print('  Patched: qwen3_5/language.py mRoPE dimension fix')
+    else:
+        print('  Already patched or structure changed: qwen3_5/language.py')
+except FileNotFoundError:
+    print('  Skipped: qwen3_5/language.py not found (model not in this mlx-vlm version)')
+"
+
+echo "==> Patches applied."
 
 echo ""
 echo "==> Bundle size:"
