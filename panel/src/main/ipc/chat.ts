@@ -321,6 +321,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               temperature: defaults.temperature,
               topP: defaults.topP,
               topK: defaults.topK,
+              minP: defaults.minP,
               repeatPenalty: defaults.repeatPenalty
             })
             console.log(`[CHAT] Applied generation defaults for ${chat.id}:`, defaults)

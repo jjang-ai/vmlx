@@ -96,6 +96,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
+  const prefixOff = !config.enablePrefixCache
   const isMambaCache = detectedCacheType === 'mamba'
 
   const toggleSection = (section: keyof typeof expandedSections) => {
@@ -277,7 +278,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff} />
+        {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
+        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff} />
         {config.usePagedCache && (
           <>
             <SliderField
@@ -342,14 +344,15 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')}>
         {!effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
-        {!effectivelyNoBatching && isMambaCache && <PerformanceHint text="Hybrid model detected — KV cache quantization will only compress the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
+        {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
+        {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid model detected — KV cache quantization will only compress the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
         <InfoNote text="KV cache quantization compresses entries stored in the prefix cache (completed prompts). It does NOT affect model weights or live generation KV cache, which always run at full precision. RAM savings apply only to cached prompt states." />
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Quantization
             <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy. Works with both LLMs and VLMs." />
           </span>
-          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching}>
+          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
             <option value="none">None (full precision cache)</option>
             <option value="q8">q8 (8-bit, ~2x cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x cache savings)</option>
@@ -374,7 +377,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
-        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled={effectivelyNoBatching || config.usePagedCache} />
+        {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
+        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled={effectivelyNoBatching || prefixOff || config.usePagedCache} />
         {config.enableDiskCache && (
           <>
             <SliderField
@@ -541,9 +545,10 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
   { value: 'auto', label: 'Auto-detect (from config.json)' },
   { value: '', label: 'None (disable tool parsing)' },
   {
-    value: 'qwen', label: 'Qwen — Qwen3 / Qwen2.5 / QwQ / Qwen3-VL', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
-      'Qwen3 (0.6B\u2013235B)', 'Qwen3-Coder', 'Qwen3-MoE (22B/57B)',
-      'Qwen3-VL (2B/32B/72B)', 'QwQ-32B', 'Qwen2.5 (0.5B\u201372B)', 'Qwen2.5-Coder (0.5B\u201332B)',
+    value: 'qwen', label: 'Qwen — Qwen3.5 / Qwen3 / Qwen2.5 / QwQ', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
+      'Qwen3.5-VL (0.8B\u2013122B MoE, native vision)', 'Qwen3 (0.6B\u2013235B)', 'Qwen3-Coder',
+      'Qwen3-MoE (22B/57B)', 'Qwen3-VL (2B/32B/72B)', 'QwQ-32B',
+      'Qwen2.5 (0.5B\u201372B)', 'Qwen2.5-Coder (0.5B\u201332B)',
       'Qwen2.5-VL (3B\u201372B)', 'Qwen2 (0.5B\u201372B)', 'Qwen2-VL (2B\u201372B)',
     ]
   },
@@ -622,8 +627,8 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
   { value: '', label: 'None (disable reasoning extraction)' },
   {
     value: 'qwen3', label: 'Qwen3 — strict <think> tags', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
-      'Qwen3 (all sizes, thinking mode)', 'Qwen3-Coder', 'QwQ-32B',
-      'StepFun Step-3.5 (all variants)', 'MiniMax-M2 / M2.5',
+      'Qwen3.5-VL (0.8B\u2013122B, native vision+reasoning)', 'Qwen3 (all sizes, thinking mode)',
+      'Qwen3-Coder', 'QwQ-32B', 'StepFun Step-3.5 (all variants)', 'MiniMax-M2 / M2.5',
     ]
   },
   {

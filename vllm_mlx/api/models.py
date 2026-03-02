@@ -533,6 +533,9 @@ class ResponsesRequest(BaseModel):
     reasoning_effort: str | None = None
     # Extra kwargs passed directly to tokenizer.apply_chat_template()
     chat_template_kwargs: dict | None = None
+    # Video processing controls (MLLM models)
+    video_fps: float | None = None
+    video_max_frames: int | None = None
 
     @field_validator("stop")
     @classmethod
