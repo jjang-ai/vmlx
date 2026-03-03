@@ -425,3 +425,364 @@ class TestModelConfigs:
         assert config.family_name == "step"
         assert config.tool_parser == "step3p5"
         assert config.reasoning_parser == "qwen3"
+
+    def test_step_vl_config(self, registry):
+        config = self._lookup(registry, "stepfun/Step-1V-8B", "step1v")
+        assert config.family_name == "step_vl"
+        assert config.is_mllm is True
+        assert config.tool_parser == "step3p5"
+        assert config.reasoning_parser == "qwen3"
+        assert config.think_in_template is True
+
+    # ── Additional Qwen family coverage ──
+
+    def test_qwen3_5_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen3.5-VL-9B", "qwen3_5")
+        assert config.family_name == "qwen3_5"
+        assert config.is_mllm is True
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+        assert config.think_in_template is True
+        assert config.eos_tokens == ["<|im_end|>"]
+
+    def test_qwen3_5_moe_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen3.5-MoE-VL-38B", "qwen3_5_moe")
+        assert config.family_name == "qwen3_5_moe"
+        assert config.is_mllm is True
+        assert config.reasoning_parser == "qwen3"
+
+    def test_qwen3_moe_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen3-MoE-15B", "qwen3_moe")
+        assert config.family_name == "qwen3_moe"
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+        assert config.think_in_template is True
+        assert config.supports_native_tools is True
+
+    def test_qwen3_next_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen3-Next-7B", "qwen3_next")
+        assert config.family_name == "qwen3_next"
+        assert config.cache_type == "mamba"
+        assert config.tool_parser == "nemotron"
+
+    def test_qwen2_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen2.5-7B-Instruct", "qwen2")
+        assert config.family_name == "qwen2"
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+        assert config.supports_native_tools is True
+
+    def test_qwen2_moe_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen2-MoE-57B", "qwen2_moe")
+        assert config.family_name == "qwen2"
+        assert config.tool_parser == "qwen"
+
+    def test_qwen2_vl_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen2-VL-7B-Instruct", "qwen2_vl")
+        assert config.family_name == "qwen2_vl"
+        assert config.is_mllm is True
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+
+    def test_qwen2_5_vl_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen2.5-VL-7B-Instruct", "qwen2_5_vl")
+        assert config.family_name == "qwen2_vl"
+        assert config.is_mllm is True
+
+    def test_qwen_mamba_config(self, registry):
+        config = self._lookup(registry, "Qwen/Qwen-Mamba-7B", "qwen_mamba")
+        assert config.family_name == "qwen_mamba"
+        assert config.cache_type == "mamba"
+        assert config.tool_parser == "qwen"
+
+    # ── Additional GLM family coverage ──
+
+    def test_glm4_moe_lite_config(self, registry):
+        """GLM-4.7 Flash (MoE Lite variant) uses openai_gptoss, NOT deepseek_r1."""
+        config = self._lookup(registry, "THUDM/GLM-4-Flash-Lite", "glm4_moe_lite")
+        assert config.family_name == "glm4_moe"
+        assert config.reasoning_parser == "openai_gptoss"
+        assert config.tool_parser == "glm47"
+        assert config.chat_template_custom is not None
+
+    def test_chatglm_config(self, registry):
+        """ChatGLM/GLM-4 base: tools only, NO reasoning parser."""
+        config = self._lookup(registry, "THUDM/ChatGLM3-6B", "chatglm")
+        assert config.family_name == "chatglm"
+        assert config.tool_parser == "glm47"
+        assert config.reasoning_parser is None
+
+    def test_glm4_base_config(self, registry):
+        """GLM-4 base (model_type glm4) falls to chatglm family."""
+        config = self._lookup(registry, "THUDM/GLM-4-9B", "glm4")
+        assert config.family_name == "chatglm"
+        assert config.reasoning_parser is None
+
+    def test_gpt_oss_has_harmony_template(self, registry):
+        config = self._lookup(registry, "THUDM/GPT-OSS", "gpt_oss")
+        assert config.chat_template_custom is not None
+        assert "<|start|>" in config.chat_template_custom
+
+    # ── GLM parser separation is CRITICAL ──
+    def test_glm_flash_vs_base_reasoning_parser_differs(self, registry):
+        """GLM Flash uses openai_gptoss, GLM-4 base has no reasoning parser.
+        These MUST be different — merging them would break one or the other."""
+        flash = self._lookup(registry, "THUDM/GLM-4-Flash", "glm4_moe")
+        base = self._lookup(registry, "THUDM/GLM-4-9B", "glm4")
+        assert flash.reasoning_parser == "openai_gptoss"
+        assert base.reasoning_parser is None
+        assert flash.family_name != base.family_name
+
+    # ── Additional Mistral family coverage ──
+
+    def test_devstral_config(self, registry):
+        config = self._lookup(registry, "mistralai/Devstral-Small-8B", "devstral")
+        assert config.tool_parser == "mistral"
+        assert config.supports_native_tools is True
+        assert config.preserve_native_tool_format is True
+
+    def test_codestral_config(self, registry):
+        config = self._lookup(registry, "mistralai/Codestral-v0.1", "codestral")
+        assert config.tool_parser == "mistral"
+
+    def test_pixtral_is_mllm(self, registry):
+        config = self._lookup(registry, "mistralai/Pixtral-12B", "pixtral")
+        assert config.is_mllm is True
+        assert config.tool_parser == "mistral"
+
+    # ── Additional DeepSeek coverage ──
+
+    def test_deepseek_v3_config(self, registry):
+        config = self._lookup(registry, "deepseek-ai/DeepSeek-V3", "deepseek_v3")
+        assert config.family_name == "deepseek"
+        assert config.reasoning_parser == "deepseek_r1"
+        assert config.tool_parser == "deepseek"
+
+    def test_deepseek_vl2_config(self, registry):
+        config = self._lookup(registry, "deepseek-ai/DeepSeek-VL2", "deepseek_vl2")
+        assert config.family_name == "deepseek_vl"
+        assert config.is_mllm is True
+
+    # ── Gemma family coverage ──
+
+    def test_gemma3_reasoning_parser(self, registry):
+        config = self._lookup(registry, "google/gemma-3-2b-it", "gemma3")
+        assert config.reasoning_parser == "deepseek_r1"
+
+    def test_gemma3_text_not_mllm(self, registry):
+        config = self._lookup(registry, "google/gemma-3-text-1b", "gemma3_text")
+        assert config.is_mllm is False
+        assert config.reasoning_parser == "deepseek_r1"
+
+    def test_paligemma_config(self, registry):
+        config = self._lookup(registry, "google/paligemma-3b", "paligemma")
+        assert config.is_mllm is True
+
+    # ── Phi family coverage ──
+
+    def test_phi4_multimodal_config(self, registry):
+        config = self._lookup(registry, "microsoft/phi-4-multimodal", "phi4mm")
+        assert config.is_mllm is True
+
+    def test_phi3_v_config(self, registry):
+        config = self._lookup(registry, "microsoft/Phi-3-Vision", "phi3v")
+        assert config.is_mllm is True
+        assert config.tool_parser == "llama"
+
+    def test_phi3_config(self, registry):
+        config = self._lookup(registry, "microsoft/phi-3-mini", "phi3")
+        assert config.tool_parser == "llama"
+        assert config.is_mllm is False
+
+    # ── Nemotron coverage ──
+
+    def test_nemotron_hybrid_cache(self, registry):
+        config = self._lookup(registry, "nvidia/Nemotron-H-47B", "nemotron_h")
+        assert config.cache_type == "hybrid"
+        assert config.tokenizer_fallback is True
+        assert config.reasoning_parser == "deepseek_r1"
+
+    # ── MiniMax coverage ──
+
+    def test_minimax_config(self, registry):
+        config = self._lookup(registry, "MiniMaxAI/Prism-Pro", "minimax")
+        assert config.tool_parser == "minimax"
+        assert config.reasoning_parser == "qwen3"
+        assert config.think_in_template is True
+
+    # ── Kimi coverage ──
+
+    def test_kimi_config(self, registry):
+        config = self._lookup(registry, "moonshotai/Kimi-K2", "kimi_k2")
+        assert config.tool_parser == "kimi"
+
+    # ── SSM/Mamba coverage ──
+
+    def test_rwkv_config(self, registry):
+        config = self._lookup(registry, "BlinkDL/RWKV-6", "rwkv6")
+        assert config.cache_type == "mamba"
+
+    def test_codestral_mamba_config(self, registry):
+        config = self._lookup(registry, "mistralai/Codestral-Mamba", "codestral_mamba")
+        assert config.cache_type == "mamba"
+
+    # ── VLM models coverage ──
+
+    def test_idefics_config(self, registry):
+        config = self._lookup(registry, "HuggingFaceM4/Idefics3-8B", "idefics3")
+        assert config.is_mllm is True
+
+    def test_cogvlm_config(self, registry):
+        config = self._lookup(registry, "THUDM/CogVLM2-19B", "cogvlm2")
+        assert config.is_mllm is True
+
+    def test_florence_config(self, registry):
+        config = self._lookup(registry, "microsoft/Florence-2-base", "florence2")
+        assert config.is_mllm is True
+
+    def test_molmo_config(self, registry):
+        config = self._lookup(registry, "allenai/Molmo-7B", "molmo")
+        assert config.is_mllm is True
+
+    def test_minicpm_v_config(self, registry):
+        config = self._lookup(registry, "openbmb/MiniCPM-V-2_6", "minicpmv")
+        assert config.is_mllm is True
+
+    def test_smolvlm_config(self, registry):
+        config = self._lookup(registry, "HuggingFaceTB/SmolVLM-Instruct", "smolvlm")
+        assert config.is_mllm is True
+
+    def test_internvl_config_full(self, registry):
+        config = self._lookup(registry, "OpenGVLab/InternVL2-8B", "internvl_chat")
+        assert config.is_mllm is True
+
+    def test_internlm_xcomposer_config(self, registry):
+        config = self._lookup(registry, "internlm/InternLM-XComposer2-VL", "internlm_xcomposer2")
+        assert config.is_mllm is True
+
+
+class TestModelConfigComprehensiveChecks:
+    """Comprehensive checks that span all model families.
+
+    These tests ensure consistency across the entire registry:
+    - Every MLLM model has is_mllm=True
+    - Reasoning parsers are valid known values
+    - Tool parsers are valid known values
+    - Cache types are valid
+    - Priority ordering makes sense (specific models beat generic)
+    """
+
+    @pytest.fixture
+    def registry(self):
+        ModelConfigRegistry._instance = None
+        import vllm_mlx.model_config_registry as mcr
+        mcr._configs_loaded = False
+        return get_model_config_registry()
+
+    VALID_REASONING_PARSERS = {None, "qwen3", "deepseek_r1", "openai_gptoss"}
+    VALID_TOOL_PARSERS = {
+        None, "qwen", "llama", "mistral", "deepseek", "hermes",
+        "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",
+    }
+    VALID_CACHE_TYPES = {"kv", "mamba", "hybrid"}
+
+    def test_all_reasoning_parsers_valid(self, registry):
+        """Every registered model's reasoning_parser must be a known parser."""
+        for config in registry._configs:
+            assert config.reasoning_parser in self.VALID_REASONING_PARSERS, (
+                f"{config.family_name} has invalid reasoning_parser: "
+                f"{config.reasoning_parser!r}"
+            )
+
+    def test_all_tool_parsers_valid(self, registry):
+        """Every registered model's tool_parser must be a known parser."""
+        for config in registry._configs:
+            assert config.tool_parser in self.VALID_TOOL_PARSERS, (
+                f"{config.family_name} has invalid tool_parser: "
+                f"{config.tool_parser!r}"
+            )
+
+    def test_all_cache_types_valid(self, registry):
+        """Every registered model must have a valid cache_type."""
+        for config in registry._configs:
+            assert config.cache_type in self.VALID_CACHE_TYPES, (
+                f"{config.family_name} has invalid cache_type: "
+                f"{config.cache_type!r}"
+            )
+
+    def test_think_in_template_requires_reasoning_parser(self, registry):
+        """If think_in_template is True, model should have a reasoning parser
+        (the parser is needed to extract <think> blocks from output)."""
+        for config in registry._configs:
+            if config.think_in_template:
+                assert config.reasoning_parser is not None, (
+                    f"{config.family_name} has think_in_template=True but no "
+                    f"reasoning_parser — parser needed to extract <think> blocks"
+                )
+
+    def test_mllm_models_comprehensive(self, registry):
+        """All known VLM/MLLM model families must have is_mllm=True."""
+        mllm_families = {
+            c.family_name for c in registry._configs if c.is_mllm
+        }
+        expected_mllm = {
+            "qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen2_vl",
+            "pixtral", "deepseek_vl", "gemma3", "paligemma",
+            "phi4_multimodal", "phi3_v", "llava", "idefics",
+            "cogvlm", "florence", "molmo", "minicpm_v", "smolvlm",
+            "internvl", "internlm_xcomposer", "step_vl",
+        }
+        for family in expected_mllm:
+            assert family in mllm_families, (
+                f"Expected {family} to be MLLM but is_mllm is False"
+            )
+
+    def test_no_duplicate_model_types(self, registry):
+        """No model_type should appear in multiple families (would cause ambiguous lookup)."""
+        seen = {}
+        for config in registry._configs:
+            for mt in config.model_types:
+                if mt in seen:
+                    # Allow if both have the same family_name (re-registration)
+                    assert seen[mt] == config.family_name, (
+                        f"model_type '{mt}' registered in both "
+                        f"'{seen[mt]}' and '{config.family_name}'"
+                    )
+                seen[mt] = config.family_name
+
+    def test_specific_families_higher_priority_than_generic(self, registry):
+        """Specific model families (VL variants, MoE) should have lower priority
+        numbers (= higher precedence) than their generic counterparts."""
+        family_priority = {c.family_name: c.priority for c in registry._configs}
+        checks = [
+            ("qwen3_vl", "qwen3"),
+            ("qwen3_5", "qwen3"),
+            ("qwen3_moe", "qwen3"),
+            ("pixtral", "mistral"),
+            ("deepseek_vl", "deepseek"),
+            ("phi4_reasoning", "phi4"),
+            ("phi3_v", "phi3"),
+            ("glm4_moe", "chatglm"),
+            ("falcon_mamba", "mamba"),
+        ]
+        for specific, generic in checks:
+            if specific in family_priority and generic in family_priority:
+                assert family_priority[specific] <= family_priority[generic], (
+                    f"{specific} (priority={family_priority[specific]}) should have "
+                    f"<= priority than {generic} (priority={family_priority[generic]})"
+                )
+
+    def test_qwen3_vl_separate_from_qwen3(self, registry):
+        """Qwen3-VL must resolve to qwen3_vl (MLLM), not qwen3 (text-only)."""
+        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
+            config = registry.lookup("Qwen3-VL-8B")
+        assert config.family_name == "qwen3_vl"
+        assert config.is_mllm is True
+
+    def test_glm_flash_separate_from_chatglm(self, registry):
+        """GLM-4.7 Flash (MoE) must NOT fall through to chatglm."""
+        registry.clear_cache()
+        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("glm4_moe")):
+            config = registry.lookup("THUDM/GLM-4-Flash")
+        assert config.family_name == "glm4_moe"
+        assert config.reasoning_parser == "openai_gptoss"

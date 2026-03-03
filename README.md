@@ -30,7 +30,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 
 ## Key Features
 
-### Inference Engine (v0.2.7)
+### Inference Engine (v0.2.8)
 
 | Feature | Description |
 |---------|-------------|
@@ -39,7 +39,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 | **Prefix Cache** | Token-level prefix matching for fast prompt reuse across requests |
 | **Continuous Batching** | Concurrent request handling with slot management |
 | **VLM Caching** | Full KV cache pipeline for vision-language models (Qwen-VL, Gemma 3, etc.) |
-| **Mamba Hybrid Support** | Auto-detects mixed KVCache + MambaCache models (Qwen3-Coder-Next, Nemotron) |
+| **Mamba Hybrid Support** | Auto-detects mixed KVCache + MambaCache models (Qwen3.5-VL, Qwen3-Coder-Next, Nemotron) |
 | **Streaming Detokenizer** | Per-request UTF-8 buffering — emoji, CJK, Arabic render correctly |
 | **Request Cancellation** | Stop inference mid-stream via API or connection close |
 | **OpenAI-Compatible API** | Chat Completions + Responses API with full streaming support |
@@ -207,34 +207,26 @@ Plus MCP tool server passthrough for local sessions.
 | Desktop app | Electron 28 + React 18 + TypeScript |
 | Styling | Tailwind CSS |
 | Database | SQLite (WAL mode, better-sqlite3) |
-| Inference engine | vLLM-MLX v0.2.7 (Python, FastAPI) |
+| Inference engine | vLLM-MLX v0.2.8 (Python, FastAPI) |
 | ML framework | Apple MLX (Metal GPU acceleration) |
 | Build | electron-vite + electron-builder |
-| Tests | Vitest (panel: 80 tests), pytest (engine: 1000+ tests) |
+| Tests | Vitest (panel: 80 tests), pytest (engine: 1295+ tests) |
 | Python | Bundled relocatable Python 3.12 |
 
 ---
 
 ## Recent Changes
 
+### Engine v0.2.8 (2026-03-03)
+- **Multi-turn VLM fix**: `model_dump(exclude_none=True)` prevents Jinja2 template from double-counting image tokens in multi-turn conversations
+- **Hybrid cache fix**: `_fix_hybrid_cache()` returns fresh full cache on mismatch instead of corrupt short cache
+- **SimpleEngine MLLM kwargs**: `reasoning_effort` and `chat_template_kwargs` now properly forwarded in VLM paths
+- **1295+ tests**: Comprehensive model config registry tests (89) + MLLM serialization tests (64)
+
 ### Panel v0.3.10 (2026-03-02)
 - **Bug fix**: `abortByEndpoint()` now correctly aborts remote session chat requests
 - **HF model sizes**: Search results show model file sizes from safetensors metadata
-- **Download progress**: Shows raw status text when tqdm can't parse
 - **Test suite**: 80 tests across 3 test files (vitest)
-- **Full remote API audit**: All 12 code paths verified correct
-
-### Engine v0.2.7 (2026-03-02)
-- **Continuous Batching Stability**: Full thread locking (`RLock`) over VLM vision background encoder processes and engine asyncio loops via bounded streaming max queues (`8192`). 
-- **Ghost Abort Subsystem**: Engine cores execute 10x faster background orphaned request collection resolving memory leaks from broken client sockets.
-- **Mamba & SSM Native Paged Routing**: Array cache detection inside `model.make_cache()` automatically reroutes Dynamic KV memory strategies to pure native mapped configurations preventing dimension failures on MoE / Hybrid architectures.
-- **VLM caching pipeline**: Paged KV cache + prefix cache + Q4/Q8 quantization for VLMs
-- **Tool fallback injection**: Auto-detects when chat templates silently drop tool definitions (e.g., Qwen with thinking OFF) and injects XML `<tool_call>` schema into system prompt. Works for all model families.
-- **Integrated tool system audit**: Responses API tool_choice, suppress_reasoning, JSON schema validation
-- **Shell injection prevention**: `gitCommand` metacharacter blocking
-- **65+ reasoning/tool tests, 54+ tool format tests**
-- **Streaming Unicode fix**: Per-request detokenizer buffers multi-byte UTF-8 correctly
-- **Hybrid model cache**: Qwen3-Coder-Next, Nemotron MambaCache+KVCache reconstruction
 
 See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) for full history.
 
@@ -242,7 +234,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.7** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.8** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 
