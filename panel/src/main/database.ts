@@ -104,11 +104,14 @@ export interface ChatOverrides {
 
 class DatabaseManager {
   private db: Database.Database
+  private closed = false
+  private dbPath: string
   /** Set when DB was recovered from corruption — main process shows dialog */
   recoveryBackupPath: string | null = null
 
   constructor() {
-    const dbPath = join(app.getPath('userData'), 'chats.db')
+    this.dbPath = join(app.getPath('userData'), 'chats.db')
+    const dbPath = this.dbPath
     try {
       this.db = new Database(dbPath)
       this.initialize()
@@ -392,6 +395,7 @@ class DatabaseManager {
 
   // Chats
   createChat(chat: Chat): void {
+    this.ensureOpen()
     const stmt = this.db.prepare(`
       INSERT INTO chats (id, title, folder_id, created_at, updated_at, model_id, model_path)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -400,6 +404,7 @@ class DatabaseManager {
   }
 
   getChats(folderId?: string): Chat[] {
+    this.ensureOpen()
     const query = folderId
       ? 'SELECT * FROM chats WHERE folder_id = ? ORDER BY updated_at DESC'
       : 'SELECT * FROM chats ORDER BY updated_at DESC'
@@ -486,6 +491,7 @@ class DatabaseManager {
 
   // Messages
   addMessage(message: Message): void {
+    this.ensureOpen()
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO messages (id, chat_id, role, content, timestamp, tokens, metrics_json, tool_calls_json, reasoning_content)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -498,6 +504,7 @@ class DatabaseManager {
 
   /** Update an existing message's content in-place (for incremental persistence during streaming) */
   updateMessageContent(messageId: string, content: string, reasoningContent?: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare(`
       UPDATE messages SET content = ?, reasoning_content = ? WHERE id = ?
     `)
@@ -637,6 +644,7 @@ class DatabaseManager {
 
   // Sessions
   createSession(session: Session): void {
+    this.ensureOpen()
     const stmt = this.db.prepare(`
       INSERT INTO sessions (id, model_path, model_name, host, port, pid, status, config, created_at, updated_at, last_started_at, last_stopped_at, type, remote_url, remote_api_key, remote_model, remote_organization)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -650,6 +658,7 @@ class DatabaseManager {
   }
 
   getSession(id: string): Session | undefined {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM sessions WHERE id = ?')
     const row = stmt.get(id) as any
     if (!row) return undefined
@@ -657,6 +666,7 @@ class DatabaseManager {
   }
 
   getSessions(): Session[] {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
     return stmt.all().map((row: any) => this.mapSessionRow(row))
   }
@@ -671,6 +681,7 @@ class DatabaseManager {
   }
 
   updateSession(id: string, updates: Partial<Session>): void {
+    this.ensureOpen()
     const fields: string[] = []
     const values: any[] = []
 
@@ -701,6 +712,7 @@ class DatabaseManager {
   }
 
   deleteSession(id: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM sessions WHERE id = ?')
     stmt.run(id)
   }
@@ -815,7 +827,34 @@ class DatabaseManager {
   }
 
   close(): void {
-    this.db.close()
+    if (!this.closed) {
+      this.closed = true
+      try {
+        this.db.close()
+      } catch (_) {
+        // Already closed or GC'd — ignore
+      }
+    }
+  }
+
+  /**
+   * Ensure DB is open. If it was closed (e.g., during quit) but something
+   * still needs it (IPC call in flight, crash handler writing status),
+   * reopen it to prevent cascading "connection is not open" errors.
+   */
+  private ensureOpen(): void {
+    if (this.closed) {
+      console.warn('[DB] Database was closed but is being accessed — reopening')
+      try {
+        this.db = new Database(this.dbPath)
+        this.db.pragma('journal_mode = WAL')
+        this.db.pragma('foreign_keys = ON')
+        this.closed = false
+      } catch (err) {
+        console.error('[DB] Failed to reopen database:', err)
+        throw err
+      }
+    }
   }
 }
 

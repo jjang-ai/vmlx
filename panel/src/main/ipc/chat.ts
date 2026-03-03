@@ -843,9 +843,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // <minimax:tool_call> get stripped by TEMPLATE_TOKEN_REGEX and never reach fullContent.
       let clientToolCallBuffering = false
       let rawAccumulated = '' // Tracks unstripped content for tool call detection
+      // Client-side <think> tag extraction: tracks whether we're inside a <think> block
+      // when the server doesn't provide reasoning_content (fallback for all parser types)
+      let clientSideThinkParsing = false
 
       // Helper: emit streaming delta to renderer
-      const emitDelta = (delta: string, isReasoningDelta: boolean) => {
+      // skipClientCount: when true, skip client-side token counting/TPS (used when
+      // a single SSE chunk is split into multiple emitDelta calls by think-tag extraction,
+      // so we only count once per SSE chunk, not once per emitDelta call)
+      const emitDelta = (delta: string, isReasoningDelta: boolean, skipClientCount = false) => {
         // Track raw content BEFORE stripping for tool call marker detection
         if (!isReasoningDelta) {
           rawAccumulated += delta
@@ -908,7 +914,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         }
         // Client-side counting (fallback when server doesn't send usage in each chunk).
         // Must happen BEFORE TPS snapshot so the rolling window uses accurate counts.
-        if (!serverSendsUsage) { tokenCount++; iterationTokenCount++ }
+        // skipClientCount prevents inflation when think-tag splitting calls emitDelta
+        // multiple times for a single SSE chunk.
+        if (!serverSendsUsage && !skipClientCount) { tokenCount++; iterationTokenCount++ }
 
         // Rolling TPS: snapshot (timestamp, relative tokenCount) for accurate throughput.
         // Uses tpsTokenBase-relative count to avoid negative deltas at iteration boundaries
@@ -1105,7 +1113,55 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             }
 
             if (choice?.content) {
-              emitDelta(choice.content, false)
+              // Client-side fallback: if server didn't provide reasoning_content
+              // but content contains <think> tags, extract them client-side.
+              // This handles servers without a reasoning parser, remote endpoints,
+              // and older server versions.
+              // chunkCounted tracks whether we've already counted this SSE chunk's token
+              // to prevent inflation from think-tag splitting into multiple emitDelta calls.
+              if (!reasoning && sessionHasReasoningParser) {
+                const content = choice.content as string
+                let chunkCounted = !!reasoning // if reasoning was emitted above, counting already happened
+                const emitWithCount = (text: string, isR: boolean) => {
+                  emitDelta(text, isR, chunkCounted)
+                  chunkCounted = true // subsequent calls skip counting
+                }
+                if (clientSideThinkParsing) {
+                  // We're inside a <think> block — check for closing tag
+                  const endIdx = content.indexOf('</think>')
+                  if (endIdx >= 0) {
+                    const reasoningPart = content.slice(0, endIdx)
+                    const contentPart = content.slice(endIdx + 8) // 8 = '</think>'.length
+                    clientSideThinkParsing = false
+                    if (reasoningPart) emitWithCount(reasoningPart, true)
+                    if (contentPart) emitWithCount(contentPart, false)
+                  } else {
+                    // Still in reasoning block
+                    emitWithCount(content, true)
+                  }
+                } else if (content.includes('<think>')) {
+                  // Start of think block found in this delta
+                  const startIdx = content.indexOf('<think>')
+                  const preContent = content.slice(0, startIdx)
+                  const afterStart = content.slice(startIdx + 7) // 7 = '<think>'.length
+                  if (preContent) emitWithCount(preContent, false)
+                  // Check if closing tag is also in this delta
+                  const endIdx = afterStart.indexOf('</think>')
+                  if (endIdx >= 0) {
+                    const reasoningPart = afterStart.slice(0, endIdx)
+                    const postContent = afterStart.slice(endIdx + 8)
+                    if (reasoningPart) emitWithCount(reasoningPart, true)
+                    if (postContent) emitWithCount(postContent, false)
+                  } else {
+                    clientSideThinkParsing = true
+                    if (afterStart) emitWithCount(afterStart, true)
+                  }
+                } else {
+                  emitWithCount(content, false)
+                }
+              } else {
+                emitDelta(choice.content, false, !!reasoning)
+              }
             }
 
             // Detect server-side tool call buffering signal (TPS keeps counting, show status)
@@ -1400,6 +1456,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           // Reset content offset tracker to match the accumulated content position
           lastEmittedContentLength = allGeneratedContent.length ? allGeneratedContent.length + 2 : 0
           clientToolCallBuffering = false
+          clientSideThinkParsing = false
           cumulativeTokenOffset += iterationTokenCount // Save completed iteration tokens for cumulative total
           iterationTokenBase = tokenCount // Save cumulative base for server-usage delta
           iterationTokenCount = 0
@@ -1439,6 +1496,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           rawAccumulated = ''
           lastFinishReason = undefined // Reset for next iteration
           clientToolCallBuffering = false
+          clientSideThinkParsing = false
           receivedToolCalls = []
           // Reset content offset tracker to match the accumulated content position
           lastEmittedContentLength = allGeneratedContent.length ? allGeneratedContent.length + 2 : 0

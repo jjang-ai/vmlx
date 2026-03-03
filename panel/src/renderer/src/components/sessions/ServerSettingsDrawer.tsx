@@ -26,6 +26,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
+  const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
 
   useEffect(() => {
     try {
@@ -40,8 +41,11 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     // Detect model cache type for feature gating
     if (session.modelPath) {
       window.api.models.detectConfig(session.modelPath)
-        .then((det: any) => { if (det?.cacheType) setDetectedCacheType(det.cacheType) })
-        .catch(() => {})
+        .then((det: any) => {
+          if (det?.cacheType) setDetectedCacheType(det.cacheType)
+          if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
+        })
+        .catch(() => { })
     }
   }, [session.id, session.config, session.host, session.port])
 
@@ -143,7 +147,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     setConfig(base)
     setDirty(true)
@@ -165,11 +169,10 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {/* Status message */}
         {message && (
-          <div className={`p-2 rounded text-xs ${
-            message.type === 'success'
+          <div className={`p-2 rounded text-xs ${message.type === 'success'
               ? 'bg-primary/10 border border-primary/30 text-primary'
               : 'bg-destructive/10 border border-destructive/30 text-destructive'
-          }`}>
+            }`}>
             {message.text}
           </div>
         )}
@@ -198,7 +201,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} />
         )}
       </div>
 
