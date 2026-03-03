@@ -1087,6 +1087,34 @@ class TestStreamingReasoningContent:
         assert delta.reasoning_content == "last thought"
         assert delta.content == "first word"
 
+    def test_computed_field_not_settable_via_constructor(self):
+        """REGRESSION: reasoning_content= in constructor must NOT set reasoning.
+
+        This was the root cause of empty streaming deltas for CRACK/VLM models.
+        Pydantic computed_field is read-only; passing reasoning_content= to __init__
+        is silently ignored, leaving reasoning=None. The constructor MUST use
+        reasoning= instead.
+        """
+        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        # Passing reasoning_content= should NOT set the reasoning field
+        delta = ChatCompletionChunkDelta(reasoning_content="should be ignored")
+        assert delta.reasoning is None
+        assert delta.reasoning_content is None
+        # The correct way:
+        delta2 = ChatCompletionChunkDelta(reasoning="correct way")
+        assert delta2.reasoning_content == "correct way"
+
+    def test_server_uses_reasoning_not_reasoning_content_in_constructor(self):
+        """Verify server.py constructs ChunkDelta with reasoning= (not reasoning_content=)."""
+        import inspect
+        from vllm_mlx import server
+        src = inspect.getsource(server.stream_chat_completion)
+        # Must NOT have reasoning_content= in constructor (silent bug)
+        assert "reasoning_content=emit_reasoning" not in src, \
+            "BUG: reasoning_content= is a computed_field and silently drops reasoning text"
+        # Must have reasoning= in constructor
+        assert "reasoning=emit_reasoning" in src
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 11: Reasoning-only fallback
