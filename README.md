@@ -210,7 +210,7 @@ Plus MCP tool server passthrough for local sessions.
 | Inference engine | vLLM-MLX v0.2.7 (Python, FastAPI) |
 | ML framework | Apple MLX (Metal GPU acceleration) |
 | Build | electron-vite + electron-builder |
-| Tests | Vitest (panel: 80 tests), pytest (engine: 827+ tests) |
+| Tests | Vitest (panel: 80 tests), pytest (engine: 1000+ tests) |
 | Python | Bundled relocatable Python 3.12 |
 
 ---
@@ -229,9 +229,10 @@ Plus MCP tool server passthrough for local sessions.
 - **Ghost Abort Subsystem**: Engine cores execute 10x faster background orphaned request collection resolving memory leaks from broken client sockets.
 - **Mamba & SSM Native Paged Routing**: Array cache detection inside `model.make_cache()` automatically reroutes Dynamic KV memory strategies to pure native mapped configurations preventing dimension failures on MoE / Hybrid architectures.
 - **VLM caching pipeline**: Paged KV cache + prefix cache + Q4/Q8 quantization for VLMs
+- **Tool fallback injection**: Auto-detects when chat templates silently drop tool definitions (e.g., Qwen with thinking OFF) and injects XML `<tool_call>` schema into system prompt. Works for all model families.
 - **Integrated tool system audit**: Responses API tool_choice, suppress_reasoning, JSON schema validation
 - **Shell injection prevention**: `gitCommand` metacharacter blocking
-- **54 new tool format tests**
+- **65+ reasoning/tool tests, 54+ tool format tests**
 - **Streaming Unicode fix**: Per-request detokenizer buffers multi-byte UTF-8 correctly
 - **Hybrid model cache**: Qwen3-Coder-Next, Nemotron MambaCache+KVCache reconstruction
 

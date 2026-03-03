@@ -200,12 +200,23 @@ VLM paged cache follows the same N-1 token truncation as LLM:
 
 ### Chat Template Fallback
 
-When `apply_chat_template()` fails (e.g., template doesn't support a kwarg):
+When `apply_chat_template()` fails or silently drops tool definitions:
 
 1. **Progressive stripping** — removes kwargs one by one (last-added first)
 2. Preserves `tools` and `enable_thinking` as long as possible
 3. Only strips essential kwargs as a last resort
-4. SimpleEngine additionally injects tool definitions into system prompt if `tools` kwarg was stripped
+
+### Tool Fallback Injection
+
+Some models (e.g., Qwen 3.5 with `enable_thinking=False`) have chat templates that
+silently drop tool schemas from the rendered prompt. `check_and_inject_fallback_tools()`
+in `api/tool_calling.py` detects this and injects a standard XML `<tool_call>` instruction
+set into the system message. This works for **all models**, not just Qwen:
+
+1. After rendering the prompt, check if the first tool name appears in it
+2. If missing → inject tool definitions as XML schema into system message
+3. Re-apply template with modified messages (tools removed from kwargs)
+4. Both `SimpleEngine` and `BatchedEngine` call this after every template application
 
 ## Settings Dependencies
 
