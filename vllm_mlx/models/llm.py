@@ -181,11 +181,21 @@ class MLXLanguageModel:
             verbose=False,
         )
 
-        # Tokenize output to get token IDs
-        tokens = self.tokenizer.encode(output_text)
+        # Truncate at first stop sequence (mlx_lm.generate doesn't support stop natively)
+        # Note: output_text is generated tokens only (no prompt echo)
+        finish_reason = "length"
+        if stop and output_text:
+            for stop_seq in stop:
+                idx = output_text.find(stop_seq)
+                if idx != -1:
+                    output_text = output_text[:idx]
+                    finish_reason = "stop"
+                    break
 
-        # Determine finish reason
-        finish_reason = "length" if len(tokens) >= max_tokens else "stop"
+        # Tokenize after truncation to get accurate token count
+        tokens = self.tokenizer.encode(output_text)
+        if finish_reason != "stop":
+            finish_reason = "length" if len(tokens) >= max_tokens else "stop"
 
         return GenerationOutput(
             text=output_text,
