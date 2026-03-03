@@ -1070,7 +1070,8 @@ class MLLMScheduler:
                 # Cache corruption or GPU error — recover by clearing state
                 # and rescheduling (matching LLM scheduler pattern).
                 # Limit retries to prevent infinite loops on persistent errors.
-                logger.error(f"MLLM batch generation error: {step_err}")
+                import traceback
+                logger.error(f"MLLM batch generation error: {step_err}\n{traceback.format_exc()}")
                 try:
                     self.batch_generator.close()
                 except Exception:
