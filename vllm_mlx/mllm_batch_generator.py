@@ -68,6 +68,68 @@ def _dequantize_cache(cache: List[Any]) -> List[Any]:
     return result
 
 
+def _fix_hybrid_cache(cache: List[Any], language_model: nn.Module) -> List[Any]:
+    """Fix reconstructed cache for hybrid models (SSM + attention layers).
+
+    Prefix cache stores ONLY KVCache (attention) layers — SSM/ArraysCache layers
+    are cumulative state and get skipped during extraction. This means the
+    reconstructed cache list has fewer entries than total model layers.
+
+    For example, Qwen3.5 9B has 32 layers (8 attention + 24 SSM), but prefix
+    cache only stores the 8 attention layers. The reconstructed list of 8 must
+    be expanded back to 32 by inserting fresh ArraysCache at SSM positions.
+
+    This uses model.make_cache() as the authoritative template for which layer
+    indices need which cache type.
+    """
+    if not hasattr(language_model, 'make_cache'):
+        return cache
+
+    try:
+        from mlx_lm.models.cache import KVCache
+        template = language_model.make_cache()
+        num_model_layers = len(template)
+
+        # If cache already matches model layer count, just fix types in-place
+        if len(cache) == num_model_layers:
+            fixed = False
+            result = list(cache)
+            for i, (tmpl, cached) in enumerate(zip(template, cache)):
+                if not isinstance(tmpl, KVCache) and isinstance(cached, KVCache):
+                    result[i] = tmpl
+                    fixed = True
+            if fixed:
+                logger.debug("Fixed hybrid cache: replaced KVCache at SSM positions")
+            return result
+
+        # Cache is shorter than model layers — need to expand.
+        # The stored cache contains only KVCache layers (attention).
+        # Build full-length list: KVCache from reconstruction at attention positions,
+        # fresh template caches at SSM positions.
+        kv_positions = [i for i, t in enumerate(template) if isinstance(t, KVCache)]
+
+        if len(cache) != len(kv_positions):
+            logger.warning(
+                f"Cache length mismatch: {len(cache)} reconstructed vs "
+                f"{len(kv_positions)} KV positions in {num_model_layers}-layer model"
+            )
+            return cache
+
+        result = list(template)  # Start with fresh caches for all layers
+        for cache_idx, model_idx in enumerate(kv_positions):
+            result[model_idx] = cache[cache_idx]  # Insert reconstructed KVCache
+
+        logger.debug(
+            f"Expanded hybrid cache: {len(cache)} KV layers -> "
+            f"{num_model_layers} total ({len(kv_positions)} KV + "
+            f"{num_model_layers - len(kv_positions)} SSM)"
+        )
+        return result
+    except Exception as e:
+        logger.warning(f"_fix_hybrid_cache failed: {e}, using original cache")
+        return cache
+
+
 @dataclass
 class MLLMBatchRequest:
     """
@@ -715,8 +777,12 @@ class MLLMBatchGenerator:
                 # so that mlx_vlm model layers can use cache.offset as a Python int.
                 # After all prefills, we merge into a single BatchKVCache for decode.
                 if req.prompt_cache is not None:
-                    # Pre-filled cache from prefix cache — these are KVCache objects
-                    req_cache = req.prompt_cache
+                    # Pre-filled cache from prefix cache — these are KVCache objects.
+                    # For hybrid models (e.g. Qwen3.5 with SSM + attention layers),
+                    # replace KVCache at SSM positions with fresh ArraysCache.
+                    # SSM layers need ArraysCache (cumulative state, not block-cached),
+                    # and using KVCache at SSM positions causes make_mask signature errors.
+                    req_cache = _fix_hybrid_cache(req.prompt_cache, self.language_model)
                 else:
                     # Create fresh per-request cache using model.make_cache()
                     # This correctly creates KVCache for attention layers and
@@ -815,8 +881,12 @@ class MLLMBatchGenerator:
         if rep_penalty is not None and rep_penalty != 1.0:
             from mlx_lm.sample_utils import make_logits_processors
             logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
+            # Capture input_ids for logits processor (needs tokens to know what to penalize)
+            input_tokens = request.input_ids
             def sampler_with_penalty(logits):
-                processed = logits_procs(logits) if logits_procs else logits
+                processed = logits
+                for proc in logits_procs:
+                    processed = proc(input_tokens, processed)
                 return base_sampler(processed)
             return sampler_with_penalty
 
