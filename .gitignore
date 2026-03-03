@@ -114,3 +114,19 @@ productionapp/*.dmg
 
 # Claude Code
 .claude/
+
+# Old development artifacts (removed from main)
+examples/
+PLANS/
+productionapp/
+BENCHMARK_RESULTS.md
+FIXES_SUMMARY.md
+PACKAGE_RELEASE_NOTES.md
+PRODUCTION_READY.md
+TEST_PLAN.md
+VERIFICATION.md
+deploy.sh
+gsm8k_*.json
+mcp.example.json
+mise.toml
+.pre-commit-config.yaml
