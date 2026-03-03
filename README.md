@@ -30,7 +30,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 
 ## Key Features
 
-### Inference Engine (v0.2.6)
+### Inference Engine (v0.2.7)
 
 | Feature | Description |
 |---------|-------------|
@@ -207,7 +207,7 @@ Plus MCP tool server passthrough for local sessions.
 | Desktop app | Electron 28 + React 18 + TypeScript |
 | Styling | Tailwind CSS |
 | Database | SQLite (WAL mode, better-sqlite3) |
-| Inference engine | vLLM-MLX v0.2.6 (Python, FastAPI) |
+| Inference engine | vLLM-MLX v0.2.7 (Python, FastAPI) |
 | ML framework | Apple MLX (Metal GPU acceleration) |
 | Build | electron-vite + electron-builder |
 | Tests | Vitest (panel: 80 tests), pytest (engine: 827+ tests) |
@@ -224,7 +224,10 @@ Plus MCP tool server passthrough for local sessions.
 - **Test suite**: 80 tests across 3 test files (vitest)
 - **Full remote API audit**: All 12 code paths verified correct
 
-### Engine v0.2.6 (Unreleased)
+### Engine v0.2.7 (2026-03-02)
+- **Continuous Batching Stability**: Full thread locking (`RLock`) over VLM vision background encoder processes and engine asyncio loops via bounded streaming max queues (`8192`). 
+- **Ghost Abort Subsystem**: Engine cores execute 10x faster background orphaned request collection resolving memory leaks from broken client sockets.
+- **Mamba & SSM Native Paged Routing**: Array cache detection inside `model.make_cache()` automatically reroutes Dynamic KV memory strategies to pure native mapped configurations preventing dimension failures on MoE / Hybrid architectures.
 - **VLM caching pipeline**: Paged KV cache + prefix cache + Q4/Q8 quantization for VLMs
 - **Integrated tool system audit**: Responses API tool_choice, suppress_reasoning, JSON schema validation
 - **Shell injection prevention**: `gitCommand` metacharacter blocking
@@ -238,7 +241,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.6** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.7** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 

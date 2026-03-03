@@ -22,6 +22,7 @@ import asyncio
 import logging
 import time
 import uuid
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
@@ -176,6 +177,9 @@ class MLLMScheduler:
         self.model = model
         self.processor = processor
         self.config = config or MLLMSchedulerConfig()
+
+        # Thread-safe lock for wait/run queues since MLLM step() runs in background thread
+        self._queue_lock = threading.RLock()
 
         # Get model config
         self.model_config = getattr(model, "config", None)
@@ -698,8 +702,9 @@ class MLLMScheduler:
             sampling_params=sampling_params,
         )
 
-        self.requests[request_id] = request
-        self.waiting.append(request)
+        with self._queue_lock:
+            self.requests[request_id] = request
+            self.waiting.append(request)
 
         logger.debug(
             f"Added MLLM request {request_id}: "
@@ -718,43 +723,44 @@ class MLLMScheduler:
         Returns:
             True if request was found and aborted
         """
-        request = self.requests.pop(request_id, None)
-        if request is None:
-            return False
-
-        # Remove from waiting queue
-        if request.status == RequestStatus.WAITING:
-            try:
-                self.waiting.remove(request)
-            except ValueError:
-                pass
-
-        # Remove from batch generator
-        if request_id in self.request_id_to_uid:
-            uid = self.request_id_to_uid[request_id]
-            if self.batch_generator is not None:
-                self.batch_generator.remove([uid])
-            del self.uid_to_request_id[uid]
-            del self.request_id_to_uid[request_id]
-
-        if request_id in self.running:
-            del self.running[request_id]
-
-        # Clean up paged cache block tables (prevent leak)
-        if self.block_aware_cache is not None:
-            self.block_aware_cache._request_tables.pop(request_id, None)
-            if self.paged_cache_manager is not None:
-                self.paged_cache_manager.detach_request(request_id)
-
-        # Clean up streaming detokenizer
-        self._cleanup_detokenizer(request_id)
-
-        # Clear extracted cache GC reference
-        request._extracted_cache = None
-
-        # Mark as aborted
-        request.status = RequestStatus.FINISHED_ABORTED
-        self.finished_req_ids.add(request_id)
+        with self._queue_lock:
+            request = self.requests.pop(request_id, None)
+            if request is None:
+                return False
+    
+            # Remove from waiting queue
+            if request.status == RequestStatus.WAITING:
+                try:
+                    self.waiting.remove(request)
+                except ValueError:
+                    pass
+    
+            # Remove from batch generator
+            if request_id in self.request_id_to_uid:
+                uid = self.request_id_to_uid[request_id]
+                if self.batch_generator is not None:
+                    self.batch_generator.remove([uid])
+                del self.uid_to_request_id[uid]
+                del self.request_id_to_uid[request_id]
+    
+            if request_id in self.running:
+                del self.running[request_id]
+    
+            # Clean up paged cache block tables (prevent leak)
+            if self.block_aware_cache is not None:
+                self.block_aware_cache._request_tables.pop(request_id, None)
+                if self.paged_cache_manager is not None:
+                    self.paged_cache_manager.detach_request(request_id)
+    
+            # Clean up streaming detokenizer
+            self._cleanup_detokenizer(request_id)
+    
+            # Clear extracted cache GC reference
+            request._extracted_cache = None
+    
+            # Mark as aborted
+            request.status = RequestStatus.FINISHED_ABORTED
+            self.finished_req_ids.add(request_id)
 
         # Signal output queue
         if request_id in self.output_queues:
@@ -1048,12 +1054,16 @@ class MLLMScheduler:
         output = MLLMSchedulerOutput()
 
         # Schedule waiting requests
-        scheduled = self._schedule_waiting()
-        output.scheduled_request_ids = [r.request_id for r in scheduled]
-        output.num_scheduled_tokens = sum(r.num_prompt_tokens for r in scheduled)
+        with self._queue_lock:
+            scheduled = self._schedule_waiting()
+            output.scheduled_request_ids = [r.request_id for r in scheduled]
+            output.num_scheduled_tokens = sum(r.num_prompt_tokens for r in scheduled)
+    
+            # Identify if we have running requests before releasing lock
+            has_running = self.batch_generator is not None and len(self.running) > 0
 
-        # Run generation step if we have running requests
-        if self.batch_generator is not None and self.running:
+        # Run generation step if we have running requests (OUTSIDE LOCK)
+        if has_running:
             try:
                 responses = self.batch_generator.next()
             except Exception as step_err:
@@ -1068,63 +1078,66 @@ class MLLMScheduler:
                 self.batch_generator = None
                 self._current_sampler_params = ()
 
-                max_retries = 2
-                retryable = []
-                failed = []
-                for req_id, req in list(self.running.items()):
-                    req._retry_count += 1
-                    if req._retry_count <= max_retries:
-                        req.status = RequestStatus.WAITING
-                        req.output_tokens.clear()
-                        req.num_output_tokens = 0
-                        req.output_text = ""
-                        req.finish_reason = None
-                        self.waiting.appendleft(req)
-                        retryable.append(req_id)
-                    else:
-                        # Permanent failure — send error response
-                        req.finish_reason = "error"
-                        req.output_text = f"Generation failed: {step_err}"
-                        failed.append(req_id)
-                    self._cleanup_detokenizer(req_id)
-                self.running.clear()
-                self.request_id_to_uid.clear()
-                self.uid_to_request_id.clear()
-
-                if failed:
-                    # Push error responses for permanently failed requests
-                    output.finished_request_ids = failed
-                    for req_id in failed:
-                        req = self.requests.get(req_id)
-                        if req:
-                            output.outputs.append(RequestOutput(
-                                request_id=req_id,
-                                output_text=f"Generation failed: {step_err}",
-                                finished=True,
-                                finish_reason="error",
-                            ))
-                    self._cleanup_finished(set(failed))
-                    logger.error(
-                        f"MLLM scheduler: {len(failed)} requests failed permanently"
-                    )
-
-                if retryable:
-                    logger.info(
-                        f"MLLM scheduler recovered: "
-                        f"{len(retryable)} requests rescheduled"
-                    )
-                return output
+                with self._queue_lock:
+                    max_retries = 2
+                    retryable = []
+                    failed = []
+                    for req_id, req in list(self.running.items()):
+                        req._retry_count += 1
+                        if req._retry_count <= max_retries:
+                            req.status = RequestStatus.WAITING
+                            req.output_tokens.clear()
+                            req.num_output_tokens = 0
+                            req.output_text = ""
+                            req.finish_reason = None
+                            self.waiting.appendleft(req)
+                            retryable.append(req_id)
+                        else:
+                            # Permanent failure — send error response
+                            req.finish_reason = "error"
+                            req.output_text = f"Generation failed: {step_err}"
+                            failed.append(req_id)
+                        self._cleanup_detokenizer(req_id)
+                    self.running.clear()
+                    self.request_id_to_uid.clear()
+                    self.uid_to_request_id.clear()
+    
+                    if failed:
+                        # Push error responses for permanently failed requests
+                        output.finished_request_ids = failed
+                        for req_id in failed:
+                            req = self.requests.get(req_id)
+                            if req:
+                                output.outputs.append(RequestOutput(
+                                    request_id=req_id,
+                                    output_text=f"Generation failed: {step_err}",
+                                    finished=True,
+                                    finish_reason="error",
+                                ))
+                        self._cleanup_finished(set(failed))
+                        logger.error(
+                            f"MLLM scheduler: {len(failed)} requests failed permanently"
+                        )
+    
+                    if retryable:
+                        logger.info(
+                            f"MLLM scheduler recovered: "
+                            f"{len(retryable)} requests rescheduled"
+                        )
+                    return output
 
             output.has_work = True
 
             if responses:
-                outputs, finished_ids = self._process_batch_responses(responses)
-                output.outputs = outputs
-                output.finished_request_ids = finished_ids
-                self._cleanup_finished(finished_ids)
+                with self._queue_lock:
+                    outputs, finished_ids = self._process_batch_responses(responses)
+                    output.outputs = outputs
+                    output.finished_request_ids = finished_ids
+                    self._cleanup_finished(finished_ids)
 
-        # Clear finished tracking for next step
-        self.finished_req_ids = set()
+        with self._queue_lock:
+            # Clear finished tracking for next step
+            self.finished_req_ids = set()
 
         return output
 
@@ -1143,62 +1156,63 @@ class MLLMScheduler:
 
     def _fail_all_requests(self, error_msg: str) -> None:
         """Fail all waiting and running requests with an error so callers don't hang."""
-        failed_ids = set()
-        # Fail running requests
-        for req_id, req in list(self.running.items()):
-            req.status = RequestStatus.FINISHED_STOPPED
-            queue = self.output_queues.get(req_id)
-            if queue is not None:
+        with self._queue_lock:
+            failed_ids = set()
+            # Fail running requests
+            for req_id, req in list(self.running.items()):
+                req.status = RequestStatus.FINISHED_STOPPED
+                queue = self.output_queues.get(req_id)
+                if queue is not None:
+                    try:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            output_text=f"[Error: {error_msg}]",
+                            finished=True,
+                            finish_reason="error",
+                        ))
+                        queue.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
+                failed_ids.add(req_id)
+            # Fail waiting requests
+            for req in list(self.waiting):
+                req_id = req.request_id
+                req.status = RequestStatus.FINISHED_STOPPED
+                queue = self.output_queues.get(req_id)
+                if queue is not None:
+                    try:
+                        queue.put_nowait(RequestOutput(
+                            request_id=req_id,
+                            output_text=f"[Error: {error_msg}]",
+                            finished=True,
+                            finish_reason="error",
+                        ))
+                        queue.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
+                failed_ids.add(req_id)
+            # Cleanup — do NOT pop output_queues here; the error+sentinel are
+            # already enqueued and stream_outputs() will drain them. If we pop
+            # the queue now, stream_outputs() will find no queue and return
+            # empty, losing the error message (user sees 0 tokens instead of error).
+            self.waiting.clear()
+            for req_id in failed_ids:
+                self.running.pop(req_id, None)
+                self.requests.pop(req_id, None)
+                # Leave output_queues[req_id] — stream_outputs reads the error then cleans up
+                self._cleanup_detokenizer(req_id)
+                # Clean up UID mappings
+                uid = self.request_id_to_uid.pop(req_id, None)
+                if uid is not None:
+                    self.uid_to_request_id.pop(uid, None)
+            self.finished_req_ids.clear()
+            # Reset batch generator so next request starts fresh
+            if self.batch_generator is not None:
                 try:
-                    queue.put_nowait(RequestOutput(
-                        request_id=req_id,
-                        output_text=f"[Error: {error_msg}]",
-                        finished=True,
-                        finish_reason="error",
-                    ))
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
+                    self.batch_generator.close()
+                except Exception:
                     pass
-            failed_ids.add(req_id)
-        # Fail waiting requests
-        for req in list(self.waiting):
-            req_id = req.request_id
-            req.status = RequestStatus.FINISHED_STOPPED
-            queue = self.output_queues.get(req_id)
-            if queue is not None:
-                try:
-                    queue.put_nowait(RequestOutput(
-                        request_id=req_id,
-                        output_text=f"[Error: {error_msg}]",
-                        finished=True,
-                        finish_reason="error",
-                    ))
-                    queue.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
-            failed_ids.add(req_id)
-        # Cleanup — do NOT pop output_queues here; the error+sentinel are
-        # already enqueued and stream_outputs() will drain them. If we pop
-        # the queue now, stream_outputs() will find no queue and return
-        # empty, losing the error message (user sees 0 tokens instead of error).
-        self.waiting.clear()
-        for req_id in failed_ids:
-            self.running.pop(req_id, None)
-            self.requests.pop(req_id, None)
-            # Leave output_queues[req_id] — stream_outputs reads the error then cleans up
-            self._cleanup_detokenizer(req_id)
-            # Clean up UID mappings
-            uid = self.request_id_to_uid.pop(req_id, None)
-            if uid is not None:
-                self.uid_to_request_id.pop(uid, None)
-        self.finished_req_ids.clear()
-        # Reset batch generator so next request starts fresh
-        if self.batch_generator is not None:
-            try:
-                self.batch_generator.close()
-            except Exception:
-                pass
-            self.batch_generator = None
+                self.batch_generator = None
 
     def get_request(self, request_id: str) -> Optional[MLLMRequest]:
         """Get a request by ID."""
@@ -1296,7 +1310,7 @@ class MLLMScheduler:
         )
 
         # Create output queue for streaming
-        self.output_queues[request_id] = asyncio.Queue()
+        self.output_queues[request_id] = asyncio.Queue(maxsize=8192)
 
         return request_id
 
@@ -1379,40 +1393,42 @@ class MLLMScheduler:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get scheduler statistics."""
-        stats = {
-            "num_waiting": len(self.waiting),
-            "num_running": len(self.running),
-            "num_finished": len(self.finished_req_ids),
-            "num_requests_processed": self.num_requests_processed,
-            "total_prompt_tokens": self.total_prompt_tokens,
-            "total_completion_tokens": self.total_completion_tokens,
-        }
+        with self._queue_lock:
+            stats = {
+                "num_waiting": len(self.waiting),
+                "num_running": len(self.running),
+                "num_finished": len(self.finished_req_ids),
+                "num_requests_processed": self.num_requests_processed,
+                "total_prompt_tokens": self.total_prompt_tokens,
+                "total_completion_tokens": self.total_completion_tokens,
+            }
 
-        if self.batch_generator is not None:
-            batch_stats = self.batch_generator.stats()
-            stats["batch_generator"] = batch_stats.to_dict()
-            # Add vision embedding cache stats from batch generator
-            stats["vision_embedding_cache"] = (
-                self.batch_generator.get_vision_cache_stats()
-            )
+            if self.batch_generator is not None:
+                batch_stats = self.batch_generator.stats()
+                stats["batch_generator"] = batch_stats.to_dict()
+                # Add vision embedding cache stats from batch generator
+                stats["vision_embedding_cache"] = (
+                    self.batch_generator.get_vision_cache_stats()
+                )
 
-        if self.batch_generator:
-            stats["vision_cache"] = self.batch_generator.get_vision_cache_stats()
+            if self.batch_generator:
+                stats["vision_cache"] = self.batch_generator.get_vision_cache_stats()
 
-        return stats
+            return stats
 
     def reset(self) -> None:
         """Reset the scheduler state."""
-        # Abort all requests
-        for request_id in list(self.requests.keys()):
-            self.abort_request(request_id)
-
-        self.waiting.clear()
-        self.running.clear()
-        self.requests.clear()
-        self.finished_req_ids.clear()
-        self.request_id_to_uid.clear()
-        self.uid_to_request_id.clear()
+        with self._queue_lock:
+            # Abort all requests
+            for request_id in list(self.requests.keys()):
+                self.abort_request(request_id)
+    
+            self.waiting.clear()
+            self.running.clear()
+            self.requests.clear()
+            self.finished_req_ids.clear()
+            self.request_id_to_uid.clear()
+            self.uid_to_request_id.clear()
 
         if self.batch_generator is not None:
             self.batch_generator.close()

@@ -2459,20 +2459,13 @@ async def stream_chat_completion(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    # When the last message is a tool result, the model typically answers directly
-    # without thinking. Don't assume implicit thinking mode in this case — if the
-    # model still outputs </think>, the parser will detect it dynamically (Case 2).
-    # This prevents the entire answer from being classified as reasoning.
-    has_tool_results = False
-    if request.messages:
-        msgs = request.messages
-        # Check if any message has role='tool' (list of dicts or objects)
-        for m in msgs:
-            role = m.get('role') if isinstance(m, dict) else getattr(m, 'role', None)
-            if role == 'tool':
-                has_tool_results = True
-                break
-    effective_think_in_template = think_in_template and not has_tool_results
+    # Keep think_in_prompt active even when tool results are present.
+    # Models like Qwen3/Qwen3.5-VL DO produce <think> blocks on follow-up
+    # requests after tool execution. The parser's streaming extraction handles
+    # <think>→</think>→content transitions correctly. Disabling think_in_prompt
+    # here caused reasoning text to leak as visible content before the <think>
+    # token accumulated in the stream.
+    effective_think_in_template = think_in_template
     if _effective_thinking is False:
         effective_think_in_template = False
 
@@ -2745,14 +2738,31 @@ async def stream_chat_completion(
         parse_text = parse_text.strip()
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or accumulated_text, request)
         if tool_calls:
-            # Emit any remaining content text before the tool calls
+            # Emit any remaining content text before the tool calls,
+            # but ONLY the portion that wasn't already streamed.
+            # During streaming, content deltas were already emitted (including
+            # reasoning redirected as content when suppress_reasoning=True).
+            # Re-emitting cleaned_text would cause duplicate visible text.
+            unemitted_content = None
             if cleaned_text and cleaned_text.strip():
+                # accumulated_content tracks what was already streamed as content
+                already_sent = accumulated_content.strip()
+                candidate = cleaned_text.strip()
+                if not already_sent or not candidate.startswith(already_sent):
+                    # Nothing was streamed yet, or content doesn't overlap — emit all
+                    unemitted_content = candidate if not content_was_emitted else None
+                else:
+                    # Subtract the already-streamed portion
+                    remainder = candidate[len(already_sent):].strip()
+                    unemitted_content = remainder if remainder else None
+
+            if unemitted_content:
                 content_chunk = ChatCompletionChunk(
                     id=response_id,
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
-                            delta=ChatCompletionChunkDelta(content=cleaned_text.strip()),
+                            delta=ChatCompletionChunkDelta(content=unemitted_content),
                             finish_reason=None,
                         )
                     ],
@@ -2799,16 +2809,22 @@ async def stream_chat_completion(
             yield "data: [DONE]\n\n"
             return
         else:
-            # No tool calls found despite markers — flush buffer as content
-            # Find the unbuffered portion and emit it
-            buffered_text = accumulated_text
-            if buffered_text:
+            # No tool calls found despite markers — flush only the UN-STREAMED
+            # portion. Content before the tool call marker was already emitted
+            # during streaming; only the buffered portion (from marker onward) needs flushing.
+            already_sent = accumulated_content.strip()
+            full = accumulated_text.strip()
+            if already_sent and full.startswith(already_sent):
+                remainder = full[len(already_sent):].strip()
+            else:
+                remainder = full if not content_was_emitted else ""
+            if remainder:
                 flush_chunk = ChatCompletionChunk(
                     id=response_id,
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
-                            delta=ChatCompletionChunkDelta(content=buffered_text),
+                            delta=ChatCompletionChunkDelta(content=remainder),
                             finish_reason="stop",
                         )
                     ],
@@ -2959,12 +2975,11 @@ async def stream_responses_api(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    # Don't assume implicit thinking when last message is tool result
-    has_tool_results = any(
-        (m.get('role') if isinstance(m, dict) else getattr(m, 'role', None)) == 'tool'
-        for m in messages
-    )
-    effective_think_in_template = think_in_template and not has_tool_results
+    # Keep think_in_prompt active even when tool results are present.
+    # (Same rationale as Chat Completions path — see stream_chat_completion.)
+    effective_think_in_template = think_in_template
+    if _effective_thinking is False:
+        effective_think_in_template = False
 
     # For thinking models without reasoning parser, prepend <think>
     is_thinking_model = effective_think_in_template and not _reasoning_parser
