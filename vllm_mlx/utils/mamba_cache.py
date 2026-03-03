@@ -47,6 +47,20 @@ class BatchMambaCache(MambaCache):
         super().__init__(size, left_padding=left_padding)
         self._batch_size = len(left_padding) if left_padding else 0
 
+    def filter(self, batch_indices) -> None:
+        """Filter batch to keep only specified indices.
+
+        Overrides ArraysCache.filter() to also filter left_padding.
+        Without this, left_padding retains the original batch_size after
+        filtering, causing make_mask() to return a mask with stale dimensions
+        that triggers shape mismatches in SSM layers during batched generation.
+
+        This matches BatchKVCache.filter() which also filters its left_padding.
+        """
+        super().filter(batch_indices)
+        if self.left_padding is not None:
+            self.left_padding = self.left_padding[batch_indices]
+
     def extract(self, idx: int) -> MambaCache:
         """
         Extract a single cache from the batch.
@@ -85,7 +99,14 @@ class BatchMambaCache(MambaCache):
         batch_size = len(caches)
         num_arrays = len(caches[0].cache) if caches[0].cache else 2
 
-        merged_cache = cls(size=num_arrays, left_padding=[0] * batch_size)
+        # Don't set left_padding: merged caches from prefill don't need padding
+        # masks. Setting [0]*N creates a no-op mask (all True) that still causes
+        # shape mismatches after filter() shrinks the batch — ArraysCache.filter()
+        # doesn't filter left_padding, so make_mask() would return a mask with
+        # stale batch dimension. With left_padding=None, make_mask() returns None
+        # and SSM layers skip masking entirely (correct for decode phase).
+        merged_cache = cls(size=num_arrays, left_padding=None)
+        merged_cache._batch_size = batch_size
 
         # Merge each array in the cache
         merged_cache.cache = []
