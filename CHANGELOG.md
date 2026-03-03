@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+#### Integrated Tool Call System — Deep Audit & Fixes (2026-03-02)
+
+- **Responses API `tool_choice` handling**: The Responses API endpoint now fully mirrors the Chat Completions handler — `tool_choice="none"` suppresses all tools, `tool_choice={"function":{"name":"X"}}` filters to the named tool only. Previously the Responses API ignored `tool_choice` entirely.
+- **Responses API `suppress_reasoning` parity**: When the client sets `enable_thinking=False` but the model forces reasoning (e.g., MiniMax), the Responses API streaming path now redirects suppressed reasoning as content (matching Chat Completions behavior). Previously it silently dropped reasoning deltas, causing the stream to appear to hang.
+- **Responses API JSON schema validation**: The non-streaming Responses API path now validates output against `json_schema` with `strict=True` and returns HTTP 400 on validation failure, matching the Chat Completions behavior. Previously it only prompt-injected JSON instructions with no post-generation validation.
+- **`gitCommand` shell injection prevention**: Added shell metacharacter blocking (`;|&`$(){}`) to prevent command injection via `/bin/sh -c`. Dangerous git operations (`push --force`, `reset --hard`, `clean -f`, `branch -D`) already blocked.
+- **`run_command` kill reason accuracy**: Added `!killReason` guards on all three kill paths (stdout overflow, stderr overflow, timeout) so only the first reason is preserved. Previously, a second overflow event could overwrite the original reason.
+- **`ask_user` always available**: Moved `ask_user` out of `UTILITY_TOOLS` category so it cannot be accidentally disabled by the `utilityToolsEnabled: false` toggle. It's a core IPC tool that should always be available.
+- **`insertText` / `replaceLines` null guards**: Added parameter validation to prevent silent corruption (NaN splice index, TypeError on undefined text).
+- **`fetchUrl` truncation reporting**: Fixed truncation footer to show original content length instead of the truncated length.
+- **`batchEdit` conditional write**: Only writes the file when at least one edit succeeded (prevents unnecessary mtime updates on all-fail).
+- **`get_diagnostics` dead code removal**: Removed dead TSC single-file branch. Fixed schema mismatch (`path` was marked required but is optional).
+
+#### Comprehensive Test Suite Expansion
+- Added `tests/test_tool_format.py` with 54 new tests covering:
+  - `ResponsesToolDefinition.to_chat_completions_format()` conversion
+  - `convert_tools_for_template()` with all input formats
+  - `tool_choice` suppression and filtering for both APIs
+  - `response_format.strict` enforcement
+  - `max_tokens` fallback chain behavior
+  - Model config registry flags (parser assignments, is_mllm, native tool format)
+  - Audio model defaults and settings
+  - `_responses_input_to_messages()` conversion (string, list, multimodal)
+  - `ToolDefinition` Pydantic model edge cases
+
 ### Added
 
 #### VLM Caching Pipeline (Pioneer MLX Feature)

@@ -371,11 +371,26 @@ class SimpleEngine(BaseEngine):
                     try:
                         prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
                     except (TypeError, Exception) as template_err:
-                        logger.warning(f"Chat template failed (retrying with fewer kwargs): {template_err}")
-                        for key in list(tpl_kwargs.keys()):
-                            if key not in ("tokenize", "add_generation_prompt"):
-                                del tpl_kwargs[key]
-                        prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
+                        # Progressively strip non-essential kwargs to preserve tools/thinking
+                        strip_order = [
+                            k for k in tpl_kwargs
+                            if k not in ("tokenize", "add_generation_prompt")
+                        ]
+                        prompt = None
+                        for key in reversed(strip_order):
+                            del tpl_kwargs[key]
+                            try:
+                                prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
+                                stripped = [k for k in strip_order if k not in tpl_kwargs]
+                                logger.warning(
+                                    f"Chat template succeeded after stripping: {stripped} "
+                                    f"(original error: {template_err})"
+                                )
+                                break
+                            except (TypeError, Exception):
+                                continue
+                        if prompt is None:
+                            prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
                 else:
                     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                     prompt += "\nassistant:"
@@ -594,16 +609,32 @@ class SimpleEngine(BaseEngine):
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
             except (TypeError, Exception) as template_err:
-                # Some templates don't support all kwargs — strip unsupported ones and retry
+                # Progressively strip non-essential kwargs to preserve tools/thinking.
+                # Strip order: extra kwargs first, then tools, then enable_thinking.
                 logger.warning(f"Chat template first attempt failed (will retry with fewer kwargs): {template_err}")
                 had_tools = "tools" in template_kwargs
-                for key in list(template_kwargs.keys()):
-                    if key not in ("tokenize", "add_generation_prompt"):
-                        del template_kwargs[key]
+                strip_order = [
+                    k for k in template_kwargs
+                    if k not in ("tokenize", "add_generation_prompt")
+                ]
+                prompt = None
+                for key in reversed(strip_order):
+                    del template_kwargs[key]
+                    try:
+                        prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                        stripped = [k for k in strip_order if k not in template_kwargs]
+                        logger.warning(
+                            f"Chat template succeeded after stripping: {stripped} "
+                            f"(original error: {template_err})"
+                        )
+                        break
+                    except (TypeError, Exception):
+                        continue
 
-                # Fallback: if template doesn't support tools kwarg, inject tool definitions
-                # into the system prompt so the model still knows about available tools
-                if had_tools and template_tools:
+                # If progressive stripping didn't work, fall through to tool injection
+                if prompt is not None:
+                    pass  # Already resolved above
+                elif had_tools and template_tools:
                     import json
                     tool_descs = []
                     for tool in template_tools:
@@ -633,13 +664,14 @@ class SimpleEngine(BaseEngine):
                         messages.insert(0, {"role": "system", "content": tool_prompt})
                     logger.info("Injected tool definitions into system prompt (template doesn't support tools kwarg)")
 
-                try:
-                    prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-                except Exception as retry_err:
-                    logger.error(f"Chat template failed even after stripping kwargs: {retry_err}")
-                    # Last resort: manual prompt formatting
-                    prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
-                    prompt += "\nassistant:"
+                if prompt is None:
+                    try:
+                        prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                    except Exception as retry_err:
+                        logger.error(f"Chat template failed even after stripping kwargs: {retry_err}")
+                        # Last resort: manual prompt formatting
+                        prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+                        prompt += "\nassistant:"
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
             prompt += "\nassistant:"

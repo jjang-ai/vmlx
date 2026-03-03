@@ -30,6 +30,44 @@ from .vision_embedding_cache import VisionEmbeddingCache
 logger = logging.getLogger(__name__)
 
 
+def _dequantize_cache(cache: List[Any]) -> List[Any]:
+    """Dequantize QuantizedKVCache layers to KVCache for batch generation.
+
+    BatchGenerator requires full-precision KVCache objects for merge/extract.
+    Returns original cache unmodified if no quantized layers found.
+    """
+    try:
+        from mlx_lm.models.cache import KVCache, QuantizedKVCache
+    except ImportError:
+        return cache
+
+    has_quantized = any(isinstance(c, QuantizedKVCache) for c in cache)
+    if not has_quantized:
+        return cache
+
+    result = []
+    for layer_cache in cache:
+        if isinstance(layer_cache, QuantizedKVCache) and layer_cache.keys is not None:
+            try:
+                kv = KVCache()
+                kv.keys = mx.dequantize(
+                    layer_cache.keys[0], layer_cache.keys[1],
+                    layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
+                )
+                kv.values = mx.dequantize(
+                    layer_cache.values[0], layer_cache.values[1],
+                    layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
+                )
+                kv.offset = layer_cache.offset
+                result.append(kv)
+            except Exception as e:
+                logger.warning(f"KV dequantization failed: {e}, using original")
+                result.append(layer_cache)
+        else:
+            result.append(layer_cache)
+    return result
+
+
 @dataclass
 class MLLMBatchRequest:
     """
@@ -318,7 +356,6 @@ class MLLMBatchGenerator:
         vision_cache_size: int = 100,
         paged_cache_manager: Optional[Any] = None,
         block_aware_cache: Optional[Any] = None,
-        logits_processors: Optional[Any] = None,
     ):
         """
         Initialize MLLM batch generator.
@@ -337,7 +374,6 @@ class MLLMBatchGenerator:
             vision_cache_size: Max entries in vision cache
             paged_cache_manager: Optional PagedCacheManager
             block_aware_cache: Optional BlockAwarePrefixCache
-            logits_processors: Optional logits processors (e.g., repetition penalty)
         """
         self.model = model
         self.processor = processor
@@ -362,7 +398,6 @@ class MLLMBatchGenerator:
         self.max_tokens = max_tokens
         self.stop_tokens = stop_tokens or set()
         self.sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
-        self.logits_processors = logits_processors
 
         self.prefill_batch_size = prefill_batch_size
         self.completion_batch_size = max(completion_batch_size, prefill_batch_size)
@@ -647,6 +682,9 @@ class MLLMBatchGenerator:
                             # Cache hit! Reconstruct actual KVCache objects from stored block data.
                             reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
                             if reconstructed is not None:
+                                # Dequantize if KV quant was applied during storage.
+                                # BatchGenerator needs full-precision KVCache, not QuantizedKVCache.
+                                reconstructed = _dequantize_cache(reconstructed)
                                 req.prompt_cache = reconstructed
                                 logger.info(
                                     f"VLM prefix cache HIT for {req.request_id}: "
@@ -774,7 +812,7 @@ class MLLMBatchGenerator:
 
         # Apply repetition penalty if set for this request
         rep_penalty = getattr(request, "repetition_penalty", 1.0)
-        if rep_penalty and rep_penalty != 1.0:
+        if rep_penalty is not None and rep_penalty != 1.0:
             from mlx_lm.sample_utils import make_logits_processors
             logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
             def sampler_with_penalty(logits):
