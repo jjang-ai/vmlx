@@ -369,6 +369,11 @@ class BatchedEngine(BaseEngine):
                     # All kwargs stripped and still failing — last resort
                     prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
                 
+            from ..api.tool_calling import check_and_inject_fallback_tools
+            prompt = check_and_inject_fallback_tools(
+                prompt, messages, tools, tokenizer, template_kwargs
+            )
+            
             if enable_thinking is False and prompt.endswith("<think>\n"):
                 prompt = prompt[:-8]
             elif enable_thinking is False and prompt.endswith("<think>"):

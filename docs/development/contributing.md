@@ -17,15 +17,48 @@ pip install -e ".[dev]"
 
 ### Running Tests
 
+**Important**: Always use the project's `.venv` Python — system Python won't have the dependencies.
+
 ```bash
-# Run all tests
-pytest tests/
+# Run ALL engine tests (~1000+ tests)
+.venv/bin/python -m pytest tests/ -v
 
-# Run specific test file
-pytest tests/test_paged_cache.py -v
+# Critical test suites to run before any build:
+.venv/bin/python -m pytest tests/test_reasoning_tool_interaction.py -v  # 61 tests: reasoning + tools
+.venv/bin/python -m pytest tests/test_tool_fallback_injection.py -v     # 4 tests: template fallback
+.venv/bin/python -m pytest tests/test_tool_format.py -v                 # 54+ tests: tool formats
 
+# Panel tests (TypeScript)
+cd panel && npx vitest run   # 80+ tests
+```
+
+### Pre-Build Checklist
+
+Before every production build, run this:
+
+```bash
+# 1. Engine tests
+.venv/bin/python -m pytest tests/ -v 2>&1 | tail -5
+
+# 2. Panel tests
+cd panel && npx vitest run 2>&1 | tail -5
+
+# 3. Build and install
+cd panel && npm run build && npm run dist
+
+# 4. Deploy
+killall vMLX 2>/dev/null || true
+rm -rf /Applications/vMLX.app
+cp -R release/mac-arm64/vMLX.app /Applications/
+xattr -cr /Applications/vMLX.app
+open /Applications/vMLX.app
+```
+
+See [Build, Test & Deploy](build-test-deploy.md) for complete details including feature cohesion matrix and dependency chain.
+
+```bash
 # Run with coverage
-pytest --cov=vllm_mlx tests/
+.venv/bin/python -m pytest --cov=vllm_mlx tests/
 ```
 
 ### Code Style
