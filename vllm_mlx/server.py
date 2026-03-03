@@ -123,6 +123,7 @@ logger = logging.getLogger(__name__)
 _engine: BaseEngine | None = None
 _model_name: str | None = None
 _model_path: str | None = None  # Full local path for config.json lookups
+_served_model_name: str | None = None  # Custom name for API (--served-model-name)
 _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
@@ -530,6 +531,14 @@ def _normalize_model_name(model_name: str) -> str:
     return model_name
 
 
+def _resolve_model_name() -> str:
+    """Return the model name to expose via the API.
+
+    Priority: _served_model_name > _model_name > 'default'
+    """
+    return _served_model_name or _model_name or "default"
+
+
 def load_model(
     model_name: str,
     use_batching: bool = False,
@@ -537,6 +546,7 @@ def load_model(
     stream_interval: int = 1,
     max_tokens: int = 32768,
     force_mllm: bool = False,
+    served_model_name: str | None = None,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -549,7 +559,7 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _tool_parser_instance
+    global _engine, _model_name, _model_path, _default_max_tokens, _tool_parser_instance, _served_model_name
 
     _default_max_tokens = max_tokens
     _model_path = model_name  # Full path for config.json lookups
@@ -557,6 +567,9 @@ def load_model(
     # e.g. "/Users/eric/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
     #    → "mlx-community/Llama-3.2-3B-Instruct-4bit"
     _model_name = _normalize_model_name(model_name)
+    _served_model_name = served_model_name  # Custom name override (may be None)
+    if _served_model_name:
+        logger.info(f"Serving model as: {_served_model_name} (actual: {_model_name})")
     # Reset tool parser instance when model is reloaded (tokenizer may change)
     _tool_parser_instance = None
 
@@ -1113,8 +1126,13 @@ async def cancel_completion(request_id: str):
 async def list_models() -> ModelsResponse:
     """List available models."""
     models = []
-    if _model_name:
-        models.append(ModelInfo(id=_model_name))
+    resolved = _resolve_model_name()
+    if resolved and resolved != "default":
+        models.append(ModelInfo(id=resolved))
+        # If served_model_name differs from actual, also list the actual name
+        # so clients using either name can find the model
+        if _served_model_name and _model_name and _served_model_name != _model_name:
+            models.append(ModelInfo(id=_model_name))
     return ModelsResponse(data=models)
 
 
@@ -1594,6 +1612,16 @@ async def create_chat_completion(
     }
     ```
     """
+    # Model name validation: accept served name, actual name, or any name (permissive)
+    resolved_name = _resolve_model_name()
+    if request.model and request.model != resolved_name and request.model != _model_name:
+        logger.info(
+            f"Request model '{request.model}' differs from served model "
+            f"'{resolved_name}' — using loaded model (single-model server)"
+        )
+    # Normalize response model field to the resolved name
+    request.model = resolved_name
+
     engine = get_engine()
 
     # For MLLM models, keep original messages with embedded images
@@ -2031,6 +2059,15 @@ async def create_response(
     }
     ```
     """
+    # Model name validation (same as chat completions)
+    resolved_name = _resolve_model_name()
+    if request.model and request.model != resolved_name and request.model != _model_name:
+        logger.info(
+            f"Request model '{request.model}' differs from served model "
+            f"'{resolved_name}' — using loaded model (single-model server)"
+        )
+    request.model = resolved_name
+
     engine = get_engine()
 
     # Convert Responses API input to chat messages
@@ -2650,8 +2687,8 @@ async def stream_chat_completion(
                     usage=chunk_usage,
                 )
                 yield f"data: {_dump_sse_json(chunk)}\n\n"
-            else:
-                # Standard path without reasoning parsing
+            elif not request_parser:
+                # Standard path without reasoning parsing (no parser configured)
                 content = delta_text
 
                 # Check for tool call markers — start buffering when detected
@@ -2705,6 +2742,10 @@ async def stream_chat_completion(
                     usage=chunk_usage,
                 )
                 yield f"data: {_dump_sse_json(chunk)}\n\n"
+            else:
+                # Reasoning parser is active but delta_text is empty/None
+                # (progress-only engine chunk). Skip — don't emit empty delta.
+                continue
 
     except Exception as e:
         # On any error, abort the request and emit an error SSE event

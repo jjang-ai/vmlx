@@ -193,6 +193,30 @@ except FileNotFoundError:
 
 echo "==> Patches applied."
 
+# ====================================================================
+# Critical: Verify the Python shared library exists (prevents broken bundles)
+# The bundled Python MUST include libpython3.12.dylib for the app to work.
+# Without it, the app falls back to system Python which may have outdated or
+# missing packages (e.g., mlx_vlm without qwen3_5_moe support).
+# ====================================================================
+echo "==> Verifying Python shared library..."
+LIBPYTHON="$BUNDLE_DIR/python/lib/libpython3.12.dylib"
+if [ -f "$LIBPYTHON" ]; then
+  echo "  libpython3.12.dylib OK ($(du -h "$LIBPYTHON" | cut -f1))"
+else
+  # Check if it exists elsewhere in the bundle (some builds put it in different locations)
+  FOUND=$(find "$BUNDLE_DIR" -name "libpython3.12*.dylib" 2>/dev/null | head -1)
+  if [ -n "$FOUND" ]; then
+    echo "  Found at: $FOUND — creating symlink"
+    ln -sf "$FOUND" "$LIBPYTHON"
+  else
+    echo "ERROR: libpython3.12.dylib NOT FOUND in bundle!"
+    echo "  The app will fall back to system Python, which may have outdated packages."
+    echo "  This is a critical build issue — the bundle is incomplete."
+    exit 1
+  fi
+fi
+
 # Post-cleanup verification: ensure pip still works (catches vendor stripping bugs)
 echo "==> Verifying pip is functional (needed for engine auto-update)..."
 "$PYTHON" -s -m pip --version > /dev/null 2>&1 || { echo "ERROR: pip is broken after cleanup! Check vendor removals."; exit 1; }

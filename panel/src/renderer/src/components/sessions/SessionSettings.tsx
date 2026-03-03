@@ -133,6 +133,9 @@ function buildCommandPreview(
   }
   if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
 
+  // Served model name
+  if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
+
   if (config.additionalArgs && config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
 
   return parts.join(' \\\n  ')

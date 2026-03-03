@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-
+import { Modal } from '../ui/Modal'
 export interface SessionConfig {
   host: string
   port: number
@@ -34,6 +34,7 @@ export interface SessionConfig {
   toolCallParser: string
   reasoningParser: string
   isMultimodal?: boolean
+  servedModelName: string
   additionalArgs: string
 }
 
@@ -71,6 +72,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   toolCallParser: 'auto',
   reasoningParser: 'auto',
   isMultimodal: undefined,
+  servedModelName: '',
   additionalArgs: ''
 }
 
@@ -80,9 +82,11 @@ interface SessionConfigFormProps {
   onReset?: () => void
   /** Detected model cache type ('kv', 'mamba', etc.) for feature gating */
   detectedCacheType?: string
+  /** Detected model max context length from config.json (max_position_embeddings) */
+  detectedMaxContext?: number
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext }: SessionConfigFormProps) {
   const [expandedSections, setExpandedSections] = useState({
     server: true,
     concurrent: false,
@@ -93,6 +97,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     performance: false,
     tools: false
   })
+
+  const [showCachingHelp, setShowCachingHelp] = useState(false)
 
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
@@ -123,6 +129,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <Field label="API Key" tooltip="Optional authentication key for the OpenAI-compatible API. When set, all API requests must include this key in the Authorization header. Leave empty to allow unauthenticated access (fine for local-only servers).">
           <input type="password" value={config.apiKey} onChange={e => onChange('apiKey', e.target.value)} placeholder="Leave empty for no auth" className="cfg-input" />
         </Field>
+        <Field label="Served Model Name" tooltip="Custom name to expose via the /v1/models API and in response objects. When set, API clients can use this name instead of the full model path. Both the custom name and the actual model name are listed in /v1/models. Leave empty to auto-derive from model path (e.g. 'mlx-community/Llama-3.2-3B').">
+          <input type="text" value={config.servedModelName} onChange={e => onChange('servedModelName', e.target.value)} placeholder="Auto (from model path)" className="cfg-input" />
+        </Field>
         <SliderField
           label="Rate Limit (req/min)"
           tooltip="Maximum number of API requests allowed per minute. Set to 0 to disable rate limiting. Useful when exposing the server to multiple users or external applications to prevent overloading."
@@ -152,8 +161,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Concurrent Processing */}
-      <Section title="Concurrent Processing" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')}>
-        <PerformanceHint text="Controls how many requests your server handles at once. Higher values = more users simultaneously, but more RAM used. For personal use, the defaults are fine." />
+      <Section title="Concurrent Processing - Caching Engine" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')}>
+        <div className="flex items-center gap-2 mb-2">
+          <PerformanceHint text="Controls how many requests your server handles at once. Keep Continuous Batching ON to enable the caching engine." />
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowCachingHelp(true) }}
+            className="w-6 h-6 flex items-center justify-center rounded-full bg-accent/50 text-accent-foreground hover:bg-accent hover:text-white transition-colors text-xs font-bold"
+            title="Caching & Compatibility Reference"
+          >
+            ?
+          </button>
+        </div>
         <SliderField
           label="Max Concurrent Sequences"
           tooltip="Maximum number of sequences (requests) that can be processed simultaneously. Higher values allow more parallel users but consume more memory. For single-user local use, 1-4 is sufficient. For multi-user servers, 16-256 depending on available RAM."
@@ -269,6 +287,56 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   disabled={config.usePagedCache}
                 />
               </>
+            )}
+
+            {/* Caching Help Modal */}
+            {showCachingHelp && (
+              <Modal title="Caching & Compatibility Engine" onClose={() => setShowCachingHelp(false)} className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                <div className="space-y-6 text-sm">
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground mb-2">The Continuous Batching Engine</h3>
+                    <p className="text-muted-foreground leading-relaxed">
+                      <strong>Continuous Batching</strong> is the heart of vMLX's server performance. Unlike simple mode (which processes exactly one request at a time), continuous batching allows multiple requests to be processed simultaneously. More importantly, <strong>it is required to enable all advanced caching features</strong> (Prefix Cache, Paged Cache, KV Quantization, and Disk Cache).
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground mb-2">Prefix Caching (Memory-Aware vs Legacy)</h3>
+                    <p className="text-muted-foreground leading-relaxed mb-2">
+                      Prefix caching drastically speeds up interactions by remembering previous prompts (like a system prompt or a long document), skipping the expensive prefill phase.
+                    </p>
+                    <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
+                      <li><strong>Memory-Aware (Default):</strong> Intelligently manages the cache based on explicit memory boundaries (MB) or a percentage of total system RAM. It automatically evicts the oldest items when crossing these limits.</li>
+                      <li><strong>Legacy Entry-Count:</strong> A simpler system that just stores a fixed number of complete prompt states regardless of their size. Useful if you want strict deterministic eviction.</li>
+                    </ul>
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground mb-2">Mamba & Hybrid Compatibility</h3>
+                    <p className="text-muted-foreground leading-relaxed mb-2">
+                      Newer models like Qwen 2.5/3, Falcon Mamba, and Jamba mix standard Attention (KV cache) with SSM blocks (Mamba/Arrays cache).
+                    </p>
+                    <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
+                      <li><strong>KV Quantization:</strong> vMLX securely isolates Mamba layers. If you turn on KV Quantization (e.g. q8), it will safely compress the Attention layers while leaving the internal Mamba/SSM memory at full precision, ensuring no corruption or quality loss.</li>
+                      <li><strong>Paged Cache Requirement:</strong> Since cumulative SSM states cannot be safely stored as continuous memory-aware blocks, the engine automatically forces <code>--use-paged-cache</code> internally for these models.</li>
+                    </ul>
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground mb-2">KV Cache Quantization</h3>
+                    <p className="text-muted-foreground leading-relaxed">
+                      By converting stored prompts to q8 or q4 precision, you can reduce the cache's RAM footprint by 2-4x. <strong>This only safely compresses saved prefixes</strong>. The actual text generation continues to run at standard full precision natively in MLX.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 className="text-base font-semibold tracking-tight text-foreground mb-2">Vision-Language (VL) Models</h3>
+                    <p className="text-muted-foreground leading-relaxed">
+                      The core engine handles Vision models automatically. <strong>Prefix caching works for images too!</strong> If you repeatedly ask questions about the exact same image (like in a tool-calling flow analyzing a dashboard), the massive vision embedding prefill is cached and reused instantly.
+                    </p>
+                  </div>
+                </div>
+              </Modal>
             )}
           </>
         )}
@@ -427,13 +495,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <SliderField
           label="Default Max Tokens"
-          tooltip="Maximum number of tokens the model can generate per request. This is the server default - individual API requests can override this. Set based on your model's context window. For a 128K context model, 32768 is a reasonable default."
+          tooltip={`Maximum number of tokens the model can generate per request. This is the server default - individual API requests can override this.${detectedMaxContext ? ` Model context window: ${detectedMaxContext.toLocaleString()} tokens.` : ' Set based on your model\'s context window.'}`}
           value={config.maxTokens}
           onChange={v => onChange('maxTokens', v)}
           min={1}
-          max={262144}
+          max={detectedMaxContext || 262144}
           step={1024}
-          defaultValue={DEFAULT_CONFIG.maxTokens}
+          defaultValue={Math.min(DEFAULT_CONFIG.maxTokens, detectedMaxContext || DEFAULT_CONFIG.maxTokens)}
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="No limit"
