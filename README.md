@@ -6,76 +6,96 @@
   </picture>
 </p>
 
-# vLLM-MLX
+<p align="center">
+  <strong>Native macOS AI inference — local models, remote endpoints, zero config</strong>
+</p>
 
-**vLLM-like inference for Apple Silicon** - GPU-accelerated Text, Image, Video & Audio on Mac
+<p align="center">
+  <a href="https://vmlx.net">Website</a> · <a href="panel/CHANGELOG.md">Panel Changelog</a> · <a href="CHANGELOG.md">Engine Changelog</a> · <a href="docs/">Documentation</a>
+</p>
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Apple Silicon](https://img.shields.io/badge/Apple-Silicon-black.svg)](https://support.apple.com/en-us/HT211814)
-[![GitHub](https://img.shields.io/badge/GitHub-waybarrios%2Fvllm--mlx-blue?logo=github)](https://github.com/waybarrios/vllm-mlx)
+---
 
-## Overview
+## What is vMLX?
 
-vllm-mlx brings native Apple Silicon GPU acceleration to vLLM by integrating:
+vMLX is a native macOS application for running AI models on Apple Silicon. It bundles a custom inference engine with a full-featured desktop interface — manage sessions, chat with models, download from HuggingFace, connect to remote APIs, and use agentic tool-calling workflows.
 
-- **[MLX](https://github.com/ml-explore/mlx)**: Apple's ML framework with unified memory and Metal kernels
-- **[mlx-lm](https://github.com/ml-explore/mlx-lm)**: Optimized LLM inference with KV cache and quantization
-- **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)**: Vision-language models for multimodal inference
-- **[mlx-audio](https://github.com/Blaizzy/mlx-audio)**: Speech-to-Text and Text-to-Speech with native voices
-- **[mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings)**: Text embeddings for semantic search and RAG
+- **Local inference** with GPU acceleration via MLX
+- **Remote endpoints** — connect to any OpenAI-compatible API
+- **HuggingFace downloader** — search, download, and serve models in-app
+- **Built-in tools** — file I/O, shell, search, image reading, ask_user interrupt
+- **MCP integration** — Model Context Protocol tool servers (local sessions)
 
-## Features
+---
 
-- **Production Ready** - 827+ tests passing, extensive Unicode/emoji fix, hybrid model cache optimization
-- **Request Cancellation** - Stop inference mid-stream via API or connection close (saves GPU compute)
-- **Multimodal** - Text, Image, Video & Audio in one platform
-- **Native GPU acceleration** on Apple Silicon (M1, M2, M3, M4)
-- **Native TTS voices** - Spanish, French, Chinese, Japanese + 5 more languages
-- **OpenAI API compatible** - drop-in replacement for OpenAI client
-- **Embeddings** - OpenAI-compatible `/v1/embeddings` endpoint with mlx-embeddings
-- **Reasoning Models** - extract thinking process from Qwen3, DeepSeek-R1
-- **MCP Tool Calling** - integrate external tools via Model Context Protocol
-- **Paged KV Cache** - memory-efficient caching with prefix sharing (5-8.5x speedup)
-- **Continuous Batching** - high throughput for multiple concurrent users (2-3.4x speedup)
+## Key Features
+
+### Inference Engine (v0.2.6)
+
+| Feature | Description |
+|---------|-------------|
+| **Paged KV Cache** | Memory-efficient caching with prefix sharing and block-level reuse |
+| **KV Cache Quantization** | Q4/Q8 quantized cache storage (2–4× memory savings) |
+| **Prefix Cache** | Token-level prefix matching for fast prompt reuse across requests |
+| **Continuous Batching** | Concurrent request handling with slot management |
+| **VLM Caching** | Full KV cache pipeline for vision-language models (Qwen-VL, Gemma 3, etc.) |
+| **Mamba Hybrid Support** | Auto-detects mixed KVCache + MambaCache models (Qwen3-Coder-Next, Nemotron) |
+| **Streaming Detokenizer** | Per-request UTF-8 buffering — emoji, CJK, Arabic render correctly |
+| **Request Cancellation** | Stop inference mid-stream via API or connection close |
+| **OpenAI-Compatible API** | Chat Completions + Responses API with full streaming support |
+
+### Desktop App (Panel v0.3.10)
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-session** | Run multiple models simultaneously on different ports |
+| **Remote endpoints** | Connect to OpenAI, Groq, local vLLM, or any compatible API |
+| **HuggingFace browser** | Search, download, and install MLX models with progress tracking |
+| **Agentic tools** | File I/O, shell, search, image reading with auto-continue loops (up to 10 iterations) |
+| **Per-chat settings** | Temperature, Top P/K, Min P, Repeat Penalty, Stop Sequences, Max Tokens |
+| **Reasoning display** | Collapsible thinking sections for Qwen3, DeepSeek-R1, GLM-4.7 |
+| **Tool parsers** | hermes, pythonic, llama3, mistral, minimax, qwen3, nemotron, step3p5, and more |
+| **Auto-detection** | Reads model config JSON for automatic parser and cache type selection |
+| **Persistent history** | SQLite-backed chat history with metrics, tool calls, and reasoning content |
+| **Live metrics** | TTFT, tokens/sec, prompt processing speed, prefix cache hits |
+
+---
 
 ## Quick Start
 
-### Installation
-
-**Using uv (recommended):**
+### Desktop App (recommended)
 
 ```bash
-# Install as CLI tool (system-wide)
-uv tool install git+https://github.com/waybarrios/vllm-mlx.git
+# Clone and build
+git clone https://github.com/vmlxllm/vmlx.git
+cd vmlx/panel
 
-# Or install in a project/virtual environment
-uv pip install git+https://github.com/waybarrios/vllm-mlx.git
+# Install dependencies
+npm install
+
+# Development mode
+npm run dev
+
+# Build and install to /Applications
+bash scripts/build-and-install.sh
 ```
 
-**Using pip:**
+### Engine Only (CLI)
 
 ```bash
-# Install from GitHub
-pip install git+https://github.com/waybarrios/vllm-mlx.git
+# Install
+uv tool install git+https://github.com/vmlxllm/vmlx.git
+# or
+pip install git+https://github.com/vmlxllm/vmlx.git
 
-# Or clone and install in development mode
-git clone https://github.com/waybarrios/vllm-mlx.git
-cd vllm-mlx
-pip install -e .
-```
-
-### Start Server
-
-```bash
-# Simple mode (single user, max throughput)
+# Start server
 vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
 
-# Continuous batching (multiple users)
+# With continuous batching
 vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
 
-# With API key authentication
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --api-key your-secret-key
+# With API key
+vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --api-key your-key
 ```
 
 ### Use with OpenAI SDK
@@ -83,11 +103,7 @@ vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --api-key yo
 ```python
 from openai import OpenAI
 
-# Without API key (local development)
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
-
-# With API key (production)
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="your-secret-key")
 
 response = client.chat.completions.create(
     model="default",
@@ -96,302 +112,139 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-### Multimodal (Images & Video)
+---
+
+## API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /v1/chat/completions` | Chat Completions API (streaming) |
+| `POST /v1/responses` | Responses API (streaming) |
+| `GET /v1/models` | List loaded models |
+| `GET /health` | Server health + model info |
+| `POST /v1/mcp/execute` | Execute MCP tool |
+| `GET /v1/cache/stats` | Prefix cache statistics |
+| `POST /v1/cache/warm` | Pre-warm cache with prompt |
+| `DELETE /v1/cache` | Clear prefix cache |
+| `POST /v1/chat/completions/{id}/cancel` | Cancel inference (save GPU) |
+| `POST /v1/embeddings` | Text embeddings (mlx-embeddings) |
+
+---
+
+## Reasoning Models
+
+Extract thinking process from reasoning-capable models:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit --port 8000
-```
-
-```python
-response = client.chat.completions.create(
-    model="default",
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "What's in this image?"},
-            {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
-        ]
-    }]
-)
-```
-
-### Audio (TTS/STT)
-
-```bash
-# Install audio dependencies
-pip install vllm-mlx[audio]
-python -m spacy download en_core_web_sm
-brew install espeak-ng  # macOS, for non-English languages
-```
-
-```bash
-# Text-to-Speech (English)
-python examples/tts_example.py "Hello, how are you?" --play
-
-# Text-to-Speech (Spanish)
-python examples/tts_multilingual.py "Hola mundo" --lang es --play
-
-# List available models and languages
-python examples/tts_multilingual.py --list-models
-python examples/tts_multilingual.py --list-languages
-```
-
-**Supported TTS Models:**
-| Model | Languages | Description |
-|-------|-----------|-------------|
-| Kokoro | EN, ES, FR, JA, ZH, IT, PT, HI | Fast, 82M params, 11 voices |
-| Chatterbox | 15+ languages | Expressive, voice cloning |
-| VibeVoice | EN | Realtime, low latency |
-| VoxCPM | ZH, EN | High quality Chinese/English |
-
-### Reasoning Models
-
-Extract the thinking process from reasoning models like Qwen3 and DeepSeek-R1:
-
-```bash
-# Start server with reasoning parser
 vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 ```
 
-```python
-response = client.chat.completions.create(
-    model="default",
-    messages=[{"role": "user", "content": "What is 17 × 23?"}]
-)
+| Parser | Models | Format |
+|--------|--------|--------|
+| `qwen3` | Qwen3, QwQ, MiniMax M2/M2.5, StepFun | `<think>` / `</think>` tags |
+| `deepseek_r1` | DeepSeek-R1, Gemma 3, Phi-4 Reasoning | Lenient `<think>` (handles missing open tag) |
+| `openai_gptoss` | GLM-4.7, GLM-4.7 Flash, GLM-Z1, GPT-OSS | Harmony `<\|channel\|>analysis/final` protocol |
 
-# Access reasoning separately from the answer
-print("Thinking:", response.choices[0].message.reasoning)
-print("Answer:", response.choices[0].message.content)
-```
+---
 
-**Supported Parsers:**
-| Parser | Models | Description |
-|--------|--------|-------------|
-| `qwen3` | Qwen3, Qwen3-Coder, QwQ, MiniMax, StepFun | Strict `<think>`/`</think>` tags |
-| `deepseek_r1` | DeepSeek-R1, Gemma 3, GLM-4.7, GLM-Z1, Phi-4 Reasoning | Lenient `<think>` (handles missing open tag) |
-| `openai_gptoss` | GLM-4.7 Flash, GPT-OSS | Harmony `<\|channel\|>analysis/final` protocol |
+## Tool Calling
 
-### Embeddings
+Built-in agentic tools available in the desktop app:
 
-Generate text embeddings for semantic search, RAG, and similarity:
+| Category | Tools |
+|----------|-------|
+| **File** | read_file, write_file, edit_file, patch_file, batch_edit, copy, move, delete, create_directory, list_directory, read_image |
+| **Search** | search_files, find_files, file_info, get_diagnostics, get_tree, diff_files |
+| **Shell** | run_command, spawn_process, get_process_output |
+| **Web** | fetchUrl, brave_search |
+| **Utility** | ask_user (interactive interrupt) |
 
-```bash
-# Start server with an embedding model pre-loaded
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --embedding-model mlx-community/all-MiniLM-L6-v2-4bit
-```
+Plus MCP tool server passthrough for local sessions.
 
-```python
-# Generate embeddings using the OpenAI SDK
-embeddings = client.embeddings.create(
-    model="mlx-community/all-MiniLM-L6-v2-4bit",
-    input=["Hello world", "How are you?"]
-)
-print(f"Dimensions: {len(embeddings.data[0].embedding)}")
-```
-
-See [Embeddings Guide](docs/guides/embeddings.md) for details on supported models and lazy loading.
-
-## Production Readiness
-
-vLLM-MLX is production-ready with all critical fixes verified:
-
-✅ **Streaming Unicode** - Emoji, CJK, Arabic display correctly (no more � characters)
-✅ **Hybrid Model Cache** - Qwen3-Coder-Next cache reuse works (5-8.5x speedup)
-✅ **Memory Management** - Stable for 100k+ token contexts
-✅ **Metal GPU Timeout** - Reliable inference for 50k+ contexts
-✅ **827+ Tests Passing** - Comprehensive test coverage
-
-See [PRODUCTION_READY.md](PRODUCTION_READY.md) for deployment guidelines and [CHANGELOG.md](CHANGELOG.md) for detailed fixes.
-
-## Documentation
-
-For full documentation, see the [docs](docs/) directory:
-
-- **Getting Started**
-  - [Installation](docs/getting-started/installation.md)
-  - [Quick Start](docs/getting-started/quickstart.md)
-  - [Production Deployment](PRODUCTION_READY.md) ⭐ **NEW**
-
-- **User Guides**
-  - [OpenAI-Compatible Server](docs/guides/server.md)
-  - [Request Cancellation](docs/api/cancellation.md) ⭐ **NEW**
-  - [Python API](docs/guides/python-api.md)
-  - [Multimodal (Images & Video)](docs/guides/multimodal.md)
-  - [Audio (STT/TTS)](docs/guides/audio.md)
-  - [Embeddings](docs/guides/embeddings.md)
-  - [Reasoning Models](docs/guides/reasoning.md)
-  - [MCP & Tool Calling](docs/guides/mcp-tools.md)
-  - [Continuous Batching](docs/guides/continuous-batching.md)
-
-- **Reference**
-  - [CLI Commands](docs/reference/cli.md)
-  - [Supported Models](docs/reference/models.md)
-  - [Configuration](docs/reference/configuration.md)
-
-- **Benchmarks**
-  - [LLM Benchmarks](docs/benchmarks/llm.md)
-  - [Image Benchmarks](docs/benchmarks/image.md)
-  - [Video Benchmarks](docs/benchmarks/video.md)
-  - [Audio Benchmarks](docs/benchmarks/audio.md)
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           vLLM API Layer                                │
-│                    (OpenAI-compatible interface)                         │
-└─────────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            MLXPlatform                                  │
-│               (vLLM platform plugin for Apple Silicon)                  │
-└─────────────────────────────────────────────────────────────────────────┘
-                                   │
-        ┌─────────────┬────────────┴────────────┬─────────────┐
-        ▼             ▼                         ▼             ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│    mlx-lm     │ │   mlx-vlm     │ │   mlx-audio   │ │mlx-embeddings │
-│(LLM inference)│ │ (Vision+LLM)  │ │  (TTS + STT)  │ │ (Embeddings)  │
-└───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘
-        │             │                         │             │
-        └─────────────┴─────────────────────────┴─────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                              MLX                                        │
-│                (Apple ML Framework - Metal kernels)                      │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    vMLX Desktop App                      │
+│              (Electron + React + TypeScript)              │
+└─────────────────────────────────────────────────────────┘
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+┌──────────────────────┐  ┌──────────────────────┐
+│   Local vllm-mlx     │  │   Remote Endpoints   │
+│   (spawned process)  │  │ (OpenAI, Groq, etc.) │
+└──────────────────────┘  └──────────────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────────────────┐
+│                    vLLM-MLX Engine                        │
+│         (FastAPI + MLX inference + caching)               │
+└─────────────────────────────────────────────────────────┘
+              │
+    ┌─────────┼──────────┬──────────┐
+    ▼         ▼          ▼          ▼
+┌────────┐┌────────┐┌────────┐┌────────────┐
+│ mlx-lm ││mlx-vlm ││mlx-aud ││mlx-embed   │
+│ (LLMs) ││(Vision)││(Audio) ││(Embeddings)│
+└────────┘└────────┘└────────┘└────────────┘
+              │
+              ▼
+┌─────────────────────────────────────────────────────────┐
+│                     Apple MLX                            │
+│             (Metal GPU + Unified Memory)                 │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Performance
+---
 
-**LLM Performance (M4 Max, 128GB):**
+## Tech Stack
 
-| Model | Speed | Memory |
-|-------|-------|--------|
-| Qwen3-0.6B-8bit | 402 tok/s | 0.7 GB |
-| Llama-3.2-1B-4bit | 464 tok/s | 0.7 GB |
-| Llama-3.2-3B-4bit | 200 tok/s | 1.8 GB |
+| Layer | Technology |
+|-------|-----------|
+| Desktop app | Electron 28 + React 18 + TypeScript |
+| Styling | Tailwind CSS |
+| Database | SQLite (WAL mode, better-sqlite3) |
+| Inference engine | vLLM-MLX v0.2.6 (Python, FastAPI) |
+| ML framework | Apple MLX (Metal GPU acceleration) |
+| Build | electron-vite + electron-builder |
+| Tests | Vitest (panel: 80 tests), pytest (engine: 827+ tests) |
+| Python | Bundled relocatable Python 3.12 |
 
-**Continuous Batching (5 concurrent requests):**
+---
 
-| Model | Single | Batched | Speedup |
-|-------|--------|---------|---------|
-| Qwen3-0.6B-8bit | 328 tok/s | 1112 tok/s | **3.4x** |
-| Llama-3.2-1B-4bit | 299 tok/s | 613 tok/s | **2.0x** |
+## Recent Changes
 
-**Audio - Speech-to-Text (M4 Max, 128GB):**
+### Panel v0.3.10 (2026-03-02)
+- **Bug fix**: `abortByEndpoint()` now correctly aborts remote session chat requests
+- **HF model sizes**: Search results show model file sizes from safetensors metadata
+- **Download progress**: Shows raw status text when tqdm can't parse
+- **Test suite**: 80 tests across 3 test files (vitest)
+- **Full remote API audit**: All 12 code paths verified correct
 
-| Model | RTF* | Use Case |
-|-------|------|----------|
-| whisper-tiny | **197x** | Real-time, low latency |
-| whisper-large-v3-turbo | **55x** | Best quality/speed balance |
-| whisper-large-v3 | **24x** | Highest accuracy |
+### Engine v0.2.6 (Unreleased)
+- **VLM caching pipeline**: Paged KV cache + prefix cache + Q4/Q8 quantization for VLMs
+- **Integrated tool system audit**: Responses API tool_choice, suppress_reasoning, JSON schema validation
+- **Shell injection prevention**: `gitCommand` metacharacter blocking
+- **54 new tool format tests**
+- **Streaming Unicode fix**: Per-request detokenizer buffers multi-byte UTF-8 correctly
+- **Hybrid model cache**: Qwen3-Coder-Next, Nemotron MambaCache+KVCache reconstruction
 
-*RTF = Real-Time Factor. RTF of 100x means 1 minute transcribes in ~0.6 seconds.
+See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) for full history.
 
-See [benchmarks](docs/benchmarks/) for detailed results.
+---
 
-## Gemma 3 Support
+## Current Version
 
-vllm-mlx includes native support for Gemma 3 vision models. Gemma 3 is automatically detected as MLLM.
+**Engine v0.2.6** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
 
-### Usage
+## Links
 
-```bash
-# Start server with Gemma 3
-vllm-mlx serve mlx-community/gemma-3-27b-it-4bit --port 8000
-
-# Verify it loaded as MLLM (not LLM)
-curl http://localhost:8000/health
-# Should show: "model_type": "mllm"
-```
-
-### Long Context Patch (mlx-vlm)
-
-Gemma 3's default `sliding_window=1024` limits context to ~10K tokens on Apple Silicon (Metal GPU timeout at higher context). To enable longer context (up to ~50K tokens), patch mlx-vlm:
-
-**Location:** `~/.../site-packages/mlx_vlm/models/gemma3/language.py`
-
-Find the `make_cache` method and replace with:
-
-```python
-def make_cache(self):
-    import os
-    # Set GEMMA3_SLIDING_WINDOW=8192 for ~40K context
-    # Set GEMMA3_SLIDING_WINDOW=0 for ~50K context (full KVCache)
-    sliding_window = int(os.environ.get('GEMMA3_SLIDING_WINDOW', self.config.sliding_window))
-
-    caches = []
-    for i in range(self.config.num_hidden_layers):
-        if (
-            i % self.config.sliding_window_pattern
-            == self.config.sliding_window_pattern - 1
-        ):
-            caches.append(KVCache())
-        elif sliding_window == 0:
-            caches.append(KVCache())  # Full context for all layers
-        else:
-            caches.append(RotatingKVCache(max_size=sliding_window, keep=0))
-    return caches
-```
-
-**Usage:**
-
-```bash
-# Default (~10K max context)
-vllm-mlx serve mlx-community/gemma-3-27b-it-4bit --port 8000
-
-# Extended context (~40K max)
-GEMMA3_SLIDING_WINDOW=8192 vllm-mlx serve mlx-community/gemma-3-27b-it-4bit --port 8000
-
-# Maximum context (~50K max)
-GEMMA3_SLIDING_WINDOW=0 vllm-mlx serve mlx-community/gemma-3-27b-it-4bit --port 8000
-```
-
-**Benchmark Results (M4 Max 128GB):**
-
-| Setting | Max Context | Memory |
-|---------|-------------|--------|
-| Default (1024) | ~10K tokens | ~16GB |
-| `GEMMA3_SLIDING_WINDOW=8192` | ~40K tokens | ~25GB |
-| `GEMMA3_SLIDING_WINDOW=0` | ~50K tokens | ~35GB |
-
-## Contributing
-
-We welcome contributions! See [Contributing Guide](docs/development/contributing.md) for details.
-
-- Bug fixes and improvements
-- Performance optimizations
-- Documentation improvements
-- Benchmarks on different Apple Silicon chips
-
-Submit PRs to: [https://github.com/waybarrios/vllm-mlx](https://github.com/waybarrios/vllm-mlx)
+- **Website**: [vmlx.net](https://vmlx.net)
+- **Contact**: admin@vmlx.net
 
 ## License
 
-Apache 2.0 - see [LICENSE](LICENSE) for details.
-
-## Citation
-
-If you use vLLM-MLX in your research or project, please cite:
-
-```bibtex
-@software{vllm_mlx2025,
-  author = {Barrios, Wayner},
-  title = {vLLM-MLX: Apple Silicon MLX Backend for vLLM},
-  year = {2025},
-  url = {https://github.com/waybarrios/vllm-mlx},
-  note = {Native GPU-accelerated LLM and vision-language model inference on Apple Silicon}
-}
-```
-
-## Acknowledgments
-
-- [MLX](https://github.com/ml-explore/mlx) - Apple's ML framework
-- [mlx-lm](https://github.com/ml-explore/mlx-lm) - LLM inference library
-- [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) - Vision-language models
-- [mlx-audio](https://github.com/Blaizzy/mlx-audio) - Text-to-Speech and Speech-to-Text
-- [mlx-embeddings](https://github.com/Blaizzy/mlx-embeddings) - Text embeddings
-- [vLLM](https://github.com/vllm-project/vllm) - High-throughput LLM serving
+Apache 2.0 — see [LICENSE](LICENSE) for details.
