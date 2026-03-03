@@ -287,6 +287,21 @@ When a specific parser (e.g., `--tool-call-parser qwen`) doesn't find tool calls
 
 This means you can safely select a specific parser even if the model occasionally uses a different format.
 
+## Tool Fallback Injection
+
+Some models' chat templates silently drop tool definitions under certain conditions (e.g., Qwen 3.5 family when `enable_thinking=False`). vllm-mlx automatically detects this and injects tool schemas as a system prompt fallback:
+
+1. After applying the chat template, vllm-mlx checks if the first tool name appears in the rendered prompt
+2. If tools are missing, it injects an XML `<tool_call>` instruction set into the system message
+3. The template is re-applied with the modified messages
+
+This is **model-agnostic** — it works for any model family, including:
+- Qwen 2.5, 3, 3.5, and VL variants (when thinking is disabled)
+- Models without native tool-aware templates
+- Custom fine-tuned models
+
+No user configuration is needed — the fallback activates automatically when tools are requested but the template drops them.
+
 ## CLI Reference
 
 | Option | Description |

@@ -21,6 +21,85 @@ from jsonschema import validate, ValidationError
 from .models import FunctionCall, ResponseFormat, ToolCall
 
 
+def check_and_inject_fallback_tools(
+    prompt: Optional[str],
+    messages: List[Dict[str, Any]],
+    template_tools: Optional[List[dict]],
+    tokenizer: Any,
+    template_kwargs: dict
+) -> Optional[str]:
+    """
+    Check if the chat template silently dropped tool definitions, and if so,
+    re-apply the template with an injected system message containing the tools.
+    
+    This fixes models like Qwen 2.5/3 where disabling reasoning causes the 
+    chat template to completely ignore the tools kwarg, as well as generic models
+    without tool-aware templates.
+    """
+    if not template_tools or prompt is None:
+        return prompt
+        
+    # Check if at least one tool name made it into the prompt
+    tool_names = [t.get("function", {}).get("name", "") for t in template_tools]
+    tool_names = [name for name in tool_names if name]
+    
+    if not tool_names:
+        return prompt
+        
+    # If the first tool name is in the prompt, we assume the template handled tools correctly
+    if tool_names[0] in prompt:
+        return prompt
+        
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.warning("Chat template silently dropped tool definitions. Injecting fallback tool schema.")
+    
+    # Format fallback tool schema
+    tool_descs = []
+    for tool in template_tools:
+        func = tool.get("function", {})
+        tool_descs.append({
+            "name": func.get("name", ""),
+            "description": func.get("description", ""),
+            "parameters": func.get("parameters", {})
+        })
+        
+    tool_prompt = (
+        "You are an expert assistant with access to tools.\n\n"
+        "# Available Tools\n\n"
+        "You have access to the following tools:\n\n"
+        + json.dumps(tool_descs, indent=2) + "\n\n"
+        "When you need to use a tool, you must output a tool call in exactly this XML format:\n"
+        "<tool_call>\n"
+        '{"name": "FUNCTION_NAME", "arguments": {"arg1": "value"}}\n'
+        "</tool_call>"
+    )
+    
+    # Inject into messages
+    messages_copy = [dict(m) for m in messages]
+    injected = False
+    for msg in messages_copy:
+        if msg.get("role") == "system":
+            msg["content"] = (msg.get("content") or "") + "\n\n" + tool_prompt
+            injected = True
+            break
+            
+    if not injected:
+        messages_copy.insert(0, {"role": "system", "content": tool_prompt})
+        
+    # Re-apply template with modified messages
+    # Remove tools from kwargs so template doesn't try to format them again
+    safe_kwargs = dict(template_kwargs)
+    safe_kwargs.pop("tools", None)
+    
+    try:
+        new_prompt = tokenizer.apply_chat_template(messages_copy, **safe_kwargs)
+        return new_prompt
+    except Exception as e:
+        logger.error(f"Failed to apply template with injected tools: {e}")
+        return prompt
+
+
 def _parse_raw_json_tool_calls(text: str) -> Optional[List[dict]]:
     """
     Parse raw JSON tool calls from model output.

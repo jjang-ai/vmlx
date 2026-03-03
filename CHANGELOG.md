@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Duplicate content when reasoning disabled**: When reasoning was turned off (`enable_thinking=False`) but the model still produced reasoning text, content appeared twice. Root cause: end-of-stream tool call extraction re-emitted `cleaned_text` that was already streamed (either as content or as redirected reasoning). Fix: track `accumulated_content` during streaming and subtract already-emitted content from the final emission.
 - **False-positive tool call buffer flush**: When tool call markers were detected but no actual tool calls were parsed, the entire `accumulated_text` was flushed as content — including text that was already streamed. Fix: only flush the un-streamed portion.
 - **Responses API `enable_thinking` guard**: Added missing `_effective_thinking is False` guard to Responses API streaming path for parity with Chat Completions.
+- **Tool fallback injection for broken templates**: Some model chat templates silently drop tool schemas when `enable_thinking=False` (e.g., Qwen 3.5 family). Added `check_and_inject_fallback_tools()` that detects when tools are missing from the rendered prompt and injects a standard XML `<tool_call>` instruction set into the system message. Works for all models — not just Qwen.
 
 #### Integrated Tool Call System — Deep Audit & Fixes (2026-03-02)
 

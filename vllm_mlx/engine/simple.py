@@ -391,6 +391,11 @@ class SimpleEngine(BaseEngine):
                                 continue
                         if prompt is None:
                             prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
+                            
+                    from ..api.tool_calling import check_and_inject_fallback_tools
+                    prompt = check_and_inject_fallback_tools(
+                        prompt, messages, template_tools, tokenizer, tpl_kwargs
+                    )
                 else:
                     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                     prompt += "\nassistant:"
@@ -631,39 +636,6 @@ class SimpleEngine(BaseEngine):
                     except (TypeError, Exception):
                         continue
 
-                # If progressive stripping didn't work, fall through to tool injection
-                if prompt is not None:
-                    pass  # Already resolved above
-                elif had_tools and template_tools:
-                    import json
-                    tool_descs = []
-                    for tool in template_tools:
-                        func = tool.get("function", {})
-                        tool_descs.append({
-                            "name": func.get("name", ""),
-                            "description": func.get("description", ""),
-                            "parameters": func.get("parameters", {})
-                        })
-                    tool_prompt = (
-                        "# Available Tools\n\n"
-                        "You have access to the following tools:\n\n"
-                        + json.dumps(tool_descs, indent=2) + "\n\n"
-                        "When you need to use a tool, output a tool call in this format:\n"
-                        "<tool_call>\n<function=FUNCTION_NAME>\n"
-                        "<parameter=PARAM_NAME>value</parameter>\n"
-                        "</function>\n</tool_call>"
-                    )
-                    messages = [dict(m) for m in messages]  # Copy to avoid mutating caller
-                    injected = False
-                    for msg in messages:
-                        if msg.get("role") == "system":
-                            msg["content"] = (msg.get("content") or "") + "\n\n" + tool_prompt
-                            injected = True
-                            break
-                    if not injected:
-                        messages.insert(0, {"role": "system", "content": tool_prompt})
-                    logger.info("Injected tool definitions into system prompt (template doesn't support tools kwarg)")
-
                 if prompt is None:
                     try:
                         prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
@@ -672,6 +644,11 @@ class SimpleEngine(BaseEngine):
                         # Last resort: manual prompt formatting
                         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                         prompt += "\nassistant:"
+                        
+            from ..api.tool_calling import check_and_inject_fallback_tools
+            prompt = check_and_inject_fallback_tools(
+                prompt, messages, template_tools, tokenizer, template_kwargs
+            )
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
             prompt += "\nassistant:"
