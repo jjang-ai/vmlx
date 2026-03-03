@@ -2679,7 +2679,7 @@ async def stream_chat_completion(
                         ChatCompletionChunkChoice(
                             delta=ChatCompletionChunkDelta(
                                 content=emit_content,
-                                reasoning_content=emit_reasoning,
+                                reasoning=emit_reasoning,
                             ),
                             finish_reason=output.finish_reason if output.finished else None,
                         )
