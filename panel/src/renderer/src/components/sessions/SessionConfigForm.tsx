@@ -70,7 +70,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   enableAutoToolChoice: false,
   toolCallParser: 'auto',
   reasoningParser: 'auto',
-  isMultimodal: false,
+  isMultimodal: undefined,
   additionalArgs: ''
 }
 
@@ -461,14 +461,22 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           onChange={v => onChange('reasoningParser', v)}
           options={REASONING_PARSER_OPTIONS}
         />
-        <CheckField
+        <SelectField
           label="Multimodal Support (VLM)"
-          tooltip="Enable Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. This activates the MLLM scheduler which handles image/video inputs alongside text. Auto-detected from config.json (vision_config presence), but you can manually enable it here if auto-detection fails. VLMs fully support prefix cache, paged KV cache, and KV cache quantization."
-          checked={config.isMultimodal ?? false}
-          onChange={v => onChange('isMultimodal', v)}
+          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto: detected from config.json (vision_config presence). Force On: always use MLLM scheduler. Force Off: never use MLLM scheduler even if auto-detected."
+          value={config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
+          onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
+          options={[
+            { value: 'auto', label: 'Auto (detect from model)' },
+            { value: 'on', label: 'Force On' },
+            { value: 'off', label: 'Force Off' },
+          ]}
         />
-        {config.isMultimodal && (
-          <InfoNote text="VLM mode active — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support. Continuous batching for VLMs is handled internally by the MLLM scheduler." />
+        {config.isMultimodal === true && (
+          <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
+        )}
+        {config.isMultimodal === false && (
+          <InfoNote text="VLM mode forced OFF — auto-detection is bypassed. Use this only if the model is incorrectly detected as multimodal." />
         )}
       </Section>
 
@@ -768,6 +776,19 @@ export function CheckField({ label, tooltip, checked, onChange, disabled }: {
       <span className="text-sm">{label}</span>
       {tooltip && <Tooltip text={tooltip} />}
     </label>
+  )
+}
+
+export function SelectField({ label, tooltip, value, onChange, options, disabled }: {
+  label: string; tooltip?: string; value: string; onChange: (v: string) => void
+  options: { value: string; label: string }[]; disabled?: boolean
+}) {
+  return (
+    <Field label={label} tooltip={tooltip}>
+      <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="cfg-input">
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </Field>
   )
 }
 

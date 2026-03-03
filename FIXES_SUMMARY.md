@@ -64,9 +64,28 @@
 
 ---
 
+### 5. Test Suite Alignment (v0.2.6) ✅
+**The Problem**: ~50 test failures across 7 test files due to API drift between implementation and tests
+
+**What Was Fixed**:
+- `test_model_config_registry.py` — Complete rewrite: tests used old regex `pattern` API, implementation uses `model_types` list with `load_config` disk lookup
+- `test_api_models.py` — Added `reasoning`/`reasoning_content` computed field to `ChatCompletionChunkDelta`
+- `test_api_utils.py` — Added `MLLM_PATTERNS` list (25+ regex patterns) for remote model name detection fallback
+- `test_reasoning_parser.py` — Fixed by `ChatCompletionChunkDelta.reasoning` field addition
+- `test_platform.py` — Created `vllm_mlx/platform.py` re-export shim; added pytest.skip guards for torch dependency
+- `test_memory_cache.py` — Added `remove()` and `reset_stats()` methods to `MemoryAwarePrefixCache`
+- `test_mllm_cache.py` — Aligned order-dependent hash tests with VLM image order semantics
+- `test_server.py` — Replaced deprecated `asyncio.get_event_loop().run_until_complete()` with `asyncio.run()`
+
+**Files Modified**: `api/models.py`, `api/utils.py`, `platform.py` (new), `memory_cache.py`, `model_config_registry.py`, + 7 test files
+
+**Impact**: **351 tests passing, 0 failures**
+
+---
+
 ## 📊 Verification
 
-✅ **827 tests passing**
+✅ **351 tests passing** (all test files, 0 failures)
 ✅ **Emoji streaming verified** (👋🌟🎉 no replacement chars)
 ✅ **CJK streaming verified** (你好, こんにちは, 안녕하세요)
 ✅ **Arabic streaming verified** (مرحبا)
@@ -85,7 +104,7 @@ cd /Users/eric/mlx/vllm-mlx
 
 ### Run Tests
 ```bash
-pytest tests/ -q  # Should show 813 passed
+pytest tests/ -q  # Should show 351 passed
 ```
 
 ### Start Production Server
@@ -160,7 +179,7 @@ INFO:vllm_mlx.scheduler:Request <id>: paged cache hit, 15 tokens in 1 blocks, 0 
 Before deploying:
 
 - [ ] Run `./verify_fixes.sh` - should show "ALL FIXES PRESENT (4/4)"
-- [ ] Run `pytest tests/ -q` - should show "813 passed"
+- [ ] Run `pytest tests/ -q` - should show "351 passed"
 - [ ] Test emoji streaming - no `�` characters
 - [ ] Test cache hits - should be 5-8x faster than first request
 - [ ] Configure `--api-key` for production security

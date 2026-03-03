@@ -344,13 +344,30 @@ class BatchedEngine(BaseEngine):
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
             except (TypeError, Exception) as template_err:
-                logger.warning(
-                    f"Chat template first attempt failed (retrying with fewer kwargs): {template_err}"
-                )
-                for key in list(template_kwargs.keys()):
-                    if key not in ("tokenize", "add_generation_prompt"):
-                        del template_kwargs[key]
-                prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                # Progressively strip non-essential kwargs to preserve tools/thinking
+                # when only extra kwargs (e.g. thinking_budget) cause failures.
+                # Strip order: extra kwargs first, then tools, then enable_thinking.
+                strip_order = [
+                    k for k in template_kwargs
+                    if k not in ("tokenize", "add_generation_prompt")
+                ]
+                # Reverse so we strip least important first (extra kwargs added last)
+                prompt = None
+                for key in reversed(strip_order):
+                    del template_kwargs[key]
+                    try:
+                        prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                        stripped = [k for k in strip_order if k not in template_kwargs]
+                        logger.warning(
+                            f"Chat template succeeded after stripping: {stripped} "
+                            f"(original error: {template_err})"
+                        )
+                        break
+                    except (TypeError, Exception):
+                        continue
+                if prompt is None:
+                    # All kwargs stripped and still failing — last resort
+                    prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
                 
             if enable_thinking is False and prompt.endswith("<think>\n"):
                 prompt = prompt[:-8]
@@ -485,6 +502,7 @@ class BatchedEngine(BaseEngine):
                 temperature=temperature,
                 top_p=top_p,
                 request_id=request_id,
+                stop=stop,
                 top_k=kwargs.get("top_k", 0),
                 min_p=kwargs.get("min_p", 0.0),
                 repetition_penalty=kwargs.get("repetition_penalty", 1.0),
@@ -710,10 +728,17 @@ class BatchedEngine(BaseEngine):
     def get_cache_stats(self) -> dict[str, Any] | None:
         """Get cache statistics."""
         if self._mllm_scheduler:
-            # Return batch generator's vision cache stats (the actually-used cache)
+            stats = {}
+            # Vision cache stats
             if self._mllm_scheduler.batch_generator:
-                return self._mllm_scheduler.batch_generator.get_vision_cache_stats()
-            return None
+                stats.update(
+                    self._mllm_scheduler.batch_generator.get_vision_cache_stats()
+                )
+            # Paged cache stats
+            if self._mllm_scheduler.block_aware_cache is not None:
+                paged_stats = self._mllm_scheduler.block_aware_cache.get_stats()
+                stats.update(paged_stats)
+            return stats if stats else None
         elif self._engine:
             return self._engine.get_cache_stats()
         return None

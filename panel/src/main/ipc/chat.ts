@@ -149,7 +149,9 @@ const SHELL_TOOLS = new Set(['run_command', 'spawn_process', 'get_process_output
 const DDG_SEARCH_TOOLS = new Set(['ddg_search'])
 const FETCH_TOOLS = new Set(['fetch_url'])
 const GIT_TOOLS = new Set(['git'])
-const UTILITY_TOOLS = new Set(['count_tokens', 'clipboard_read', 'clipboard_write', 'ask_user'])
+const UTILITY_TOOLS = new Set(['count_tokens', 'clipboard_read', 'clipboard_write'])
+// ask_user is intentionally excluded from UTILITY_TOOLS — it's a core IPC tool that should
+// always be available regardless of the utilityToolsEnabled toggle.
 
 /** Filter BUILTIN_TOOLS based on per-category toggle overrides */
 function filterTools(overrides: any): any[] {
@@ -748,12 +750,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
           if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
           if (overrides?.builtinToolsEnabled) {
-            obj.tools = filterTools(overrides).map(t => ({
-              type: 'function',
-              name: t.function.name,
-              description: t.function.description,
-              parameters: t.function.parameters
-            }))
+            // Chat Completions API: tools must be in OpenAI format with "function" wrapper
+            // e.g. {"type": "function", "function": {"name": ..., "parameters": ...}}
+            obj.tools = filterTools(overrides)
           }
           // enable_thinking: sent to both local and remote (some providers support it)
           obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
@@ -1236,6 +1235,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           })
         }
 
+        const pendingImageDataUrls: string[] = []
         for (const tc of receivedToolCalls) {
           // Check abort between each tool — don't make user wait for all tools to finish
           if (abortController.signal.aborted) throw Object.assign(new Error('AbortError'), { name: 'AbortError' })
@@ -1286,6 +1286,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                 console.log(`[CHAT] Builtin tool: ${tc.function.name}`)
                 const result = await executeBuiltinTool(tc.function.name, toolArgs, workDir, overrides?.toolResultMaxChars)
                 resultText = result.content
+                // For read_image: inject image as multimodal content for VLM follow-ups
+                if (result.imageDataUrl) {
+                  pendingImageDataUrls.push(result.imageDataUrl)
+                }
                 emitToolStatus(result.is_error ? 'error' : 'result', tc.function.name, resultText, toolIteration)
               }
             } else if (isRemote) {
@@ -1328,6 +1332,18 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           requestMessages.push(useResponsesApi
             ? { type: 'function_call_output', call_id: tc.id, output: resultText }
             : { role: 'tool', tool_call_id: tc.id, content: resultText })
+        }
+
+        // Inject images from read_image tool results as multimodal content parts.
+        // VL models can only process images in content arrays, not in tool result strings.
+        if (pendingImageDataUrls.length > 0) {
+          const imageParts: any[] = pendingImageDataUrls.map(url => ({
+            type: 'image_url',
+            image_url: { url }
+          }))
+          imageParts.push({ type: 'text', text: 'Here are the images from the tool results above.' })
+          requestMessages.push({ role: 'user', content: imageParts })
+          console.log(`[CHAT] Injected ${pendingImageDataUrls.length} image(s) as multimodal content for VLM`)
         }
       }
 

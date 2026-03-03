@@ -83,6 +83,30 @@ def serve_command(args):
     else:
         server._reasoning_parser = None
 
+    # Auto-apply tool/reasoning parsers from model config registry when CLI
+    # flags were not explicitly set.  This lets known models "just work" for
+    # direct CLI users who don't pass --tool-call-parser / --reasoning-parser.
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc = get_model_config_registry().lookup(args.model)
+        if _mc.family_name != "unknown":
+            # Auto-apply tool parser
+            if not server._tool_call_parser and _mc.tool_parser:
+                server._tool_call_parser = _mc.tool_parser
+                server._enable_auto_tool_choice = True
+                logger.info(f"Auto-configured tool parser from registry: {_mc.tool_parser}")
+            # Auto-apply reasoning parser
+            if not server._reasoning_parser and _mc.reasoning_parser:
+                try:
+                    from .reasoning import get_parser
+                    _rp_cls = get_parser(_mc.reasoning_parser)
+                    server._reasoning_parser = _rp_cls()
+                    logger.info(f"Auto-configured reasoning parser from registry: {_mc.reasoning_parser}")
+                except Exception as e:
+                    logger.warning(f"Failed to auto-configure reasoning parser '{_mc.reasoning_parser}': {e}")
+    except Exception as e:
+        logger.debug(f"Registry auto-apply skipped: {e}")
+
     # Security summary at startup
     print("=" * 60)
     print("SECURITY CONFIGURATION")

@@ -51,6 +51,39 @@ def clean_output_text(text: str) -> str:
 # Model Detection
 # =============================================================================
 
+# Regex patterns for detecting MLLM/VLM models by name.
+# Used as a fallback when config.json and model registry are unavailable
+# (e.g., remote HuggingFace model names without local config).
+MLLM_PATTERNS = [
+    r"qwen.*vl",
+    r"qwen3_5",
+    r"llava",
+    r"idefics",
+    r"paligemma",
+    r"gemma.?3(?!_text)",  # gemma3 but not gemma3_text
+    r"medgemma",
+    r"pixtral",
+    r"molmo",
+    r"phi.?3.?vision",
+    r"phi4mm",
+    r"cogvlm",
+    r"internvl",
+    r"deepseek.?vl",
+    r"florence",
+    r"minicpm.?v",
+    r"smolvlm",
+    r"step1v",
+    r"internlm.?xcomposer",
+    r"bunny",
+    r"fuyu",
+    r"kosmos",
+    r"blip",
+    r"minigpt",
+    r"glm.?4v",
+]
+
+_MLLM_PATTERN_RE = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
+
 
 def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
@@ -58,7 +91,8 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
 
     Primary check: force_mllm flag (highest priority)
     Secondary check: reads the model's config.json for vision_config presence.
-    Fallback: uses the model config registry and pattern matching for remote models.
+    Tertiary: uses the model config registry.
+    Fallback: regex pattern matching on model name.
 
     Args:
         model_name: HuggingFace model name or local path
@@ -83,7 +117,7 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         except Exception:
             pass  # Fall through to registry
 
-    # Fallback for remote HuggingFace model names: use registry
+    # Secondary: use model config registry (reads model_type from config.json)
     try:
         from ..model_config_registry import get_model_config_registry
 
@@ -94,7 +128,8 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     except Exception:
         pass  # Fall through to pattern matching
 
-    return False
+    # Fallback: regex pattern matching on model name
+    return bool(_MLLM_PATTERN_RE.search(model_name))
 
 
 # Backwards compatibility alias

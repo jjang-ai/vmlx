@@ -102,6 +102,9 @@ class MLLMRequest:
     num_prompt_tokens: int = 0
     num_output_tokens: int = 0
 
+    # Error recovery
+    _retry_count: int = 0
+
 
 @dataclass
 class MLLMSchedulerOutput:
@@ -441,6 +444,78 @@ class MLLMScheduler:
                 result.append(layer_cache)
         return result
 
+    def _truncate_hybrid_cache(
+        self, raw_cache: List[Any], prompt_len: int
+    ) -> Optional[List[Any]]:
+        """
+        Truncate cache for hybrid models (MambaCache + KVCache layers).
+
+        Unlike the LLM scheduler's _truncate_cache_to_prompt_length, this method
+        handles hybrid models by:
+        - Truncating KVCache layers normally (to prompt_len - 1)
+        - Passing MambaCache layers through unchanged (they're cumulative state)
+
+        MambaCache layers will be skipped during _extract_cache_states() since
+        they can't be sliced into blocks. Only KVCache layers are stored.
+        """
+        target_len = prompt_len - 1
+        if not raw_cache or target_len <= 0:
+            return None
+
+        truncated = []
+        for layer_cache in raw_cache:
+            if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
+                try:
+                    k = layer_cache.keys
+                    v = layer_cache.values
+
+                    if isinstance(k, tuple):
+                        # QuantizedKVCache
+                        try:
+                            from mlx_lm.models.cache import QuantizedKVCache
+                        except ImportError:
+                            return None
+                        safe_target = min(target_len, k[0].shape[-2])
+                        if safe_target <= 0:
+                            return None
+                        new_cache = QuantizedKVCache(
+                            group_size=layer_cache.group_size,
+                            bits=layer_cache.bits,
+                        )
+                        new_cache.keys = tuple(t[..., :safe_target, :] for t in k)
+                        new_cache.values = tuple(t[..., :safe_target, :] for t in v)
+                        new_cache.offset = safe_target
+                        truncated.append(new_cache)
+                    else:
+                        # Standard KVCache
+                        from mlx_lm.models.cache import KVCache
+                        new_cache = KVCache()
+                        ndim = k.ndim
+                        if ndim == 4:
+                            new_cache.keys = k[:, :, :target_len, :]
+                            new_cache.values = v[:, :, :target_len, :]
+                        elif ndim == 3:
+                            new_cache.keys = k[:, :target_len, :]
+                            new_cache.values = v[:, :target_len, :]
+                        else:
+                            return None
+                        new_cache.offset = target_len
+                        truncated.append(new_cache)
+                except Exception as e:
+                    logger.warning(f"Failed to truncate KVCache layer: {e}")
+                    return None
+            elif hasattr(layer_cache, "cache") and isinstance(
+                getattr(layer_cache, "cache", None), list
+            ):
+                # MambaCache: pass through unchanged — will be skipped
+                # during _extract_cache_states() since it can't be blocked
+                truncated.append(layer_cache)
+            else:
+                # Unknown cache type — skip this layer
+                truncated.append(layer_cache)
+
+        return truncated
+
     def _extract_cache_states(self, raw_cache: List[Any]) -> List[Dict[str, Any]]:
         """
         Extract actual tensor state from each layer cache for paged storage.
@@ -457,18 +532,19 @@ class MLLMScheduler:
         extracted = []
         for i, layer_cache in enumerate(raw_cache):
             try:
-                if hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
+                # Check MambaCache/ArraysCache FIRST: they also have state/meta_state
+                # but their .cache attribute is a list (cumulative state, can't be blocked)
+                if hasattr(layer_cache, "cache") and isinstance(
+                    getattr(layer_cache, "cache", None), list
+                ):
+                    # MambaCache/ArraysCache: cumulative state, skip for paged storage
+                    continue
+                elif hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
                     extracted.append({
                         "state": layer_cache.state,
                         "meta_state": layer_cache.meta_state,
                         "class_name": type(layer_cache).__name__,
                     })
-                elif hasattr(layer_cache, "cache") and isinstance(
-                    getattr(layer_cache, "cache", None), list
-                ):
-                    # MambaCache/ArraysCache: cumulative state, skip for paged storage
-                    # (cannot be sliced into blocks)
-                    continue
                 else:
                     logger.debug(
                         f"VLM cache layer {i} ({type(layer_cache).__name__}) "
@@ -517,6 +593,10 @@ class MLLMScheduler:
         """
         from mlx_lm.sample_utils import make_sampler
 
+        # If no sampling params provided and generator exists, keep current
+        if sampling_params is None and self.batch_generator is not None:
+            return
+
         # Use provided params or sensible defaults
         temp = sampling_params.temperature if sampling_params else 0.7
         top_p = sampling_params.top_p if sampling_params else 0.9
@@ -540,15 +620,15 @@ class MLLMScheduler:
             )
             return
 
-        sampler = make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k)
-
-        # Build logits processors for repetition penalty
-        logits_processors = None
-        if rep_penalty and rep_penalty != 1.0:
-            from mlx_lm.sample_utils import make_logits_processors
-            logits_processors = make_logits_processors(
-                repetition_penalty=rep_penalty,
+        # Clear paged cache when BatchGenerator changes — cache objects are
+        # tied to their generator instance
+        if self.batch_generator is not None and self.block_aware_cache is not None:
+            logger.debug(
+                "Clearing paged cache: MLLM BatchGenerator being recreated"
             )
+            self.block_aware_cache.clear()
+
+        sampler = make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k)
 
         self.batch_generator = MLLMBatchGenerator(
             model=self.model,
@@ -557,7 +637,6 @@ class MLLMScheduler:
             max_tokens=self.config.default_max_tokens,
             stop_tokens=self.stop_tokens,
             sampler=sampler,
-            logits_processors=logits_processors,
             prefill_batch_size=self.config.prefill_batch_size,
             completion_batch_size=self.config.completion_batch_size,
             prefill_step_size=self.config.prefill_step_size,
@@ -577,6 +656,7 @@ class MLLMScheduler:
         temperature: float = 0.7,
         top_p: float = 0.9,
         request_id: Optional[str] = None,
+        stop: Optional[List[str]] = None,
         **kwargs,
     ) -> str:
         """
@@ -590,6 +670,7 @@ class MLLMScheduler:
             temperature: Sampling temperature
             top_p: Top-p sampling
             request_id: Optional custom request ID
+            stop: Stop sequences (string patterns)
             **kwargs: Additional generation parameters
 
         Returns:
@@ -605,6 +686,8 @@ class MLLMScheduler:
             top_k=kwargs.get("top_k", 0),
             min_p=kwargs.get("min_p", 0.0),
             repetition_penalty=kwargs.get("repetition_penalty", 1.0),
+            stop=stop or [],
+            stop_token_ids=kwargs.get("stop_token_ids", []),
         )
 
         request = MLLMRequest(
@@ -635,7 +718,7 @@ class MLLMScheduler:
         Returns:
             True if request was found and aborted
         """
-        request = self.requests.get(request_id)
+        request = self.requests.pop(request_id, None)
         if request is None:
             return False
 
@@ -657,6 +740,18 @@ class MLLMScheduler:
         if request_id in self.running:
             del self.running[request_id]
 
+        # Clean up paged cache block tables (prevent leak)
+        if self.block_aware_cache is not None:
+            self.block_aware_cache._request_tables.pop(request_id, None)
+            if self.paged_cache_manager is not None:
+                self.paged_cache_manager.detach_request(request_id)
+
+        # Clean up streaming detokenizer
+        self._cleanup_detokenizer(request_id)
+
+        # Clear extracted cache GC reference
+        request._extracted_cache = None
+
         # Mark as aborted
         request.status = RequestStatus.FINISHED_ABORTED
         self.finished_req_ids.add(request_id)
@@ -666,6 +761,14 @@ class MLLMScheduler:
             try:
                 self.output_queues[request_id].put_nowait(None)
             except asyncio.QueueFull:
+                pass
+
+        # Free Metal memory when all requests done
+        if not self.running:
+            try:
+                import mlx.core as mx
+                mx.clear_memory_cache()
+            except Exception:
                 pass
 
         logger.debug(f"Aborted request {request_id}")
@@ -718,10 +821,18 @@ class MLLMScheduler:
 
             request.status = RequestStatus.RUNNING
             self.running[request.request_id] = request
+            # NOTE: prompt token count is NOT known yet at scheduling time
+            # (it comes from batch generator's first response).
+            # Tracking is done at request finish time instead.
             scheduled.append(request)
 
-        # Insert into batch generator
+        # Merge per-request stop_token_ids into batch generator stop tokens
         if batch_requests and self.batch_generator is not None:
+            for request in scheduled:
+                if request.sampling_params.stop_token_ids:
+                    self.batch_generator.stop_tokens.update(
+                        request.sampling_params.stop_token_ids
+                    )
             uids = self.batch_generator.insert(batch_requests)
 
             for uid, request in zip(uids, scheduled):
@@ -763,6 +874,12 @@ class MLLMScheduler:
             if request is None:
                 continue
 
+            # Set prompt token count from first response (batch generator knows actual count)
+            if request.num_prompt_tokens == 0:
+                prompt_ids = getattr(response, "prompt_token_ids", None)
+                if prompt_ids:
+                    request.num_prompt_tokens = len(prompt_ids)
+
             # Append token to request
             request.output_tokens.append(response.token)
             request.num_output_tokens = len(request.output_tokens)
@@ -773,10 +890,23 @@ class MLLMScheduler:
             # Check if this is a stop token BEFORE adding to detokenizer
             # so stop tokens (e.g. <|im_end|>) don't leak into new_text
             is_stop = response.finish_reason == "stop"
+            string_stop_truncate = -1  # >=0 when string stop matched
 
             if not is_stop:
                 detok.add_token(response.token)
                 new_text = detok.last_segment
+
+                # Post-decode string stop sequence check.
+                # MLLMBatchGenerator only handles EOS stop tokens;
+                # string stop sequences need decoded-text matching.
+                if request.sampling_params.stop:
+                    full_text = detok.text
+                    for stop_str in request.sampling_params.stop:
+                        idx = full_text.find(stop_str)
+                        if idx >= 0:
+                            string_stop_truncate = idx
+                            new_text = ""  # suppress partial output
+                            break
             else:
                 new_text = ""
 
@@ -790,33 +920,52 @@ class MLLMScheduler:
                 completion_tokens=request.num_output_tokens,
             )
 
+            # Determine effective finish reason (string stop overrides)
+            finish_reason = response.finish_reason
+            if string_stop_truncate >= 0:
+                finish_reason = "stop"
+
             # Check if finished
-            if response.finish_reason is not None:
+            if finish_reason is not None:
                 if getattr(response, "prompt_cache", None) is not None:
                     request._extracted_cache = response.prompt_cache
                     request._extracted_tokens = getattr(response, "prompt_token_ids", [])
 
-                if response.finish_reason == "stop":
+                if finish_reason == "stop":
                     request.status = RequestStatus.FINISHED_STOPPED
-                elif response.finish_reason == "length":
+                elif finish_reason == "length":
                     request.status = RequestStatus.FINISHED_LENGTH_CAPPED
 
                 output.finished = True
-                output.finish_reason = response.finish_reason
+                output.finish_reason = finish_reason
                 finished_ids.add(request_id)
 
                 # Finalize detokenizer and use its complete text
                 detok.finalize()
-                output.output_text = detok.text
+                if string_stop_truncate >= 0:
+                    output.output_text = detok.text[:string_stop_truncate]
+                else:
+                    output.output_text = detok.text
                 request.output_text = output.output_text
-                request.finish_reason = response.finish_reason
+                request.finish_reason = finish_reason
 
+                # For string stop: tell batch generator to stop generating
+                if string_stop_truncate >= 0 and self.batch_generator is not None:
+                    uid = request.batch_uid
+                    if uid is not None:
+                        try:
+                            self.batch_generator.remove([uid])
+                        except Exception:
+                            pass
+
+                self.total_prompt_tokens += request.num_prompt_tokens
                 self.total_completion_tokens += request.num_output_tokens
                 self.num_requests_processed += 1
 
                 logger.debug(
-                    f"Request {request_id} finished: {response.finish_reason}, "
-                    f"{request.num_output_tokens} tokens"
+                    f"Request {request_id} finished: {finish_reason}, "
+                    f"prompt={request.num_prompt_tokens}, "
+                    f"completion={request.num_output_tokens} tokens"
                 )
 
             outputs.append(output)
@@ -833,29 +982,39 @@ class MLLMScheduler:
                         token_list = getattr(request, "_extracted_tokens", [])
                         if token_list:
                             cache_blocks = request._extracted_cache()
-                            # Quantize first (if KV quant enabled) — converts
-                            # KVCache→QuantizedKVCache for 2-4x memory reduction.
-                            # Must happen BEFORE _extract_cache_states() so that
-                            # extracted state dicts contain quantized tuple tensors.
-                            if getattr(self, '_kv_cache_bits', 0):
-                                cache_blocks = self._quantize_cache_for_storage(cache_blocks)
-                            # Convert raw cache objects to state-dict format
-                            # that BlockAwarePrefixCache.store_cache() expects.
-                            # store_cache checks is_tensor_data which requires
-                            # {"state": ..., "meta_state": ...} dicts.
-                            cache_states = self._extract_cache_states(cache_blocks)
-                            if cache_states:
-                                self.block_aware_cache.store_cache(
-                                    request_id,
-                                    token_list,
-                                    cache_states,
+                            if cache_blocks is None:
+                                logger.debug(f"No cache blocks to store for {request_id}")
+                            else:
+                                prompt_len = len(token_list)
+                                # For hybrid models (MambaCache + KVCache), the standard
+                                # truncation fails because MambaCache is cumulative.
+                                # Use MLLM-specific truncation that skips Mamba layers
+                                # and only truncates KVCache layers.
+                                cache_blocks = self._truncate_hybrid_cache(
+                                    cache_blocks, prompt_len
                                 )
-                                logger.info(
-                                    f"VLM Scheduler stored paged Prefix Cache for "
-                                    f"{request_id}: {len(cache_states)} layers"
-                                )
+                                if cache_blocks is None:
+                                    logger.debug(
+                                        f"Cache truncation failed for {request_id}"
+                                    )
+                                else:
+                                    truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
+                                    if getattr(self, '_kv_cache_bits', 0):
+                                        cache_blocks = self._quantize_cache_for_storage(cache_blocks)
+                                    cache_states = self._extract_cache_states(cache_blocks)
+                                    if cache_states:
+                                        self.block_aware_cache.store_cache(
+                                            request_id,
+                                            truncated_tokens,
+                                            cache_states,
+                                        )
+                                        logger.info(
+                                            f"VLM Scheduler stored paged Prefix Cache for "
+                                            f"{request_id}: {len(cache_states)} layers, "
+                                            f"truncated to {len(truncated_tokens)} tokens"
+                                        )
                     except Exception as e:
-                        logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}")
+                        logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}", exc_info=True)
 
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
@@ -895,7 +1054,67 @@ class MLLMScheduler:
 
         # Run generation step if we have running requests
         if self.batch_generator is not None and self.running:
-            responses = self.batch_generator.next()
+            try:
+                responses = self.batch_generator.next()
+            except Exception as step_err:
+                # Cache corruption or GPU error — recover by clearing state
+                # and rescheduling (matching LLM scheduler pattern).
+                # Limit retries to prevent infinite loops on persistent errors.
+                logger.error(f"MLLM batch generation error: {step_err}")
+                try:
+                    self.batch_generator.close()
+                except Exception:
+                    pass
+                self.batch_generator = None
+                self._current_sampler_params = ()
+
+                max_retries = 2
+                retryable = []
+                failed = []
+                for req_id, req in list(self.running.items()):
+                    req._retry_count += 1
+                    if req._retry_count <= max_retries:
+                        req.status = RequestStatus.WAITING
+                        req.output_tokens.clear()
+                        req.num_output_tokens = 0
+                        req.output_text = ""
+                        req.finish_reason = None
+                        self.waiting.appendleft(req)
+                        retryable.append(req_id)
+                    else:
+                        # Permanent failure — send error response
+                        req.finish_reason = "error"
+                        req.output_text = f"Generation failed: {step_err}"
+                        failed.append(req_id)
+                    self._cleanup_detokenizer(req_id)
+                self.running.clear()
+                self.request_id_to_uid.clear()
+                self.uid_to_request_id.clear()
+
+                if failed:
+                    # Push error responses for permanently failed requests
+                    output.finished_request_ids = failed
+                    for req_id in failed:
+                        req = self.requests.get(req_id)
+                        if req:
+                            output.outputs.append(RequestOutput(
+                                request_id=req_id,
+                                output_text=f"Generation failed: {step_err}",
+                                finished=True,
+                                finish_reason="error",
+                            ))
+                    self._cleanup_finished(set(failed))
+                    logger.error(
+                        f"MLLM scheduler: {len(failed)} requests failed permanently"
+                    )
+
+                if retryable:
+                    logger.info(
+                        f"MLLM scheduler recovered: "
+                        f"{len(retryable)} requests rescheduled"
+                    )
+                return output
+
             output.has_work = True
 
             if responses:

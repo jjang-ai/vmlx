@@ -66,7 +66,8 @@ export interface ServerConfig {
   // Additional
   additionalArgs?: string
 
-  // Legacy
+  // Legacy — stored in DB but NOT wired to any CLI arg.
+  // Kept for backward compatibility with existing session configs.
   logLevel?: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
 }
 

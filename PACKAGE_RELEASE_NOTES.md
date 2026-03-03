@@ -106,6 +106,27 @@ This release includes critical bug fixes and optimizations that make vLLM-MLX pr
 
 ---
 
+### 5. Test Suite Alignment (v0.2.6)
+
+**Problem**: ~50 test failures across 7 test files due to API drift between tests and implementation after major architecture changes.
+
+**What Was Fixed**:
+- **Model config registry tests**: Complete rewrite for `model_types`-based API (replaced old regex `pattern` tests)
+- **API models**: Added `reasoning`/`reasoning_content` computed field to `ChatCompletionChunkDelta`
+- **MLLM detection**: Added `MLLM_PATTERNS` list (25+ patterns) as fallback for remote model name detection
+- **Platform module**: Created `vllm_mlx/platform.py` re-export shim with pytest.skip guards for torch
+- **Memory cache**: Added `remove()` and `reset_stats()` methods to `MemoryAwarePrefixCache`
+- **MLLM cache**: Aligned order-dependent hash tests with VLM image order semantics
+- **Server tests**: Replaced deprecated `asyncio.get_event_loop().run_until_complete()` with `asyncio.run()`
+
+**Files Modified**:
+- `vllm_mlx/api/models.py`, `vllm_mlx/api/utils.py`, `vllm_mlx/platform.py` (new), `vllm_mlx/memory_cache.py`, `vllm_mlx/model_config_registry.py`
+- `tests/test_model_config_registry.py`, `tests/test_mllm_cache.py`, `tests/test_server.py`, `tests/test_platform.py`
+
+**Result**: 351 passed, 0 failed, 3 deselected
+
+---
+
 ### 4. Metal GPU Timeout Prevention
 
 **Problem**: macOS kills processes (SIGTERM) when GPU operations exceed ~20-30 seconds, causing crashes on large contexts.
@@ -126,9 +147,9 @@ This release includes critical bug fixes and optimizations that make vLLM-MLX pr
 ## 📊 Verification Results
 
 ### Test Coverage
-- **827 tests passing** across all modules
+- **351 tests passing** across all modules
 - **0 failures** after all fixes
-- Test execution time: ~32 seconds
+- Test execution time: ~3 seconds
 
 ### Live Server Testing
 All tests performed with Qwen3-Coder-Next-8bit on M4 Max 128GB:
@@ -214,7 +235,7 @@ pip install -e .
 grep -q "_detokenizer_pool" vllm_mlx/scheduler.py && echo "✅ Fixes present"
 
 # Run tests
-pytest tests/ -q  # Should show 813 passed
+pytest tests/ -q  # Should show 351 passed
 
 # Restart any running servers to load new code
 pkill -f "vllm-mlx serve"
@@ -254,7 +275,7 @@ vllm-mlx-chat  # or vllm-mlx-text-chat
 
 Use this checklist before deploying to production:
 
-- [x] All 827 tests pass
+- [x] All 351 tests pass
 - [x] Emoji streaming verified (👋🌟🎉)
 - [x] CJK streaming verified (你好, こんにちは, 안녕하세요)
 - [x] Arabic streaming verified (مرحبا)
@@ -284,7 +305,7 @@ Use this checklist before deploying to production:
 - Stable for 100k+ token contexts
 
 ✅ **Extensively tested**
-- 827 tests passing
+- 351 tests passing
 - Live server verification
 - Multi-language streaming
 - Long context handling

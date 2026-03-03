@@ -23,6 +23,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Late-bound reference to mlx_lm.utils.load_config (imported on first use).
+# Exposed at module level so tests can mock it with unittest.mock.patch.
+load_config = None
+
 
 @dataclass
 class ModelConfig:
@@ -120,8 +124,11 @@ class ModelConfigRegistry:
 
             model_type = None
             try:
+                global load_config
+                if load_config is None:
+                    from mlx_lm.utils import load_config as _lc
+                    load_config = _lc
                 from pathlib import Path
-                from mlx_lm.utils import load_config
                 model_config = load_config(Path(model_name))
                 model_type = model_config.get("model_type", "").lower()
             except Exception as e:
