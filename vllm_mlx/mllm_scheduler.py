@@ -1044,6 +1044,15 @@ class MLLMScheduler:
                     del self.uid_to_request_id[uid]
                 del self.request_id_to_uid[request_id]
 
+            # Clean up paged cache request tracking to free tensor references
+            if self.block_aware_cache is not None:
+                self.block_aware_cache._request_tables.pop(request_id, None)
+            if self.paged_cache_manager is not None:
+                self.paged_cache_manager.detach_request(request_id)
+
+            # Remove from master request dict to free output_tokens and cache refs
+            self.requests.pop(request_id, None)
+
             # Track as finished
             self.finished_req_ids.add(request_id)
 
