@@ -146,7 +146,7 @@ class EngineCore:
 
         # Periodic check for scheduler/collector mismatch (ghost requests
         # in scheduler.running with no output collector). Runs every N steps.
-        _GHOST_CHECK_INTERVAL = 500  # check every 500 steps
+        _GHOST_CHECK_INTERVAL = 50  # check every 50 steps
         _ghost_check_counter = 0
 
         while self._running:

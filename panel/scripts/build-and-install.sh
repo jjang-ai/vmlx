@@ -89,8 +89,11 @@ npm run build
 echo "==> Packaging for macOS..."
 npx electron-builder --mac --dir
 
-# Find the built .app in release/
-APP_PATH=$(find release -name "$APP_NAME" -type d -maxdepth 3 | head -1)
+# Find the built .app in release/ — prefer mac-arm64 over mas (sandboxed)
+APP_PATH=$(find release/mac-arm64 -name "$APP_NAME" -type d -maxdepth 2 2>/dev/null | head -1)
+if [ -z "$APP_PATH" ]; then
+  APP_PATH=$(find release -name "$APP_NAME" -type d -maxdepth 3 | head -1)
+fi
 
 if [ -z "$APP_PATH" ]; then
   echo "ERROR: Could not find $APP_NAME in release/"
