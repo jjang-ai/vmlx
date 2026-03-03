@@ -193,8 +193,9 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
     if model_name in _template_always_thinks_cache:
         return _template_always_thinks_cache[model_name]
 
-    # Qwen models natively inject <think> but they are explicitly patched in batched.py/mllm.py to strip it.
-    if "qwen" in model_name.lower() or "exploit" in model_name.lower():
+    # Qwen models natively inject <think> but honor enable_thinking=False
+    # (they are explicitly patched in batched.py/mllm.py to strip it).
+    if "qwen" in model_name.lower():
         _template_always_thinks_cache[model_name] = False
         return False
 
@@ -1627,10 +1628,17 @@ async def create_chat_completion(
     # For MLLM models, keep original messages with embedded images
     # (MLLM.chat() extracts images from message content internally)
     if engine.is_mllm:
-        # Convert Pydantic messages to dicts preserving full content
+        # Convert Pydantic messages to dicts, excluding None fields.
+        # CRITICAL: model_dump() without exclude_none includes ALL optional fields
+        # (e.g. image_url=None on text items). The Jinja2 chat template checks
+        # 'image_url' in item (key existence), so None-valued fields cause text items
+        # to be misdetected as images, producing duplicate <|image_pad|> tokens.
         messages = []
         for msg in request.messages:
-            msg_dict = msg.model_dump() if hasattr(msg, "model_dump") else dict(msg)
+            if hasattr(msg, "model_dump"):
+                msg_dict = msg.model_dump(exclude_none=True)
+            else:
+                msg_dict = dict(msg)
             messages.append(msg_dict)
         images, videos = [], []  # MLLM extracts these from messages
         logger.debug(f"MLLM: Processing {len(messages)} messages")
@@ -1924,13 +1932,23 @@ def _responses_input_to_messages(
     def _resolve_content(raw_content):
         """Resolve content: preserve arrays for MLLM, extract text for LLM."""
         if preserve_multimodal and isinstance(raw_content, list):
-            # Check if any part has image/video — if so, preserve the full array
+            # Convert Pydantic content parts to clean dicts (exclude None fields)
+            # to avoid template issues where 'image_url' in item returns True
+            # for text items that have image_url=None as a model field.
+            clean_parts = []
+            for p in raw_content:
+                if hasattr(p, "model_dump"):
+                    clean_parts.append(p.model_dump(exclude_none=True))
+                elif isinstance(p, dict):
+                    clean_parts.append({k: v for k, v in p.items() if v is not None})
+                else:
+                    clean_parts.append(p)
             has_media = any(
                 isinstance(p, dict) and p.get("type") in ("image_url", "image", "video_url", "video")
-                for p in raw_content
+                for p in clean_parts
             )
             if has_media:
-                return raw_content
+                return clean_parts
         return _extract_text_from_content(raw_content)
 
     messages = []

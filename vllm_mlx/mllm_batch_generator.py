@@ -104,13 +104,14 @@ def _fix_hybrid_cache(
             # Cache already correct length — no expansion needed
             if len(cache) == num_model_layers:
                 return cache
-            # Cache length doesn't match expected KV layer count — can't fix
+            # Cache length doesn't match expected KV layer count — return fresh cache
             if len(cache) != len(kv_positions):
                 logger.warning(
                     f"Cache length mismatch: {len(cache)} reconstructed vs "
-                    f"{len(kv_positions)} KV positions in {num_model_layers}-layer model"
+                    f"{len(kv_positions)} KV positions in {num_model_layers}-layer model, "
+                    "returning fresh cache"
                 )
-                return cache
+                return language_model.make_cache()
 
         # Need make_cache() for fresh SSM objects at non-KV positions
         template = language_model.make_cache()
@@ -135,9 +136,10 @@ def _fix_hybrid_cache(
         if len(cache) != len(positions):
             logger.warning(
                 f"Cache length mismatch: {len(cache)} reconstructed vs "
-                f"{len(positions)} KV positions in {n_layers}-layer model"
+                f"{len(positions)} KV positions in {n_layers}-layer model, "
+                "returning fresh cache"
             )
-            return cache
+            return template
 
         result = list(template)
         for cache_idx, model_idx in enumerate(positions):
@@ -510,8 +512,8 @@ class MLLMBatchGenerator:
                 template = self.language_model.make_cache()
                 self._hybrid_num_layers = len(template)
                 self._hybrid_kv_positions = [i for i, t in enumerate(template) if isinstance(t, KVCache)]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to pre-compute hybrid cache info: {e}")
 
         # Vision embedding cache for repeated images
         self.vision_cache = VisionEmbeddingCache(
@@ -691,6 +693,7 @@ class MLLMBatchGenerator:
         )
 
         # Prepare inputs using mlx_vlm
+        # Prepare inputs using mlx_vlm
         inputs = prepare_inputs(
             self.processor,
             images=all_images if all_images else None,
@@ -784,18 +787,70 @@ class MLLMBatchGenerator:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
                         block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
                         if block_table is not None:
-                            # Cache hit! Reconstruct actual KVCache objects from stored block data.
                             reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
                             if reconstructed is not None:
-                                # Dequantize if KV quant was applied during storage.
-                                # BatchGenerator needs full-precision KVCache, not QuantizedKVCache.
                                 reconstructed = _dequantize_cache(reconstructed)
-                                req.prompt_cache = reconstructed
-                                logger.info(
-                                    f"VLM prefix cache HIT for {req.request_id}: "
-                                    f"{block_table.num_tokens} cached tokens, "
-                                    f"{len(remaining)} remaining"
+
+                                # Hybrid models (SSM + attention, e.g. Qwen3.5-VL):
+                                # Prefix cache stores only KVCache (attention) layers.
+                                # SSM layers are cumulative state that must process ALL tokens.
+                                # We can't skip prefix computation — SSM layers would get wrong state.
+                                # So for hybrid models: don't use reconstructed cache for computation.
+                                is_hybrid = (
+                                    self._hybrid_kv_positions is not None
+                                    and self._hybrid_num_layers is not None
+                                    and len(self._hybrid_kv_positions) < self._hybrid_num_layers
                                 )
+
+                                if is_hybrid:
+                                    logger.info(
+                                        f"VLM prefix cache HIT for {req.request_id}: "
+                                        f"{block_table.num_tokens} cached tokens "
+                                        f"(hybrid model — full prefill required, SSM needs all tokens)"
+                                    )
+                                    # Don't set req.prompt_cache — fresh cache + full prefill
+                                else:
+                                    # Pure attention VLM: can safely skip cached prefix tokens.
+                                    # Trim input_ids to only remaining (uncached) tokens.
+                                    req.prompt_cache = reconstructed
+                                    if remaining:
+                                        # Check if remaining tokens contain image placeholders.
+                                        # If so, we'd need partial pixel_values which is complex —
+                                        # fall back to full prefill instead.
+                                        model_config = getattr(self.model, "config", None)
+                                        img_token_id = (
+                                            getattr(model_config, "image_token_index", None)
+                                            if model_config else None
+                                        )
+                                        has_images = img_token_id is not None and img_token_id in remaining
+                                        if has_images:
+                                            req.prompt_cache = None
+                                            logger.info(
+                                                f"VLM prefix cache HIT for {req.request_id}: "
+                                                f"{block_table.num_tokens} cached tokens, "
+                                                f"remaining has images — full prefill"
+                                            )
+                                        else:
+                                            req.input_ids = mx.array([remaining])
+                                            req.pixel_values = None
+                                            req.attention_mask = None
+                                            req.image_grid_thw = None
+                                            logger.info(
+                                                f"VLM prefix cache HIT for {req.request_id}: "
+                                                f"{block_table.num_tokens} cached, "
+                                                f"{len(remaining)} remaining (text-only)"
+                                            )
+                                    else:
+                                        # All tokens cached. Need at least the last token
+                                        # for a forward pass to get logits for sampling.
+                                        req.input_ids = mx.array([token_list[-1:]])
+                                        req.pixel_values = None
+                                        req.attention_mask = None
+                                        req.image_grid_thw = None
+                                        logger.info(
+                                            f"VLM prefix cache FULL HIT for {req.request_id}: "
+                                            f"{block_table.num_tokens} cached tokens"
+                                        )
                     except Exception as e:
                         logger.warning(f"Failed to fetch paged cache for {req.request_id}: {e}")
 

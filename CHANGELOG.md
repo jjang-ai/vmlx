@@ -5,6 +5,37 @@ All notable changes to vLLM-MLX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-03-03
+
+### Fixed
+
+#### Multi-Turn VLM 0-Token Output (Critical)
+- **Root cause**: `model_dump()` without `exclude_none=True` included `image_url=None` on text ContentParts. Jinja2 templates check key existence (`'image_url' in item`) which returned True even for None values, causing Qwen3VLProcessor to count 2× image_pad tokens for 1 image → IndexError → fallback to PyTorch → crash.
+- **Fix**: All three Pydantic-to-dict conversion paths now use `model_dump(exclude_none=True)`:
+  - `server.py` Chat Completions MLLM path
+  - `server.py` Responses API `_resolve_content()`
+  - `mllm.py` content extraction (defense-in-depth)
+- **Fix**: `batched.py` MLLM single-turn path now passes `extra_template_kwargs` (enable_thinking, reasoning_effort)
+
+#### Hybrid Cache Mismatch Returns Corrupt Cache (Critical)
+- **Root cause**: `_fix_hybrid_cache()` returned the short (attention-only) reconstructed cache when its length didn't match expected KV positions, instead of a fresh full-length cache from `make_cache()`. This gave the model a cache with wrong layer count.
+- **Fix**: Both mismatch paths now return `language_model.make_cache()` (fresh full cache) or `template` (from already-called make_cache).
+
+#### SimpleEngine MLLM Drops Reasoning Kwargs
+- **Root cause**: SimpleEngine `chat()` and `stream_generate()` MLLM paths only forwarded `enable_thinking`, silently dropping `reasoning_effort` and `chat_template_kwargs`.
+- **Fix**: Both paths now forward all three kwargs to the underlying mlx-vlm model.
+
+#### Miscellaneous
+- Removed hardcoded model name from `_template_always_thinks()` — now uses only dynamic template testing
+- `make_cache()` failure in MLLMBatchGenerator init now logs warning instead of bare `except: pass`
+
+### Added
+
+#### Comprehensive Test Suite Expansion
+- **64 MLLM serialization tests** (`test_mllm_message_serialization.py`): model_dump behavior, Jinja2 key-existence simulation, multi-turn image counting, _fix_hybrid_cache correctness, SimpleEngine kwargs forwarding, mllm.py model_dump paths
+- **89 model config registry tests** (`test_model_config_registry.py`): Every model family's tool parser, reasoning parser, cache type, MLLM flag, think_in_template, and priority — plus cross-family consistency checks (valid parsers, no duplicate model_types, priority ordering, MLLM completeness)
+- **Total engine test suite**: 1295+ tests passing (up from 1237)
+
 ## [0.2.7] - 2026-03-02
 
 ### Fixed

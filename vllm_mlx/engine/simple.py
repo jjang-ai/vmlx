@@ -323,6 +323,10 @@ class SimpleEngine(BaseEngine):
                 mllm_kwargs = dict(kwargs)
                 if thinking_enabled is not None:
                     mllm_kwargs["enable_thinking"] = thinking_enabled
+                if reasoning_effort:
+                    mllm_kwargs["reasoning_effort"] = reasoning_effort
+                if extra_ct_kwargs:
+                    mllm_kwargs.update(extra_ct_kwargs)
                 output = await asyncio.to_thread(
                     self._model.chat,
                     messages=messages,
@@ -473,6 +477,10 @@ class SimpleEngine(BaseEngine):
             mllm_kwargs = dict(kwargs)
             if thinking_enabled is not None:
                 mllm_kwargs["enable_thinking"] = thinking_enabled
+            if reasoning_effort:
+                mllm_kwargs["reasoning_effort"] = reasoning_effort
+            if extra_ct_kwargs:
+                mllm_kwargs.update(extra_ct_kwargs)
 
             async with self._generation_lock:
                 try:

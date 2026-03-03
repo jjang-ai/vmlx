@@ -1063,9 +1063,10 @@ class MLXMultimodalLM:
                         msg_text += item
                         continue
 
-                    # Convert Pydantic models to dicts
+                    # Convert Pydantic models to dicts (exclude_none prevents
+                    # false key-existence checks in downstream templates)
                     if hasattr(item, "model_dump"):
-                        item = item.model_dump()
+                        item = item.model_dump(exclude_none=True)
                     elif hasattr(item, "dict"):
                         item = item.dict()
 
@@ -1452,9 +1453,10 @@ class MLXMultimodalLM:
                         msg_text += item
                         continue
 
-                    # Convert Pydantic models to dicts
+                    # Convert Pydantic models to dicts (exclude_none prevents
+                    # false key-existence checks in downstream templates)
                     if hasattr(item, "model_dump"):
-                        item = item.model_dump()
+                        item = item.model_dump(exclude_none=True)
                     elif hasattr(item, "dict"):
                         item = item.dict()
 

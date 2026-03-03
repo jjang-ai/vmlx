@@ -300,6 +300,9 @@ class BatchedEngine(BaseEngine):
                 }
                 if enable_thinking is not None:
                     tpl_kwargs["enable_thinking"] = enable_thinking
+                # Merge extra chat_template_kwargs (e.g. thinking_budget, reasoning_effort)
+                if extra_template_kwargs:
+                    tpl_kwargs.update(extra_template_kwargs)
                 try:
                     prompt = self._processor.apply_chat_template(
                         built_messages, **tpl_kwargs
