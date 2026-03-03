@@ -95,10 +95,9 @@ rm -rf "$SITE/setuptools" 2>/dev/null || true          # build tool, not needed 
 rm -rf "$SITE/setuptools"*.dist-info 2>/dev/null || true
 
 # Keep pip intact (needed for engine auto-update at runtime via python3 -m pip)
-# NOTE: Do NOT remove pip/_vendor/* — pip 26+ requires cachecontrol and other
-# vendored modules. Removing them breaks `python3 -m pip install`.
-# Trim only safe targets: pip's test suite and docs.
-rm -rf "$SITE/pip/_vendor/pygments" 2>/dev/null || true      # syntax highlighting, not needed for install
+# NOTE: Do NOT remove pip/_vendor/* — pip 26+ requires cachecontrol, pygments,
+# rich, and other vendored modules. Removing them breaks `python3 -m pip install`.
+# Only safe to remove: pip's test directories.
 find "$SITE/pip" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 
 # ====================================================================
