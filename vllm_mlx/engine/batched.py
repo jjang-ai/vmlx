@@ -280,30 +280,14 @@ class BatchedEngine(BaseEngine):
                 if config is None:
                     config = load_config(self._model_name)
 
-                # Extract text from last user message
-                text_prompt = ""
-                for msg in reversed(messages):
-                    if msg.get("role") == "user":
-                        content = msg.get("content", "")
-                        if isinstance(content, str):
-                            text_prompt = content
-                        elif isinstance(content, list):
-                            for item in content:
-                                if isinstance(item, str):
-                                    text_prompt = item
-                                    break
-                                elif (
-                                    isinstance(item, dict)
-                                    and item.get("type") == "text"
-                                ):
-                                    text_prompt = item.get("text", "")
-                                    break
-                        break
-
+                # Pass full messages list (including system prompt) to mlx_vlm.
+                # apply_chat_template accepts a list of dicts with role/content
+                # and properly handles system messages and multimodal content
+                # via extract_text_from_content().
                 prompt = apply_chat_template(
                     self._processor,
                     config,
-                    text_prompt,
+                    messages,
                     num_images=num_images,
                 )
                 if enable_thinking is False and prompt.endswith("<think>\n"):
