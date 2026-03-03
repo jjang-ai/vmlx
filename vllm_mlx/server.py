@@ -2893,7 +2893,13 @@ async def stream_chat_completion(
 
     # Safeguard: if model generated zero tokens (empty stream), emit a diagnostic
     # chunk so clients always get feedback instead of a silent empty response.
-    if last_output is None and not content_was_emitted and not accumulated_reasoning:
+    # Also catches the case where engine yielded an output with 0 completion tokens
+    # (e.g., immediate EOS) — last_output is set but nothing was emitted.
+    _zero_tokens = (last_output is None) or (
+        not content_was_emitted and not accumulated_reasoning
+        and getattr(last_output, 'completion_tokens', 1) == 0
+    )
+    if _zero_tokens and not content_was_emitted and not accumulated_reasoning:
         logger.warning(f"Request {response_id}: model generated zero tokens")
         empty_chunk = ChatCompletionChunk(
             id=response_id,
