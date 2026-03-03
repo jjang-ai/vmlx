@@ -14,6 +14,8 @@ Tests cover:
 - Fix #6: Server content leak prevention (truncated reasoning)
 - Fix #7: Concurrent batching BatchKVCache.offset proxy (_BatchOffsetSafeCache)
 - Fix #8: Streaming reasoning echo prevention (reasoning_was_streamed flag)
+- Fix #9: BatchMambaCache filter/merge (SSM stale left_padding crash)
+- Fix #10: Always-wrap proxy (filter-down-to-1 slice error)
 - Implicit reasoning streaming (think_in_prompt mode)
 - API models integration (AssistantMessage, ChatCompletionChunkDelta)
 - Performance (large outputs, many chunks, repeated parsing)
@@ -1108,8 +1110,13 @@ class TestBatchOffsetSafeCache:
     a scalar int while delegating all other attribute access unchanged.
     """
 
-    def test_mx_array_offset_returns_int(self):
-        """Proxy should convert mx.array offset to Python int."""
+    def test_mx_array_offset_returns_max_int(self):
+        """Proxy should convert mx.array offset to max element as Python int.
+
+        Using max (not first element) ensures the attention mask is wide enough
+        for ALL sequences in the batch, preventing broadcast shape mismatches
+        when sequences have different lengths due to left-padding.
+        """
         import mlx.core as mx
         from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
 
@@ -1117,7 +1124,7 @@ class TestBatchOffsetSafeCache:
             offset = mx.array([10, 20, 30])
         proxy = _BatchOffsetSafeCache(FakeCache())
         assert isinstance(proxy.offset, int)
-        assert proxy.offset == 10
+        assert proxy.offset == 30  # max, not first
 
     def test_scalar_mx_array_offset(self):
         """Proxy should handle scalar (0-dim) mx.array offset."""
@@ -1189,3 +1196,157 @@ class TestBatchOffsetSafeCache:
         assert isinstance(wrapped[0], _BatchOffsetSafeCache)
         assert isinstance(wrapped[1], KVCache)
         assert isinstance(wrapped[2], _BatchOffsetSafeCache)
+
+    def test_divergent_offsets_uses_max(self):
+        """When batch sequences have different offsets, proxy uses max.
+
+        This prevents broadcast_shapes errors when the mask is sliced
+        to kv_seq_len — using max ensures the mask is wide enough for
+        all sequences, while left_padding in the mask handles masking
+        invalid positions for shorter sequences.
+        """
+        import mlx.core as mx
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        # Simulate: 3 sequences with different lengths due to left-padding
+        # Sequence 0 is shortest (offset 95), sequence 1 is longest (offset 100)
+        class FakeCache:
+            offset = mx.array([95, 100, 98])
+        proxy = _BatchOffsetSafeCache(FakeCache())
+        # Should return 100 (max) to make mask wide enough
+        assert proxy.offset == 100
+        # Verify it's a plain int for slice compatibility
+        assert type(proxy.offset) is int
+
+    def test_wrap_always_applied_single_request_batch(self):
+        """_wrap_batch_caches wraps even when batch filters down to 1 request.
+
+        When a batch starts with N>1 requests and filters down to 1, the cache
+        is still BatchKVCache (offset is mx.array), but input_tokens.shape[0]=1.
+        The proxy must still wrap to convert offset to int, otherwise VL models
+        that use cache.offset in slice ops get "Slice indices must be integers".
+        """
+        import mlx.core as mx
+        from mlx_lm.models.cache import BatchKVCache
+        from vllm_mlx.mllm_batch_generator import (
+            _BatchOffsetSafeCache,
+            _wrap_batch_caches,
+        )
+
+        # Simulate: batch started with 3 requests, filtered down to 1
+        bkv = BatchKVCache([0])
+        # After filter, offset is still mx.array (1-element)
+        bkv.offset = mx.array([42])
+        wrapped = _wrap_batch_caches([bkv])
+        assert isinstance(wrapped[0], _BatchOffsetSafeCache)
+        # Proxy converts mx.array offset to int
+        assert wrapped[0].offset == 42
+        assert type(wrapped[0].offset) is int
+
+    def test_batch_mamba_cache_filter_updates_left_padding(self):
+        """BatchMambaCache.filter() must filter left_padding along with cache arrays.
+
+        Without this, left_padding retains the original batch_size after
+        filtering. Then make_mask() returns a mask with stale dimensions,
+        causing shape mismatches in SSM layers during batched generation.
+        This was the root cause of the intermittent concatenate error:
+        [concatenate] (1,3,12288) and (2,1,12288)
+        """
+        import mlx.core as mx
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        # Simulate a merged batch of 3 requests with left_padding
+        cache = BatchMambaCache(size=2, left_padding=[5, 10, 15])
+        cache.cache = [
+            mx.ones((3, 3, 128)),  # conv_state: (batch=3, d_conv-1=3, d=128)
+            mx.ones((3, 4, 64)),   # ssm_state: (batch=3, nh=4, d=64)
+        ]
+
+        # Filter to keep only requests 0 and 2
+        cache.filter(mx.array([0, 2], mx.int32))
+
+        # Cache arrays should be filtered to batch_size=2
+        assert cache.cache[0].shape == (2, 3, 128)
+        assert cache.cache[1].shape == (2, 4, 64)
+
+        # left_padding MUST also be filtered to batch_size=2
+        assert cache.left_padding.shape == (2,)
+        assert cache.left_padding.tolist() == [5, 15]
+
+    def test_batch_mamba_cache_filter_none_left_padding(self):
+        """BatchMambaCache.filter() works when left_padding is None."""
+        import mlx.core as mx
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        cache = BatchMambaCache(size=2, left_padding=None)
+        cache._batch_size = 3
+        cache.cache = [
+            mx.ones((3, 3, 128)),
+            mx.ones((3, 4, 64)),
+        ]
+
+        # Should not crash when left_padding is None
+        cache.filter(mx.array([0, 1], mx.int32))
+        assert cache.cache[0].shape == (2, 3, 128)
+        assert cache.left_padding is None
+
+    def test_batch_mamba_cache_merge_no_left_padding(self):
+        """BatchMambaCache.merge() should NOT set left_padding.
+
+        Setting left_padding=[0]*N creates a no-op mask that causes shape
+        mismatches after filter() shrinks the batch. With left_padding=None,
+        make_mask() returns None and SSM layers skip masking (correct for decode).
+        """
+        import mlx.core as mx
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        # Create 3 individual caches (simulating post-prefill per-request caches)
+        caches = []
+        for _ in range(3):
+            c = BatchMambaCache(size=2, left_padding=None)
+            c.cache = [mx.ones((1, 3, 128)), mx.ones((1, 4, 64))]
+            caches.append(c)
+
+        # Merge them
+        merged = BatchMambaCache.merge(caches)
+
+        # Merged cache should have correct batch dimension
+        assert merged.cache[0].shape == (3, 3, 128)
+        assert merged.cache[1].shape == (3, 4, 64)
+
+        # left_padding should be None (NOT [0, 0, 0])
+        assert merged.left_padding is None
+
+        # make_mask should return None (no masking during decode)
+        assert merged.make_mask(1) is None
+
+    def test_batch_mamba_cache_merge_then_filter_no_stale_mask(self):
+        """Full lifecycle: merge → step → filter should not leave stale masks.
+
+        Regression test for the concatenate crash: after merge of 3 caches then
+        filter to 2, make_mask() must not return a (3, N) mask for batch_size=2.
+        """
+        import mlx.core as mx
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        caches = []
+        for _ in range(3):
+            c = BatchMambaCache(size=2, left_padding=None)
+            c.cache = [mx.ones((1, 3, 128)), mx.ones((1, 4, 64))]
+            caches.append(c)
+
+        merged = BatchMambaCache.merge(caches)
+
+        # Simulate a generation step updating cache
+        merged.cache[0] = mx.ones((3, 3, 128)) * 2
+        merged.cache[1] = mx.ones((3, 4, 64)) * 2
+
+        # Filter: one request finishes, keep requests 0 and 1
+        merged.filter(mx.array([0, 1], mx.int32))
+
+        assert merged.cache[0].shape == (2, 3, 128)
+        assert merged.cache[1].shape == (2, 4, 64)
+
+        # The critical check: make_mask should return None or match batch_size=2
+        mask = merged.make_mask(1)
+        assert mask is None or mask.shape[0] == 2

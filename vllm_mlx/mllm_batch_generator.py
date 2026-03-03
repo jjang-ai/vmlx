@@ -416,8 +416,11 @@ class _BatchOffsetSafeCache:
     offsets, causing "Slice indices must be integers or None".
 
     This proxy wraps a BatchKVCache and intercepts .offset reads to return
-    the first element as a scalar int. All other attributes (update_and_fetch,
-    make_mask, keys, values, etc.) delegate to the underlying cache unchanged.
+    the **maximum** offset as a scalar int. Using max (not first element) ensures
+    the attention mask is wide enough for ALL sequences in the batch, preventing
+    broadcast shape mismatches when sequences have different lengths. The mask's
+    built-in left_padding handling already masks out invalid positions for shorter
+    sequences.
 
     Only applied during _step() when batch_size > 1. Single-request batches
     keep original KVCache objects (which already have int offsets).
@@ -432,7 +435,7 @@ class _BatchOffsetSafeCache:
     def offset(self):
         raw = self._inner.offset
         if isinstance(raw, mx.array):
-            return (raw if raw.ndim == 0 else raw[0]).item()
+            return (raw if raw.ndim == 0 else raw.max()).item()
         return raw
 
     @offset.setter
@@ -1108,11 +1111,13 @@ class MLLMBatchGenerator:
         if input_tokens.ndim == 1:
             input_tokens = input_tokens[:, None]
 
-        # Wrap BatchKVCache with offset-safe proxies for VL models (batch > 1).
+        # Wrap BatchKVCache with offset-safe proxies for VL models.
         # Several Qwen VL attention layers use cache.offset in slice ops that
         # require int, but BatchKVCache.offset is mx.array. The proxy converts it.
-        if input_tokens.shape[0] > 1:
-            cache = _wrap_batch_caches(cache)
+        # Always wrap: a batch that started with N>1 requests can filter down to 1
+        # while cache remains BatchKVCache (offset still mx.array). The proxy is a
+        # no-op when offset is already int (single-request path with raw KVCache).
+        cache = _wrap_batch_caches(cache)
 
         # Run language model only (not full VLM)
         output = self.language_model(input_tokens, cache=cache)
@@ -1176,7 +1181,6 @@ class MLLMBatchGenerator:
 
         y, logprobs = batch.y, batch.logprobs
         batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
-        mx.async_eval(batch.y, batch.logprobs)
 
         y = y.tolist()
         toc = time.perf_counter()
