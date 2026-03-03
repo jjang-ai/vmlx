@@ -5,9 +5,27 @@ All notable changes to vLLM-MLX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.7] - 2026-03-02
 
 ### Fixed
+
+#### Continuous Batching Stability (2026-03-02)
+
+- **Continuous Batching Thread Safety**: Added `threading.RLock()` to protect queue mutations across asynchronous loops and sync `MLLM` vision tasks running over background threads (`step`, `add_request`, `abort_request`). Resolves latent data race failures under heavy loads.
+- **Bounded Queues**: Fixed unbounded growth mapping of the stream generation output by explicitly setting max size values (`asyncio.Queue(maxsize=8192)`). Ensures memory safety during downstream socket unresponsiveness scaling.
+- **Ghost Abort Subsystem**: Fast-tracked the `_ghost_check_counter` interval from checking every 500 loops to 50 loops on the core Engine allowing rapid recycling of broken API memory references for stability endpoints.
+- **Batched Engine Rescheduling Safety**: Gracefully intercepted GPU-metal-level corruption traps within generation steps by ensuring requests accurately respool via `retryable` queue structures dropping erroring chunk pointers automatically without completely abandoning API sessions. 
+
+#### Mamba & SSM Native Paged Routing (2026-03-02)
+- **Automatic Multi-Array Cache Re-Routing**: Intercepts `model.make_cache()` structure arrays matching hybrid combinations (`MambaCache` alongside `KVCache`) natively detecting standard LLM truncations violations. Auto switches memory parameters inside the `Scheduler` to natively fall back to compatible Paged and Legacy parameters gracefully to prevent sequence faults.
+
+### Fixed
+
+#### Reasoning Content Leaking as Visible Text During Tool Calls (2026-03-02)
+- **Reasoning leak on tool follow-ups**: When using agentic tool calling with thinking models (Qwen3, Qwen3.5-VL), reasoning text leaked into visible content on follow-up requests after tool execution. Root cause: `effective_think_in_template` was forced to `False` when tool results were present, breaking the reasoning parser's `think_in_prompt` state. Fix: keep `think_in_prompt=True` — the parser's streaming extraction handles `<think>`→`</think>`→content transitions correctly regardless of tool results.
+- **Duplicate content when reasoning disabled**: When reasoning was turned off (`enable_thinking=False`) but the model still produced reasoning text, content appeared twice. Root cause: end-of-stream tool call extraction re-emitted `cleaned_text` that was already streamed (either as content or as redirected reasoning). Fix: track `accumulated_content` during streaming and subtract already-emitted content from the final emission.
+- **False-positive tool call buffer flush**: When tool call markers were detected but no actual tool calls were parsed, the entire `accumulated_text` was flushed as content — including text that was already streamed. Fix: only flush the un-streamed portion.
+- **Responses API `enable_thinking` guard**: Added missing `_effective_thinking is False` guard to Responses API streaming path for parity with Chat Completions.
 
 #### Integrated Tool Call System — Deep Audit & Fixes (2026-03-02)
 
