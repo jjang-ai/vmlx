@@ -50,14 +50,23 @@ class Qwen3ReasoningParser(BaseThinkingReasoningParser):
         Handles both explicit <think>...</think> tags and implicit mode
         where <think> was in the prompt (only </think> in output).
 
+        Also handles truncated reasoning where the model hit max_tokens
+        during the thinking phase (<think> present but no </think>).
+        In that case, text after <think> goes to reasoning_content.
+
         Args:
             model_output: Complete model output text.
 
         Returns:
             (reasoning, content) tuple.
         """
-        # If no end token at all, treat as pure content
         if self.end_token not in model_output:
+            if self.start_token in model_output:
+                # <think> present but no </think> — reasoning was truncated
+                # (e.g., max_tokens hit during thinking phase).
+                # Delegate to base class Case 3: returns (reasoning, None).
+                return super().extract_reasoning(model_output)
+            # No think tags at all — pure content
             return None, model_output
 
         # Use base class implementation (handles both explicit and implicit)

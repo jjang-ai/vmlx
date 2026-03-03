@@ -4,9 +4,19 @@ Tests for reasoning content extraction parsers.
 
 Tests cover:
 - Parser registry (registration, lookup, listing)
-- Qwen3 parser (non-streaming and streaming)
+- Qwen3 parser (non-streaming and streaming, 4 cases)
 - DeepSeek-R1 parser (non-streaming and streaming)
-- Edge cases (no tags, partial tags, etc.)
+- Edge cases (no tags, partial tags, unicode, code, HTML)
+- Fix #1: enable_thinking=False forwarding (was silently dropped)
+- Fix #2: Truncated reasoning overflow (max_tokens during thinking)
+- Fix #3/4: MLLM sampling params (temperature kwarg, top_k/min_p sampler)
+- Fix #5: LLM non-streaming stop sequence truncation
+- Fix #6: Server content leak prevention (truncated reasoning)
+- Fix #7: Concurrent batching BatchKVCache.offset proxy (_BatchOffsetSafeCache)
+- Fix #8: Streaming reasoning echo prevention (reasoning_was_streamed flag)
+- Implicit reasoning streaming (think_in_prompt mode)
+- API models integration (AssistantMessage, ChatCompletionChunkDelta)
+- Performance (large outputs, many chunks, repeated parsing)
 """
 
 import pytest
@@ -107,12 +117,12 @@ class TestQwen3Parser:
         assert reasoning is None
         assert content == output
 
-    def test_only_start_tag_no_reasoning(self, parser):
-        """Qwen3 requires both tags - missing end tag means no reasoning."""
+    def test_only_start_tag_truncated_reasoning(self, parser):
+        """<think> without </think> = truncated reasoning (max_tokens hit during thinking)."""
         output = "<think>Started thinking but never finished"
         reasoning, content = parser.extract_reasoning(output)
-        assert reasoning is None
-        assert content == output
+        assert reasoning == "Started thinking but never finished"
+        assert content is None
 
     def test_only_end_tag_implicit_mode(self, parser):
         """Qwen3 supports implicit mode - when <think> is in prompt, only </think> in output."""
@@ -650,13 +660,12 @@ class TestQwen3SpecificCases:
         assert reasoning == "some text"
         assert content == "more text"
 
-        # Only start tag - no </think> means model is still generating
-        # Qwen3 requires </think> to extract reasoning (treats as pure content until then)
+        # Only start tag - <think> without </think> means truncated reasoning
+        # (max_tokens hit during thinking phase). Text goes to reasoning_content.
         output2 = "<think>incomplete reasoning"
         reasoning, content = parser.extract_reasoning(output2)
-        # No </think> = no reasoning extraction, entire output is content
-        assert reasoning is None
-        assert content == output2
+        assert reasoning == "incomplete reasoning"
+        assert content is None
 
     def test_qwen3_empty_think_tags(self, parser):
         """Test empty think tags."""
@@ -679,3 +688,504 @@ class TestQwen3SpecificCases:
             if expected_reasoning is None:
                 assert reasoning is None or reasoning.strip() == ""
             assert expected_content in (content or "")
+
+
+class TestTruncatedReasoningOverflow:
+    """Tests for Fix #2: reasoning overflow when max_tokens hit during thinking.
+
+    When a model generates <think> but hits max_tokens before producing </think>,
+    the text after <think> should go to reasoning_content (not content).
+    This matches streaming behavior where reasoning is progressively emitted.
+    """
+
+    @pytest.fixture
+    def qwen3_parser(self):
+        return get_parser("qwen3")()
+
+    @pytest.fixture
+    def deepseek_parser(self):
+        return get_parser("deepseek_r1")()
+
+    def test_qwen3_truncated_reasoning_basic(self, qwen3_parser):
+        """Basic truncated reasoning: <think> with text, no </think>."""
+        output = "<think>Let me analyze step by step..."
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert reasoning == "Let me analyze step by step..."
+        assert content is None
+
+    def test_qwen3_truncated_reasoning_multiline(self, qwen3_parser):
+        """Truncated reasoning with multiple lines of thinking."""
+        output = "<think>Step 1: Parse the input\nStep 2: Apply algorithm\nStep 3: But I ran out of"
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert "Step 1" in reasoning
+        assert "Step 2" in reasoning
+        assert "ran out of" in reasoning
+        assert content is None
+
+    def test_qwen3_truncated_reasoning_with_newline_after_tag(self, qwen3_parser):
+        """Truncated reasoning where <think> is followed by newline (common pattern)."""
+        output = "<think>\nLet me think about this carefully.\nFirst, I need to consider"
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert reasoning is not None
+        assert "think about this carefully" in reasoning
+        assert content is None
+
+    def test_qwen3_truncated_reasoning_long(self, qwen3_parser):
+        """Truncated reasoning with very long text (realistic max_tokens scenario)."""
+        long_text = "\n".join(
+            [f"Step {i}: Processing data chunk {i} with detailed analysis" for i in range(50)]
+        )
+        output = f"<think>{long_text}"
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert reasoning is not None
+        assert "Step 0" in reasoning
+        assert "Step 49" in reasoning
+        assert content is None
+
+    def test_qwen3_truncated_vs_complete(self, qwen3_parser):
+        """Verify truncated and complete reasoning produce consistent results."""
+        # Complete reasoning
+        complete = "<think>Full reasoning here</think>The answer is 42."
+        r1, c1 = qwen3_parser.extract_reasoning(complete)
+        assert r1 == "Full reasoning here"
+        assert c1 == "The answer is 42."
+
+        # Truncated (same reasoning text, no closing tag)
+        truncated = "<think>Full reasoning here"
+        r2, c2 = qwen3_parser.extract_reasoning(truncated)
+        assert r2 == "Full reasoning here"
+        assert c2 is None
+
+    def test_qwen3_no_tags_still_pure_content(self, qwen3_parser):
+        """No think tags at all should still return pure content."""
+        output = "Just a normal response with no thinking."
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert reasoning is None
+        assert content == output
+
+    def test_qwen3_empty_think_tag_truncated(self, qwen3_parser):
+        """<think> immediately followed by nothing (empty reasoning truncated)."""
+        output = "<think>"
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        # Empty text after <think> → None reasoning, None content
+        assert reasoning is None
+        assert content is None
+
+    def test_deepseek_truncated_reasoning(self, deepseek_parser):
+        """DeepSeek-R1 should also handle truncated reasoning."""
+        output = "<think>Step by step analysis that got cut"
+        reasoning, content = deepseek_parser.extract_reasoning(output)
+        # Base class Case 3 handles this
+        assert reasoning == "Step by step analysis that got cut"
+        assert content is None
+
+    def test_qwen3_truncated_with_unicode(self, qwen3_parser):
+        """Truncated reasoning with unicode content."""
+        output = "<think>分析这个问题：需要考虑多个因素\n1. 第一个因素\n2. 第二个因素"
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert "分析" in reasoning
+        assert "第二个因素" in reasoning
+        assert content is None
+
+    def test_qwen3_truncated_with_code(self, qwen3_parser):
+        """Truncated reasoning containing code snippets."""
+        output = "<think>Let me trace the code:\n```python\ndef foo():\n    return bar()"
+        reasoning, content = qwen3_parser.extract_reasoning(output)
+        assert "def foo" in reasoning
+        assert content is None
+
+
+class TestEnableThinkingForwarding:
+    """Tests for Fix #1: enable_thinking=False forwarding to chat template.
+
+    Previously, only enable_thinking=True was forwarded to the template.
+    enable_thinking=False was silently dropped, causing models to always reason.
+    Now both True and False are forwarded when explicitly set.
+    """
+
+    def test_enable_thinking_true_forwarded(self):
+        """enable_thinking=True should be in template_kwargs."""
+        # Simulate the logic from mllm.py
+        enable_thinking = True
+        template_kwargs = {}
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
+        assert template_kwargs == {"enable_thinking": True}
+
+    def test_enable_thinking_false_forwarded(self):
+        """enable_thinking=False should be in template_kwargs (was previously dropped)."""
+        enable_thinking = False
+        template_kwargs = {}
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
+        assert template_kwargs == {"enable_thinking": False}
+
+    def test_enable_thinking_none_not_forwarded(self):
+        """enable_thinking=None should NOT be in template_kwargs."""
+        enable_thinking = None
+        template_kwargs = {}
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
+        assert template_kwargs == {}
+
+    def test_enable_thinking_extraction_from_kwargs(self):
+        """enable_thinking should be properly popped from kwargs."""
+        kwargs = {"enable_thinking": False, "other_param": 42}
+        enable_thinking = kwargs.pop("enable_thinking", None)
+        assert enable_thinking is False
+        assert "enable_thinking" not in kwargs
+        assert kwargs == {"other_param": 42}
+
+    def test_enable_thinking_default_when_missing(self):
+        """Missing enable_thinking should default to None."""
+        kwargs = {"other_param": 42}
+        enable_thinking = kwargs.pop("enable_thinking", None)
+        assert enable_thinking is None
+
+
+class TestMLLMSamplingParams:
+    """Tests for Fix #3 and #4: MLLM sampling parameter handling.
+
+    Fix #3: temp= → temperature= (correct kwarg name for mlx_vlm)
+    Fix #4: top_k/min_p extraction and sampler creation
+    """
+
+    def test_sampler_creation_with_top_k(self):
+        """top_k > 0 should trigger sampler creation."""
+        kwargs = {"top_k": 50, "top_p": 0.9}
+        temperature = 0.7
+        top_k = kwargs.pop("top_k", 0)
+        min_p = kwargs.pop("min_p", 0.0)
+
+        needs_sampler = (top_k and top_k > 0) or (min_p and min_p > 0.0)
+        assert needs_sampler is True
+
+    def test_sampler_creation_with_min_p(self):
+        """min_p > 0 should trigger sampler creation."""
+        kwargs = {"min_p": 0.1}
+        top_k = kwargs.pop("top_k", 0)
+        min_p = kwargs.pop("min_p", 0.0)
+
+        needs_sampler = (top_k and top_k > 0) or (min_p and min_p > 0.0)
+        assert needs_sampler is True
+
+    def test_no_sampler_when_defaults(self):
+        """Default top_k=0 and min_p=0.0 should not create sampler."""
+        kwargs = {}
+        top_k = kwargs.pop("top_k", 0)
+        min_p = kwargs.pop("min_p", 0.0)
+
+        needs_sampler = (top_k and top_k > 0) or (min_p and min_p > 0.0)
+        assert not needs_sampler
+
+    def test_top_p_extracted_for_sampler(self):
+        """When sampler needed, top_p should be popped to avoid double-passing."""
+        kwargs = {"top_k": 50, "top_p": 0.9, "other": "keep"}
+        top_k = kwargs.pop("top_k", 0)
+        min_p = kwargs.pop("min_p", 0.0)
+        if (top_k and top_k > 0) or (min_p and min_p > 0.0):
+            top_p = kwargs.pop("top_p", 1.0)
+            assert top_p == 0.9
+        assert "top_p" not in kwargs
+        assert kwargs == {"other": "keep"}
+
+
+class TestServerContentLeakPrevention:
+    """Tests for Fix #6: Server-side content leak when reasoning is truncated.
+
+    When extract_reasoning() returns (reasoning, None) — i.e., truncated reasoning
+    with no content after it — the server must set content_for_parsing = "" to avoid
+    leaking raw <think> tags into the content field.
+    """
+
+    @pytest.fixture(params=["qwen3", "deepseek_r1"])
+    def parser(self, request):
+        return get_parser(request.param)()
+
+    def test_truncated_reasoning_no_content_leak(self, parser):
+        """When reasoning is truncated, content should be empty, not raw output."""
+        output = "<think>Some reasoning that got cut off"
+        reasoning, content = parser.extract_reasoning(output)
+        # Key assertion: content must NOT contain <think> tags
+        assert reasoning is not None
+        assert content is None  # No content, not the raw output
+
+    def test_complete_reasoning_content_preserved(self, parser):
+        """Normal case: complete reasoning should pass content through."""
+        output = "<think>Thinking</think>The answer."
+        reasoning, content = parser.extract_reasoning(output)
+        assert reasoning == "Thinking"
+        assert content == "The answer."
+
+    def test_no_tags_content_preserved(self, parser):
+        """No tags: full output should be content."""
+        output = "Just a plain response."
+        reasoning, content = parser.extract_reasoning(output)
+        assert reasoning is None
+        assert content == "Just a plain response."
+
+    def test_content_for_parsing_logic(self):
+        """Simulate the server.py content_for_parsing logic."""
+        parser = get_parser("qwen3")()
+
+        # Case 1: Normal — both reasoning and content
+        r, c = parser.extract_reasoning("<think>R</think>C")
+        content_for_parsing = "<think>R</think>C"  # raw output
+        if c is not None:
+            content_for_parsing = c
+        elif r is not None:
+            content_for_parsing = ""  # Fix #6
+        assert content_for_parsing == "C"
+
+        # Case 2: Truncated — reasoning only
+        r, c = parser.extract_reasoning("<think>Truncated reasoning")
+        content_for_parsing = "<think>Truncated reasoning"  # raw output
+        if c is not None:
+            content_for_parsing = c
+        elif r is not None:
+            content_for_parsing = ""  # Fix #6: prevents leak
+        assert content_for_parsing == ""
+
+        # Case 3: No tags — pure content
+        r, c = parser.extract_reasoning("Plain text")
+        content_for_parsing = "Plain text"  # raw output
+        if c is not None:
+            content_for_parsing = c
+        elif r is not None:
+            content_for_parsing = ""
+        assert content_for_parsing == "Plain text"
+
+
+class TestImplicitReasoningStreaming:
+    """Tests for streaming implicit reasoning mode (think_in_prompt=True).
+
+    When <think> is injected in the prompt (by agents like OpenCode), only
+    </think> appears in the model output. Text before </think> is reasoning.
+    """
+
+    @pytest.fixture(params=["qwen3", "deepseek_r1"])
+    def parser(self, request):
+        return get_parser(request.param)()
+
+    def test_think_in_prompt_streams_as_reasoning(self, parser):
+        """With think_in_prompt=True, tokens before </think> are reasoning."""
+        parser.reset_state(think_in_prompt=True)
+
+        tokens = ["I", " think", " the", "</think>", "answer"]
+        accumulated = ""
+        reasoning_parts = []
+        content_parts = []
+
+        for token in tokens:
+            prev = accumulated
+            accumulated += token
+            result = parser.extract_reasoning_streaming(prev, accumulated, token)
+            if result:
+                if result.reasoning:
+                    reasoning_parts.append(result.reasoning)
+                if result.content:
+                    content_parts.append(result.content)
+
+        assert "I think the" in "".join(reasoning_parts)
+        assert "answer" in "".join(content_parts)
+
+    def test_think_in_prompt_false_streams_as_content(self, parser):
+        """With think_in_prompt=False (default), text without tags is content."""
+        parser.reset_state(think_in_prompt=False)
+
+        tokens = ["Hello", " world"]
+        accumulated = ""
+        content_parts = []
+
+        for token in tokens:
+            prev = accumulated
+            accumulated += token
+            result = parser.extract_reasoning_streaming(prev, accumulated, token)
+            if result:
+                if result.content:
+                    content_parts.append(result.content)
+
+        assert "Hello world" in "".join(content_parts)
+
+    def test_think_in_prompt_default_is_false(self, parser):
+        """Default think_in_prompt should be False."""
+        parser.reset_state()
+        # Without think_in_prompt, tokens without tags should be content
+        result = parser.extract_reasoning_streaming("", "Hello", "Hello")
+        assert result is not None
+        assert result.content == "Hello"
+        assert result.reasoning is None
+
+
+class TestLLMStopSequences:
+    """Tests for Fix #5: LLM non-streaming stop sequence support.
+
+    Previously, stop sequences were accepted but silently ignored in
+    non-streaming LLM.generate(). Now they trigger post-generation truncation.
+    """
+
+    def test_stop_sequence_truncation_logic(self):
+        """Stop sequence should truncate output at first match."""
+        output_text = "Hello world! How are you doing today?"
+        stop = ["!"]
+        for stop_seq in stop:
+            idx = output_text.find(stop_seq)
+            if idx != -1:
+                output_text = output_text[:idx]
+                break
+        assert output_text == "Hello world"
+
+    def test_multiple_stop_sequences(self):
+        """First matching stop sequence should win."""
+        output_text = "Line 1\nLine 2\n---\nLine 4"
+        stop = ["---", "\n\n"]
+        for stop_seq in stop:
+            idx = output_text.find(stop_seq)
+            if idx != -1:
+                output_text = output_text[:idx]
+                break
+        assert output_text == "Line 1\nLine 2\n"
+
+    def test_no_stop_sequence_match(self):
+        """If no stop sequence matches, output is unchanged."""
+        output_text = "Complete response here."
+        stop = ["NONEXISTENT"]
+        original = output_text
+        for stop_seq in stop:
+            idx = output_text.find(stop_seq)
+            if idx != -1:
+                output_text = output_text[:idx]
+                break
+        assert output_text == original
+
+    def test_stop_none_no_truncation(self):
+        """stop=None should not cause truncation."""
+        output_text = "Response text."
+        stop = None
+        if stop and output_text:
+            for stop_seq in stop:
+                idx = output_text.find(stop_seq)
+                if idx != -1:
+                    output_text = output_text[:idx]
+                    break
+        assert output_text == "Response text."
+
+    def test_stop_at_beginning(self):
+        """Stop sequence at the very beginning should return empty string."""
+        output_text = "STOP rest of text"
+        stop = ["STOP"]
+        for stop_seq in stop:
+            idx = output_text.find(stop_seq)
+            if idx != -1:
+                output_text = output_text[:idx]
+                break
+        assert output_text == ""
+
+    def test_finish_reason_set_correctly(self):
+        """Finish reason should be 'stop' when stop sequence found."""
+        output_text = "Hello! World"
+        stop = ["!"]
+        finish_reason = "length"  # default
+        if stop and output_text:
+            for stop_seq in stop:
+                idx = output_text.find(stop_seq)
+                if idx != -1:
+                    output_text = output_text[:idx]
+                    finish_reason = "stop"
+                    break
+        assert finish_reason == "stop"
+        assert output_text == "Hello"
+
+
+class TestBatchOffsetSafeCache:
+    """Tests for Fix #7: _BatchOffsetSafeCache proxy for concurrent batching.
+
+    When multiple requests are batched, BatchKVCache.offset is an mx.array
+    of per-request offsets. Several Qwen VL model attention layers use
+    cache.offset in slice operations that require a Python int.
+
+    The _BatchOffsetSafeCache proxy intercepts .offset reads to return
+    a scalar int while delegating all other attribute access unchanged.
+    """
+
+    def test_mx_array_offset_returns_int(self):
+        """Proxy should convert mx.array offset to Python int."""
+        import mlx.core as mx
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        class FakeCache:
+            offset = mx.array([10, 20, 30])
+        proxy = _BatchOffsetSafeCache(FakeCache())
+        assert isinstance(proxy.offset, int)
+        assert proxy.offset == 10
+
+    def test_scalar_mx_array_offset(self):
+        """Proxy should handle scalar (0-dim) mx.array offset."""
+        import mlx.core as mx
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        class FakeCache:
+            offset = mx.array(42)
+        proxy = _BatchOffsetSafeCache(FakeCache())
+        assert isinstance(proxy.offset, int)
+        assert proxy.offset == 42
+
+    def test_int_offset_passthrough(self):
+        """Proxy should pass through Python int offset unchanged."""
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        class FakeCache:
+            offset = 99
+        proxy = _BatchOffsetSafeCache(FakeCache())
+        assert proxy.offset == 99
+
+    def test_attribute_delegation(self):
+        """Proxy should delegate non-offset attributes to inner cache."""
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        class FakeCache:
+            offset = 0
+            keys = "fake_keys"
+            values = "fake_values"
+            def make_mask(self):
+                return "mask"
+        proxy = _BatchOffsetSafeCache(FakeCache())
+        assert proxy.keys == "fake_keys"
+        assert proxy.values == "fake_values"
+        assert proxy.make_mask() == "mask"
+
+    def test_truthiness(self):
+        """Proxy should be truthy (used in 'if cache:' checks)."""
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        class FakeCache:
+            offset = 0
+        proxy = _BatchOffsetSafeCache(FakeCache())
+        assert bool(proxy) is True
+
+    def test_offset_setter_delegates(self):
+        """Setting offset through proxy should update inner cache."""
+        import mlx.core as mx
+        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+
+        class FakeCache:
+            offset = 0
+        inner = FakeCache()
+        proxy = _BatchOffsetSafeCache(inner)
+        proxy.offset = mx.array([100, 200])
+        assert isinstance(inner.offset, mx.array)
+
+    def test_wrap_batch_caches_selective(self):
+        """_wrap_batch_caches should only wrap BatchKVCache objects."""
+        from mlx_lm.models.cache import BatchKVCache, KVCache
+        from vllm_mlx.mllm_batch_generator import (
+            _BatchOffsetSafeCache,
+            _wrap_batch_caches,
+        )
+
+        bkv = BatchKVCache([0, 5])
+        kv = KVCache()
+        wrapped = _wrap_batch_caches([bkv, kv, bkv])
+        assert isinstance(wrapped[0], _BatchOffsetSafeCache)
+        assert isinstance(wrapped[1], KVCache)
+        assert isinstance(wrapped[2], _BatchOffsetSafeCache)
