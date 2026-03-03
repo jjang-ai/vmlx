@@ -103,6 +103,10 @@ class MLLMRequest:
     num_prompt_tokens: int = 0
     num_output_tokens: int = 0
 
+    # Video processing parameters (per-request overrides)
+    video_fps: Optional[float] = None
+    video_max_frames: Optional[int] = None
+
     # Error recovery
     _retry_count: int = 0
 
@@ -700,6 +704,8 @@ class MLLMScheduler:
             images=images,
             videos=videos,
             sampling_params=sampling_params,
+            video_fps=kwargs.get("video_fps"),
+            video_max_frames=kwargs.get("video_max_frames"),
         )
 
         with self._queue_lock:
@@ -822,6 +828,8 @@ class MLLMScheduler:
                 top_k=request.sampling_params.top_k,
                 min_p=request.sampling_params.min_p,
                 repetition_penalty=request.sampling_params.repetition_penalty,
+                video_fps=request.video_fps,
+                video_max_frames=request.video_max_frames,
             )
             batch_requests.append(batch_req)
 
