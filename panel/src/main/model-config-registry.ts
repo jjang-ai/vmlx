@@ -35,6 +35,7 @@ export interface DetectedConfig {
   enableAutoToolChoice: boolean
   isMultimodal: boolean
   description: string
+  maxContextLength?: number
 }
 
 const CONFIG_BY_FAMILY = new Map<string, Omit<ModelConfig, 'pattern' | 'familyName'>>()
@@ -314,6 +315,7 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
 /**
  * Detect model configuration ONLY by reading the model's config.json.
  * This is the authoritative way. We no longer guess based on folder name/regex.
+ * Also reads max_position_embeddings for context length detection.
  */
 export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
   try {
@@ -323,13 +325,28 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
       const parsed = JSON.parse(raw)
       const modelType = parsed.model_type?.toLowerCase()
 
+      // Read max context length from config.json (check multiple field names)
+      const maxContextLength: number | undefined =
+        (typeof parsed.max_position_embeddings === 'number' ? parsed.max_position_embeddings : undefined) ??
+        (typeof parsed.max_sequence_length === 'number' ? parsed.max_sequence_length : undefined) ??
+        (typeof parsed.seq_length === 'number' ? parsed.seq_length : undefined) ??
+        // Some models nest it in text_config (VL models)
+        (typeof parsed.text_config?.max_position_embeddings === 'number' ? parsed.text_config.max_position_embeddings : undefined)
+
       if (modelType && MODEL_TYPE_TO_FAMILY[modelType]) {
         const familyName = MODEL_TYPE_TO_FAMILY[modelType]
         const config = CONFIG_BY_FAMILY.get(familyName)
         if (config) {
-          return configToDetected(familyName, config)
+          const detected = configToDetected(familyName, config)
+          detected.maxContextLength = maxContextLength
+          return detected
         }
       }
+
+      // Even if model_type isn't recognized, still return context length
+      const fallback = { ...DEFAULT_CONFIG }
+      if (maxContextLength) fallback.maxContextLength = maxContextLength
+      return fallback
     }
   } catch (_) {
     console.log(`[MODEL-CONFIG] Error reading or parsing config.json at ${modelPath}`)

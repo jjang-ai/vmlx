@@ -1060,7 +1060,7 @@ export class SessionManager extends EventEmitter {
     // Only respect explicit user choice (true/false); undefined defers to auto-detect.
     const isVLM = config.isMultimodal === true ? true
       : config.isMultimodal === false ? false
-      : !!detected.isMultimodal
+        : !!detected.isMultimodal
     if (isVLM) args.push('--is-mllm')
 
     if (config.continuousBatching) args.push('--continuous-batching')
@@ -1090,6 +1090,10 @@ export class SessionManager extends EventEmitter {
     }
     if (effectiveAutoTool) {
       args.push('--enable-auto-tool-choice')
+    }
+    // Pass custom served model name if configured
+    if (config.servedModelName) {
+      args.push('--served-model-name', config.servedModelName)
     }
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)

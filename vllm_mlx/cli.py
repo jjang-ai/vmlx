@@ -134,6 +134,8 @@ def serve_command(args):
     print("=" * 60)
 
     print(f"Loading model: {args.model}")
+    if getattr(args, 'served_model_name', None):
+        print(f"Served model name: {args.served_model_name}")
     print(f"Default max tokens: {args.max_tokens}")
 
     # Store MCP config path for FastAPI startup
@@ -223,6 +225,7 @@ def serve_command(args):
         scheduler_config=scheduler_config,
         stream_interval=args.stream_interval if args.continuous_batching else 1,
         max_tokens=args.max_tokens,
+        served_model_name=getattr(args, 'served_model_name', None),
     )
 
     # Start server
@@ -486,6 +489,10 @@ Examples:
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start OpenAI-compatible server")
     serve_parser.add_argument("model", type=str, help="Model to serve")
+    serve_parser.add_argument(
+        "--served-model-name", type=str, default=None,
+        help="Custom name to expose via /v1/models API (default: auto from model path)"
+    )
     serve_parser.add_argument(
         "--host", type=str, default="0.0.0.0", help="Host to bind"
     )

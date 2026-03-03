@@ -57,6 +57,9 @@ export interface ServerConfig {
   // Reasoning
   reasoningParser?: string
 
+  // Custom API model name (--served-model-name)
+  servedModelName?: string
+
   // Multimodal (VLM)
   isMultimodal?: boolean
 

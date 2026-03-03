@@ -22,6 +22,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [detectedCacheType, setDetectedCacheType] = useState<string | undefined>()
+  const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
@@ -497,8 +498,9 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                               setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
                               // Still detect cache type for UI gating (Mamba vs KV, VLM)
                               try {
-                                const det = await window.api.models.detectConfig(model.path)
+                                const det = await window.api.models.detectConfig(model.path) as any
                                 if (det?.cacheType) setDetectedCacheType(det.cacheType)
+                                if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
                               } catch (_) { }
                               setStep(2)
                               return // skip auto-detect for config — existing config already has everything
@@ -507,7 +509,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                         } catch (_) { }
                         // Fallback: auto-detect model config for fresh sessions
                         try {
-                          const detected = await window.api.models.detectConfig(model.path)
+                          const detected = await window.api.models.detectConfig(model.path) as any
                           if (detected && detected.family !== 'unknown') {
                             setConfig(prev => ({
                               ...prev,
@@ -517,6 +519,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                               usePagedCache: detected.usePagedCache,
                             }))
                             setDetectedCacheType(detected.cacheType || 'kv')
+                            if (detected.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
                           }
                         } catch (_) {
                           // Auto-detect failed — user can configure manually
@@ -624,7 +627,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
         </div>
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} />
 
         {/* Launch */}
         <div className="flex gap-3 mt-6 pb-6">
