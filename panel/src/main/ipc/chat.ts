@@ -458,6 +458,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // Update active request entry with resolved baseUrl and auth for cancel support
     const activeEntry = activeRequests.get(chatId)
     if (activeEntry) {
+      activeEntry.endpoint = { host: resolved.host, port: resolved.port }
       activeEntry.baseUrl = baseUrl
       if (Object.keys(authHeaders).length > 0) activeEntry.authHeaders = authHeaders
     }

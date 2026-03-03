@@ -94,11 +94,19 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
               <span className="truncate font-medium" title={active.repoId}>
                 {shortName(active.repoId)}
               </span>
-              {p?.percent != null && p.percent > 0 && (
-                <span className="text-muted-foreground">{p.percent}%</span>
+              {p?.percent != null && p.percent > 0 ? (
+                <>
+                  <span className="text-muted-foreground">{p.percent}%</span>
+                  {p?.speed && <span className="text-muted-foreground">{p.speed}</span>}
+                  {p?.eta && <span className="text-muted-foreground">ETA {p.eta}</span>}
+                </>
+              ) : p?.raw ? (
+                <span className="text-muted-foreground truncate max-w-[200px]" title={p.raw}>
+                  {p.raw.slice(0, 60)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">Starting...</span>
               )}
-              {p?.speed && <span className="text-muted-foreground">{p.speed}</span>}
-              {p?.eta && <span className="text-muted-foreground">ETA {p.eta}</span>}
               {queue.length > 0 && (
                 <span className="text-muted-foreground">+{queue.length} queued</span>
               )}

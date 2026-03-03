@@ -8,6 +8,7 @@ interface HFModel {
   lastModified: string
   tags: string[]
   pipelineTag?: string
+  size?: string
 }
 
 interface DownloadTabProps {
@@ -61,7 +62,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       if (status.active) repos.add(status.active.repoId)
       for (const q of status.queue || []) repos.add(q.repoId)
       setDownloadingRepos(repos)
-    }).catch(() => {})
+    }).catch(() => { })
   }, [])
 
   // Listen for download events
@@ -236,6 +237,7 @@ function ModelCard({ model, isDownloading, onDownload }: {
           <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
             <span title="Downloads">{formatNumber(model.downloads)} downloads</span>
             <span title="Likes">{model.likes} likes</span>
+            {model.size && <span title="Model size">{model.size}</span>}
             <span>{timeAgo(model.lastModified)}</span>
           </div>
           {model.tags.length > 0 && (
@@ -251,13 +253,22 @@ function ModelCard({ model, isDownloading, onDownload }: {
             </div>
           )}
         </div>
-        <button
-          onClick={onDownload}
-          disabled={isDownloading}
-          className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap flex-shrink-0"
-        >
-          {isDownloading ? 'Downloading...' : 'Download'}
-        </button>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <button
+            onClick={(e) => { e.stopPropagation(); window.open(`https://huggingface.co/${model.id}`, '_blank') }}
+            className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded"
+            title="View on HuggingFace"
+          >
+            ↗
+          </button>
+          <button
+            onClick={onDownload}
+            disabled={isDownloading}
+            className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap"
+          >
+            {isDownloading ? 'Downloading...' : 'Download'}
+          </button>
+        </div>
       </div>
     </div>
   )
