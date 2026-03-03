@@ -55,9 +55,10 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
   const bundledPython = getBundledPythonPath()
   if (bundledPython) {
     try {
-      const ver = execSync(`"${bundledPython}" -c "import vllm_mlx; print(vllm_mlx.__version__)"`, {
+      const ver = execSync(`"${bundledPython}" -s -c "import vllm_mlx; print(vllm_mlx.__version__)"`, {
         encoding: 'utf-8',
-        timeout: 10000
+        timeout: 10000,
+        env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
       }).trim()
       console.log(`[vLLM Manager] Found bundled Python with vllm_mlx ${ver}`)
       return { installed: true, path: bundledPython, version: ver, method: 'bundled', bundled: true }
@@ -311,7 +312,8 @@ export function installVllmStreaming(
       return
     }
     cmd = bundledPython
-    args = ['-m', 'pip', 'install', '--force-reinstall', '--no-deps', sourcePath]
+    // -s: suppress user site-packages to ensure pip installs into bundled env only
+    args = ['-s', '-m', 'pip', 'install', '--force-reinstall', '--no-deps', sourcePath]
   } else {
     const built = buildInstallCommand(method, action, installerPath)
     cmd = built.cmd
@@ -322,8 +324,14 @@ export function installVllmStreaming(
   console.log(`[vLLM Manager] Running: ${fullCmd}`)
   onLog(`$ ${fullCmd}\n`)
 
+  const installEnv: Record<string, string | undefined> = { ...process.env }
+  if (method === 'bundled-update') {
+    // Isolate bundled Python from user's system packages
+    installEnv.PYTHONNOUSERSITE = '1'
+    installEnv.PYTHONPATH = ''
+  }
   const proc = spawn(cmd, args, {
-    env: { ...process.env },
+    env: installEnv,
     stdio: ['ignore', 'pipe', 'pipe']
   })
   activeInstall = proc
@@ -363,9 +371,10 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
 
   let current = ''
   try {
-    current = execSync(`"${bundledPython}" -c "import vllm_mlx; print(vllm_mlx.__version__)"`, {
+    current = execSync(`"${bundledPython}" -s -c "import vllm_mlx; print(vllm_mlx.__version__)"`, {
       encoding: 'utf-8',
-      timeout: 10000
+      timeout: 10000,
+      env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
     }).trim()
   } catch (_) {
     return { current: '', bundled: '', needsUpdate: false }

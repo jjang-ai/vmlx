@@ -414,12 +414,19 @@ export class SessionManager extends EventEmitter {
 
     let proc: ChildProcess
     if (vllmResult.type === 'bundled') {
-      // Bundled Python: spawn python3 -m vllm_mlx.cli serve <model> --host ... --port ...
-      // This avoids shebang path issues with relocatable Python
-      const fullCmd = `${vllmResult.pythonPath} -m vllm_mlx.cli ${args.join(' ')}`
+      // Bundled Python: spawn python3 -s -m vllm_mlx.cli serve <model> --host ... --port ...
+      // -s: suppress user site-packages (~/.local/lib/python3.12/site-packages)
+      // This avoids shebang path issues with relocatable Python and ensures
+      // the app uses ONLY its bundled engine, never system-installed mlx-lm/vllm-mlx.
+      const bundledEnv: Record<string, string | undefined> = {
+        ...spawnEnv,
+        PYTHONNOUSERSITE: '1',  // Extra safety: disable user site-packages
+        PYTHONPATH: undefined,  // Clear any inherited PYTHONPATH
+      }
+      const fullCmd = `${vllmResult.pythonPath} -s -m vllm_mlx.cli ${args.join(' ')}`
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
-      proc = spawn(vllmResult.pythonPath, ['-m', 'vllm_mlx.cli', ...args], {
-        env: spawnEnv,
+      proc = spawn(vllmResult.pythonPath, ['-s', '-m', 'vllm_mlx.cli', ...args], {
+        env: bundledEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,  // Separate process group so we can kill entire group
       })
@@ -1049,10 +1056,11 @@ export class SessionManager extends EventEmitter {
     // (e.g., a Qwen3 model named "Nemotron-Orchestrator" getting hybrid cache config).
     const detected = detectModelConfigFromDir(config.modelPath)
 
-    // VLM detection: user explicitly checked = always on; otherwise auto-detect from config.json.
-    // DEFAULT_CONFIG has isMultimodal=false, so we can't use ?? (false is not null).
-    // User must explicitly check the VLM box to force it on; otherwise auto-detect wins.
-    const isVLM = config.isMultimodal === true ? true : !!detected.isMultimodal
+    // VLM detection: tri-state — undefined=auto, true=force on, false=force off.
+    // Only respect explicit user choice (true/false); undefined defers to auto-detect.
+    const isVLM = config.isMultimodal === true ? true
+      : config.isMultimodal === false ? false
+      : !!detected.isMultimodal
     if (isVLM) args.push('--is-mllm')
 
     if (config.continuousBatching) args.push('--continuous-batching')
@@ -1195,9 +1203,10 @@ export class SessionManager extends EventEmitter {
     const bundledPython = getBundledPythonPath()
     if (bundledPython) {
       try {
-        execSync(`"${bundledPython}" -c "import vllm_mlx"`, {
+        execSync(`"${bundledPython}" -s -c "import vllm_mlx"`, {
           encoding: 'utf-8',
-          timeout: 10000
+          timeout: 10000,
+          env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
         })
         return { type: 'bundled', pythonPath: bundledPython }
       } catch (_) {

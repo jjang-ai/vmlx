@@ -603,6 +603,29 @@ class MemoryAwarePrefixCache:
 
         return len(expired_keys)
 
+    def remove(self, tokens: list[int]) -> bool:
+        """Remove a specific cache entry by token key.
+
+        Returns True if removed, False if not found.
+        """
+        tokens_key = tuple(tokens)
+        if tokens_key not in self._entries:
+            return False
+        entry = self._entries.pop(tokens_key)
+        self._current_memory -= entry.memory_bytes
+        self._stats.evictions += 1
+        self._stats.entry_count = len(self._entries)
+        self._stats.current_memory_bytes = self._current_memory
+        return True
+
+    def reset_stats(self) -> None:
+        """Reset hit/miss/eviction counters while preserving cached entries."""
+        self._stats = CacheStats(
+            max_memory_bytes=self._max_memory,
+            current_memory_bytes=self._current_memory,
+            entry_count=len(self._entries),
+        )
+
     def clear(self) -> None:
         """Clear all cached entries."""
         self._entries.clear()

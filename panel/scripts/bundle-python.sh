@@ -94,9 +94,12 @@ rm -rf "$SITE/_soundfile"* 2>/dev/null || true
 rm -rf "$SITE/setuptools" 2>/dev/null || true          # build tool, not needed at runtime (~4.2 MB)
 rm -rf "$SITE/setuptools"*.dist-info 2>/dev/null || true
 
-# Keep pip (needed for engine auto-update at runtime via python3 -m pip)
-# Only trim pip's vendored cache module
-rm -rf "$SITE/pip/_vendor/cachecontrol" 2>/dev/null || true
+# Keep pip intact (needed for engine auto-update at runtime via python3 -m pip)
+# NOTE: Do NOT remove pip/_vendor/* — pip 26+ requires cachecontrol and other
+# vendored modules. Removing them breaks `python3 -m pip install`.
+# Trim only safe targets: pip's test suite and docs.
+rm -rf "$SITE/pip/_vendor/pygments" 2>/dev/null || true      # syntax highlighting, not needed for install
+find "$SITE/pip" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 
 # ====================================================================
 # Patches for bundled dependencies (apply AFTER pip install, AFTER cleanup)
@@ -189,6 +192,20 @@ except FileNotFoundError:
 "
 
 echo "==> Patches applied."
+
+# Post-cleanup verification: ensure pip still works (catches vendor stripping bugs)
+echo "==> Verifying pip is functional (needed for engine auto-update)..."
+"$PYTHON" -s -m pip --version > /dev/null 2>&1 || { echo "ERROR: pip is broken after cleanup! Check vendor removals."; exit 1; }
+echo "  pip OK"
+
+# Verify path isolation
+echo "==> Verifying path isolation..."
+ENABLE_USER_SITE=$("$PYTHON" -s -c "import site; print(site.ENABLE_USER_SITE)" 2>&1)
+if [ "$ENABLE_USER_SITE" = "False" ]; then
+  echo "  ENABLE_USER_SITE=False with -s flag OK"
+else
+  echo "WARNING: -s flag did not suppress user site-packages"
+fi
 
 echo ""
 echo "==> Bundle size:"

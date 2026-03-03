@@ -171,6 +171,8 @@ class ChatCompletionRequest(BaseModel):
     # Tool calling
     tools: list[ToolDefinition] | None = None
     tool_choice: str | dict | None = None  # "auto", "none", or specific tool
+    # Number of completions (only n=1 supported; rejects n>1 with validation error)
+    n: int | None = None
     # Structured output
     response_format: ResponseFormat | dict | None = None
     # MLLM-specific parameters
@@ -186,6 +188,13 @@ class ChatCompletionRequest(BaseModel):
     # Standard vLLM convention: {"enable_thinking": true/false, ...}
     # enable_thinking here is used as fallback when top-level enable_thinking is None
     chat_template_kwargs: dict | None = None
+
+    @field_validator("n")
+    @classmethod
+    def validate_n(cls, v):
+        if v is not None and v != 1:
+            raise ValueError("Only n=1 is supported. Multiple completions are not implemented.")
+        return v
 
 
 class AssistantMessage(BaseModel):
@@ -585,8 +594,16 @@ class ChatCompletionChunkDelta(BaseModel):
 
     role: str | None = None
     content: str | None = None
-    reasoning_content: str | None = None
+    reasoning: str | None = Field(
+        default=None, exclude=True  # Internal storage; excluded from JSON
+    )
     tool_calls: list[dict] | None = None
+
+    @computed_field
+    @property
+    def reasoning_content(self) -> str | None:
+        """OpenAI O1-style reasoning field. Only present when thinking is enabled."""
+        return self.reasoning
 
 
 class ChatCompletionChunkChoice(BaseModel):
