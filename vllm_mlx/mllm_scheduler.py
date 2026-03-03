@@ -1158,10 +1158,24 @@ class MLLMScheduler:
                 if queue is not None:
                     try:
                         queue.put_nowait(req_output)
-                        if req_output.finished:
-                            queue.put_nowait(None)  # Signal end
                     except asyncio.QueueFull:
-                        pass
+                        pass  # Token lost — acceptable for intermediate tokens
+                    if req_output.finished:
+                        # Sentinel MUST be delivered — without it stream_outputs hangs
+                        try:
+                            queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            # Queue is full but we must deliver sentinel.
+                            # This should never happen (8192 buffer), but handle it.
+                            logger.warning(f"Output queue full for {req_output.request_id}, forcing sentinel")
+                            try:
+                                queue.get_nowait()  # Drain one item to make room
+                            except asyncio.QueueEmpty:
+                                pass
+                            try:
+                                queue.put_nowait(None)
+                            except asyncio.QueueFull:
+                                pass
 
     def _fail_all_requests(self, error_msg: str) -> None:
         """Fail all waiting and running requests with an error so callers don't hang."""
@@ -1179,9 +1193,20 @@ class MLLMScheduler:
                             finished=True,
                             finish_reason="error",
                         ))
-                        queue.put_nowait(None)
                     except asyncio.QueueFull:
                         pass
+                    # Sentinel MUST be delivered separately
+                    try:
+                        queue.put_nowait(None)
+                    except asyncio.QueueFull:
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            pass
                 failed_ids.add(req_id)
             # Fail waiting requests
             for req in list(self.waiting):
@@ -1196,9 +1221,20 @@ class MLLMScheduler:
                             finished=True,
                             finish_reason="error",
                         ))
-                        queue.put_nowait(None)
                     except asyncio.QueueFull:
                         pass
+                    # Sentinel MUST be delivered separately
+                    try:
+                        queue.put_nowait(None)
+                    except asyncio.QueueFull:
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            queue.put_nowait(None)
+                        except asyncio.QueueFull:
+                            pass
                 failed_ids.add(req_id)
             # Cleanup — do NOT pop output_queues here; the error+sentinel are
             # already enqueued and stream_outputs() will drain them. If we pop

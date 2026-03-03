@@ -523,8 +523,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     const hasAttachments = attachments && attachments.length > 0
     const userContentForDb = hasAttachments
       ? JSON.stringify([
+        ...(content.trim() ? [{ type: 'text', text: content }] : []),
         ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
-        ...(content.trim() ? [{ type: 'text', text: content }] : [])
       ])
       : content
     const userMessage: Message = {
