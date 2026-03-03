@@ -68,7 +68,12 @@ def _dequantize_cache(cache: List[Any]) -> List[Any]:
     return result
 
 
-def _fix_hybrid_cache(cache: List[Any], language_model: nn.Module) -> List[Any]:
+def _fix_hybrid_cache(
+    cache: List[Any],
+    language_model: nn.Module,
+    kv_positions: Optional[List[int]] = None,
+    num_model_layers: Optional[int] = None,
+) -> List[Any]:
     """Fix reconstructed cache for hybrid models (SSM + attention layers).
 
     Prefix cache stores ONLY KVCache (attention) layers — SSM/ArraysCache layers
@@ -79,19 +84,40 @@ def _fix_hybrid_cache(cache: List[Any], language_model: nn.Module) -> List[Any]:
     cache only stores the 8 attention layers. The reconstructed list of 8 must
     be expanded back to 32 by inserting fresh ArraysCache at SSM positions.
 
-    This uses model.make_cache() as the authoritative template for which layer
-    indices need which cache type.
+    Args:
+        cache: Reconstructed cache list (may be shorter than model layers)
+        language_model: The language model (for make_cache() template)
+        kv_positions: Pre-computed KVCache layer indices (skips recomputation)
+        num_model_layers: Pre-computed total layer count
     """
     if not hasattr(language_model, 'make_cache'):
         return cache
 
     try:
         from mlx_lm.models.cache import KVCache
-        template = language_model.make_cache()
-        num_model_layers = len(template)
 
-        # If cache already matches model layer count, just fix types in-place
-        if len(cache) == num_model_layers:
+        # Fast path: use pre-computed positions to check if fix is needed
+        if kv_positions is not None and num_model_layers is not None:
+            # Not a hybrid model (all layers are KVCache) — no fix needed
+            if len(kv_positions) == num_model_layers:
+                return cache
+            # Cache already correct length — no expansion needed
+            if len(cache) == num_model_layers:
+                return cache
+            # Cache length doesn't match expected KV layer count — can't fix
+            if len(cache) != len(kv_positions):
+                logger.warning(
+                    f"Cache length mismatch: {len(cache)} reconstructed vs "
+                    f"{len(kv_positions)} KV positions in {num_model_layers}-layer model"
+                )
+                return cache
+
+        # Need make_cache() for fresh SSM objects at non-KV positions
+        template = language_model.make_cache()
+        n_layers = len(template)
+
+        if len(cache) == n_layers:
+            # Same length — check for type mismatches (KVCache at SSM positions)
             fixed = False
             result = list(cache)
             for i, (tmpl, cached) in enumerate(zip(template, cache)):
@@ -102,27 +128,25 @@ def _fix_hybrid_cache(cache: List[Any], language_model: nn.Module) -> List[Any]:
                 logger.debug("Fixed hybrid cache: replaced KVCache at SSM positions")
             return result
 
-        # Cache is shorter than model layers — need to expand.
-        # The stored cache contains only KVCache layers (attention).
-        # Build full-length list: KVCache from reconstruction at attention positions,
-        # fresh template caches at SSM positions.
-        kv_positions = [i for i, t in enumerate(template) if isinstance(t, KVCache)]
-
-        if len(cache) != len(kv_positions):
+        # Cache shorter than model — expand using template
+        positions = kv_positions if kv_positions is not None else [
+            i for i, t in enumerate(template) if isinstance(t, KVCache)
+        ]
+        if len(cache) != len(positions):
             logger.warning(
                 f"Cache length mismatch: {len(cache)} reconstructed vs "
-                f"{len(kv_positions)} KV positions in {num_model_layers}-layer model"
+                f"{len(positions)} KV positions in {n_layers}-layer model"
             )
             return cache
 
-        result = list(template)  # Start with fresh caches for all layers
-        for cache_idx, model_idx in enumerate(kv_positions):
-            result[model_idx] = cache[cache_idx]  # Insert reconstructed KVCache
+        result = list(template)
+        for cache_idx, model_idx in enumerate(positions):
+            result[model_idx] = cache[cache_idx]
 
         logger.debug(
             f"Expanded hybrid cache: {len(cache)} KV layers -> "
-            f"{num_model_layers} total ({len(kv_positions)} KV + "
-            f"{num_model_layers - len(kv_positions)} SSM)"
+            f"{n_layers} total ({len(positions)} KV + "
+            f"{n_layers - len(positions)} SSM)"
         )
         return result
     except Exception as e:
@@ -477,6 +501,18 @@ class MLLMBatchGenerator:
         # Statistics
         self._stats = MLLMBatchStats()
 
+        # Pre-compute hybrid cache template info (avoids make_cache() per request)
+        self._hybrid_kv_positions: Optional[List[int]] = None
+        self._hybrid_num_layers: Optional[int] = None
+        if hasattr(self.language_model, 'make_cache'):
+            try:
+                from mlx_lm.models.cache import KVCache
+                template = self.language_model.make_cache()
+                self._hybrid_num_layers = len(template)
+                self._hybrid_kv_positions = [i for i, t in enumerate(template) if isinstance(t, KVCache)]
+            except Exception:
+                pass
+
         # Vision embedding cache for repeated images
         self.vision_cache = VisionEmbeddingCache(
             max_pixel_entries=vision_cache_size,
@@ -789,7 +825,11 @@ class MLLMBatchGenerator:
                     # replace KVCache at SSM positions with fresh ArraysCache.
                     # SSM layers need ArraysCache (cumulative state, not block-cached),
                     # and using KVCache at SSM positions causes make_mask signature errors.
-                    req_cache = _fix_hybrid_cache(req.prompt_cache, self.language_model)
+                    req_cache = _fix_hybrid_cache(
+                        req.prompt_cache, self.language_model,
+                        kv_positions=self._hybrid_kv_positions,
+                        num_model_layers=self._hybrid_num_layers,
+                    )
                 else:
                     # Create fresh per-request cache using model.make_cache()
                     # This correctly creates KVCache for attention layers and
@@ -874,7 +914,12 @@ class MLLMBatchGenerator:
 
         Each request can have different temperature/top_p/top_k/min_p.
         Repetition penalty is applied via logits_processors when set.
+        Samplers are cached on the request to avoid per-step reconstruction.
         """
+        cached = getattr(request, '_cached_sampler', None)
+        if cached is not None:
+            return cached
+
         from mlx_lm.sample_utils import make_sampler
         base_sampler = make_sampler(
             temp=request.temperature,
@@ -888,21 +933,23 @@ class MLLMBatchGenerator:
         if rep_penalty is not None and rep_penalty != 1.0:
             from mlx_lm.sample_utils import make_logits_processors
             logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
-            # Build full token sequence (prompt + generated) each call so the
-            # penalty applies to already-generated tokens, not just the prompt.
-            prompt_ids = request.input_ids
-            def sampler_with_penalty(logits, _req=request, _prompt=prompt_ids):
-                if _req.output_tokens:
-                    prompt_list = _prompt.tolist() if hasattr(_prompt, 'tolist') else list(_prompt)
-                    all_tokens = mx.array(prompt_list + _req.output_tokens)
-                else:
-                    all_tokens = _prompt
+            # Flatten prompt to 1D list — input_ids is 2D [1, seq_len] from prepare_inputs
+            ids = request.input_ids
+            prompt_list = ids[0].tolist() if ids is not None and ids.ndim > 1 else (
+                ids.tolist() if ids is not None else []
+            )
+            def sampler_with_penalty(logits, _req=request, _prompt_list=prompt_list):
+                # Build full token sequence (prompt + generated) so penalty
+                # applies to already-generated tokens, not just the prompt.
+                all_tokens = mx.array(_prompt_list + _req.output_tokens)
                 processed = logits
                 for proc in logits_procs:
                     processed = proc(all_tokens, processed)
                 return base_sampler(processed)
+            request._cached_sampler = sampler_with_penalty
             return sampler_with_penalty
 
+        request._cached_sampler = base_sampler
         return base_sampler
 
     def _step(
