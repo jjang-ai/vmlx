@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.3.10 — 2026-03-02 — Remote API Audit, HF Downloader, Test Suite
+
+### Bug Fixes
+- **Remote abort fix**: `abortByEndpoint()` now correctly matches remote sessions — previously, stopping a remote session failed to abort in-flight chat requests because the `endpoint` field was never set on active request entries.
+
+### Improvements
+- **HF model sizes**: HuggingFace search results now display model file sizes (extracted from `safetensors` metadata with fallback parameter estimation).
+- **HF model link**: Each model card in the Download tab now has a ↗ button to open the HuggingFace model page in the browser.
+- **Download status fallback**: When tqdm progress can't be parsed (e.g., during "Fetching N files" phase), the download status bar now shows the raw status text instead of a blank pulsing dot.
+
+### New
+- **Test suite**: Added vitest test infrastructure with 80 tests across 3 test files:
+  - `remote-session.test.ts` — URL resolution, auth headers, modelPath format, abort tracking, stale lock recovery, health check paths
+  - `request-builder.test.ts` — Completions/Responses API parameter forwarding, remote gating, tool format, filterTools
+  - `download-manager.test.ts` — tqdm parsing, size formatting, number formatting, timeAgo, model size extraction, download queue logic
+
+### Verified (Remote API Audit)
+- All sampling parameters (temperature, top_p, top_k, min_p, repeat_penalty, stop, max_tokens, reasoning_effort) correctly forwarded for remote sessions
+- `chat_template_kwargs` correctly excluded for remote sessions
+- MCP tools correctly blocked with clear error message
+- Tool format uses correct wire format per API (Completions: wrapped, Responses: flat)
+- Health check uses `/v1/models` for remote, `/health` for local
+- Dampened fail counting (every 3rd failure) for remote health monitor
+- 15-second recently-healthy optimization skips redundant health checks
+- Stale lock recovery works with session-specific timeout + 30s buffer
+- Abort handler sends fire-and-forget cancel request (silently fails for providers without cancel endpoints)
+- Remote sessions correctly reset to 'stopped' on app restart
+
+---
+
 ## v0.3.9 — 2026-02-15 — Paged Cache Default, Streaming Smoothness, GLM-4.7 Verified
 
 ### Changes

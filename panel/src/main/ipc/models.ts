@@ -545,6 +545,25 @@ export function registerModelHandlers(): void {
   cleanStaleMarkers().catch(() => { })
 
   // Search HuggingFace for MLX models
+  /** Extract total model size from HF API safetensors metadata */
+  function extractModelSize(m: any): string | undefined {
+    try {
+      // safetensors.total: total bytes across all safetensors files
+      const total = m.safetensors?.total
+      if (typeof total === 'number' && total > 0) return formatSize(total)
+      // Fallback: sum parameter counts from safetensors.parameters
+      const params = m.safetensors?.parameters
+      if (params && typeof params === 'object') {
+        const totalParams = Object.values(params).reduce((sum: number, v: any) => sum + (typeof v === 'number' ? v : 0), 0)
+        if (totalParams > 0) {
+          // Rough estimate: 2 bytes per param for fp16/bf16 (most MLX models)
+          return formatSize(totalParams * 2)
+        }
+      }
+    } catch (_) { }
+    return undefined
+  }
+
   ipcMain.handle('models:searchHF', async (_, query: string) => {
     const params = new URLSearchParams({
       search: query,
@@ -567,7 +586,8 @@ export function registerModelHandlers(): void {
       likes: m.likes ?? 0,
       lastModified: m.lastModified,
       tags: m.tags || [],
-      pipelineTag: m.pipeline_tag
+      pipelineTag: m.pipeline_tag,
+      size: extractModelSize(m)
     }))
   })
 
@@ -587,7 +607,8 @@ export function registerModelHandlers(): void {
       likes: m.likes ?? 0,
       lastModified: m.lastModified,
       tags: m.tags || [],
-      pipelineTag: m.pipeline_tag
+      pipelineTag: m.pipeline_tag,
+      size: extractModelSize(m)
     }))
   })
 
