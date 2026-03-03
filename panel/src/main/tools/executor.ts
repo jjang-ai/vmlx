@@ -24,6 +24,8 @@ const spawnedProcesses = new Map<string, SpawnedEntry>()
 export interface ToolResult {
   content: string
   is_error: boolean
+  /** For read_image: base64 data URL to inject as a multimodal content part in VLM follow-ups */
+  imageDataUrl?: string
 }
 
 // ─── Security ────────────────────────────────────────────────────────────────
@@ -476,7 +478,7 @@ async function runCommand(command: string, workingDir: string): Promise<ToolResu
   if (!command) return { content: 'Missing required parameter: command', is_error: true }
   return new Promise((resolve) => {
     let stdout = '', stderr = ''
-    let killed = false
+    let killReason = ''
     const proc = spawn('/bin/sh', ['-c', command], {
       cwd: workingDir,
       env: { ...process.env },
@@ -484,18 +486,18 @@ async function runCommand(command: string, workingDir: string): Promise<ToolResu
     })
     proc.stdout?.on('data', (d: Buffer) => {
       stdout += d.toString()
-      if (stdout.length > 10 * 1024 * 1024) { killed = true; proc.kill() }
+      if (!killReason && stdout.length > 10 * 1024 * 1024) { killReason = 'Output exceeded 10MB limit'; proc.kill() }
     })
     proc.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString()
-      if (stderr.length > 10 * 1024 * 1024) { killed = true; proc.kill() }
+      if (!killReason && stderr.length > 10 * 1024 * 1024) { killReason = 'Stderr exceeded 10MB limit'; proc.kill() }
     })
-    const timer = setTimeout(() => { killed = true; proc.kill() }, 60000)
+    const timer = setTimeout(() => { if (!killReason) { killReason = 'Command timed out after 60 seconds'; proc.kill() } }, 60000)
     proc.on('close', (code) => {
       clearTimeout(timer)
-      if (killed) {
+      if (killReason) {
         const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
-        resolve({ content: `$ ${command}\n\nCommand timed out after 60 seconds\n\n${combined}`, is_error: true })
+        resolve({ content: `$ ${command}\n\n${killReason}\n\n${combined}`, is_error: true })
       } else if (code === 0 || code === null) {
         resolve({ content: `$ ${command}\n\n${stdout}`, is_error: false })
       } else {
@@ -637,8 +639,10 @@ function batchEdit(
     results.push(`Edit ${i + 1}: OK`)
   }
 
-  writeFileSync(fullPath, content, 'utf-8')
   const okCount = results.filter(r => r.includes('OK')).length
+  if (okCount > 0) {
+    writeFileSync(fullPath, content, 'utf-8')
+  }
   return {
     content: `Batch edit ${path}: ${okCount}/${edits.length} succeeded\n${results.join('\n')}`,
     is_error: okCount === 0
@@ -669,13 +673,10 @@ function getDiagnostics(path: string, tool: string | undefined, workingDir: stri
     let args: string[]
     switch (tool) {
       case 'tsc':
-        // Check for npx first; run tsc --noEmit on the file or project
+        // Always run project-wide tsc --noEmit (single-file checking requires --isolatedModules
+        // and misses cross-file type errors). The path argument selects auto-detect only.
         cmd = 'npx'
         args = ['tsc', '--noEmit', '--pretty', 'false']
-        if (path !== '.' && !statSync(fullPath).isDirectory()) {
-          // Type-checking a single file needs --isolatedModules or just check the project
-          args = ['tsc', '--noEmit', '--pretty', 'false']
-        }
         break
       case 'eslint':
         cmd = 'npx'
@@ -822,6 +823,7 @@ async function fetchUrl(url: string, maxLength?: number): Promise<ToolResult> {
 
     // Truncate
     const maxChars = maxLength || 20000
+    const originalLength = text.length
     let truncated = false
     if (text.length > maxChars) {
       text = text.slice(0, maxChars)
@@ -829,7 +831,7 @@ async function fetchUrl(url: string, maxLength?: number): Promise<ToolResult> {
     }
 
     const header = `URL: ${url} (${contentType.split(';')[0]})`
-    const footer = truncated ? `\n\n[Truncated at ${maxChars} chars. ${text.length} of total fetched.]` : ''
+    const footer = truncated ? `\n\n[Truncated at ${maxChars} chars. Full response was ${originalLength} chars.]` : ''
 
     return { content: `${header}\n\n${text}${footer}`, is_error: false }
   } catch (err: any) {
@@ -905,6 +907,7 @@ async function ddgSearch(query: string, count?: number): Promise<ToolResult> {
 function insertText(path: string, line: number, text: string, workingDir: string): ToolResult {
   if (!path) return { content: 'Missing required parameter: path', is_error: true }
   if (text === undefined || text === null) return { content: 'Missing required parameter: text', is_error: true }
+  if (line === undefined || line === null) return { content: 'Missing required parameter: line', is_error: true }
   const fullPath = resolvePath(workingDir, path)
   if (!existsSync(fullPath)) return { content: `File not found: ${path}`, is_error: true }
 
@@ -919,6 +922,10 @@ function insertText(path: string, line: number, text: string, workingDir: string
 
 function replaceLines(path: string, startLine: number, endLine: number, text: string, workingDir: string): ToolResult {
   if (!path) return { content: 'Missing required parameter: path', is_error: true }
+  if (text === undefined || text === null) return { content: 'Missing required parameter: text', is_error: true }
+  if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) {
+    return { content: 'Missing or invalid start_line/end_line parameters', is_error: true }
+  }
   const fullPath = resolvePath(workingDir, path)
   if (!existsSync(fullPath)) return { content: `File not found: ${path}`, is_error: true }
 
@@ -1103,7 +1110,15 @@ function readImage(path: string, workingDir: string): ToolResult {
   if (stat.size > 10 * 1024 * 1024) return { content: `Image too large: ${formatBytes(stat.size)} (max 10MB)`, is_error: true }
 
   const base64 = readFileSync(fullPath).toString('base64')
-  return { content: `Image: ${path} (${mime}, ${formatBytes(stat.size)})\ndata:${mime};base64,${base64}`, is_error: false }
+  const dataUrl = `data:${mime};base64,${base64}`
+  // Return metadata as content (safe for context) + image data URL separately
+  // for VLM follow-ups. The dataUrl is injected as a multimodal content part
+  // by chat.ts so VL models can actually "see" the image.
+  return {
+    content: `Image loaded: ${path} (${mime}, ${formatBytes(stat.size)}). The image has been attached for visual analysis.`,
+    is_error: false,
+    imageDataUrl: dataUrl
+  }
 }
 
 // ─── Background Process ──────────────────────────────────────────────────────
@@ -1218,6 +1233,11 @@ function clipboardWrite(text: string): ToolResult {
 function gitCommand(command: string, workingDir: string): ToolResult {
   if (!command) return { content: 'Missing required parameter: command', is_error: true }
 
+  // Block shell metacharacters that could enable command injection via /bin/sh -c
+  if (/[;|&`$(){}]/.test(command)) {
+    return { content: `Blocked: "git ${command}" contains shell metacharacters. Use run_command for complex shell commands.`, is_error: true }
+  }
+
   // Block destructive operations
   const dangerous = [
     /push\s+.*--force/, /push\s+-f\b/,
@@ -1231,10 +1251,10 @@ function gitCommand(command: string, workingDir: string): ToolResult {
     }
   }
 
-  // Use execFileSync with shell args split for simple commands, fall back to shell for complex ones
-  // Git commands often need shell features (quotes in commit messages, pipes, etc.)
+  // Use shell execution via /bin/sh -c to handle quoted args correctly
+  // (e.g., git commit -m "fix: some bug" would break with naive split)
   try {
-    const output = execFileSync('git', command.split(/\s+/), {
+    const output = execFileSync('/bin/sh', ['-c', `git ${command}`], {
       cwd: workingDir,
       encoding: 'utf-8',
       timeout: 30000,

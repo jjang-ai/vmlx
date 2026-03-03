@@ -173,7 +173,8 @@ def compute_images_hash(images: list[str]) -> str:
         return "no_images"
 
     hashes = [compute_image_hash(img) for img in images]
-    combined = "_".join(sorted(hashes))
+    # Preserve order: image order matters for VLMs (different order = different result)
+    combined = "_".join(hashes)
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
