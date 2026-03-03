@@ -268,7 +268,7 @@ class BatchedEngine(BaseEngine):
         non_system_msgs = sum(1 for m in messages if m.get("role") != "system")
 
         if self._is_mllm and self._processor and not tools and non_system_msgs <= 2:
-            # Use mlx_vlm's chat template for single-turn MLLM (image-aware).
+            # Use mlx_vlm for single-turn MLLM (image-aware token insertion).
             # When tools are provided, or for multi-turn conversations (>2 non-system
             # messages), fall through to standard tokenizer path which properly handles
             # full conversation history and tool definitions.
@@ -280,20 +280,40 @@ class BatchedEngine(BaseEngine):
                 if config is None:
                     config = load_config(self._model_name)
 
-                # Pass full messages list (including system prompt) to mlx_vlm.
-                # apply_chat_template accepts a list of dicts with role/content
-                # and properly handles system messages and multimodal content
-                # via extract_text_from_content().
-                prompt = apply_chat_template(
+                # Two-step pipeline:
+                # 1. Build messages with image tokens via mlx_vlm (return_messages=True)
+                # 2. Apply template via processor with enable_thinking support
+                built_messages = apply_chat_template(
                     self._processor,
                     config,
                     messages,
                     num_images=num_images,
+                    return_messages=True,
                 )
-                if enable_thinking is False and prompt.endswith("<think>\n"):
-                    prompt = prompt[:-8]
-                elif enable_thinking is False and prompt.endswith("<think>"):
-                    prompt = prompt[:-7]
+
+                # Apply template with enable_thinking via the processor directly.
+                # mlx_vlm's get_chat_template doesn't forward enable_thinking,
+                # causing thinking models to always use thinking-OFF format.
+                tpl_kwargs = {
+                    "tokenize": False,
+                    "add_generation_prompt": True,
+                }
+                if enable_thinking is not None:
+                    tpl_kwargs["enable_thinking"] = enable_thinking
+                try:
+                    prompt = self._processor.apply_chat_template(
+                        built_messages, **tpl_kwargs
+                    )
+                except TypeError:
+                    # Processor doesn't support enable_thinking — fall back
+                    tpl_kwargs.pop("enable_thinking", None)
+                    prompt = self._processor.apply_chat_template(
+                        built_messages, **tpl_kwargs
+                    )
+                    if enable_thinking is False and prompt.endswith("<think>\n"):
+                        prompt = prompt[:-8]
+                    elif enable_thinking is False and prompt.endswith("<think>"):
+                        prompt = prompt[:-7]
                 return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
