@@ -151,6 +151,10 @@ class MLLMBatchRequest:
     min_p: float = 0.0
     repetition_penalty: float = 1.0
 
+    # Video processing parameters (per-request overrides)
+    video_fps: Optional[float] = None
+    video_max_frames: Optional[int] = None
+
     # Processed inputs (set after vision preprocessing)
     input_ids: Optional[mx.array] = None
     pixel_values: Optional[mx.array] = None
@@ -611,13 +615,16 @@ class MLLMBatchGenerator:
                 MAX_FRAMES,
             )
 
+            fps = request.video_fps or DEFAULT_FPS
+            max_frames = request.video_max_frames or MAX_FRAMES
+
             for video in request.videos:
                 try:
                     video_path = process_video_input(video)
                     frames = extract_video_frames_smart(
                         video_path,
-                        fps=DEFAULT_FPS,
-                        max_frames=MAX_FRAMES,
+                        fps=fps,
+                        max_frames=max_frames,
                     )
                     frame_paths = save_frames_to_temp(frames)
                     all_images.extend(frame_paths)
@@ -881,12 +888,18 @@ class MLLMBatchGenerator:
         if rep_penalty is not None and rep_penalty != 1.0:
             from mlx_lm.sample_utils import make_logits_processors
             logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
-            # Capture input_ids for logits processor (needs tokens to know what to penalize)
-            input_tokens = request.input_ids
-            def sampler_with_penalty(logits):
+            # Build full token sequence (prompt + generated) each call so the
+            # penalty applies to already-generated tokens, not just the prompt.
+            prompt_ids = request.input_ids
+            def sampler_with_penalty(logits, _req=request, _prompt=prompt_ids):
+                if _req.output_tokens:
+                    prompt_list = _prompt.tolist() if hasattr(_prompt, 'tolist') else list(_prompt)
+                    all_tokens = mx.array(prompt_list + _req.output_tokens)
+                else:
+                    all_tokens = _prompt
                 processed = logits
                 for proc in logits_procs:
-                    processed = proc(input_tokens, processed)
+                    processed = proc(all_tokens, processed)
                 return base_sampler(processed)
             return sampler_with_penalty
 

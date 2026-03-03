@@ -427,9 +427,12 @@ class BatchedEngine(BaseEngine):
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                stop=stop,
                 top_k=kwargs.get("top_k", 0),
                 min_p=kwargs.get("min_p", 0.0),
                 repetition_penalty=kwargs.get("repetition_penalty", 1.0),
+                video_fps=kwargs.get("video_fps"),
+                video_max_frames=kwargs.get("video_max_frames"),
             )
 
             return GenerationOutput(
@@ -515,6 +518,8 @@ class BatchedEngine(BaseEngine):
                 top_k=kwargs.get("top_k", 0),
                 min_p=kwargs.get("min_p", 0.0),
                 repetition_penalty=kwargs.get("repetition_penalty", 1.0),
+                video_fps=kwargs.get("video_fps"),
+                video_max_frames=kwargs.get("video_max_frames"),
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
