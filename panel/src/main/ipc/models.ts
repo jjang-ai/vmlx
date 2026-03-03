@@ -64,7 +64,8 @@ async function detectModelFormat(modelPath: string): Promise<'mlx' | 'gguf' | 'u
 
 const BUILTIN_MODEL_PATHS = [
   join(homedir(), '.lmstudio/models'),
-  join(homedir(), '.cache/huggingface/hub')
+  join(homedir(), '.cache/huggingface/hub'),
+  join(homedir(), '.exo/models'),
 ]
 
 const SETTINGS_KEY = 'model_scan_directories'
@@ -288,10 +289,20 @@ export function registerModelHandlers(): void {
 
   // Open a native directory picker dialog
   ipcMain.handle('models:browseDirectory', async () => {
+    // Default to LM Studio models folder if it exists, otherwise home
+    const lmStudioPath = join(homedir(), '.lmstudio', 'models')
+    let defaultPath: string | undefined
+    try {
+      await access(lmStudioPath)
+      defaultPath = lmStudioPath
+    } catch {
+      defaultPath = homedir()
+    }
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
       securityScopedBookmarks: true,
-      title: 'Select Model Directory'
+      title: 'Select Model Directory',
+      defaultPath
     })
     if (result.canceled || result.filePaths.length === 0) {
       return { canceled: true }
