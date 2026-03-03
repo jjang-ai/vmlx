@@ -893,7 +893,7 @@ class MLXMultimodalLM:
             formatted_prompt,
             all_images if all_images else None,
             max_tokens=max_tokens,
-            temp=temperature,
+            temperature=temperature,
             top_p=top_p,
             verbose=False,
             prompt_cache=prompt_cache,
@@ -1005,7 +1005,7 @@ class MLXMultimodalLM:
             formatted_prompt,
             all_images if all_images else None,
             max_tokens=max_tokens,
-            temp=temperature,
+            temperature=temperature,
             **kwargs,
         ):
             yield chunk
@@ -1146,8 +1146,8 @@ class MLXMultimodalLM:
         # Pass enable_thinking if provided (Qwen3-VL, etc.)
         enable_thinking = kwargs.pop("enable_thinking", None)
         template_kwargs = {}
-        if enable_thinking is True:
-            template_kwargs["enable_thinking"] = True
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
         try:
             # Use get_chat_template directly since messages are already properly formatted
             formatted_prompt = get_chat_template(
@@ -1296,13 +1296,24 @@ class MLXMultimodalLM:
             except Exception:
                 prompt_cache = None
 
+        # Extract sampling params not natively supported by mlx_vlm.generate()
+        # (top_k, min_p require a custom sampler; they're silently ignored otherwise)
+        top_k = kwargs.pop("top_k", 0)
+        min_p = kwargs.pop("min_p", 0.0)
+        if (top_k and top_k > 0) or (min_p and min_p > 0.0):
+            from mlx_lm.sample_utils import make_sampler
+            top_p = kwargs.pop("top_p", 1.0)
+            kwargs["sampler"] = make_sampler(
+                temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k
+            )
+
         result = generate(
             self.model,
             self.processor,
             formatted_prompt,
             all_images if all_images else None,
             max_tokens=max_tokens,
-            temp=temperature,
+            temperature=temperature,
             verbose=False,
             prompt_cache=prompt_cache,
             skip_prompt_processing=skip_prompt_processing,
@@ -1527,8 +1538,8 @@ class MLXMultimodalLM:
         # Pass enable_thinking if provided (Qwen3-VL, etc.)
         enable_thinking = kwargs.pop("enable_thinking", None)
         template_kwargs = {}
-        if enable_thinking is True:
-            template_kwargs["enable_thinking"] = True
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
         try:
             # Use get_chat_template directly since messages are already properly formatted
             formatted_prompt = get_chat_template(
@@ -1622,6 +1633,16 @@ class MLXMultimodalLM:
             self.processor.detokenizer = NaiveStreamingDetokenizer(tokenizer)
             self.processor._patched_detok = True
 
+        # Extract sampling params not natively supported by mlx_vlm.stream_generate()
+        top_k = kwargs.pop("top_k", 0)
+        min_p = kwargs.pop("min_p", 0.0)
+        if (top_k and top_k > 0) or (min_p and min_p > 0.0):
+            from mlx_lm.sample_utils import make_sampler
+            top_p = kwargs.pop("top_p", 1.0)
+            kwargs["sampler"] = make_sampler(
+                temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k
+            )
+
         try:
             for chunk in stream_generate(
                 self.model,
@@ -1629,7 +1650,7 @@ class MLXMultimodalLM:
                 formatted_prompt,
                 all_images if all_images else None,
                 max_tokens=max_tokens,
-                temp=temperature,
+                temperature=temperature,
                 prompt_cache=prompt_cache,
                 **kwargs,
             ):

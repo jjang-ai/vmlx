@@ -5,10 +5,11 @@ Base parser for models using <think>...</think> tags for reasoning.
 This module provides BaseThinkingReasoningParser, a concrete implementation
 for extracting reasoning content from models that use thinking tags.
 
-Supports three scenarios:
+Supports four scenarios:
 1. Both tags in output: <think>reasoning</think>content
 2. Only closing tag (think injected in prompt): reasoning</think>content
-3. No tags: pure content
+3. Only opening tag (truncated reasoning, max_tokens hit): <think>reasoning
+4. No tags: pure content
 """
 
 from abc import abstractmethod
@@ -62,10 +63,11 @@ class BaseThinkingReasoningParser(ReasoningParser):
         """
         Extract reasoning from complete output.
 
-        Handles three cases:
+        Handles four cases:
         1. Both tags present: <think>reasoning</think>content
         2. Only closing tag: reasoning</think>content (think in prompt)
-        3. No tags: pure content
+        3. Only opening tag: <think>reasoning (truncated, max_tokens hit)
+        4. No tags: pure content
 
         Args:
             model_output: Complete model output text.

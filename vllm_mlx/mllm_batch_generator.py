@@ -406,6 +406,90 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
     return batch_cache
 
 
+class _BatchOffsetSafeCache:
+    """Proxy that ensures cache.offset returns a scalar int, not mx.array.
+
+    Several VL model attention layers (Qwen3.5, Qwen2.5-VL, Qwen2-VL, Qwen3-VL,
+    Qwen3-VL-MoE, Qwen3-Omni-MoE) use cache.offset directly in slice operations
+    like ``mask[..., :kv_seq_len]`` which requires a Python int. When multiple
+    requests are batched, BatchKVCache.offset is an mx.array of per-request
+    offsets, causing "Slice indices must be integers or None".
+
+    This proxy wraps a BatchKVCache and intercepts .offset reads to return
+    the first element as a scalar int. All other attributes (update_and_fetch,
+    make_mask, keys, values, etc.) delegate to the underlying cache unchanged.
+
+    Only applied during _step() when batch_size > 1. Single-request batches
+    keep original KVCache objects (which already have int offsets).
+    """
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+
+    @property
+    def offset(self):
+        raw = self._inner.offset
+        if isinstance(raw, mx.array):
+            return (raw if raw.ndim == 0 else raw[0]).item()
+        return raw
+
+    @offset.setter
+    def offset(self, value):
+        self._inner.offset = value
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        if name in _BatchOffsetSafeCache.__slots__:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._inner, name, value)
+
+    def __bool__(self):
+        # BatchKVCache is always truthy when it exists (used in `if cache:` checks)
+        return True
+
+    def __len__(self):
+        if hasattr(self._inner, "__len__"):
+            return len(self._inner)
+        # BatchKVCache doesn't implement __len__; return batch size from offset
+        raw = self._inner.offset
+        if isinstance(raw, mx.array) and raw.ndim > 0:
+            return raw.shape[0]
+        return 1
+
+    def __iter__(self):
+        if hasattr(self._inner, "__iter__"):
+            return iter(self._inner)
+        raise TypeError(f"'{type(self._inner).__name__}' object is not iterable")
+
+    def __repr__(self):
+        return f"_BatchOffsetSafeCache({self._inner!r})"
+
+
+def _wrap_batch_caches(cache: List[Any]) -> List[Any]:
+    """Wrap BatchKVCache objects with offset-safe proxies for VL model compat.
+
+    Returns the list with BatchKVCache entries wrapped in _BatchOffsetSafeCache.
+    Non-BatchKVCache entries (MambaCache, ArraysCache, etc.) pass through unchanged.
+    """
+    try:
+        from mlx_lm.models.cache import BatchKVCache
+    except ImportError:
+        return cache
+
+    wrapped = []
+    for c in cache:
+        if isinstance(c, BatchKVCache):
+            wrapped.append(_BatchOffsetSafeCache(c))
+        else:
+            wrapped.append(c)
+    return wrapped
+
+
 class MLLMBatchGenerator:
     """
     Batch generator for Vision Language Models.
@@ -1023,6 +1107,12 @@ class MLLMBatchGenerator:
         # Ensure correct shape
         if input_tokens.ndim == 1:
             input_tokens = input_tokens[:, None]
+
+        # Wrap BatchKVCache with offset-safe proxies for VL models (batch > 1).
+        # Several Qwen VL attention layers use cache.offset in slice ops that
+        # require int, but BatchKVCache.offset is mx.array. The proxy converts it.
+        if input_tokens.shape[0] > 1:
+            cache = _wrap_batch_caches(cache)
 
         # Run language model only (not full VLM)
         output = self.language_model(input_tokens, cache=cache)

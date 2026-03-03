@@ -1834,6 +1834,10 @@ async def create_chat_completion(
         )
         if remaining_text is not None:
             content_for_parsing = remaining_text
+        elif reasoning_text is not None:
+            # Truncated reasoning (e.g., max_tokens hit during <think> phase):
+            # reasoning extracted but no content after it — don't leak raw <think> tags
+            content_for_parsing = ""
         # Suppress reasoning when user explicitly disabled thinking
         _suppress = request.enable_thinking is False
         if not _suppress and request.chat_template_kwargs:
@@ -2279,6 +2283,10 @@ async def create_response(
         )
         if remaining_text is not None:
             content_for_parsing = remaining_text
+        elif reasoning_text is not None:
+            # Truncated reasoning (e.g., max_tokens hit during <think> phase):
+            # reasoning extracted but no content after it — don't leak raw <think> tags
+            content_for_parsing = ""
         # Suppress reasoning when user explicitly disabled thinking
         _suppress = request.enable_thinking is False
         if not _suppress and request.chat_template_kwargs:
@@ -2554,6 +2562,7 @@ async def stream_chat_completion(
     accumulated_reasoning = ""  # Track reasoning text for fallback
     accumulated_content = ""  # Track content-only text for tool call marker detection
     content_was_emitted = False  # Whether any content chunk was sent
+    reasoning_was_streamed = False  # Whether any reasoning_content chunk was sent
 
     # Tool call buffering: when we detect a tool call marker in the stream,
     # we stop emitting content and buffer the rest. At end of stream, we parse
@@ -2689,6 +2698,9 @@ async def stream_chat_completion(
                 # Skip chunks that have nothing to emit after conversion
                 if not emit_content and not emit_reasoning and not output.finished:
                     continue
+
+                if emit_reasoning:
+                    reasoning_was_streamed = True
 
                 chunk = ChatCompletionChunk(
                     id=response_id,
@@ -2871,8 +2883,10 @@ async def stream_chat_completion(
             # No tool calls found despite markers — flush only the UN-STREAMED
             # portion. Content before the tool call marker was already emitted
             # during streaming; only the buffered portion (from marker onward) needs flushing.
+            # When reasoning parser is active, use accumulated_content (content-only)
+            # instead of accumulated_text (which includes reasoning and would leak it).
             already_sent = accumulated_content.strip()
-            full = accumulated_text.strip()
+            full = accumulated_content.strip() if request_parser else accumulated_text.strip()
             if already_sent and full.startswith(already_sent):
                 remainder = full[len(already_sent):].strip()
             else:
@@ -2894,7 +2908,9 @@ async def stream_chat_completion(
     # emit the reasoning text as content so clients always get a usable response.
     # This handles models that wrap everything in <think>...</think> without
     # producing content after the closing tag.
-    if request_parser and not content_was_emitted and accumulated_reasoning:
+    # Skip if reasoning was already streamed as reasoning_content chunks — the
+    # client already has the text and echoing it as content creates duplicates.
+    if request_parser and not content_was_emitted and accumulated_reasoning and not reasoning_was_streamed:
         fallback_chunk = ChatCompletionChunk(
             id=response_id,
             model=request.model,
