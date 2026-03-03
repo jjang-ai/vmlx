@@ -883,8 +883,9 @@ class TestEmptyResponseSafeguard:
         import vllm_mlx.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # The safeguard checks last_output is None, no content, no reasoning
+        # The safeguard checks last_output is None OR zero completion_tokens
         assert "last_output is None" in source
+        assert "completion_tokens" in source
         assert "content_was_emitted" in source
         assert "accumulated_reasoning" in source
         # And emits a diagnostic message
@@ -1465,3 +1466,50 @@ class TestPerRequestParserInstances:
 
         assert result1.reasoning == "hello"  # think_in_prompt=True → reasoning
         assert result2.content == "hello"    # think_in_prompt=False → content
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Section 14: MLLM System Prompt Handling
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestMLLMSystemPrompt:
+    """Tests that MLLM single-turn path preserves system prompts."""
+
+    def test_mllm_single_turn_passes_full_messages(self):
+        """MLLM single-turn path must pass full messages list (including system)
+        to mlx_vlm's apply_chat_template, not just the user text."""
+        source = inspect.getsource(
+            __import__("vllm_mlx.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
+        )
+        # Should NOT extract just text_prompt from user message
+        assert "text_prompt = \"\"" not in source, \
+            "BUG: MLLM single-turn path extracts only user text, dropping system prompt"
+        # Should pass messages list to apply_chat_template
+        assert "messages," in source
+
+    def test_mllm_path_condition(self):
+        """MLLM path activates for single-turn VLM without tools."""
+        source = inspect.getsource(
+            __import__("vllm_mlx.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
+        )
+        assert "non_system_msgs <= 2" in source
+        assert "not tools" in source
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Section 15: Improved Zero-Token Safeguard
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestImprovedZeroTokenSafeguard:
+    """Tests that zero-token safeguard catches empty generation with last_output set."""
+
+    def test_safeguard_catches_zero_completion_tokens(self):
+        """Safeguard must also fire when last_output exists but has 0 completion_tokens."""
+        source = inspect.getsource(
+            __import__("vllm_mlx.server", fromlist=["stream_chat_completion"]).stream_chat_completion
+        )
+        # Must check completion_tokens == 0, not just last_output is None
+        assert "completion_tokens" in source
+        assert "Model produced no response" in source
