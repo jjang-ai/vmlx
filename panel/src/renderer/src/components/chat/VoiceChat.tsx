@@ -10,8 +10,48 @@ interface VoiceChatProps {
 type RecordingState = 'idle' | 'recording' | 'transcribing'
 
 /**
+ * Load audio settings from the app settings store.
+ * Settings keys: sttModel, ttsModel, ttsVoice, ttsSpeed
+ */
+function useAudioSettings() {
+  const [settings, setSettings] = useState<{
+    sttModel?: string; ttsModel?: string; ttsVoice?: string; ttsSpeed?: number
+  }>({})
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const [stt, tts, voice, speed] = await Promise.all([
+          window.api.settings.get('sttModel'),
+          window.api.settings.get('ttsModel'),
+          window.api.settings.get('ttsVoice'),
+          window.api.settings.get('ttsSpeed'),
+        ])
+        if (!cancelled) {
+          setSettings({
+            sttModel: stt || undefined,
+            ttsModel: tts || undefined,
+            ttsVoice: voice || undefined,
+            ttsSpeed: speed ? parseFloat(speed) : undefined,
+          })
+        }
+      } catch {
+        // Settings not available — use hardcoded defaults
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  return settings
+}
+
+/**
  * Microphone button component that records audio and transcribes via STT.
  * Uses MediaRecorder API for recording, sends to /v1/audio/transcriptions.
+ *
+ * STT model resolution: explicit prop > settings('sttModel') > 'whisper-large-v3'
  */
 export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: VoiceChatProps) {
   const [state, setState] = useState<RecordingState>('idle')
@@ -19,6 +59,9 @@ export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: Voi
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
+  const audioSettings = useAudioSettings()
+
+  const effectiveSttModel = sttModel || audioSettings.sttModel || 'whisper-large-v3'
 
   // Cleanup on unmount
   useEffect(() => {
@@ -71,7 +114,7 @@ export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: Voi
 
           const result = await window.api.audio.transcribe({
             audioBase64: base64,
-            model: sttModel || 'whisper-large-v3',
+            model: effectiveSttModel,
             endpoint
           })
 
@@ -96,7 +139,7 @@ export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: Voi
         setError(err.message || 'Failed to start recording')
       }
     }
-  }, [endpoint, sttModel, onTranscription])
+  }, [endpoint, effectiveSttModel, onTranscription])
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
@@ -165,11 +208,18 @@ interface TTSPlayerProps {
 /**
  * TTS playback: converts text to speech and plays audio.
  * Can auto-play when text changes (for voice mode).
+ *
+ * TTS settings resolution: explicit prop > settings('ttsModel'/'ttsVoice'/'ttsSpeed') > defaults
  */
 export function TTSPlayer({ text, endpoint, ttsModel, voice, speed, autoPlay }: TTSPlayerProps) {
   const [playing, setPlaying] = useState(false)
   const [loading, setLoading] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioSettings = useAudioSettings()
+
+  const effectiveModel = ttsModel || audioSettings.ttsModel || 'kokoro'
+  const effectiveVoice = voice || audioSettings.ttsVoice || 'af_heart'
+  const effectiveSpeed = speed || audioSettings.ttsSpeed || 1.0
 
   const play = useCallback(async () => {
     if (!text.trim()) return
@@ -177,9 +227,9 @@ export function TTSPlayer({ text, endpoint, ttsModel, voice, speed, autoPlay }: 
     try {
       const audioBase64 = await window.api.audio.speak({
         text,
-        model: ttsModel || 'kokoro',
-        voice: voice || 'af_heart',
-        speed: speed || 1.0,
+        model: effectiveModel,
+        voice: effectiveVoice,
+        speed: effectiveSpeed,
         endpoint
       })
 
@@ -204,7 +254,7 @@ export function TTSPlayer({ text, endpoint, ttsModel, voice, speed, autoPlay }: 
     } finally {
       setLoading(false)
     }
-  }, [text, endpoint, ttsModel, voice, speed])
+  }, [text, endpoint, effectiveModel, effectiveVoice, effectiveSpeed])
 
   const stop = useCallback(() => {
     if (audioRef.current) {

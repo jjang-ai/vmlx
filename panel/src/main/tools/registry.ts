@@ -400,7 +400,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
             description: 'Diagnostic tool to run: "auto" (detect from project), "tsc" (TypeScript), "eslint", "python" (py_compile). Default: "auto"'
           }
         },
-        required: ['path']
+        required: []
       }
     }
   },

@@ -144,10 +144,14 @@ class TestImageHashing:
             path2 = f2.name
 
         try:
-            # Order shouldn't matter (sorted internally)
+            # Same order produces same hash (deterministic)
             hash_a = compute_images_hash([path1, path2])
+            hash_a2 = compute_images_hash([path1, path2])
+            assert hash_a == hash_a2
+
+            # Different order produces different hash (order matters for VLMs)
             hash_b = compute_images_hash([path2, path1])
-            assert hash_a == hash_b
+            assert hash_a != hash_b
         finally:
             os.unlink(path1)
             os.unlink(path2)
@@ -417,13 +421,13 @@ class TestMLLMCacheManager:
             # Store
             cache_manager.store_cache(images, prompt, ["multi_cache"], num_tokens=200)
 
-            # Fetch same images in same order
+            # Fetch same images in same order — cache hit
             cache, hit = cache_manager.fetch_cache(images, prompt)
             assert hit is True
 
-            # Fetch same images in different order - should still hit (sorted internally)
+            # Different order — cache miss (order matters for VLM semantics)
             cache, hit = cache_manager.fetch_cache([img2, img1], prompt)
-            assert hit is True
+            assert hit is False
         finally:
             os.unlink(img1)
             os.unlink(img2)

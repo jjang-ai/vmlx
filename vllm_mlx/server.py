@@ -390,38 +390,32 @@ def _parse_tool_calls_with_parser(
     Returns:
         Tuple of (cleaned_text, tool_calls)
     """
-    global _tool_parser_instance
-
     # If auto tool choice is not enabled, use the generic parser
     if not _enable_auto_tool_choice or not _tool_call_parser:
         return parse_tool_calls(output_text)
 
-    # Initialize parser if needed
-    if _tool_parser_instance is None:
-        try:
-            parser_cls = ToolParserManager.get_tool_parser(_tool_call_parser)
-            # Get tokenizer from engine if available
-            tokenizer = None
-            if _engine is not None and hasattr(_engine, "_tokenizer"):
-                tokenizer = _engine._tokenizer
-            _tool_parser_instance = parser_cls(tokenizer)
-            logger.info(f"Initialized tool call parser: {_tool_call_parser}")
-        except Exception as e:
-            logger.warning(
-                f"Failed to initialize tool parser '{_tool_call_parser}': {e}"
-            )
-            logger.warning("Falling back to generic parser")
-            return parse_tool_calls(output_text)
+    # Create a fresh parser instance per call for thread-safety.
+    # Non-streaming requests can be concurrent — sharing a global instance
+    # risks interleaved state even with reset().
+    try:
+        parser_cls = ToolParserManager.get_tool_parser(_tool_call_parser)
+        tokenizer = None
+        if _engine is not None and hasattr(_engine, "_tokenizer"):
+            tokenizer = _engine._tokenizer
+        parser_instance = parser_cls(tokenizer)
+    except Exception as e:
+        logger.warning(
+            f"Failed to initialize tool parser '{_tool_call_parser}': {e}"
+        )
+        return parse_tool_calls(output_text)
 
     # Use the configured parser, fall back to generic if it finds nothing
     try:
-        # Reset parser state between requests
-        _tool_parser_instance.reset()
         # Convert request to dict format for parsers that need schema info (e.g., Step3p5 type coercion)
         parser_request = None
         if request and request.tools:
             parser_request = {"tools": convert_tools_for_template(request.tools)}
-        result = _tool_parser_instance.extract_tool_calls(output_text, request=parser_request)
+        result = parser_instance.extract_tool_calls(output_text, request=parser_request)
         if result.tools_called:
             tool_calls = [
                 ToolCall(
@@ -451,6 +445,11 @@ def _detect_native_tool_support() -> bool:
     Native format means role="tool" messages and tool_calls fields
     are preserved instead of being converted to text.
 
+    Checks two sources:
+    1. The parser class's ``supports_native_format()`` method.
+    2. The model config registry ``preserve_native_tool_format`` flag
+       (fallback for parsers that don't declare native support).
+
     Returns:
         True if native format should be preserved
     """
@@ -459,7 +458,8 @@ def _detect_native_tool_support() -> bool:
 
     try:
         parser_cls = ToolParserManager.get_tool_parser(_tool_call_parser)
-        return parser_cls.supports_native_format()
+        if parser_cls.supports_native_format():
+            return True
     except KeyError:
         # Parser not found - this is a configuration error, log as error
         logger.error(
@@ -470,7 +470,17 @@ def _detect_native_tool_support() -> bool:
     except Exception as e:
         # Unexpected error during detection
         logger.warning(f"Failed to detect native tool support: {e}")
-        return False
+
+    # Fallback: check model config registry for preserve_native_tool_format
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc = get_model_config_registry().lookup(_model_path or _model_name or "")
+        if _mc.preserve_native_tool_format:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def load_embedding_model(
@@ -608,12 +618,14 @@ def load_model(
     # Log Metal GPU memory after model load
     try:
         import mlx.core as mx
+        active_gb = peak_gb = None
         if hasattr(mx, "get_active_memory"):
             active_gb = mx.get_active_memory() / (1024 ** 3)
             peak_gb = mx.get_peak_memory() / (1024 ** 3)
         elif hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
             active_gb = mx.metal.get_active_memory() / (1024 ** 3)
             peak_gb = mx.metal.get_peak_memory() / (1024 ** 3)
+        if active_gb is not None:
             logger.info(f"Metal GPU memory after load: {active_gb:.2f}GB active, {peak_gb:.2f}GB peak")
     except Exception:
         pass
@@ -694,6 +706,7 @@ async def health():
     memory_info = None
     try:
         import mlx.core as mx
+        active = peak = cache = None
         if hasattr(mx, "get_active_memory"):
             active = mx.get_active_memory()
             peak = mx.get_peak_memory()
@@ -702,6 +715,7 @@ async def health():
             active = mx.metal.get_active_memory()
             peak = mx.metal.get_peak_memory()
             cache = mx.metal.get_cache_memory()
+        if active is not None:
             memory_info = {
                 "active_mb": round(active / (1024 * 1024), 1),
                 "peak_mb": round(peak / (1024 * 1024), 1),
@@ -745,7 +759,11 @@ def _get_scheduler():
     """Get the scheduler from the engine, or None if not available."""
     if _engine is None:
         return None
-    # BatchedEngine._engine is AsyncEngineCore, which has .engine (EngineCore)
+    # MLLM path: scheduler is directly on the engine
+    mllm_sched = getattr(_engine, "_mllm_scheduler", None)
+    if mllm_sched is not None:
+        return mllm_sched
+    # LLM path: BatchedEngine._engine is AsyncEngineCore, which has .engine (EngineCore)
     # EngineCore has .scheduler
     async_core = getattr(_engine, "_engine", None)
     if async_core is not None:
@@ -785,7 +803,7 @@ async def cache_stats():
             }
 
     # Disk cache (L2) stats
-    if scheduler and scheduler.disk_cache is not None:
+    if scheduler and getattr(scheduler, "disk_cache", None) is not None:
         result["disk_cache"] = scheduler.disk_cache.stats()
 
     # MLLM-specific cache stats
@@ -800,6 +818,27 @@ async def cache_stats():
         result["pixel_values_cache"] = get_pixel_values_cache_stats()
         result["pil_image_cache"] = get_pil_cache_stats()
     except ImportError:
+        pass
+
+    # Metal GPU memory info
+    try:
+        import mlx.core as mx
+        active = peak = cache_mem = None
+        if hasattr(mx, "get_active_memory"):
+            active = mx.get_active_memory()
+            peak = mx.get_peak_memory()
+            cache_mem = mx.get_cache_memory()
+        elif hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
+            active = mx.metal.get_active_memory()
+            peak = mx.metal.get_peak_memory()
+            cache_mem = mx.metal.get_cache_memory()
+        if active is not None:
+            result["memory"] = {
+                "active_mb": round(active / (1024 * 1024), 1),
+                "peak_mb": round(peak / (1024 * 1024), 1),
+                "cache_mb": round(cache_mem / (1024 * 1024), 1),
+            }
+    except Exception:
         pass
 
     if not result:
@@ -817,7 +856,7 @@ async def cache_entries():
     entries = []
     cache_type = "none"
 
-    if scheduler.memory_aware_cache is not None:
+    if getattr(scheduler, "memory_aware_cache", None) is not None:
         cache_type = "memory_aware"
         from .memory_cache import _BYTES_PER_MB
         for tokens_key, entry in scheduler.memory_aware_cache._entries.items():
@@ -827,7 +866,7 @@ async def cache_entries():
                 "memory_mb": round(entry.memory_bytes / _BYTES_PER_MB, 2),
                 "cache_type": "memory_aware",
             })
-    elif scheduler.block_aware_cache is not None:
+    elif getattr(scheduler, "block_aware_cache", None) is not None:
         cache_type = "paged"
         for block_id, block in scheduler.block_aware_cache.paged_cache.allocated_blocks.items():
             entries.append({
@@ -837,7 +876,7 @@ async def cache_entries():
                 "has_data": block.cache_data is not None,
                 "cache_type": "paged",
             })
-    elif scheduler.prefix_cache is not None:
+    elif getattr(scheduler, "prefix_cache", None) is not None:
         cache_type = "legacy"
         for _, tokens_tuple in scheduler.prefix_cache._lru:
             entries.append({
@@ -899,16 +938,16 @@ async def cache_warm(request: dict):
 
             # Store in the appropriate cache
             stored = False
-            if scheduler.memory_aware_cache is not None:
+            if getattr(scheduler, "memory_aware_cache", None) is not None:
                 stored = scheduler.memory_aware_cache.store(tokens, cache)
-            elif scheduler.block_aware_cache is not None:
+            elif getattr(scheduler, "block_aware_cache", None) is not None:
                 extracted = scheduler._extract_cache_states(cache)
                 if extracted:
                     result = scheduler.block_aware_cache.store_cache(
                         f"warm-{i}-{uuid.uuid4().hex[:8]}", tokens, extracted
                     )
                     stored = result is not None
-            elif scheduler.prefix_cache is not None:
+            elif getattr(scheduler, "prefix_cache", None) is not None:
                 scheduler.prefix_cache.store_cache(tokens, cache)
                 stored = True
             else:
@@ -944,16 +983,16 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
     if cache_type in ("prefix", "all"):
         scheduler = _get_scheduler()
         if scheduler is not None:
-            if scheduler.memory_aware_cache is not None:
+            if getattr(scheduler, "memory_aware_cache", None) is not None:
                 scheduler.memory_aware_cache.clear()
                 cleared.append("memory_aware_prefix")
-            if scheduler.block_aware_cache is not None:
+            if getattr(scheduler, "block_aware_cache", None) is not None:
                 scheduler.block_aware_cache.clear()
                 cleared.append("paged_prefix")
-            if scheduler.prefix_cache is not None:
+            if getattr(scheduler, "prefix_cache", None) is not None:
                 scheduler.prefix_cache.clear()
                 cleared.append("legacy_prefix")
-            if scheduler.disk_cache is not None:
+            if getattr(scheduler, "disk_cache", None) is not None:
                 scheduler.disk_cache.clear()
                 cleared.append("disk_cache")
 
@@ -1648,20 +1687,38 @@ async def create_chat_completion(
     if request.video_max_frames:
         chat_kwargs["video_max_frames"] = request.video_max_frames
 
+    # Handle tool_choice: "none" suppresses tools entirely, "auto"/None is default,
+    # "required" or specific tool dict are handled post-generation.
+    _tool_choice = request.tool_choice
+    _suppress_tools = (_tool_choice == "none")
+
     # Merge MCP tools with user-provided tools
     all_tools = []
-    
-    # Add MCP tools if available
-    if _mcp_manager is not None:
-        mcp_tools = _mcp_manager.get_all_tools_openai()
-        all_tools.extend(mcp_tools)
-        if mcp_tools:
-            logger.debug(f"Added {len(mcp_tools)} MCP tools")
-    
-    # Add user-provided tools
-    if request.tools:
-        all_tools.extend(request.tools)
-        logger.debug(f"Added {len(request.tools)} user tools")
+
+    if not _suppress_tools:
+        # Add MCP tools if available
+        if _mcp_manager is not None:
+            mcp_tools = _mcp_manager.get_all_tools_openai()
+            all_tools.extend(mcp_tools)
+            if mcp_tools:
+                logger.debug(f"Added {len(mcp_tools)} MCP tools")
+
+        # Add user-provided tools
+        if request.tools:
+            # If tool_choice is a specific tool dict, filter to only that tool
+            if isinstance(_tool_choice, dict):
+                target_name = (_tool_choice.get("function", {}).get("name")
+                               or _tool_choice.get("name"))
+                if target_name:
+                    # request.tools are ToolDefinition Pydantic models (type + function dict)
+                    filtered = [t for t in request.tools
+                                if t.function.get("name") == target_name]
+                    all_tools.extend(filtered if filtered else request.tools)
+                else:
+                    all_tools.extend(request.tools)
+            else:
+                all_tools.extend(request.tools)
+            logger.debug(f"Added {len(all_tools)} tools (tool_choice={_tool_choice})")
 
     # Pass merged tools to engine (normalize all to template format)
     if all_tools:
@@ -1766,6 +1823,17 @@ async def create_chat_completion(
             # Return JSON as string
             cleaned_text = json.dumps(parsed_json)
         if not is_valid:
+            # Check if strict mode is enabled — return 400 error instead of a warning
+            _rf_strict = False
+            if isinstance(response_format, dict):
+                _rf_strict = response_format.get("json_schema", {}).get("strict", False)
+            elif hasattr(response_format, "json_schema") and response_format.json_schema:
+                _rf_strict = getattr(response_format.json_schema, "strict", False)
+            if _rf_strict:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"response_format strict mode: {error}"
+                )
             logger.warning(f"JSON validation failed: {error}")
 
     # Determine finish reason
@@ -2042,33 +2110,53 @@ async def create_response(
     if request.video_max_frames:
         chat_kwargs["video_max_frames"] = request.video_max_frames
 
+    # Handle tool_choice: "none" suppresses tools entirely, "auto"/None is default,
+    # "required" or specific tool dict are handled post-generation.
+    _tool_choice = request.tool_choice
+    _suppress_tools = (_tool_choice == "none")
+
     # Merge MCP tools with user-provided tools
     all_tools = []
 
-    # Add MCP tools if available
-    if _mcp_manager is not None:
-        mcp_tools = _mcp_manager.get_all_tools_openai()
-        all_tools.extend(mcp_tools)
-        if mcp_tools:
-            logger.debug(f"Added {len(mcp_tools)} MCP tools")
+    if not _suppress_tools:
+        # Add MCP tools if available
+        if _mcp_manager is not None:
+            mcp_tools = _mcp_manager.get_all_tools_openai()
+            all_tools.extend(mcp_tools)
+            if mcp_tools:
+                logger.debug(f"Added {len(mcp_tools)} MCP tools")
 
-    # Add user-provided tools — convert from Responses API flat format to Chat Completions nested format
-    if request.tools:
-        from .api.tool_calling import convert_tools_for_template
-        for tool in request.tools:
-            tool_type = tool.get("type", "")
-            # Skip built-in Responses API tools (web_search, code_interpreter, file_search, etc.)
-            if tool_type != "function" and "function" not in tool and "name" not in tool:
-                continue
-            # Chat Completions nested format: {"type": "function", "function": {...}}
-            if "function" in tool:
-                all_tools.append(ToolDefinition(**tool))
-            # Responses API flat format: {"type": "function", "name": "...", "parameters": {...}}
-            elif "name" in tool:
-                flat = ResponsesToolDefinition(**tool)
-                all_tools.append(ToolDefinition(**flat.to_chat_completions_format()))
-        logger.debug(f"Added {len(request.tools)} user tools")
-    
+        # Add user-provided tools — convert from Responses API flat format to Chat Completions nested format
+        if request.tools:
+            # If tool_choice is a specific tool dict, filter to only that tool
+            if isinstance(_tool_choice, dict):
+                target_name = (_tool_choice.get("function", {}).get("name")
+                               or _tool_choice.get("name"))
+            else:
+                target_name = None
+
+            from .api.tool_calling import convert_tools_for_template
+            for tool in request.tools:
+                tool_type = tool.get("type", "")
+                # Skip built-in Responses API tools (web_search, code_interpreter, file_search, etc.)
+                if tool_type != "function" and "function" not in tool and "name" not in tool:
+                    continue
+                # Chat Completions nested format: {"type": "function", "function": {...}}
+                if "function" in tool:
+                    td = ToolDefinition(**tool)
+                    # Filter to specific tool if tool_choice is a dict
+                    if target_name and td.function.get("name") != target_name:
+                        continue
+                    all_tools.append(td)
+                # Responses API flat format: {"type": "function", "name": "...", "parameters": {...}}
+                elif "name" in tool:
+                    # Filter to specific tool if tool_choice is a dict
+                    if target_name and tool.get("name") != target_name:
+                        continue
+                    flat = ResponsesToolDefinition(**tool)
+                    all_tools.append(ToolDefinition(**flat.to_chat_completions_format()))
+            logger.debug(f"Added {len(all_tools)} tools (tool_choice={_tool_choice})")
+
     # Pass merged tools to engine
     if all_tools:
         from .api.tool_calling import convert_tools_for_template
@@ -2151,6 +2239,26 @@ async def create_response(
 
     # Parse tool calls
     cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or content_for_parsing, request)
+
+    # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
+    _text_format = request.text if hasattr(request, "text") else None
+    if _text_format and isinstance(_text_format, dict) and _text_format.get("type") not in (None, "text") and not tool_calls:
+        # Build a response_format-compatible dict for parse_json_output
+        _rf_type = _text_format.get("type", "")
+        if _rf_type in ("json_schema", "json_object"):
+            response_format = _text_format
+            _out_text = cleaned_text or content_for_parsing
+            _out_text, parsed_json, is_valid, error = parse_json_output(_out_text, response_format)
+            if parsed_json is not None:
+                cleaned_text = json.dumps(parsed_json)
+            if not is_valid:
+                _rf_strict = _text_format.get("json_schema", {}).get("strict", False)
+                if _rf_strict:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"response_format strict mode: {error}"
+                    )
+                logger.warning(f"[responses] JSON validation failed: {error}")
 
     # Build output array
     output_items = []
@@ -2929,22 +3037,33 @@ async def stream_responses_api(
                                     tool_call_buffering = True
 
                         if not tool_call_buffering:
-                            # Emit reasoning as custom event (unless suppressed)
-                            if delta_msg.reasoning and not suppress_reasoning:
+                            # When reasoning is suppressed (client requested enable_thinking=False
+                            # but model forces it), redirect reasoning as content so the UI
+                            # doesn't hang waiting for visible content.
+                            if suppress_reasoning:
+                                emit_content = delta_msg.reasoning or delta_msg.content
+                                emit_reasoning = None
+                            else:
+                                emit_reasoning = delta_msg.reasoning
+                                emit_content = delta_msg.content
+
+                            # Emit reasoning as custom event
+                            if emit_reasoning:
                                 yield _sse("response.reasoning.delta", {
                                     "type": "response.reasoning.delta",
                                     "item_id": msg_id,
                                     "output_index": 0,
-                                    "delta": delta_msg.reasoning,
+                                    "delta": emit_reasoning,
                                 })
                             # Emit content as standard text delta
-                            if delta_msg.content:
-                                streamed_text += delta_msg.content
+                            if emit_content:
+                                content_was_emitted = True
+                                streamed_text += emit_content
                                 yield _sse("response.output_text.delta", {
                                     "type": "response.output_text.delta",
                                     "item_id": msg_id,
                                     "output_index": 0, "content_index": 0,
-                                    "delta": delta_msg.content,
+                                    "delta": emit_content,
                                 })
                 else:
                     # Standard path without reasoning parsing

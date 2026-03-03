@@ -177,6 +177,36 @@ The panel app reads `generation_config.json` via `readGenerationDefaults()` and 
 
 When continuous batching is enabled for multimodal (VLM) models, the `MLLMScheduler` uses per-request sampling parameters from the first waiting request. Each `MLLMBatchRequest` carries its own `temperature`, `top_p`, `top_k`, `min_p`, and `repetition_penalty`. The batch generator is recreated when sampling parameters change between batches.
 
+### MLLM Stop Sequences
+
+String stop sequences (e.g., `["###", "<|end|>"]`) flow through the full MLLM path:
+
+1. **API** → `server.py` resolves `stop` from request
+2. **Engine** → `batched.py` passes `stop=stop` to `add_request_async()`
+3. **Scheduler** → `mllm_scheduler.add_request()` stores stop in `SamplingParams`
+4. **Post-decode** → `_process_batch_responses()` checks decoded text against stop strings
+5. **Truncation** → Output text truncated at stop match, finish_reason set to "stop"
+6. **Cleanup** → Batch generator removes the request to stop further generation
+
+### MLLM Paged Cache Storage
+
+VLM paged cache follows the same N-1 token truncation as LLM:
+
+1. On request completion, `_extracted_cache()` returns raw KVCache from batch generator
+2. Cache is truncated to `prompt_len - 1` tokens (so last token can be re-fed on cache hit)
+3. Quantized (if KV quant enabled) via `_quantize_cache_for_storage()`
+4. Converted to state-dict format via `_extract_cache_states()`
+5. Stored in `BlockAwarePrefixCache` with truncated token key
+
+### Chat Template Fallback
+
+When `apply_chat_template()` fails (e.g., template doesn't support a kwarg):
+
+1. **Progressive stripping** — removes kwargs one by one (last-added first)
+2. Preserves `tools` and `enable_thinking` as long as possible
+3. Only strips essential kwargs as a last resort
+4. SimpleEngine additionally injects tool definitions into system prompt if `tools` kwarg was stripped
+
 ## Settings Dependencies
 
 Feature activation follows a dependency chain:

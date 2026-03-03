@@ -590,6 +590,7 @@ class BlockAwarePrefixCache:
             if reused:
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
+                self.paged_cache.stats.total_tokens_cached += len(block_tokens)
                 parent_hash = block_chain_hash
                 continue
 
@@ -619,6 +620,7 @@ class BlockAwarePrefixCache:
             if existing_block:
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
+                self.paged_cache.stats.total_tokens_cached += len(block_tokens)
                 parent_hash = block_chain_hash
                 continue
 
@@ -637,6 +639,7 @@ class BlockAwarePrefixCache:
             block.token_count = len(block_tokens)
             block_table.block_ids.append(block.block_id)
             block_table.num_tokens += len(block_tokens)
+            self.paged_cache.stats.total_tokens_cached += len(block_tokens)
 
             # Set chain hash on the block (for L1 dedup and L2 disk addressing)
             block.block_hash = block_chain_hash
