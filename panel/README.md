@@ -7,17 +7,17 @@
 </p>
 
 <p align="center">
-  <strong>A native macOS app for running LLMs on Apple Silicon</strong>
+  <strong>The most complete MLX inference engine for Mac</strong>
 </p>
 
 <p align="center">
-  Manage multiple vLLM-MLX inference servers, chat with models, benchmark performance,<br>
-  and configure every parameter — all from a single desktop app.
+  Voice, vision, Mamba, 5-layer caching, 20+ agentic tools.<br>
+  Run any MLX model locally with full prefix caching, paged KV, q4/q8 quantization, and continuous batching.
 </p>
 
 <p align="center">
   <a href="https://vmlx.net">Website</a> &bull;
-  <a href="https://github.com/vmlxllm/vmlx">GitHub</a> &bull;
+  <a href="https://huggingface.co/dealignai">Models</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#features">Features</a>
 </p>
@@ -401,4 +401,4 @@ Add custom model directories via the directory manager in the Create Session wiz
 
 ## License
 
-MIT License
+Proprietary — Copyright 2026 ShieldStack LLC. All rights reserved. See [LICENSE](LICENSE).

@@ -149,7 +149,7 @@ const SHELL_TOOLS = new Set(['run_command', 'spawn_process', 'get_process_output
 const DDG_SEARCH_TOOLS = new Set(['ddg_search'])
 const FETCH_TOOLS = new Set(['fetch_url'])
 const GIT_TOOLS = new Set(['git'])
-const UTILITY_TOOLS = new Set(['count_tokens', 'clipboard_read', 'clipboard_write'])
+const UTILITY_TOOLS = new Set(['count_tokens', 'clipboard_read', 'clipboard_write', 'get_current_datetime'])
 // ask_user is intentionally excluded from UTILITY_TOOLS — it's a core IPC tool that should
 // always be available regardless of the utilityToolsEnabled toggle.
 
@@ -557,26 +557,17 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // Using any[] to support tool_calls and tool_call_id fields
     const requestMessages: any[] = []
 
-    // Inject current date/time so the model knows when "now" is.
-    // Placed at the END of the system prompt to maximize prefix cache hits
-    // (the stable prompt prefix stays identical across days).
-    const now = new Date()
-    const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
-    const dateSuffix = `\n\nCurrent date: ${dateStr}, ${timeStr}`
-
     // Add system prompt from overrides if available, or agentic prompt when built-in tools enabled
     const hasSystemPrompt = !!overrides?.systemPrompt
     if (hasSystemPrompt && overrides?.builtinToolsEnabled) {
       const toolRule = '\n\nIMPORTANT: After using any tools, you MUST always provide a substantive response explaining what you found or did. Never stop after just executing tools.'
-      requestMessages.push({ role: 'system', content: overrides!.systemPrompt! + toolRule + dateSuffix })
+      requestMessages.push({ role: 'system', content: overrides!.systemPrompt! + toolRule })
     } else if (hasSystemPrompt) {
-      requestMessages.push({ role: 'system', content: overrides!.systemPrompt! + dateSuffix })
+      requestMessages.push({ role: 'system', content: overrides!.systemPrompt! })
     } else if (overrides?.builtinToolsEnabled) {
-      requestMessages.push({ role: 'system', content: AGENTIC_SYSTEM_PROMPT + dateSuffix })
+      requestMessages.push({ role: 'system', content: AGENTIC_SYSTEM_PROMPT })
     } else {
-      // No system prompt at all — inject a minimal one with just the date
-      requestMessages.push({ role: 'system', content: `You are a helpful assistant.${dateSuffix}` })
+      requestMessages.push({ role: 'system', content: 'You are a helpful assistant.' })
     }
 
     // Add conversation messages (skip any existing system messages to avoid duplicates)

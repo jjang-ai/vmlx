@@ -369,25 +369,6 @@ class MCPExecuteResponse(BaseModel):
 # =============================================================================
 
 
-class AudioTranscriptionRequest(BaseModel):
-    """Request for audio transcription (STT)."""
-
-    model: str = "whisper-large-v3"
-    language: str | None = None
-    response_format: str = "json"
-    temperature: float = 0.0
-    timestamp_granularities: list[str] | None = None
-
-
-class AudioTranscriptionResponse(BaseModel):
-    """Response from audio transcription."""
-
-    text: str
-    language: str | None = None
-    duration: float | None = None
-    segments: list[dict] | None = None
-
-
 class AudioSpeechRequest(BaseModel):
     """Request for text-to-speech."""
 
@@ -396,13 +377,6 @@ class AudioSpeechRequest(BaseModel):
     voice: str = "af_heart"
     speed: float = 1.0
     response_format: str = "wav"
-
-
-class AudioSeparationRequest(BaseModel):
-    """Request for audio source separation."""
-
-    model: str = "htdemucs"
-    stems: list[str] = Field(default_factory=lambda: ["vocals", "accompaniment"])
 
 
 # =============================================================================
@@ -542,6 +516,8 @@ class ResponsesRequest(BaseModel):
     reasoning_effort: str | None = None
     # Extra kwargs passed directly to tokenizer.apply_chat_template()
     chat_template_kwargs: dict | None = None
+    # Request timeout in seconds (None = use server default)
+    timeout: float | None = None
     # Video processing controls (MLLM models)
     video_fps: float | None = None
     video_max_frames: int | None = None

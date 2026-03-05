@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.0.0 — 2026-03-05 — Production Release
+
+### Production Readiness
+- **App identity**: Bundle ID `net.vmlx.app`, copyright ShieldStack LLC, proprietary license
+- **Code signing**: Developer ID Application: ShieldStack LLC (55KGF2S5AY), hardened runtime
+- **Branded DMG**: Custom Midnight Steel background with vMLX logo and drag-to-install arrow
+- **CSP header**: Content Security Policy on renderer window (blocks XSS, restricts connect/font/img sources)
+- **Version 1.0.0**: Updated across package.json, Info.plist, and all metadata
+
+### New Features
+- **Date/Time tool**: Models can query current date, time, and timezone for time-aware responses
+- **Embeddings tab**: Generate and compare embeddings with cosine similarity
+- **Performance tab**: Real-time token generation speed monitoring
+- **Cache management tab**: View cache stats, entries, warm up, and clear caches
+- **420 tests** across 6 test suites (vitest)
+
+### Engine (vllm-mlx 0.2.8)
+- **KV cache quantization**: Storage-boundary q4/q8 compression (full precision during generation)
+- **Prefix cache visibility**: `cached_tokens` reported in OpenAI-compatible API response
+- **Mamba/SSM support**: BatchMambaCache with batch filtering, merging, and KV quantization safety
+- **Vision-language + caching**: Only MLX engine where VL models work with full 5-layer caching stack
+- **50+ auto-detected architectures**, 14 tool call parsers, 4 reasoning parsers
+
+---
+
 ## v0.3.10 — 2026-03-02 — Remote API Audit, HF Downloader, Test Suite
 
 ### Bug Fixes
@@ -318,5 +343,5 @@ Complete redesign from tab-based single-server to session-centric multi-instance
 
 ---
 
-**Current Version:** v0.3.9
-**Status:** Production-ready on macOS Apple Silicon
+**Current Version:** v1.0.0
+**Status:** Production release — macOS Apple Silicon

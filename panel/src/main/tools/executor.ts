@@ -135,6 +135,8 @@ export async function executeBuiltinTool(
         result = clipboardWrite(args.text); break
       case 'git':
         result = gitCommand(args.command, workingDir); break
+      case 'get_current_datetime':
+        result = getCurrentDatetime(); break
       // ask_user is handled in chat.ts (needs IPC to renderer), not here
       default:
         return { content: `Unknown tool: ${toolName}`, is_error: true }
@@ -1226,6 +1228,16 @@ function clipboardWrite(text: string): ToolResult {
   if (text === undefined || text === null) return { content: 'Missing required parameter: text', is_error: true }
   clipboard.writeText(text)
   return { content: `Written ${text.length} characters to clipboard.`, is_error: false }
+}
+
+// ─── Date/Time ──────────────────────────────────────────────────────────────
+
+function getCurrentDatetime(): ToolResult {
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  return { content: `${dateStr}, ${timeStr} (${timezone})`, is_error: false }
 }
 
 // ─── Git ─────────────────────────────────────────────────────────────────────

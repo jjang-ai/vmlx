@@ -141,6 +141,29 @@ is_vlm_model = is_mllm_model
 # =============================================================================
 
 
+def _flatten_content_list(content: list) -> str:
+    """Flatten an OpenAI content array to a single text string.
+
+    Extracts text parts from content arrays like:
+        [{"type": "text", "text": "hello"}, {"type": "image_url", ...}]
+    Returns joined text parts. Used when assistant messages have content
+    as an array alongside tool_calls (OpenAI spec says assistant content
+    is string|null, but some clients send arrays).
+    """
+    parts = []
+    for item in content:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        elif hasattr(item, "dict"):
+            item = item.dict()
+        if isinstance(item, dict):
+            if item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        elif isinstance(item, str):
+            parts.append(item)
+    return "\n".join(parts) if parts else ""
+
+
 def extract_multimodal_content(
     messages: list[Message],
     preserve_native_format: bool = False,
@@ -179,6 +202,10 @@ def extract_multimodal_content(
         else:
             role = msg.role
             content = msg.content
+
+        # Map "developer" role to "system" (OpenAI API compatibility)
+        if role == "developer":
+            role = "system"
 
         # Handle tool response messages (role="tool")
         if role == "tool":
@@ -225,6 +252,10 @@ def extract_multimodal_content(
                     elif hasattr(tc, "dict"):
                         tool_calls_list.append(tc.dict())
 
+                # Flatten list content to string for tool_calls messages
+                # (assistant content is always string/null in OpenAI spec)
+                if isinstance(content, list):
+                    content = _flatten_content_list(content)
                 msg_dict = {"role": role, "content": content if content else ""}
                 if tool_calls_list:
                     msg_dict["tool_calls"] = tool_calls_list
@@ -233,13 +264,21 @@ def extract_multimodal_content(
                 # Convert tool calls to text for models without native support
                 tool_calls_text = []
                 for tc in tool_calls:
+                    if hasattr(tc, "model_dump"):
+                        tc = tc.model_dump()
+                    elif hasattr(tc, "dict"):
+                        tc = tc.dict()
                     if isinstance(tc, dict):
                         func = tc.get("function", {})
                         name = func.get("name", "unknown")
                         args = func.get("arguments", "{}")
                         tool_calls_text.append(f"[Calling tool: {name}({args})]")
 
-                text = content if content else ""
+                # Flatten list content to string (fixes list + "\n" crash)
+                if isinstance(content, list):
+                    text = _flatten_content_list(content)
+                else:
+                    text = content if content else ""
                 if tool_calls_text:
                     text = (text + "\n" if text else "") + "\n".join(tool_calls_text)
 

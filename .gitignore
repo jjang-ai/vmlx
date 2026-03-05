@@ -130,3 +130,4 @@ gsm8k_*.json
 mcp.example.json
 mise.toml
 .pre-commit-config.yaml
+panel/.env.signing

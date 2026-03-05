@@ -77,16 +77,15 @@ function parseContentArray(content: string): Array<{ type: string; text?: string
 
 /** Group tool statuses into tool call groups. Each 'calling' phase starts a new group.
  *  Also extracts contentOffset for inline positioning. */
-function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOffsets: boolean; processingStatus?: any; doneStatus?: any } {
+function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOffsets: boolean; processingStatus?: any } {
   const groups: InlineToolGroup[] = []
   let current: InlineToolGroup | null = null
   let hasOffsets = false
   let processingStatus: any = null
-  let doneStatus: any = null
 
   for (const s of statuses) {
     if (s.phase === 'calling') {
-      current = { name: s.toolName, statuses: [s], contentOffset: s.contentOffset }
+      current = { name: s.toolName, statuses: [s] }
       if (s.contentOffset !== undefined) hasOffsets = true
       groups.push(current)
     } else if (s.phase === 'generating') {
@@ -97,14 +96,13 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
       processingStatus = s
       current = null
     } else if (s.phase === 'done') {
-      doneStatus = s
       current = null
     } else if (current) {
       current.statuses.push(s)
     }
   }
 
-  return { groups, hasOffsets, processingStatus, doneStatus }
+  return { groups, hasOffsets, processingStatus }
 }
 
 export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses }: MessageBubbleProps) {
@@ -179,72 +177,50 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     return <p className="whitespace-pre-wrap">{message.content}</p>
   }
 
-  /** Render assistant content with inline tool calls interleaved at their content offsets */
+  /** Render assistant content with inline tool calls.
+   *  Tool call pills are shown first (grouped), then the full content as one cohesive block.
+   *  This avoids splitting the model's text at arbitrary SSE chunk boundaries. */
   const renderInlineContent = () => {
     if (!message.content && (!toolGroups || toolGroups.groups.length === 0)) return null
 
     const content = message.content || ''
 
-    // If we have tool groups with content offsets, split content and interleave
     if (toolGroups && toolGroups.hasOffsets && toolGroups.groups.length > 0) {
-      // Sort groups by contentOffset ascending
-      const sorted = [...toolGroups.groups]
-        .filter(g => (g as any).contentOffset !== undefined)
-        .sort((a, b) => ((a as any).contentOffset || 0) - ((b as any).contentOffset || 0))
+      const elements: JSX.Element[] = []
 
-      if (sorted.length > 0) {
-        const elements: JSX.Element[] = []
-        let lastOffset = 0
-
-        for (let i = 0; i < sorted.length; i++) {
-          const group = sorted[i]
-          const offset = (group as any).contentOffset || 0
-
-          // Render text segment before this tool call
-          if (offset > lastOffset) {
-            const segment = content.slice(lastOffset, offset).trim()
-            if (segment) {
-              elements.push(renderMarkdownSegment(segment, `seg-${i}`) as JSX.Element)
-            }
-          }
-
-          // Render inline tool call
-          elements.push(
-            <InlineToolCall
-              key={`tool-${i}`}
-              group={group}
-              isStreaming={!!isStreaming}
-            />
-          )
-
-          lastOffset = Math.max(lastOffset, offset)
-        }
-
-        // Render remaining text after last tool call
-        if (lastOffset < content.length) {
-          const remaining = content.slice(lastOffset).trim()
-          if (remaining) {
-            elements.push(renderMarkdownSegment(remaining, 'seg-last') as JSX.Element)
-          }
-        }
-
-        // Show generating/processing status
-        if (toolGroups.processingStatus && isStreaming) {
-          const isGenerating = toolGroups.processingStatus.phase === 'generating'
-          elements.push(
-            <div key="processing" className="flex items-center gap-2 text-muted-foreground text-xs py-1">
-              <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isGenerating ? 'bg-primary' : 'bg-warning'}`} />
-              <span>{isGenerating ? 'Generating tool call...' : 'Processing tool results...'}</span>
-            </div>
-          )
-        }
-
-        return <>{elements}</>
+      // Render all tool call groups first
+      for (let i = 0; i < toolGroups.groups.length; i++) {
+        elements.push(
+          <InlineToolCall
+            key={`tool-${i}`}
+            group={toolGroups.groups[i]}
+            isStreaming={!!isStreaming}
+          />
+        )
       }
+
+      // Show generating/processing status
+      if (toolGroups.processingStatus && isStreaming) {
+        const isGenerating = toolGroups.processingStatus.phase === 'generating'
+        elements.push(
+          <div key="processing" className="flex items-center gap-2 text-muted-foreground text-xs py-1">
+            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isGenerating ? 'bg-primary' : 'bg-warning'}`} />
+            <span>{isGenerating ? 'Generating tool call...' : 'Processing tool results...'}</span>
+          </div>
+        )
+      }
+
+      // Render the full content as one block after tool calls
+      if (content.trim()) {
+        elements.push(renderMarkdownSegment(content, 'seg-content') as JSX.Element)
+      }
+
+      return <>{elements}</>
     }
 
-    // Fallback: render all content then tool calls at bottom (legacy behavior)
-    if (!content) return null
+    // Fallback: render content (no tool calls with offsets)
+    if (!content.trim()) return null
+    // Content is sanitized via DOMPurify in sanitizeHtml() before rendering
     const html = sanitizeHtml(marked.parse(content) as string)
     return (
       <div

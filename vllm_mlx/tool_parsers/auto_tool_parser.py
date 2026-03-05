@@ -7,7 +7,6 @@ Automatically detects and parses tool calls from various model formats.
 
 import json
 import re
-import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -15,12 +14,8 @@ from .abstract_tool_parser import (
     ExtractedToolCallInformation,
     ToolParser,
     ToolParserManager,
+    generate_tool_id,
 )
-
-
-def generate_tool_id() -> str:
-    """Generate a unique tool call ID."""
-    return f"call_{uuid.uuid4().hex[:8]}"
 
 
 @ToolParserManager.register_module(["auto", "generic"])
@@ -278,11 +273,24 @@ class AutoToolParser(ToolParser):
             except json.JSONDecodeError:
                 pass
 
-        # Find JSON objects with balanced braces
+        # Find JSON objects with balanced braces (string-aware)
         depth = 0
         start = None
+        in_string = False
+        escape = False
 
         for i, char in enumerate(text):
+            if escape:
+                escape = False
+                continue
+            if char == '\\' and in_string:
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if char == "{":
                 if depth == 0:
                     start = i

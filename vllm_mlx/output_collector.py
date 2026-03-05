@@ -51,6 +51,7 @@ class RequestOutputCollector:
         self.ready = asyncio.Event()
         self.aggregate = aggregate
         self._is_waiting = False
+        self._cancelled = False
 
     def put(self, output: RequestOutput) -> None:
         """
@@ -106,10 +107,12 @@ class RequestOutputCollector:
                 RequestOutputCollector._waiting_consumers += 1
         try:
             while self.output is None:
+                if self._cancelled:
+                    raise RuntimeError("Collector was cancelled")
                 await self.ready.wait()
             output = self.get_nowait()
-            # This should never be None after wait, but satisfy type checker
-            assert output is not None
+            if output is None:
+                raise RuntimeError("Collector was cancelled")
             return output
         finally:
             if self._is_waiting:
@@ -153,9 +156,11 @@ class RequestOutputCollector:
         )
 
     def clear(self) -> None:
-        """Clear any pending output."""
+        """Clear any pending output and wake blocked consumers."""
         self.output = None
-        self.ready.clear()
+        self._cancelled = True
+        # Set (not clear) the event so any blocked get() wakes up and exits
+        self.ready.set()
         if self._is_waiting:
             self._is_waiting = False
             with RequestOutputCollector._waiting_lock:
