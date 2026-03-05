@@ -1,12 +1,39 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-BatchMambaCache and cache patching for continuous batching.
+BatchMambaCache and cache patching for hybrid model continuous batching.
 
-mlx-lm's BatchGenerator requires cache objects to have an `extract` method,
-but MambaCache (which extends ArraysCache) doesn't have one. This module
-provides a BatchMambaCache wrapper and patches mlx-lm to support all cache
-types in continuous batching: MambaCache, RotatingKVCache (with keep > 0),
-ArraysCache, and CacheList.
+This module enables continuous batching for models that use non-KVCache layers
+(MambaCache, ArraysCache) -- primarily hybrid SSM+attention architectures like
+Qwen3.5-VL, Mamba, and Jamba.
+
+PROBLEM
+-------
+mlx-lm's BatchGenerator assumes all cache layers are KVCache with ``extract()``
+and ``merge()`` methods. But MambaCache (extends ArraysCache) lacks ``extract()``,
+and ``_make_cache()`` / ``_merge_caches()`` don't handle non-KV types. This causes
+crashes when batching hybrid models.
+
+SOLUTION
+--------
+1. ``BatchMambaCache``: Batch-aware wrapper around MambaCache with:
+   - ``extract(idx)`` -- extract single request's state from batch
+   - ``merge(caches)`` -- concatenate multiple MambaCache into batch
+   - ``filter(batch_indices)`` -- filter batch AND left_padding together
+
+2. ``patch_mlx_lm_for_mamba()``: Monkey-patches mlx-lm's generate module:
+   - ``_make_cache`` -- handles MambaCache -> BatchMambaCache conversion
+   - ``_merge_caches`` -- handles all cache types including QuantizedKVCache,
+     MambaCache, ArraysCache, RotatingKVCache, and CacheList (recursive)
+
+3. ``ensure_mamba_support()`` -- idempotent entry point (called by scheduler)
+
+INTEGRATION
+-----------
+Called from ``MLLMScheduler.__init__()`` when ``_is_hybrid_model()`` detects
+non-KVCache layers. Must be called before any BatchGenerator usage.
+
+The patched ``_merge_caches`` also handles QuantizedKVCache -> dequantize ->
+BatchKVCache merging, which is needed when KV cache quantization is active.
 """
 
 import logging

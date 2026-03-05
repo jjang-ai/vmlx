@@ -11,7 +11,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ..api.tool_calling import convert_tools_for_template
+from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, is_mllm_model
 from .base import BaseEngine, GenerationOutput
 
@@ -374,7 +374,7 @@ class SimpleEngine(BaseEngine):
 
                     try:
                         prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
-                    except (TypeError, Exception) as template_err:
+                    except Exception as template_err:
                         # Progressively strip non-essential kwargs to preserve tools/thinking
                         strip_order = [
                             k for k in tpl_kwargs
@@ -391,12 +391,11 @@ class SimpleEngine(BaseEngine):
                                     f"(original error: {template_err})"
                                 )
                                 break
-                            except (TypeError, Exception):
+                            except Exception:
                                 continue
                         if prompt is None:
                             prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
                             
-                    from ..api.tool_calling import check_and_inject_fallback_tools
                     prompt = check_and_inject_fallback_tools(
                         prompt, messages, template_tools, tokenizer, tpl_kwargs
                     )
@@ -408,13 +407,25 @@ class SimpleEngine(BaseEngine):
                 if prompt_suffix:
                     prompt += prompt_suffix
 
-                # Use generate() with the manually-built prompt
-                return await self.generate(
+                # Generate inline (don't call self.generate() — we already hold
+                # _generation_lock and asyncio.Lock is not reentrant).
+                output = await asyncio.to_thread(
+                    self._model.generate,
                     prompt=prompt,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     top_p=top_p,
                     **kwargs,
+                )
+                text = clean_output_text(output.text)
+                return GenerationOutput(
+                    text=text,
+                    tokens=getattr(output, "tokens", []),
+                    prompt_tokens=getattr(output, "prompt_tokens", 0),
+                    completion_tokens=getattr(
+                        output, "completion_tokens", len(getattr(output, "tokens", []))
+                    ),
+                    finish_reason=output.finish_reason,
                 )
 
     async def stream_chat(
@@ -470,6 +481,7 @@ class SimpleEngine(BaseEngine):
             # event loop stays responsive between tokens.
             accumulated_text = ""
             token_count = 0
+            last_prompt_tokens = 0
             finished = False
             self._abort_requested = False
 
@@ -560,12 +572,16 @@ class SimpleEngine(BaseEngine):
                     new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
                     accumulated_text += new_text
 
+                    chunk_prompt_tokens = getattr(chunk, "prompt_tokens", 0)
+                    if chunk_prompt_tokens:
+                        last_prompt_tokens = chunk_prompt_tokens
+
                     finished = chunk.finish_reason is not None
 
                     yield GenerationOutput(
                         text=accumulated_text,
                         new_text=new_text,
-                        prompt_tokens=getattr(chunk, "prompt_tokens", 0),
+                        prompt_tokens=last_prompt_tokens,
                         completion_tokens=token_count,
                         finished=finished,
                         finish_reason=chunk.finish_reason if finished else None,
@@ -579,7 +595,7 @@ class SimpleEngine(BaseEngine):
                     yield GenerationOutput(
                         text=accumulated_text,
                         new_text="",
-                        prompt_tokens=0,
+                        prompt_tokens=last_prompt_tokens,
                         completion_tokens=token_count,
                         finished=True,
                         finish_reason="stop",
@@ -621,7 +637,7 @@ class SimpleEngine(BaseEngine):
 
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-            except (TypeError, Exception) as template_err:
+            except Exception as template_err:
                 # Progressively strip non-essential kwargs to preserve tools/thinking.
                 # Strip order: extra kwargs first, then tools, then enable_thinking.
                 logger.warning(f"Chat template first attempt failed (will retry with fewer kwargs): {template_err}")
@@ -641,7 +657,7 @@ class SimpleEngine(BaseEngine):
                             f"(original error: {template_err})"
                         )
                         break
-                    except (TypeError, Exception):
+                    except Exception:
                         continue
 
                 if prompt is None:
@@ -653,7 +669,6 @@ class SimpleEngine(BaseEngine):
                         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                         prompt += "\nassistant:"
                         
-            from ..api.tool_calling import check_and_inject_fallback_tools
             prompt = check_and_inject_fallback_tools(
                 prompt, messages, template_tools, tokenizer, template_kwargs
             )

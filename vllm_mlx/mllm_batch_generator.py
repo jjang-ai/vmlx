@@ -1,30 +1,108 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-MLLM Batch Generator for multimodal continuous batching.
+MLLM Batch Generator -- continuous batching engine for multimodal models.
 
-This module implements continuous batching for Multimodal Language Models (MLLMs)
-like Qwen3-VL, following the same architecture as LLM continuous batching but
-adapted for vision models.
+This module is the low-level generation engine that the MLLMScheduler delegates
+to. It handles vision preprocessing, prefill, cache management, and batched
+token-by-token decode on Apple Metal.
 
-Key insight: VLM models have a `model.language_model` which is a standard LLM.
-After the initial forward pass with vision encoding, text generation uses only
-the language model - which CAN be batched using the same BatchKVCache pattern.
+KEY INSIGHT
+-----------
+VLM models have a ``model.language_model`` which is a standard LLM.
+After the initial forward pass with vision encoding, text generation uses
+only the language model -- which CAN be batched using the same BatchKVCache
+pattern as pure LLM inference.
 
-Architecture:
-1. Vision inputs are processed per-request (not batched)
-2. Initial VLM forward pass extracts cross-attention states / encoder outputs
-3. Language model generation is batched using BatchKVCache (like LLM batching)
+GENERATION PIPELINE
+-------------------
+::
+
+    _process_prompts()                        step()
+    ==================                        ======
+    For each request:                         For all active requests:
+    1. _preprocess_request()                  1. language_model(y, cache=cache)
+       - Pixel processing + tokenization      2. Sample next token
+       - Vision cache lookup                  3. Check stop conditions
+    2. Cache fetch (paged/memory/legacy/disk)  4. Return responses
+    3. _run_vision_encoding()                  5. Filter finished requests
+       - Full VLM forward (vision + LM)
+       - Populates KV cache
+    4. Capture SSM state (hybrid models)
+    5. Merge per-request caches -> BatchKVCache
+    6. Return MLLMBatch
+
+CACHE FETCH ORDER (in _process_prompts)
+-----------------------------------------
+Each request tries caches in this priority::
+
+    1. Paged cache (block_aware_cache.fetch_cache)
+       +-- Hybrid model: also check HybridSSMStateCache
+    2. Memory-aware or legacy cache (fetch/fetch_cache)
+    3. Disk cache L2 fallback (disk_cache.fetch)
+
+On cache HIT for pure attention models:
+  - ``req.prompt_cache`` = reconstructed KV cache
+  - ``req.input_ids`` trimmed to remaining (uncached) tokens
+  - ``req.pixel_values/attention_mask/image_grid_thw`` = None (no re-encoding)
+
+On cache HIT for hybrid models (KV + SSM):
+  - With SSM companion HIT: full cache (KV + SSM), skip all prefix tokens
+  - Without SSM companion: forced full prefill (SSM state is path-dependent)
+
+HYBRID MODEL HANDLING
+---------------------
+Hybrid models (e.g., Qwen3.5-VL 122B: 36 SSM + 12 attention layers) require
+special treatment because SSM state is cumulative -- you can't skip prefix
+computation for SSM layers even if you have the KV cache.
+
+``HybridSSMStateCache``:
+  - Companion LRU cache (max 50 entries) storing SSM layer states
+  - Keyed by hash(tuple(token_ids[:prompt_len]))
+  - Stored after prefill (before cache merge destroys per-request state)
+  - Deep-copies SSM arrays with mx.contiguous() for safety
+  - Enables groundbreaking full prefix skip for hybrid VLMs
+
+``_fix_hybrid_cache()``:
+  - Expands KV-only reconstructed cache to full layer count
+  - Inserts fresh ArraysCache at SSM positions from model.make_cache() template
+  - Pre-computed ``_hybrid_kv_positions`` and ``_hybrid_num_layers`` for speed
+
+METAL OPTIMIZATIONS
+-------------------
+- ``mx.metal.set_cache_limit()``: 25% of max working set (floor 512MB)
+  Bounds the Metal allocator's free-list so prefix cache and OS get memory.
+- ``mx.async_eval()``: Used in prefill loop for GPU/CPU overlap.
+  Submits sampled token + cache states to GPU without blocking.
+- ``mx.contiguous()``: Applied to extracted cache keys/values in
+  ``MLLMBatch.extract_cache()`` to release batch tensor references.
+- ``mx.new_stream()``: Dedicated Metal stream for generation.
+- Old limits restored in ``close()`` for clean teardown.
+
+KEY CLASSES
+-----------
+- ``HybridSSMStateCache`` -- Companion LRU cache for SSM layer states
+- ``MLLMBatchRequest`` -- Per-request data (tokens, pixels, sampling params)
+- ``MLLMBatchResponse`` -- Per-request step output (token, logprobs, cache)
+- ``MLLMBatch`` -- Active batch state (all requests being generated together)
+- ``MLLMBatchStats`` -- Throughput and timing statistics
+- ``MLLMBatchGenerator`` -- Main batch generator class
+
+HELPER FUNCTIONS
+----------------
+- ``_dequantize_cache()`` -- QuantizedKVCache -> KVCache for batch generation
+- ``_fix_hybrid_cache()`` -- Expand KV-only cache for hybrid models
+- ``_merge_caches()`` -- Merge per-request caches into batch-aware caches
 """
 
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
 
-from .multimodal_processor import MultimodalProcessor
 from .vision_embedding_cache import VisionEmbeddingCache
 
 logger = logging.getLogger(__name__)
@@ -156,6 +234,64 @@ def _fix_hybrid_cache(
         return cache
 
 
+class HybridSSMStateCache:
+    """Companion cache for SSM layer states in hybrid models.
+
+    Hybrid models (SSM + attention, e.g. Qwen3.5-VL) store KVCache in the
+    prefix cache but lose MambaCache/ArraysCache state. This companion cache
+    stores SSM state captured at the prompt boundary during prefill, keyed
+    by the prompt token prefix hash.
+
+    On a prefix cache HIT for a hybrid model, if the companion SSM state also
+    hits, we can reconstruct the FULL cache (KV + SSM) and skip the prefix
+    entirely — saving all compute on prefix tokens.
+
+    Without this, hybrid cache hits are wasted: the model must do a full
+    prefill through all layers because SSM state is cumulative.
+    """
+
+    def __init__(self, max_entries: int = 50):
+        self._store: OrderedDict[str, List[Any]] = OrderedDict()
+        self._max_entries = max_entries
+
+    def _key(self, token_ids: List[int], num_tokens: int) -> str:
+        """Deterministic hash key from token prefix using SHA-256."""
+        import hashlib
+        import json
+        data = json.dumps(token_ids[:num_tokens], separators=(",", ":")).encode()
+        return hashlib.sha256(data).hexdigest()
+
+    def store(
+        self,
+        token_ids: List[int],
+        num_tokens: int,
+        ssm_states: List[Any],
+    ) -> None:
+        """Store SSM layer states for a prompt prefix."""
+        key = self._key(token_ids, num_tokens)
+        # Remove existing entry to update position
+        if key in self._store:
+            del self._store[key]
+        self._store[key] = ssm_states
+        # Evict oldest if over limit
+        while len(self._store) > self._max_entries:
+            self._store.popitem(last=False)
+
+    def fetch(
+        self, token_ids: List[int], num_tokens: int
+    ) -> Optional[List[Any]]:
+        """Fetch SSM states for a matching prompt prefix."""
+        key = self._key(token_ids, num_tokens)
+        states = self._store.get(key)
+        if states is not None:
+            # Move to end (most recently used)
+            self._store.move_to_end(key)
+        return states
+
+    def clear(self) -> None:
+        self._store.clear()
+
+
 @dataclass
 class MLLMBatchRequest:
     """
@@ -214,6 +350,7 @@ class MLLMBatchResponse:
     finish_reason: Optional[str] = None  # "stop", "length", or None
     prompt_cache: Optional[Callable[[], List[Any]]] = None  # Cache extraction function
     prompt_token_ids: Optional[List[int]] = None  # Original tokenized prompt for prefix key
+    cached_tokens: int = 0  # Number of prompt tokens served from cache
 
 
 @dataclass
@@ -273,7 +410,15 @@ class MLLMBatch:
         for c in self.cache:
             if hasattr(c, "extract"):
                 # Batched cache (BatchKVCache, BatchMambaCache) — extract single request
-                extracted.append(c.extract(idx))
+                layer = c.extract(idx)
+                # Make extracted keys/values contiguous: BatchKVCache.extract()
+                # returns sliced views that reference the full batch tensor.
+                # Without contiguous(), the full batch tensor stays alive in memory
+                # even after the batch is freed.
+                if hasattr(layer, "keys") and layer.keys is not None:
+                    layer.keys = mx.contiguous(layer.keys)
+                    layer.values = mx.contiguous(layer.values)
+                extracted.append(layer)
             elif idx == 0:
                 # Unbatched cache (KVCache, ArraysCache) from single-request path —
                 # return the cache itself since there's only one request
@@ -494,27 +639,48 @@ def _wrap_batch_caches(cache: List[Any]) -> List[Any]:
 
 
 class MLLMBatchGenerator:
-    """
-    Batch generator for Vision Language Models.
+    """Batch generator for Vision Language Models on Apple Metal.
 
-    This class manages continuous batching for MLLM requests:
+    This is the low-level generation engine. The MLLMScheduler creates one
+    instance and delegates all prefill/decode work to it.
 
-    1. Vision Encoding Phase:
-       - Process images/videos through vision encoder (per-request)
-       - Extract vision features and merge with text embeddings
-       - Store cross-attention states for language model
+    **Two-phase generation:**
 
-    2. Language Generation Phase:
-       - Use language model with BatchKVCache for batched generation
-       - Generate tokens for all requests simultaneously
-       - Same pattern as LLM BatchGenerator
+    1. **Prefill** (``_process_prompts``):
+       Vision encoding + language model forward pass, per-request.
+       Each request gets its own KVCache/ArraysCache, then all are merged
+       into batch-aware caches (BatchKVCache/BatchMambaCache) for decode.
 
-    Example:
-        >>> generator = MLLMBatchGenerator(model, processor)
-        >>> uids = generator.insert([request1, request2])
-        >>> while responses := generator.next():
-        ...     for resp in responses:
-        ...         print(f"Request {resp.request_id}: token={resp.token}")
+    2. **Decode** (``step``):
+       Language model generates one token for ALL active requests at once.
+       Uses batched cache for efficient parallel generation.
+
+    **Cache integration:**
+
+    Receives cache objects (paged, memory-aware, legacy, disk) from the
+    scheduler. Handles cache fetch in _process_prompts (before prefill)
+    and exposes cache extraction via MLLMBatchResponse.prompt_cache
+    (after generation, for store by scheduler).
+
+    **Hybrid model support:**
+
+    Pre-computes ``_hybrid_kv_positions`` and ``_hybrid_num_layers`` at init.
+    Maintains ``HybridSSMStateCache`` for SSM state at prompt boundary.
+    Uses ``_fix_hybrid_cache()`` to expand KV-only reconstructed caches.
+
+    **Metal memory:**
+
+    Sets ``mx.metal.set_cache_limit()`` at 25% of max working set,
+    uses ``mx.async_eval()`` in prefill, ``mx.contiguous()`` on extracted
+    cache. Restores old limits in ``close()``.
+
+    Example::
+
+        generator = MLLMBatchGenerator(model, processor)
+        uids = generator.insert([request1, request2])
+        while responses := generator.next():
+            for resp in responses:
+                print(f"Request {resp.request_id}: token={resp.token}")
     """
 
     # Generation stream for async eval
@@ -524,7 +690,6 @@ class MLLMBatchGenerator:
         self,
         model: nn.Module,
         processor: Any,
-        mm_processor: Optional[MultimodalProcessor] = None,
         max_tokens: int = 256,
         stop_tokens: Optional[set] = None,
         sampler: Optional[Callable[[mx.array], mx.array]] = None,
@@ -535,6 +700,12 @@ class MLLMBatchGenerator:
         vision_cache_size: int = 100,
         paged_cache_manager: Optional[Any] = None,
         block_aware_cache: Optional[Any] = None,
+        memory_aware_cache: Optional[Any] = None,
+        prefix_cache: Optional[Any] = None,
+        disk_cache: Optional[Any] = None,
+        kv_cache_bits: int = 0,
+        kv_cache_group_size: int = 64,
+        ssm_state_cache_size: int = 50,
     ):
         """
         Initialize MLLM batch generator.
@@ -542,7 +713,6 @@ class MLLMBatchGenerator:
         Args:
             model: The VLM model (must have model.language_model)
             processor: The VLM processor for tokenization and image processing
-            mm_processor: Optional MultimodalProcessor for input preparation
             max_tokens: Default max tokens per request
             stop_tokens: Set of stop token IDs
             sampler: Sampling function (default: argmax)
@@ -553,12 +723,27 @@ class MLLMBatchGenerator:
             vision_cache_size: Max entries in vision cache
             paged_cache_manager: Optional PagedCacheManager
             block_aware_cache: Optional BlockAwarePrefixCache
+            memory_aware_cache: Optional MemoryAwarePrefixCache
+            prefix_cache: Optional PrefixCacheManager (legacy)
+            disk_cache: Optional DiskCacheManager (L2)
+            kv_cache_bits: Quantization bits (0=none, 4=q4, 8=q8)
+            kv_cache_group_size: Quantization group size
+            ssm_state_cache_size: Max entries in HybridSSMStateCache (LRU)
         """
         self.model = model
         self.processor = processor
-        self.mm_processor = mm_processor
         self.paged_cache_manager = paged_cache_manager
         self.block_aware_cache = block_aware_cache
+        self.memory_aware_cache = memory_aware_cache
+        self.prefix_cache = prefix_cache
+        self.disk_cache = disk_cache
+        self._kv_cache_bits = kv_cache_bits
+        self._kv_cache_group_size = kv_cache_group_size
+
+        # Companion SSM state cache for hybrid models (MambaCache + KVCache).
+        # Stores SSM layer states at prompt boundary so hybrid cache HITs can
+        # skip the full prefix instead of wasting the KV cache hit.
+        self._ssm_state_cache = HybridSSMStateCache(max_entries=ssm_state_cache_size)
 
         # Get language model for text generation
         self.language_model = getattr(model, "language_model", model)
@@ -619,17 +804,37 @@ class MLLMBatchGenerator:
 
         # Memory management
         self._old_wired_limit = None
+        self._old_cache_limit = None
         if mx.metal.is_available():
             self._old_wired_limit = mx.set_wired_limit(
                 mx.metal.device_info()["max_recommended_working_set_size"]
             )
+            # Set Metal allocator cache limit to 25% of max working set
+            # (floor 512MB). This bounds the Metal allocator's free-list,
+            # preventing it from hoarding memory that prefix cache / OS needs.
+            try:
+                max_ws = mx.metal.device_info()["max_recommended_working_set_size"]
+                cache_limit = max(512 * 1024 * 1024, int(max_ws * 0.25))
+                self._old_cache_limit = mx.metal.set_cache_limit(cache_limit)
+                logger.info(
+                    f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
+                    f"(25% of {max_ws / (1024**3):.1f}GB max working set)"
+                )
+            except Exception as e:
+                logger.debug(f"Metal cache limit not available: {e}")
 
     def close(self) -> None:
-        """Release resources and reset wired limit."""
+        """Release resources and reset wired/cache limits."""
         if self._old_wired_limit is not None:
             mx.synchronize(MLLMBatchGenerator._stream)
             mx.set_wired_limit(self._old_wired_limit)
             self._old_wired_limit = None
+        if self._old_cache_limit is not None:
+            try:
+                mx.metal.set_cache_limit(self._old_cache_limit)
+            except Exception:
+                pass
+            self._old_cache_limit = None
 
     def __del__(self):
         try:
@@ -861,10 +1066,47 @@ class MLLMBatchGenerator:
         return output
 
     def _process_prompts(self, requests: List[MLLMBatchRequest]) -> MLLMBatch:
+        """Prefill all requests: vision encoding, cache fetch, and batch merge.
+
+        This is the most complex method in the batch generator. For each request:
+
+        1. **Preprocess**: tokenize prompt + process pixel values via mlx-vlm processor.
+           Save original token IDs before any cache mutation.
+        2. **Cache fetch** (3 tiers + disk L2 fallback):
+           - Paged: block_aware_cache.fetch_cache() -> reconstruct -> hybrid check
+           - Memory-aware/Legacy: cache_obj.fetch() -> hybrid check
+           - Disk L2: disk_cache.fetch() (only if in-memory missed)
+           On HIT: set req.prompt_cache, trim req.input_ids, clear pixel_values.
+           On HIT (hybrid + SSM companion): inject SSM state into full cache.
+        3. **Vision encoding**: _run_vision_encoding() does full VLM forward pass.
+           Uses req.prompt_cache if available (cache HIT = shorter prefix).
+        4. **Async submit**: mx.async_eval() submits sampled token + cache states
+           to GPU without blocking, enabling CPU/GPU overlap across requests.
+        5. **SSM state capture** (hybrid models only): after prefill of fresh
+           prompts, deep-copy SSM layer states into HybridSSMStateCache. Uses
+           _original_token_ids (pre-mutation) for consistent keying.
+        6. **Cache merge**: merge per-request caches into batch-aware caches
+           (KVCache->BatchKVCache, MambaCache->BatchMambaCache). Single request
+           optimization: keep original caches to preserve integer offsets.
+
+        Returns:
+            MLLMBatch with merged cache, first tokens, and request metadata.
+        """
         tic = time.perf_counter()
 
         for req in requests:
             self._preprocess_request(req)
+            # Save full token list BEFORE cache fetch can mutate req.input_ids.
+            # Used later for SSM state cache keying (must be consistent with fetch key).
+            req._original_token_ids = (
+                req.input_ids.tolist()
+                if req.input_ids is not None and req.input_ids.ndim == 1
+                else req.input_ids[0].tolist()
+                if req.input_ids is not None
+                else []
+            )
+            # Track how many prompt tokens were served from cache (for usage reporting)
+            req._cached_tokens = 0
             # After preprocessing, the prompt is fully tokenized including image patches.
             # Query the BlockAwarePrefixCache for reusable KV blocks.
             # fetch_cache returns (block_table, remaining_tokens) — NOT cache objects!
@@ -890,16 +1132,61 @@ class MLLMBatchGenerator:
                                 )
 
                                 if is_hybrid:
-                                    logger.info(
-                                        f"VLM prefix cache HIT for {req.request_id}: "
-                                        f"{block_table.num_tokens} cached tokens "
-                                        f"(hybrid model — full prefill required, SSM needs all tokens)"
+                                    # Hybrid model: check companion SSM state cache.
+                                    # If we have SSM state at this prefix boundary,
+                                    # we can reconstruct full cache and skip prefix.
+                                    ssm_states = self._ssm_state_cache.fetch(
+                                        token_list, block_table.num_tokens
                                     )
-                                    # Don't set req.prompt_cache — fresh cache + full prefill
+                                    if ssm_states is not None:
+                                        # Full hybrid cache reconstruction:
+                                        # KV from paged cache + SSM from companion cache
+                                        full_cache = _fix_hybrid_cache(
+                                            reconstructed, self.language_model,
+                                            kv_positions=self._hybrid_kv_positions,
+                                            num_model_layers=self._hybrid_num_layers,
+                                        )
+                                        # Inject stored SSM states at non-KV positions
+                                        kv_set = set(self._hybrid_kv_positions or [])
+                                        ssm_idx = 0
+                                        for layer_idx in range(len(full_cache)):
+                                            if layer_idx not in kv_set and ssm_idx < len(ssm_states):
+                                                full_cache[layer_idx] = ssm_states[ssm_idx]
+                                                ssm_idx += 1
+
+                                        req.prompt_cache = full_cache
+                                        req._cached_tokens = block_table.num_tokens
+                                        if remaining:
+                                            req.input_ids = mx.array([remaining])
+                                            req.pixel_values = None
+                                            req.attention_mask = None
+                                            req.image_grid_thw = None
+                                            logger.info(
+                                                f"VLM HYBRID cache HIT for {req.request_id}: "
+                                                f"{block_table.num_tokens} cached (KV+SSM), "
+                                                f"{len(remaining)} remaining"
+                                            )
+                                        else:
+                                            req.input_ids = mx.array([token_list[-1:]])
+                                            req.pixel_values = None
+                                            req.attention_mask = None
+                                            req.image_grid_thw = None
+                                            logger.info(
+                                                f"VLM HYBRID cache FULL HIT for {req.request_id}: "
+                                                f"{block_table.num_tokens} cached (KV+SSM)"
+                                            )
+                                    else:
+                                        logger.info(
+                                            f"VLM prefix cache HIT for {req.request_id}: "
+                                            f"{block_table.num_tokens} cached tokens "
+                                            f"(hybrid — no SSM state, full prefill required)"
+                                        )
+                                        # Don't set req.prompt_cache — fresh cache + full prefill
                                 else:
                                     # Pure attention VLM: can safely skip cached prefix tokens.
                                     # Trim input_ids to only remaining (uncached) tokens.
                                     req.prompt_cache = reconstructed
+                                    req._cached_tokens = block_table.num_tokens
                                     if remaining:
                                         # Check if remaining tokens contain image placeholders.
                                         # If so, we'd need partial pixel_values which is complex —
@@ -941,14 +1228,123 @@ class MLLMBatchGenerator:
                     except Exception as e:
                         logger.warning(f"Failed to fetch paged cache for {req.request_id}: {e}")
 
+            # Memory-aware or legacy prefix cache fetch (non-paged paths)
+            elif (self.memory_aware_cache is not None or self.prefix_cache is not None) and req.prompt_cache is None:
+                if req.input_ids is not None:
+                    try:
+                        token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+
+                        # Try memory-aware cache first, then legacy
+                        cache_obj = self.memory_aware_cache or self.prefix_cache
+                        fetch_fn = getattr(cache_obj, 'fetch', None) or getattr(cache_obj, 'fetch_cache', None)
+                        if fetch_fn is not None:
+                            cache, remaining = fetch_fn(token_list)
+                            if cache:
+                                # Dequantize if KV cache quantization is active
+                                if self._kv_cache_bits:
+                                    cache = _dequantize_cache(cache)
+
+                                # Hybrid model check (same logic as paged path)
+                                is_hybrid = (
+                                    self._hybrid_kv_positions is not None
+                                    and self._hybrid_num_layers is not None
+                                    and len(self._hybrid_kv_positions) < self._hybrid_num_layers
+                                )
+                                if is_hybrid:
+                                    logger.info(
+                                        f"VLM memory/legacy cache HIT for {req.request_id}: "
+                                        f"{len(token_list) - len(remaining)} cached tokens "
+                                        f"(hybrid model — full prefill required)"
+                                    )
+                                else:
+                                    req.prompt_cache = cache
+                                    num_cached = len(token_list) - len(remaining)
+                                    if remaining:
+                                        model_config = getattr(self.model, "config", None)
+                                        img_token_id = (
+                                            getattr(model_config, "image_token_index", None)
+                                            if model_config else None
+                                        )
+                                        has_images = img_token_id is not None and img_token_id in remaining
+                                        if has_images:
+                                            req.prompt_cache = None
+                                            logger.info(
+                                                f"VLM cache HIT for {req.request_id}: "
+                                                f"remaining has images — full prefill"
+                                            )
+                                        else:
+                                            req._cached_tokens = num_cached
+                                            req.input_ids = mx.array([remaining])
+                                            req.pixel_values = None
+                                            req.attention_mask = None
+                                            req.image_grid_thw = None
+                                            logger.info(
+                                                f"VLM cache HIT for {req.request_id}: "
+                                                f"{num_cached} cached, "
+                                                f"{len(remaining)} remaining"
+                                            )
+                                    else:
+                                        req._cached_tokens = len(token_list)
+                                        req.input_ids = mx.array([token_list[-1:]])
+                                        req.pixel_values = None
+                                        req.attention_mask = None
+                                        req.image_grid_thw = None
+                                        logger.info(
+                                            f"VLM cache FULL HIT for {req.request_id}: "
+                                            f"{len(token_list)} cached tokens"
+                                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch VLM cache for {req.request_id}: {e}")
+
+            # L2: Disk cache fallback when in-memory cache missed.
+            # DiskCacheManager.fetch() returns Optional[List[Any]] (exact match only,
+            # no partial prefix), NOT a tuple like prefix_cache.fetch_cache().
+            if req.prompt_cache is None and self.disk_cache is not None:
+                if req.input_ids is not None:
+                    try:
+                        token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        disk_result = self.disk_cache.fetch(token_list)
+                        if disk_result is not None:
+                            is_hybrid = (
+                                self._hybrid_kv_positions is not None
+                                and self._hybrid_num_layers is not None
+                                and len(self._hybrid_kv_positions) < self._hybrid_num_layers
+                            )
+                            if not is_hybrid:
+                                # Check for image tokens in remaining suffix
+                                model_config = getattr(self.model, "config", None)
+                                img_token_id = (
+                                    getattr(model_config, "image_token_index", None)
+                                    if model_config else None
+                                )
+                                has_images = img_token_id is not None and img_token_id in token_list
+                                if has_images:
+                                    logger.info(
+                                        f"VLM disk cache (L2) HIT for {req.request_id}: "
+                                        f"has images — full prefill"
+                                    )
+                                else:
+                                    req.prompt_cache = disk_result
+                                    req._cached_tokens = len(token_list)
+                                    # Disk cache is exact-match (hash-based), all tokens cached.
+                                    # Set input to last token only for decode phase.
+                                    req.input_ids = mx.array([token_list[-1:]])
+                                    req.pixel_values = None
+                                    req.attention_mask = None
+                                    req.image_grid_thw = None
+                                    logger.info(
+                                        f"VLM disk cache (L2) HIT for {req.request_id}: "
+                                        f"{len(token_list)} cached tokens"
+                                    )
+                    except Exception as e:
+                        logger.debug(f"VLM disk cache fetch failed for {req.request_id}: {e}")
+
         # Get token sequences and lengths
         input_ids_list = [
             req.input_ids.tolist() if req.input_ids is not None else [0]
             for req in requests
         ]
         lengths = [len(ids) for ids in input_ids_list]
-        max_length = max(lengths)
-        padding = [max_length - seq_len for seq_len in lengths]
 
         self._stats.prompt_tokens += sum(lengths)
 
@@ -998,7 +1394,10 @@ class MLLMBatchGenerator:
                 req_sampler = self._make_request_sampler(req)
                 sampled = req_sampler(logprobs)
 
-                # Eval all cache states: KVCache has .state, MambaCache has .cache
+                # Async eval cache states: KVCache has .state, MambaCache has .cache.
+                # mx.async_eval() submits to GPU without blocking the CPU thread,
+                # allowing the next request's preprocessing to overlap with this
+                # request's GPU computation.
                 try:
                     cache_states = []
                     for c in req_cache:
@@ -1010,13 +1409,63 @@ class MLLMBatchGenerator:
                                 cache_states.append(st)
                         elif hasattr(c, 'cache'):
                             cache_states.extend(x for x in c.cache if x is not None)
-                    mx.eval(sampled, logprobs, *cache_states)
+                    mx.async_eval(sampled, logprobs, *cache_states)
                 except Exception as e:
                     logger.warning(f"Cache state eval error (non-fatal): {e}")
-                    mx.eval(sampled, logprobs)
+                    mx.async_eval(sampled, logprobs)
 
                 first_tokens.append(sampled.item())
                 all_logprobs.append(logprobs.squeeze(0))
+
+                # Capture SSM state at prompt boundary for hybrid models.
+                # This must happen after eval (state is materialized) and before
+                # cache merge (after merge, per-request state is lost).
+                if (
+                    self._hybrid_kv_positions is not None
+                    and self._hybrid_num_layers is not None
+                    and len(self._hybrid_kv_positions) < self._hybrid_num_layers
+                    and req.prompt_cache is None  # Only for fresh prefill (no cache hit)
+                ):
+                    try:
+                        kv_set = set(self._hybrid_kv_positions)
+                        ssm_layers = []
+                        for layer_idx, c in enumerate(req_cache):
+                            if layer_idx not in kv_set:
+                                # Deep-copy SSM state: make contiguous copies of arrays
+                                # so they survive batch merge/filter mutations.
+                                if hasattr(c, 'cache') and isinstance(c.cache, list):
+                                    from copy import copy
+                                    cloned = copy(c)
+                                    cloned.cache = [
+                                        mx.contiguous(mx.array(a)) if a is not None else None
+                                        for a in c.cache
+                                    ]
+                                    ssm_layers.append(cloned)
+                                else:
+                                    ssm_layers.append(c)
+                        if ssm_layers:
+                            # Use pre-mutation full token list for SSM keying.
+                            # CRITICAL: align to block boundary so fetch key matches.
+                            # Fetch uses block_table.num_tokens (block-aligned), so
+                            # store must use the same alignment.
+                            all_tokens = getattr(req, '_original_token_ids', None)
+                            if all_tokens is None:
+                                all_tokens = input_ids_list[i]
+                            prompt_len = len(all_tokens)
+                            if self.block_aware_cache is not None:
+                                bs = getattr(self.block_aware_cache, 'block_size', 64)
+                                prompt_len = (prompt_len // bs) * bs
+                            if prompt_len > 0:
+                                self._ssm_state_cache.store(
+                                    all_tokens, prompt_len, ssm_layers
+                                )
+                                logger.debug(
+                                    f"Captured SSM state at prompt boundary for "
+                                    f"{req.request_id}: {len(ssm_layers)} layers, "
+                                    f"{prompt_len} tokens (block-aligned)"
+                                )
+                    except Exception as e:
+                        logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
 
         y = mx.array(first_tokens)
 
@@ -1236,10 +1685,12 @@ class MLLMBatchGenerator:
                     finish_reason=finish_reason,
                     prompt_cache=cache_fn,
                     prompt_token_ids=(
-                        req.input_ids[0].tolist() if req.input_ids is not None and req.input_ids.ndim > 1
-                        else req.input_ids.tolist() if req.input_ids is not None
-                        else []
+                        getattr(req, '_original_token_ids', None)
+                        or (req.input_ids[0].tolist() if req.input_ids is not None and req.input_ids.ndim > 1
+                            else req.input_ids.tolist() if req.input_ids is not None
+                            else [])
                     ),
+                    cached_tokens=getattr(req, '_cached_tokens', 0),
                 )
             )
 

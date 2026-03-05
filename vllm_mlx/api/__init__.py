@@ -43,10 +43,7 @@ from .models import (
     MCPExecuteRequest,
     MCPExecuteResponse,
     # Audio
-    AudioTranscriptionRequest,
-    AudioTranscriptionResponse,
     AudioSpeechRequest,
-    AudioSeparationRequest,
     # Embeddings
     EmbeddingRequest,
     EmbeddingData,
@@ -101,10 +98,7 @@ __all__ = [
     "MCPExecuteRequest",
     "MCPExecuteResponse",
     # Audio
-    "AudioTranscriptionRequest",
-    "AudioTranscriptionResponse",
     "AudioSpeechRequest",
-    "AudioSeparationRequest",
     # Embeddings
     "EmbeddingRequest",
     "EmbeddingData",

@@ -129,8 +129,12 @@ class TestEmbeddingEngine:
         from vllm_mlx.embedding import EmbeddingEngine
 
         engine = EmbeddingEngine("test-model")
+        # count_tokens uses inner_tok = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+        # Create a mock inner tokenizer with encode, then wrap it
+        inner_tok = MagicMock()
+        inner_tok.encode.return_value = [1, 2, 3, 4, 5]
         mock_tokenizer = MagicMock()
-        mock_tokenizer.encode.return_value = [1, 2, 3, 4, 5]
+        mock_tokenizer._tokenizer = inner_tok
         engine._tokenizer = mock_tokenizer
         engine._model = MagicMock()  # mark as loaded
 

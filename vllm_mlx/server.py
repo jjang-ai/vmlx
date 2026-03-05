@@ -79,6 +79,7 @@ from .api.models import (
     EmbeddingUsage,
     FunctionCall,
     ImageUrl,  # noqa: F401
+    AudioSpeechRequest,
     MCPExecuteRequest,
     MCPExecuteResponse,
     MCPServerInfo,  # noqa: F401
@@ -114,6 +115,7 @@ from .api.utils import (
     is_mllm_model,  # noqa: F401
 )
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, SimpleEngine
+from .reasoning.gptoss_parser import GptOssReasoningParser
 from .tool_parsers import ToolParserManager
 
 logging.basicConfig(level=logging.INFO)
@@ -157,6 +159,7 @@ _mcp_manager = None
 # Global embedding engine (lazy loaded)
 _embedding_engine = None
 _embedding_model_locked: str | None = None  # Set when --embedding-model is used
+_embedding_lock = asyncio.Lock()  # Serialize load-and-use to prevent hot-swap races
 
 # API key authentication
 _api_key: str | None = None
@@ -224,7 +227,6 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
 # Tool calling configuration
 _enable_auto_tool_choice: bool = False
 _tool_call_parser: str | None = None  # Parser name: auto, mistral, qwen, llama, hermes
-_tool_parser_instance = None  # Instantiated parser
 
 
 @asynccontextmanager
@@ -267,19 +269,26 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: Close MCP connections and stop engine
+    # Shutdown: Close MCP connections, stop engine, and kill caffeinate
     if _mcp_manager is not None:
         await _mcp_manager.stop()
         logger.info("MCP manager stopped")
     if _engine is not None:
         await _engine.stop()
         logger.info("Engine stopped")
+    if caffeinate_process is not None:
+        try:
+            caffeinate_process.terminate()
+            caffeinate_process.wait(timeout=5)
+            logger.info("Caffeinate process terminated")
+        except Exception:
+            caffeinate_process.kill()
 
 
 app = FastAPI(
     title="vllm-mlx API",
     description="OpenAI-compatible API for MLX LLM/MLLM inference on Apple Silicon",
-    version="0.2.1",
+    version="0.2.8",
     lifespan=lifespan,
 )
 
@@ -333,9 +342,12 @@ _rate_limiter = RateLimiter(requests_per_minute=60, enabled=False)
 
 async def check_rate_limit(request: Request):
     """Rate limiting dependency."""
-    # Use API key as client ID if available, otherwise use IP
-    client_id = request.headers.get(
-        "Authorization", request.client.host if request.client else "unknown"
+    # Use client IP for per-client rate limiting.
+    # X-Forwarded-For for reverse proxy setups, then direct IP, then "unknown".
+    client_id = (
+        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or (request.client.host if request.client else None)
+        or "unknown"
     )
 
     allowed, retry_after = _rate_limiter.is_allowed(client_id)
@@ -560,7 +572,7 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _tool_parser_instance, _served_model_name
+    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name
 
     _default_max_tokens = max_tokens
     _model_path = model_name  # Full path for config.json lookups
@@ -571,8 +583,6 @@ def load_model(
     _served_model_name = served_model_name  # Custom name override (may be None)
     if _served_model_name:
         logger.info(f"Serving model as: {_served_model_name} (actual: {_model_name})")
-    # Reset tool parser instance when model is reloaded (tokenizer may change)
-    _tool_parser_instance = None
 
     # Log system memory before model load for diagnostics
     try:
@@ -656,7 +666,7 @@ def load_model(
                 f"Only {available_gb:.1f}GB free. Risk of OOM under load. "
                 "Consider a smaller model or quantized variant."
             )
-    except (ImportError, Exception):
+    except Exception:
         pass
 
     # Set native tool format support on the engine (thread-safe via instance property)
@@ -910,9 +920,6 @@ async def cache_warm(request: dict):
     """
     Warm the prefix cache by pre-computing KV states for given prompts.
 
-    Note: This runs model inference synchronously and will block other
-    requests while warming. Use for system prompts before serving traffic.
-
     Request body: {"prompts": ["system prompt text", ...]}
     """
     scheduler = _get_scheduler()
@@ -923,64 +930,61 @@ async def cache_warm(request: dict):
     if not prompts:
         return {"error": "No prompts provided"}
 
-    warmed = 0
-    token_counts = []
-    errors = []
+    def _do_warm():
+        """Run prefill warming in a thread to avoid blocking the event loop."""
+        warmed = 0
+        token_counts = []
+        errors = []
 
-    for i, prompt in enumerate(prompts):
-        try:
-            # Tokenize the prompt
-            if hasattr(scheduler, "_actual_tokenizer"):
-                tokens = scheduler._actual_tokenizer.encode(prompt)
-            else:
-                tokens = scheduler.tokenizer.encode(prompt)
+        for i, prompt in enumerate(prompts):
+            try:
+                if hasattr(scheduler, "_actual_tokenizer"):
+                    tokens = scheduler._actual_tokenizer.encode(prompt)
+                else:
+                    tokens = scheduler.tokenizer.encode(prompt)
 
-            if not tokens:
-                errors.append(f"Prompt {i}: empty after tokenization")
-                continue
+                if not tokens:
+                    errors.append(f"Prompt {i}: empty after tokenization")
+                    continue
 
-            # Run prefill to get cache state
-            cache_tokens = tokens[:-1]  # Store N-1 tokens
-            if not cache_tokens:
-                errors.append(f"Prompt {i}: too short (1 token)")
-                continue
+                cache_tokens = tokens[:-1]
+                if not cache_tokens:
+                    errors.append(f"Prompt {i}: too short (1 token)")
+                    continue
 
-            cache = scheduler._prefill_for_prompt_only_cache(cache_tokens)
-            if cache is None:
-                errors.append(f"Prompt {i}: prefill failed")
-                continue
+                cache = scheduler._prefill_for_prompt_only_cache(cache_tokens)
+                if cache is None:
+                    errors.append(f"Prompt {i}: prefill failed")
+                    continue
 
-            # Store in the appropriate cache
-            stored = False
-            if getattr(scheduler, "memory_aware_cache", None) is not None:
-                stored = scheduler.memory_aware_cache.store(tokens, cache)
-            elif getattr(scheduler, "block_aware_cache", None) is not None:
-                extracted = scheduler._extract_cache_states(cache)
-                if extracted:
-                    result = scheduler.block_aware_cache.store_cache(
-                        f"warm-{i}-{uuid.uuid4().hex[:8]}", tokens, extracted
-                    )
-                    stored = result is not None
-            elif getattr(scheduler, "prefix_cache", None) is not None:
-                scheduler.prefix_cache.store_cache(tokens, cache)
-                stored = True
-            else:
-                errors.append(f"Prompt {i}: no cache backend enabled")
-                continue
+                stored = False
+                if getattr(scheduler, "memory_aware_cache", None) is not None:
+                    stored = scheduler.memory_aware_cache.store(tokens, cache)
+                elif getattr(scheduler, "block_aware_cache", None) is not None:
+                    extracted = scheduler._extract_cache_states(cache)
+                    if extracted:
+                        result = scheduler.block_aware_cache.store_cache(
+                            f"warm-{i}-{uuid.uuid4().hex[:8]}", tokens, extracted
+                        )
+                        stored = result is not None
+                elif getattr(scheduler, "prefix_cache", None) is not None:
+                    scheduler.prefix_cache.store_cache(tokens, cache)
+                    stored = True
+                else:
+                    errors.append(f"Prompt {i}: no cache backend enabled")
+                    continue
 
-            if stored:
-                warmed += 1
-                token_counts.append(len(tokens))
-            else:
-                errors.append(f"Prompt {i}: cache store rejected (too large or full)")
-        except Exception as e:
-            errors.append(f"Prompt {i}: {type(e).__name__}: {e}")
+                if stored:
+                    warmed += 1
+                    token_counts.append(len(tokens))
+                else:
+                    errors.append(f"Prompt {i}: cache store rejected (too large or full)")
+            except Exception as e:
+                errors.append(f"Prompt {i}: {type(e).__name__}: {e}")
 
-    return {
-        "warmed": warmed,
-        "token_counts": token_counts,
-        "errors": errors if errors else None,
-    }
+        return {"warmed": warmed, "token_counts": token_counts, "errors": errors if errors else None}
+
+    return await asyncio.to_thread(_do_warm)
 
 
 @app.delete("/v1/cache")
@@ -1213,22 +1217,25 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
                 ),
             )
 
-        # Lazy-load or swap embedding engine
-        load_embedding_model(model_name, lock=False, reuse_existing=True)
-
         # Normalise input to list
         texts = request.input if isinstance(request.input, list) else [request.input]
 
         if not texts:
             raise HTTPException(status_code=400, detail="Input must not be empty")
 
-        start_time = time.perf_counter()
+        # Lock protects the load-and-use sequence so a concurrent request
+        # cannot hot-swap _embedding_engine between load and embed calls.
+        async with _embedding_lock:
+            # Lazy-load or swap embedding engine
+            load_embedding_model(model_name, lock=False, reuse_existing=True)
 
-        # Count tokens for usage reporting
-        prompt_tokens = _embedding_engine.count_tokens(texts)
+            start_time = time.perf_counter()
 
-        # Generate embeddings (batch)
-        embeddings = _embedding_engine.embed(texts)
+            # Count tokens for usage reporting
+            prompt_tokens = _embedding_engine.count_tokens(texts)
+
+            # Generate embeddings (batch)
+            embeddings = _embedding_engine.embed(texts)
 
         elapsed = time.perf_counter() - start_time
         logger.info(
@@ -1409,13 +1416,7 @@ async def create_transcription(
 
 
 @app.post("/v1/audio/speech", dependencies=[Depends(verify_api_key)])
-async def create_speech(
-    model: str = "kokoro",
-    input: str = "",
-    voice: str = "af_heart",
-    speed: float = 1.0,
-    response_format: str = "wav",
-):
+async def create_speech(request: AudioSpeechRequest):
     """
     Generate speech from text (OpenAI TTS API compatible).
 
@@ -1439,18 +1440,18 @@ async def create_speech(
             "vibevoice": "mlx-community/VibeVoice-Realtime-0.5B-4bit",
             "voxcpm": "mlx-community/VoxCPM1.5",
         }
-        model_name = model_map.get(model, model)
+        model_name = model_map.get(request.model, request.model)
 
         # Load engine if needed
         if _tts_engine is None or _tts_engine.model_name != model_name:
             _tts_engine = TTSEngine(model_name)
             _tts_engine.load()
 
-        audio = _tts_engine.generate(input, voice=voice, speed=speed)
-        audio_bytes = _tts_engine.to_bytes(audio, format=response_format)
+        audio = _tts_engine.generate(request.input, voice=request.voice, speed=request.speed)
+        audio_bytes = _tts_engine.to_bytes(audio, format=request.response_format)
 
         content_type = (
-            "audio/wav" if response_format == "wav" else f"audio/{response_format}"
+            "audio/wav" if request.response_format == "wav" else f"audio/{request.response_format}"
         )
         return Response(content=audio_bytes, media_type=content_type)
 
@@ -1489,12 +1490,16 @@ async def create_completion(request: CompletionRequest):
     """Create a text completion."""
     engine = get_engine()
 
+    # Normalize model name (consistent with chat/responses endpoints)
+    resolved_name = _resolve_model_name()
+    request.model = resolved_name
+
     # Handle single prompt or list of prompts
     prompts = request.prompt if isinstance(request.prompt, list) else [request.prompt]
 
     if request.stream:
         return StreamingResponse(
-            stream_completion(engine, prompts[0], request),
+            stream_completions_multi(engine, prompts, request),
             media_type="text/event-stream",
         )
 
@@ -1567,6 +1572,7 @@ async def create_completion(request: CompletionRequest):
 @app.post(
     "/v1/chat/completions",
     dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    response_model_exclude_none=True,
 )
 async def create_chat_completion(
     request: ChatCompletionRequest,
@@ -1639,6 +1645,9 @@ async def create_chat_completion(
                 msg_dict = msg.model_dump(exclude_none=True)
             else:
                 msg_dict = dict(msg)
+            # Map "developer" role to "system" (OpenAI API compatibility)
+            if msg_dict.get("role") == "developer":
+                msg_dict["role"] = "system"
             messages.append(msg_dict)
         images, videos = [], []  # MLLM extracts these from messages
         logger.debug(f"MLLM: Processing {len(messages)} messages")
@@ -1763,7 +1772,6 @@ async def create_chat_completion(
     # Inject Harmony analysis prefix for GPT-OSS models when thinking is enabled.
     # The suffix replaces the template's generation prompt (<|start|>assistant<|message|>)
     # with the analysis channel prefix to guide the model into reasoning mode.
-    from .reasoning.gptoss_parser import GptOssReasoningParser
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
         if _think_val is True:
@@ -1971,11 +1979,15 @@ def _responses_input_to_messages(
     # (many models only support single tool-calls per message)
     # function_call_output becomes a tool message
 
+    def _normalize_role(role: str) -> str:
+        """Map 'developer' role to 'system' (OpenAI API compatibility)."""
+        return "system" if role == "developer" else role
+
     for item in input_data:
         if not isinstance(item, dict):
             if hasattr(item, "role"):
                 raw = item.content if hasattr(item, "content") else ""
-                messages.append({"role": item.role, "content": _resolve_content(raw)})
+                messages.append({"role": _normalize_role(item.role), "content": _resolve_content(raw)})
             continue
 
         item_type = item.get("type", "")
@@ -2018,12 +2030,12 @@ def _responses_input_to_messages(
 
         # message type with content parts
         if item_type == "message":
-            role = item.get("role", "user")
+            role = _normalize_role(item.get("role", "user"))
             content = _resolve_content(item.get("content", ""))
             messages.append({"role": role, "content": content})
         # Standard role-based message (no type field, or type is not a special one)
         elif "role" in item:
-            role = item.get("role", "user")
+            role = _normalize_role(item.get("role", "user"))
             # Preserve tool messages with tool_call_id (Chat Completions format)
             if role == "tool" and "tool_call_id" in item:
                 messages.append({
@@ -2194,7 +2206,6 @@ async def create_response(
             else:
                 target_name = None
 
-            from .api.tool_calling import convert_tools_for_template
             for tool in request.tools:
                 tool_type = tool.get("type", "")
                 # Skip built-in Responses API tools (web_search, code_interpreter, file_search, etc.)
@@ -2218,11 +2229,9 @@ async def create_response(
 
     # Pass merged tools to engine
     if all_tools:
-        from .api.tool_calling import convert_tools_for_template
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
 
     # Inject Harmony analysis prefix for GPT-OSS models (same as Chat Completions path)
-    from .reasoning.gptoss_parser import GptOssReasoningParser
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
         if _think_val is True:
@@ -2250,7 +2259,7 @@ async def create_response(
 
     # Non-streaming response
     start_time = time.perf_counter()
-    timeout = _default_timeout
+    timeout = request.timeout or _default_timeout
 
     try:
         output = await asyncio.wait_for(
@@ -2396,51 +2405,65 @@ def _inject_json_instruction(messages: list, instruction: str) -> list:
 # =============================================================================
 
 
-async def stream_completion(
+async def stream_completions_multi(
     engine: BaseEngine,
-    prompt: str,
+    prompts: list[str],
     request: CompletionRequest,
 ) -> AsyncIterator[str]:
-    """Stream completion response."""
+    """Stream completion responses for one or more prompts.
+
+    Each prompt gets its own choice index in the streaming chunks.
+    A single [DONE] sentinel is sent after all prompts complete.
+    """
     response_id = f"cmpl-{uuid.uuid4().hex[:8]}"
-    try:
-        async for output in engine.stream_generate(
-            prompt=prompt,
-            max_tokens=request.max_tokens or _default_max_tokens,
-            temperature=_resolve_temperature(request.temperature),
-            top_p=_resolve_top_p(request.top_p),
-            stop=request.stop,
-        ):
-            data = {
+    created = int(time.time())
+
+    for prompt_index, prompt in enumerate(prompts):
+        try:
+            gen_kwargs: dict = {
+                "prompt": prompt,
+                "max_tokens": request.max_tokens or _default_max_tokens,
+                "temperature": _resolve_temperature(request.temperature),
+                "top_p": _resolve_top_p(request.top_p),
+                "stop": request.stop,
+            }
+            if request.top_k is not None:
+                gen_kwargs["top_k"] = request.top_k
+            if request.min_p is not None:
+                gen_kwargs["min_p"] = request.min_p
+            if request.repetition_penalty is not None:
+                gen_kwargs["repetition_penalty"] = request.repetition_penalty
+            async for output in engine.stream_generate(**gen_kwargs):
+                data = {
+                    "id": response_id,
+                    "object": "text_completion",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": prompt_index,
+                            "text": output.new_text,
+                            "finish_reason": output.finish_reason if output.finished else None,
+                        }
+                    ],
+                }
+                if output.finished:
+                    data["usage"] = get_usage(output).model_dump(exclude_none=True)
+                yield f"data: {json.dumps(data, ensure_ascii=True)}\n\n"
+        except Exception as e:
+            logger.error(f"Stream error for {response_id}: {e}", exc_info=True)
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(response_id)
+            error_data = {
                 "id": response_id,
                 "object": "text_completion",
-                "created": int(time.time()),
-                "model": request.model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "text": output.new_text,
-                        "finish_reason": output.finish_reason if output.finished else None,
-                    }
-                ],
+                "error": {
+                    "message": f"Stream generation failed: {e}",
+                    "type": "server_error",
+                    "code": "internal_error",
+                },
             }
-            if output.finished:
-                data["usage"] = get_usage(output).model_dump(exclude_none=True)
-            yield f"data: {json.dumps(data, ensure_ascii=True)}\n\n"
-    except Exception as e:
-        logger.error(f"Stream error for {response_id}: {e}", exc_info=True)
-        if hasattr(engine, "abort_request"):
-            await engine.abort_request(response_id)
-        error_data = {
-            "id": response_id,
-            "object": "text_completion",
-            "error": {
-                "message": f"Stream generation failed: {e}",
-                "type": "server_error",
-                "code": "internal_error",
-            },
-        }
-        yield f"data: {json.dumps(error_data)}\n\n"
+            yield f"data: {json.dumps(error_data)}\n\n"
 
     yield "data: [DONE]\n\n"
 
@@ -2461,7 +2484,7 @@ async def stream_chat_completion(
     engine: BaseEngine,
     messages: list,
     request: ChatCompletionRequest,
-    fastapi_request: Request = None,
+    fastapi_request: Request | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """Stream chat completion with auto-detection of closed connections."""
@@ -2473,9 +2496,13 @@ async def stream_chat_completion(
     # Check if we should include usage in the final chunk
     include_usage = request.stream_options and request.stream_options.include_usage
 
+    # Stable timestamp for all chunks in this stream (OpenAI spec compliance)
+    _created_ts = int(time.time())
+
     # First chunk with role
     first_chunk = ChatCompletionChunk(
         id=response_id,
+        created=_created_ts,
         model=request.model,
         choices=[
             ChatCompletionChunkChoice(
@@ -2561,7 +2588,8 @@ async def stream_chat_completion(
     accumulated_text = ""
     accumulated_reasoning = ""  # Track reasoning text for fallback
     accumulated_content = ""  # Track content-only text for tool call marker detection
-    content_was_emitted = False  # Whether any content chunk was sent
+    streamed_content = ""  # Track content actually yielded to client (for post-stream dedup)
+    content_was_emitted = False  # Whether any content chunk was actually sent
     reasoning_was_streamed = False  # Whether any reasoning_content chunk was sent
 
     # Tool call buffering: when we detect a tool call marker in the stream,
@@ -2574,24 +2602,8 @@ async def stream_chat_completion(
     # Track token counts for usage reporting
     prompt_tokens = 0
     completion_tokens = 0
+    cached_tokens = 0
     last_output = None
-
-    def _emit_content_chunk(content_text, output_obj, is_finished=False):
-        """Helper to create a content SSE chunk."""
-        chunk_usage = get_usage(output_obj) if include_usage else None
-        return ChatCompletionChunk(
-            id=response_id,
-            model=request.model,
-            choices=[
-                ChatCompletionChunkChoice(
-                    delta=ChatCompletionChunkDelta(
-                        content=content_text if content_text else None,
-                    ),
-                    finish_reason=output_obj.finish_reason if is_finished else None,
-                )
-            ],
-            usage=chunk_usage,
-        )
 
     try:
         # Stream content
@@ -2611,6 +2623,8 @@ async def stream_chat_completion(
                 prompt_tokens = output.prompt_tokens
             if hasattr(output, "completion_tokens") and output.completion_tokens:
                 completion_tokens = output.completion_tokens
+            if hasattr(output, "cached_tokens") and output.cached_tokens:
+                cached_tokens = output.cached_tokens
 
             # Always accumulate full text (needed for both reasoning and tool call parsing)
             accumulated_text += delta_text if delta_text else ""
@@ -2626,9 +2640,8 @@ async def stream_chat_completion(
                     # Skip this chunk (e.g., <think> token itself)
                     continue
 
-                # Track what was emitted for end-of-stream fallback
+                # Accumulate for marker detection (before buffering check)
                 if delta_msg.content:
-                    content_was_emitted = True
                     accumulated_content += delta_msg.content
                 if delta_msg.reasoning:
                     accumulated_reasoning += delta_msg.reasoning
@@ -2661,6 +2674,7 @@ async def stream_chat_completion(
                     if include_usage:
                         buf_chunk = ChatCompletionChunk(
                             id=response_id,
+                            created=_created_ts,
                             model=request.model,
                             choices=[
                                 ChatCompletionChunkChoice(
@@ -2686,11 +2700,9 @@ async def stream_chat_completion(
                 if suppress_reasoning:
                     emit_content = delta_msg.reasoning or delta_msg.content
                     emit_reasoning = None
-                    if emit_content:
-                        content_was_emitted = True
-                        if delta_msg.reasoning:
-                            # Transfer accumulated text if we shifted reasoning to content
-                            accumulated_content += delta_msg.reasoning
+                    if emit_content and delta_msg.reasoning:
+                        # Transfer accumulated text if we shifted reasoning to content
+                        accumulated_content += delta_msg.reasoning
                 else:
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
@@ -2701,9 +2713,13 @@ async def stream_chat_completion(
 
                 if emit_reasoning:
                     reasoning_was_streamed = True
+                if emit_content:
+                    content_was_emitted = True
+                    streamed_content += emit_content
 
                 chunk = ChatCompletionChunk(
                     id=response_id,
+                    created=_created_ts,
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
@@ -2733,6 +2749,7 @@ async def stream_chat_completion(
                     if include_usage:
                         buf_chunk = ChatCompletionChunk(
                             id=response_id,
+                            created=_created_ts,
                             model=request.model,
                             choices=[
                                 ChatCompletionChunkChoice(
@@ -2755,11 +2772,13 @@ async def stream_chat_completion(
 
                 if content:
                     content_was_emitted = True
+                    streamed_content += content
 
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
                 chunk = ChatCompletionChunk(
                     id=response_id,
+                    created=_created_ts,
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
@@ -2811,25 +2830,29 @@ async def stream_chat_completion(
         if tool_calls:
             # Emit any remaining content text before the tool calls,
             # but ONLY the portion that wasn't already streamed.
-            # During streaming, content deltas were already emitted (including
-            # reasoning redirected as content when suppress_reasoning=True).
-            # Re-emitting cleaned_text would cause duplicate visible text.
+            # streamed_content tracks what was ACTUALLY yielded to the client
+            # (not just accumulated — content in the same delta as a tool marker
+            # may be accumulated but never yielded due to buffering).
             unemitted_content = None
             if cleaned_text and cleaned_text.strip():
-                # accumulated_content tracks what was already streamed as content
-                already_sent = accumulated_content.strip()
+                already_sent = streamed_content.strip()
                 candidate = cleaned_text.strip()
-                if not already_sent or not candidate.startswith(already_sent):
-                    # Nothing was streamed yet, or content doesn't overlap — emit all
-                    unemitted_content = candidate if not content_was_emitted else None
-                else:
+                if not already_sent:
+                    # Nothing was streamed yet — emit all cleaned content
+                    unemitted_content = candidate
+                elif candidate.startswith(already_sent):
                     # Subtract the already-streamed portion
                     remainder = candidate[len(already_sent):].strip()
                     unemitted_content = remainder if remainder else None
+                else:
+                    # Content doesn't overlap (rare: reasoning redirect, etc.)
+                    # Emit the full candidate only if nothing was sent
+                    unemitted_content = candidate if not content_was_emitted else None
 
             if unemitted_content:
                 content_chunk = ChatCompletionChunk(
                     id=response_id,
+                    created=_created_ts,
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
@@ -2855,6 +2878,7 @@ async def stream_chat_completion(
             ]
             tool_chunk = ChatCompletionChunk(
                 id=response_id,
+                created=_created_ts,
                 model=request.model,
                 choices=[
                     ChatCompletionChunkChoice(
@@ -2866,26 +2890,30 @@ async def stream_chat_completion(
             yield f"data: {_dump_sse_json(tool_chunk)}\n\n"
             # Skip normal end-of-stream handling — we already set finish_reason
             if include_usage:
+                _tc_usage = Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                )
+                if cached_tokens > 0:
+                    _tc_usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
                 usage_chunk = ChatCompletionChunk(
                     id=response_id,
+                    created=_created_ts,
                     model=request.model,
                     choices=[],
-                    usage=Usage(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        total_tokens=prompt_tokens + completion_tokens,
-                    ),
+                    usage=_tc_usage,
                 )
                 yield f"data: {_dump_sse_json(usage_chunk)}\n\n"
             yield "data: [DONE]\n\n"
             return
         else:
             # No tool calls found despite markers — flush only the UN-STREAMED
-            # portion. Content before the tool call marker was already emitted
-            # during streaming; only the buffered portion (from marker onward) needs flushing.
+            # portion. streamed_content tracks what was actually yielded to client;
+            # the remainder needs flushing.
             # When reasoning parser is active, use accumulated_content (content-only)
             # instead of accumulated_text (which includes reasoning and would leak it).
-            already_sent = accumulated_content.strip()
+            already_sent = streamed_content.strip()
             full = accumulated_content.strip() if request_parser else accumulated_text.strip()
             if already_sent and full.startswith(already_sent):
                 remainder = full[len(already_sent):].strip()
@@ -2894,6 +2922,7 @@ async def stream_chat_completion(
             if remainder:
                 flush_chunk = ChatCompletionChunk(
                     id=response_id,
+                    created=_created_ts,
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
@@ -2913,6 +2942,7 @@ async def stream_chat_completion(
     if request_parser and not content_was_emitted and accumulated_reasoning and not reasoning_was_streamed:
         fallback_chunk = ChatCompletionChunk(
             id=response_id,
+            created=_created_ts,
             model=request.model,
             choices=[
                 ChatCompletionChunkChoice(
@@ -2937,6 +2967,7 @@ async def stream_chat_completion(
         logger.warning(f"Request {response_id}: model generated zero tokens")
         empty_chunk = ChatCompletionChunk(
             id=response_id,
+            created=_created_ts,
             model=request.model,
             choices=[
                 ChatCompletionChunkChoice(
@@ -2951,15 +2982,19 @@ async def stream_chat_completion(
 
     # Send final chunk with usage if requested
     if include_usage:
+        _usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        if cached_tokens > 0:
+            _usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
         usage_chunk = ChatCompletionChunk(
             id=response_id,
+            created=_created_ts,
             model=request.model,
             choices=[],  # Empty choices for usage-only chunk
-            usage=Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
+            usage=_usage,
         )
         yield f"data: {_dump_sse_json(usage_chunk)}\n\n"
 
@@ -2970,7 +3005,7 @@ async def stream_responses_api(
     engine: BaseEngine,
     messages: list,
     request: ResponsesRequest,
-    fastapi_request: Request = None,
+    fastapi_request: Request | None = None,
     **kwargs,
 ) -> AsyncIterator[str]:
     """Stream response in OpenAI Responses API SSE format.
@@ -3106,9 +3141,8 @@ async def stream_responses_api(
                         # Skip this chunk (e.g., <think> token itself)
                         pass
                     else:
-                        # Track what was emitted
+                        # Accumulate for marker detection (before buffering check)
                         if delta_msg.content:
-                            content_was_emitted = True
                             accumulated_content += delta_msg.content
                         if delta_msg.reasoning:
                             accumulated_reasoning += delta_msg.reasoning
@@ -3577,7 +3611,7 @@ Examples:
 
     # Initialize reasoning parser (auto-detect or explicit)
     global _reasoning_parser
-    from .reasoning import get_parser, list_parsers
+    from .reasoning import get_parser
 
     parser_name = args.reasoning_parser
     # Auto-detect from model config if not explicitly set
@@ -3630,14 +3664,6 @@ Examples:
                 _tool_call_parser = None
         if _tool_call_parser:
             logger.info(f"Tool calling enabled (parser: {_tool_call_parser})")
-    elif _tool_call_parser == "auto":
-        # Fallback: if CLI module already set _tool_call_parser to "auto"
-        detected_tool = registry.get_tool_parser(model_name)
-        if detected_tool:
-            _tool_call_parser = detected_tool
-            logger.info(f"Auto-detected tool call parser: {_tool_call_parser} (from model name)")
-        else:
-            _tool_call_parser = None
 
     # Pre-load embedding model if specified
     load_embedding_model(args.embedding_model, lock=True)

@@ -33,8 +33,9 @@ def serve_command(args):
     logger = logging.getLogger(__name__)
 
     # Unified server configuration — explicit args ONLY
-    # If the user (or vMLX frontend) passes --tool-call-parser qwen, we use qwen.
-    # If it's "auto" or empty, we do NOT try to regex match the model name.
+    # If the user passes --tool-call-parser qwen, we use qwen.
+    # If it's "auto", we auto-detect via model_config_registry.
+    # If it's "none" or omitted, tool calling is disabled.
     
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     server._default_timeout = args.timeout
@@ -44,9 +45,10 @@ def serve_command(args):
         )
 
     # Configure tool calling
-    if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser not in ("auto", "none"):
+    if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser != "none":
         server._enable_auto_tool_choice = True
-        server._tool_call_parser = args.tool_call_parser
+        # "auto" → resolved below by model_config_registry auto-apply (lines 86-108)
+        server._tool_call_parser = None if args.tool_call_parser == "auto" else args.tool_call_parser
     else:
         server._enable_auto_tool_choice = False
         server._tool_call_parser = None
@@ -226,6 +228,7 @@ def serve_command(args):
         stream_interval=args.stream_interval if args.continuous_batching else 1,
         max_tokens=args.max_tokens,
         served_model_name=getattr(args, 'served_model_name', None),
+        force_mllm=getattr(args, 'is_mllm', False),
     )
 
     # Start server
@@ -270,6 +273,10 @@ def bench_command(args):
             kv_cache_quantization=args.kv_cache_quantization,
             kv_cache_group_size=args.kv_cache_group_size,
             model_path=args.model,
+            # Disk cache (prompt-level L2)
+            enable_disk_cache=getattr(args, 'enable_disk_cache', False),
+            disk_cache_dir=getattr(args, 'disk_cache_dir', None),
+            disk_cache_max_gb=getattr(args, 'disk_cache_max_gb', 10.0),
             # Block disk cache (L2 for paged cache)
             enable_block_disk_cache=getattr(args, 'enable_block_disk_cache', False),
             block_disk_cache_dir=getattr(args, 'block_disk_cache_dir', None),
@@ -488,99 +495,142 @@ Examples:
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start OpenAI-compatible server")
-    serve_parser.add_argument("model", type=str, help="Model to serve")
+    serve_parser.add_argument(
+        "model", type=str,
+        help="HuggingFace model name or local path to serve. "
+             "Example: mlx-community/Llama-3.2-3B-Instruct-4bit",
+    )
     serve_parser.add_argument(
         "--served-model-name", type=str, default=None,
-        help="Custom name to expose via /v1/models API (default: auto from model path)"
+        help="Custom model name exposed via /v1/models API. Clients use this name in requests. "
+             "Useful for aliasing long model paths. Default: auto-extracted from model path.",
     )
     serve_parser.add_argument(
-        "--host", type=str, default="0.0.0.0", help="Host to bind"
-    )
-    serve_parser.add_argument("--port", type=int, default=8000, help="Port to bind")
-    serve_parser.add_argument(
-        "--max-num-seqs", type=int, default=256, help="Max concurrent sequences"
+        "--host", type=str, default="0.0.0.0",
+        help="Network interface to bind. '0.0.0.0' = all interfaces (accessible from other machines). "
+             "'127.0.0.1' = localhost only (default: 0.0.0.0)",
     )
     serve_parser.add_argument(
-        "--prefill-batch-size", type=int, default=8, help="Prefill batch size"
+        "--port", type=int, default=8000,
+        help="TCP port for the API server (default: 8000). Example: --port 8092",
     )
     serve_parser.add_argument(
-        "--completion-batch-size", type=int, default=32, help="Completion batch size"
+        "--max-num-seqs", type=int, default=256,
+        help="Maximum number of requests that can be processed simultaneously. Higher values "
+             "use more memory but support more concurrent users. Requires --continuous-batching. "
+             "(default: 256)",
+    )
+    serve_parser.add_argument(
+        "--prefill-batch-size", type=int, default=8,
+        help="How many new prompts to process at once during the 'prefill' phase "
+             "(reading the input). Higher = faster throughput but more memory spikes. "
+             "Requires --continuous-batching. (default: 8)",
+    )
+    serve_parser.add_argument(
+        "--completion-batch-size", type=int, default=32,
+        help="How many responses to generate tokens for simultaneously during the 'decode' phase. "
+             "Higher = more throughput for concurrent requests but more memory. "
+             "Requires --continuous-batching. (default: 32)",
     )
     serve_parser.add_argument(
         "--enable-prefix-cache",
         action="store_true",
         default=True,
-        help="Enable prefix caching for repeated prompts (default: enabled)",
+        help="Cache computed KV states for prompt prefixes so repeated system prompts "
+             "or conversation history don't need to be recomputed. Saves significant time "
+             "on multi-turn conversations. Requires --continuous-batching. (default: enabled)",
     )
     serve_parser.add_argument(
         "--disable-prefix-cache",
         action="store_true",
-        help="Disable prefix caching",
+        help="Turn off prefix caching. Useful for debugging or if memory is very limited.",
     )
     serve_parser.add_argument(
         "--prefix-cache-size",
         type=int,
         default=100,
-        help="Max entries in prefix cache (default: 100, legacy mode only)",
+        help="Maximum number of cached prompt prefixes (legacy entry-count mode only, "
+             "ignored when memory-aware cache is active). (default: 100)",
     )
-    # Memory-aware cache options (recommended for large models)
+    # Memory-aware cache options
     serve_parser.add_argument(
         "--cache-memory-mb",
         type=int,
         default=None,
-        help="Cache memory limit in MB (default: auto-detect ~30%% of RAM)",
+        help="Fixed memory budget for prefix cache in megabytes. When set, cached prompts "
+             "are evicted based on actual memory usage rather than entry count. "
+             "Example: --cache-memory-mb 4096 for 4GB. Default: auto-detect (~30%% of available RAM).",
     )
     serve_parser.add_argument(
         "--cache-memory-percent",
         type=float,
         default=0.30,
-        help="Fraction of available RAM for cache if auto-detecting (default: 0.30)",
+        help="Fraction of available unified memory to use for prefix cache when auto-detecting. "
+             "Only used when --cache-memory-mb is not set. Value is a decimal: 0.30 = 30%%. "
+             "Example: 0.50 for half of RAM. (default: 0.30)",
     )
     serve_parser.add_argument(
         "--no-memory-aware-cache",
         action="store_true",
-        help="Disable memory-aware cache, use legacy entry-count based cache",
+        help="Fall back to simple entry-count-based cache eviction instead of memory-aware. "
+             "Not recommended — memory-aware cache is better for most workloads.",
     )
     serve_parser.add_argument(
         "--cache-ttl-minutes",
         type=float,
         default=0,
-        help="Cache entry time-to-live in minutes. Entries not accessed within this window are evicted. 0=disabled (default: 0)",
+        help="Automatically evict cache entries not accessed within this many minutes. "
+             "Useful for long-running servers to prevent stale caches from consuming memory. "
+             "0 = never expire, entries only evicted when cache is full. (default: 0)",
     )
     serve_parser.add_argument(
         "--stream-interval",
         type=int,
         default=1,
-        help="Tokens to batch before streaming (1=smooth, higher=throughput)",
+        help="How many tokens to generate before sending a streaming update to the client. "
+             "1 = send every token (smoothest typing effect). Higher values batch tokens "
+             "for slightly better throughput. Requires --continuous-batching. (default: 1)",
     )
     serve_parser.add_argument(
         "--max-tokens",
         type=int,
         default=32768,
-        help="Default max tokens for generation (default: 32768)",
+        help="Default maximum number of tokens the model will generate per request. "
+             "Can be overridden per-request via the 'max_tokens' API parameter. "
+             "Higher values allow longer responses but use more memory. (default: 32768)",
     )
     serve_parser.add_argument(
         "--continuous-batching",
         action="store_true",
-        help="Enable continuous batching for multiple concurrent users (slower for single user)",
+        help="Process multiple requests simultaneously using continuous batching. "
+             "Required for: prefix caching, paged cache, KV quantization, and concurrent users. "
+             "Without this, requests are processed one at a time (faster for single user). "
+             "Example: vllm-mlx serve model --continuous-batching",
     )
-    # Paged cache options (experimental)
+    # Paged cache options
     serve_parser.add_argument(
         "--use-paged-cache",
         action="store_true",
-        help="Use paged KV cache for memory efficiency (experimental)",
+        help="Use block-based (paged) KV cache management. Splits cached prompts into "
+             "fixed-size blocks that can be shared across requests with common prefixes. "
+             "Reduces memory fragmentation and improves cache utilization for multi-user "
+             "workloads. Requires --continuous-batching.",
     )
     serve_parser.add_argument(
         "--paged-cache-block-size",
         type=int,
         default=64,
-        help="Tokens per cache block (default: 64)",
+        help="Number of tokens per cache block when using paged cache. Smaller blocks = "
+             "more granular sharing but higher overhead. Larger blocks = less overhead but "
+             "waste space on short prompts. (default: 64)",
     )
     serve_parser.add_argument(
         "--max-cache-blocks",
         type=int,
         default=1000,
-        help="Maximum number of cache blocks (default: 1000)",
+        help="Maximum number of cache blocks to keep in memory. Each block holds KV states "
+             "for --paged-cache-block-size tokens. Total cache capacity = blocks × block_size. "
+             "(default: 1000, i.e. 64,000 tokens with default block size)",
     )
     # KV cache quantization
     serve_parser.add_argument(
@@ -588,84 +638,101 @@ Examples:
         type=str,
         default="none",
         choices=["none", "q4", "q8"],
-        help="Quantize KV cache to reduce GPU memory (~2-4x). q8=8-bit, q4=4-bit (default: none)",
+        help="Compress stored KV cache to reduce unified memory usage by 2-4x. "
+             "q8 = 8-bit (minimal quality loss, ~2x savings). "
+             "q4 = 4-bit (slight quality loss, ~4x savings). "
+             "Cache is stored compressed but decompressed for generation (no inference slowdown). "
+             "Requires --continuous-batching. (default: none)",
     )
     serve_parser.add_argument(
         "--kv-cache-group-size",
         type=int,
         default=64,
-        help="Group size for KV cache quantization (default: 64)",
+        help="Group size for KV cache quantization. Smaller = better accuracy but larger "
+             "metadata overhead. Only used when --kv-cache-quantization is q4 or q8. (default: 64)",
     )
     # Disk cache options
     serve_parser.add_argument(
         "--enable-disk-cache",
         action="store_true",
-        help="Save prompt caches to disk for reuse across server restarts. "
-             "Acts as L2 cache behind the in-memory prefix cache.",
+        help="Persist prompt KV caches to SSD so they survive server restarts. Acts as "
+             "an L2 cache: on L1 (in-memory) miss, checks disk before recomputing. "
+             "Great for system prompts and repeated conversations. "
+             "Requires --continuous-batching.",
     )
     serve_parser.add_argument(
         "--disk-cache-dir",
         type=str,
         default=None,
-        help="Directory for disk cache files (default: ~/.cache/vllm-mlx/prompt-cache)",
+        help="Directory to store disk cache files. Each cached prompt becomes a .safetensors file. "
+             "(default: ~/.cache/vllm-mlx/prompt-cache)",
     )
     serve_parser.add_argument(
         "--disk-cache-max-gb",
         type=float,
         default=10.0,
-        help="Maximum disk cache size in GB. 0 = unlimited (default: 10)",
+        help="Maximum total size of disk cache in gigabytes. Oldest entries are evicted "
+             "when the limit is exceeded. 0 = unlimited. (default: 10)",
     )
     # Block-level disk cache (L2 for paged cache)
     serve_parser.add_argument(
         "--enable-block-disk-cache",
         action="store_true",
-        help="Enable block-level disk persistence for paged KV cache. "
-             "Saves individual cache blocks to SSD for reuse across evictions and restarts. "
-             "Requires --use-paged-cache.",
+        help="Persist individual paged cache blocks to SSD. When a block is evicted from "
+             "memory, it's saved to disk and reloaded on the next hit instead of recomputing. "
+             "Requires --use-paged-cache. Great for large multi-user workloads.",
     )
     serve_parser.add_argument(
         "--block-disk-cache-dir",
         type=str,
         default=None,
-        help="Directory for block disk cache (default: ~/.cache/vllm-mlx/block-cache/<model_hash>)",
+        help="Directory for block disk cache files. (default: ~/.cache/vllm-mlx/block-cache/<model_hash>)",
     )
     serve_parser.add_argument(
         "--block-disk-cache-max-gb",
         type=float,
         default=10.0,
-        help="Maximum block disk cache size in GB. 0 = unlimited (default: 10)",
+        help="Maximum total size of block disk cache in GB. 0 = unlimited. (default: 10)",
     )
     # MCP options
     serve_parser.add_argument(
         "--mcp-config",
         type=str,
         default=None,
-        help="Path to MCP configuration file (JSON/YAML) for tool integration",
+        help="Path to MCP (Model Context Protocol) config file (JSON/YAML). Enables the model "
+             "to call external tools (web search, code execution, etc.) via MCP servers. "
+             "Tools appear in /v1/mcp/tools and can be used in chat completions with tool_choice.",
     )
     # Security options
     serve_parser.add_argument(
         "--api-key",
         type=str,
         default=None,
-        help="API key for authentication (if not set, no auth required)",
+        help="Require this API key for all requests. Clients must send it as "
+             "'Authorization: Bearer <key>'. Without this, anyone with network access "
+             "can use your model. Example: --api-key sk-my-secret-key",
     )
     serve_parser.add_argument(
         "--rate-limit",
         type=int,
         default=0,
-        help="Rate limit requests per minute per client (0 = disabled)",
+        help="Maximum requests per minute per client IP. Prevents abuse from a single "
+             "client overwhelming the server. 0 = no limit. Example: --rate-limit 60",
     )
     serve_parser.add_argument(
         "--timeout",
         type=float,
         default=300.0,
-        help="Default request timeout in seconds (default: 300)",
+        help="Maximum time in seconds for a single request before it's cancelled. "
+             "Long prompts or high max_tokens may need higher values. (default: 300 = 5 minutes)",
     )
     # Tool calling options
     serve_parser.add_argument(
         "--enable-auto-tool-choice",
         action="store_true",
-        help="Enable auto tool choice for supported models. Use --tool-call-parser to specify which parser to use.",
+        help="Let the model decide when to call tools (function calling). Must be combined "
+             "with --tool-call-parser to specify how the model formats tool calls. "
+             "Example: --enable-auto-tool-choice --tool-call-parser qwen",
     )
     serve_parser.add_argument(
         "--tool-call-parser",
@@ -674,6 +741,7 @@ Examples:
         choices=[
             "auto",
             "none",
+            # Primary names
             "mistral",
             "qwen",
             "llama",
@@ -687,13 +755,27 @@ Examples:
             "functionary",
             "glm47",
             "step3p5",
+            # Aliases (map to same parsers)
+            "generic",
+            "qwen3",
+            "llama3",
+            "llama4",
+            "nous",
+            "deepseek_v3",
+            "deepseek_r1",
+            "kimi_k2",
+            "moonshot",
+            "granite3",
+            "nemotron3",
+            "minimax_m2",
+            "meetkai",
+            "stepfun",
+            "glm4",
         ],
-        help=(
-            "Select the tool call parser for the model. Options: "
-            "auto (auto-detect), none, mistral, qwen, llama, hermes, deepseek, "
-            "kimi, granite, nemotron, minimax, xlam, functionary, glm47, step3p5. "
-            "Required for --enable-auto-tool-choice."
-        ),
+        help="Which format to use for parsing tool calls from model output. Must match your "
+             "model's training format. Common choices: 'qwen' for Qwen models, 'llama' for "
+             "Llama 3+, 'hermes' for Hermes/NousResearch, 'mistral' for Mistral. "
+             "Use 'auto' to detect from model name. Requires --enable-auto-tool-choice.",
     )
     # Reasoning parser options - choices loaded dynamically from registry
     from .reasoning import list_parsers
@@ -704,35 +786,44 @@ Examples:
         type=str,
         default=None,
         choices=["auto", "none"] + reasoning_choices,
-        help=(
-            "Enable reasoning content extraction with specified parser. "
-            "Use 'auto' to detect from model name, or 'none' to disable explicitly. "
-            f"Options: auto, none, {', '.join(reasoning_choices)}."
-        ),
+        help="Extract reasoning/thinking content from model output. Reasoning models like "
+             "Qwen3 and DeepSeek-R1 wrap their thinking in special tags. This parser extracts "
+             "that content into a separate 'reasoning_content' field in the API response. "
+             "'auto' = detect from model name. 'none' = explicitly disable. "
+             f"Parsers: {', '.join(reasoning_choices)}.",
     )
     serve_parser.add_argument(
         "--is-mllm",
         action="store_true",
-        help="Explicitly mark the model as a Multimodal Vision/Language Model. Disables auto-detection.",
+        help="Force the model to load as a multimodal (vision) model even if auto-detection "
+             "doesn't recognize it. Use this for VLM models that aren't in the built-in registry. "
+             "Auto-detection checks config.json for 'vision_config'.",
     )
     # Embedding model option
     serve_parser.add_argument(
         "--embedding-model",
         type=str,
         default=None,
-        help="Pre-load an embedding model at startup (e.g. mlx-community/embeddinggemma-300m-6bit)",
+        help="Pre-load a separate embedding model at startup for /v1/embeddings endpoint. "
+             "Runs alongside the main chat model. Example: --embedding-model "
+             "mlx-community/embeddinggemma-300m-6bit",
     )
     serve_parser.add_argument(
         "--default-temperature",
         type=float,
         default=None,
-        help="Default temperature for generation (overrides per-request if set)",
+        help="Server-wide default temperature for generation. Controls randomness: "
+             "0.0 = deterministic, 1.0 = creative. Overridden by per-request 'temperature'. "
+             "If not set, uses 0.7 as fallback.",
     )
     serve_parser.add_argument(
         "--default-top-p",
         type=float,
         default=None,
-        help="Default top_p for generation",
+        help="Server-wide default top-p (nucleus sampling) for generation. Only considers "
+             "tokens whose cumulative probability ≤ this value: 0.9 = use top 90%% of probability mass. "
+             "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
+             "If not set, uses model default.",
     )
     # Bench command
     bench_parser = subparsers.add_parser("bench", help="Run benchmark")
@@ -824,6 +915,41 @@ Examples:
         type=int,
         default=64,
         help="Group size for KV cache quantization (default: 64)",
+    )
+    # Disk cache options (bench)
+    bench_parser.add_argument(
+        "--enable-disk-cache",
+        action="store_true",
+        help="Save prompt caches to disk for reuse across runs",
+    )
+    bench_parser.add_argument(
+        "--disk-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for disk cache files (default: ~/.cache/vllm-mlx/prompt-cache)",
+    )
+    bench_parser.add_argument(
+        "--disk-cache-max-gb",
+        type=float,
+        default=10.0,
+        help="Maximum disk cache size in GB (default: 10)",
+    )
+    bench_parser.add_argument(
+        "--enable-block-disk-cache",
+        action="store_true",
+        help="Enable block-level disk persistence (requires --use-paged-cache)",
+    )
+    bench_parser.add_argument(
+        "--block-disk-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for block disk cache",
+    )
+    bench_parser.add_argument(
+        "--block-disk-cache-max-gb",
+        type=float,
+        default=10.0,
+        help="Maximum block disk cache size in GB (default: 10)",
     )
 
     # Detokenizer benchmark

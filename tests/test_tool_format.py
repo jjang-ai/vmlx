@@ -460,25 +460,6 @@ class TestModelConfigRegistryFlags:
 class TestAudioModelDefaults:
     """Test audio model request defaults."""
 
-    def test_transcription_model_default(self):
-        from vllm_mlx.api.models import AudioTranscriptionRequest
-
-        req = AudioTranscriptionRequest()
-        assert req.model == "whisper-large-v3"
-
-    def test_transcription_language_none_auto(self):
-        from vllm_mlx.api.models import AudioTranscriptionRequest
-
-        req = AudioTranscriptionRequest()
-        assert req.language is None
-
-    def test_transcription_response_format_options(self):
-        from vllm_mlx.api.models import AudioTranscriptionRequest
-
-        for fmt in ["json", "text", "verbose_json"]:
-            req = AudioTranscriptionRequest(response_format=fmt)
-            assert req.response_format == fmt
-
     def test_speech_request_defaults(self):
         from vllm_mlx.api.models import AudioSpeechRequest
 
@@ -494,12 +475,6 @@ class TestAudioModelDefaults:
         assert req.speed == 0.25
         req2 = AudioSpeechRequest(input="test", speed=4.0)
         assert req2.speed == 4.0
-
-    def test_separation_request_custom_stems(self):
-        from vllm_mlx.api.models import AudioSeparationRequest
-
-        req = AudioSeparationRequest(stems=["vocals", "drums", "bass", "other"])
-        assert len(req.stems) == 4
 
 
 # ─── Responses Input Conversion ──────────────────────────────────────────────

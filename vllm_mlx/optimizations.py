@@ -15,11 +15,7 @@ Note: mlx-lm already includes optimized implementations internally:
 No additional optimization is needed - mlx-lm is already fast out of the box.
 
 Usage:
-    from vllm_mlx.optimizations import (
-        detect_hardware,
-        get_optimization_status,
-        benchmark_memory_bandwidth,
-    )
+    from vllm_mlx.optimizations import detect_hardware
 """
 
 import logging
@@ -141,69 +137,3 @@ def detect_hardware() -> HardwareInfo:
         )
 
 
-def benchmark_memory_bandwidth() -> dict:
-    """
-    Benchmark actual memory bandwidth achieved.
-
-    Returns:
-        dict with bandwidth measurements for different array sizes
-    """
-    import time
-
-    sizes_mb = [64, 256, 1024]
-    results = {}
-
-    for size_mb in sizes_mb:
-        elements = (size_mb * 1024 * 1024) // 4  # float32
-        a = mx.random.normal((elements,))
-        b = mx.random.normal((elements,))
-        mx.eval(a, b)
-
-        start = time.perf_counter()
-        for _ in range(10):
-            c = a + b
-            mx.eval(c)
-        elapsed = time.perf_counter() - start
-
-        # read a, read b, write c = 3x size
-        total_bytes = 3 * size_mb * 1024 * 1024 * 10
-        bandwidth_gbs = (total_bytes / elapsed) / 1e9
-
-        results[f"{size_mb}MB"] = f"{bandwidth_gbs:.1f} GB/s"
-
-    return results
-
-
-def get_optimization_status() -> dict:
-    """
-    Get current hardware and MLX status.
-
-    Returns:
-        dict with hardware info and MLX configuration
-    """
-    hw = detect_hardware()
-    device_info = mx.metal.device_info()
-    flash_available = hasattr(mx, "fast") and hasattr(
-        mx.fast, "scaled_dot_product_attention"
-    )
-
-    return {
-        "hardware": {
-            "chip": hw.chip_name,
-            "total_memory_gb": hw.total_memory_gb,
-            "memory_bandwidth_gbs": hw.memory_bandwidth_gbs,
-            "gpu_cores": hw.gpu_cores,
-            "device_name": device_info.get("device_name", "Unknown"),
-        },
-        "mlx_memory": {
-            "active_bytes": mx.get_active_memory(),
-            "cache_bytes": mx.get_cache_memory(),
-            "peak_bytes": mx.get_peak_memory(),
-        },
-        "mlx_lm_features": {
-            "flash_attention": "built-in" if flash_available else "not available",
-            "metal_kernels": "optimized for Apple Silicon",
-            "kv_cache": "managed by mlx-lm",
-            "quantization": "4-bit and 8-bit supported",
-        },
-    }

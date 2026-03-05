@@ -134,12 +134,25 @@ def _parse_raw_json_tool_calls(text: str) -> Optional[List[dict]]:
         except json.JSONDecodeError:
             pass
 
-    # Find JSON objects with balanced braces
+    # Find JSON objects with balanced braces (string-aware)
     tool_calls = []
     depth = 0
     start = None
+    in_string = False
+    escape = False
 
     for i, char in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if char == '\\' and in_string:
+            escape = True
+            continue
+        if char == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
         if char == "{":
             if depth == 0:
                 start = i
@@ -242,7 +255,7 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
         cleaned_text = re.sub(
             r"<tool_call>\s*<function=[^>]+>.*?</function>\s*</tool_call>",
             "",
-            text,
+            cleaned_text,
             flags=re.DOTALL,
         ).strip()
 

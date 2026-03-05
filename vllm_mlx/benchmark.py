@@ -615,29 +615,8 @@ def run_benchmark(
 # =============================================================================
 
 # MLLM model detection patterns
-MLLM_PATTERNS = [
-    "-VL-",
-    "-VL/",
-    "VL-",
-    "llava",
-    "LLaVA",
-    "idefics",
-    "Idefics",
-    "paligemma",
-    "PaliGemma",
-    "pixtral",
-    "Pixtral",
-    "molmo",
-    "Molmo",
-    "phi3-vision",
-    "phi-3-vision",
-    "cogvlm",
-    "CogVLM",
-    "internvl",
-    "InternVL",
-    "deepseek-vl",
-    "DeepSeek-VL",
-]
+# Use canonical is_mllm_model from api/utils (config.json + registry + regex)
+from .api.utils import is_mllm_model
 
 # Test image URL (Yellow Labrador from Wikimedia Commons)
 MLLM_TEST_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/YellowLabradorLooking_new.jpg/1200px-YellowLabradorLooking_new.jpg"
@@ -646,15 +625,6 @@ MLLM_TEST_IMAGE_URLS = [
     "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg",
     "https://upload.wikimedia.org/wikipedia/commons/thumb/4/47/PNG_transparency_demonstration_1.png/640px-PNG_transparency_demonstration_1.png",
 ]
-
-
-def is_mllm_model(model_name: str) -> bool:
-    """Check if model name indicates a multimodal language model."""
-    model_lower = model_name.lower()
-    for pattern in MLLM_PATTERNS:
-        if pattern.lower() in model_lower:
-            return True
-    return False
 
 
 @dataclass
