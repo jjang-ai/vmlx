@@ -593,6 +593,18 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
         required: ['command']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_current_datetime',
+      description: 'Get the current date, time, and timezone. Use this when you need to know the current date or time.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
+      }
+    }
   }
 ]
 

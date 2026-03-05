@@ -63,20 +63,18 @@ class BlockDiskStore:
     Args:
         cache_dir: Directory to store cache files.
         max_size_gb: Maximum total cache size in GB. 0 = unlimited.
-        write_through: If True, write blocks on store (not just on eviction).
     """
 
     def __init__(
         self,
         cache_dir: str,
         max_size_gb: float = 10.0,
-        write_through: bool = True,
+        **kwargs,
     ):
         self.cache_dir = Path(cache_dir)
         self.blocks_dir = self.cache_dir / "blocks"
         self.blocks_dir.mkdir(parents=True, exist_ok=True)
         self.max_size_bytes = int(max(0.0, max_size_gb) * 1024**3)
-        self.write_through = write_through
 
         # SQLite index
         self._db_path = self.cache_dir / "block_index.db"
@@ -89,10 +87,15 @@ class BlockDiskStore:
         self.disk_writes = 0
         self.disk_evictions = 0
 
+        # Persistent read connection (main thread only — not shared with writer)
+        self._read_conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+        self._read_conn.execute("PRAGMA journal_mode=WAL")
+
         # Background writer thread
         # Queue items: (block_hash, numpy_tensors_dict, dtype_str, num_layers, token_count)
         # or special commands: ("__access__", ...) or ("__cleanup__", ...)
         self._write_queue: list = []
+        self._write_queue_max = 500  # Bound memory usage: drop oldest if exceeded
         self._write_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._writer_thread = threading.Thread(
@@ -134,20 +137,12 @@ class BlockDiskStore:
             conn.close()
 
     def _count_entries(self) -> int:
-        conn = sqlite3.connect(str(self._db_path))
-        try:
-            return conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
-        finally:
-            conn.close()
+        return self._read_conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
 
     def _total_size(self) -> int:
-        conn = sqlite3.connect(str(self._db_path))
-        try:
-            return conn.execute(
-                "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
-            ).fetchone()[0]
-        finally:
-            conn.close()
+        return self._read_conn.execute(
+            "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
+        ).fetchone()[0]
 
     def _hash_to_path(self, hash_hex: str) -> Path:
         """Shard by first 2 chars for filesystem efficiency."""
@@ -179,21 +174,25 @@ class BlockDiskStore:
 
         hash_hex = block_hash.hex()
 
-        conn = sqlite3.connect(str(self._db_path), timeout=1.0)
         try:
-            row = conn.execute(
+            row = self._read_conn.execute(
+                "SELECT file_name, dtype FROM blocks WHERE block_hash = ?",
+                (hash_hex,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Connection might be stale after writer vacuum — reconnect
+            self._read_conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+            row = self._read_conn.execute(
                 "SELECT file_name, dtype FROM blocks WHERE block_hash = ?",
                 (hash_hex,)
             ).fetchone()
 
-            if row is None:
-                with self._stats_lock:
-                    self.disk_misses += 1
-                return None
+        if row is None:
+            with self._stats_lock:
+                self.disk_misses += 1
+            return None
 
-            file_name, dtype = row
-        finally:
-            conn.close()
+        file_name, dtype = row
 
         file_path = self.cache_dir / file_name
 
@@ -286,75 +285,87 @@ class BlockDiskStore:
             return
 
         with self._write_lock:
+            # Drop oldest non-command items if queue is too large (prevent OOM)
+            if len(self._write_queue) >= self._write_queue_max:
+                logger.warning(
+                    f"BlockDiskStore write queue full ({self._write_queue_max}), "
+                    "dropping oldest block write"
+                )
+                # Find and drop first block write (not __access__/__cleanup__)
+                for i, item in enumerate(self._write_queue):
+                    if isinstance(item[0], bytes):
+                        self._write_queue.pop(i)
+                        break
             self._write_queue.append((block_hash, np_tensors, dtype, num_layers, token_count))
 
     def _background_writer(self) -> None:
-        """Background thread: drain write queue and persist blocks."""
-        while not self._stop_event.is_set():
-            self._stop_event.wait(timeout=0.2)  # 200ms poll
+        """Background thread: drain write queue and persist blocks.
 
-            with self._write_lock:
-                if not self._write_queue:
-                    continue
-                batch = self._write_queue[:]
-                self._write_queue.clear()
+        Uses a persistent write connection for the lifetime of this thread,
+        avoiding the overhead of opening/closing a SQLite connection per
+        operation. The connection is created once at thread start.
+        """
+        write_conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        write_conn.execute("PRAGMA journal_mode=WAL")
 
-            for item in batch:
-                try:
-                    if item[0] == "__access__":
-                        # Access time update
-                        _, hash_hex, ts = item
-                        self._update_access(hash_hex, ts)
-                    elif item[0] == "__cleanup__":
-                        # Stale index cleanup
-                        _, hash_hex, _ = item
-                        self._cleanup_entry(hash_hex)
-                    else:
-                        # Normal block write (pre-serialized numpy tensors)
-                        block_hash, np_tensors, dtype, num_layers, token_count = item
-                        self._write_block(block_hash, np_tensors, dtype, num_layers, token_count)
-                except Exception as e:
-                    h = item[0] if isinstance(item[0], str) else (
-                        item[0].hex()[:12] if isinstance(item[0], bytes) else "?"
-                    )
-                    logger.warning(f"Background writer error ({h}): {e}")
+        try:
+            while not self._stop_event.is_set():
+                self._stop_event.wait(timeout=0.2)  # 200ms poll
 
-            # Evict if over budget
-            self._maybe_evict()
+                with self._write_lock:
+                    if not self._write_queue:
+                        continue
+                    batch = self._write_queue[:]
+                    self._write_queue.clear()
 
-    def _update_access(self, hash_hex: str, ts: float) -> None:
+                for item in batch:
+                    try:
+                        if item[0] == "__access__":
+                            _, hash_hex, ts = item
+                            self._update_access(write_conn, hash_hex, ts)
+                        elif item[0] == "__cleanup__":
+                            _, hash_hex, _ = item
+                            self._cleanup_entry(write_conn, hash_hex)
+                        else:
+                            block_hash, np_tensors, dtype, num_layers, token_count = item
+                            self._write_block(write_conn, block_hash, np_tensors, dtype, num_layers, token_count)
+                    except Exception as e:
+                        h = item[0] if isinstance(item[0], str) else (
+                            item[0].hex()[:12] if isinstance(item[0], bytes) else "?"
+                        )
+                        logger.warning(f"Background writer error ({h}): {e}")
+
+                # Evict if over budget
+                self._maybe_evict(write_conn)
+        finally:
+            write_conn.close()
+
+    def _update_access(self, conn: sqlite3.Connection, hash_hex: str, ts: float) -> None:
         """Update last_accessed time in the index (background thread only)."""
-        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
-        try:
-            conn.execute(
-                "UPDATE blocks SET last_accessed = ?, access_count = access_count + 1 "
-                "WHERE block_hash = ?",
-                (ts, hash_hex)
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn.execute(
+            "UPDATE blocks SET last_accessed = ?, access_count = access_count + 1 "
+            "WHERE block_hash = ?",
+            (ts, hash_hex)
+        )
+        conn.commit()
 
-    def _cleanup_entry(self, hash_hex: str) -> None:
+    def _cleanup_entry(self, conn: sqlite3.Connection, hash_hex: str) -> None:
         """Remove a stale index entry and its file (background thread only)."""
-        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
-        try:
-            row = conn.execute(
-                "SELECT file_name FROM blocks WHERE block_hash = ?", (hash_hex,)
-            ).fetchone()
-            if row:
-                file_path = self.cache_dir / row[0]
-                try:
-                    file_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
-                conn.commit()
-        finally:
-            conn.close()
+        row = conn.execute(
+            "SELECT file_name FROM blocks WHERE block_hash = ?", (hash_hex,)
+        ).fetchone()
+        if row:
+            file_path = self.cache_dir / row[0]
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
+            conn.commit()
 
     def _write_block(
         self,
+        conn: sqlite3.Connection,
         block_hash: bytes,
         np_tensors: Dict[str, Any],
         dtype: str,
@@ -370,52 +381,48 @@ class BlockDiskStore:
         hash_hex = block_hash.hex()
 
         # Skip if already on disk
-        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+        exists = conn.execute(
+            "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
+        ).fetchone()
+        if exists:
+            return
+
+        # Atomic write: write to temp file then rename
+        file_path = self._hash_to_path(hash_hex)
+        rel_path = file_path.relative_to(self.cache_dir)
+        tmp_path = file_path.with_name(file_path.stem + ".tmp.safetensors")
+
         try:
-            exists = conn.execute(
-                "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
-            ).fetchone()
-            if exists:
+            if HAS_NUMPY_SAFETENSORS:
+                # Use safetensors.numpy — no MLX operations on this thread
+                _save_numpy_safetensors(np_tensors, str(tmp_path))
+            elif HAS_MLX:
+                # Fallback: use mx.save_safetensors on pre-evaluated arrays.
+                # Less safe but arrays are already materialized.
+                mx.save_safetensors(str(tmp_path), np_tensors)
+            else:
                 return
-
-            # Atomic write: write to temp file then rename
-            file_path = self._hash_to_path(hash_hex)
-            rel_path = file_path.relative_to(self.cache_dir)
-            tmp_path = file_path.with_name(file_path.stem + ".tmp.safetensors")
-
+            os.rename(str(tmp_path), str(file_path))
+        except Exception:
+            # Clean up partial file
             try:
-                if HAS_NUMPY_SAFETENSORS:
-                    # Use safetensors.numpy — no MLX operations on this thread
-                    _save_numpy_safetensors(np_tensors, str(tmp_path))
-                elif HAS_MLX:
-                    # Fallback: use mx.save_safetensors on pre-evaluated arrays.
-                    # Less safe but arrays are already materialized.
-                    mx.save_safetensors(str(tmp_path), np_tensors)
-                else:
-                    return
-                os.rename(str(tmp_path), str(file_path))
+                tmp_path.unlink(missing_ok=True)
             except Exception:
-                # Clean up partial file
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                raise
+                pass
+            raise
 
-            file_size = file_path.stat().st_size
-            now = time.time()
+        file_size = file_path.stat().st_size
+        now = time.time()
 
-            conn.execute(
-                """INSERT OR IGNORE INTO blocks
-                   (block_hash, file_name, num_tokens, num_layers, dtype,
-                    file_size, created_at, last_accessed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (hash_hex, str(rel_path), token_count, num_layers, dtype,
-                 file_size, now, now)
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn.execute(
+            """INSERT OR IGNORE INTO blocks
+               (block_hash, file_name, num_tokens, num_layers, dtype,
+                file_size, created_at, last_accessed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (hash_hex, str(rel_path), token_count, num_layers, dtype,
+             file_size, now, now)
+        )
+        conn.commit()
 
         with self._stats_lock:
             self.disk_writes += 1
@@ -428,66 +435,50 @@ class BlockDiskStore:
     # Eviction
     # =========================================================================
 
-    def _maybe_evict(self) -> None:
+    def _maybe_evict(self, conn: sqlite3.Connection) -> None:
         """Evict LRU blocks if total disk usage exceeds max."""
         if self.max_size_bytes <= 0:
             return
 
-        conn = sqlite3.connect(str(self._db_path), timeout=5.0)
-        try:
-            total = conn.execute(
-                "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
-            ).fetchone()[0]
+        total = conn.execute(
+            "SELECT COALESCE(SUM(file_size), 0) FROM blocks"
+        ).fetchone()[0]
 
-            if total <= self.max_size_bytes:
-                return
+        if total <= self.max_size_bytes:
+            return
 
-            target = int(self.max_size_bytes * 0.8)  # Free down to 80%
-            rows = conn.execute(
-                "SELECT block_hash, file_name, file_size FROM blocks "
-                "ORDER BY last_accessed ASC"
-            ).fetchall()
+        target = int(self.max_size_bytes * 0.8)  # Free down to 80%
+        rows = conn.execute(
+            "SELECT block_hash, file_name, file_size FROM blocks "
+            "ORDER BY last_accessed ASC"
+        ).fetchall()
 
-            evicted = 0
-            for hash_hex, file_name, file_size in rows:
-                if total <= target:
-                    break
-                file_path = self.cache_dir / file_name
-                try:
-                    file_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
-                total -= file_size
-                evicted += 1
+        evicted = 0
+        for hash_hex, file_name, file_size in rows:
+            if total <= target:
+                break
+            file_path = self.cache_dir / file_name
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            conn.execute("DELETE FROM blocks WHERE block_hash = ?", (hash_hex,))
+            total -= file_size
+            evicted += 1
 
-            conn.commit()
+        conn.commit()
 
-            if evicted:
-                with self._stats_lock:
-                    self.disk_evictions += evicted
-                logger.info(
-                    f"Disk cache eviction: removed {evicted} blocks "
-                    f"(now {total / 1024**3:.2f}GB)"
-                )
-        finally:
-            conn.close()
+        if evicted:
+            with self._stats_lock:
+                self.disk_evictions += evicted
+            logger.info(
+                f"Disk cache eviction: removed {evicted} blocks "
+                f"(now {total / 1024**3:.2f}GB)"
+            )
 
     # =========================================================================
     # Management
     # =========================================================================
-
-    def has_block(self, block_hash: bytes) -> bool:
-        """Check if a block exists on disk without loading it."""
-        hash_hex = block_hash.hex()
-        conn = sqlite3.connect(str(self._db_path), timeout=1.0)
-        try:
-            exists = conn.execute(
-                "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
-            ).fetchone()
-            return exists is not None
-        finally:
-            conn.close()
 
     def get_stats(self) -> Dict[str, Any]:
         """Return cache statistics."""
@@ -539,13 +530,27 @@ class BlockDiskStore:
         with self._write_lock:
             remaining = self._write_queue[:]
             self._write_queue.clear()
-        for item in remaining:
+        if remaining:
+            flush_conn = sqlite3.connect(str(self._db_path), timeout=5.0)
+            flush_conn.execute("PRAGMA journal_mode=WAL")
             try:
-                if isinstance(item[0], bytes):
-                    # Queue format: (block_hash, np_tensors, dtype, num_layers, token_count)
-                    self._write_block(item[0], item[1], item[2], item[3], item[4])
-            except Exception:
-                pass
+                for item in remaining:
+                    try:
+                        if item[0] == "__access__":
+                            self._update_access(flush_conn, item[1], item[2])
+                        elif item[0] == "__cleanup__":
+                            self._cleanup_entry(flush_conn, item[1])
+                        elif isinstance(item[0], bytes):
+                            self._write_block(flush_conn, item[0], item[1], item[2], item[3], item[4])
+                    except Exception:
+                        pass
+            finally:
+                flush_conn.close()
+        # Close persistent read connection
+        try:
+            self._read_conn.close()
+        except Exception:
+            pass
 
 
 # =============================================================================

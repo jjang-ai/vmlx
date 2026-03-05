@@ -49,12 +49,11 @@ class TempFileManager:
 
     def cleanup(self, path: str) -> bool:
         """Clean up a specific temp file. Returns True if successful."""
-        with self._lock:
-            if path in self._files:
-                self._files.discard(path)
         try:
             if os.path.exists(path):
                 os.unlink(path)
+                with self._lock:
+                    self._files.discard(path)
                 logger.debug(f"Cleaned up temp file: {path}")
                 return True
         except OSError as e:
@@ -449,21 +448,29 @@ def process_video_input(video: str | dict) -> str:
 
 
 # Cache for base64 images to avoid re-saving the same image
-_base64_image_cache: dict[str, str] = {}  # hash -> temp file path
+# OrderedDict for LRU eviction with bounded size
+from collections import OrderedDict
+
+_base64_image_cache: OrderedDict[str, str] = OrderedDict()  # hash -> temp file path
+_BASE64_IMAGE_CACHE_MAX_SIZE = 100
 
 
 def save_base64_image(base64_string: str) -> str:
     """Save base64 image to temp file and return path. Caches identical images."""
     import hashlib
 
-    # Hash the base64 string to check cache
-    image_hash = hashlib.md5(base64_string[:1000].encode()).hexdigest()
+    # Hash the full base64 string to avoid collisions
+    image_hash = hashlib.sha256(base64_string.encode()).hexdigest()
 
     # Return cached path if available and file still exists
     if image_hash in _base64_image_cache:
         cached_path = _base64_image_cache[image_hash]
         if Path(cached_path).exists():
+            _base64_image_cache.move_to_end(image_hash)  # LRU: mark as recently used
             return cached_path
+        else:
+            # File was cleaned up, remove stale entry
+            del _base64_image_cache[image_hash]
 
     image_bytes = decode_base64_image(base64_string)
 
@@ -485,6 +492,11 @@ def save_base64_image(base64_string: str) -> str:
 
     path = _temp_manager.register(temp_file.name)
     _base64_image_cache[image_hash] = path
+
+    # Evict oldest entries if cache exceeds size limit
+    while len(_base64_image_cache) > _BASE64_IMAGE_CACHE_MAX_SIZE:
+        _base64_image_cache.popitem(last=False)  # Remove oldest (FIFO order)
+
     return path
 
 
@@ -776,6 +788,174 @@ class MLXMultimodalLM:
         )
         return save_frames_to_temp(frames)
 
+    @staticmethod
+    def _extract_multimodal_messages(
+        messages: list[dict],
+    ) -> tuple[list[dict], list[str], list]:
+        """
+        Parse OpenAI-format messages into chat_messages, image URLs, and videos.
+
+        Extracts text, images, and videos from multimodal message content,
+        building properly structured chat messages for Qwen3-VL-MoE and similar
+        models that expect image tokens before text in user messages.
+
+        Args:
+            messages: List of chat messages in OpenAI format
+
+        Returns:
+            Tuple of (chat_messages, all_image_urls, videos) where:
+            - chat_messages: Properly structured messages for chat template
+            - all_image_urls: Raw image URLs/paths to process
+            - videos: Raw video inputs to process
+        """
+        all_image_urls: list[str] = []
+        videos: list = []
+        chat_messages: list[dict] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            msg_text = ""
+            msg_image_count = 0
+
+            if isinstance(content, str):
+                msg_text = content
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, str):
+                        msg_text += item
+                        continue
+
+                    # Convert Pydantic models to dicts (exclude_none prevents
+                    # false key-existence checks in downstream templates)
+                    if hasattr(item, "model_dump"):
+                        item = item.model_dump(exclude_none=True)
+                    elif hasattr(item, "dict"):
+                        item = item.model_dump()
+
+                    if isinstance(item, dict):
+                        item_type = item.get("type", "")
+
+                        if item_type == "text":
+                            msg_text += item.get("text", "")
+
+                        elif item_type == "image_url":
+                            img_url = item.get("image_url", {})
+                            if isinstance(img_url, str):
+                                all_image_urls.append(img_url)
+                            else:
+                                all_image_urls.append(img_url.get("url", ""))
+                            msg_image_count += 1
+
+                        elif item_type == "image":
+                            all_image_urls.append(
+                                item.get("image", item.get("url", ""))
+                            )
+                            msg_image_count += 1
+
+                        elif item_type == "video":
+                            videos.append(item.get("video", item.get("url", "")))
+
+            # Build properly structured message for Qwen3-VL-MoE
+            # Format: {"role": "...", "content": [{"type": "image"}, ..., {"type": "text", "text": "..."}]}
+            if msg_text or msg_image_count > 0:
+                if role == "user" and msg_image_count > 0:
+                    content_list: list[dict] = []
+                    for _ in range(msg_image_count):
+                        content_list.append({"type": "image"})
+                    content_list.append(
+                        {"type": "text", "text": msg_text, "content": msg_text}
+                    )
+                    chat_messages.append({"role": role, "content": content_list})
+                elif role == "assistant":
+                    chat_messages.append({"role": role, "content": msg_text})
+                else:
+                    chat_messages.append(
+                        {
+                            "role": role,
+                            "content": [
+                                {"type": "text", "text": msg_text, "content": msg_text}
+                            ],
+                        }
+                    )
+
+        return chat_messages, all_image_urls, videos
+
+    def _apply_chat_template(
+        self,
+        chat_messages: list[dict],
+        enable_thinking: bool | None = None,
+    ) -> str:
+        """
+        Apply chat template to structured messages with enable_thinking support.
+
+        Handles TypeError fallback (for processors that don't support
+        enable_thinking), general exception fallback to last user message,
+        and stripping of forced reasoning loops for abliterated models.
+
+        Args:
+            chat_messages: Structured chat messages from _extract_multimodal_messages()
+            enable_thinking: Whether to enable thinking mode (None = don't pass)
+
+        Returns:
+            Formatted prompt string
+        """
+        from mlx_vlm.prompt_utils import get_chat_template
+
+        template_kwargs = {}
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
+
+        formatted_prompt = None
+        try:
+            formatted_prompt = get_chat_template(
+                self.processor,
+                chat_messages,
+                add_generation_prompt=True,
+                **template_kwargs,
+            )
+        except TypeError:
+            # Processor doesn't support enable_thinking kwarg -- retry without it
+            try:
+                formatted_prompt = get_chat_template(
+                    self.processor,
+                    chat_messages,
+                    add_generation_prompt=True,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to apply chat template: {e}, using last user message"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to apply chat template: {e}, using last user message"
+            )
+
+        # Ensure stripping of forced reasoning loops for abliterated models
+        if enable_thinking is False and formatted_prompt:
+            if formatted_prompt.endswith("<think>\n"):
+                formatted_prompt = formatted_prompt[:-8]
+            elif formatted_prompt.endswith("<think>"):
+                formatted_prompt = formatted_prompt[:-7]
+
+        if formatted_prompt is None:
+            # Fallback to last user message if template fails
+            last_user_msg = ""
+            for m in reversed(chat_messages):
+                if m["role"] == "user":
+                    content = m.get("content", "")
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                last_user_msg = item.get("text", "")
+                                break
+                    else:
+                        last_user_msg = content
+                    break
+            formatted_prompt = last_user_msg
+
+        return formatted_prompt
+
     def generate(
         self,
         prompt: str,
@@ -1038,86 +1218,11 @@ class MLXMultimodalLM:
             self.load()
 
         from mlx_vlm import generate
-        from mlx_vlm.prompt_utils import get_chat_template
 
-        # Extract text and images from messages
-        # Build chat_messages for multi-turn support WITH proper image tokens per message
-        all_image_urls = []  # Raw URLs/paths to process later
-        videos = []
-        chat_messages = []  # List of properly formatted messages for chat template
+        # Extract text, images, and videos from messages
+        chat_messages, all_image_urls, videos = self._extract_multimodal_messages(messages)
 
         logger.info(f"MLLM.chat() called with {len(messages)} messages")
-
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            msg_text = ""  # Text content for this message
-            msg_image_count = 0  # Number of images in THIS message
-
-            if isinstance(content, str):
-                msg_text = content
-            elif isinstance(content, list):
-                # OpenAI multimodal format - extract text and count images for THIS message
-                for item in content:
-                    if isinstance(item, str):
-                        msg_text += item
-                        continue
-
-                    # Convert Pydantic models to dicts (exclude_none prevents
-                    # false key-existence checks in downstream templates)
-                    if hasattr(item, "model_dump"):
-                        item = item.model_dump(exclude_none=True)
-                    elif hasattr(item, "dict"):
-                        item = item.dict()
-
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-
-                        if item_type == "text":
-                            msg_text += item.get("text", "")
-
-                        elif item_type == "image_url":
-                            img_url = item.get("image_url", {})
-                            if isinstance(img_url, str):
-                                all_image_urls.append(img_url)
-                            else:
-                                all_image_urls.append(img_url.get("url", ""))
-                            msg_image_count += 1
-
-                        elif item_type == "image":
-                            all_image_urls.append(
-                                item.get("image", item.get("url", ""))
-                            )
-                            msg_image_count += 1
-
-                        elif item_type == "video":
-                            videos.append(item.get("video", item.get("url", "")))
-
-            # Build properly structured message for Qwen3-VL-MoE
-            # Format: {"role": "...", "content": [{"type": "image"}, ..., {"type": "text", "text": "..."}]}
-            if msg_text or msg_image_count > 0:
-                if role == "user" and msg_image_count > 0:
-                    # User message WITH images - build content array with image tokens FIRST
-                    content_list = []
-                    for _ in range(msg_image_count):
-                        content_list.append({"type": "image"})
-                    content_list.append(
-                        {"type": "text", "text": msg_text, "content": msg_text}
-                    )
-                    chat_messages.append({"role": role, "content": content_list})
-                elif role == "assistant":
-                    # Assistant messages - just text content (not array)
-                    chat_messages.append({"role": role, "content": msg_text})
-                else:
-                    # User/system message WITHOUT images - still use content array format
-                    chat_messages.append(
-                        {
-                            "role": role,
-                            "content": [
-                                {"type": "text", "text": msg_text, "content": msg_text}
-                            ],
-                        }
-                    )
 
         # Process images
         all_images = []
@@ -1134,7 +1239,7 @@ class MLXMultimodalLM:
             all_images.extend(frames)
             logger.info(f"Added {len(frames)} frames from video: {video_path}")
 
-        # Apply chat template directly - messages are already properly structured
+        # Apply chat template
         logger.info(
             f"Applying chat template with {len(chat_messages)} messages, {len(all_images)} images"
         )
@@ -1143,60 +1248,8 @@ class MLXMultimodalLM:
             logger.info(
                 f"  Chat msg {i}: role={cm['role']}, content={content_preview}..."
             )
-        # Pass enable_thinking if provided (Qwen3-VL, etc.)
         enable_thinking = kwargs.pop("enable_thinking", None)
-        template_kwargs = {}
-        if enable_thinking is not None:
-            template_kwargs["enable_thinking"] = enable_thinking
-        try:
-            # Use get_chat_template directly since messages are already properly formatted
-            formatted_prompt = get_chat_template(
-                self.processor,
-                chat_messages,
-                add_generation_prompt=True,
-                **template_kwargs,
-            )
-        except TypeError:
-            # Processor doesn't support enable_thinking kwarg — retry without it
-            try:
-                formatted_prompt = get_chat_template(
-                    self.processor,
-                    chat_messages,
-                    add_generation_prompt=True,
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to apply chat template: {e}, using last user message"
-                )
-                formatted_prompt = None
-        except Exception as e:
-            logger.warning(
-                f"Failed to apply chat template: {e}, using last user message"
-            )
-            formatted_prompt = None
-
-        # Ensure stripping of forced reasoning loops for abliterated models
-        if enable_thinking is False and formatted_prompt:
-            if formatted_prompt.endswith("<think>\n"):
-                formatted_prompt = formatted_prompt[:-8]
-            elif formatted_prompt.endswith("<think>"):
-                formatted_prompt = formatted_prompt[:-7]
-
-        if formatted_prompt is None:
-            # Fallback to last user message if template fails
-            last_user_msg = ""
-            for m in reversed(chat_messages):
-                if m["role"] == "user":
-                    content = m.get("content", "")
-                    if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                last_user_msg = item.get("text", "")
-                                break
-                    else:
-                        last_user_msg = content
-                    break
-            formatted_prompt = last_user_msg
+        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
 
         # Prefix caching with vision embedding support
         # Following LMCache approach: cache vision embeddings to skip encoder on hit
@@ -1206,7 +1259,6 @@ class MLXMultimodalLM:
         use_cache = kwargs.pop("use_cache", True)
         cache_entry = None
         prefix_match_len = 0
-        vision_embeddings = None
         cache_hit = False
 
         # Tokenize prompt for cache lookup
@@ -1225,11 +1277,9 @@ class MLXMultimodalLM:
                 )
                 if cache_entry:
                     cache_hit = True
-                    vision_embeddings = cache_entry.vision_embeddings
-                    if vision_embeddings is not None:
-                        logger.info(
-                            "[PREFIX CACHE] Vision embeddings cached - would skip encoder!"
-                        )
+                    # NOTE: cache_entry.vision_embeddings is not used — mlx-vlm's
+                    # generate() does not accept pre-computed vision embeddings.
+                    # The KV cache hit path below handles the actual speedup.
                     if prefix_match_len > 0:
                         logger.info(
                             f"[PREFIX CACHE] {prefix_match_len} prefix tokens match"
@@ -1370,13 +1420,26 @@ class MLXMultimodalLM:
                                     )
                     cache_to_store.append(new_cache)
 
+                # Estimate num_image_tokens from the model config or token IDs.
+                # Different models use different counts (e.g., Gemma3=256, Qwen2-VL varies).
+                num_img_tokens = 0
+                if all_images and self.config:
+                    # Try to get image_token_index from config and count occurrences in token_ids
+                    img_token_id = getattr(self.config, "image_token_index", None)
+                    if img_token_id is not None and token_ids:
+                        num_img_tokens = token_ids.count(img_token_id)
+                    if num_img_tokens == 0:
+                        # Fallback: use prompt_tokens_count minus a rough text estimate
+                        # or just leave as 0 (cache stats only, not critical for correctness)
+                        num_img_tokens = 0
+
                 self._cache_manager.store(
                     images=all_images,
                     prompt=formatted_prompt,
-                    vision_embeddings=None,
+                    vision_embeddings=None,  # mlx-vlm doesn't support pre-computed embeddings
                     kv_cache=cache_to_store,
                     token_ids=token_ids,
-                    num_image_tokens=256,
+                    num_image_tokens=num_img_tokens,
                     model_name=self.model_name,
                 )
                 logger.info(
@@ -1431,7 +1494,6 @@ class MLXMultimodalLM:
 
         try:
             from mlx_vlm import stream_generate
-            from mlx_vlm.prompt_utils import get_chat_template
         except ImportError:
             # Fallback to non-streaming if stream_generate not available
             output = self.chat(
@@ -1443,82 +1505,8 @@ class MLXMultimodalLM:
             yield output
             return
 
-        # Extract text and images from messages
-        # Build chat_messages for multi-turn support WITH proper image tokens per message
-        all_image_urls = []  # Raw URLs/paths to process later
-        videos = []
-        chat_messages = []  # List of properly formatted messages for chat template
-
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            msg_text = ""  # Text content for this message
-            msg_image_count = 0  # Number of images in THIS message
-
-            if isinstance(content, str):
-                msg_text = content
-            elif isinstance(content, list):
-                # OpenAI multimodal format - extract text and count images for THIS message
-                for item in content:
-                    if isinstance(item, str):
-                        msg_text += item
-                        continue
-
-                    # Convert Pydantic models to dicts (exclude_none prevents
-                    # false key-existence checks in downstream templates)
-                    if hasattr(item, "model_dump"):
-                        item = item.model_dump(exclude_none=True)
-                    elif hasattr(item, "dict"):
-                        item = item.dict()
-
-                    if isinstance(item, dict):
-                        item_type = item.get("type", "")
-
-                        if item_type == "text":
-                            msg_text += item.get("text", "")
-
-                        elif item_type == "image_url":
-                            img_url = item.get("image_url", {})
-                            if isinstance(img_url, str):
-                                all_image_urls.append(img_url)
-                            else:
-                                all_image_urls.append(img_url.get("url", ""))
-                            msg_image_count += 1
-
-                        elif item_type == "image":
-                            all_image_urls.append(
-                                item.get("image", item.get("url", ""))
-                            )
-                            msg_image_count += 1
-
-                        elif item_type == "video":
-                            videos.append(item.get("video", item.get("url", "")))
-
-            # Build properly structured message for Qwen3-VL-MoE
-            # Format: {"role": "...", "content": [{"type": "image"}, ..., {"type": "text", "text": "..."}]}
-            if msg_text or msg_image_count > 0:
-                if role == "user" and msg_image_count > 0:
-                    # User message WITH images - build content array with image tokens FIRST
-                    content_list = []
-                    for _ in range(msg_image_count):
-                        content_list.append({"type": "image"})
-                    content_list.append(
-                        {"type": "text", "text": msg_text, "content": msg_text}
-                    )
-                    chat_messages.append({"role": role, "content": content_list})
-                elif role == "assistant":
-                    # Assistant messages - just text content (not array)
-                    chat_messages.append({"role": role, "content": msg_text})
-                else:
-                    # User/system message WITHOUT images - still use content array format
-                    chat_messages.append(
-                        {
-                            "role": role,
-                            "content": [
-                                {"type": "text", "text": msg_text, "content": msg_text}
-                            ],
-                        }
-                    )
+        # Extract text, images, and videos from messages
+        chat_messages, all_image_urls, videos = self._extract_multimodal_messages(messages)
 
         # Process images
         all_images = []
@@ -1534,61 +1522,9 @@ class MLXMultimodalLM:
             )
             all_images.extend(frames)
 
-        # Apply chat template directly - messages are already properly structured
-        # Pass enable_thinking if provided (Qwen3-VL, etc.)
+        # Apply chat template
         enable_thinking = kwargs.pop("enable_thinking", None)
-        template_kwargs = {}
-        if enable_thinking is not None:
-            template_kwargs["enable_thinking"] = enable_thinking
-        try:
-            # Use get_chat_template directly since messages are already properly formatted
-            formatted_prompt = get_chat_template(
-                self.processor,
-                chat_messages,
-                add_generation_prompt=True,
-                **template_kwargs,
-            )
-        except TypeError:
-            # Processor doesn't support enable_thinking kwarg — retry without it
-            try:
-                formatted_prompt = get_chat_template(
-                    self.processor,
-                    chat_messages,
-                    add_generation_prompt=True,
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to apply chat template: {e}, using last user message"
-                )
-                formatted_prompt = None
-        except Exception as e:
-            logger.warning(
-                f"Failed to apply chat template: {e}, using last user message"
-            )
-            formatted_prompt = None
-
-        # Ensure stripping of forced reasoning loops for abliterated models
-        if enable_thinking is False and formatted_prompt:
-            if formatted_prompt.endswith("<think>\n"):
-                formatted_prompt = formatted_prompt[:-8]
-            elif formatted_prompt.endswith("<think>"):
-                formatted_prompt = formatted_prompt[:-7]
-
-        if formatted_prompt is None:
-            # Fallback to last user message if template fails
-            last_user_msg = ""
-            for m in reversed(chat_messages):
-                if m["role"] == "user":
-                    content = m.get("content", "")
-                    if isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, dict) and item.get("type") == "text":
-                                last_user_msg = item.get("text", "")
-                                break
-                    else:
-                        last_user_msg = content
-                    break
-            formatted_prompt = last_user_msg
+        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
 
         # Check cache for existing KV state (uses images as cache key)
         from mlx_vlm.models import cache as vlm_cache
@@ -1614,6 +1550,7 @@ class MLXMultimodalLM:
         # Stream generate tokens with cache
         accumulated_text = ""
         token_count = 0
+        last_prompt_tokens = 0
 
         # Ensure processor uses NaiveStreamingDetokenizer for all MLLM models.
         # mlx-vlm's default streaming detokenizer can buffer infinitely for some
@@ -1659,10 +1596,14 @@ class MLXMultimodalLM:
                 new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
                 accumulated_text += new_text
 
+                chunk_prompt_tokens = getattr(chunk, "prompt_tokens", 0)
+                if chunk_prompt_tokens:
+                    last_prompt_tokens = chunk_prompt_tokens
+
                 yield MLLMOutput(
                     text=new_text,  # Just the new token for streaming
                     finish_reason=None,
-                    prompt_tokens=getattr(chunk, "prompt_tokens", 0),
+                    prompt_tokens=last_prompt_tokens,
                     completion_tokens=token_count,
                 )
         except Exception as e:
@@ -1686,7 +1627,7 @@ class MLXMultimodalLM:
         yield MLLMOutput(
             text="",
             finish_reason="stop",
-            prompt_tokens=getattr(chunk, "prompt_tokens", 0) if 'chunk' in locals() else 0,
+            prompt_tokens=last_prompt_tokens,
             completion_tokens=token_count,
         )
 
@@ -1855,40 +1796,13 @@ class MLXMultimodalLM:
 
     @staticmethod
     def is_mllm_model(model_name: str) -> bool:
-        """Check if a model name indicates an MLLM model."""
-        mllm_patterns = [
-            "-VL-",
-            "-VL/",
-            "VL-",
-            "llava",
-            "LLaVA",
-            "idefics",
-            "Idefics",
-            "paligemma",
-            "PaliGemma",
-            "gemma-3",
-            "gemma3",  # Gemma 3 (multimodal)
-            "medgemma",
-            "MedGemma",  # MedGemma (medical multimodal)
-            "pixtral",
-            "Pixtral",
-            "molmo",
-            "Molmo",
-            "phi3-vision",
-            "phi-3-vision",
-            "cogvlm",
-            "CogVLM",
-            "internvl",
-            "InternVL",
-            "minicpm-v",
-            "MiniCPM-V",
-            "florence",
-            "Florence",
-            "deepseek-vl",
-            "DeepSeek-VL",
-        ]
-        model_lower = model_name.lower()
-        return any(pattern.lower() in model_lower for pattern in mllm_patterns)
+        """Check if a model name indicates an MLLM model.
+
+        Delegates to the canonical implementation in api.utils which checks
+        config.json, model registry, and regex patterns.
+        """
+        from ..api.utils import is_mllm_model as _canonical
+        return _canonical(model_name)
 
     def __repr__(self) -> str:
         status = "loaded" if self._loaded else "not loaded"

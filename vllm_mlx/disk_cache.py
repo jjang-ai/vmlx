@@ -9,13 +9,20 @@ maps token hash → cache file for fast lookup.
 This acts as an L2 cache: the in-memory prefix cache is L1 (fast, limited),
 and the disk cache is L2 (slower I/O, much larger capacity). On cache miss
 in L1, the scheduler checks L2 before doing a full prefill.
+
+Architecture:
+- Background writer thread: store() enqueues writes so they don't block inference
+- SQLite connection pool: reuses connections instead of opening per-operation
+- Graceful shutdown: flushes pending writes before exit
 """
 
 import hashlib
 import json
 import logging
 import os
+import queue
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,6 +37,44 @@ def _hash_tokens(tokens: List[int]) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+class _ConnectionPool:
+    """Simple SQLite connection pool (thread-safe).
+
+    Reuses connections instead of opening a new one per operation.
+    SQLite in WAL mode supports concurrent readers with a single writer.
+    """
+
+    def __init__(self, db_path: str, max_size: int = 4):
+        self._db_path = db_path
+        self._pool: queue.Queue = queue.Queue(maxsize=max_size)
+        self._max_size = max_size
+
+    def get(self) -> sqlite3.Connection:
+        """Get a connection from the pool (or create a new one)."""
+        try:
+            return self._pool.get_nowait()
+        except queue.Empty:
+            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            return conn
+
+    def put(self, conn: sqlite3.Connection) -> None:
+        """Return a connection to the pool."""
+        try:
+            self._pool.put_nowait(conn)
+        except queue.Full:
+            conn.close()
+
+    def close_all(self) -> None:
+        """Close all pooled connections."""
+        while not self._pool.empty():
+            try:
+                conn = self._pool.get_nowait()
+                conn.close()
+            except queue.Empty:
+                break
+
+
 class DiskCacheManager:
     """
     Persistent disk-based cache for KV/Mamba states.
@@ -37,6 +82,11 @@ class DiskCacheManager:
     Stores prompt caches as .safetensors files indexed by a SQLite database.
     Compatible with all mlx-lm cache types (KVCache, QuantizedKVCache,
     RotatingKVCache, ArraysCache/MambaCache, CacheList).
+
+    Features:
+    - Background writer thread: store() is non-blocking
+    - SQLite connection pool: avoids per-operation connection overhead
+    - Graceful shutdown: flushes pending writes
 
     Args:
         cache_dir: Directory to store cache files. Created if it doesn't exist.
@@ -50,13 +100,25 @@ class DiskCacheManager:
         self.max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024) if max_size_gb > 0 else 0
 
         # SQLite index for fast token hash → file lookup
-        self._db_path = self.cache_dir / "cache_index.db"
+        self._db_path = str(self.cache_dir / "cache_index.db")
         self._init_db()
 
-        # Stats
+        # Connection pool
+        self._pool = _ConnectionPool(self._db_path, max_size=4)
+
+        # Stats (thread-safe via lock)
+        self._stats_lock = threading.Lock()
         self.hits = 0
         self.misses = 0
         self.stores = 0
+
+        # Background writer thread
+        self._write_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self._stop_event = threading.Event()
+        self._writer_thread = threading.Thread(
+            target=self._background_writer, daemon=True, name="disk-cache-writer"
+        )
+        self._writer_thread.start()
 
         logger.info(
             f"Disk cache initialized: dir={self.cache_dir}, "
@@ -66,7 +128,7 @@ class DiskCacheManager:
 
     def _init_db(self) -> None:
         """Create the SQLite index if it doesn't exist."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = sqlite3.connect(self._db_path)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS cache_entries (
@@ -88,17 +150,21 @@ class DiskCacheManager:
         conn.close()
 
     def _count_entries(self) -> int:
-        conn = sqlite3.connect(str(self._db_path))
-        count = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
-        conn.close()
-        return count
+        conn = self._pool.get()
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
+            return count
+        finally:
+            self._pool.put(conn)
 
     def _total_size(self) -> int:
         """Get total size of all cached files in bytes."""
-        conn = sqlite3.connect(str(self._db_path))
-        result = conn.execute("SELECT COALESCE(SUM(file_size), 0) FROM cache_entries").fetchone()[0]
-        conn.close()
-        return result
+        conn = self._pool.get()
+        try:
+            result = conn.execute("SELECT COALESCE(SUM(file_size), 0) FROM cache_entries").fetchone()[0]
+            return result
+        finally:
+            self._pool.put(conn)
 
     def fetch(self, tokens: List[int]) -> Optional[List[Any]]:
         """
@@ -109,64 +175,74 @@ class DiskCacheManager:
         """
         token_hash = _hash_tokens(tokens)
 
-        conn = sqlite3.connect(str(self._db_path))
-        row = conn.execute(
-            "SELECT file_name FROM cache_entries WHERE token_hash = ?",
-            (token_hash,)
-        ).fetchone()
-
-        if row is None:
-            conn.close()
-            self.misses += 1
-            return None
-
-        file_name = row[0]
-        file_path = self.cache_dir / file_name
-
-        if not file_path.exists():
-            # File was deleted externally — clean up the index
-            conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
-            conn.commit()
-            conn.close()
-            self.misses += 1
-            logger.warning(f"Disk cache file missing: {file_path}, removed index entry")
-            return None
-
+        conn = self._pool.get()
         try:
-            from mlx_lm.models.cache import load_prompt_cache
-            cache = load_prompt_cache(str(file_path))
+            row = conn.execute(
+                "SELECT file_name FROM cache_entries WHERE token_hash = ?",
+                (token_hash,)
+            ).fetchone()
 
-            # Update access time and count
-            now = time.time()
-            conn.execute(
-                "UPDATE cache_entries SET last_accessed = ?, access_count = access_count + 1 "
-                "WHERE token_hash = ?",
-                (now, token_hash)
-            )
-            conn.commit()
-            conn.close()
+            if row is None:
+                with self._stats_lock:
+                    self.misses += 1
+                return None
 
-            self.hits += 1
-            logger.info(
-                f"Disk cache hit: {len(tokens)} tokens, "
-                f"file={file_name} ({file_path.stat().st_size / 1024 / 1024:.1f}MB)"
-            )
-            return cache
+            file_name = row[0]
+            file_path = self.cache_dir / file_name
 
-        except Exception as e:
-            conn.close()
-            self.misses += 1
-            logger.warning(f"Failed to load disk cache {file_path}: {e}")
-            # Remove corrupt entry
+            if not file_path.exists():
+                # File was deleted externally — clean up the index
+                conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
+                conn.commit()
+                with self._stats_lock:
+                    self.misses += 1
+                logger.warning(f"Disk cache file missing: {file_path}, removed index entry")
+                return None
+
             try:
-                self._remove_entry(token_hash)
-            except Exception:
-                pass
-            return None
+                from mlx_lm.models.cache import load_prompt_cache
+                cache = load_prompt_cache(str(file_path))
+
+                # Update access time and count
+                now = time.time()
+                conn.execute(
+                    "UPDATE cache_entries SET last_accessed = ?, access_count = access_count + 1 "
+                    "WHERE token_hash = ?",
+                    (now, token_hash)
+                )
+                conn.commit()
+
+                with self._stats_lock:
+                    self.hits += 1
+                logger.info(
+                    f"Disk cache hit: {len(tokens)} tokens, "
+                    f"file={file_name} ({file_path.stat().st_size / 1024 / 1024:.1f}MB)"
+                )
+                return cache
+
+            except Exception as e:
+                with self._stats_lock:
+                    self.misses += 1
+                logger.warning(f"Failed to load disk cache {file_path}: {e}")
+                # Remove corrupt entry
+                try:
+                    conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
+                    conn.commit()
+                    if file_path.exists():
+                        file_path.unlink()
+                except Exception:
+                    pass
+                return None
+        finally:
+            self._pool.put(conn)
 
     def store(self, tokens: List[int], cache: List[Any], metadata: Optional[Dict[str, str]] = None) -> bool:
         """
-        Store a KV cache to disk for the given token sequence.
+        Enqueue a KV cache for background storage to disk.
+
+        The actual I/O happens on the background writer thread so this call
+        is non-blocking. Returns True if the write was enqueued (or already
+        cached), False if the queue is full or the cache is not serializable.
 
         Args:
             tokens: The prompt token IDs this cache corresponds to.
@@ -174,21 +250,73 @@ class DiskCacheManager:
             metadata: Optional string metadata to store alongside the cache.
 
         Returns:
-            True if stored successfully, False otherwise.
+            True if enqueued or already cached, False otherwise.
         """
         token_hash = _hash_tokens(tokens)
 
-        # Check if already cached
-        conn = sqlite3.connect(str(self._db_path))
-        existing = conn.execute(
-            "SELECT file_name FROM cache_entries WHERE token_hash = ?",
-            (token_hash,)
-        ).fetchone()
+        # Quick check if already cached (read-only, no write lock needed)
+        conn = self._pool.get()
+        try:
+            existing = conn.execute(
+                "SELECT 1 FROM cache_entries WHERE token_hash = ?",
+                (token_hash,)
+            ).fetchone()
+        finally:
+            self._pool.put(conn)
+
         if existing:
-            conn.close()
             return True  # Already cached
 
-        conn.close()
+        # Verify cache objects have the required .state/.meta_state protocol
+        for i, c in enumerate(cache):
+            if not hasattr(c, 'state') or not hasattr(c, 'meta_state'):
+                logger.warning(
+                    f"Cache layer {i} ({type(c).__name__}) missing state/meta_state protocol, "
+                    "cannot save to disk"
+                )
+                return False
+
+        # Enqueue for background write
+        try:
+            self._write_queue.put_nowait((token_hash, tokens, cache, metadata))
+            return True
+        except queue.Full:
+            logger.warning("Disk cache write queue full, dropping store request")
+            return False
+
+    def _background_writer(self) -> None:
+        """Background thread: drain write queue and persist caches."""
+        while not self._stop_event.is_set():
+            try:
+                item = self._write_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                token_hash, tokens, cache, metadata = item
+                self._write_cache(token_hash, tokens, cache, metadata)
+            except Exception as e:
+                logger.warning(f"Background disk cache write failed: {e}")
+
+    def _write_cache(
+        self,
+        token_hash: str,
+        tokens: List[int],
+        cache: List[Any],
+        metadata: Optional[Dict[str, str]],
+    ) -> None:
+        """Write a cache to disk (called from background thread)."""
+        # Double-check not already cached (race with concurrent stores)
+        conn = self._pool.get()
+        try:
+            existing = conn.execute(
+                "SELECT 1 FROM cache_entries WHERE token_hash = ?",
+                (token_hash,)
+            ).fetchone()
+            if existing:
+                return
+        finally:
+            self._pool.put(conn)
 
         # Generate filename
         file_name = f"cache_{token_hash[:16]}_{len(tokens)}tok.safetensors"
@@ -196,15 +324,6 @@ class DiskCacheManager:
 
         try:
             from mlx_lm.models.cache import save_prompt_cache
-
-            # Ensure cache objects have the required .state/.meta_state protocol
-            for i, c in enumerate(cache):
-                if not hasattr(c, 'state') or not hasattr(c, 'meta_state'):
-                    logger.warning(
-                        f"Cache layer {i} ({type(c).__name__}) missing state/meta_state protocol, "
-                        "cannot save to disk"
-                    )
-                    return False
 
             save_metadata = metadata or {}
             save_metadata["num_tokens"] = str(len(tokens))
@@ -216,7 +335,8 @@ class DiskCacheManager:
             now = time.time()
 
             # Insert into index
-            with sqlite3.connect(str(self._db_path)) as conn:
+            conn = self._pool.get()
+            try:
                 conn.execute(
                     "INSERT OR REPLACE INTO cache_entries "
                     "(token_hash, file_name, num_tokens, file_size, created_at, last_accessed, access_count, metadata) "
@@ -225,8 +345,11 @@ class DiskCacheManager:
                      json.dumps(save_metadata) if save_metadata else None)
                 )
                 conn.commit()
+            finally:
+                self._pool.put(conn)
 
-            self.stores += 1
+            with self._stats_lock:
+                self.stores += 1
             logger.info(
                 f"Disk cache stored: {len(tokens)} tokens, "
                 f"{file_size / 1024 / 1024:.1f}MB → {file_name}"
@@ -234,8 +357,6 @@ class DiskCacheManager:
 
             # Evict if over size limit
             self._evict_if_needed()
-
-            return True
 
         except Exception as e:
             logger.warning(f"Failed to store disk cache: {e}")
@@ -245,25 +366,6 @@ class DiskCacheManager:
                     file_path.unlink()
                 except Exception:
                     pass
-            return False
-
-    def _remove_entry(self, token_hash: str) -> None:
-        """Remove a cache entry (both file and index)."""
-        conn = sqlite3.connect(str(self._db_path))
-        row = conn.execute(
-            "SELECT file_name FROM cache_entries WHERE token_hash = ?",
-            (token_hash,)
-        ).fetchone()
-        if row:
-            file_path = self.cache_dir / row[0]
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except Exception:
-                    pass
-            conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
-            conn.commit()
-        conn.close()
 
     def _evict_if_needed(self) -> None:
         """Evict oldest entries if total size exceeds the limit."""
@@ -274,61 +376,90 @@ class DiskCacheManager:
         if total <= self.max_size_bytes:
             return
 
-        conn = sqlite3.connect(str(self._db_path))
-        # Get entries ordered by LRU (least recently accessed first)
-        rows = conn.execute(
-            "SELECT token_hash, file_name, file_size FROM cache_entries "
-            "ORDER BY last_accessed ASC"
-        ).fetchall()
+        conn = self._pool.get()
+        try:
+            # Get entries ordered by LRU (least recently accessed first)
+            rows = conn.execute(
+                "SELECT token_hash, file_name, file_size FROM cache_entries "
+                "ORDER BY last_accessed ASC"
+            ).fetchall()
 
-        evicted = 0
-        for token_hash, file_name, file_size in rows:
-            if total <= self.max_size_bytes:
-                break
-            file_path = self.cache_dir / file_name
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except Exception:
-                    pass
-            conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
-            total -= file_size
-            evicted += 1
+            evicted = 0
+            for token_hash, file_name, file_size in rows:
+                if total <= self.max_size_bytes:
+                    break
+                file_path = self.cache_dir / file_name
+                if file_path.exists():
+                    try:
+                        file_path.unlink()
+                    except Exception:
+                        pass
+                conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
+                total -= file_size
+                evicted += 1
 
-        if evicted:
-            conn.commit()
-            logger.info(f"Disk cache evicted {evicted} entries to stay within size limit")
-        conn.close()
+            if evicted:
+                conn.commit()
+                logger.info(f"Disk cache evicted {evicted} entries to stay within size limit")
+        finally:
+            self._pool.put(conn)
 
     def clear(self) -> None:
         """Remove all cached files and reset the index."""
-        conn = sqlite3.connect(str(self._db_path))
-        rows = conn.execute("SELECT file_name FROM cache_entries").fetchall()
-        for (file_name,) in rows:
-            file_path = self.cache_dir / file_name
-            if file_path.exists():
-                try:
-                    file_path.unlink()
-                except Exception:
-                    pass
-        conn.execute("DELETE FROM cache_entries")
-        conn.commit()
-        conn.close()
-        self.hits = 0
-        self.misses = 0
-        self.stores = 0
+        conn = self._pool.get()
+        try:
+            rows = conn.execute("SELECT file_name FROM cache_entries").fetchall()
+            for (file_name,) in rows:
+                file_path = self.cache_dir / file_name
+                if file_path.exists():
+                    try:
+                        file_path.unlink()
+                    except Exception:
+                        pass
+            conn.execute("DELETE FROM cache_entries")
+            conn.commit()
+        finally:
+            self._pool.put(conn)
+        with self._stats_lock:
+            self.hits = 0
+            self.misses = 0
+            self.stores = 0
         logger.info("Disk cache cleared")
+
+    def shutdown(self) -> None:
+        """Stop background writer, flush pending writes, and close connections."""
+        self._stop_event.set()
+        self._writer_thread.join(timeout=10.0)
+        if self._writer_thread.is_alive():
+            logger.warning("Disk cache writer thread did not stop in time")
+
+        # Flush remaining items from write queue
+        while not self._write_queue.empty():
+            try:
+                item = self._write_queue.get_nowait()
+                token_hash, tokens, cache, metadata = item
+                self._write_cache(token_hash, tokens, cache, metadata)
+            except queue.Empty:
+                break
+            except Exception as e:
+                logger.warning(f"Failed to flush disk cache write: {e}")
+
+        # Close connection pool
+        self._pool.close_all()
+        logger.info("Disk cache shut down")
 
     def stats(self) -> Dict[str, Any]:
         """Return cache statistics."""
         total_size = self._total_size()
         count = self._count_entries()
-        return {
-            "entries": count,
-            "total_size_mb": total_size / 1024 / 1024,
-            "max_size_gb": self.max_size_bytes / 1024 / 1024 / 1024 if self.max_size_bytes else 0,
-            "hits": self.hits,
-            "misses": self.misses,
-            "stores": self.stores,
-            "hit_rate": self.hits / max(self.hits + self.misses, 1),
-        }
+        with self._stats_lock:
+            return {
+                "entries": count,
+                "total_size_mb": total_size / 1024 / 1024,
+                "max_size_gb": self.max_size_bytes / 1024 / 1024 / 1024 if self.max_size_bytes else 0,
+                "hits": self.hits,
+                "misses": self.misses,
+                "stores": self.stores,
+                "hit_rate": self.hits / max(self.hits + self.misses, 1),
+                "pending_writes": self._write_queue.qsize(),
+            }

@@ -1,25 +1,145 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-MLLM Scheduler for multimodal continuous batching.
+MLLM Scheduler -- Multimodal Language Model continuous batching on Apple Metal.
 
-This scheduler handles Multimodal Language Model requests with continuous
-batching support, following the same architecture as the LLM scheduler.
+This is the central orchestrator for all multimodal inference in vllm-mlx.
+It manages request lifecycle, cache infrastructure, and Metal GPU memory for
+Vision Language Models (VLMs) like Qwen3-VL, Qwen3.5-VL, LLaVA, InternVL, etc.
 
-Key features:
-- Batch processing of multiple MLLM requests
-- Vision embedding caching for repeated images
-- Step-based generation loop (like LLM scheduler)
-- Support for both streaming and non-streaming generation
+REQUEST LIFECYCLE
+-----------------
+::
 
-Architecture:
-1. Requests arrive via add_request() -> waiting queue
-2. Scheduler moves requests from waiting to running (via MLLMBatchGenerator)
-3. step() method generates one token for ALL running requests
-4. Finished requests are removed and outputs returned
+    add_request()       _schedule()          step()          _cleanup_finished()
+    ------------> WAITING ----------> RUNNING ------> FINISHED ----------------->
+                  (deque)            (dict)    (tokens)    (cache store + cleanup)
+
+1. Requests arrive via add_request() -> waiting deque (FCFS ordering)
+2. _schedule() moves requests from waiting -> running (via MLLMBatchGenerator)
+3. step() generates one token per step for ALL running requests simultaneously
+4. _process_batch_responses() extracts tokens, detokenizes, checks stop
+5. _cleanup_finished() stores cache, frees memory, removes request state
+6. Async streaming: output_queues deliver RequestOutput per token
+
+CACHE ARCHITECTURE (3-Tier Exclusive Selection)
+-----------------------------------------------
+The scheduler selects ONE in-memory cache mode at init time, with optional
+disk L2 backing. This matches the LLM scheduler's cache design exactly.
+
+**Tier 1 -- In-Memory (mutually exclusive):**
+
+- **PAGED CACHE** (default, recommended):
+  PagedCacheManager + BlockAwarePrefixCache.
+  Fixed-size blocks (default 64 tokens), O(1) block-level matching.
+  Supports BlockDiskStore L2 for persistence.
+  Required for hybrid models (auto-switches from memory-aware).
+  Config: ``use_paged_cache=True, paged_cache_block_size=64``
+
+- **MEMORY-AWARE CACHE** (good for large models):
+  MemoryAwarePrefixCache.
+  Auto-sizes to fraction of available RAM with TTL-based expiration
+  and LRU eviction. Monitors memory pressure via ``mx.metal.device_info()``.
+  Config: ``use_paged_cache=False, use_memory_aware_cache=True``
+
+- **LEGACY PREFIX CACHE** (simple, entry-count based):
+  PrefixCacheManager.
+  Fixed max_entries, no memory awareness. Trie-based token prefix matching.
+  Config: ``use_paged_cache=False, use_memory_aware_cache=False``
+
+**Tier 2 -- Disk (optional, additive to any Tier 1):**
+
+- **DISK CACHE L2** (non-paged paths):
+  DiskCacheManager -- serializes KV cache to ``~/.cache/vllm-mlx/``.
+  Config: ``enable_disk_cache=True``
+
+- **BLOCK DISK STORE** (paged path only):
+  BlockDiskStore -- persists paged blocks to disk.
+  Config: ``enable_block_disk_cache=True``
+
+**Cross-Cutting: KV Cache Quantization:**
+
+Storage-boundary quantization for 2-4x memory savings.
+Full-precision KVCache during generation -> quantize on store ->
+dequantize on fetch. Never modifies model.make_cache().
+Config: ``kv_cache_quantization="q4"|"q8", kv_cache_group_size=64``
+
+HYBRID MODEL SUPPORT (SSM + Attention)
+---------------------------------------
+Models like Qwen3.5-VL have mixed layers: some use KVCache (attention),
+others use MambaCache/ArraysCache (SSM/linear attention). This creates a
+cache asymmetry problem:
+
+- KVCache layers CAN be prefix-cached (position-independent)
+- SSM layers CANNOT -- their state is cumulative and path-dependent
+
+The scheduler handles this via:
+
+1. ``_is_hybrid_model()`` -- detects non-KVCache layers at init
+2. Auto-switches to paged cache (memory-aware can't truncate SSM state)
+3. ``HybridSSMStateCache`` (companion cache in MLLMBatchGenerator):
+   After prefill, captures SSM layer states keyed by prompt tokens.
+   On paged cache HIT + SSM companion HIT -> full skip (KV + SSM).
+   On paged cache HIT + SSM MISS -> forced full prefill.
+4. ``_fix_hybrid_cache()`` -- expands reconstructed KV-only cache back to
+   full layer count by inserting fresh ArraysCache at SSM positions
+5. ``ensure_mamba_support()`` -- patches mlx-lm's BatchGenerator for
+   MambaCache batching (merge, extract, filter)
+
+METAL GPU MEMORY MANAGEMENT
+----------------------------
+- Metal allocator cache limit: 25% of max working set (floor 512MB).
+  Prevents Metal from hoarding freed memory in its allocator free-list,
+  leaving more memory available for prefix cache and OS.
+- Periodic GC: ``mx.clear_memory_cache()`` every 60s during sustained traffic
+  (via ``_last_metal_gc_time`` timer in ``step()``)
+- Idle GC: ``mx.clear_memory_cache()`` when all requests finish
+  (in ``_cleanup_finished`` when ``self.running`` is empty)
+- Wired limit: set to ``max_recommended_working_set_size`` at init
+- ``mx.async_eval()`` in prefill loop for GPU/CPU overlap
+
+CACHE STORE FLOW (in _cleanup_finished)
+-----------------------------------------
+When a request finishes, its KV cache is stored for future reuse::
+
+    request._extracted_cache (set by _process_batch_responses)
+         |
+         +-- Paged: block_aware_cache.store_cache(tokens, states)
+         |     +-- Optional: disk L2 store + quantization
+         |
+         +-- Memory-aware: memory_aware_cache.store(tokens, cache)
+         |     +-- Optional: disk L2 store + quantization
+         |
+         +-- Legacy: prefix_cache.store_cache(tokens, cache)
+               +-- Optional: disk L2 store + quantization
+
+Each path uses ``_truncate_hybrid_cache()`` to trim generation tokens,
+``_quantize_cache_for_storage()`` if ``kv_cache_bits > 0``, and always
+sets ``_extracted_cache = None`` in a finally block to free tensor refs.
+
+CACHE FETCH FLOW (in MLLMBatchGenerator._process_prompts)
+----------------------------------------------------------
+Before prefill, each request checks for cached KV state::
+
+    1. Paged cache -> block_aware_cache.fetch_cache(request_id, tokens)
+       +-- Pure attention model: skip cached prefix tokens
+       +-- Hybrid + SSM companion HIT: full skip (KV + SSM)
+       +-- Hybrid + SSM MISS: no skip (full prefill needed)
+    2. Memory-aware/Legacy -> cache_obj.fetch(tokens)
+       +-- Same image-token and hybrid guards
+    3. Disk L2 fallback -> disk_cache.fetch(tokens)
+       +-- Only for non-hybrid models
+
+KEY CLASSES
+-----------
+- ``MLLMSchedulerConfig`` -- All cache + scheduling settings (dataclass)
+- ``MLLMRequest`` -- Per-request state (prompt, media, tokens, status)
+- ``MLLMSchedulerOutput`` -- Output from one step() call
+- ``MLLMScheduler`` -- Main scheduler class
 """
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 import threading
@@ -35,7 +155,6 @@ from .mllm_batch_generator import (
     MLLMBatchRequest,
     MLLMBatchResponse,
 )
-from .multimodal_processor import MultimodalProcessor
 from .request import RequestOutput, RequestStatus, SamplingParams
 
 logger = logging.getLogger(__name__)
@@ -43,7 +162,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MLLMSchedulerConfig:
-    """Configuration for MLLM scheduler."""
+    """Configuration for MLLM scheduler.
+
+    All fields mirror the LLM SchedulerConfig for full cache parity.
+    The 3-tier cache selection is mutually exclusive:
+
+    - ``use_paged_cache=True`` -> PagedCacheManager + BlockAwarePrefixCache
+    - ``use_memory_aware_cache=True`` (and paged off) -> MemoryAwarePrefixCache
+    - Both off -> PrefixCacheManager (legacy entry-count based)
+
+    Disk L2 caches are additive on top of any tier.
+    KV cache quantization applies at the storage boundary (not during generation).
+    """
 
     # Maximum concurrent MLLM requests in the batch
     max_num_seqs: int = 16
@@ -73,6 +203,31 @@ class MLLMSchedulerConfig:
     # KV cache quantization for prefix cache storage
     kv_cache_quantization: str = "none"  # "none", "q4", "q8"
     kv_cache_group_size: int = 64
+
+    # Memory-aware cache settings (L1, recommended for large models)
+    use_memory_aware_cache: bool = True  # Use memory-based eviction
+    cache_memory_mb: Optional[int] = None  # None = auto-detect (cache_memory_percent of RAM)
+    cache_memory_percent: float = 0.20  # Fraction of available RAM if auto-detecting
+    cache_ttl_minutes: float = 0  # Cache entry TTL in minutes (0 = no expiration)
+
+    # Legacy entry-count prefix cache (fallback when paged+memory-aware both off)
+    prefix_cache_size: int = 100
+
+    # Disk cache L2 (persistent across restarts, non-paged path)
+    enable_disk_cache: bool = False
+    disk_cache_dir: Optional[str] = None  # None = ~/.cache/vllm-mlx/prompt-cache/<hash>
+    disk_cache_max_gb: float = 10.0
+
+    # Block-level disk cache L2 (persistent, paged path)
+    enable_block_disk_cache: bool = False
+    block_disk_cache_dir: Optional[str] = None  # None = ~/.cache/vllm-mlx/block-cache/<hash>
+    block_disk_cache_max_gb: float = 10.0
+
+    # Model path (used to scope disk cache per model)
+    model_path: Optional[str] = None
+
+    # Hybrid SSM state cache size (companion cache for SSM layer states)
+    ssm_state_cache_size: int = 50
 
 
 @dataclass
@@ -132,36 +287,54 @@ class MLLMSchedulerOutput:
 
 
 class MLLMScheduler:
-    """
-    Scheduler for Vision Language Model requests with continuous batching.
+    """Scheduler for Vision Language Model requests with continuous batching.
 
-    This scheduler manages the lifecycle of MLLM requests using the
-    MLLMBatchGenerator for efficient batch processing:
+    This is the main entry point for multimodal inference. It owns:
 
-    1. Requests arrive and are added to the waiting queue
-    2. Scheduler moves requests from waiting to running (via batch generator)
-    3. step() generates one token for ALL running requests simultaneously
-    4. Finished requests are removed and outputs returned
+    - **Request queues**: waiting (deque) and running (dict) with thread-safe lock
+    - **Cache infrastructure**: one of paged/memory-aware/legacy + optional disk L2
+    - **Batch generator**: MLLMBatchGenerator (lazy, recreated on sampler change)
+    - **Metal memory**: GC timer, wired limit, cache limit
+    - **Streaming**: per-request output queues with detokenizer pool
 
-    Example:
-        >>> scheduler = MLLMScheduler(model, processor, config)
-        >>> # Add requests
-        >>> request_id = scheduler.add_request(
-        ...     prompt="What's in this image?",
-        ...     images=["photo.jpg"]
-        ... )
-        >>> # Run generation loop
-        >>> while scheduler.has_requests():
-        ...     output = scheduler.step()
-        ...     for req_output in output.outputs:
-        ...         if req_output.finished:
-        ...             print(f"Finished: {req_output.output_text}")
+    Thread safety: _queue_lock (RLock) protects waiting/running mutations.
+    step() runs in a background thread; add_request_async() from the event loop.
 
-    For async usage with streaming:
-        >>> await scheduler.start()
-        >>> request_id = await scheduler.add_request_async(...)
-        >>> async for output in scheduler.stream_outputs(request_id):
-        ...     print(output.new_text, end="")
+    Cache init priority (in __init__):
+      1. Detect hybrid model -> auto-switch to paged if needed
+      2. Paged cache (with optional BlockDiskStore)
+      3. Memory-aware cache (elif)
+      4. Legacy prefix cache (elif)
+      5. Disk cache L2 (additive, non-paged paths)
+      6. KV cache quantization setup
+
+    Key methods:
+      - ``add_request()`` / ``add_request_async()`` -- enqueue a VLM request
+      - ``step()`` -- one generation step (schedule + generate + cleanup)
+      - ``stream_outputs()`` -- async generator for streaming tokens
+      - ``abort_request()`` -- cancel a running/waiting request
+      - ``get_stats()`` -- cache hit rates, throughput, memory usage
+      - ``reset()`` -- clear all state and caches
+
+    Example (sync)::
+
+        scheduler = MLLMScheduler(model, processor, config)
+        request_id = scheduler.add_request(
+            prompt="What's in this image?",
+            images=["photo.jpg"]
+        )
+        while scheduler.has_requests():
+            output = scheduler.step()
+            for req_output in output.outputs:
+                if req_output.finished:
+                    print(f"Finished: {req_output.output_text}")
+
+    Example (async streaming)::
+
+        await scheduler.start()
+        request_id = await scheduler.add_request_async(...)
+        async for output in scheduler.stream_outputs(request_id):
+            print(output.new_text, end="")
     """
 
     def __init__(
@@ -171,7 +344,15 @@ class MLLMScheduler:
         config: Optional[MLLMSchedulerConfig] = None,
     ):
         """
-        Initialize MLLM scheduler.
+        Initialize MLLM scheduler with full cache infrastructure.
+
+        Init sequence:
+        1. Detect hybrid model (SSM + attention) -> auto-switch to paged
+        2. Initialize cache tier (paged > memory-aware > legacy, exclusive)
+        3. Initialize disk L2 (additive, if enabled)
+        4. Configure KV cache quantization (storage boundary)
+        5. Set up request queues, UID mappings, output queues
+        6. Start Metal GC timer for sustained-traffic memory management
 
         Args:
             model: The VLM model
@@ -188,16 +369,12 @@ class MLLMScheduler:
         # Get model config
         self.model_config = getattr(model, "config", None)
 
-        # Multimodal processor for input preparation
-        self.mm_processor = MultimodalProcessor(
-            model=model,
-            processor=processor,
-            config=self.model_config,
-        )
-
         # Token-level Prefix caching for the language model
         self.paged_cache_manager = None
         self.block_aware_cache = None
+        self.memory_aware_cache = None
+        self.prefix_cache = None
+        self.disk_cache = None
 
         # Detect hybrid models (mixed KVCache + MambaCache layers)
         lang_model = self.model.language_model if hasattr(self.model, "language_model") else self.model
@@ -225,28 +402,128 @@ class MLLMScheduler:
                     "(memory-aware cache can't truncate MambaCache)."
                 )
                 self.config.use_paged_cache = True
+                self.config.use_memory_aware_cache = False
 
-        if self.config.enable_prefix_cache and self.config.use_paged_cache:
+        # --- Cache initialization chain (paged > memory-aware > legacy) ---
+        if self.config.enable_prefix_cache:
+            if self.config.use_paged_cache:
+                # Paged cache with optional block-level disk store (L2)
+                block_disk_store = None
+                if self.config.enable_block_disk_cache:
+                    cache_dir = self.config.block_disk_cache_dir
+                    if cache_dir is None and self.config.model_path:
+                        import hashlib
+                        model_hash = hashlib.sha256(
+                            self.config.model_path.encode()
+                        ).hexdigest()[:12]
+                        cache_dir = os.path.join(
+                            os.path.expanduser("~"),
+                            ".cache", "vllm-mlx", "block-cache", model_hash,
+                        )
+                    elif cache_dir is None:
+                        cache_dir = os.path.join(
+                            os.path.expanduser("~"),
+                            ".cache", "vllm-mlx", "block-cache", "default",
+                        )
+                    try:
+                        from .block_disk_store import BlockDiskStore
+                        block_disk_store = BlockDiskStore(
+                            cache_dir=cache_dir,
+                            max_size_gb=self.config.block_disk_cache_max_gb,
+                        )
+                        logger.info(
+                            f"VLM block disk cache enabled: dir={cache_dir}, "
+                            f"max={self.config.block_disk_cache_max_gb}GB"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"VLM block disk cache init failed at {cache_dir}: {e}. "
+                            "Continuing without block disk cache."
+                        )
+
+                try:
+                    from .paged_cache import PagedCacheManager
+                    from .prefix_cache import BlockAwarePrefixCache
+
+                    self.paged_cache_manager = PagedCacheManager(
+                        block_size=self.config.paged_cache_block_size,
+                        max_blocks=self.config.max_cache_blocks,
+                        disk_store=block_disk_store,
+                    )
+                    self.block_aware_cache = BlockAwarePrefixCache(
+                        model=lang_model,
+                        paged_cache_manager=self.paged_cache_manager,
+                    )
+                    logger.info(
+                        f"VLM Paged cache enabled: block_size={self.config.paged_cache_block_size}, "
+                        f"max_blocks={self.config.max_cache_blocks}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to initialize VLM paged cache: {e}")
+                    self.paged_cache_manager = None
+                    self.block_aware_cache = None
+
+            elif self.config.use_memory_aware_cache:
+                # Memory-aware cache (L1, recommended for large models)
+                try:
+                    from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
+                    cache_config = MemoryCacheConfig(
+                        max_memory_mb=self.config.cache_memory_mb,
+                        max_memory_percent=self.config.cache_memory_percent,
+                        ttl_minutes=self.config.cache_ttl_minutes,
+                    )
+                    self.memory_aware_cache = MemoryAwarePrefixCache(
+                        model=lang_model,
+                        config=cache_config,
+                    )
+                    logger.info(
+                        f"VLM memory-aware cache enabled: "
+                        f"limit={self.memory_aware_cache.memory_limit_mb:.1f}MB"
+                    )
+                except Exception as e:
+                    logger.warning(f"VLM memory-aware cache init failed: {e}")
+
+            else:
+                # Legacy entry-count prefix cache
+                try:
+                    from .prefix_cache import PrefixCacheManager
+                    self.prefix_cache = PrefixCacheManager(
+                        model=lang_model,
+                        max_entries=self.config.prefix_cache_size,
+                    )
+                    logger.info(
+                        f"VLM prefix cache enabled: max_entries={self.config.prefix_cache_size}"
+                    )
+                except Exception as e:
+                    logger.warning(f"VLM prefix cache init failed: {e}")
+
+        # Disk cache L2 (persistent across restarts, for non-paged paths)
+        if self.config.enable_disk_cache and self.config.enable_prefix_cache:
+            import hashlib
+            base_dir = self.config.disk_cache_dir or os.path.expanduser(
+                "~/.cache/vllm-mlx/prompt-cache"
+            )
+            if self.config.model_path:
+                model_hash = hashlib.sha256(
+                    self.config.model_path.encode()
+                ).hexdigest()[:12]
+                model_slug = os.path.basename(self.config.model_path.rstrip("/"))
+                cache_dir = os.path.join(base_dir, f"{model_slug}_{model_hash}")
+            else:
+                cache_dir = base_dir
             try:
-                from .paged_cache import PagedCacheManager
-                from .prefix_cache import BlockAwarePrefixCache
-                
-                self.paged_cache_manager = PagedCacheManager(
-                    block_size=self.config.paged_cache_block_size,
-                    max_blocks=self.config.max_cache_blocks,
+                from .disk_cache import DiskCacheManager
+                self.disk_cache = DiskCacheManager(
+                    cache_dir=cache_dir,
+                    max_size_gb=self.config.disk_cache_max_gb,
                 )
-                self.block_aware_cache = BlockAwarePrefixCache(
-                    model=lang_model,
-                    paged_cache_manager=self.paged_cache_manager,
-                )
-                logger.info(
-                    f"VLM Paged cache enabled: block_size={self.config.paged_cache_block_size}, "
-                    f"max_blocks={self.config.max_cache_blocks}"
-                )
+                logger.info(f"VLM disk cache (L2) enabled: dir={cache_dir}")
             except Exception as e:
-                logger.warning(f"Failed to initialize VLM paged cache: {e}")
-                self.paged_cache_manager = None
-                self.block_aware_cache = None
+                logger.warning(f"VLM disk cache init failed: {e}")
+        elif self.config.enable_disk_cache and not self.config.enable_prefix_cache:
+            logger.warning(
+                "VLM disk cache requires prefix cache to be enabled — disk cache disabled"
+            )
 
         # KV cache quantization for prefix cache storage (2-4x memory reduction)
         self._kv_cache_bits = 0
@@ -297,10 +574,31 @@ class MLLMScheduler:
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
 
+        # Periodic Metal memory cache cleanup timer (matches LLM scheduler).
+        # During sustained MLLM traffic, self.running is never empty so
+        # _cleanup_finished's mx.clear_memory_cache() never triggers.
+        self._last_metal_gc_time = time.monotonic()
+        self._metal_gc_interval = 60.0  # seconds
+
+        # Log cache configuration summary for diagnostics
+        cache_mode = "none"
+        if self.block_aware_cache is not None:
+            cache_mode = "paged"
+        elif self.memory_aware_cache is not None:
+            cache_mode = "memory-aware"
+        elif self.prefix_cache is not None:
+            cache_mode = "legacy"
+        logger.info(
+            f"MLLM Scheduler initialized: cache_mode={cache_mode}, "
+            f"hybrid={self._is_hybrid}, "
+            f"kv_quant={self.config.kv_cache_quantization}, "
+            f"disk_l2={self.disk_cache is not None}, "
+            f"max_seqs={self.config.max_num_seqs}"
+        )
+
     def _get_detokenizer(self, request_id: str, tokenizer: Any) -> Any:
         """Get or create a streaming detokenizer for a request."""
         if request_id not in self._detokenizer_pool:
-            from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
             detok = NaiveStreamingDetokenizer(tokenizer)
             detok.reset()
             self._detokenizer_pool[request_id] = detok
@@ -315,8 +613,14 @@ class MLLMScheduler:
         """Check if VLM language model uses non-standard cache types.
 
         Returns True for models with mixed KVCache + MambaCache/ArraysCache layers,
-        or pure Mamba/SSM models. These need paged cache (memory-aware cache can't
-        truncate cumulative SSM states).
+        or pure Mamba/SSM models. These need special handling:
+        - Auto-switch to paged cache (memory-aware can't truncate SSM states)
+        - Enable MambaCache batching support (ensure_mamba_support)
+        - HybridSSMStateCache for companion SSM state caching
+
+        Detection: calls model.make_cache() and checks cache type names.
+        Pure KV types (KVCache, RotatingKVCache, QuantizedKVCache) -> False.
+        Any other type (ArraysCache, MambaCache, CacheList with mixed) -> True.
         """
         if not hasattr(model, "make_cache"):
             return False
@@ -598,6 +902,10 @@ class MLLMScheduler:
 
         If sampling_params differ from the current generator's settings,
         the generator is recreated (unless active requests prevent it).
+
+        On recreation, clears ALL 3 cache tiers (paged, memory-aware, legacy)
+        because cache objects contain tensor references tied to the old generator.
+        Passes all cache objects and quantization settings to the new generator.
         """
         from mlx_lm.sample_utils import make_sampler
 
@@ -628,28 +936,53 @@ class MLLMScheduler:
             )
             return
 
-        # Clear paged cache when BatchGenerator changes — cache objects are
+        # Close old generator to restore Metal wired/cache limits
+        if self.batch_generator is not None:
+            try:
+                self.batch_generator.close()
+            except Exception:
+                pass
+
+        # Clear all caches when BatchGenerator changes — cache objects are
         # tied to their generator instance
-        if self.batch_generator is not None and self.block_aware_cache is not None:
-            logger.debug(
-                "Clearing paged cache: MLLM BatchGenerator being recreated"
-            )
-            self.block_aware_cache.clear()
+        if self.batch_generator is not None:
+            if self.block_aware_cache is not None:
+                logger.debug(
+                    "Clearing paged cache: MLLM BatchGenerator being recreated"
+                )
+                self.block_aware_cache.clear()
+            if self.memory_aware_cache is not None:
+                logger.debug(
+                    "Clearing memory-aware cache: MLLM BatchGenerator being recreated"
+                )
+                self.memory_aware_cache.clear()
+            if self.prefix_cache is not None:
+                logger.debug(
+                    "Clearing legacy prefix cache: MLLM BatchGenerator being recreated"
+                )
+                self.prefix_cache.clear()
 
         sampler = make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k)
 
         self.batch_generator = MLLMBatchGenerator(
             model=self.model,
             processor=self.processor,
-            mm_processor=self.mm_processor,
             max_tokens=self.config.default_max_tokens,
             stop_tokens=self.stop_tokens,
             sampler=sampler,
             prefill_batch_size=self.config.prefill_batch_size,
             completion_batch_size=self.config.completion_batch_size,
             prefill_step_size=self.config.prefill_step_size,
+            enable_vision_cache=self.config.enable_vision_cache,
+            vision_cache_size=self.config.vision_cache_size,
             paged_cache_manager=self.paged_cache_manager,
             block_aware_cache=self.block_aware_cache,
+            memory_aware_cache=self.memory_aware_cache,
+            prefix_cache=self.prefix_cache,
+            disk_cache=self.disk_cache,
+            kv_cache_bits=self._kv_cache_bits,
+            kv_cache_group_size=self._kv_cache_group_size,
+            ssm_state_cache_size=self.config.ssm_state_cache_size,
         )
         self._current_sampler_params = new_params
 
@@ -768,12 +1101,12 @@ class MLLMScheduler:
             request.status = RequestStatus.FINISHED_ABORTED
             self.finished_req_ids.add(request_id)
 
-        # Signal output queue
-        if request_id in self.output_queues:
-            try:
-                self.output_queues[request_id].put_nowait(None)
-            except asyncio.QueueFull:
-                pass
+            # Signal output queue (inside lock to prevent race with queue cleanup)
+            if request_id in self.output_queues:
+                try:
+                    self.output_queues[request_id].put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
 
         # Free Metal memory when all requests done
         if not self.running:
@@ -840,13 +1173,15 @@ class MLLMScheduler:
             # Tracking is done at request finish time instead.
             scheduled.append(request)
 
-        # Merge per-request stop_token_ids into batch generator stop tokens
+        # Merge per-request stop_token_ids into batch generator stop tokens.
+        # Track per-request additions so they can be removed on cleanup
+        # (prevents stop tokens leaking across unrelated requests).
         if batch_requests and self.batch_generator is not None:
             for request in scheduled:
                 if request.sampling_params.stop_token_ids:
-                    self.batch_generator.stop_tokens.update(
-                        request.sampling_params.stop_token_ids
-                    )
+                    new_tokens = set(request.sampling_params.stop_token_ids)
+                    self.batch_generator.stop_tokens.update(new_tokens)
+                    request._added_stop_tokens = new_tokens
             uids = self.batch_generator.insert(batch_requests)
 
             for uid, request in zip(uids, scheduled):
@@ -932,6 +1267,7 @@ class MLLMScheduler:
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
+                cached_tokens=getattr(response, 'cached_tokens', 0),
             )
 
             # Determine effective finish reason (string stop overrides)
@@ -987,23 +1323,35 @@ class MLLMScheduler:
         return outputs, finished_ids
 
     def _cleanup_finished(self, finished_ids: Set[str]) -> None:
-        """Clean up finished requests."""
+        """Clean up finished requests and store KV cache for future prefix reuse.
+
+        For each finished request, this method:
+        1. Stores the extracted KV cache via the active cache tier (paged,
+           memory-aware, or legacy) with optional disk L2 write and quantization.
+        2. Cleans up the streaming detokenizer.
+        3. Removes from running dict, UID mappings, paged cache tracking.
+        4. Removes from master requests dict to free output_tokens/cache refs.
+        5. Triggers Metal GC (mx.clear_memory_cache) when all requests done.
+
+        The _extracted_cache and _extracted_tokens attributes are set on the
+        MLLMRequest by _process_batch_responses() during step(). They are always
+        set to None in a finally block after store to prevent memory leaks.
+        """
         for request_id in finished_ids:
+            request = self.running.get(request_id)
+
+            # --- Cache store: paged path ---
             if self.block_aware_cache is not None:
-                request = self.running.get(request_id)
                 if request is not None and getattr(request, "_extracted_cache", None) is not None:
                     try:
                         token_list = getattr(request, "_extracted_tokens", [])
                         if token_list:
-                            cache_blocks = request._extracted_cache()
+                            raw = request._extracted_cache
+                            cache_blocks = raw() if callable(raw) else raw
                             if cache_blocks is None:
                                 logger.debug(f"No cache blocks to store for {request_id}")
                             else:
                                 prompt_len = len(token_list)
-                                # For hybrid models (MambaCache + KVCache), the standard
-                                # truncation fails because MambaCache is cumulative.
-                                # Use MLLM-specific truncation that skips Mamba layers
-                                # and only truncates KVCache layers.
                                 cache_blocks = self._truncate_hybrid_cache(
                                     cache_blocks, prompt_len
                                 )
@@ -1013,6 +1361,12 @@ class MLLMScheduler:
                                     )
                                 else:
                                     truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
+                                    # L2: persist to disk before quantization
+                                    if self.disk_cache is not None:
+                                        try:
+                                            self.disk_cache.store(truncated_tokens, cache_blocks)
+                                        except Exception as de:
+                                            logger.debug(f"VLM disk cache store failed for {request_id}: {de}")
                                     if getattr(self, '_kv_cache_bits', 0):
                                         cache_blocks = self._quantize_cache_for_storage(cache_blocks)
                                     cache_states = self._extract_cache_states(cache_blocks)
@@ -1029,6 +1383,93 @@ class MLLMScheduler:
                                         )
                     except Exception as e:
                         logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}", exc_info=True)
+                    finally:
+                        if request is not None:
+                            request._extracted_cache = None
+
+            # --- Cache store: memory-aware path ---
+            elif self.memory_aware_cache is not None:
+                if (
+                    request is not None
+                    and getattr(request, "_extracted_cache", None) is not None
+                    and getattr(request, "_extracted_tokens", None)
+                ):
+                    try:
+                        prompt_tokens = list(request._extracted_tokens)
+                        prompt_len = len(prompt_tokens)
+                        raw_cache = request._extracted_cache
+                        if callable(raw_cache):
+                            raw_cache = raw_cache()
+                        if raw_cache:
+                            cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
+                            if cache_to_store is not None:
+                                # L2: persist pre-quantization
+                                if self.disk_cache is not None:
+                                    try:
+                                        self.disk_cache.store(prompt_tokens, cache_to_store)
+                                    except Exception as de:
+                                        logger.debug(f"VLM disk store failed for {request_id}: {de}")
+                                if getattr(self, '_kv_cache_bits', 0):
+                                    cache_to_store = self._quantize_cache_for_storage(cache_to_store)
+                                stored = self.memory_aware_cache.store(prompt_tokens, cache_to_store)
+                                if stored:
+                                    logger.info(
+                                        f"VLM stored memory-aware cache for {request_id} "
+                                        f"({prompt_len} prompt tokens)"
+                                    )
+                    except Exception as e:
+                        logger.warning(f"VLM memory-aware cache store failed for {request_id}: {e}")
+                    finally:
+                        if request is not None:
+                            request._extracted_cache = None
+
+            # --- Cache store: legacy prefix cache path ---
+            elif self.prefix_cache is not None:
+                if (
+                    request is not None
+                    and getattr(request, "_extracted_cache", None) is not None
+                    and getattr(request, "_extracted_tokens", None)
+                ):
+                    try:
+                        prompt_tokens = list(request._extracted_tokens)
+                        prompt_len = len(prompt_tokens)
+                        raw_cache = request._extracted_cache
+                        if callable(raw_cache):
+                            raw_cache = raw_cache()
+                        if raw_cache:
+                            cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
+                            if cache_to_store is not None:
+                                if self.disk_cache is not None:
+                                    try:
+                                        self.disk_cache.store(prompt_tokens, cache_to_store)
+                                    except Exception as de:
+                                        logger.debug(f"VLM disk store failed for {request_id}: {de}")
+                                if getattr(self, '_kv_cache_bits', 0):
+                                    cache_to_store = self._quantize_cache_for_storage(cache_to_store)
+                                self.prefix_cache.store_cache(prompt_tokens, cache_to_store)
+                                logger.debug(
+                                    f"VLM stored legacy prefix cache for {request_id} "
+                                    f"({prompt_len} prompt tokens)"
+                                )
+                    except Exception as e:
+                        logger.debug(f"VLM prefix cache store failed for {request_id}: {e}")
+                    finally:
+                        if request is not None:
+                            request._extracted_cache = None
+
+            # Remove per-request stop tokens from batch generator
+            if (
+                request is not None
+                and self.batch_generator is not None
+                and getattr(request, '_added_stop_tokens', None)
+            ):
+                # Only remove tokens that no other running request also needs
+                other_stops = set()
+                for other_id, other_req in self.running.items():
+                    if other_id != request_id:
+                        other_stops.update(getattr(other_req, '_added_stop_tokens', set()))
+                removable = request._added_stop_tokens - other_stops - self.stop_tokens
+                self.batch_generator.stop_tokens -= removable
 
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
@@ -1056,14 +1497,28 @@ class MLLMScheduler:
             # Track as finished
             self.finished_req_ids.add(request_id)
 
-    def step(self) -> MLLMSchedulerOutput:
-        """
-        Execute one scheduling step (no queue pushing — see _step_and_dispatch).
+        # Clear Metal memory cache when all requests done (vision tensors are large)
+        if finished_ids and not self.running:
+            try:
+                import mlx.core as mx
+                mx.clear_memory_cache()
+            except Exception:
+                pass
 
-        This method:
-        1. Schedules waiting requests into the batch
-        2. Runs one generation step via MLLMBatchGenerator
-        3. Processes outputs and handles finished requests
+    def step(self) -> MLLMSchedulerOutput:
+        """Execute one scheduling step -- the core generation loop tick.
+
+        Called repeatedly by _step_and_dispatch() in the background thread.
+        Each call:
+
+        1. _schedule_waiting() moves queued requests -> running (under lock)
+        2. batch_generator.next() generates one token for all active requests
+        3. _process_batch_responses() extracts tokens, detokenizes, checks stops
+        4. _cleanup_finished() stores cache, frees memory, removes state
+        5. Periodic Metal GC every 60s during sustained traffic
+
+        Error recovery: on GPU/cache errors, attempts retry (max 2) per request
+        by re-queueing. On persistent failure, finishes request with error.
 
         Returns:
             MLLMSchedulerOutput with results of this step
@@ -1116,10 +1571,19 @@ class MLLMScheduler:
                             req.output_text = f"Generation failed: {step_err}"
                             failed.append(req_id)
                         self._cleanup_detokenizer(req_id)
+                    # Clean up paged cache block tables for all running requests
+                    # to prevent stale entries on retry
+                    if self.block_aware_cache is not None:
+                        for req_id in self.running:
+                            self.block_aware_cache._request_tables.pop(req_id, None)
+                    if self.paged_cache_manager is not None:
+                        for req_id in self.running:
+                            self.paged_cache_manager.detach_request(req_id)
+
                     self.running.clear()
                     self.request_id_to_uid.clear()
                     self.uid_to_request_id.clear()
-    
+
                     if failed:
                         # Push error responses for permanently failed requests
                         output.finished_request_ids = failed
@@ -1157,6 +1621,19 @@ class MLLMScheduler:
             # Clear finished tracking for next step
             self.finished_req_ids = set()
 
+        # Periodic Metal memory cache cleanup during sustained traffic.
+        # Vision models hold large pixel_value tensors and cross-attention states
+        # that fragment Metal's allocator cache.
+        _now = time.monotonic()
+        if _now - self._last_metal_gc_time > self._metal_gc_interval:
+            self._last_metal_gc_time = _now
+            try:
+                import mlx.core as mx
+                mx.clear_memory_cache()
+                logger.debug("VLM periodic Metal memory cache cleanup")
+            except Exception:
+                pass
+
         return output
 
     def _dispatch_outputs(self, step_output: "MLLMSchedulerOutput") -> None:
@@ -1192,7 +1669,7 @@ class MLLMScheduler:
             failed_ids = set()
             # Fail running requests
             for req_id, req in list(self.running.items()):
-                req.status = RequestStatus.FINISHED_STOPPED
+                req.status = RequestStatus.FINISHED_ABORTED
                 queue = self.output_queues.get(req_id)
                 if queue is not None:
                     try:
@@ -1220,7 +1697,7 @@ class MLLMScheduler:
             # Fail waiting requests
             for req in list(self.waiting):
                 req_id = req.request_id
-                req.status = RequestStatus.FINISHED_STOPPED
+                req.status = RequestStatus.FINISHED_ABORTED
                 queue = self.output_queues.get(req_id)
                 if queue is not None:
                     try:
@@ -1446,7 +1923,12 @@ class MLLMScheduler:
     # ========== Stats and utilities ==========
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get scheduler statistics."""
+        """Get scheduler statistics including all cache mode metrics.
+
+        Returns dict with: queue sizes, token counts, batch generator stats,
+        vision cache stats, and active cache tier stats (paged/memory-aware/
+        legacy/disk). Used by /v1/stats endpoint and health monitoring.
+        """
         with self._queue_lock:
             stats = {
                 "num_waiting": len(self.waiting),
@@ -1460,32 +1942,86 @@ class MLLMScheduler:
             if self.batch_generator is not None:
                 batch_stats = self.batch_generator.stats()
                 stats["batch_generator"] = batch_stats.to_dict()
-                # Add vision embedding cache stats from batch generator
-                stats["vision_embedding_cache"] = (
-                    self.batch_generator.get_vision_cache_stats()
-                )
-
-            if self.batch_generator:
                 stats["vision_cache"] = self.batch_generator.get_vision_cache_stats()
+
+            # Cache stats for all cache modes
+            if self.block_aware_cache is not None:
+                try:
+                    stats["paged_cache"] = {
+                        "type": "paged",
+                        "block_size": self.config.paged_cache_block_size,
+                        "max_blocks": self.config.max_cache_blocks,
+                    }
+                    if self.paged_cache_manager is not None:
+                        stats["paged_cache"]["allocated_blocks"] = (
+                            len(self.paged_cache_manager.allocated_blocks)
+                            if hasattr(self.paged_cache_manager, "allocated_blocks")
+                            else 0
+                        )
+                except Exception:
+                    pass
+            if self.memory_aware_cache is not None:
+                try:
+                    stats["memory_aware_cache"] = self.memory_aware_cache.get_stats()
+                except Exception:
+                    stats["memory_aware_cache"] = {"type": "memory_aware"}
+            if self.prefix_cache is not None:
+                try:
+                    stats["prefix_cache"] = {
+                        "type": "legacy",
+                        "max_entries": self.config.prefix_cache_size,
+                    }
+                except Exception:
+                    pass
+            if self.disk_cache is not None:
+                try:
+                    stats["disk_cache"] = {"type": "disk", "enabled": True}
+                except Exception:
+                    pass
 
             return stats
 
     def reset(self) -> None:
-        """Reset the scheduler state."""
+        """Reset all scheduler state: queues, requests, UIDs, caches, generator.
+
+        Signals all output queues with None sentinel, removes active requests
+        from batch generator, clears all collections, destroys batch generator,
+        and triggers a final Metal GC. Does NOT clear the cache tiers themselves
+        (paged/memory-aware/legacy) -- those persist for reuse.
+        """
         with self._queue_lock:
-            # Abort all requests
-            for request_id in list(self.requests.keys()):
-                self.abort_request(request_id)
-    
+            # Signal all output queues with sentinel to unblock async consumers
+            for req_id, queue in self.output_queues.items():
+                try:
+                    queue.put_nowait(None)
+                except (asyncio.QueueFull, Exception):
+                    pass
+
+            # Remove from batch generator
+            if self.batch_generator is not None:
+                uids = list(self.uid_to_request_id.keys())
+                if uids:
+                    try:
+                        self.batch_generator.remove(uids)
+                    except Exception:
+                        pass
+
             self.waiting.clear()
             self.running.clear()
             self.requests.clear()
             self.finished_req_ids.clear()
             self.request_id_to_uid.clear()
             self.uid_to_request_id.clear()
+            self._detokenizer_pool.clear()
 
         if self.batch_generator is not None:
             self.batch_generator.close()
             self.batch_generator = None
+            self._current_sampler_params = ()
 
-        # Vision cache is inside batch_generator, already cleaned up above
+        # Single Metal GC after everything is cleaned up
+        try:
+            import mlx.core as mx
+            mx.clear_memory_cache()
+        except Exception:
+            pass

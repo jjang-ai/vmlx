@@ -286,69 +286,6 @@ class MLXLanguageModel:
             if finished:
                 break
 
-    def chat(
-        self,
-        messages: list[dict],
-        max_tokens: int = 256,
-        temperature: float = 0.7,
-        top_p: float = 0.9,
-        tools: list | None = None,
-        **kwargs,
-    ) -> GenerationOutput:
-        """
-        Generate a chat response.
-
-        Args:
-            messages: List of chat messages [{"role": "user", "content": "..."}]
-            max_tokens: Maximum tokens to generate
-            temperature: Sampling temperature
-            top_p: Top-p sampling parameter
-            tools: Optional list of tools for function calling
-            **kwargs: Additional generation parameters
-
-        Returns:
-            GenerationOutput with the assistant's response
-        """
-        if not self._loaded:
-            self.load()
-
-        # Apply chat template
-        if hasattr(self.tokenizer, "apply_chat_template"):
-            # Build kwargs for apply_chat_template
-            template_kwargs = {
-                "tokenize": False,
-                "add_generation_prompt": True,
-            }
-
-            # Add tools if provided and supported
-            if tools:
-                template_kwargs["tools"] = tools
-
-            try:
-                prompt = self.tokenizer.apply_chat_template(
-                    messages,
-                    **template_kwargs,
-                )
-            except TypeError:
-                # Tokenizer doesn't support tools parameter
-                del template_kwargs["tools"]
-                prompt = self.tokenizer.apply_chat_template(
-                    messages,
-                    **template_kwargs,
-                )
-        else:
-            # Fallback: simple concatenation
-            prompt = "\n".join(f"{msg['role']}: {msg['content']}" for msg in messages)
-            prompt += "\nassistant:"
-
-        return self.generate(
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            **kwargs,
-        )
-
     def get_model_info(self) -> dict:
         """Get information about the loaded model."""
         if not self._loaded:

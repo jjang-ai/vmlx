@@ -9,7 +9,6 @@ Handles Kimi K2 and related models' tool calling format:
 
 import json
 import re
-import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,12 +16,8 @@ from .abstract_tool_parser import (
     ExtractedToolCallInformation,
     ToolParser,
     ToolParserManager,
+    generate_tool_id,
 )
-
-
-def generate_tool_id() -> str:
-    """Generate a unique tool call ID."""
-    return f"call_{uuid.uuid4().hex[:8]}"
 
 
 @ToolParserManager.register_module(["kimi", "kimi_k2", "moonshot"])
@@ -45,7 +40,6 @@ class KimiToolParser(ToolParser):
     TOOL_CALLS_START = "<|tool_calls_section_begin|>"
     TOOL_CALLS_START_ALT = "<|tool_call_section_begin|>"  # Singular variant
     TOOL_CALLS_END = "<|tool_calls_section_end|>"
-    TOOL_CALLS_END_ALT = "<|tool_call_section_end|>"
     TOOL_CALL_START = "<|tool_call_begin|>"
     TOOL_CALL_END = "<|tool_call_end|>"
     TOOL_ARG_START = "<|tool_call_argument_begin|>"
@@ -90,8 +84,9 @@ class KimiToolParser(ToolParser):
         for match in matches:
             func_id, func_args = match
             # func_id format: functions.get_weather:0 or get_weather:0
-            func_name = func_id.split(":")[-2] if ":" in func_id else func_id
-            func_name = func_name.split(".")[-1]  # Remove 'functions.' prefix
+            # Strip trailing ":N" call index, then remove 'functions.' prefix
+            func_name = func_id.rsplit(":", 1)[0] if ":" in func_id else func_id
+            func_name = func_name.split(".")[-1]
 
             try:
                 # Validate JSON

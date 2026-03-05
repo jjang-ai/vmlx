@@ -147,19 +147,13 @@ class MLXModelRunner:
     def _apply_optimizations(self) -> None:
         """Apply low-level optimizations for maximum performance."""
         try:
-            from vllm_mlx.optimizations import (
-                configure_memory_optimization,
-                detect_hardware,
-            )
+            from vllm_mlx.optimizations import detect_hardware
 
-            # Detect hardware and apply memory optimization
+            # Detect hardware
             self._hardware_info = detect_hardware()
             logger.info(f"Hardware detected: {self._hardware_info.chip_name}")
             logger.info(f"Memory: {self._hardware_info.total_memory_gb:.1f} GB")
             logger.info(f"Bandwidth: {self._hardware_info.memory_bandwidth_gbs} GB/s")
-
-            # Configure memory settings
-            configure_memory_optimization()
 
             # Compile the model forward pass for kernel fusion
             self._setup_compiled_forward()
@@ -298,10 +292,17 @@ class MLXModelRunner:
             total_tokens += len(generated_ids)
 
         # Process running requests (continue generation)
+        # NOTE: MLXModelRunner is a vLLM v1 compat shim. Running requests
+        # should not reach here during normal vllm-mlx serving.
         for req_id in scheduler_output.scheduled_running_reqs:
-            # For running requests, we continue generation
-            # This is simplified - in practice we'd use KV cache
-            generated_ids = self._continue_generation(req_id)
+            try:
+                generated_ids = self._continue_generation(req_id)
+            except NotImplementedError:
+                logger.error(
+                    "MLXModelRunner._continue_generation called — this runner "
+                    "is a vLLM compat shim. Use Scheduler.step() for inference."
+                )
+                break
             if generated_ids:
                 req_id_to_token_ids[req_id] = generated_ids
                 total_tokens += len(generated_ids)
@@ -332,12 +333,8 @@ class MLXModelRunner:
         Returns:
             Tuple of (logits, updated_cache)
         """
-        try:
-            from vllm_mlx.optimizations import get_optimal_prefill_size
-        except ImportError:
-            # Fallback if optimizations module not available
-            def get_optimal_prefill_size(seq_len):
-                return min(512, seq_len)
+        def get_optimal_prefill_size(seq_len):
+            return min(512, seq_len)
 
         seq_len = input_ids.shape[-1] if len(input_ids.shape) > 1 else len(input_ids)
         chunk_size = get_optimal_prefill_size(seq_len)
@@ -421,11 +418,20 @@ class MLXModelRunner:
         """
         Continue generation for an existing request.
 
-        This is a placeholder - in a full implementation, we would
-        use cached KV states to continue generation efficiently.
+        Not implemented — MLXModelRunner is a vLLM v1 platform plugin shim
+        and is not used during normal vllm-mlx serving. The real inference
+        path uses Scheduler.step() with mlx-lm's BatchGenerator.
+
+        Raises:
+            NotImplementedError: Always. This code path should not be reached
+                during normal operation. If you see this error, the vLLM v1
+                executor is routing running requests to MLXModelRunner, which
+                requires a full implementation with per-request KV state tracking.
         """
-        # For now, return empty - full implementation would track state
-        return []
+        raise NotImplementedError(
+            f"_continue_generation({req_id}) not implemented. "
+            "MLXModelRunner is a vLLM compat shim; use Scheduler for inference."
+        )
 
     def decode_tokens(self, token_ids: list[int]) -> str:
         """Decode token IDs to text."""
@@ -465,7 +471,6 @@ class MLXModelRunner:
                     "memory_gb": self._hardware_info.total_memory_gb,
                     "bandwidth_gbs": self._hardware_info.memory_bandwidth_gbs,
                     "gpu_cores": self._hardware_info.gpu_cores,
-                    "prefill_chunk_size": self._hardware_info.optimal_prefill_size,
                 }
 
         return info

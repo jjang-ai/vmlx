@@ -28,7 +28,7 @@ def test_is_apple_silicon():
 def test_mlx_platform_properties():
     """Test MLXPlatform class properties."""
     try:
-        from vllm_mlx.platform import MLXPlatform
+        from vllm_mlx.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -46,7 +46,7 @@ def test_mlx_platform_properties():
 def test_get_device_name():
     """Test getting device name."""
     try:
-        from vllm_mlx.platform import MLXPlatform
+        from vllm_mlx.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -58,7 +58,7 @@ def test_get_device_name():
 def test_get_device_memory():
     """Test getting device memory."""
     try:
-        from vllm_mlx.platform import MLXPlatform
+        from vllm_mlx.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -71,7 +71,7 @@ def test_supported_dtypes():
     """Test supported dtypes."""
     try:
         import torch
-        from vllm_mlx.platform import MLXPlatform
+        from vllm_mlx.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -95,7 +95,7 @@ def test_plugin_entry_point():
         pytest.skip("MLX not installed")
 
     result = mlx_platform_plugin()
-    assert result == "vllm_mlx.platform.MLXPlatform"
+    assert result == "vllm_mlx.mlx_platform.MLXPlatform"
 
 
 def test_device_info():

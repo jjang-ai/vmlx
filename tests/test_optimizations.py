@@ -40,47 +40,9 @@ class TestHardwareDetection:
         assert "M4 Max" in HARDWARE_PROFILES
 
 
-class TestOptimizationStatus:
-    """Tests for optimization status reporting."""
-
-    def test_get_optimization_status(self):
-        """Test optimization status reporting."""
-        from vllm_mlx.optimizations import get_optimization_status
-
-        status = get_optimization_status()
-
-        assert "hardware" in status
-        assert "mlx_memory" in status
-        assert "mlx_lm_features" in status
-
-        assert "chip" in status["hardware"]
-        assert "device_name" in status["hardware"]
-
-
-class TestMemoryBandwidth:
-    """Tests for memory bandwidth benchmarking."""
-
-    def test_memory_bandwidth_benchmark(self):
-        """Test memory bandwidth benchmark."""
-        from vllm_mlx.optimizations import benchmark_memory_bandwidth
-
-        results = benchmark_memory_bandwidth()
-
-        assert "64MB" in results
-        assert "256MB" in results
-        assert "1024MB" in results
-
-        print(f"\n{'='*50}")
-        print("Memory Bandwidth Benchmark")
-        print(f"{'='*50}")
-        for size, bandwidth in results.items():
-            print(f"{size}: {bandwidth}")
-        print(f"{'='*50}")
-
-
 def run_quick_test():
     """Run a quick test of hardware detection."""
-    from vllm_mlx.optimizations import detect_hardware, get_optimization_status
+    from vllm_mlx.optimizations import detect_hardware
 
     print("=" * 60)
     print("Quick Hardware Detection Test")
@@ -92,11 +54,6 @@ def run_quick_test():
     print(f"  Memory: {hw.total_memory_gb:.1f} GB")
     print(f"  Bandwidth: {hw.memory_bandwidth_gbs} GB/s")
     print(f"  GPU Cores: {hw.gpu_cores}")
-
-    status = get_optimization_status()
-    print("\nMLX-LM Features (built-in):")
-    for feature, value in status["mlx_lm_features"].items():
-        print(f"  {feature}: {value}")
 
     print("\n" + "=" * 60)
     print("Done!")

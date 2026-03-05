@@ -3,7 +3,6 @@ import { useState } from 'react'
 export interface InlineToolGroup {
   name: string
   statuses: Array<{ phase: string; toolName: string; detail?: string; iteration?: number }>
-  contentOffset?: number
 }
 
 interface InlineToolCallProps {

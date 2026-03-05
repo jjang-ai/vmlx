@@ -15,7 +15,6 @@ Supports MiniMax-M2.5 and MiniMax-M2 models.
 
 import json
 import re
-import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -23,12 +22,8 @@ from .abstract_tool_parser import (
     ExtractedToolCallInformation,
     ToolParser,
     ToolParserManager,
+    generate_tool_id,
 )
-
-
-def generate_tool_id() -> str:
-    """Generate a unique tool call ID."""
-    return f"call_{uuid.uuid4().hex[:8]}"
 
 
 def _extract_name(name_str: str) -> str:
@@ -54,19 +49,11 @@ def _convert_param_value(value: str) -> Any:
     if not value:
         return value
 
-    # Try JSON parsing for structured types
+    # Try JSON parsing (handles null, true, false, numbers, objects, arrays)
     try:
         return json.loads(value)
     except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Special cases
-    if value.lower() == "null":
-        return None
-    if value.lower() in ("true", "false"):
-        return value.lower() == "true"
-
-    return value
+        return value
 
 
 @ToolParserManager.register_module(["minimax", "minimax_m2"])

@@ -91,10 +91,12 @@ class EmbeddingEngine:
         if isinstance(texts, str):
             texts = [texts]
 
+        # Use the same inner tokenizer as embed() for consistency
+        inner_tok = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
         total = 0
         for text in texts:
             try:
-                tokens = self._tokenizer.encode(text)
+                tokens = inner_tok.encode(text)
                 if isinstance(tokens, list):
                     total += len(tokens)
                 elif hasattr(tokens, "__len__"):

@@ -50,24 +50,24 @@ ALLOWED_COMMANDS: Set[str] = {
 
 # Patterns that indicate dangerous commands
 DANGEROUS_PATTERNS: List[re.Pattern] = [
-    re.compile(r";\s*"),  # Command chaining with ;
-    re.compile(r"\|\s*"),  # Piping
-    re.compile(r"&&\s*"),  # Command chaining with &&
-    re.compile(r"\|\|\s*"),  # Command chaining with ||
+    re.compile(r";\s*\S"),  # Command chaining with ; (require char after to avoid trailing ;)
+    re.compile(r"\|\s*\S"),  # Piping (require non-space after to avoid false positives)
+    re.compile(r"&&\s*\S"),  # Command chaining with && (require char after)
+    re.compile(r"\|\|\s*\S"),  # Command chaining with || (require char after)
     re.compile(r"`"),  # Backtick command substitution
     re.compile(r"\$\("),  # $() command substitution
-    re.compile(r">\s*"),  # Output redirection
-    re.compile(r"<\s*"),  # Input redirection
+    re.compile(r"[0-9]?>\s*/"),  # Output redirection to absolute path
+    re.compile(r"[0-9]?>>\s*"),  # Append redirection
+    re.compile(r"<\s*/"),  # Input redirection from absolute path
     re.compile(r"\.\./"),  # Path traversal
-    re.compile(r"~"),  # Home directory expansion (can be abused)
 ]
 
 # Dangerous argument patterns
 DANGEROUS_ARG_PATTERNS: List[re.Pattern] = [
-    re.compile(r";\s*"),
-    re.compile(r"\|\s*"),
-    re.compile(r"&&\s*"),
-    re.compile(r"\|\|\s*"),
+    re.compile(r";\s*\S"),  # Require char after ; (allows trailing semicolons in SQL etc.)
+    re.compile(r"\|\s*\S"),  # Require char after | (allows trailing pipe in values)
+    re.compile(r"&&\s*\S"),  # Require char after &&
+    re.compile(r"\|\|\s*\S"),  # Require char after ||
     re.compile(r"`"),
     re.compile(r"\$\("),
     re.compile(r"\$\{"),
@@ -231,6 +231,8 @@ class MCPCommandValidator:
             "PATH",  # Modifying PATH could redirect commands
             "PYTHONPATH",
             "NODE_PATH",
+            "NODE_OPTIONS",  # Can inject --require to load arbitrary code
+            "ELECTRON_RUN_AS_NODE",  # Turns Electron apps into plain Node.js
         }
 
         for key, value in env.items():

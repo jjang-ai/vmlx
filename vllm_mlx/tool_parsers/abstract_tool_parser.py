@@ -7,6 +7,7 @@ Inspired by vLLM's tool parser architecture but simplified for MLX backend.
 
 import importlib
 import re
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -22,6 +23,11 @@ if TYPE_CHECKING:
 # 2. Only closing tag: ...content before...</think> (when <think> is in prompt)
 THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 IMPLICIT_THINK_PATTERN = re.compile(r"^.*?</think>", re.DOTALL)
+
+
+def generate_tool_id() -> str:
+    """Generate a unique tool call ID (OpenAI format: call_<8hex>)."""
+    return f"call_{uuid.uuid4().hex[:8]}"
 
 
 @dataclass
@@ -143,8 +149,11 @@ class ToolParser(ABC):
         """
         Extract tool calls from streaming model output.
 
-        Override this method for streaming support. Default implementation
-        returns None (no streaming support).
+        NOTE: Not called by the server at runtime. The server uses a
+        buffer-then-parse strategy (accumulate full output, then call
+        extract_tool_calls on complete text). Subclass implementations
+        are retained for testing and potential future streaming-native
+        tool parsing.
 
         Args:
             previous_text: Text before this delta

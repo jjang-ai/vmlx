@@ -119,6 +119,21 @@ class MCPClient:
                 self._state = MCPServerState.ERROR
                 self._error = str(e)
                 logger.error(f"Failed to connect to MCP server '{self.name}': {e}")
+                # Clean up any partially-initialized resources
+                try:
+                    if self._session:
+                        await self._session.__aexit__(None, None, None)
+                        self._session = None
+                    if hasattr(self, "_stdio_client") and self._stdio_client:
+                        await self._stdio_client.__aexit__(None, None, None)
+                        self._stdio_client = None
+                    if hasattr(self, "_sse_client") and self._sse_client:
+                        await self._sse_client.__aexit__(None, None, None)
+                        self._sse_client = None
+                except Exception as cleanup_err:
+                    logger.warning(f"Error during cleanup of '{self.name}': {cleanup_err}")
+                self._read = None
+                self._write = None
                 return False
 
     async def _connect_stdio(self):
@@ -147,9 +162,16 @@ class MCPClient:
         self._stdio_client = stdio_client(server_params)
         self._read, self._write = await self._stdio_client.__aenter__()
 
-        # Create session
-        self._session = ClientSession(self._read, self._write)
-        await self._session.__aenter__()
+        # Create session — clean up stdio client if this fails
+        try:
+            self._session = ClientSession(self._read, self._write)
+            await self._session.__aenter__()
+        except Exception:
+            await self._stdio_client.__aexit__(None, None, None)
+            self._stdio_client = None
+            self._read = None
+            self._write = None
+            raise
 
     async def _connect_sse(self):
         """Connect via SSE transport."""
@@ -165,9 +187,16 @@ class MCPClient:
         self._sse_client = sse_client(self.config.url)
         self._read, self._write = await self._sse_client.__aenter__()
 
-        # Create session
-        self._session = ClientSession(self._read, self._write)
-        await self._session.__aenter__()
+        # Create session — clean up SSE client if this fails
+        try:
+            self._session = ClientSession(self._read, self._write)
+            await self._session.__aenter__()
+        except Exception:
+            await self._sse_client.__aexit__(None, None, None)
+            self._sse_client = None
+            self._read = None
+            self._write = None
+            raise
 
     async def _initialize_session(self):
         """Initialize the MCP session."""

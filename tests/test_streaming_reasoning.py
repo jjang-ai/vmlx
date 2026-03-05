@@ -492,8 +492,8 @@ class TestGptOssParserComplete:
         """Below fallback threshold, non-Harmony text returns None."""
         parser.reset_state()
 
-        # Short text below threshold (60 chars)
-        accumulated = "Short text"
+        # Short text below threshold (10 chars)
+        accumulated = "Hi"
         result = parser.extract_reasoning_streaming("", accumulated, accumulated)
         assert result is None
 
@@ -501,8 +501,8 @@ class TestGptOssParserComplete:
         """Above fallback threshold, non-Harmony text becomes content."""
         parser.reset_state()
 
-        # Build up past threshold (60 chars)
-        text = "A" * 70
+        # Build up past threshold (10 chars)
+        text = "A" * 20
         accumulated = ""
         results = []
         for i in range(0, len(text), 10):
