@@ -16,7 +16,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ..api.tool_calling import convert_tools_for_template
+from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
 from ..model_config_registry import get_model_config_registry
 from .base import BaseEngine, GenerationOutput
@@ -143,7 +143,13 @@ class BatchedEngine(BaseEngine):
         logger.info(f"BatchedEngine loaded: {self._model_name} (mllm={self._is_mllm})")
 
     async def _start_mllm(self) -> None:
-        """Start the MLLM engine with MLLMScheduler (continuous batching)."""
+        """Start the MLLM engine with MLLMScheduler (continuous batching).
+
+        Forwards ALL cache settings from the user's SchedulerConfig to
+        MLLMSchedulerConfig for full LLM/MLLM cache parity. This includes
+        paged cache, memory-aware cache, legacy prefix cache, disk L2,
+        block disk store, and KV cache quantization settings.
+        """
         from ..mllm_scheduler import MLLMScheduler, MLLMSchedulerConfig
         from ..models.mllm import MLXMultimodalLM
 
@@ -182,6 +188,25 @@ class BatchedEngine(BaseEngine):
             max_cache_blocks=getattr(self._scheduler_config, "max_cache_blocks", 1000),
             kv_cache_quantization=getattr(self._scheduler_config, "kv_cache_quantization", "none"),
             kv_cache_group_size=getattr(self._scheduler_config, "kv_cache_group_size", 64),
+            # Memory-aware cache settings
+            use_memory_aware_cache=getattr(self._scheduler_config, "use_memory_aware_cache", True),
+            cache_memory_mb=getattr(self._scheduler_config, "cache_memory_mb", None),
+            cache_memory_percent=getattr(self._scheduler_config, "cache_memory_percent", 0.20),
+            cache_ttl_minutes=getattr(self._scheduler_config, "cache_ttl_minutes", 0),
+            # Legacy prefix cache
+            prefix_cache_size=getattr(self._scheduler_config, "prefix_cache_size", 100),
+            # Disk cache L2
+            enable_disk_cache=getattr(self._scheduler_config, "enable_disk_cache", False),
+            disk_cache_dir=getattr(self._scheduler_config, "disk_cache_dir", None),
+            disk_cache_max_gb=getattr(self._scheduler_config, "disk_cache_max_gb", 10.0),
+            # Block-level disk cache L2
+            enable_block_disk_cache=getattr(self._scheduler_config, "enable_block_disk_cache", False),
+            block_disk_cache_dir=getattr(self._scheduler_config, "block_disk_cache_dir", None),
+            block_disk_cache_max_gb=getattr(self._scheduler_config, "block_disk_cache_max_gb", 10.0),
+            # Model path for disk cache scoping
+            model_path=getattr(self._scheduler_config, "model_path", None) or self._model_name,
+            # Hybrid SSM state cache size
+            ssm_state_cache_size=getattr(self._scheduler_config, "ssm_state_cache_size", 50),
         )
 
         # Create and start MLLM scheduler
@@ -242,6 +267,9 @@ class BatchedEngine(BaseEngine):
 
         if self._engine:
             await self._engine.stop()
+            # close() handles scheduler.shutdown() + deep_reset() + collector cleanup.
+            # stop() already called scheduler.shutdown(), but close() is idempotent
+            # and handles additional cleanup (model ownership, deep_reset).
             self._engine.engine.close()
             self._engine = None
 
@@ -350,7 +378,7 @@ class BatchedEngine(BaseEngine):
 
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-            except (TypeError, Exception) as template_err:
+            except Exception as template_err:
                 # Progressively strip non-essential kwargs to preserve tools/thinking
                 # when only extra kwargs (e.g. thinking_budget) cause failures.
                 # Strip order: extra kwargs first, then tools, then enable_thinking.
@@ -370,13 +398,12 @@ class BatchedEngine(BaseEngine):
                             f"(original error: {template_err})"
                         )
                         break
-                    except (TypeError, Exception):
+                    except Exception:
                         continue
                 if prompt is None:
                     # All kwargs stripped and still failing — last resort
                     prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
                 
-            from ..api.tool_calling import check_and_inject_fallback_tools
             prompt = check_and_inject_fallback_tools(
                 prompt, messages, tools, tokenizer, template_kwargs
             )

@@ -167,18 +167,6 @@ class TestAPIModels:
         # Pydantic converts dict to AudioUrl model
         assert part.audio_url.url == "test.mp3"
 
-    def test_transcription_request(self):
-        """Test AudioTranscriptionRequest model."""
-        from vllm_mlx.api.models import AudioTranscriptionRequest
-
-        req = AudioTranscriptionRequest(
-            model="whisper-large-v3",
-            language="en",
-        )
-        assert req.model == "whisper-large-v3"
-        assert req.language == "en"
-        assert req.response_format == "json"
-
     def test_speech_request(self):
         """Test AudioSpeechRequest model."""
         from vllm_mlx.api.models import AudioSpeechRequest
@@ -193,18 +181,6 @@ class TestAPIModels:
         assert req.input == "Hello world"
         assert req.voice == "af_heart"
         assert req.speed == 1.2
-
-    def test_transcription_response(self):
-        """Test AudioTranscriptionResponse model."""
-        from vllm_mlx.api.models import AudioTranscriptionResponse
-
-        resp = AudioTranscriptionResponse(
-            text="Hello world",
-            language="en",
-            duration=2.5,
-        )
-        assert resp.text == "Hello world"
-
 
 class TestAudioImports:
     """Test that all audio modules can be imported."""
@@ -225,11 +201,11 @@ class TestAudioImports:
         """Test importing audio API models."""
         from vllm_mlx.api import (
             AudioUrl,
-            AudioTranscriptionRequest,
+            AudioSpeechRequest,
         )
 
         assert AudioUrl is not None
-        assert AudioTranscriptionRequest is not None
+        assert AudioSpeechRequest is not None
 
 
 # Integration tests (require mlx-audio installed)

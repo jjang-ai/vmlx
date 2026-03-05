@@ -110,15 +110,14 @@ class VisionEmbeddingCache:
     def __init__(
         self,
         max_pixel_entries: int = 100,
-        max_encoding_entries: int = 50,
         enabled: bool = True,
+        **kwargs,
     ):
         """
         Initialize the vision embedding cache.
 
         Args:
             max_pixel_entries: Max entries in pixel cache (LRU eviction)
-            max_encoding_entries: Unused (kept for API compatibility)
             enabled: Whether caching is enabled
         """
         self.max_pixel_entries = max_pixel_entries

@@ -9,7 +9,6 @@ Handles Qwen's tool calling formats:
 
 import json
 import re
-import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,12 +16,8 @@ from .abstract_tool_parser import (
     ExtractedToolCallInformation,
     ToolParser,
     ToolParserManager,
+    generate_tool_id,
 )
-
-
-def generate_tool_id() -> str:
-    """Generate a unique tool call ID."""
-    return f"call_{uuid.uuid4().hex[:8]}"
 
 
 @ToolParserManager.register_module(["qwen", "qwen3"])

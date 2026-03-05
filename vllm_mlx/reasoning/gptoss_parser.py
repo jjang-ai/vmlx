@@ -189,7 +189,10 @@ class GptOssReasoningParser(ReasoningParser):
 
         return reasoning_parts, content_parts
 
-    _FALLBACK_THRESHOLD = 60
+    # Characters to buffer before concluding the model isn't using Harmony
+    # protocol. The <|channel|> marker is 11 chars; 10 gives enough room for
+    # split-chunk detection without a perceptible delay for non-Harmony models.
+    _FALLBACK_THRESHOLD = 10
 
     def extract_reasoning_streaming(
         self,

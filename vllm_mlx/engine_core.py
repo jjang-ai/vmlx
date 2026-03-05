@@ -326,9 +326,10 @@ class EngineCore:
 
     async def abort_request(self, request_id: str) -> bool:
         """Abort a request."""
-        result = self.scheduler.abort_request(request_id)
+        # _cleanup_request handles scheduler.abort_request() internally —
+        # don't call it here too (was causing double abort)
         self._cleanup_request(request_id)
-        return result
+        return True
 
     def _cleanup_request(self, request_id: str) -> None:
         """Clean up request tracking.
@@ -397,7 +398,9 @@ class EngineCore:
                                 collector.get(), timeout=timeout
                             )
                     else:
-                        output = collector.get_nowait() or await collector.get()
+                        output = collector.get_nowait()
+                        if output is None:
+                            output = await collector.get()
 
                     yield output
 
@@ -488,16 +491,13 @@ class EngineCore:
         Returns:
             List of RequestOutput in same order as prompts
         """
-        from .request import Request
-        import uuid as uuid_module
-
         if sampling_params is None:
             sampling_params = SamplingParams()
 
         # Add all requests to scheduler
         request_ids = []
         for prompt in prompts:
-            request_id = str(uuid_module.uuid4())
+            request_id = str(uuid.uuid4())
             request = Request(
                 request_id=request_id,
                 prompt=prompt,
@@ -566,6 +566,9 @@ class EngineCore:
             logger.debug(f"Engine {self._engine_id} released model ownership")
 
         self._closed = True
+
+        # Flush disk caches before clearing in-memory state
+        self.scheduler.shutdown()
 
         # Reset scheduler to clear BatchGenerator and all caches
         self.scheduler.deep_reset()

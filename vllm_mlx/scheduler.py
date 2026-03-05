@@ -14,6 +14,7 @@ The scheduler follows vLLM's design with:
 import logging
 import os
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
@@ -21,8 +22,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from mlx_lm.generate import BatchGenerator
 from mlx_lm.sample_utils import make_sampler
-from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
-
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
@@ -87,7 +86,7 @@ class SchedulerConfig:
     # Memory-aware cache settings (recommended for large models)
     use_memory_aware_cache: bool = True  # Use memory-based eviction
     cache_memory_mb: Optional[int] = None  # None = auto-detect (30% of available RAM)
-    cache_memory_percent: float = 0.20  # Fraction of available RAM if auto-detecting
+    cache_memory_percent: float = 0.30  # Fraction of available RAM if auto-detecting
     cache_ttl_minutes: float = 0  # Cache entry TTL in minutes (0 = no expiration)
 
     # Paged cache settings (experimental - for memory efficiency)
@@ -378,15 +377,9 @@ class Scheduler:
             return False
 
     def _detect_head_dim(self) -> Optional[int]:
-        """Detect the model's KV head dimension from a test cache layer."""
+        """Detect the model's KV head dimension from model config."""
         try:
-            cache = self.model.make_cache()
-            for layer in cache:
-                if hasattr(layer, 'keys') and hasattr(layer, 'step'):
-                    # KVCache: head_dim is the last dim of the pre-allocated keys
-                    # Need to run a dummy forward pass to populate keys
-                    pass
-            # Fallback: inspect model config for head_dim
+            # Inspect model config for head_dim
             if hasattr(self.model, 'args'):
                 args = self.model.args
                 if hasattr(args, 'head_dim') and args.head_dim:
@@ -656,8 +649,6 @@ class Scheduler:
             return fresh_cache
         except Exception as e:
             logger.warning(f"Prefill-only pass failed: {e}")
-            import traceback
-
             logger.debug(traceback.format_exc())
             return None
 
@@ -774,9 +765,14 @@ class Scheduler:
                 )
                 return
 
-            # Clear prefix cache when BatchGenerator changes
-            # BatchKVCache objects are tied to their generator instance
+            # Clear all prefix caches when BatchGenerator changes —
+            # BatchKVCache objects and block tables are tied to their generator instance
             if self.batch_generator is not None:
+                if self.block_aware_cache is not None:
+                    logger.debug(
+                        "Clearing paged cache: BatchGenerator being recreated"
+                    )
+                    self.block_aware_cache.clear()
                 if self.memory_aware_cache is not None:
                     logger.debug(
                         "Clearing memory-aware cache: BatchGenerator being recreated"
@@ -901,7 +897,6 @@ class Scheduler:
             if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
                 # Positional cache: truncate to target length
                 try:
-                    cls_name = type(layer_cache).__name__
                     k = layer_cache.keys
                     v = layer_cache.values
 
@@ -1292,7 +1287,18 @@ class Scheduler:
         return len(self.running)
 
     def shutdown(self) -> None:
-        """Shutdown the scheduler and flush disk caches."""
+        """Shutdown the scheduler and flush disk caches. Idempotent."""
+        if getattr(self, '_shutdown_done', False):
+            return
+        self._shutdown_done = True
+
+        # Flush prompt-level disk cache (DiskCacheManager)
+        if getattr(self, 'disk_cache', None) is not None:
+            logger.info("Shutting down prompt disk cache...")
+            self.disk_cache.shutdown()
+            logger.info("Prompt disk cache shutdown complete")
+
+        # Flush block-level disk cache (BlockDiskStore)
         if hasattr(self, 'paged_cache_manager') and self.paged_cache_manager:
             disk_store = getattr(self.paged_cache_manager, '_disk_store', None)
             if disk_store is not None:
@@ -1836,12 +1842,19 @@ class Scheduler:
         """Move running requests back to waiting queue for retry."""
         count = len(self.running)
         for request_id, request in list(self.running.items()):
-            # Reset request state
+            # Reset request state — must clear ALL generation state so the
+            # retried request starts from scratch with correct token budget
             request.status = RequestStatus.WAITING
             request.batch_uid = None
             request.prompt_cache = None
             request.cached_tokens = 0
             request.remaining_tokens = request.prompt_token_ids
+            request.output_token_ids = []
+            request.output_text = ""
+            request.num_computed_tokens = 0
+
+            # Clear stale detokenizer — request will restart from scratch
+            self._cleanup_detokenizer(request_id)
 
             # Move to waiting queue (at front for priority)
             self.waiting.appendleft(request)
@@ -1864,7 +1877,7 @@ class Scheduler:
         response processing — scheduling errors propagate immediately.
 
         Args:
-            max_retries: Number of times to retry on cache errors (default 1)
+            max_retries: Number of times to retry on cache errors (default 2)
 
         Returns:
             SchedulerOutput with results of this step
@@ -1924,7 +1937,7 @@ class Scheduler:
                         raise
 
         # Clear finished tracking for next step
-        self.finished_req_ids = set()
+        self.finished_req_ids.clear()
 
         # Periodic Metal memory cache cleanup during sustained traffic.
         # When requests are always running, _cleanup_finished never calls

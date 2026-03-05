@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron'
 import { join } from 'path'
 import { readFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -144,6 +144,24 @@ function createWindow(): void {
     handlersRegistered = true
   }
 
+  // Content Security Policy — hardens renderer against XSS
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self';" +
+          " script-src 'self';" +
+          " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
+          " font-src 'self' https://fonts.gstatic.com;" +
+          " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;" +
+          " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co;" +
+          " media-src 'self' blob:;"
+        ]
+      }
+    })
+  })
+
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
   })
@@ -162,7 +180,7 @@ function createWindow(): void {
 
 // App ready
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.ericjang.vmlx')
+  electronApp.setAppUserModelId('net.vmlx.app')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
