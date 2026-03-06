@@ -66,6 +66,17 @@ export interface ServerConfig {
   // Cache TTL
   cacheTtlMinutes?: number
 
+  // Speculative decoding
+  speculativeModel?: string
+  numDraftTokens?: number
+
+  // Generation defaults
+  defaultTemperature?: number
+  defaultTopP?: number
+
+  // Embedding model (separate from main model)
+  embeddingModel?: string
+
   // Additional
   additionalArgs?: string
 
