@@ -100,6 +100,9 @@ declare global {
         set: (key: string, value: string) => Promise<{ success: boolean }>
         delete: (key: string) => Promise<{ success: boolean }>
       }
+      app: {
+        onUpdateAvailable: (callback: (data: { currentVersion: string; latestVersion: string; url: string; notes?: string }) => void) => () => void
+      }
       sessions: {
         list: () => Promise<any[]>
         get: (id: string) => Promise<any>

@@ -15,6 +15,7 @@ import { registerPerformanceHandlers } from './ipc/performance'
 import { sessionManager } from './sessions'
 import { db } from './database'
 import { checkEngineVersion, installVllmStreaming } from './vllm-manager'
+import { checkForUpdates } from './update-checker'
 
 let mainWindow: BrowserWindow | null = null
 let handlersRegistered = false
@@ -251,6 +252,10 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error('[STARTUP] Error checking engine version:', e)
   }
+
+  // Check for app updates (non-blocking, fires after 5s delay)
+  const appVersion = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf-8')).version
+  checkForUpdates(() => mainWindow, appVersion)
 
   // Detect and adopt existing vllm-mlx processes on startup
   try {
