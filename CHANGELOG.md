@@ -5,6 +5,14 @@ All notable changes to vMLX Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-03-06
+
+### Fixed
+- **Reasoning parser for always-thinking models**: Fixed `effective_think_in_template` being unconditionally set to `False` when user disables reasoning. For models whose templates always inject `<think>` (MiniMax M2.5, Prism Pro), the parser now stays in implicit reasoning mode so it correctly classifies reasoning vs content. The `suppress_reasoning` flag handles hiding reasoning from the user. Fixed in both Chat Completions and Responses API paths.
+
+### Improved
+- **Parser dropdown UI**: Reasoning and tool parser dropdown labels now include model names directly (e.g., "Qwen3 — Qwen / QwQ / MiniMax / StepFun"). Help panel auto-opens when a manual parser is selected. More comprehensive model compatibility lists. Auto-detect labels say "(recommended)".
+
 ## [0.2.9] - 2026-03-05
 
 ### Added
