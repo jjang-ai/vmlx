@@ -6,6 +6,7 @@ import { SessionSettings } from './components/sessions/SessionSettings'
 import { SetupScreen } from './components/setup/SetupScreen'
 import { ToastProvider } from './components/Toast'
 import { DownloadStatusBar } from './components/DownloadStatusBar'
+import { UpdateBanner } from './components/UpdateBanner'
 
 type View =
   | { type: 'setup' }
@@ -51,7 +52,8 @@ function App() {
           </div>
         </div>
 
-        {/* Global download status bar */}
+        {/* Update notification + download status */}
+        <UpdateBanner />
         <DownloadStatusBar />
 
         {/* Main content */}
