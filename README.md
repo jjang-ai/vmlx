@@ -30,7 +30,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 
 ## Key Features
 
-### Inference Engine (v0.2.9)
+### Inference Engine (v0.2.10)
 
 | Feature | Description |
 |---------|-------------|
@@ -223,7 +223,7 @@ Plus MCP tool server passthrough for local sessions.
 
 ## Recent Changes
 
-### Engine v0.2.9 (2026-03-05)
+### Engine v0.2.10 (2026-03-05)
 - **Speculative decoding**: `--speculative-model` + `--num-draft-tokens` CLI flags for 20-90% throughput boost
 - **RotatingKVCache confirmed**: Sliding window attention support verified across all cache modules
 - 21 new tests for speculative decoding
@@ -245,7 +245,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.9** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.10** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 
