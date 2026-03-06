@@ -29,9 +29,11 @@ interface MessageListProps {
   reasoningDoneMap?: Record<string, boolean>
   toolStatusMap?: Record<string, any[]>
   hideToolStatus?: boolean
+  sessionId?: string
+  sessionEndpoint?: { host: string; port: number }
 }
 
-export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus }: MessageListProps) {
+export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
@@ -81,6 +83,8 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
           reasoningContent={reasoningMap?.[message.id]}
           reasoningDone={reasoningDoneMap?.[message.id] ?? false}
           toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
+          sessionId={sessionId}
+          sessionEndpoint={sessionEndpoint}
         />
       ))}
       <div ref={bottomRef} />

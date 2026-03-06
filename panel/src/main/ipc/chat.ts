@@ -1384,13 +1384,16 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
         // Inject images from read_image tool results as multimodal content parts.
         // VL models can only process images in content arrays, not in tool result strings.
+        // Text FIRST, then images — Qwen3.5-VL expects this order.
         if (pendingImageDataUrls.length > 0) {
-          const imageParts: any[] = pendingImageDataUrls.map(url => ({
-            type: 'image_url',
-            image_url: { url }
-          }))
-          imageParts.push({ type: 'text', text: 'Here are the images from the tool results above.' })
-          requestMessages.push({ role: 'user', content: imageParts })
+          const contentParts: any[] = [
+            { type: 'text', text: 'Here are the images from the tool results above.' },
+            ...pendingImageDataUrls.map(url => ({
+              type: 'image_url',
+              image_url: { url }
+            }))
+          ]
+          requestMessages.push({ role: 'user', content: contentParts })
           console.log(`[CHAT] Injected ${pendingImageDataUrls.length} image(s) as multimodal content for VLM`)
         }
       }

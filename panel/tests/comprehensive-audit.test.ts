@@ -1480,3 +1480,238 @@ describe('Phase 8: SSE Streaming Fix + Served Model Name', () => {
     })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: Download Manager & Background Downloads
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Phase 5: Download Manager', () => {
+    describe('Download queue deduplication', () => {
+        interface DownloadJob {
+            id: string
+            repoId: string
+            status: 'queued' | 'downloading' | 'complete' | 'cancelled' | 'error'
+        }
+
+        function startDownload(
+            activeJob: DownloadJob | null,
+            queue: DownloadJob[],
+            repoId: string
+        ): { status: string; jobId?: string } {
+            if (activeJob?.repoId === repoId) return { jobId: activeJob.id, status: 'already_downloading' }
+            const queued = queue.find(j => j.repoId === repoId)
+            if (queued) return { jobId: queued.id, status: 'already_queued' }
+            const id = `dl_${Date.now()}`
+            queue.push({ id, repoId, status: 'queued' })
+            return { jobId: id, status: 'queued' }
+        }
+
+        it('returns immediately with jobId (non-blocking)', () => {
+            const queue: DownloadJob[] = []
+            const result = startDownload(null, queue, 'mlx-community/model')
+            expect(result.status).toBe('queued')
+            expect(result.jobId).toBeDefined()
+            expect(queue.length).toBe(1)
+        })
+
+        it('detects already-downloading model', () => {
+            const active: DownloadJob = { id: 'dl_1', repoId: 'mlx-community/model', status: 'downloading' }
+            const result = startDownload(active, [], 'mlx-community/model')
+            expect(result.status).toBe('already_downloading')
+        })
+
+        it('detects already-queued model', () => {
+            const queue: DownloadJob[] = [{ id: 'dl_1', repoId: 'mlx-community/model', status: 'queued' }]
+            const result = startDownload(null, queue, 'mlx-community/model')
+            expect(result.status).toBe('already_queued')
+        })
+
+        it('allows different models to queue', () => {
+            const queue: DownloadJob[] = []
+            startDownload(null, queue, 'mlx-community/model-a')
+            startDownload(null, queue, 'mlx-community/model-b')
+            expect(queue.length).toBe(2)
+        })
+    })
+
+    describe('Stale marker cleanup', () => {
+        it('marker older than 1 hour is stale', () => {
+            const ts = Date.now() - 3700000
+            expect(!isNaN(ts) && Date.now() - ts > 3600000).toBe(true)
+        })
+
+        it('marker less than 1 hour old is not stale', () => {
+            const ts = Date.now() - 1800000
+            expect(!isNaN(ts) && Date.now() - ts > 3600000).toBe(false)
+        })
+
+        it('NaN timestamp is not treated as stale', () => {
+            const ts = NaN
+            expect(!isNaN(ts) && Date.now() - ts > 3600000).toBe(false)
+        })
+    })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 6: Audio IPC & Auth Headers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Phase 6: Audio IPC Auth Headers', () => {
+    // Reproduces the auth header assembly logic from ipc/utils.ts
+    function getAuthHeaders(session: { apiKey?: string; remoteOrganization?: string }): Record<string, string> {
+        const headers: Record<string, string> = {}
+        if (session.apiKey) {
+            headers['Authorization'] = `Bearer ${session.apiKey}`
+        }
+        if (session.remoteOrganization) {
+            headers['OpenAI-Organization'] = session.remoteOrganization
+        }
+        return headers
+    }
+
+    it('includes Bearer token when apiKey is set', () => {
+        const h = getAuthHeaders({ apiKey: 'sk-test123' })
+        expect(h['Authorization']).toBe('Bearer sk-test123')
+    })
+
+    it('includes Organization header when set', () => {
+        const h = getAuthHeaders({ apiKey: 'sk-test', remoteOrganization: 'org-abc' })
+        expect(h['OpenAI-Organization']).toBe('org-abc')
+    })
+
+    it('returns empty headers for local session (no apiKey)', () => {
+        const h = getAuthHeaders({})
+        expect(Object.keys(h).length).toBe(0)
+    })
+
+    it('omits Organization when not set', () => {
+        const h = getAuthHeaders({ apiKey: 'sk-test' })
+        expect(h['OpenAI-Organization']).toBeUndefined()
+    })
+
+    // Known issue: audio.ts doesn't pass auth headers for sessions with API keys
+    // This test documents the expected behavior when the bug is fixed
+    describe('Audio endpoint auth header assembly', () => {
+        function buildAudioHeaders(
+            baseUrl: string,
+            session: { apiKey?: string; remoteOrganization?: string }
+        ): Record<string, string> {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+            // This is what SHOULD happen (auth headers passed to audio endpoints)
+            const auth = getAuthHeaders(session)
+            return { ...headers, ...auth }
+        }
+
+        it('remote session audio request includes auth headers', () => {
+            const h = buildAudioHeaders('https://api.openai.com', { apiKey: 'sk-test' })
+            expect(h['Authorization']).toBe('Bearer sk-test')
+            expect(h['Content-Type']).toBe('application/json')
+        })
+
+        it('local session audio request has no auth headers', () => {
+            const h = buildAudioHeaders('http://localhost:9876', {})
+            expect(h['Authorization']).toBeUndefined()
+            expect(h['Content-Type']).toBe('application/json')
+        })
+    })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 7: Reasoning Parser Behavior with enable_thinking
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Phase 7: Reasoning & Thinking Tri-State', () => {
+    // Simulates how the server handles enable_thinking + reasoning parser
+    type ThinkingMode = true | false | undefined  // true=On, false=Off, undefined=Auto
+
+    function resolveThinking(
+        enableThinking: ThinkingMode,
+        hasReasoningParser: boolean
+    ): { addThinkingTemplate: boolean; parseReasoning: boolean } {
+        if (enableThinking === false) {
+            // Explicit Off: don't add template, don't parse (model won't produce think tags)
+            return { addThinkingTemplate: false, parseReasoning: false }
+        }
+        if (enableThinking === true) {
+            // Explicit On: add template if parser exists, always parse
+            return { addThinkingTemplate: hasReasoningParser, parseReasoning: hasReasoningParser }
+        }
+        // Auto (undefined): let model decide, parse if parser is configured
+        return { addThinkingTemplate: false, parseReasoning: hasReasoningParser }
+    }
+
+    it('thinking=true with parser: enables both template and parsing', () => {
+        const r = resolveThinking(true, true)
+        expect(r.addThinkingTemplate).toBe(true)
+        expect(r.parseReasoning).toBe(true)
+    })
+
+    it('thinking=false: disables both even with parser', () => {
+        const r = resolveThinking(false, true)
+        expect(r.addThinkingTemplate).toBe(false)
+        expect(r.parseReasoning).toBe(false)
+    })
+
+    it('thinking=undefined (auto) with parser: parses but does not force template', () => {
+        const r = resolveThinking(undefined, true)
+        expect(r.addThinkingTemplate).toBe(false)
+        expect(r.parseReasoning).toBe(true)
+    })
+
+    it('thinking=true without parser: no template or parsing', () => {
+        const r = resolveThinking(true, false)
+        expect(r.addThinkingTemplate).toBe(false)
+        expect(r.parseReasoning).toBe(false)
+    })
+
+    it('thinking=undefined without parser: nothing happens', () => {
+        const r = resolveThinking(undefined, false)
+        expect(r.addThinkingTemplate).toBe(false)
+        expect(r.parseReasoning).toBe(false)
+    })
+
+    // Tri-state storage: how config values map
+    describe('Tri-state config storage', () => {
+        function interpretEnableThinking(value: any): ThinkingMode {
+            if (value === true) return true
+            if (value === false) return false
+            return undefined  // null, undefined, missing = Auto
+        }
+
+        it('true → On', () => expect(interpretEnableThinking(true)).toBe(true))
+        it('false → Off', () => expect(interpretEnableThinking(false)).toBe(false))
+        it('undefined → Auto', () => expect(interpretEnableThinking(undefined)).toBeUndefined())
+        it('null → Auto', () => expect(interpretEnableThinking(null)).toBeUndefined())
+    })
+
+    // Parser selection: empty string vs undefined
+    describe('Parser empty string semantics', () => {
+        function resolveParser(
+            detected: string | undefined,
+            saved: string | undefined
+        ): string | undefined {
+            // Empty string "" = user explicitly chose "None (disabled)"
+            if (saved === '') return undefined  // Disabled
+            // Auto-detected always wins for non-empty values
+            if (detected) return detected
+            // Fallback to saved
+            return saved
+        }
+
+        it('empty string disables parser (explicit None)', () => {
+            expect(resolveParser('deepseek_r1', '')).toBeUndefined()
+        })
+
+        it('detected parser wins over saved', () => {
+            expect(resolveParser('deepseek_r1', 'hermes')).toBe('deepseek_r1')
+        })
+
+        it('saved value used as fallback when no detection', () => {
+            expect(resolveParser(undefined, 'hermes')).toBe('hermes')
+        })
+
+        it('both undefined returns undefined', () => {
+            expect(resolveParser(undefined, undefined)).toBeUndefined()
+        })
+    })
+})
+

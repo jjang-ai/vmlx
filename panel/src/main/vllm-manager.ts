@@ -371,13 +371,14 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
 
   let current = ''
   try {
-    current = execSync(`"${bundledPython}" -s -c "import vllm_mlx; print(vllm_mlx.__version__)"`, {
+    current = execSync(`"${bundledPython}" -s -c "import vllm_mlx; print(getattr(vllm_mlx, '__version__', 'unknown'))"`, {
       encoding: 'utf-8',
       timeout: 10000,
       env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
     }).trim()
   } catch (_) {
-    return { current: '', bundled: '', needsUpdate: false }
+    // Can't import vllm_mlx at all — needs install, not just update
+    current = 'unknown'
   }
 
   const sourcePath = getBundledSourcePath()
@@ -392,7 +393,8 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
     return { current, bundled: '', needsUpdate: false }
   }
 
-  const needsUpdate = !!(current && bundled && current !== bundled)
+  // Update if versions differ OR if current version is unknown (old install without __version__)
+  const needsUpdate = !!(bundled && (current !== bundled))
   console.log(`[vLLM Manager] Engine version check: installed=${current}, source=${bundled}, needsUpdate=${needsUpdate}`)
   return { current, bundled, needsUpdate }
 }

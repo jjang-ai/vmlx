@@ -73,10 +73,17 @@ class STTEngine:
             self._loaded = True
             logger.info(f"STT model loaded: {self.model_name}")
         except ImportError as e:
-            logger.error(f"mlx-audio not installed: {e}")
-            raise ImportError(
-                "mlx-audio is required for STT. Install with: pip install mlx-audio"
-            ) from e
+            msg = str(e)
+            if "mlx_audio" in msg or "mlx-audio" in msg:
+                logger.error(f"mlx-audio not installed: {e}")
+                raise ImportError(
+                    "mlx-audio is required for STT. Install with: pip install mlx-audio"
+                ) from e
+            else:
+                logger.error(f"STT dependency missing: {e}")
+                raise ImportError(
+                    f"STT dependency missing: {msg}"
+                ) from e
 
     def transcribe(
         self,

@@ -126,12 +126,12 @@ function buildCommandPreview(
   }
 
   // Tool integration
-  if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
-  if (effectiveAutoTool) {
-    parts.push('--enable-auto-tool-choice')
-    if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
-  }
+  // Pass resolved parsers directly (mirrors buildArgs lines 1085-1093)
+  if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
   if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
+  if (effectiveAutoTool) parts.push('--enable-auto-tool-choice')
+
+  if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
 
   // Served model name
   if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)

@@ -209,7 +209,7 @@ Both APIs support: streaming, tool calls, reasoning extraction, usage tracking, 
 
 ## Requirements
 
-- macOS 12+ (Apple Silicon recommended)
+- macOS 26+ (Tahoe) — Apple Silicon required (MLX Metal shaders require Metal 4.0)
 - Node.js 18+
 - vLLM-MLX installed (auto-installed on first launch, or manually via `uv tool install vllm-mlx`)
 - MLX-format models (configurable scan directories, defaults: `~/.lmstudio/models/`, `~/.cache/huggingface/hub/`)
