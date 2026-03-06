@@ -2569,9 +2569,15 @@ async def stream_chat_completion(
     # <think>→</think>→content transitions correctly. Disabling think_in_prompt
     # here caused reasoning text to leak as visible content before the <think>
     # token accumulated in the stream.
+    #
+    # After the _template_always_thinks() check above, think_in_template already
+    # correctly reflects reality:
+    # - Template respects enable_thinking=False → think_in_template is False
+    # - Template always injects <think> (e.g., MiniMax) → think_in_template stays True
+    # We MUST NOT override it to False here — the parser needs think_in_prompt=True
+    # to correctly classify implicit reasoning from always-thinking templates.
+    # suppress_reasoning (below) handles hiding reasoning from the user.
     effective_think_in_template = think_in_template
-    if _effective_thinking is False:
-        effective_think_in_template = False
 
     # Track if we need to add <think> prefix for thinking models (when no reasoning parser)
     # The template adds <think> to the prompt, so the model output starts inside the think block
@@ -3107,9 +3113,9 @@ async def stream_responses_api(
 
     # Keep think_in_prompt active even when tool results are present.
     # (Same rationale as Chat Completions path — see stream_chat_completion.)
+    # After _template_always_thinks() above, think_in_template already correctly
+    # reflects reality — do NOT override to False for always-thinking templates.
     effective_think_in_template = think_in_template
-    if _effective_thinking is False:
-        effective_think_in_template = False
 
     # For thinking models without reasoning parser, prepend <think>
     is_thinking_model = effective_think_in_template and not _reasoning_parser

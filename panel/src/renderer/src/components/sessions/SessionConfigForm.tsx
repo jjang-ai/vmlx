@@ -567,7 +567,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <ParserField
           label="Reasoning Parser"
-          tooltip="Extract reasoning/thinking content from models that support it (Qwen3, DeepSeek-R1, Gemma 3, GLM-4.7, Phi-4 Reasoning, etc). 'Auto-detect' reads config.json. Qwen3 uses strict <think> tags, DeepSeek R1 uses lenient <think> (also works for Gemma 3, GLM-4.7, Phi-4), GPT-OSS/Harmony uses <|channel|> protocol. Click '?' for format examples."
+          tooltip="Separates reasoning/thinking from final content. Use Auto-detect unless it picks wrong. Qwen3 parser: Qwen, QwQ, MiniMax, StepFun (strict <think> tags). DeepSeek R1 parser: DeepSeek-R1, Gemma 3, GLM-4.7, Phi-4, Nemotron (lenient <think> tags). GPT-OSS parser: GLM-4.7 Flash, GPT-OSS only (Harmony protocol). Click '?' for full model list."
           value={config.reasoningParser}
           onChange={v => onChange('reasoningParser', v)}
           options={REASONING_PARSER_OPTIONS}
@@ -691,7 +691,7 @@ interface ParserOption {
 }
 
 const TOOL_PARSER_OPTIONS: ParserOption[] = [
-  { value: 'auto', label: 'Auto-detect (from config.json)' },
+  { value: 'auto', label: 'Auto-detect (recommended)' },
   { value: '', label: 'None (disable tool parsing)' },
   {
     value: 'qwen', label: 'Qwen — Qwen3.5 / Qwen3 / Qwen2.5 / QwQ', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
@@ -772,25 +772,31 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
 ]
 
 const REASONING_PARSER_OPTIONS: ParserOption[] = [
-  { value: 'auto', label: 'Auto-detect (from config.json)' },
+  { value: 'auto', label: 'Auto-detect (recommended)' },
   { value: '', label: 'None (disable reasoning extraction)' },
   {
-    value: 'qwen3', label: 'Qwen3 — strict <think> tags', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
-      'Qwen3.5-VL (0.8B\u2013122B, native vision+reasoning)', 'Qwen3 (all sizes, thinking mode)',
-      'Qwen3-Coder', 'QwQ-32B', 'StepFun Step-3.5 (all variants)', 'MiniMax-M2 / M2.5',
+    value: 'qwen3', label: 'Qwen3 — Qwen / QwQ / MiniMax / StepFun', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
+      'Qwen3.5-VL (0.8B\u2013122B MoE, vision+reasoning)', 'Qwen3 (0.6B\u2013235B, all sizes)',
+      'Qwen3-Coder (all sizes)', 'Qwen3-MoE (22B/57B)', 'QwQ-32B',
+      'MiniMax-M2 (46B)', 'MiniMax-M2.5 (172B MoE)',
+      'MiniMax Prism Pro (80B)', 'StepFun Step-3.5 Flash (8B MoE)',
+      'StepFun Step-3.5', 'StepFun Step-1V (vision)',
     ]
   },
   {
-    value: 'deepseek_r1', label: 'DeepSeek R1 — lenient <think> tags', format: '<think>...reasoning...</think>content  (lenient: handles missing <think>)', models: [
+    value: 'deepseek_r1', label: 'DeepSeek R1 — DeepSeek / Gemma / GLM / Phi / Nemotron', format: '<think>...reasoning...</think>content  (lenient: handles missing <think>)', models: [
       'DeepSeek-R1 (671B native)', 'DeepSeek-R1-0528',
-      'Gemma 3 (1B/4B/12B/27B, thinking mode)', 'GLM-4.7 (9B) \u2014 NOT GLM-4.7 Flash',
-      'GLM-Z1 (32B)', 'Phi-4 Reasoning / Reasoning Plus (14B)',
-      '\u26A0 R1-Distill-Qwen/Llama: select this manually (auto-detect picks no reasoning)',
+      'Gemma 3 (1B/4B/12B/27B, thinking mode)',
+      'GLM-4.7 (9B) \u2014 NOT GLM-4.7 Flash', 'GLM-Z1 (32B)',
+      'Phi-4 Reasoning / Reasoning Plus (14B)',
+      'Nemotron (hybrid Mamba+attention)',
+      '\u26A0 R1-Distill-Qwen/Llama: must select manually (auto-detect has no reasoning)',
     ]
   },
   {
-    value: 'openai_gptoss', label: 'GPT-OSS / Harmony — <|channel|> protocol', format: '<|channel|>analysis<|message|>reasoning...<|channel|>final<|message|>content', models: [
-      'GLM-4.7 Flash (9B MoE) \u2014 uses this, NOT deepseek_r1', 'GPT-OSS-20B', 'GPT-OSS-120B',
+    value: 'openai_gptoss', label: 'GPT-OSS / Harmony — GLM-4.7 Flash / GPT-OSS', format: '<|channel|>analysis<|message|>reasoning...<|channel|>final<|message|>content', models: [
+      'GLM-4.7 Flash (9B MoE) \u2014 uses Harmony, NOT deepseek_r1',
+      'GPT-OSS-20B', 'GPT-OSS-120B',
     ]
   },
 ]
@@ -800,6 +806,8 @@ function ParserField({ label, tooltip, value, onChange, options }: {
 }) {
   const [showHelp, setShowHelp] = useState(false)
   const selected = options.find(o => o.value === value)
+  // Show help panel when explicitly toggled OR when a non-auto parser is manually selected
+  const helpVisible = showHelp || (value !== 'auto' && value !== '')
 
   return (
     <div className="block">
@@ -820,7 +828,7 @@ function ParserField({ label, tooltip, value, onChange, options }: {
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
-      {showHelp && (
+      {helpVisible && (
         <div className="mt-1.5 bg-background border border-border rounded p-2 text-xs max-h-48 overflow-auto space-y-2">
           {options.filter(o => o.format).map(o => {
             const isSelected = o.value === value
@@ -848,7 +856,7 @@ function ParserField({ label, tooltip, value, onChange, options }: {
           </div>
         </div>
       )}
-      {selected?.format && !showHelp && (
+      {selected?.format && !helpVisible && (
         <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate" title={selected.format}>
           {selected.format}
         </p>
