@@ -200,6 +200,15 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('templates:delete', id)
   },
 
+  // App-level events
+  app: {
+    onUpdateAvailable: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('app:updateAvailable', handler)
+      return () => { ipcRenderer.removeListener('app:updateAvailable', handler) }
+    }
+  },
+
   // App-level settings (API keys, preferences)
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
