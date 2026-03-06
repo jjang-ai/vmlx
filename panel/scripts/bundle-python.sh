@@ -47,6 +47,14 @@ echo "==> Installing dependencies..."
   "psutil>=5.9.0" "tqdm>=4.66.0" "pyyaml>=6.0" \
   "requests>=2.28.0" "tabulate>=0.9.0" "mlx-embeddings>=0.0.5"
 
+# Install mlx-audio for STT/TTS (--no-deps: it pins exact mlx-lm/transformers versions
+# that conflict with ours — we already have all the real deps above)
+echo "==> Installing mlx-audio (STT/TTS)..."
+"$PYTHON" -m pip install --no-deps "mlx-audio>=0.2.0"
+# Install mlx-audio's transitive deps that we don't already have
+"$PYTHON" -m pip install \
+  librosa sounddevice miniaudio pyloudnorm numba
+
 # Install our customized vllm-mlx from source (--no-deps since all deps already installed)
 echo "==> Installing vllm-mlx from source..."
 "$PYTHON" -m pip install --no-deps "$REPO_DIR"
@@ -220,6 +228,18 @@ fi
 echo "==> Verifying pip is functional (needed for engine auto-update)..."
 "$PYTHON" -s -m pip --version > /dev/null 2>&1 || { echo "ERROR: pip is broken after cleanup! Check vendor removals."; exit 1; }
 echo "  pip OK"
+
+# Critical: reject editable installs (prevents shipping dev-machine paths to users)
+echo "==> Checking for editable installs..."
+EDITABLE_PTH=$(find "$SITE" -maxdepth 1 -name "__editable__.*" -o -name "__editable___*" 2>/dev/null)
+if [ -n "$EDITABLE_PTH" ]; then
+  echo "ERROR: Editable install detected in bundled Python!"
+  echo "  Found: $EDITABLE_PTH"
+  echo "  This would ship with hardcoded paths to your dev machine."
+  echo "  Fix: re-run bundle-python.sh from scratch (it cleans the bundle dir)."
+  exit 1
+fi
+echo "  No editable installs (good)"
 
 # Verify path isolation
 echo "==> Verifying path isolation..."

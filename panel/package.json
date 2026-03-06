@@ -78,7 +78,7 @@
       "notarize": {
         "teamId": "55KGF2S5AY"
       },
-      "minimumSystemVersion": "12.0.0"
+      "minimumSystemVersion": "26.0.0"
     },
     "dmg": {
       "background": "build/dmg-background.png",

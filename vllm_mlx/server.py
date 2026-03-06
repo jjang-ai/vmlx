@@ -1415,11 +1415,13 @@ async def create_transcription(
             "duration": result.duration,
         }
 
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="mlx-audio not installed. Install with: pip install mlx-audio",
-        )
+    except ImportError as e:
+        msg = str(e)
+        if "mlx_audio" in msg or "mlx-audio" in msg:
+            detail = "mlx-audio not installed. Install with: pip install mlx-audio"
+        else:
+            detail = f"STT dependency missing: {msg}"
+        raise HTTPException(status_code=503, detail=detail)
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1465,11 +1467,13 @@ async def create_speech(request: AudioSpeechRequest):
         )
         return Response(content=audio_bytes, media_type=content_type)
 
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="mlx-audio not installed. Install with: pip install mlx-audio",
-        )
+    except ImportError as e:
+        msg = str(e)
+        if "mlx_audio" in msg or "mlx-audio" in msg:
+            detail = "mlx-audio not installed. Install with: pip install mlx-audio"
+        else:
+            detail = f"TTS dependency missing: {msg}"
+        raise HTTPException(status_code=503, detail=detail)
     except Exception as e:
         logger.error(f"TTS generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

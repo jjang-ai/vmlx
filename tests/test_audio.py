@@ -247,5 +247,116 @@ class TestAudioIntegration:
         assert residual is not None
 
 
+class TestTTSErrorMessages:
+    """Tests for improved TTS/STT error messages that distinguish
+    'mlx-audio not installed' from transitive dependency failures."""
+
+    def test_tts_load_catches_import_error(self):
+        """TTSEngine.load() re-raises ImportError with context."""
+        from vllm_mlx.audio.tts import TTSEngine
+        from unittest.mock import patch
+
+        engine = TTSEngine("mlx-community/Kokoro-82M-bf16")
+
+        # Simulate mlx-audio itself missing
+        with patch.dict("sys.modules", {"mlx_audio": None, "mlx_audio.tts": None, "mlx_audio.tts.generate": None}):
+            try:
+                engine.load()
+                assert False, "Should have raised ImportError"
+            except ImportError as e:
+                assert "mlx-audio" in str(e).lower() or "mlx_audio" in str(e).lower()
+
+    def test_tts_transitive_dep_error_preserved(self):
+        """TTSEngine.load() preserves transitive dependency error messages."""
+        from vllm_mlx.audio.tts import TTSEngine
+        from unittest.mock import patch
+
+        engine = TTSEngine("mlx-community/Kokoro-82M-bf16")
+
+        # Simulate a transitive dep failure (e.g., misaki, num2words)
+        def fake_load_model(*args, **kwargs):
+            raise ImportError("No module named 'num2words'")
+
+        with patch("vllm_mlx.audio.tts.TTSEngine.load", side_effect=ImportError("TTS dependency missing: No module named 'num2words'")):
+            try:
+                engine.load()
+                assert False, "Should have raised ImportError"
+            except ImportError as e:
+                msg = str(e)
+                assert "num2words" in msg
+                # Should NOT say "mlx-audio not installed" for transitive deps
+                assert "mlx-audio is required" not in msg
+
+    def test_stt_load_catches_import_error(self):
+        """STTEngine.load() re-raises ImportError with context."""
+        from vllm_mlx.audio.stt import STTEngine
+        from unittest.mock import patch
+
+        engine = STTEngine("mlx-community/whisper-large-v3-mlx")
+
+        with patch.dict("sys.modules", {"mlx_audio": None, "mlx_audio.stt": None, "mlx_audio.stt.utils": None}):
+            try:
+                engine.load()
+                assert False, "Should have raised ImportError"
+            except ImportError as e:
+                assert "mlx-audio" in str(e).lower() or "mlx_audio" in str(e).lower() or "stt" in str(e).lower()
+
+
+class TestMambaCacheCompat:
+    """Tests for BatchMambaCache compatibility across mlx-lm versions."""
+
+    def test_batch_mamba_cache_init(self):
+        """BatchMambaCache initializes regardless of MambaCache signature."""
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        cache = BatchMambaCache(size=3, left_padding=[0, 0])
+        assert cache._batch_size == 2
+        assert len(cache.cache) == 3
+
+    def test_batch_mamba_cache_init_no_padding(self):
+        """BatchMambaCache handles None left_padding."""
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        cache = BatchMambaCache(size=2, left_padding=None)
+        assert cache._batch_size == 0
+
+    def test_batch_mamba_cache_extract(self):
+        """BatchMambaCache.extract returns a MambaCache with correct structure."""
+        import mlx.core as mx
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+
+        cache = BatchMambaCache(size=2, left_padding=[0, 0])
+        cache.cache = [
+            mx.zeros((2, 4, 8)),
+            mx.zeros((2, 4, 8)),
+        ]
+        extracted = cache.extract(0)
+        assert extracted.cache[0].shape == (1, 4, 8)
+        assert extracted.cache[1].shape == (1, 4, 8)
+
+    def test_batch_mamba_cache_merge(self):
+        """BatchMambaCache.merge concatenates caches along batch dim."""
+        import mlx.core as mx
+        from vllm_mlx.utils.mamba_cache import BatchMambaCache, MambaCache
+
+        try:
+            c1 = MambaCache(2)
+        except TypeError:
+            c1 = MambaCache()
+            c1.cache = [None, None]
+        c1.cache = [mx.zeros((1, 4, 8)), mx.zeros((1, 4, 8))]
+
+        try:
+            c2 = MambaCache(2)
+        except TypeError:
+            c2 = MambaCache()
+            c2.cache = [None, None]
+        c2.cache = [mx.ones((1, 4, 8)), mx.ones((1, 4, 8))]
+
+        merged = BatchMambaCache.merge([c1, c2])
+        assert merged.cache[0].shape == (2, 4, 8)
+        assert merged._batch_size == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
