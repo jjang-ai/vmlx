@@ -46,20 +46,20 @@ function buildCommandPreview(
   if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
   if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
-  // VLM models use internal MLLM scheduler batching; LLMs use --continuous-batching flag
   if (isVLM) parts.push('--is-mllm')
-  if (config.continuousBatching && !isVLM) parts.push('--continuous-batching')
+  if (config.continuousBatching) parts.push('--continuous-batching')
 
-  // Parser resolution: detected ALWAYS wins (mirrors buildArgs lines 1052-1062)
+  // Parser resolution: User explicit choice -> Detected config -> Fallback
+  // (mirrors buildArgs: user choice wins over detection)
   const effectiveToolParser = config.toolCallParser === ''
     ? undefined
-    : detected?.toolParser
-    || (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser : undefined)
+    : (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
+      : detected?.toolParser)
   const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
   const effectiveReasoningParser = config.reasoningParser === ''
     ? undefined
-    : detected?.reasoningParser
-    || (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser : undefined)
+    : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
+      : detected?.reasoningParser)
 
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
@@ -68,8 +68,8 @@ function buildCommandPreview(
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
   } else {
-    // Auto-enable continuous batching for LLMs (VLMs handle batching internally)
-    if (!isVLM && !config.continuousBatching && !parts.includes('--continuous-batching')) {
+    // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx)
+    if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
       parts.push('--continuous-batching')
     }
     // Safe prefill default
@@ -135,6 +135,25 @@ function buildCommandPreview(
 
   // Served model name
   if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
+
+  // Speculative decoding
+  if (config.speculativeModel) {
+    parts.push('--speculative-model', config.speculativeModel)
+    if (config.numDraftTokens && config.numDraftTokens !== 3) {
+      parts.push('--num-draft-tokens', config.numDraftTokens.toString())
+    }
+  }
+
+  // Generation defaults
+  if (config.defaultTemperature && config.defaultTemperature > 0) {
+    parts.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
+  }
+  if (config.defaultTopP && config.defaultTopP > 0) {
+    parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
+  }
+
+  // Embedding model
+  if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
   if (config.additionalArgs && config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
 
