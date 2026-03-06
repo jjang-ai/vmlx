@@ -5,6 +5,34 @@ All notable changes to vLLM-MLX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-03-05
+
+### Added
+
+#### Speculative Decoding (Phase 3 — vllm-metal Feature Integration)
+- **New module**: `speculative.py` — Speculative decoding using mlx-lm's native `speculative_generate_step()`
+  - `SpeculativeConfig` dataclass with model, num_tokens, disable_by_batch_size
+  - `load_draft_model()` / `unload_draft_model()` lifecycle management
+  - `get_spec_stats()` for API health endpoint integration
+  - `is_speculative_enabled()` global state check
+- **CLI flags**:
+  - `--speculative-model` — path/name of draft model (same tokenizer required)
+  - `--num-draft-tokens` — tokens drafted per step (default: 3, sweet spot 2-5)
+- **How it works**: Draft model proposes N tokens → target model verifies all N in a single forward pass → accepted tokens skip individual decode → 20-90% throughput improvement with zero quality loss
+- **Server integration**: `/health` endpoint now reports `speculative_decoding` status (enabled, draft_model, num_draft_tokens, draft_model_loaded)
+- **Startup banner**: Speculative decoding status displayed in security/feature summary
+- **Test suite**: 21 new tests in `tests/test_speculative.py`:
+  - Config validation (defaults, clamping, warnings)
+  - Global state lifecycle (load/unload/enable check)
+  - Stats reporting (not configured, partial, fully loaded)
+  - Error handling (invalid model → ValueError, auto-disable)
+  - CLI argument parsing
+  - mlx-lm integration (speculative_generate_step importable, stream_generate accepts draft_model)
+  - Server health endpoint integration
+
+### Phase 1 Status: RotatingKVCache
+- **Already implemented** — confirmed RotatingKVCache support across: `mllm_batch_generator.py`, `scheduler.py`, `prefix_cache.py`, `disk_cache.py`, `memory_cache.py`, `utils/mamba_cache.py`, `utils/cache_types.py`
+
 ## [0.2.8] - 2026-03-03
 
 ### Fixed

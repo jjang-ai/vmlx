@@ -133,6 +133,13 @@ def serve_command(args):
         print(f"  Reasoning: requested '{args.reasoning_parser}' but no parser matched")
     else:
         print("  Reasoning: Use --reasoning-parser to enable")
+    spec_model = getattr(args, 'speculative_model', None)
+    if spec_model:
+        print(f"  Speculative decoding: ENABLED")
+        print(f"    Draft model: {spec_model}")
+        print(f"    Draft tokens per step: {getattr(args, 'num_draft_tokens', 3)}")
+    else:
+        print("  Speculative decoding: Use --speculative-model to enable")
     print("=" * 60)
 
     print(f"Loading model: {args.model}")
@@ -219,6 +226,35 @@ def serve_command(args):
             ignored.append("--enable-prefix-cache")
         if ignored:
             print(f"  NOTE: These settings require --continuous-batching and will be ignored: {', '.join(ignored)}")
+
+    # Load speculative decoding draft model if configured
+    spec_model = getattr(args, 'speculative_model', None)
+    if spec_model:
+        from .speculative import SpeculativeConfig, load_draft_model
+        spec_config = SpeculativeConfig(
+            model=spec_model,
+            num_tokens=getattr(args, 'num_draft_tokens', 3),
+        )
+        load_draft_model(spec_config)
+        print(f"Draft model loaded: {spec_model}")
+
+        # Warn about incompatible combinations
+        if getattr(args, 'continuous_batching', False):
+            print(
+                "  ⚠️  WARNING: Speculative decoding is incompatible with --continuous-batching.")
+            print(
+                "     The draft model will only be used in SimpleEngine (non-batched) mode.")
+            print(
+                "     BatchedEngine requests will use standard (non-speculative) generation.")
+
+        # Check if target model is MLLM
+        from .api.utils import is_mllm_model
+        is_mllm = is_mllm_model(args.model, force_mllm=getattr(args, 'force_mllm', False))
+        if is_mllm:
+            print(
+                "  ⚠️  WARNING: Speculative decoding is incompatible with multimodal (VLM) models.")
+            print(
+                "     The draft model will be ignored for VLM requests (mlx-vlm has no spec decoding).")
 
     # Load model with unified server
     load_model(
@@ -824,6 +860,24 @@ Examples:
              "tokens whose cumulative probability ≤ this value: 0.9 = use top 90%% of probability mass. "
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
+    )
+    # Speculative decoding options
+    serve_parser.add_argument(
+        "--speculative-model",
+        type=str,
+        default=None,
+        help="Path or HuggingFace name of a small draft model for speculative decoding. "
+             "The draft model proposes tokens that the main model verifies in a single "
+             "forward pass, giving 20-90%% speedup with zero quality loss. Must use the "
+             "same tokenizer as the main model. Example: --speculative-model mlx-community/Llama-3.2-1B-Instruct-4bit",
+    )
+    serve_parser.add_argument(
+        "--num-draft-tokens",
+        type=int,
+        default=3,
+        help="Number of tokens the draft model proposes per speculative decoding step. "
+             "Higher values = more potential speedup but lower acceptance rate. "
+             "Typical sweet spot is 2-5. (default: 3)",
     )
     # Bench command
     bench_parser = subparsers.add_parser("bench", help="Run benchmark")
