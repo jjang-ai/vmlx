@@ -1,5 +1,5 @@
 /**
- * Shared types for vLLM-MLX server configuration and process detection.
+ * Shared types for vMLX Engine server configuration and process detection.
  * The actual multi-instance management lives in sessions.ts (SessionManager).
  */
 

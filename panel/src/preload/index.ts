@@ -123,7 +123,7 @@ const api = {
       ipcRenderer.invoke('chat:import', modelPath)
   },
 
-  // vLLM-MLX management
+  // vMLX Engine management
   vllm: {
     checkInstallation: () => ipcRenderer.invoke('vllm:check-installation'),
     detectInstallers: () => ipcRenderer.invoke('vllm:detect-installers'),

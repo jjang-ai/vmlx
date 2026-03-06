@@ -1,6 +1,6 @@
 # Reasoning Models
 
-vllm-mlx supports reasoning models that show their thinking process before giving an answer. Models like Qwen3 and DeepSeek-R1 wrap their reasoning in `<think>...</think>` tags, and vllm-mlx can parse these tags to separate the reasoning from the final response.
+vmlx-engine supports reasoning models that show their thinking process before giving an answer. Models like Qwen3 and DeepSeek-R1 wrap their reasoning in `<think>...</think>` tags, and vmlx-engine can parse these tags to separate the reasoning from the final response.
 
 ## Why Use Reasoning Parsing?
 
@@ -26,18 +26,18 @@ The easiest way is to use `auto`, which detects the correct parser from the mode
 
 ```bash
 # Auto-detect parser from model name (recommended)
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
 
 # Explicit parser selection
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 
 # For DeepSeek-R1 models
-vllm-mlx serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
+vmlx-engine serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
 ```
 
 ### Auto-Detection
 
-When you pass `--reasoning-parser auto`, vllm-mlx uses its model config registry to match the model name against known patterns and select the appropriate parser:
+When you pass `--reasoning-parser auto`, vmlx-engine uses its model config registry to match the model name against known patterns and select the appropriate parser:
 
 | Model Pattern | Parser Selected |
 |---------------|----------------|
@@ -131,7 +131,7 @@ print(f"Final answer: {content_text}")
 Automatically detects the correct parser based on the model name. This is the recommended option — it works for all known reasoning models and gracefully falls back to no parsing for models that don't use thinking tags.
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
 ```
 
 ### Qwen3 Parser (`qwen3`)
@@ -142,7 +142,7 @@ For Qwen3 models that use explicit `<think>` and `</think>` tags.
 - Best for: Qwen3-0.6B, Qwen3-4B, Qwen3-8B, Qwen3-Coder-Next, GLM-4.7 and similar models
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 ```
 
 ### DeepSeek-R1 Parser (`deepseek_r1`)
@@ -155,7 +155,7 @@ For DeepSeek-R1 models that may omit the opening `<think>` tag.
 - Also used for GLM-4.7 and GLM-Z1 (non-Flash variants that use `<think>` tags with `think_in_template=True`)
 
 ```bash
-vllm-mlx serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
+vmlx-engine serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
 ```
 
 ### GPT-OSS / Harmony Parser (`openai_gptoss`)
@@ -167,7 +167,7 @@ For GLM-4.7 Flash and GPT-OSS models that use the Harmony protocol with channel 
 - `think_in_template=False` — reasoning is NOT injected in the chat template
 
 ```bash
-vllm-mlx serve lmstudio-community/GLM-4.7-Flash-MLX-8bit --reasoning-parser openai_gptoss
+vmlx-engine serve lmstudio-community/GLM-4.7-Flash-MLX-8bit --reasoning-parser openai_gptoss
 ```
 
 ## How It Works

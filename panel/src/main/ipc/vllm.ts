@@ -8,7 +8,7 @@ import {
 } from '../vllm-manager'
 
 export function registerVllmHandlers(getWindow: () => BrowserWindow | null): void {
-  // Check if vllm-mlx is installed
+  // Check if vmlx-engine is installed
   ipcMain.handle('vllm:check-installation', async () => {
     return await checkVllmInstallation()
   })

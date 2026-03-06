@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build a relocatable Python environment with all vllm-mlx dependencies.
+# Build a relocatable Python environment with all vmlx-engine dependencies.
 # Run once on dev machine before `npm run dist`.
 # Output: panel/bundled-python/python/ (~1-2 GB)
 
@@ -55,14 +55,14 @@ echo "==> Installing mlx-audio (STT/TTS)..."
 "$PYTHON" -m pip install \
   librosa sounddevice miniaudio pyloudnorm numba
 
-# Install our customized vllm-mlx from source (--no-deps since all deps already installed)
-echo "==> Installing vllm-mlx from source..."
+# Install our customized vmlx-engine from source (--no-deps since all deps already installed)
+echo "==> Installing vmlx-engine from source..."
 "$PYTHON" -m pip install --no-deps "$REPO_DIR"
 
 # Verify it works
 echo "==> Verifying installation..."
-"$PYTHON" -c "import vllm_mlx; print(f'vllm_mlx {vllm_mlx.__version__} imported OK')"
-"$PYTHON" -m vllm_mlx.cli --help > /dev/null 2>&1 && echo "CLI OK"
+"$PYTHON" -c "import vmlx_engine; print(f'vmlx_engine {vmlx_engine.__version__} imported OK')"
+"$PYTHON" -m vmlx_engine.cli --help > /dev/null 2>&1 && echo "CLI OK"
 
 # Clean up to reduce size
 echo "==> Cleaning up..."
@@ -87,7 +87,7 @@ find "$SITE" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 
 # Packages not needed at runtime (transitive deps / dev-only tools)
-# torch/torchvision: vllm-mlx uses MLX, not PyTorch. torch's bundled copy is
+# torch/torchvision: vmlx-engine uses MLX, not PyTorch. torch's bundled copy is
 # broken (missing torchgen) and causes ModuleNotFoundError on startup.
 # transformers gracefully degrades without torch via is_torch_available().
 rm -rf "$SITE/torch" "$SITE/torch-"*.dist-info 2>/dev/null || true

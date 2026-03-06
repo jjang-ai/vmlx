@@ -404,13 +404,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 <div className="block">
                   <span className="text-xs font-medium text-muted-foreground">
                     Block Cache Directory
-                    <Tooltip text="Directory for block-level disk cache files. A model-specific subdirectory is created automatically. Leave empty for default (~/.cache/vllm-mlx/block-cache/<model_hash>/)." />
+                    <Tooltip text="Directory for block-level disk cache files. A model-specific subdirectory is created automatically. Leave empty for default (~/.cache/vmlx-engine/block-cache/<model_hash>/)." />
                   </span>
                   <input
                     type="text"
                     value={config.blockDiskCacheDir || ''}
                     onChange={e => onChange('blockDiskCacheDir', e.target.value)}
-                    placeholder="~/.cache/vllm-mlx/block-cache"
+                    placeholder="~/.cache/vmlx-engine/block-cache"
                     className="cfg-input text-xs"
                   />
                 </div>
@@ -477,13 +477,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <div className="block">
               <span className="text-xs font-medium text-muted-foreground">
                 Cache Directory
-                <Tooltip text="Base directory for disk cache files (.safetensors). A model-specific subdirectory is created automatically. Leave empty for the default location (~/.cache/vllm-mlx/prompt-cache/<model>/). Set a custom path if you want to use a specific drive." />
+                <Tooltip text="Base directory for disk cache files (.safetensors). A model-specific subdirectory is created automatically. Leave empty for the default location (~/.cache/vmlx-engine/prompt-cache/<model>/). Set a custom path if you want to use a specific drive." />
               </span>
               <input
                 type="text"
                 value={config.diskCacheDir || ''}
                 onChange={e => onChange('diskCacheDir', e.target.value)}
-                placeholder="~/.cache/vllm-mlx/prompt-cache"
+                placeholder="~/.cache/vmlx-engine/prompt-cache"
                 className="cfg-input text-xs"
               />
             </div>
@@ -519,7 +519,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <SliderField
           label="Default Temperature"
-          tooltip="Server-wide default temperature for generation. Controls randomness: 0.0 = deterministic, 1.0 = creative. Overridden by per-request 'temperature' parameter. Set to 'Server default' to use vllm-mlx's built-in default (0.7)."
+          tooltip="Server-wide default temperature for generation. Controls randomness: 0.0 = deterministic, 1.0 = creative. Overridden by per-request 'temperature' parameter. Set to 'Server default' to use vmlx-engine's built-in default (0.7)."
           value={config.defaultTemperature}
           onChange={v => onChange('defaultTemperature', v)}
           min={0}
@@ -535,7 +535,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         <SliderField
           label="Default Top-P"
-          tooltip="Server-wide default nucleus sampling threshold. Only considers tokens whose cumulative probability ≤ this value. 0.9 = use top 90% of probability mass. Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. Set to 'Server default' to use vllm-mlx's built-in default."
+          tooltip="Server-wide default nucleus sampling threshold. Only considers tokens whose cumulative probability ≤ this value. 0.9 = use top 90% of probability mass. Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. Set to 'Server default' to use vmlx-engine's built-in default."
           value={config.defaultTopP}
           onChange={v => onChange('defaultTopP', v)}
           min={1}

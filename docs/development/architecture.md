@@ -111,7 +111,7 @@ Request Completion                    Cache Storage
 ## Module Structure
 
 ```
-vllm_mlx/
+vmlx_engine/
 ├── api/
 │   ├── models.py         # Pydantic models
 │   ├── utils.py          # Shared utilities
@@ -251,14 +251,14 @@ When user navigates away from a chat:
 
 ## Hardware Detection
 
-vllm-mlx auto-detects Apple Silicon:
+vmlx-engine auto-detects Apple Silicon:
 - Chip name (M1, M2, M3, M4)
 - Total memory
 - Neural engine cores
 - GPU cores
 
 ```python
-from vllm_mlx.hardware import get_hardware_info
+from vmlx_engine.hardware import get_hardware_info
 
 hw = get_hardware_info()
 print(f"{hw.chip_name} ({hw.total_memory_gb:.0f} GB)")

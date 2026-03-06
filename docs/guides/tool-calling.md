@@ -1,6 +1,6 @@
 # Tool Calling
 
-vllm-mlx supports OpenAI-compatible tool calling (function calling) with automatic parsing for many popular model families.
+vmlx-engine supports OpenAI-compatible tool calling (function calling) with automatic parsing for many popular model families.
 
 ## Quick Start
 
@@ -8,11 +8,11 @@ Enable tool calling by adding the `--enable-auto-tool-choice` flag when starting
 
 ```bash
 # Auto-detect parser from model name (recommended)
-vllm-mlx serve mlx-community/Devstral-Small-2507-4bit \
+vmlx-engine serve mlx-community/Devstral-Small-2507-4bit \
   --enable-auto-tool-choice
 
 # Or specify parser explicitly
-vllm-mlx serve mlx-community/Devstral-Small-2507-4bit \
+vmlx-engine serve mlx-community/Devstral-Small-2507-4bit \
   --enable-auto-tool-choice \
   --tool-call-parser mistral
 ```
@@ -75,11 +75,11 @@ Use `--tool-call-parser` to select a parser for your model family:
 
 ```bash
 # Devstral Small (optimized for coding and tool use)
-vllm-mlx serve mlx-community/Devstral-Small-2507-4bit \
+vmlx-engine serve mlx-community/Devstral-Small-2507-4bit \
   --enable-auto-tool-choice --tool-call-parser mistral
 
 # Mistral Instruct
-vllm-mlx serve mlx-community/Mistral-7B-Instruct-v0.3-4bit \
+vmlx-engine serve mlx-community/Mistral-7B-Instruct-v0.3-4bit \
   --enable-auto-tool-choice --tool-call-parser mistral
 ```
 
@@ -87,7 +87,7 @@ vllm-mlx serve mlx-community/Mistral-7B-Instruct-v0.3-4bit \
 
 ```bash
 # Qwen3
-vllm-mlx serve mlx-community/Qwen3-4B-4bit \
+vmlx-engine serve mlx-community/Qwen3-4B-4bit \
   --enable-auto-tool-choice --tool-call-parser qwen
 ```
 
@@ -95,7 +95,7 @@ vllm-mlx serve mlx-community/Qwen3-4B-4bit \
 
 ```bash
 # Llama 3.2
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit \
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit \
   --enable-auto-tool-choice --tool-call-parser llama
 ```
 
@@ -103,7 +103,7 @@ vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit \
 
 ```bash
 # DeepSeek V3
-vllm-mlx serve mlx-community/DeepSeek-V3-0324-4bit \
+vmlx-engine serve mlx-community/DeepSeek-V3-0324-4bit \
   --enable-auto-tool-choice --tool-call-parser deepseek
 ```
 
@@ -111,7 +111,7 @@ vllm-mlx serve mlx-community/DeepSeek-V3-0324-4bit \
 
 ```bash
 # Granite 4.0
-vllm-mlx serve mlx-community/granite-4.0-tiny-preview-4bit \
+vmlx-engine serve mlx-community/granite-4.0-tiny-preview-4bit \
   --enable-auto-tool-choice --tool-call-parser granite
 ```
 
@@ -119,7 +119,7 @@ vllm-mlx serve mlx-community/granite-4.0-tiny-preview-4bit \
 
 ```bash
 # Nemotron 3 Nano
-vllm-mlx serve mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-MLX-6Bit \
+vmlx-engine serve mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-MLX-6Bit \
   --enable-auto-tool-choice --tool-call-parser nemotron
 ```
 
@@ -127,7 +127,7 @@ vllm-mlx serve mlx-community/NVIDIA-Nemotron-3-Nano-30B-A3B-MLX-6Bit \
 
 ```bash
 # GLM-4.7 Flash
-vllm-mlx serve lmstudio-community/GLM-4.7-Flash-MLX-8bit \
+vmlx-engine serve lmstudio-community/GLM-4.7-Flash-MLX-8bit \
   --enable-auto-tool-choice --tool-call-parser glm47
 ```
 
@@ -135,7 +135,7 @@ vllm-mlx serve lmstudio-community/GLM-4.7-Flash-MLX-8bit \
 
 ```bash
 # Kimi K2
-vllm-mlx serve mlx-community/Kimi-K2-Instruct-4bit \
+vmlx-engine serve mlx-community/Kimi-K2-Instruct-4bit \
   --enable-auto-tool-choice --tool-call-parser kimi
 ```
 
@@ -143,7 +143,7 @@ vllm-mlx serve mlx-community/Kimi-K2-Instruct-4bit \
 
 ```bash
 # xLAM
-vllm-mlx serve mlx-community/xLAM-2-fc-r-4bit \
+vmlx-engine serve mlx-community/xLAM-2-fc-r-4bit \
   --enable-auto-tool-choice --tool-call-parser xlam
 ```
 
@@ -151,7 +151,7 @@ vllm-mlx serve mlx-community/xLAM-2-fc-r-4bit \
 
 When `--enable-auto-tool-choice` is used without specifying `--tool-call-parser`, the parser defaults to `auto`. Auto-detection works in two stages:
 
-**Stage 1: Model name detection** — vllm-mlx checks the model name against its registry and selects a model-specific parser (e.g., Qwen -> `qwen`, Mistral -> `mistral`). This is the most reliable method.
+**Stage 1: Model name detection** — vmlx-engine checks the model name against its registry and selects a model-specific parser (e.g., Qwen -> `qwen`, Mistral -> `mistral`). This is the most reliable method.
 
 **Stage 2: Format detection (fallback)** — If no model-specific parser is matched, the generic parser tries to detect the format from the output:
 1. Mistral (`[TOOL_CALLS]`)
@@ -163,11 +163,11 @@ When `--enable-auto-tool-choice` is used without specifying `--tool-call-parser`
 
 ```bash
 # Auto is the default when no parser is specified
-vllm-mlx serve mlx-community/Qwen3-4B-4bit \
+vmlx-engine serve mlx-community/Qwen3-4B-4bit \
   --enable-auto-tool-choice
 
 # Equivalent to:
-vllm-mlx serve mlx-community/Qwen3-4B-4bit \
+vmlx-engine serve mlx-community/Qwen3-4B-4bit \
   --enable-auto-tool-choice --tool-call-parser auto
 ```
 
@@ -277,7 +277,7 @@ SSE events follow the OpenAI Responses API spec:
 
 ## Parser Fallback
 
-When a specific parser (e.g., `--tool-call-parser qwen`) doesn't find tool calls in the model's output, vllm-mlx automatically falls back to the generic parser. The generic parser tries all known formats:
+When a specific parser (e.g., `--tool-call-parser qwen`) doesn't find tool calls in the model's output, vmlx-engine automatically falls back to the generic parser. The generic parser tries all known formats:
 
 1. Mistral (`[TOOL_CALLS]`)
 2. Qwen/Hermes XML (`<tool_call>{...}</tool_call>`)
@@ -289,9 +289,9 @@ This means you can safely select a specific parser even if the model occasionall
 
 ## Tool Fallback Injection
 
-Some models' chat templates silently drop tool definitions under certain conditions (e.g., Qwen 3.5 family when `enable_thinking=False`). vllm-mlx automatically detects this and injects tool schemas as a system prompt fallback:
+Some models' chat templates silently drop tool definitions under certain conditions (e.g., Qwen 3.5 family when `enable_thinking=False`). vmlx-engine automatically detects this and injects tool schemas as a system prompt fallback:
 
-1. After applying the chat template, vllm-mlx checks if the first tool name appears in the rendered prompt
+1. After applying the chat template, vmlx-engine checks if the first tool name appears in the rendered prompt
 2. If tools are missing, it injects an XML `<tool_call>` instruction set into the system message
 3. The template is re-applied with the modified messages
 

@@ -1,16 +1,16 @@
 # vMLX — Project Design Document
 
-**A native macOS app for managing multiple vLLM-MLX inference servers simultaneously**
+**A native macOS app for managing multiple vMLX Engine inference servers simultaneously**
 
 ---
 
 ## Project Goals
 
 1. **Session-centric** — Each model loaded = one session with its own port, config, and chat history
-2. **Multi-instance** — Run multiple vLLM-MLX servers simultaneously on different ports
-3. **Zero-config** — Auto-detect models, auto-assign ports, adopt running processes, auto-install vLLM-MLX
+2. **Multi-instance** — Run multiple vMLX Engine servers simultaneously on different ports
+3. **Zero-config** — Auto-detect models, auto-assign ports, adopt running processes, auto-install vMLX Engine
 4. **Persistent** — Chat history tied to model path, survives across load/unload cycles
-5. **Full control** — Every vLLM-MLX parameter exposed in the UI
+5. **Full control** — Every vMLX Engine parameter exposed in the UI
 
 ---
 
@@ -40,9 +40,9 @@
                      │  ipcMain.handle
 ┌────────────────────┴────────────────────────────┐
 │  Main Process (Node.js)                          │
-│  SessionManager  → spawn/kill vLLM-MLX processes │
+│  SessionManager  → spawn/kill vMLX Engine processes │
 │  DatabaseManager → SQLite WAL (chats, sessions)  │
-│  VllmManager     → install/update/detect vLLM-MLX│
+│  VllmManager     → install/update/detect vMLX Engine│
 │  IPC Handlers    → sessions, chat, models, vllm  │
 └─────────────────────────────────────────────────┘
 ```
@@ -51,13 +51,13 @@
 
 ```
 App.tsx (view routing, no sidebar)
-├── SetupScreen         → First-run vLLM-MLX installer gate
+├── SetupScreen         → First-run vMLX Engine installer gate
 ├── SessionDashboard    → Grid of session cards (home screen)
 ├── CreateSession       → Two-step wizard (model picker → config → launch)
 ├── SessionView         → Header + ChatInterface + Settings drawers (per-session)
 │   ├── ChatSettings    → Per-chat inference params drawer
 │   └── ServerSettings  → Inline server config drawer
-├── SessionSettings     → Full-page vLLM-MLX server config editor
+├── SessionSettings     → Full-page vMLX Engine server config editor
 └── About               → UpdateManager + app info
 ```
 
@@ -71,7 +71,7 @@ Navigation: title bar with Home button + About button. No sidebar tabs.
 
 ### 0. First Launch (Setup)
 
-App checks for vLLM-MLX installation. If not found:
+App checks for vMLX Engine installation. If not found:
 - Auto-detects available installers (uv preferred, pip3 fallback with Python >=3.10 check)
 - One-click install with streaming terminal output
 - On success, proceeds to dashboard
@@ -84,14 +84,14 @@ Each card shows: model name, truncated path, host:port, PID, status indicator.
 
 Actions:
 - **Open** — Navigate to session interior (running sessions only)
-- **Start** — Spawn the vLLM-MLX process
+- **Start** — Spawn the vMLX Engine process
 - **Stop** — SIGTERM with 3s SIGKILL fallback
 - **Delete** — Stop + remove from database
 - **Configure** (gear icon) — Open full-page settings editor
 
 Buttons:
 - **New Session** — Launch creation wizard
-- **Detect Processes** — Scan for running `vllm-mlx serve` processes
+- **Detect Processes** — Scan for running `vmlx-engine serve` processes
 
 ### 2. Create Session (Two-Step Wizard)
 
@@ -102,7 +102,7 @@ Buttons:
 - Manual path entry for models not in scan directories
 
 **Step 2: Configure Server**
-Every vLLM-MLX parameter in collapsible sections:
+Every vMLX Engine parameter in collapsible sections:
 
 | Section | Parameters |
 |---------|-----------|
@@ -114,7 +114,7 @@ Every vLLM-MLX parameter in collapsible sections:
 | Tool Integration | MCP config path, auto tool choice, parser selection |
 | Additional Arguments | raw CLI flags textbox |
 
-**Launch**: Creates session + spawns `vllm-mlx serve`. Loading screen shows real-time server logs.
+**Launch**: Creates session + spawns `vmlx-engine serve`. Loading screen shows real-time server logs.
 
 ### 3. Session Interior
 
@@ -126,11 +126,11 @@ Every vLLM-MLX parameter in collapsible sections:
 
 **Settings drawers**:
 - Chat Settings (per-chat): temperature, top_p, max_tokens, system prompt, stop sequences
-- Server Settings (per-session): full vLLM-MLX config form
+- Server Settings (per-session): full vMLX Engine config form
 
 ### 4. About
 
-vLLM-MLX update manager: check for updates, one-click upgrade with streaming output, release notes.
+vMLX Engine update manager: check for updates, one-click upgrade with streaming output, release notes.
 
 ---
 
@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS chats (
 | Method | Description |
 |--------|-----------|
 | `createSession(modelPath, config)` | Create DB record, auto-assign port if needed |
-| `startSession(sessionId)` | Spawn `vllm-mlx serve`, wait for `/health` (120s timeout) |
+| `startSession(sessionId)` | Spawn `vmlx-engine serve`, wait for `/health` (120s timeout) |
 | `stopSession(sessionId)` | SIGTERM → 3s → SIGKILL, with 15s hard timeout |
 | `deleteSession(sessionId)` | Stop + remove from DB |
 | `detectAndAdoptAll()` | Scan all running vLLM processes, create/update session records |
@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS chats (
 ### Install Flow
 1. `detectAvailableInstallers()` — checks uv paths, then pip3 with Python >=3.10 validation
 2. User picks method (or auto-selects uv if available)
-3. `installVllmStreaming()` — spawns `uv tool install vllm-mlx` or `pip3 install vllm-mlx`
+3. `installVllmStreaming()` — spawns `uv tool install vmlx-engine` or `pip3 install vmlx-engine`
 4. Real-time stdout/stderr forwarded as `vllm:install-log` IPC events
 5. On completion, Promise resolves with success/failure
 
@@ -245,7 +245,7 @@ CREATE TABLE IF NOT EXISTS chats (
 | `chat:setOverrides/getOverrides/clearOverrides` | invoke | Per-chat settings |
 | `chat:stream/complete` | event | SSE streaming |
 
-### vLLM-MLX
+### vMLX Engine
 | Channel | Direction | Description |
 |---------|-----------|-------------|
 | `vllm:check-installation/detect-installers/check-updates` | invoke | Detection |
@@ -270,12 +270,12 @@ CREATE TABLE IF NOT EXISTS chats (
 1. Open SQLite database (WAL mode), run migrations
 2. `sessionManager.detectAndAdoptAll()` — scan for running vLLM processes
 3. `sessionManager.startGlobalMonitor()` — start 5s health-check interval
-4. Check vLLM-MLX installation → SetupScreen or Dashboard
+4. Check vMLX Engine installation → SetupScreen or Dashboard
 
 ### Session Start
 1. `buildArgs()` converts SessionConfig → CLI flags
 2. `findVllmMlx()` locates binary
-3. `spawn('vllm-mlx', ['serve', modelPath, ...args])`
+3. `spawn('vmlx-engine', ['serve', modelPath, ...args])`
 4. Stream stdout/stderr via `session:log` events
 5. `waitForReady()` polls `/health` every 2s (120s timeout)
 6. On success: emit `session:ready`, update DB status to `running`
@@ -301,7 +301,7 @@ CREATE TABLE IF NOT EXISTS chats (
 |------|---------|
 | `src/main/sessions.ts` | SessionManager — multi-instance lifecycle, health monitoring (3-strike), process detection |
 | `src/main/database.ts` | SQLite WAL schema + CRUD for all tables |
-| `src/main/vllm-manager.ts` | vLLM-MLX detection, streaming install (uv/pip), update, version checking |
+| `src/main/vllm-manager.ts` | vMLX Engine detection, streaming install (uv/pip), update, version checking |
 | `src/main/index.ts` | App lifecycle: startup adoption, global monitor, graceful quit |
 | `src/main/ipc/sessions.ts` | Session IPC handlers with window getter pattern |
 | `src/main/ipc/chat.ts` | Chat IPC + SSE streaming + AbortController + per-chat concurrency guard |
@@ -320,7 +320,7 @@ CREATE TABLE IF NOT EXISTS chats (
 | `src/renderer/src/components/chat/ChatInterface.tsx` | Chat with streaming, markdown, metrics |
 | `src/renderer/src/components/chat/ChatSettings.tsx` | Per-chat inference settings drawer |
 | `src/renderer/src/components/chat/ChatList.tsx` | Chat history sidebar with folders, search, rename |
-| `src/renderer/src/components/update/UpdateManager.tsx` | vLLM-MLX update checker and installer |
+| `src/renderer/src/components/update/UpdateManager.tsx` | vMLX Engine update checker and installer |
 
 ---
 

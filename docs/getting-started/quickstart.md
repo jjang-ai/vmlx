@@ -6,10 +6,10 @@ Start the server:
 
 ```bash
 # Simple mode - maximum throughput for single user
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
 
 # Continuous batching - for multiple concurrent users
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
 ```
 
 Use with OpenAI Python SDK:
@@ -37,7 +37,7 @@ curl http://localhost:8000/v1/chat/completions \
 ## Option 2: Direct Python API
 
 ```python
-from vllm_mlx.models import MLXLanguageModel
+from vmlx_engine.models import MLXLanguageModel
 
 model = MLXLanguageModel("mlx-community/Llama-3.2-3B-Instruct-4bit")
 model.load()
@@ -54,7 +54,7 @@ for chunk in model.stream_generate("Tell me a story"):
 ## Option 3: Gradio Chat UI
 
 ```bash
-vllm-mlx-chat --model mlx-community/Llama-3.2-3B-Instruct-4bit
+vmlx-engine-chat --model mlx-community/Llama-3.2-3B-Instruct-4bit
 ```
 
 Opens a web interface at http://localhost:7860
@@ -64,7 +64,7 @@ Opens a web interface at http://localhost:7860
 For image/video understanding, use a VLM model:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit --port 8000
+vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit --port 8000
 ```
 
 ```python
@@ -87,10 +87,10 @@ Separate the model's thinking process from the final answer:
 
 ```bash
 # Auto-detect parser from model name (recommended)
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
 
 # Or specify explicitly
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 ```
 
 ```python
@@ -106,7 +106,7 @@ print(response.choices[0].message.content)  # Final answer
 Generate text embeddings for semantic search and RAG:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-4B-4bit --embedding-model mlx-community/multilingual-e5-small-mlx
+vmlx-engine serve mlx-community/Qwen3-4B-4bit --embedding-model mlx-community/multilingual-e5-small-mlx
 ```
 
 ```python
@@ -122,11 +122,11 @@ Enable function calling with any supported model:
 
 ```bash
 # Auto-detect tool parser from model name
-vllm-mlx serve mlx-community/Devstral-Small-2507-4bit \
+vmlx-engine serve mlx-community/Devstral-Small-2507-4bit \
   --enable-auto-tool-choice
 
 # Or specify parser explicitly
-vllm-mlx serve mlx-community/Devstral-Small-2507-4bit \
+vmlx-engine serve mlx-community/Devstral-Small-2507-4bit \
   --enable-auto-tool-choice --tool-call-parser mistral
 ```
 

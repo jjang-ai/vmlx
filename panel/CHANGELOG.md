@@ -16,7 +16,7 @@
 - **Cache management tab**: View cache stats, entries, warm up, and clear caches
 - **420 tests** across 6 test suites (vitest)
 
-### Engine (vllm-mlx 0.2.8)
+### Engine (vmlx-engine 0.2.8)
 - **KV cache quantization**: Storage-boundary q4/q8 compression (full precision during generation)
 - **Prefix cache visibility**: `cached_tokens` reported in OpenAI-compatible API response
 - **Mamba/SSM support**: BatchMambaCache with batch filtering, merging, and KV quantization safety
@@ -106,7 +106,7 @@
 ## v0.3.7 — 2026-02-15 — Per-Category Tool Toggles, Code Block Styling, StepFun Fix
 
 ### Bug Fixes
-- **StepFun parser**: Fixed invalid `step3p5` tool-call-parser (not a valid vllm-mlx value). StepFun models now correctly use `qwen` parser since they're Qwen3-architecture based.
+- **StepFun parser: Fixed invalid `step3p5` tool-call-parser (not a valid vmlx-engine value). StepFun models now correctly use `qwen` parser since they're Qwen3-architecture based.
 - **Dead prose CSS**: Installed `@tailwindcss/typography` plugin — `prose`/`prose-invert` classes on assistant messages now actually apply styling. Previously the classes had no effect.
 - **Code copy buttons**: Fixed non-functional copy buttons — DOMPurify correctly strips `onclick` handlers; switched to React event delegation.
 - **Dynamic require**: Replaced `require('electron').shell` with proper static import of `shell` from electron.
@@ -179,8 +179,8 @@
 
 ### New Features
 
-#### One-Click vLLM-MLX Installer
-- **First-run setup gate**: App shows SetupScreen on launch if vLLM-MLX is not installed, blocking access until installation succeeds
+#### One-Click vMLX Engine Installer
+- **First-run setup gate**: App shows SetupScreen on launch if vMLX Engine is not installed, blocking access until installation succeeds
 - **Auto-detect install methods**: Checks for `uv` (preferred) then `pip3` with Python >=3.10 validation
 - **Streaming terminal output**: Real-time install/upgrade logs shown in a terminal-style viewer
 - **One-click install in About page**: UpdateManager rewritten with Tailwind, supports streaming install and upgrade
@@ -260,7 +260,7 @@
 
 #### Removed Ghost Chat Override Settings
 - Removed `topK` and `repeatPenalty` from `ChatOverrides` interface and DB methods
-- These were never accepted by vLLM-MLX's OpenAI-compatible endpoint
+- These were never accepted by vMLX Engine's OpenAI-compatible endpoint
 
 #### Removed Dead Preload APIs & Handler Files
 - Removed `server.*`, `models.list/load/unload/download`, `update.*`, `inference.*`, `config.*` preload APIs
@@ -268,14 +268,14 @@
 - Deleted dead UI components: `ModelSelector.tsx`, `ServerConfig.tsx`
 
 #### Verified All CLI Flags
-- Confirmed ALL 23 flags in `buildArgs()` are valid against `vllm-mlx serve --help`
+- Confirmed ALL 23 flags in `buildArgs()` are valid against `vmlx-engine serve --help`
 
 ---
 
 ## v0.3.2 — 2026-02-05 — Chat Accuracy, Metrics & Organization
 
 ### Bug Fixes
-- Removed non-functional `top_k` and `repeat_penalty` chat settings (not accepted by vLLM-MLX API)
+- Removed non-functional `top_k` and `repeat_penalty` chat settings (not accepted by vMLX Engine API)
 - Partial responses now saved on streaming error with `[Generation interrupted]` marker
 
 ### New Features
@@ -289,7 +289,7 @@
 ## v0.3.1 — 2026-02-05 — Settings, Chat Controls & Stability Fixes
 
 ### New Features
-- **Session Settings page**: Full-page config editor for all vLLM-MLX parameters
+- **Session Settings page**: Full-page config editor for all vMLX Engine parameters
 - **Chat Settings drawer**: Per-chat inference controls (temperature, top_p, max_tokens, system prompt, stop sequences)
 - **Shared SessionConfigForm**: Extracted reusable config form component
 - **Session Card configure button**: Gear icon navigates to SessionSettings
@@ -310,8 +310,8 @@ Complete redesign from tab-based single-server to session-centric multi-instance
 - **Session Dashboard**: Grid of session cards with real-time status
 - **Two-step Creation Wizard**: Model picker + full server configuration
 - **Session View**: Per-session chat with header, streaming, and settings
-- **Multi-instance**: Run multiple vLLM-MLX servers simultaneously
-- **Process adoption**: Detect and adopt running `vllm-mlx serve` processes on startup
+- **Multi-instance**: Run multiple vMLX Engine servers simultaneously
+- **Process adoption**: Detect and adopt running `vmlx-engine serve` processes on startup
 - **Chat history per model path**: Persistent across load/unload cycles
 - **Configurable model directories**: Add/remove scan directories via UI
 
@@ -337,7 +337,7 @@ Complete redesign from tab-based single-server to session-centric multi-instance
 ## v0.1.0 — 2026-02-04 — Initial Release
 
 - Basic Electron + React + TypeScript app
-- vLLM-MLX process management
+- vMLX Engine process management
 - Chat interface with SQLite persistence
 - Model detection
 

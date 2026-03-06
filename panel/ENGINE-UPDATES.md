@@ -1,6 +1,6 @@
 # vMLX Engine Maintenance Guide
 
-How to maintain the vllm-mlx engine and push updates to users.
+How to maintain the vmlx-engine engine and push updates to users.
 
 ## Architecture
 
@@ -11,42 +11,42 @@ vMLX.app/Contents/Resources/
 │       ├── bin/python3              ← Relocatable Python 3.12 interpreter
 │       └── lib/python3.12/
 │           └── site-packages/
-│               ├── vllm_mlx/        ← Engine (pip installed from source)
+│               ├── vmlx_engine/        ← Engine (pip installed from source)
 │               ├── mlx/
 │               ├── transformers/
 │               └── ...              ← All dependencies
-├── vllm-mlx-source/                 ← Engine source (auto-copied from repo)
+├── vmlx-engine-source/                 ← Engine source (auto-copied from repo)
 │   ├── pyproject.toml
-│   └── vllm_mlx/
+│   └── vmlx_engine/
 └── app/                             ← Electron app
 ```
 
 ### How it works
 
 1. **On startup**, the app compares installed engine version (in bundled-python)
-   against source version (in vllm-mlx-source/pyproject.toml)
+   against source version (in vmlx-engine-source/pyproject.toml)
 2. If versions differ, it auto-runs `pip install --force-reinstall --no-deps`
    from the bundled source (takes ~5s, 30s timeout)
-3. **Session launch** uses `python3 -m vllm_mlx.cli serve ...` instead of the
-   `vllm-mlx` binary, avoiding shebang path issues in relocatable Python
+3. **Session launch** uses `python3 -m vmlx_engine.cli serve ...` instead of the
+   `vmlx-engine` binary, avoiding shebang path issues in relocatable Python
 
 ### Fallback behavior
 
 If bundled Python is not present (dev mode, or older builds):
-- Falls back to system-installed `vllm-mlx` binary (uv, pip, homebrew)
+- Falls back to system-installed `vmlx-engine` binary (uv, pip, homebrew)
 - SetupScreen appears if no installation found
 - All existing behavior preserved
 
 ## Update Scenarios
 
-### 1. Updating vllm-mlx source code (frequent)
+### 1. Updating vmlx-engine source code (frequent)
 
 Engine-only changes: model configs, parsers, server logic, API handlers.
 
-1. Edit files in `vllm_mlx/`
+1. Edit files in `vmlx_engine/`
 2. **Bump version** in `pyproject.toml`
 3. Rebuild: `cd panel && npm run build && npx electron-builder --mac`
-4. The source is auto-copied to `Resources/vllm-mlx-source/` by electron-builder
+4. The source is auto-copied to `Resources/vmlx-engine-source/` by electron-builder
 5. On user's machine: app detects version mismatch on startup, auto-reinstalls (~5s)
 
 ### 2. Updating Python dependencies (rare)
@@ -62,17 +62,17 @@ When MLX, transformers, or other deps need version bumps.
 
 Pure Python changes — only step 1 above needed.
 
-- `vllm_mlx/model_configs.py` — model family detection
-- `vllm_mlx/reasoning/*.py` — reasoning parsers
-- `vllm_mlx/tools/*.py` — tool call parsers
+- `vmlx_engine/model_configs.py` — model family detection
+- `vmlx_engine/reasoning/*.py` — reasoning parsers
+- `vmlx_engine/tools/*.py` — tool call parsers
 
 ## Key files that MUST stay in sync
 
 | Python | TypeScript | What |
 |--------|-----------|------|
-| `vllm_mlx/model_configs.py` | `panel/src/main/model-config-registry.ts` | Model family detection, parser/cache defaults |
-| `vllm_mlx/api/models.py` | `panel/src/main/ipc/chat.ts` | Request fields (stream_options, enable_thinking) |
-| `vllm_mlx/server.py` | `panel/src/main/ipc/chat.ts` | Both Chat Completions + Responses API paths |
+| `vmlx_engine/model_configs.py` | `panel/src/main/model-config-registry.ts` | Model family detection, parser/cache defaults |
+| `vmlx_engine/api/models.py` | `panel/src/main/ipc/chat.ts` | Request fields (stream_options, enable_thinking) |
+| `vmlx_engine/server.py` | `panel/src/main/ipc/chat.ts` | Both Chat Completions + Responses API paths |
 
 ## Parser & Cache Architecture
 
@@ -168,8 +168,8 @@ are fine to reference and distribute normally.
 
 ```bash
 # 1. Verify bundled Python
-bundled-python/python/bin/python3 -c "import vllm_mlx; print(vllm_mlx.__version__)"
-bundled-python/python/bin/python3 -m vllm_mlx.cli --help
+bundled-python/python/bin/python3 -c "import vmlx_engine; print(vmlx_engine.__version__)"
+bundled-python/python/bin/python3 -m vmlx_engine.cli --help
 
 # 2. Build and package
 npm run build && npx electron-builder --mac

@@ -1,13 +1,13 @@
 # Contributing
 
-We welcome contributions to vllm-mlx!
+We welcome contributions to vmlx-engine!
 
 ## Getting Started
 
 ```bash
 # Clone the repository
-git clone https://github.com/waybarrios/vllm-mlx.git
-cd vllm-mlx
+git clone https://github.com/vmlxllm/vmlx.git
+cd vmlx
 
 # Install with dev dependencies
 pip install -e ".[dev]"
@@ -58,31 +58,31 @@ See [Build, Test & Deploy](build-test-deploy.md) for complete details including 
 
 ```bash
 # Run with coverage
-.venv/bin/python -m pytest --cov=vllm_mlx tests/
+.venv/bin/python -m pytest --cov=vmlx_engine tests/
 ```
 
 ### Code Style
 
 ```bash
 # Format code
-black vllm_mlx/
-isort vllm_mlx/
+black vmlx_engine/
+isort vmlx_engine/
 
 # Type checking
-mypy vllm_mlx/
+mypy vmlx_engine/
 ```
 
 ### Running Benchmarks
 
 ```bash
 # LLM benchmark
-vllm-mlx-bench --model mlx-community/Qwen3-0.6B-8bit
+vmlx-engine-bench --model mlx-community/Qwen3-0.6B-8bit
 
 # Image benchmark
-vllm-mlx-bench --model mlx-community/Qwen3-VL-8B-Instruct-4bit
+vmlx-engine-bench --model mlx-community/Qwen3-VL-8B-Instruct-4bit
 
 # Video benchmark
-vllm-mlx-bench --model mlx-community/Qwen3-VL-8B-Instruct-4bit --video
+vmlx-engine-bench --model mlx-community/Qwen3-VL-8B-Instruct-4bit --video
 ```
 
 ## Areas for Contribution
@@ -111,9 +111,9 @@ See [Architecture](architecture.md) for details on the codebase structure.
 If you have access to different Apple Silicon chips (M1, M2, M3, M4), benchmark results are valuable:
 
 ```bash
-vllm-mlx-bench --model mlx-community/Qwen3-0.6B-8bit --output results_m4.json
+vmlx-engine-bench --model mlx-community/Qwen3-0.6B-8bit --output results_m4.json
 ```
 
 ## Questions?
 
-Open an issue at [GitHub Issues](https://github.com/waybarrios/vllm-mlx/issues).
+Open an issue at [GitHub Issues](https://github.com/vmlxllm/vmlx/issues).

@@ -3,7 +3,7 @@ import { resolveBaseUrl, getAuthHeaders } from './utils'
 
 /**
  * Embeddings IPC handlers.
- * Proxies to the vllm-mlx server's /v1/embeddings endpoint.
+ * Proxies to the vmlx-engine server's /v1/embeddings endpoint.
  */
 
 export function registerEmbeddingHandlers(): void {

@@ -23,10 +23,10 @@ jobs:
           pip install ruff black
 
       - name: Run ruff
-        run: ruff check vllm_mlx/ tests/ --select E,F,W --ignore E402,E501,E731,F811,F841
+        run: ruff check vmlx_engine/ tests/ --select E,F,W --ignore E402,E501,E731,F811,F841
 
       - name: Run black
-        run: black --check vllm_mlx/ tests/
+        run: black --check vmlx_engine/ tests/
 
   type-check:
     runs-on: ubuntu-latest
@@ -44,7 +44,7 @@ jobs:
           pip install mypy pydantic fastapi
 
       - name: Run mypy
-        run: mypy vllm_mlx/ --ignore-missing-imports --no-error-summary
+        run: mypy vmlx_engine/ --ignore-missing-imports --no-error-summary
         continue-on-error: true
 
   test-matrix:
@@ -82,7 +82,7 @@ jobs:
             tests/test_request.py \
             -v --tb=short \
             -k "not Integration and not InjectJson and not TestMLXMultimodalLMCache" \
-            --cov=vllm_mlx \
+            --cov=vmlx_engine \
             --cov-report=term-missing \
             --cov-report=xml
 

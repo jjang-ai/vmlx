@@ -144,9 +144,9 @@ export class SessionManager extends EventEmitter {
 
       for (const line of lines) {
         if (line.includes('grep')) continue
-        // Detect `vllm-mlx serve`, `python -m vllm_mlx.cli serve`, and `python -m vllm_mlx.server` processes
-        const isCliServe = line.includes('vllm-mlx') && line.includes('serve')
-        const isPythonModule = line.includes('vllm_mlx') && (line.includes('.cli') || line.includes('.server') || line.includes('--model'))
+        // Detect `vmlx-engine serve`, `python -m vmlx_engine.cli serve`, and `python -m vmlx_engine.server` processes
+        const isCliServe = line.includes('vmlx-engine') && line.includes('serve')
+        const isPythonModule = line.includes('vmlx_engine') && (line.includes('.cli') || line.includes('.server') || line.includes('--model'))
         if (!isCliServe && !isPythonModule) continue
 
         const parsed = this.parsePsLine(line)
@@ -189,14 +189,14 @@ export class SessionManager extends EventEmitter {
 
       let modelPath = ''
 
-      // Try `serve <model-path> --...` format first (vllm-mlx CLI)
+      // Try `serve <model-path> --...` format first (vmlx-engine CLI)
       const serveIdx = cmdStart.indexOf('serve ')
       if (serveIdx !== -1) {
         const afterServe = cmdStart.substring(serveIdx + 6).trim()
         modelPath = afterServe.split(/\s+--/)[0].trim()
       }
 
-      // Try `--model <path>` format (python -m vllm_mlx.server)
+      // Try `--model <path>` format (python -m vmlx_engine.server)
       if (!modelPath) {
         const modelMatch = cmdStart.match(/--model\s+(\S+)/)
         if (modelMatch) modelPath = modelMatch[1]
@@ -341,10 +341,10 @@ export class SessionManager extends EventEmitter {
     config.port = session.port
 
     const vllmResult = this.findVllmMlx()
-    if (!vllmResult) throw new Error('vllm-mlx not found. Please install it first.')
+    if (!vllmResult) throw new Error('vmlx-engine not found. Please install it first.')
     if (!existsSync(config.modelPath)) throw new Error(`Model not found at: ${config.modelPath}`)
 
-    // Validate model format: vllm-mlx only supports MLX (safetensors) models
+    // Validate model format: vmlx-engine only supports MLX (safetensors) models
     try {
       const files = readdirSync(config.modelPath)
       const hasGGUF = files.some(f => f.endsWith('.gguf') || f.endsWith('.gguf.part'))
@@ -353,14 +353,14 @@ export class SessionManager extends EventEmitter {
 
       if (hasGGUF && !hasSafetensors) {
         throw new Error(
-          'This model is in GGUF format, which is not supported by vllm-mlx. ' +
+          'This model is in GGUF format, which is not supported by vmlx-engine. ' +
           'Please download an MLX-format version (safetensors) from HuggingFace Hub.'
         )
       }
       if (!hasConfig) {
         throw new Error(
           'Model directory is missing config.json. This may not be a valid MLX model. ' +
-          'vllm-mlx requires MLX-format models with config.json and .safetensors files.'
+          'vmlx-engine requires MLX-format models with config.json and .safetensors files.'
         )
       }
     } catch (e) {
@@ -414,24 +414,24 @@ export class SessionManager extends EventEmitter {
 
     let proc: ChildProcess
     if (vllmResult.type === 'bundled') {
-      // Bundled Python: spawn python3 -s -m vllm_mlx.cli serve <model> --host ... --port ...
+      // Bundled Python: spawn python3 -s -m vmlx_engine.cli serve <model> --host ... --port ...
       // -s: suppress user site-packages (~/.local/lib/python3.12/site-packages)
       // This avoids shebang path issues with relocatable Python and ensures
-      // the app uses ONLY its bundled engine, never system-installed mlx-lm/vllm-mlx.
+      // the app uses ONLY its bundled engine, never system-installed mlx-lm/vmlx-engine.
       const bundledEnv: Record<string, string | undefined> = {
         ...spawnEnv,
         PYTHONNOUSERSITE: '1',  // Extra safety: disable user site-packages
         PYTHONPATH: undefined,  // Clear any inherited PYTHONPATH
       }
-      const fullCmd = `${vllmResult.pythonPath} -s -m vllm_mlx.cli ${args.join(' ')}`
+      const fullCmd = `${vllmResult.pythonPath} -s -m vmlx_engine.cli ${args.join(' ')}`
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
-      proc = spawn(vllmResult.pythonPath, ['-s', '-m', 'vllm_mlx.cli', ...args], {
+      proc = spawn(vllmResult.pythonPath, ['-s', '-m', 'vmlx_engine.cli', ...args], {
         env: bundledEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,  // Separate process group so we can kill entire group
       })
     } else {
-      // System binary: spawn vllm-mlx directly
+      // System binary: spawn vmlx-engine directly
       const fullCmd = `${vllmResult.binaryPath} ${args.join(' ')}`
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
       proc = spawn(vllmResult.binaryPath, args, {
@@ -1098,7 +1098,7 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
-    // Prefix cache — requires --continuous-batching to take effect in vllm-mlx
+    // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
     // When MCP tools + auto-tool-choice are enabled, force prefix cache ON.
     // Tool follow-up requests share most of the prompt with the original request;
     // without prefix cache each follow-up re-processes the entire prompt (~16s).
@@ -1108,7 +1108,7 @@ export class SessionManager extends EventEmitter {
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
     } else {
-      // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx).
+      // Auto-enable continuous batching when prefix cache is on (required by vmlx-engine).
       if (!config.continuousBatching && !args.includes('--continuous-batching')) {
         args.push('--continuous-batching')
       }
@@ -1223,32 +1223,32 @@ export class SessionManager extends EventEmitter {
   }
 
   findVllmMlx(): VllmMlxPath | null {
-    // Bundled Python: use python3 -m vllm_mlx.cli instead of vllm-mlx binary
+    // Bundled Python: use python3 -m vmlx_engine.cli instead of vmlx-engine binary
     // This avoids shebang path issues in relocatable Python builds
     const bundledPython = getBundledPythonPath()
     if (bundledPython) {
       try {
-        execSync(`"${bundledPython}" -s -c "import vllm_mlx"`, {
+        execSync(`"${bundledPython}" -s -c "import vmlx_engine"`, {
           encoding: 'utf-8',
           timeout: 10000,
           env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
         })
         return { type: 'bundled', pythonPath: bundledPython }
       } catch (_) {
-        console.log('[SESSIONS] Bundled Python found but vllm_mlx import failed, trying system')
+        console.log('[SESSIONS] Bundled Python found but vmlx_engine import failed, trying system')
       }
     }
 
     // System binary search
     const home = homedir()
     const locations = [
-      join(home, '.local', 'bin', 'vllm-mlx'),     // uv tool / pip --user
-      '/opt/homebrew/bin/vllm-mlx',                  // Homebrew (Apple Silicon)
-      '/usr/local/bin/vllm-mlx',                     // Homebrew (Intel) / system pip
-      '/usr/bin/vllm-mlx',                           // System pip
-      join(home, 'miniforge3', 'bin', 'vllm-mlx'),  // Miniforge
-      join(home, 'anaconda3', 'bin', 'vllm-mlx'),   // Anaconda
-      join(home, 'miniconda3', 'bin', 'vllm-mlx'),  // Miniconda
+      join(home, '.local', 'bin', 'vmlx-engine'),     // uv tool / pip --user
+      '/opt/homebrew/bin/vmlx-engine',                  // Homebrew (Apple Silicon)
+      '/usr/local/bin/vmlx-engine',                     // Homebrew (Intel) / system pip
+      '/usr/bin/vmlx-engine',                           // System pip
+      join(home, 'miniforge3', 'bin', 'vmlx-engine'),  // Miniforge
+      join(home, 'anaconda3', 'bin', 'vmlx-engine'),   // Anaconda
+      join(home, 'miniconda3', 'bin', 'vmlx-engine'),  // Miniconda
     ]
 
     // Scan pyenv versions (common on macOS)
@@ -1256,7 +1256,7 @@ export class SessionManager extends EventEmitter {
     try {
       if (existsSync(pyenvRoot)) {
         for (const ver of readdirSync(pyenvRoot)) {
-          locations.push(join(pyenvRoot, ver, 'bin', 'vllm-mlx'))
+          locations.push(join(pyenvRoot, ver, 'bin', 'vmlx-engine'))
         }
       }
     } catch (_) { }
@@ -1269,7 +1269,7 @@ export class SessionManager extends EventEmitter {
     for (const shell of ['/bin/zsh', '/bin/bash']) {
       try {
         const result = execSync(
-          `${shell} -lc "which vllm-mlx"`,
+          `${shell} -lc "which vmlx-engine"`,
           { encoding: 'utf-8', timeout: 5000 }
         ).trim()
         if (result && existsSync(result)) return { type: 'system', binaryPath: result }
@@ -1278,7 +1278,7 @@ export class SessionManager extends EventEmitter {
 
     // Last resort: plain which
     try {
-      const result = execSync('which vllm-mlx', { encoding: 'utf-8', timeout: 3000 }).trim()
+      const result = execSync('which vmlx-engine', { encoding: 'utf-8', timeout: 3000 }).trim()
       if (result && existsSync(result)) return { type: 'system', binaryPath: result }
     } catch (_) { }
     return null

@@ -1,10 +1,10 @@
-# vLLM-MLX Documentation
+# vMLX Engine Documentation
 
 **Apple Silicon MLX Backend for vLLM** - GPU-accelerated Text, Image, Video & Audio on Mac
 
-## What is vLLM-MLX?
+## What is vMLX Engine?
 
-vllm-mlx brings native Apple Silicon GPU acceleration to vLLM by integrating:
+vmlx-engine brings native Apple Silicon GPU acceleration to vLLM by integrating:
 
 - **[MLX](https://github.com/ml-explore/mlx)**: Apple's ML framework with unified memory and Metal kernels
 - **[mlx-lm](https://github.com/ml-explore/mlx-lm)**: Optimized LLM inference with KV cache and quantization

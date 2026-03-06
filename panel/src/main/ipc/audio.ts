@@ -3,7 +3,7 @@ import { resolveBaseUrl, getAuthHeaders } from './utils'
 
 /**
  * Audio IPC handlers for STT (transcription) and TTS (speech synthesis).
- * These proxy requests to the vllm-mlx server's /v1/audio/* endpoints.
+ * These proxy requests to the vmlx-engine server's /v1/audio/* endpoints.
  */
 
 export function registerAudioHandlers(): void {

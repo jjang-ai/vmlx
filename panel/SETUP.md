@@ -4,33 +4,33 @@
 
 - macOS 26+ (Tahoe) — Apple Silicon required (MLX Metal shaders require Metal 4.0)
 - Node.js 18+
-- vLLM-MLX (auto-installed on first launch, or install manually)
+- vMLX Engine (auto-installed on first launch, or install manually)
 
 ## Quick Start
 
 ```bash
-cd ~/mlx/vllm-mlx-panel
+cd ~/mlx/vmlx-engine
 npm install
 npm run dev
 ```
 
-## Installing vLLM-MLX
+## Installing vMLX Engine
 
-vMLX auto-detects and offers to install vLLM-MLX on first launch. You can also install manually:
+vMLX auto-detects and offers to install vMLX Engine on first launch. You can also install manually:
 
 ```bash
 # Recommended — uv manages its own Python venv
-uv tool install vllm-mlx
+uv tool install vmlx-engine
 
 # Alternative — needs Python 3.10+
-pip3 install vllm-mlx
+pip3 install vmlx-engine
 ```
 
-The app searches for `vllm-mlx` in these locations:
-1. `~/.local/bin/vllm-mlx` (uv/pip user install)
-2. `/opt/homebrew/bin/vllm-mlx` (Homebrew)
-3. `/usr/local/bin/vllm-mlx`
-4. Falls back to `which vllm-mlx`
+The app searches for `vmlx-engine` in these locations:
+1. `~/.local/bin/vmlx-engine` (uv/pip user install)
+2. `/opt/homebrew/bin/vmlx-engine` (Homebrew)
+3. `/usr/local/bin/vmlx-engine`
+4. Falls back to `which vmlx-engine`
 
 ## Development
 
@@ -71,11 +71,11 @@ open /Applications/vMLX.app
 rsync -avz --delete \
   --exclude node_modules --exclude dist --exclude out \
   --exclude release --exclude .git --exclude '*.db*' \
-  ~/mlx/vllm-mlx-panel/ macstudio:~/mlx/vllm-mlx-panel/
+  ~/mlx/vmlx-engine/ macstudio:~/mlx/vmlx-engine/
 
 # On Mac Studio: install, build, package, deploy
 ssh macstudio 'echo "#!/bin/bash
-cd /Users/example/mlx/vllm-mlx-panel
+cd /Users/example/mlx/vmlx-engine
 npm ci
 npm run build
 npx electron-builder --mac --dir
@@ -93,7 +93,7 @@ src/
 │   ├── index.ts                # App lifecycle, startup adoption, quit
 │   ├── sessions.ts             # SessionManager (multi-instance, health monitor)
 │   ├── database.ts             # SQLite WAL schema + CRUD
-│   ├── vllm-manager.ts         # vLLM-MLX detect/install/update
+│   ├── vllm-manager.ts         # vMLX Engine detect/install/update
 │   └── ipc/                    # IPC handlers
 │       ├── sessions.ts         # Session CRUD + lifecycle
 │       ├── chat.ts             # Chat + SSE streaming + abort
@@ -106,7 +106,7 @@ src/
 │           ├── setup/          # First-run installer
 │           ├── sessions/       # Dashboard, Card, Create, View, Settings
 │           ├── chat/           # Chat interface, list, settings, messages
-│           └── update/         # vLLM-MLX update manager
+│           └── update/         # vMLX Engine update manager
 └── preload/                    # IPC bridge
     ├── index.ts                # contextBridge API
     └── index.d.ts              # TypeScript declarations
@@ -114,7 +114,7 @@ src/
 
 ## Database
 
-SQLite database at `~/Library/Application Support/vllm-mlx-panel/chats.db`
+SQLite database at `~/Library/Application Support/vmlx-engine/chats.db`
 
 Tables: `sessions`, `chats`, `messages`, `folders`, `chat_overrides`, `settings`
 

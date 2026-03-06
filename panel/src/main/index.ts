@@ -257,16 +257,16 @@ app.whenReady().then(async () => {
   const appVersion = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf-8')).version
   checkForUpdates(() => mainWindow, appVersion)
 
-  // Detect and adopt existing vllm-mlx processes on startup
+  // Detect and adopt existing vmlx-engine processes on startup
   try {
     const adopted = await sessionManager.detectAndAdoptAll()
     if (adopted.length > 0) {
-      console.log(`[STARTUP] Adopted ${adopted.length} vllm-mlx process(es):`)
+      console.log(`[STARTUP] Adopted ${adopted.length} vmlx-engine process(es):`)
       for (const s of adopted) {
         console.log(`  - ${s.modelName || s.modelPath} on port ${s.port} (PID ${s.pid})`)
       }
     } else {
-      console.log('[STARTUP] No existing vllm-mlx processes found')
+      console.log('[STARTUP] No existing vmlx-engine processes found')
     }
   } catch (e) {
     console.error('[STARTUP] Error during process detection:', e)
@@ -282,7 +282,7 @@ app.whenReady().then(async () => {
   })
 })
 
-// Kill all vllm-mlx processes on quit — with timeout to prevent hanging
+// Kill all vmlx-engine processes on quit — with timeout to prevent hanging
 app.on('before-quit', async (e) => {
   if (isQuitting) return
   isQuitting = true
@@ -294,7 +294,7 @@ app.on('before-quit', async (e) => {
       sessionManager.stopAll(),
       new Promise(resolve => setTimeout(resolve, 15000))
     ])
-    console.log('[QUIT] All vllm-mlx processes stopped')
+    console.log('[QUIT] All vmlx-engine processes stopped')
   } catch (err) {
     console.error('[QUIT] Error stopping processes:', err)
   }

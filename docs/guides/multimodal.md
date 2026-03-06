@@ -1,6 +1,6 @@
 # Multimodal Models (Images & Video)
 
-vllm-mlx supports vision-language models for image and video understanding.
+vmlx-engine supports vision-language models for image and video understanding.
 
 ## Supported Models
 
@@ -17,7 +17,7 @@ vllm-mlx supports vision-language models for image and video understanding.
 ## Starting a Multimodal Server
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit --port 8000
+vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit --port 8000
 ```
 
 Models with "VL", "Vision", or "mllm" in the name are auto-detected as multimodal.
@@ -165,7 +165,7 @@ curl http://localhost:8000/v1/chat/completions \
 ## Python API
 
 ```python
-from vllm_mlx.models import MLXMultimodalLM
+from vmlx_engine.models import MLXMultimodalLM
 
 mllm = MLXMultimodalLM("mlx-community/Qwen3-VL-4B-Instruct-3bit")
 mllm.load()
@@ -188,7 +188,7 @@ output = mllm.generate(
 VLM models fully support continuous batching, paged cache, prefix cache, and KV cache quantization:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
+vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
   --continuous-batching \
   --use-paged-cache \
   --kv-cache-quantization q8 \
@@ -254,18 +254,18 @@ Tested on Apple M4 Max with 128 GB unified memory.
 
 ```bash
 # Quick benchmark
-vllm-mlx-bench --model mlx-community/Qwen3-VL-4B-Instruct-3bit --quick
+vmlx-engine-bench --model mlx-community/Qwen3-VL-4B-Instruct-3bit --quick
 
 # Full benchmark with more resolutions
-vllm-mlx-bench --model mlx-community/Qwen3-VL-4B-Instruct-3bit
+vmlx-engine-bench --model mlx-community/Qwen3-VL-4B-Instruct-3bit
 
 # Video benchmark
-vllm-mlx-bench --model mlx-community/Qwen3-VL-4B-Instruct-3bit --video
+vmlx-engine-bench --model mlx-community/Qwen3-VL-4B-Instruct-3bit --video
 ```
 
 ## MLLM Cache
 
-vllm-mlx includes a prefix cache system for multimodal models that can significantly speed up repeated requests with the same images.
+vmlx-engine includes a prefix cache system for multimodal models that can significantly speed up repeated requests with the same images.
 
 ### How It Works
 
@@ -277,10 +277,10 @@ The cache uses content-based hashing (similar to LMCache) to identify identical 
 
 ```bash
 # Enable with default settings (512 MB max)
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit --enable-mllm-cache
+vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit --enable-mllm-cache
 
 # With custom memory limit
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
+vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
     --enable-mllm-cache \
     --mllm-cache-max-mb 1024
 ```
@@ -288,7 +288,7 @@ vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
 ### Python API
 
 ```python
-from vllm_mlx.mllm_cache import MLLMPrefixCacheManager
+from vmlx_engine.mllm_cache import MLLMPrefixCacheManager
 
 # Create cache manager
 cache = MLLMPrefixCacheManager(max_memory_mb=512)
@@ -334,7 +334,7 @@ When memory pressure occurs, least recently accessed entries are evicted first.
 For interactive multimodal chat:
 
 ```bash
-vllm-mlx-chat --model mlx-community/Qwen3-VL-4B-Instruct-3bit
+vmlx-engine-chat --model mlx-community/Qwen3-VL-4B-Instruct-3bit
 ```
 
 Supports drag-and-drop images and videos.
