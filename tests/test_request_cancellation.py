@@ -2,7 +2,7 @@
 """Tests for request cancellation functionality."""
 
 import pytest
-from vllm_mlx.engine.batched import BatchedEngine
+from vmlx_engine.engine.batched import BatchedEngine
 
 
 @pytest.mark.asyncio
@@ -44,7 +44,7 @@ async def test_cancel_endpoint_aborts_request():
         custom_id = "chatcmpl-cancel-test"
 
         # Add a request that would generate many tokens
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
         await engine._engine.add_request(
             prompt="Count to 100",
             sampling_params=SamplingParams(max_tokens=100),

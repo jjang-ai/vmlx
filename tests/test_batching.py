@@ -10,13 +10,13 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock
 
-from vllm_mlx.request import (
+from vmlx_engine.request import (
     Request,
     RequestOutput,
     RequestStatus,
     SamplingParams,
 )
-from vllm_mlx.scheduler import (
+from vmlx_engine.scheduler import (
     Scheduler,
     SchedulerConfig,
     SchedulingPolicy,
@@ -617,7 +617,7 @@ class TestEngineAsync:
 
     async def test_engine_lifecycle(self, mock_model_and_tokenizer):
         """Test engine start/stop lifecycle."""
-        from vllm_mlx.engine import AsyncEngineCore, EngineConfig
+        from vmlx_engine.engine import AsyncEngineCore, EngineConfig
 
         model, tokenizer = mock_model_and_tokenizer
 
@@ -634,7 +634,7 @@ class TestEngineAsync:
 
     async def test_engine_context_manager(self, mock_model_and_tokenizer):
         """Test engine as async context manager."""
-        from vllm_mlx.engine import AsyncEngineCore
+        from vmlx_engine.engine import AsyncEngineCore
 
         model, tokenizer = mock_model_and_tokenizer
 

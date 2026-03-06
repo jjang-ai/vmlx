@@ -16,7 +16,7 @@ These tests are pure unit tests with NO MLX dependency.
 
 import pytest
 
-from vllm_mlx.api.models import (
+from vmlx_engine.api.models import (
     ContentPart,
     ImageUrl,
     Message,
@@ -619,7 +619,7 @@ class TestChatCompletionRequestMLLM:
 
     def test_request_with_stream_options(self):
         """Request with stream_options for usage reporting."""
-        from vllm_mlx.api.models import StreamOptions
+        from vmlx_engine.api.models import StreamOptions
 
         req = ChatCompletionRequest(
             model="test",
@@ -918,7 +918,7 @@ class TestExtractMultimodalContentPydantic:
 
     def test_pydantic_content_parts(self):
         """extract_multimodal_content with Pydantic ContentPart objects."""
-        from vllm_mlx.api.utils import extract_multimodal_content
+        from vmlx_engine.api.utils import extract_multimodal_content
 
         messages = [
             Message(
@@ -940,7 +940,7 @@ class TestExtractMultimodalContentPydantic:
 
     def test_mixed_pydantic_and_dict_content(self):
         """Messages with mix of Pydantic and dict content parts."""
-        from vllm_mlx.api.utils import extract_multimodal_content
+        from vmlx_engine.api.utils import extract_multimodal_content
 
         messages = [
             Message(
@@ -960,7 +960,7 @@ class TestExtractMultimodalContentPydantic:
 
     def test_no_images_produces_empty_list(self):
         """Text-only multi-turn should produce no images."""
-        from vllm_mlx.api.utils import extract_multimodal_content
+        from vmlx_engine.api.utils import extract_multimodal_content
 
         messages = [
             Message(role="user", content="Hello"),
@@ -1100,11 +1100,11 @@ class TestFixHybridCache:
         mock_kvcache = type('KVCache', (), {})
 
         with mock_patch(
-            "vllm_mlx.mllm_batch_generator.logger"
+            "vmlx_engine.mllm_batch_generator.logger"
         ):
-            from vllm_mlx.mllm_batch_generator import _fix_hybrid_cache
+            from vmlx_engine.mllm_batch_generator import _fix_hybrid_cache
             # Temporarily mock the import inside the function
-            import vllm_mlx.mllm_batch_generator as mbg
+            import vmlx_engine.mllm_batch_generator as mbg
             original_fn = mbg._fix_hybrid_cache
 
             # Test: corrupt cache (20) doesn't match kv_positions (30)
@@ -1129,7 +1129,7 @@ class TestFixHybridCache:
         # Cache already correct length
         correct_cache = [MagicMock() for _ in range(32)]
 
-        from vllm_mlx.mllm_batch_generator import _fix_hybrid_cache
+        from vmlx_engine.mllm_batch_generator import _fix_hybrid_cache
         result = _fix_hybrid_cache(
             correct_cache, mock_model,
             kv_positions=kv_positions,
@@ -1148,7 +1148,7 @@ class TestFixHybridCache:
 
         cache = [MagicMock() for _ in range(32)]
 
-        from vllm_mlx.mllm_batch_generator import _fix_hybrid_cache
+        from vmlx_engine.mllm_batch_generator import _fix_hybrid_cache
         result = _fix_hybrid_cache(
             cache, mock_model,
             kv_positions=kv_positions,
@@ -1163,7 +1163,7 @@ class TestFixHybridCache:
         mock_model = MagicMock(spec=[])  # No make_cache attribute
         cache = [MagicMock() for _ in range(32)]
 
-        from vllm_mlx.mllm_batch_generator import _fix_hybrid_cache
+        from vmlx_engine.mllm_batch_generator import _fix_hybrid_cache
         result = _fix_hybrid_cache(cache, mock_model)
         assert result is cache
 

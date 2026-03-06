@@ -68,9 +68,9 @@ class TestSimpleEngineConcurrency:
     @pytest.mark.asyncio
     async def test_lock_prevents_concurrent_generate(self, mock_model):
         """Test that the lock prevents concurrent generate calls."""
-        from vllm_mlx.engine.simple import SimpleEngine
+        from vmlx_engine.engine.simple import SimpleEngine
 
-        with patch("vllm_mlx.engine.simple.is_mllm_model", return_value=False):
+        with patch("vmlx_engine.engine.simple.is_mllm_model", return_value=False):
             engine = SimpleEngine("test-model")
             engine._model = mock_model
             engine._loaded = True
@@ -92,9 +92,9 @@ class TestSimpleEngineConcurrency:
     @pytest.mark.asyncio
     async def test_lock_prevents_concurrent_chat(self, mock_llm_model):
         """Test that the lock prevents concurrent chat calls."""
-        from vllm_mlx.engine.simple import SimpleEngine
+        from vmlx_engine.engine.simple import SimpleEngine
 
-        with patch("vllm_mlx.engine.simple.is_mllm_model", return_value=False):
+        with patch("vmlx_engine.engine.simple.is_mllm_model", return_value=False):
             engine = SimpleEngine("test-model")
             engine._model = mock_llm_model
             engine._loaded = True
@@ -118,7 +118,7 @@ class TestSimpleEngineConcurrency:
     @pytest.mark.asyncio
     async def test_lock_serializes_stream_generate(self, mock_model):
         """Test that stream_generate uses the same lock as other methods."""
-        from vllm_mlx.engine.simple import SimpleEngine
+        from vmlx_engine.engine.simple import SimpleEngine
 
         def stream_generate_side_effect(**kwargs):
             # Yield a few chunks
@@ -132,7 +132,7 @@ class TestSimpleEngineConcurrency:
 
         mock_model.stream_generate = MagicMock(side_effect=stream_generate_side_effect)
 
-        with patch("vllm_mlx.engine.simple.is_mllm_model", return_value=False):
+        with patch("vmlx_engine.engine.simple.is_mllm_model", return_value=False):
             engine = SimpleEngine("test-model")
             engine._model = mock_model
             engine._loaded = True
@@ -181,9 +181,9 @@ class TestSimpleEngineConcurrency:
     @pytest.mark.asyncio
     async def test_engine_initialization_creates_lock(self):
         """Test that SimpleEngine creates a lock on initialization."""
-        from vllm_mlx.engine.simple import SimpleEngine
+        from vmlx_engine.engine.simple import SimpleEngine
 
-        with patch("vllm_mlx.engine.simple.is_mllm_model", return_value=False):
+        with patch("vmlx_engine.engine.simple.is_mllm_model", return_value=False):
             engine = SimpleEngine("test-model")
 
             assert hasattr(engine, "_generation_lock")
@@ -192,9 +192,9 @@ class TestSimpleEngineConcurrency:
     @pytest.mark.asyncio
     async def test_requests_complete_in_order(self, mock_model):
         """Test that concurrent requests complete (may be in any order due to lock)."""
-        from vllm_mlx.engine.simple import SimpleEngine
+        from vmlx_engine.engine.simple import SimpleEngine
 
-        with patch("vllm_mlx.engine.simple.is_mllm_model", return_value=False):
+        with patch("vmlx_engine.engine.simple.is_mllm_model", return_value=False):
             engine = SimpleEngine("test-model")
             engine._model = mock_model
             engine._loaded = True

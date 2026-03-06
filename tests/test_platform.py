@@ -9,7 +9,7 @@ import pytest
 
 def test_is_apple_silicon():
     """Test Apple Silicon detection."""
-    from vllm_mlx.plugin import is_mlx_available
+    from vmlx_engine.plugin import is_mlx_available
 
     if sys.platform == "darwin" and platform.machine() == "arm64":
         # Should be available on Apple Silicon Mac
@@ -28,7 +28,7 @@ def test_is_apple_silicon():
 def test_mlx_platform_properties():
     """Test MLXPlatform class properties."""
     try:
-        from vllm_mlx.mlx_platform import MLXPlatform
+        from vmlx_engine.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -46,7 +46,7 @@ def test_mlx_platform_properties():
 def test_get_device_name():
     """Test getting device name."""
     try:
-        from vllm_mlx.mlx_platform import MLXPlatform
+        from vmlx_engine.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -58,7 +58,7 @@ def test_get_device_name():
 def test_get_device_memory():
     """Test getting device memory."""
     try:
-        from vllm_mlx.mlx_platform import MLXPlatform
+        from vmlx_engine.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -71,7 +71,7 @@ def test_supported_dtypes():
     """Test supported dtypes."""
     try:
         import torch
-        from vllm_mlx.mlx_platform import MLXPlatform
+        from vmlx_engine.mlx_platform import MLXPlatform
     except ImportError:
         pytest.skip("torch not installed (required by MLXPlatform)")
 
@@ -84,7 +84,7 @@ def test_supported_dtypes():
 
 def test_plugin_entry_point():
     """Test plugin entry point returns correct class path."""
-    from vllm_mlx.plugin import mlx_platform_plugin
+    from vmlx_engine.plugin import mlx_platform_plugin
 
     if sys.platform != "darwin" or platform.machine() != "arm64":
         pytest.skip("Not on Apple Silicon")
@@ -95,12 +95,12 @@ def test_plugin_entry_point():
         pytest.skip("MLX not installed")
 
     result = mlx_platform_plugin()
-    assert result == "vllm_mlx.mlx_platform.MLXPlatform"
+    assert result == "vmlx_engine.mlx_platform.MLXPlatform"
 
 
 def test_device_info():
     """Test getting device info."""
-    from vllm_mlx.plugin import get_mlx_device_info
+    from vmlx_engine.plugin import get_mlx_device_info
 
     info = get_mlx_device_info()
 

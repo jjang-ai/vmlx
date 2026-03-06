@@ -98,7 +98,7 @@ class TestMLLMHelperFunctions:
 
     def test_is_base64_image(self):
         """Test base64 image detection."""
-        from vllm_mlx.models.mllm import is_base64_image
+        from vmlx_engine.models.mllm import is_base64_image
 
         assert is_base64_image("data:image/png;base64,iVBORw0KGgo=")
         assert is_base64_image("data:image/jpeg;base64,/9j/4AAQSkZJRg==")
@@ -107,7 +107,7 @@ class TestMLLMHelperFunctions:
 
     def test_is_base64_video(self):
         """Test base64 video detection."""
-        from vllm_mlx.models.mllm import is_base64_video
+        from vmlx_engine.models.mllm import is_base64_video
 
         assert is_base64_video("data:video/mp4;base64,AAAA")
         assert is_base64_video("data:video/webm;base64,AAAA")
@@ -116,7 +116,7 @@ class TestMLLMHelperFunctions:
 
     def test_is_url(self):
         """Test URL detection."""
-        from vllm_mlx.models.mllm import is_url
+        from vmlx_engine.models.mllm import is_url
 
         assert is_url("https://example.com/image.jpg")
         assert is_url("http://example.com/video.mp4")
@@ -148,7 +148,7 @@ class TestVideoFrameExtraction:
     def test_extract_video_frames_smart(self, test_video_path):
         """Test smart frame extraction."""
         cv2 = pytest.importorskip("cv2")
-        from vllm_mlx.models.mllm import extract_video_frames_smart
+        from vmlx_engine.models.mllm import extract_video_frames_smart
 
         # Extract frames
         frames = extract_video_frames_smart(test_video_path, fps=2.0, max_frames=10)
@@ -161,7 +161,7 @@ class TestVideoFrameExtraction:
     def test_extract_frames_respects_max_frames(self, test_video_path):
         """Test that max_frames limit is respected."""
         cv2 = pytest.importorskip("cv2")
-        from vllm_mlx.models.mllm import extract_video_frames_smart
+        from vmlx_engine.models.mllm import extract_video_frames_smart
 
         frames = extract_video_frames_smart(test_video_path, fps=30.0, max_frames=5)
 
@@ -170,7 +170,7 @@ class TestVideoFrameExtraction:
     def test_save_frames_to_temp(self, test_video_path):
         """Test saving frames to temp files."""
         cv2 = pytest.importorskip("cv2")
-        from vllm_mlx.models.mllm import extract_video_frames_smart, save_frames_to_temp
+        from vmlx_engine.models.mllm import extract_video_frames_smart, save_frames_to_temp
 
         frames = extract_video_frames_smart(test_video_path, fps=1.0, max_frames=2)
         paths = save_frames_to_temp(frames)
@@ -186,14 +186,14 @@ class TestImageProcessing:
 
     def test_process_image_input_local_file(self, test_image_path):
         """Test processing local image file."""
-        from vllm_mlx.models.mllm import process_image_input
+        from vmlx_engine.models.mllm import process_image_input
 
         result = process_image_input(test_image_path)
         assert result == test_image_path
 
     def test_process_image_input_dict_format(self, test_image_path):
         """Test processing image in dict format."""
-        from vllm_mlx.models.mllm import process_image_input
+        from vmlx_engine.models.mllm import process_image_input
 
         # OpenAI format
         result = process_image_input({"url": test_image_path})
@@ -205,14 +205,14 @@ class TestVideoProcessing:
 
     def test_process_video_input_local_file(self, test_video_path):
         """Test processing local video file."""
-        from vllm_mlx.models.mllm import process_video_input
+        from vmlx_engine.models.mllm import process_video_input
 
         result = process_video_input(test_video_path)
         assert result == test_video_path
 
     def test_process_video_input_dict_format(self, test_video_path):
         """Test processing video in dict format."""
-        from vllm_mlx.models.mllm import process_video_input
+        from vmlx_engine.models.mllm import process_video_input
 
         # OpenAI format
         result = process_video_input({"url": test_video_path})
@@ -220,7 +220,7 @@ class TestVideoProcessing:
 
     def test_process_video_input_empty_raises(self):
         """Test that empty input raises error."""
-        from vllm_mlx.models.mllm import process_video_input
+        from vmlx_engine.models.mllm import process_video_input
 
         with pytest.raises(ValueError):
             process_video_input("")
@@ -239,7 +239,7 @@ class TestMLLMModelInit:
 
     def test_model_init(self):
         """Test model initialization."""
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM("test-model")
         assert model.model_name == "test-model"
@@ -247,7 +247,7 @@ class TestMLLMModelInit:
 
     def test_model_info_not_loaded(self):
         """Test model info when not loaded."""
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM("test-model")
         info = model.get_model_info()
@@ -257,7 +257,7 @@ class TestMLLMModelInit:
 
     def test_model_repr(self):
         """Test model string representation."""
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM("test-model")
         repr_str = repr(model)
@@ -278,7 +278,7 @@ class TestMLLMImageGeneration:
     def test_generate_with_image(self, small_mllm_model, test_image_path):
         """Test generation with an image."""
         pytest.importorskip("mlx_vlm")
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM(small_mllm_model)
         model.load()
@@ -296,7 +296,7 @@ class TestMLLMImageGeneration:
     def test_describe_image(self, small_mllm_model, test_image_path):
         """Test describe_image convenience method."""
         pytest.importorskip("mlx_vlm")
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM(small_mllm_model)
         model.load()
@@ -314,7 +314,7 @@ class TestMLLMVideoGeneration:
     def test_generate_with_video(self, small_mllm_model, test_video_path):
         """Test generation with a video."""
         pytest.importorskip("mlx_vlm")
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM(small_mllm_model)
         model.load()
@@ -333,7 +333,7 @@ class TestMLLMVideoGeneration:
     def test_describe_video(self, small_mllm_model, test_video_path):
         """Test describe_video convenience method."""
         pytest.importorskip("mlx_vlm")
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM(small_mllm_model)
         model.load()
@@ -356,7 +356,7 @@ class TestMLLMChat:
     def test_chat_with_image(self, small_mllm_model, test_image_path):
         """Test chat interface with image."""
         pytest.importorskip("mlx_vlm")
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM(small_mllm_model)
         model.load()
@@ -379,7 +379,7 @@ class TestMLLMChat:
     def test_chat_with_video(self, small_mllm_model, test_video_path):
         """Test chat interface with video."""
         pytest.importorskip("mlx_vlm")
-        from vllm_mlx.models.mllm import MLXMultimodalLM
+        from vmlx_engine.models.mllm import MLXMultimodalLM
 
         model = MLXMultimodalLM(small_mllm_model)
         model.load()

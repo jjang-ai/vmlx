@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from vllm_mlx.tool_parsers import (
+from vmlx_engine.tool_parsers import (
     AutoToolParser,
     DeepSeekToolParser,
     FunctionaryToolParser,
@@ -915,7 +915,7 @@ class TestThinkTagStripping:
 
     def test_strip_think_tags_utility(self):
         """Test the strip_think_tags static method."""
-        from vllm_mlx.tool_parsers.abstract_tool_parser import ToolParser
+        from vmlx_engine.tool_parsers.abstract_tool_parser import ToolParser
 
         # Basic stripping
         text = "<think>Let me analyze this</think>The answer is 42"

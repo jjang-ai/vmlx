@@ -33,7 +33,7 @@ class TestThinkInPromptStreaming:
 
     @pytest.fixture
     def parser(self):
-        from vllm_mlx.reasoning import get_parser
+        from vmlx_engine.reasoning import get_parser
         return get_parser("qwen3")()
 
     def test_think_in_prompt_reasoning_then_content(self, parser):
@@ -151,7 +151,7 @@ class TestEnableThinkingTriState:
 
     def test_enable_thinking_priority_chain_in_source(self):
         """Verify server.py has correct priority chain for enable_thinking."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # Priority 1: top-level enable_thinking field
@@ -164,7 +164,7 @@ class TestEnableThinkingTriState:
 
     def test_suppress_reasoning_when_thinking_false(self):
         """When enable_thinking=False, suppress_reasoning should be True."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # suppress_reasoning is set when thinking is explicitly False
@@ -172,7 +172,7 @@ class TestEnableThinkingTriState:
 
     def test_effective_think_in_template_cleared_when_thinking_false(self):
         """When enable_thinking=False, effective_think_in_template should be False."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # The code: if _effective_thinking is False: effective_think_in_template = False
@@ -180,7 +180,7 @@ class TestEnableThinkingTriState:
 
     def test_parser_gets_think_in_prompt_from_effective(self):
         """Parser reset_state should receive effective_think_in_template, not raw."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         assert "think_in_prompt=effective_think_in_template" in source
@@ -196,7 +196,7 @@ class TestSuppressReasoningRedirect:
 
     def test_suppress_reasoning_redirect_in_source(self):
         """Verify suppress_reasoning redirect logic exists in streaming."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # When suppress_reasoning is True:
@@ -208,7 +208,7 @@ class TestSuppressReasoningRedirect:
 
     def test_suppress_reasoning_accumulates_redirected_content(self):
         """Redirected reasoning should be tracked in accumulated_content."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # accumulated_content += delta_msg.reasoning (when reasoning redirected)
@@ -229,7 +229,7 @@ class TestTemplateAlwaysThinks:
 
     def test_function_exists_and_signature(self):
         """_template_always_thinks should exist with correct signature."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         assert hasattr(server_mod, "_template_always_thinks")
         sig = inspect.signature(server_mod._template_always_thinks)
         params = list(sig.parameters.keys())
@@ -238,7 +238,7 @@ class TestTemplateAlwaysThinks:
 
     def test_qwen_fast_path_returns_false(self):
         """Qwen models should fast-path to False (they honor enable_thinking)."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod._template_always_thinks)
 
         # The code checks for "qwen" in model_name.lower()
@@ -249,7 +249,7 @@ class TestTemplateAlwaysThinks:
 
     def test_result_caching(self):
         """Results should be cached per model name."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod._template_always_thinks)
 
         assert "_template_always_thinks_cache" in source
@@ -258,7 +258,7 @@ class TestTemplateAlwaysThinks:
 
     def test_empirical_probe_renders_template(self):
         """Should probe the tokenizer by rendering with enable_thinking=False."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod._template_always_thinks)
 
         assert "apply_chat_template" in source
@@ -284,7 +284,7 @@ class TestSSEStreamingFix:
 
     def test_elif_not_request_parser_guard(self):
         """The streaming loop must use 'elif not request_parser' not 'else'."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # The fix: elif not request_parser (not bare else)
@@ -292,7 +292,7 @@ class TestSSEStreamingFix:
 
     def test_empty_delta_comment(self):
         """The empty delta guard should have descriptive comment."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # After the guard, there should be a continue + comment about empty delta
@@ -300,7 +300,7 @@ class TestSSEStreamingFix:
 
     def test_three_path_structure(self):
         """Streaming loop should have 3 paths: parser+delta, no-parser, parser+empty."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # Path 1: if request_parser and delta_text:
@@ -321,7 +321,7 @@ class TestGptOssParserComplete:
 
     @pytest.fixture
     def parser(self):
-        from vllm_mlx.reasoning import get_parser
+        from vmlx_engine.reasoning import get_parser
         return get_parser("openai_gptoss")()
 
     # --- Non-streaming: _parse_channels ---
@@ -386,41 +386,41 @@ class TestGptOssParserComplete:
 
     def test_normalize_bare_markers_garbled_html(self):
         """Garbled HTML-like '</assistantfinal' should be normalized."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._normalize_bare_markers("</assistant final")
         assert "<|channel|>" in result
         assert "final" in result
 
     def test_normalize_bare_markers_garbled_pipe(self):
         """Garbled pipe-bracket '<|assistantanalysis' should be normalized."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._normalize_bare_markers("<|assistant analysis")
         assert "<|channel|>" in result
         assert "analysis" in result
 
     def test_normalize_bare_markers_case_insensitive(self):
         """Bare marker normalization should be case-insensitive."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._normalize_bare_markers("</ASSISTANTfinal")
         assert "<|channel|>" in result
         assert "final" in result
 
     def test_normalize_bare_markers_with_space(self):
         """'</assistant final' (with space) should be normalized."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._normalize_bare_markers("</assistant final")
         assert "<|channel|>" in result
 
     def test_normalize_preserves_proper_markers(self):
         """Already-proper markers should not be double-normalized."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         text = "<|channel|>analysis<|message|>content"
         result = GptOssReasoningParser._normalize_bare_markers(text)
         assert result == text
 
     def test_normalize_no_assistant_keyword(self):
         """Text without 'assistant' should pass through unchanged."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         text = "just regular text without the keyword"
         result = GptOssReasoningParser._normalize_bare_markers(text)
         assert result == text
@@ -429,31 +429,31 @@ class TestGptOssParserComplete:
 
     def test_clean_protocol_residue_leading(self):
         """Leading protocol words should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._clean_protocol_residue("assistant Hello") == "Hello"
         assert GptOssReasoningParser._clean_protocol_residue("analysis Hello") == "Hello"
         assert GptOssReasoningParser._clean_protocol_residue("final Hello") == "Hello"
 
     def test_clean_protocol_residue_trailing(self):
         """Trailing protocol words should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._clean_protocol_residue("Hello assistant") == "Hello"
         assert GptOssReasoningParser._clean_protocol_residue("Hello analysis") == "Hello"
 
     def test_clean_protocol_residue_garbled_tokens(self):
         """Garbled special token fragments should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._clean_protocol_residue("<|assistant.Hello") == "Hello"
         assert GptOssReasoningParser._clean_protocol_residue("<|end. more text") == "more text"
 
     def test_clean_protocol_residue_empty_string(self):
         """Empty string should pass through."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._clean_protocol_residue("") == ""
 
     def test_clean_protocol_residue_concatenated(self):
         """Concatenated protocol words like 'assistantanalysis' in middle."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._clean_protocol_residue("Hello assistantanalysis World")
         assert "assistantanalysis" not in result
 
@@ -461,29 +461,29 @@ class TestGptOssParserComplete:
 
     def test_strip_partial_marker_start_tag(self):
         """Trailing partial <|start|> should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._strip_partial_marker("Hello<|sta") == "Hello"
         assert GptOssReasoningParser._strip_partial_marker("Hello<|star") == "Hello"
 
     def test_strip_partial_marker_channel_tag(self):
         """Trailing partial <|channel|> should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._strip_partial_marker("Hello<|cha") == "Hello"
 
     def test_strip_partial_assistant_word(self):
         """Trailing 'assistant' word should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._strip_partial_marker("Hello assistant") == "Hello"
 
     def test_strip_partial_assistant_fragment(self):
         """Trailing partial 'assistan' (3+ chars) should be stripped."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._strip_partial_marker("Hello assista")
         assert "assista" not in result
 
     def test_strip_no_partial(self):
         """Text without partial markers should pass through."""
-        from vllm_mlx.reasoning.gptoss_parser import GptOssReasoningParser
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         assert GptOssReasoningParser._strip_partial_marker("Hello World") == "Hello World"
 
     # --- Streaming with fallback ---
@@ -591,40 +591,40 @@ class TestCleanOutputText:
     """Tests for clean_output_text utility function."""
 
     def test_removes_im_end(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("Hello<|im_end|>") == "Hello"
 
     def test_removes_im_start(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("<|im_start|>Hello") == "Hello"
 
     def test_removes_endoftext(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("Hello<|endoftext|>") == "Hello"
 
     def test_removes_eot_id(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("Hello<|eot_id|>") == "Hello"
 
     def test_removes_end_tag(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("Hello<|end|>") == "Hello"
 
     def test_removes_s_tags(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("</s>Hello<s>") == "Hello"
 
     def test_removes_pad_tokens(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("[PAD]Hello[PAD]") == "Hello"
 
     def test_removes_multiple_special_tokens(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         result = clean_output_text("<|im_start|>Hello<|im_end|><|endoftext|>")
         assert result == "Hello"
 
     def test_preserves_think_tags(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         text = "<think>reasoning</think>content"
         result = clean_output_text(text)
         assert "<think>" in result
@@ -632,7 +632,7 @@ class TestCleanOutputText:
 
     def test_adds_missing_opening_think(self):
         """When only </think> is present, <think> should be prepended."""
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         text = "reasoning content</think>final answer"
         result = clean_output_text(text)
         assert result.startswith("<think>")
@@ -640,29 +640,29 @@ class TestCleanOutputText:
 
     def test_does_not_double_add_think(self):
         """When <think> is already present, don't add another."""
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         text = "<think>reasoning</think>content"
         result = clean_output_text(text)
         assert result.count("<think>") == 1
 
     def test_empty_string_passthrough(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         assert clean_output_text("") == ""
 
     def test_none_passthrough(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         # None should be handled (returns falsy)
         result = clean_output_text(None)
         assert not result
 
     def test_whitespace_only_stripped(self):
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         result = clean_output_text("  Hello  ")
         assert result == "Hello"
 
     def test_special_tokens_with_think_blocks(self):
         """Special tokens around think blocks should be stripped, tags preserved."""
-        from vllm_mlx.api.utils import clean_output_text
+        from vmlx_engine.api.utils import clean_output_text
         text = "<|im_start|><think>reasoning</think>content<|im_end|>"
         result = clean_output_text(text)
         assert "<think>" in result
@@ -696,13 +696,13 @@ class TestQwen35ModelConfig:
     @pytest.fixture(autouse=True)
     def setup_registry(self):
         from unittest.mock import patch
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
-        from vllm_mlx.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
 
         registry = ModelConfigRegistry()
         register_all(registry)
 
-        with patch("vllm_mlx.model_config_registry.load_config", return_value=None):
+        with patch("vmlx_engine.model_config_registry.load_config", return_value=None):
             self._registry = registry
             yield
 
@@ -762,13 +762,13 @@ class TestGLMModelConfig:
     @pytest.fixture(autouse=True)
     def setup_registry(self):
         from unittest.mock import patch
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
-        from vllm_mlx.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
 
         registry = ModelConfigRegistry()
         register_all(registry)
 
-        with patch("vllm_mlx.model_config_registry.load_config", return_value=None):
+        with patch("vmlx_engine.model_config_registry.load_config", return_value=None):
             self._registry = registry
             yield
 
@@ -817,13 +817,13 @@ class TestOtherModelConfigs:
     @pytest.fixture(autouse=True)
     def setup_registry(self):
         from unittest.mock import patch
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
-        from vllm_mlx.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
 
         registry = ModelConfigRegistry()
         register_all(registry)
 
-        with patch("vllm_mlx.model_config_registry.load_config", return_value=None):
+        with patch("vmlx_engine.model_config_registry.load_config", return_value=None):
             self._registry = registry
             yield
 
@@ -880,7 +880,7 @@ class TestEmptyResponseSafeguard:
 
     def test_chat_completions_zero_token_safeguard(self):
         """Chat completions must detect zero-token streams."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # The safeguard checks last_output is None OR zero completion_tokens
@@ -893,7 +893,7 @@ class TestEmptyResponseSafeguard:
 
     def test_responses_api_empty_fallback_chain(self):
         """Responses API must have fallback chain for empty responses."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_responses_api)
 
         # Fallback chain: display_text → clean_output_text → diagnostic
@@ -903,7 +903,7 @@ class TestEmptyResponseSafeguard:
 
     def test_responses_api_reasoning_fallback(self):
         """Responses API should use accumulated_reasoning as fallback when no content."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_responses_api)
 
         # accumulated_reasoning fallback
@@ -922,12 +922,12 @@ class TestParserRegistryCompleteness:
     def test_all_reasoning_parsers_registered(self):
         """Every reasoning_parser name used in model_configs must be in registry."""
         from unittest.mock import patch
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
-        from vllm_mlx.model_configs import register_all
-        from vllm_mlx.reasoning import list_parsers
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        from vmlx_engine.reasoning import list_parsers
 
         registry = ModelConfigRegistry()
-        with patch("vllm_mlx.model_config_registry.load_config", return_value=None):
+        with patch("vmlx_engine.model_config_registry.load_config", return_value=None):
             register_all(registry)
 
         available_parsers = set(list_parsers())
@@ -941,17 +941,17 @@ class TestParserRegistryCompleteness:
 
     def test_openai_gptoss_is_registered(self):
         """openai_gptoss must be registered (used by GLM and GPT-OSS families)."""
-        from vllm_mlx.reasoning import list_parsers
+        from vmlx_engine.reasoning import list_parsers
         assert "openai_gptoss" in list_parsers()
 
     def test_qwen3_parser_is_registered(self):
         """qwen3 parser must be registered."""
-        from vllm_mlx.reasoning import list_parsers
+        from vmlx_engine.reasoning import list_parsers
         assert "qwen3" in list_parsers()
 
     def test_deepseek_r1_parser_is_registered(self):
         """deepseek_r1 parser must be registered."""
-        from vllm_mlx.reasoning import list_parsers
+        from vmlx_engine.reasoning import list_parsers
         assert "deepseek_r1" in list_parsers()
 
 
@@ -965,37 +965,37 @@ class TestMLLMPatternDetection:
 
     def test_qwen3_5_detected_as_mllm(self):
         """qwen3_5 pattern should match Qwen3.5 model names."""
-        from vllm_mlx.api.utils import MLLM_PATTERNS
+        from vmlx_engine.api.utils import MLLM_PATTERNS
         pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
         assert pattern.search("Qwen3.5-VL-72B")
         assert pattern.search("qwen3_5_moe")
 
     def test_qwen_vl_detected(self):
-        from vllm_mlx.api.utils import MLLM_PATTERNS
+        from vmlx_engine.api.utils import MLLM_PATTERNS
         pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
         assert pattern.search("Qwen2-VL-7B")
         assert pattern.search("qwen-vl-chat")
 
     def test_gemma3_detected_but_not_text(self):
         """gemma3 should be detected but gemma3_text should NOT."""
-        from vllm_mlx.api.utils import MLLM_PATTERNS
+        from vmlx_engine.api.utils import MLLM_PATTERNS
         pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
         assert pattern.search("gemma-3-27b")
         assert not pattern.search("gemma3_text-only")
 
     def test_pixtral_detected(self):
-        from vllm_mlx.api.utils import MLLM_PATTERNS
+        from vmlx_engine.api.utils import MLLM_PATTERNS
         pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
         assert pattern.search("pixtral-12b")
 
     def test_llava_detected(self):
-        from vllm_mlx.api.utils import MLLM_PATTERNS
+        from vmlx_engine.api.utils import MLLM_PATTERNS
         pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
         assert pattern.search("llava-1.5-7b")
 
     def test_text_only_not_detected(self):
         """Text-only models should NOT match MLLM patterns."""
-        from vllm_mlx.api.utils import MLLM_PATTERNS
+        from vmlx_engine.api.utils import MLLM_PATTERNS
         pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
         assert not pattern.search("Llama-3-8B")
         assert not pattern.search("Mistral-7B")
@@ -1019,7 +1019,7 @@ class TestEnableThinkingAPIKwargs:
 
     def test_chat_template_kwargs_path_in_source(self):
         """Server must read enable_thinking from chat_template_kwargs."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # _ct_kwargs = request.chat_template_kwargs or {}
@@ -1028,7 +1028,7 @@ class TestEnableThinkingAPIKwargs:
 
     def test_top_level_takes_priority(self):
         """request.enable_thinking must override chat_template_kwargs."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # The priority check: request.enable_thinking is not None checked FIRST
@@ -1049,13 +1049,13 @@ class TestEnableThinkingAPIKwargs:
 
     def test_enable_thinking_field_on_request_model(self):
         """ChatCompletionRequest should have enable_thinking field."""
-        from vllm_mlx.api.models import ChatCompletionRequest
+        from vmlx_engine.api.models import ChatCompletionRequest
         fields = ChatCompletionRequest.model_fields
         assert "enable_thinking" in fields
 
     def test_chat_template_kwargs_field_on_request_model(self):
         """ChatCompletionRequest should have chat_template_kwargs field."""
-        from vllm_mlx.api.models import ChatCompletionRequest
+        from vmlx_engine.api.models import ChatCompletionRequest
         fields = ChatCompletionRequest.model_fields
         assert "chat_template_kwargs" in fields
 
@@ -1069,21 +1069,21 @@ class TestStreamingReasoningContent:
 
     def test_chunk_delta_has_reasoning_content(self):
         """ChatCompletionChunkDelta should expose reasoning_content."""
-        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
         delta = ChatCompletionChunkDelta(reasoning="thinking...")
         assert delta.reasoning == "thinking..."
         assert delta.reasoning_content == "thinking..."
 
     def test_chunk_delta_reasoning_none_when_content_only(self):
         """reasoning_content should be None when only content is set."""
-        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
         delta = ChatCompletionChunkDelta(content="hello")
         assert delta.reasoning_content is None
         assert delta.content == "hello"
 
     def test_chunk_delta_both_fields(self):
         """During transition, both reasoning and content can be set."""
-        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
         delta = ChatCompletionChunkDelta(reasoning="last thought", content="first word")
         assert delta.reasoning_content == "last thought"
         assert delta.content == "first word"
@@ -1096,7 +1096,7 @@ class TestStreamingReasoningContent:
         is silently ignored, leaving reasoning=None. The constructor MUST use
         reasoning= instead.
         """
-        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
         # Passing reasoning_content= should NOT set the reasoning field
         delta = ChatCompletionChunkDelta(reasoning_content="should be ignored")
         assert delta.reasoning is None
@@ -1108,7 +1108,7 @@ class TestStreamingReasoningContent:
     def test_server_uses_reasoning_not_reasoning_content_in_constructor(self):
         """Verify server.py constructs ChunkDelta with reasoning= (not reasoning_content=)."""
         import inspect
-        from vllm_mlx import server
+        from vmlx_engine import server
         src = inspect.getsource(server.stream_chat_completion)
         # Must NOT have reasoning_content= in constructor (silent bug)
         assert "reasoning_content=emit_reasoning" not in src, \
@@ -1131,7 +1131,7 @@ class TestReasoningOnlyFallback:
 
     def test_reasoning_only_fallback_in_source(self):
         """Server must have reasoning-only fallback logic."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # The fallback: if not content_was_emitted and accumulated_reasoning
@@ -1140,7 +1140,7 @@ class TestReasoningOnlyFallback:
 
     def test_reasoning_only_fallback_emits_with_stop(self):
         """Fallback chunk should have finish_reason='stop'."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # Find the reasoning fallback block and verify it uses "stop"
@@ -1164,7 +1164,7 @@ class TestQwen35ThinkingScenarios:
 
     @pytest.fixture
     def parser(self):
-        from vllm_mlx.reasoning import get_parser
+        from vmlx_engine.reasoning import get_parser
         return get_parser("qwen3")()
 
     def test_thinking_on_with_think_in_template(self, parser):
@@ -1337,37 +1337,37 @@ class TestGptOssRegexPatterns:
 
     def test_bare_marker_regex_html_prefixed(self):
         """Bare markers with </ prefix (garbled HTML-like tokens)."""
-        from vllm_mlx.reasoning.gptoss_parser import _BARE_MARKER_RE
+        from vmlx_engine.reasoning.gptoss_parser import _BARE_MARKER_RE
         assert _BARE_MARKER_RE.search("</assistant final")
         assert _BARE_MARKER_RE.search("</assistant analysis")
 
     def test_bare_marker_regex_pipe_prefixed(self):
         """Bare markers with <| prefix (garbled special tokens)."""
-        from vllm_mlx.reasoning.gptoss_parser import _BARE_MARKER_RE
+        from vmlx_engine.reasoning.gptoss_parser import _BARE_MARKER_RE
         assert _BARE_MARKER_RE.search("<|assistant analysis")
         assert _BARE_MARKER_RE.search("<|assistant final")
 
     def test_bare_marker_regex_with_closing(self):
         """Bare markers with closing bracket forms."""
-        from vllm_mlx.reasoning.gptoss_parser import _BARE_MARKER_RE
+        from vmlx_engine.reasoning.gptoss_parser import _BARE_MARKER_RE
         assert _BARE_MARKER_RE.search("<assistant final|>")
         assert _BARE_MARKER_RE.search("</assistant analysis|>")
 
     def test_bare_marker_regex_doubled_assistant(self):
         """Doubled assistant word with prefix."""
-        from vllm_mlx.reasoning.gptoss_parser import _BARE_MARKER_RE
+        from vmlx_engine.reasoning.gptoss_parser import _BARE_MARKER_RE
         assert _BARE_MARKER_RE.search("</assistant assistant final")
 
     def test_bare_marker_regex_no_match(self):
         """Regular text should not match."""
-        from vllm_mlx.reasoning.gptoss_parser import _BARE_MARKER_RE
+        from vmlx_engine.reasoning.gptoss_parser import _BARE_MARKER_RE
         assert not _BARE_MARKER_RE.search("hello world")
         assert not _BARE_MARKER_RE.search("assist")
         assert not _BARE_MARKER_RE.search("the final answer")
 
     def test_protocol_residue_regex(self):
         """Protocol residue patterns."""
-        from vllm_mlx.reasoning.gptoss_parser import _PROTOCOL_RESIDUE_RE
+        from vmlx_engine.reasoning.gptoss_parser import _PROTOCOL_RESIDUE_RE
         assert _PROTOCOL_RESIDUE_RE.search("</assistantanalysis")
         assert _PROTOCOL_RESIDUE_RE.search("<assistant")
         assert _PROTOCOL_RESIDUE_RE.search("assistantassistantanalysis")
@@ -1375,7 +1375,7 @@ class TestGptOssRegexPatterns:
 
     def test_protocol_residue_no_false_positive(self):
         """Regular text should not match protocol residue."""
-        from vllm_mlx.reasoning.gptoss_parser import _PROTOCOL_RESIDUE_RE
+        from vmlx_engine.reasoning.gptoss_parser import _PROTOCOL_RESIDUE_RE
         assert not _PROTOCOL_RESIDUE_RE.search("hello world")
         assert not _PROTOCOL_RESIDUE_RE.search("the final answer")
 
@@ -1395,7 +1395,7 @@ class TestToolCallBufferingStructure:
 
     def test_content_uses_accumulated(self):
         """Content tool call detection should use accumulated_content."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         assert "accumulated_content" in source
@@ -1403,7 +1403,7 @@ class TestToolCallBufferingStructure:
 
     def test_reasoning_uses_delta_only(self):
         """Reasoning tool call detection should use delta only."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         assert "delta_msg.reasoning" in source
@@ -1412,7 +1412,7 @@ class TestToolCallBufferingStructure:
 
     def test_harmony_tool_format_detection(self):
         """GPT-OSS/Harmony native tool format (to=name code{}) detection."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # Regex for: to=name code{
@@ -1433,7 +1433,7 @@ class TestPerRequestParserInstances:
 
     def test_per_request_parser_creation(self):
         """Server must create new parser instance per request."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # Should create a new instance, not reuse the global
@@ -1441,7 +1441,7 @@ class TestPerRequestParserInstances:
 
     def test_parser_reset_with_effective_think(self):
         """Parser reset_state should use effective_think_in_template."""
-        import vllm_mlx.server as server_mod
+        import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         assert "request_parser.reset_state" in source
@@ -1449,7 +1449,7 @@ class TestPerRequestParserInstances:
 
     def test_parser_concurrent_isolation(self):
         """Two parser instances should not share state."""
-        from vllm_mlx.reasoning import get_parser
+        from vmlx_engine.reasoning import get_parser
 
         parser1 = get_parser("qwen3")()
         parser2 = get_parser("qwen3")()
@@ -1480,7 +1480,7 @@ class TestMLLMSystemPrompt:
         """MLLM single-turn path must pass full messages list (including system)
         to mlx_vlm's apply_chat_template, not just the user text."""
         source = inspect.getsource(
-            __import__("vllm_mlx.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
+            __import__("vmlx_engine.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
         )
         # Should NOT extract just text_prompt from user message
         assert "text_prompt = \"\"" not in source, \
@@ -1491,7 +1491,7 @@ class TestMLLMSystemPrompt:
     def test_mllm_path_condition(self):
         """MLLM path activates for single-turn VLM without tools."""
         source = inspect.getsource(
-            __import__("vllm_mlx.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
+            __import__("vmlx_engine.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
         )
         assert "non_system_msgs <= 2" in source
         assert "not tools" in source
@@ -1508,7 +1508,7 @@ class TestImprovedZeroTokenSafeguard:
     def test_safeguard_catches_zero_completion_tokens(self):
         """Safeguard must also fire when last_output exists but has 0 completion_tokens."""
         source = inspect.getsource(
-            __import__("vllm_mlx.server", fromlist=["stream_chat_completion"]).stream_chat_completion
+            __import__("vmlx_engine.server", fromlist=["stream_chat_completion"]).stream_chat_completion
         )
         # Must check completion_tokens == 0, not just last_output is None
         assert "completion_tokens" in source

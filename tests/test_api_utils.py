@@ -3,10 +3,10 @@
 Tests for API utility functions.
 
 Tests clean_output_text, is_mllm_model, and extract_multimodal_content
-from vllm_mlx/api/utils.py. No MLX dependency.
+from vmlx_engine/api/utils.py. No MLX dependency.
 """
 
-from vllm_mlx.api.utils import (
+from vmlx_engine.api.utils import (
     clean_output_text,
     extract_multimodal_content,
     is_mllm_model,
@@ -14,7 +14,7 @@ from vllm_mlx.api.utils import (
     MLLM_PATTERNS,
     SPECIAL_TOKENS_PATTERN,
 )
-from vllm_mlx.api.models import Message, ContentPart, ImageUrl
+from vmlx_engine.api.models import Message, ContentPart, ImageUrl
 
 
 class TestCleanOutputText:

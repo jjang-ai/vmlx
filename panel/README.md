@@ -38,7 +38,7 @@
 - **Benchmarks** — Built-in benchmark suite measuring TTFT, TPS, prompt processing speed, with history tracking
 - **Cache Inspector** — Real-time prefix cache stats, entry browser, warm-up, and cache management
 - **Chat Export/Import** — Export chats as JSON or Markdown, import from ChatGPT/Claude/vMLX formats
-- **Remote Sessions** — Connect to any OpenAI-compatible endpoint (not just local vLLM-MLX)
+- **Remote Sessions** — Connect to any OpenAI-compatible endpoint (not just local vMLX Engine)
 - **Per-Chat Overrides** — Temperature, top_p, max_tokens, system prompt, stop sequences per conversation
 - **Bundled Python** — Optional self-contained Python distribution for zero-dependency deployment
 - **Auto-Detection** — Model architecture, parser, and cache type detected from config.json
@@ -68,20 +68,20 @@ cp -R release/mac-arm64/vMLX.app /Applications/
 
 ### 1. First Launch — Setup
 
-On first launch, vMLX checks for a vLLM-MLX installation. If not found, it offers **one-click install** via `uv` (preferred) or `pip3` (Python 3.10+ required). Optionally bundles a self-contained Python 3.12 distribution with all dependencies.
+On first launch, vMLX checks for a vMLX Engine installation. If not found, it offers **one-click install** via `uv` (preferred) or `pip3` (Python 3.10+ required). Optionally bundles a self-contained Python 3.12 distribution with all dependencies.
 
 ### 2. Dashboard — See All Sessions
 
-The dashboard shows all your vLLM-MLX sessions as cards. Each session represents one model loaded on one port. Sessions can be running, stopped, loading, or in an error state.
+The dashboard shows all your vMLX Engine sessions as cards. Each session represents one model loaded on one port. Sessions can be running, stopped, loading, or in an error state.
 
-If vLLM-MLX is already running (started from terminal), click **Detect Processes** — the app scans for running `vllm-mlx serve` processes, health-checks each one, and automatically creates session records.
+If vMLX Engine is already running (started from terminal), click **Detect Processes** — the app scans for running `vmlx-engine serve` processes, health-checks each one, and automatically creates session records.
 
 ### 3. Create a Session — Pick Model + Configure
 
 Click **New Session** to launch the two-step wizard:
 
 1. **Select Model** — Scans configured directories for MLX-format models. Auto-detects architecture, parser, and cache type from config.json.
-2. **Configure Server** — Every vLLM-MLX parameter is exposed with detailed tooltips and plain-language performance hints:
+2. **Configure Server** — Every vMLX Engine parameter is exposed with detailed tooltips and plain-language performance hints:
    - **Server**: host, port (auto-assigned), API key, rate limit, timeout
    - **Concurrent Processing**: max sequences, prefill/completion batch sizes, continuous batching
    - **Prefix Cache**: enable/disable, memory-aware vs entry-count, memory limits, TTL
@@ -92,7 +92,7 @@ Click **New Session** to launch the two-step wizard:
    - **Tools (MCP)**: MCP config, auto tool choice, tool call parser, reasoning parser
    - **Additional**: raw CLI arguments
 
-Click **Launch** — the app spawns `vllm-mlx serve` and shows live server logs. When the health endpoint responds OK, you're taken into the session.
+Click **Launch** — the app spawns `vmlx-engine serve` and shows live server logs. When the health endpoint responds OK, you're taken into the session.
 
 ### 4. Inside a Session — Chat + Panels
 
@@ -107,9 +107,9 @@ Each session shows:
 
 Multiple sessions can run simultaneously on different ports.
 
-### 5. About — vLLM-MLX Management
+### 5. About — vMLX Engine Management
 
-Access via the **About** button in the title bar. Check for vLLM-MLX updates, install/upgrade with streaming terminal output, and view release notes. Auto-updates the bundled engine when source version changes.
+Access via the **About** button in the title bar. Check for vMLX Engine updates, install/upgrade with streaming terminal output, and view release notes. Auto-updates the bundled engine when source version changes.
 
 ---
 
@@ -117,7 +117,7 @@ Access via the **About** button in the title bar. Check for vLLM-MLX updates, in
 
 ```
 App.tsx (view routing)
-├── SetupScreen         → First-run vLLM-MLX installer gate
+├── SetupScreen         → First-run vMLX Engine installer gate
 ├── SessionDashboard    → Grid of session cards (home screen)
 ├── CreateSession       → Two-step wizard (model picker → config → launch)
 ├── SessionView         → Header + ChatInterface + Settings drawers (per-session)
@@ -125,7 +125,7 @@ App.tsx (view routing)
 │   ├── ServerSettings  → Inline server config drawer
 │   ├── CachePanel      → Real-time cache stats + management
 │   └── BenchmarkPanel  → Performance benchmarking suite
-├── SessionSettings     → Full-page vLLM-MLX server config editor
+├── SessionSettings     → Full-page vMLX Engine server config editor
 └── About               → UpdateManager + app info
 ```
 
@@ -147,9 +147,9 @@ App.tsx (view routing)
                      │  ipcMain.handle
 ┌────────────────────┴────────────────────────────┐
 │  Main Process (Node.js)                          │
-│  SessionManager  → spawn/kill vLLM-MLX processes │
+│  SessionManager  → spawn/kill vMLX Engine processes │
 │  DatabaseManager → SQLite WAL (chats, sessions)  │
-│  VllmManager     → install/update/detect vLLM-MLX│
+│  VllmManager     → install/update/detect vMLX Engine│
 │  IPC Handlers    → sessions, chat, models, vllm  │
 │                  → cache, benchmark, export       │
 └─────────────────────────────────────────────────┘
@@ -161,7 +161,7 @@ App.tsx (view routing)
 |------|---------|
 | `src/main/sessions.ts` | `SessionManager` — multi-instance lifecycle, process detection, health monitoring, buildArgs |
 | `src/main/database.ts` | SQLite WAL schema + CRUD for sessions, chats, messages, folders, overrides, benchmarks, settings |
-| `src/main/vllm-manager.ts` | vLLM-MLX detection, install (uv/pip streaming), update, version checking |
+| `src/main/vllm-manager.ts` | vMLX Engine detection, install (uv/pip streaming), update, version checking |
 | `src/main/ipc/sessions.ts` | IPC handlers: list, get, create, start, stop, delete, detect, update |
 | `src/main/ipc/chat.ts` | Chat handlers: sendMessage (dual API SSE streaming), tool calls, abort, TPS tracking |
 | `src/main/ipc/models.ts` | Model scanning, directory management, config.json detection |
@@ -211,7 +211,7 @@ Both APIs support: streaming, tool calls, reasoning extraction, usage tracking, 
 
 - macOS 26+ (Tahoe) — Apple Silicon required (MLX Metal shaders require Metal 4.0)
 - Node.js 18+
-- vLLM-MLX installed (auto-installed on first launch, or manually via `uv tool install vllm-mlx`)
+- vMLX Engine installed (auto-installed on first launch, or manually via `uv tool install vmlx-engine`)
 - MLX-format models (configurable scan directories, defaults: `~/.lmstudio/models/`, `~/.cache/huggingface/hub/`)
 
 ---
@@ -313,7 +313,7 @@ src/
 │   ├── index.ts                    # App lifecycle, startup
 │   ├── sessions.ts                 # SessionManager (multi-instance)
 │   ├── database.ts                 # SQLite WAL schema + queries
-│   ├── vllm-manager.ts            # vLLM-MLX install/update/detect
+│   ├── vllm-manager.ts            # vMLX Engine install/update/detect
 │   └── ipc/
 │       ├── sessions.ts             # Session IPC handlers
 │       ├── chat.ts                 # Chat IPC + dual-API SSE streaming + abort
@@ -355,11 +355,11 @@ Deploy: `cp -R release/mac-arm64/vMLX.app /Applications/`
 
 ## Troubleshooting
 
-### vLLM-MLX not found
+### vMLX Engine not found
 On first launch, the app offers one-click install. If you prefer manual install:
 ```bash
-uv tool install vllm-mlx          # Recommended (fastest)
-pip3 install vllm-mlx             # Alternative (needs Python 3.10+)
+uv tool install vmlx-engine          # Recommended (fastest)
+pip3 install vmlx-engine             # Alternative (needs Python 3.10+)
 ```
 
 ### Models not detected
@@ -375,12 +375,12 @@ Add custom model directories via the directory manager in the Create Session wiz
 
 ### Chat history missing
 - Chat history is tied to exact `modelPath`. If you moved the model, chats won't appear.
-- Database location: `~/Library/Application Support/vllm-mlx-panel/chats.db`
+- Database location: `~/Library/Application Support/vmlx-engine/chats.db`
 
 ### Process detected but not adopted
 - Click "Detect Processes" on the dashboard
 - The process must respond to `/health` endpoint
-- Only processes running `vllm-mlx serve` are detected
+- Only processes running `vmlx-engine serve` are detected
 
 ### Vision models using SimpleEngine
 - VLM/multimodal models automatically use SimpleEngine (no batching, paged cache, or KV quant)
@@ -391,7 +391,7 @@ Add custom model directories via the directory manager in the Create Session wiz
 
 ## Credits
 
-- **[vLLM-MLX](https://github.com/waybarrios/vllm-mlx)** — Apple Silicon inference engine
+- **[vMLX Engine](https://github.com/vmlxllm/vmlx)** — Apple Silicon inference engine
 - **[MLX](https://github.com/ml-explore/mlx)** — Apple's ML framework
 - **[mlx-lm](https://github.com/ml-explore/mlx-lm)** — LLM inference
 - **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** — Vision-language models

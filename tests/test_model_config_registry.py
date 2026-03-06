@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from vllm_mlx.model_config_registry import (
+from vmlx_engine.model_config_registry import (
     ModelConfig,
     ModelConfigRegistry,
     get_model_config_registry,
@@ -87,7 +87,7 @@ class TestModelConfigRegistry:
             priority=10,
         )
         empty_registry.register(config)
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("test_model_type")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("test_model_type")):
             result = empty_registry.lookup("my-test_model-8B")
         assert result.family_name == "test_model"
 
@@ -99,7 +99,7 @@ class TestModelConfigRegistry:
         )
         empty_registry.register(config)
         # All lookups that return model_type "qwen3" should match
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3")):
             assert empty_registry.lookup("Qwen3-8B").family_name == "qwen3"
             empty_registry.clear_cache()
             assert empty_registry.lookup("qwen3-instruct").family_name == "qwen3"
@@ -112,7 +112,7 @@ class TestModelConfigRegistry:
         )
         empty_registry.register(config)
         # Model type that doesn't match any registered config
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("unknown_type")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("unknown_type")):
             result = empty_registry.lookup("totally-unknown-model")
         assert result.family_name == "unknown"
 
@@ -135,14 +135,14 @@ class TestModelConfigRegistry:
         empty_registry.register(specific)
 
         # qwen3_vl model_type matches the specific config
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
             result = empty_registry.lookup("mlx-community/Qwen3-VL-8B")
         assert result.family_name == "qwen3_vl"
         assert result.is_mllm is True
 
         # qwen2 model_type matches only the generic config
         empty_registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen2")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen2")):
             result = empty_registry.lookup("mlx-community/Qwen2-7B")
         assert result.family_name == "qwen"
 
@@ -154,7 +154,7 @@ class TestModelConfigRegistry:
             priority=10,
         )
         empty_registry.register(config)
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("mamba")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("mamba")):
             assert empty_registry.get_cache_type("mamba-7B") == "mamba"
 
     def test_eos_tokens_lookup(self, empty_registry):
@@ -165,10 +165,10 @@ class TestModelConfigRegistry:
             priority=10,
         )
         empty_registry.register(config)
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3")):
             assert empty_registry.get_eos_tokens("Qwen3-8B") == ["<|im_end|>"]
         empty_registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("unknown")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("unknown")):
             assert empty_registry.get_eos_tokens("unknown-model") is None
 
     def test_is_mllm(self, empty_registry):
@@ -187,10 +187,10 @@ class TestModelConfigRegistry:
         empty_registry.register(text_config)
         empty_registry.register(vl_config)
 
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
             assert empty_registry.is_mllm("Qwen3-VL-8B") is True
         empty_registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3")):
             assert empty_registry.is_mllm("Qwen3-8B") is False
 
     def test_tool_parser(self, empty_registry):
@@ -201,7 +201,7 @@ class TestModelConfigRegistry:
             priority=10,
         )
         empty_registry.register(config)
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("mistral")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("mistral")):
             assert empty_registry.get_tool_parser("Mistral-7B") == "mistral"
 
     def test_architecture_hints(self, empty_registry):
@@ -212,7 +212,7 @@ class TestModelConfigRegistry:
             priority=10,
         )
         empty_registry.register(config)
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("gemma3")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("gemma3")):
             hints = empty_registry.get_architecture_hints("gemma3-2B")
         assert hints == {"inject_pixel_values": True}
 
@@ -224,10 +224,10 @@ class TestModelConfigRegistry:
             priority=10,
         )
         empty_registry.register(config)
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("nemotron")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("nemotron")):
             assert empty_registry.needs_tokenizer_fallback("nemotron-8B") is True
         empty_registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("unknown")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("unknown")):
             assert empty_registry.needs_tokenizer_fallback("llama-8B") is False
 
     def test_list_registered(self, empty_registry):
@@ -251,7 +251,7 @@ class TestModelConfigRegistry:
         )
         empty_registry.register(config)
         # Trigger caching
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("test_type")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("test_type")):
             empty_registry.lookup("test-model")
         assert len(empty_registry._match_cache) > 0
         empty_registry.clear_cache()
@@ -280,14 +280,14 @@ class TestModelConfigs:
     def registry(self):
         """Get registry with all model configs loaded."""
         ModelConfigRegistry._instance = None
-        import vllm_mlx.model_config_registry as mcr
+        import vmlx_engine.model_config_registry as mcr
         mcr._configs_loaded = False
         return get_model_config_registry()
 
     def _lookup(self, registry, model_name, model_type):
         """Helper: lookup with mocked load_config returning given model_type."""
         registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config(model_type)):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config(model_type)):
             return registry.lookup(model_name)
 
     # Qwen family
@@ -675,7 +675,7 @@ class TestModelConfigComprehensiveChecks:
     @pytest.fixture
     def registry(self):
         ModelConfigRegistry._instance = None
-        import vllm_mlx.model_config_registry as mcr
+        import vmlx_engine.model_config_registry as mcr
         mcr._configs_loaded = False
         return get_model_config_registry()
 
@@ -774,7 +774,7 @@ class TestModelConfigComprehensiveChecks:
 
     def test_qwen3_vl_separate_from_qwen3(self, registry):
         """Qwen3-VL must resolve to qwen3_vl (MLLM), not qwen3 (text-only)."""
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3_vl")):
             config = registry.lookup("Qwen3-VL-8B")
         assert config.family_name == "qwen3_vl"
         assert config.is_mllm is True
@@ -782,7 +782,7 @@ class TestModelConfigComprehensiveChecks:
     def test_glm_flash_separate_from_chatglm(self, registry):
         """GLM-4.7 Flash (MoE) must NOT fall through to chatglm."""
         registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config("glm4_moe")):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("glm4_moe")):
             config = registry.lookup("THUDM/GLM-4-Flash")
         assert config.family_name == "glm4_moe"
         assert config.reasoning_parser == "openai_gptoss"

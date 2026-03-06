@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vllm_mlx.utils.cache_types import (
+from vmlx_engine.utils.cache_types import (
     CacheType,
     detect_cache_type,
     detect_cache_type_from_state,

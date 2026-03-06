@@ -16,7 +16,7 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from dataclasses import fields
 
-from vllm_mlx.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
+from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
 
 
 # ============================================================
@@ -109,7 +109,7 @@ class TestMLLMSchedulerConfigParity:
 
     def test_all_config_fields_match_scheduler_config(self):
         """Ensure MLLM config has all cache-related fields from SchedulerConfig."""
-        from vllm_mlx.scheduler import SchedulerConfig
+        from vmlx_engine.scheduler import SchedulerConfig
 
         cache_field_names = {
             "enable_prefix_cache",
@@ -154,8 +154,8 @@ class TestConfigForwarding:
 
     def test_mllm_config_fields_forwarded(self):
         """Check that _start_mllm creates MLLMSchedulerConfig with all fields."""
-        from vllm_mlx.engine.batched import BatchedEngine
-        from vllm_mlx.scheduler import SchedulerConfig
+        from vmlx_engine.engine.batched import BatchedEngine
+        from vmlx_engine.scheduler import SchedulerConfig
         import inspect
 
         # Get the source of _start_mllm to verify forwarding
@@ -191,12 +191,12 @@ class TestHybridSSMStateCache:
     """Tests for the companion SSM state cache."""
 
     def test_import(self):
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
         cache = HybridSSMStateCache(max_entries=10)
         assert cache is not None
 
     def test_store_and_fetch(self):
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
         tokens = [1, 2, 3, 4, 5]
@@ -208,14 +208,14 @@ class TestHybridSSMStateCache:
         assert result is ssm_states
 
     def test_fetch_miss(self):
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
         result = cache.fetch([1, 2, 3], 3)
         assert result is None
 
     def test_lru_eviction(self):
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=2)
 
@@ -228,7 +228,7 @@ class TestHybridSSMStateCache:
         assert cache.fetch([5, 6], 2) == ["state_c"]
 
     def test_lru_access_refresh(self):
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=2)
 
@@ -246,7 +246,7 @@ class TestHybridSSMStateCache:
         assert cache.fetch([5, 6], 2) == ["state_c"]
 
     def test_clear(self):
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
         cache.store([1, 2, 3], 3, ["state"])
@@ -255,7 +255,7 @@ class TestHybridSSMStateCache:
 
     def test_prefix_keying(self):
         """Verify that cache is keyed by prefix, not full token list."""
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
         tokens_full = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -270,7 +270,7 @@ class TestHybridSSMStateCache:
 
     def test_different_lengths_different_keys(self):
         """Same prefix tokens but different num_tokens → different keys."""
-        from vllm_mlx.mllm_batch_generator import HybridSSMStateCache
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
         tokens = [1, 2, 3, 4, 5]
@@ -293,7 +293,7 @@ class TestBatchGeneratorCacheParams:
     def test_init_signature(self):
         """Verify constructor accepts all cache params."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         sig = inspect.signature(MLLMBatchGenerator.__init__)
         param_names = list(sig.parameters.keys())
@@ -320,7 +320,7 @@ class TestMLLMBatchExtractContiguous:
     def test_extract_calls_contiguous(self):
         """Verify extract_cache makes keys/values contiguous."""
         import mlx.core as mx
-        from vllm_mlx.mllm_batch_generator import MLLMBatch
+        from vmlx_engine.mllm_batch_generator import MLLMBatch
 
         # Create a mock batch with a mock cache that has extract()
         mock_kv = MagicMock()
@@ -361,7 +361,7 @@ class TestEnsureBatchGeneratorCacheClearing:
     def test_clears_paged_cache(self):
         """Verify paged cache is cleared on generator rebuild."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
         assert "block_aware_cache" in source
@@ -370,7 +370,7 @@ class TestEnsureBatchGeneratorCacheClearing:
     def test_clears_memory_aware_cache(self):
         """Verify memory-aware cache is cleared on generator rebuild."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
         assert "memory_aware_cache" in source
@@ -379,7 +379,7 @@ class TestEnsureBatchGeneratorCacheClearing:
     def test_clears_legacy_prefix_cache(self):
         """Verify legacy prefix cache is cleared on generator rebuild."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
         assert "prefix_cache" in source
@@ -396,7 +396,7 @@ class TestCleanupFinishedCacheStore:
 
     def test_has_paged_store_path(self):
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "block_aware_cache" in source
@@ -404,7 +404,7 @@ class TestCleanupFinishedCacheStore:
 
     def test_has_memory_aware_store_path(self):
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "memory_aware_cache" in source
@@ -412,7 +412,7 @@ class TestCleanupFinishedCacheStore:
 
     def test_has_legacy_store_path(self):
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "prefix_cache" in source
@@ -420,7 +420,7 @@ class TestCleanupFinishedCacheStore:
 
     def test_has_disk_cache_l2_writes(self):
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "disk_cache" in source
@@ -428,7 +428,7 @@ class TestCleanupFinishedCacheStore:
     def test_uses_extracted_tokens_not_prompt_token_ids(self):
         """Ensure memory-aware and legacy paths use _extracted_tokens."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         # Should NOT reference prompt_token_ids (doesn't exist on MLLMRequest)
@@ -452,7 +452,7 @@ class TestMetalGCTimer:
     def test_gc_timer_fields_exist(self):
         """Verify GC timer fields are on MLLMScheduler source."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.__init__)
         assert "_last_metal_gc_time" in source
@@ -461,7 +461,7 @@ class TestMetalGCTimer:
     def test_step_has_periodic_gc(self):
         """Verify step() includes periodic Metal GC."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.step)
         assert "clear_memory_cache" in source
@@ -470,7 +470,7 @@ class TestMetalGCTimer:
     def test_cleanup_has_idle_gc(self):
         """Verify _cleanup_finished clears Metal cache when idle."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "clear_memory_cache" in source
@@ -487,7 +487,7 @@ class TestGetStatsCacheReporting:
     def test_get_stats_reports_cache_modes(self):
         """Verify get_stats source includes all cache mode reporting."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.get_stats)
         assert "paged_cache" in source
@@ -529,7 +529,7 @@ class TestCacheInitChain:
     def test_init_source_has_three_tiers(self):
         """Verify init chain covers all 3 tiers."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.__init__)
 
@@ -547,7 +547,7 @@ class TestCacheInitChain:
     def test_init_source_has_disk_cache_l2(self):
         """Verify disk cache L2 initialization is present."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.__init__)
         assert "DiskCacheManager" in source
@@ -555,7 +555,7 @@ class TestCacheInitChain:
     def test_init_source_has_block_disk_store(self):
         """Verify block disk store wiring is present."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.__init__)
         assert "BlockDiskStore" in source
@@ -571,7 +571,7 @@ class TestProcessPromptsCacheFetch:
 
     def test_has_paged_fetch(self):
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "block_aware_cache" in source
@@ -579,21 +579,21 @@ class TestProcessPromptsCacheFetch:
 
     def test_has_memory_aware_fetch(self):
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "memory_aware_cache" in source
 
     def test_has_legacy_fetch(self):
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "prefix_cache" in source
 
     def test_has_disk_cache_l2_fallback(self):
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "disk_cache" in source
@@ -601,7 +601,7 @@ class TestProcessPromptsCacheFetch:
     def test_has_hybrid_ssm_state_fetch(self):
         """Verify hybrid models check companion SSM state cache."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "_ssm_state_cache" in source
@@ -610,7 +610,7 @@ class TestProcessPromptsCacheFetch:
     def test_has_ssm_state_capture(self):
         """Verify SSM state is captured at prompt boundary during prefill."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "_ssm_state_cache.store" in source
@@ -628,7 +628,7 @@ class TestMetalCacheLimit:
     def test_init_has_cache_limit(self):
         """Verify batch generator sets Metal cache limit."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator.__init__)
         assert "set_cache_limit" in source
@@ -637,7 +637,7 @@ class TestMetalCacheLimit:
     def test_close_restores_cache_limit(self):
         """Verify close() restores old cache limit."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator.close)
         assert "_old_cache_limit" in source

@@ -141,14 +141,14 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
 
     // Pre-validate before entering launch state
     try {
-      // Check vllm-mlx installation
+      // Check vmlx-engine installation
       const installation = await window.api.vllm.checkInstallation()
       if (!installation?.installed) {
         setLaunchError(
           'Inference engine not found. Restart vMLX to run first-time setup, ' +
           'or install manually:\n\n' +
-          '  uv tool install vllm-mlx\n' +
-          '  pip3 install vllm-mlx'
+          '  uv tool install vmlx-engine\n' +
+          '  pip3 install vmlx-engine'
         )
         return
       }

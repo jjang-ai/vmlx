@@ -90,16 +90,16 @@ uv tool install git+https://github.com/vmlxllm/vmlx.git
 pip install git+https://github.com/vmlxllm/vmlx.git
 
 # Start server
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
 
 # With continuous batching
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
 
 # With API key
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --api-key your-key
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --api-key your-key
 
 # With speculative decoding (20-90% faster)
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 \
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 \
   --speculative-model mlx-community/Llama-3.2-1B-Instruct-4bit \
   --num-draft-tokens 3
 ```
@@ -142,7 +142,7 @@ print(response.choices[0].message.content)
 Extract thinking process from reasoning-capable models:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 ```
 
 | Parser | Models | Format |
@@ -180,13 +180,13 @@ Plus MCP tool server passthrough for local sessions.
               ┌────────────┴────────────┐
               ▼                         ▼
 ┌──────────────────────┐  ┌──────────────────────┐
-│   Local vllm-mlx     │  │   Remote Endpoints   │
+│   Local vmlx-engine     │  │   Remote Endpoints   │
 │   (spawned process)  │  │ (OpenAI, Groq, etc.) │
 └──────────────────────┘  └──────────────────────┘
               │
               ▼
 ┌─────────────────────────────────────────────────────────┐
-│                    vLLM-MLX Engine                        │
+│                    vMLX Engine Engine                        │
 │         (FastAPI + MLX inference + caching)               │
 └─────────────────────────────────────────────────────────┘
               │
@@ -213,7 +213,7 @@ Plus MCP tool server passthrough for local sessions.
 | Desktop app | Electron 28 + React 18 + TypeScript |
 | Styling | Tailwind CSS |
 | Database | SQLite (WAL mode, better-sqlite3) |
-| Inference engine | vLLM-MLX v0.2.8 (Python, FastAPI) |
+| Inference engine | vMLX Engine v0.2.8 (Python, FastAPI) |
 | ML framework | Apple MLX (Metal GPU acceleration) |
 | Build | electron-vite + electron-builder |
 | Tests | Vitest (panel: 80 tests), pytest (engine: 1295+ tests) |

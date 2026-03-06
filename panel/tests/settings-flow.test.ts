@@ -114,7 +114,7 @@ function buildCommandPreview(
     config: SessionConfig,
     detected?: DetectedConfig
 ): string {
-    const parts = ['vllm-mlx serve', modelPath]
+    const parts = ['vmlx-engine serve', modelPath]
     const isVLM = config.isMultimodal ?? !!detected?.isMultimodal
 
     parts.push('--host', config.host)
@@ -149,7 +149,7 @@ function buildCommandPreview(
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
     } else {
-        // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx)
+        // Auto-enable continuous batching when prefix cache is on (required by vmlx-engine)
         if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
             parts.push('--continuous-batching')
         }

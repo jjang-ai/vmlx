@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from vllm_mlx.memory_cache import (
+from vmlx_engine.memory_cache import (
     CacheStats,
     MemoryAwarePrefixCache,
     MemoryCacheConfig,
@@ -57,7 +57,7 @@ class TestMemoryCacheConfig:
 
     def test_compute_memory_limit_auto(self):
         with patch(
-            "vllm_mlx.memory_cache._get_available_memory",
+            "vmlx_engine.memory_cache._get_available_memory",
             return_value=8 * 1024 * 1024 * 1024,  # 8GB
         ):
             config = MemoryCacheConfig(max_memory_percent=0.25)
@@ -66,7 +66,7 @@ class TestMemoryCacheConfig:
 
     def test_compute_memory_limit_fallback(self):
         with patch(
-            "vllm_mlx.memory_cache._get_available_memory",
+            "vmlx_engine.memory_cache._get_available_memory",
             return_value=0,  # Detection failed
         ):
             config = MemoryCacheConfig(max_memory_percent=0.25)

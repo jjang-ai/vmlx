@@ -34,7 +34,7 @@ class TestNormalizeModelName:
 
     def test_full_local_path_extracts_org_model(self):
         """Full filesystem path → last two path components."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name(
             "/Users/example/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
@@ -43,21 +43,21 @@ class TestNormalizeModelName:
 
     def test_huggingface_id_unchanged(self):
         """HuggingFace-style 'org/model' stays unchanged."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name("mlx-community/Llama-3.2-3B-Instruct-4bit")
         assert result == "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
     def test_single_component_stays_as_is(self):
         """A bare model name without org prefix stays unchanged."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name("my-local-model")
         assert result == "my-local-model"
 
     def test_path_with_trailing_slash(self):
         """Trailing slashes are stripped before extraction."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name(
             "/Users/example/models/mlx-community/Qwen3-8B/"
@@ -66,7 +66,7 @@ class TestNormalizeModelName:
 
     def test_deep_nested_path(self):
         """Very deep path still extracts last two components."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name(
             "/a/b/c/d/e/f/org-name/model-name"
@@ -75,14 +75,14 @@ class TestNormalizeModelName:
 
     def test_relative_path_with_separator(self):
         """Relative path with / is treated as a path."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name("models/org/model")
         assert result == "org/model"
 
     def test_root_path_single_component(self):
         """Path /model → '/model': splits to ['', 'model'], f"{parts[-2]}/{parts[-1]}" = '/model'."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         # /model splits to ['', 'model'] — len >= 2,
         # so returns f"{''}/{'model'}" = "/model" (empty org prefix + slash + name).
@@ -91,7 +91,7 @@ class TestNormalizeModelName:
 
     def test_empty_string(self):
         """Empty string → empty string."""
-        from vllm_mlx.server import _normalize_model_name
+        from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name("")
         assert result == ""
@@ -107,7 +107,7 @@ class TestResolveModelName:
 
     def test_served_name_wins_over_actual(self):
         """served_model_name has highest priority."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -121,7 +121,7 @@ class TestResolveModelName:
 
     def test_actual_name_when_no_served_name(self):
         """Falls back to _model_name when no served name."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -135,7 +135,7 @@ class TestResolveModelName:
 
     def test_default_when_nothing_set(self):
         """Falls back to 'default' when nothing is set."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -149,7 +149,7 @@ class TestResolveModelName:
 
     def test_empty_served_name_treated_as_none(self):
         """Empty string served_model_name is falsy — falls through to _model_name."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -163,7 +163,7 @@ class TestResolveModelName:
 
     def test_served_name_with_special_characters(self):
         """Served name can be any arbitrary string."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -186,7 +186,7 @@ class TestModelsEndpoint:
 
     def test_lists_served_name_as_primary(self):
         """When served_model_name is set, it appears first in the list."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -205,7 +205,7 @@ class TestModelsEndpoint:
 
     def test_lists_only_actual_when_no_served_name(self):
         """When no served_model_name, only actual name appears."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -222,7 +222,7 @@ class TestModelsEndpoint:
 
     def test_no_duplicate_when_served_equals_actual(self):
         """When served_model_name == _model_name, no duplicate listing."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -239,7 +239,7 @@ class TestModelsEndpoint:
 
     def test_empty_list_when_default(self):
         """When resolved name is 'default', list is empty."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -255,7 +255,7 @@ class TestModelsEndpoint:
 
     def test_response_format_is_openai_compatible(self):
         """Models response has correct OpenAI-compatible structure."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -269,7 +269,7 @@ class TestModelsEndpoint:
             model = result.data[0]
             assert model.object == "model"
             assert model.id == "test-model"
-            assert model.owned_by == "vllm-mlx"
+            assert model.owned_by == "vmlx-engine"
             assert isinstance(model.created, int)
         finally:
             server._served_model_name = orig_served
@@ -293,7 +293,7 @@ class TestPermissiveModelValidation:
         """Request model matching served name — no warning logged."""
         import logging
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -312,7 +312,7 @@ class TestPermissiveModelValidation:
 
     def test_matching_actual_name_no_warning(self):
         """Request model matching actual name (not served) — no warning."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -331,7 +331,7 @@ class TestPermissiveModelValidation:
 
     def test_mismatched_model_accepted_permissively(self):
         """Request with unknown model — accepted (permissive single-model server)."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -355,7 +355,7 @@ class TestPermissiveModelValidation:
 
     def test_none_model_accepted(self):
         """Request with model=None — accepted and overwritten."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -373,7 +373,7 @@ class TestPermissiveModelValidation:
 
     def test_empty_string_model_accepted(self):
         """Request with model='' — accepted and overwritten."""
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         orig_served = server._served_model_name
         orig_model = server._model_name
@@ -408,7 +408,7 @@ class TestValidationStructure:
         """Chat completions endpoint validates model name."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.create_chat_completion)
         # Must call _resolve_model_name
@@ -420,7 +420,7 @@ class TestValidationStructure:
         """Responses API endpoint validates model name."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.create_response)
         # Must call _resolve_model_name
@@ -432,7 +432,7 @@ class TestValidationStructure:
         """Neither endpoint raises HTTPException for model name mismatch."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         for func in [server.create_chat_completion, server.create_response]:
             source = inspect.getsource(func)
@@ -452,7 +452,7 @@ class TestValidationStructure:
         """Validation check in chat completions accepts both served and actual name."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.create_chat_completion)
         # The validation condition should check both resolved_name AND _model_name
@@ -463,7 +463,7 @@ class TestValidationStructure:
         """Validation check in responses API accepts both served and actual name."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.create_response)
         assert "request.model != resolved_name" in source
@@ -482,7 +482,7 @@ class TestLoadModelServedName:
         """load_model() has served_model_name parameter."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         sig = inspect.signature(server.load_model)
         assert "served_model_name" in sig.parameters
@@ -493,7 +493,7 @@ class TestLoadModelServedName:
         """load_model() body writes to _served_model_name global."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.load_model)
         # Must declare _served_model_name as global
@@ -514,7 +514,7 @@ class TestCLIServedModelName:
         """CLI argparse includes --served-model-name flag."""
         import inspect
 
-        from vllm_mlx import cli
+        from vmlx_engine import cli
 
         source = inspect.getsource(cli)
         assert "--served-model-name" in source
@@ -523,7 +523,7 @@ class TestCLIServedModelName:
         """serve_command() passes served_model_name to load_model()."""
         import inspect
 
-        from vllm_mlx import cli
+        from vmlx_engine import cli
 
         source = inspect.getsource(cli.serve_command)
         assert "served_model_name" in source
@@ -532,7 +532,7 @@ class TestCLIServedModelName:
         """serve_command() prints served model name when set."""
         import inspect
 
-        from vllm_mlx import cli
+        from vmlx_engine import cli
 
         source = inspect.getsource(cli.serve_command)
         assert "Served model name:" in source
@@ -550,7 +550,7 @@ class TestStreamingModelName:
         """stream_chat_completion() references request.model for chunk model field."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_chat_completion)
         # The streaming function should reference request.model for response objects
@@ -560,7 +560,7 @@ class TestStreamingModelName:
         """stream_responses_api() references request.model for response objects."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_responses_api)
         # Responses API uses request.model in dict literals (SSE events), not keyword args
@@ -570,7 +570,7 @@ class TestStreamingModelName:
         """Model config registry lookups use _model_path, not potentially-aliased request.model."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_chat_completion)
         # Registry lookup should use _model_path as primary (not request.model which is aliased)
@@ -595,7 +595,7 @@ class TestSSEStreamingFix:
         """The non-parser streaming path is guarded by `elif not request_parser:`."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_chat_completion)
         # The critical fix: standard path must be `elif not request_parser:`
@@ -606,7 +606,7 @@ class TestSSEStreamingFix:
         """Parser path only fires when both request_parser AND delta_text are truthy."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_chat_completion)
         # The parser path condition
@@ -616,7 +616,7 @@ class TestSSEStreamingFix:
         """Parser path skips chunks with nothing to emit (no content, no reasoning)."""
         import inspect
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         source = inspect.getsource(server.stream_chat_completion)
         # Empty emission guard inside parser path
@@ -633,27 +633,27 @@ class TestModelInfoResponse:
 
     def test_model_info_defaults(self):
         """ModelInfo has correct default fields."""
-        from vllm_mlx.api.models import ModelInfo
+        from vmlx_engine.api.models import ModelInfo
 
         info = ModelInfo(id="test-model")
         assert info.id == "test-model"
         assert info.object == "model"
-        assert info.owned_by == "vllm-mlx"
+        assert info.owned_by == "vmlx-engine"
         assert isinstance(info.created, int)
 
     def test_model_info_serialization(self):
         """ModelInfo serializes correctly for JSON response."""
-        from vllm_mlx.api.models import ModelInfo
+        from vmlx_engine.api.models import ModelInfo
 
         info = ModelInfo(id="my-custom-name")
         data = info.model_dump()
         assert data["id"] == "my-custom-name"
         assert data["object"] == "model"
-        assert data["owned_by"] == "vllm-mlx"
+        assert data["owned_by"] == "vmlx-engine"
 
     def test_models_response_structure(self):
         """ModelsResponse has correct list structure."""
-        from vllm_mlx.api.models import ModelInfo, ModelsResponse
+        from vmlx_engine.api.models import ModelInfo, ModelsResponse
 
         response = ModelsResponse(data=[
             ModelInfo(id="served-name"),
@@ -666,7 +666,7 @@ class TestModelInfoResponse:
 
     def test_models_response_empty(self):
         """ModelsResponse can be empty."""
-        from vllm_mlx.api.models import ModelsResponse
+        from vmlx_engine.api.models import ModelsResponse
 
         response = ModelsResponse(data=[])
         assert response.object == "list"
@@ -674,7 +674,7 @@ class TestModelInfoResponse:
 
     def test_models_response_json_serialization(self):
         """ModelsResponse serializes to OpenAI-compatible JSON."""
-        from vllm_mlx.api.models import ModelInfo, ModelsResponse
+        from vmlx_engine.api.models import ModelInfo, ModelsResponse
 
         response = ModelsResponse(data=[ModelInfo(id="test")])
         json_str = response.model_dump_json()

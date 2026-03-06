@@ -150,7 +150,7 @@ Let's begin the session. I'm ready to help with any technical questions you have
 
     # Test WITHOUT paged cache (standard approach)
     print("\n--- Test WITHOUT Paged Cache ---")
-    from vllm_mlx.prefix_cache import PrefixCacheManager
+    from vmlx_engine.prefix_cache import PrefixCacheManager
 
     standard_cache = PrefixCacheManager(model=model, max_entries=100)
 
@@ -187,8 +187,8 @@ Let's begin the session. I'm ready to help with any technical questions you have
 
     # Test WITH paged cache
     print("\n--- Test WITH Paged Cache ---")
-    from vllm_mlx.paged_cache import PagedCacheManager
-    from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
     paged_manager = PagedCacheManager(block_size=64, max_blocks=500)
     paged_cache = BlockAwarePrefixCache(model=model, paged_cache_manager=paged_manager)
@@ -290,9 +290,9 @@ async def run_real_concurrent_inference(model_name: str):
     import asyncio
     from mlx_lm import load
 
-    from vllm_mlx.engine import AsyncEngineCore, EngineConfig
-    from vllm_mlx.request import SamplingParams
-    from vllm_mlx.scheduler import SchedulerConfig
+    from vmlx_engine.engine import AsyncEngineCore, EngineConfig
+    from vmlx_engine.request import SamplingParams
+    from vmlx_engine.scheduler import SchedulerConfig
 
     print_header("Real Concurrent Inference (20 requests)")
 
@@ -579,7 +579,7 @@ def main():
     print("     TEST COMPLETE")
     print("=" * 70)
     print("\nTo enable paged cache in production:")
-    print("  vllm-mlx serve <model> --continuous-batching --use-paged-cache")
+    print("  vmlx-engine serve <model> --continuous-batching --use-paged-cache")
     print()
 
 

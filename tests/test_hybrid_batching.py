@@ -60,7 +60,7 @@ class TestHybridBatching:
         self, mock_standard_model, mock_hybrid_model, mock_pure_mamba_model
     ):
         """Test that _is_hybrid_model correctly identifies non-standard caches."""
-        from vllm_mlx.scheduler import Scheduler
+        from vmlx_engine.scheduler import Scheduler
 
         # Standard KV-only
         assert Scheduler._is_hybrid_model(mock_standard_model) is False
@@ -75,7 +75,7 @@ class TestHybridBatching:
         mock_no_cache = MagicMock(spec=[])
         assert Scheduler._is_hybrid_model(mock_no_cache) is False
 
-    @patch("vllm_mlx.scheduler.Scheduler._is_hybrid_model")
+    @patch("vmlx_engine.scheduler.Scheduler._is_hybrid_model")
     def test_hybrid_forces_legacy_cache(
         self, mock_is_hybrid, mock_hybrid_model
     ):
@@ -85,7 +85,7 @@ class TestHybridBatching:
         """
         mock_is_hybrid.return_value = True
 
-        from vllm_mlx.scheduler import Scheduler, SchedulerConfig
+        from vmlx_engine.scheduler import Scheduler, SchedulerConfig
         from mlx_lm.tokenizer_utils import TokenizerWrapper
 
         mock_tokenizer = MagicMock(spec=TokenizerWrapper)
@@ -97,7 +97,7 @@ class TestHybridBatching:
             use_paged_cache=False
         )
 
-        with patch("vllm_mlx.scheduler.logger") as mock_logger:
+        with patch("vmlx_engine.scheduler.logger") as mock_logger:
             # We must trap model properties required inside __init__
             mock_hybrid_model.config = MagicMock()
             
@@ -113,14 +113,14 @@ class TestHybridBatching:
                 "Auto-switching to paged cache for correct cache reuse."
             )
 
-    @patch("vllm_mlx.scheduler.Scheduler._is_hybrid_model")
+    @patch("vmlx_engine.scheduler.Scheduler._is_hybrid_model")
     def test_hybrid_allows_paged_cache(
         self, mock_is_hybrid, mock_hybrid_model
     ):
         """Test that paged cache is permitted with hybrid models."""
         mock_is_hybrid.return_value = True
 
-        from vllm_mlx.scheduler import Scheduler, SchedulerConfig
+        from vmlx_engine.scheduler import Scheduler, SchedulerConfig
         from mlx_lm.tokenizer_utils import TokenizerWrapper
 
         mock_tokenizer = MagicMock(spec=TokenizerWrapper)
@@ -133,7 +133,7 @@ class TestHybridBatching:
 
         mock_hybrid_model.config = MagicMock()
         
-        with patch("vllm_mlx.scheduler.logger") as mock_logger:
+        with patch("vmlx_engine.scheduler.logger") as mock_logger:
             scheduler = Scheduler(mock_hybrid_model, mock_tokenizer, config)
             
             # It retains paged cache because paged cache implements custom Mamba block mappings

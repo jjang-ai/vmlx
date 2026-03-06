@@ -68,7 +68,7 @@ Browse thousands of pre-optimized models at: **https://huggingface.co/mlx-commun
 
 ## Model Detection
 
-vllm-mlx auto-detects model capabilities by name patterns:
+vmlx-engine auto-detects model capabilities by name patterns:
 
 ### Multimodal Detection
 - Contains "VL", "Vision", "vision"
@@ -102,13 +102,13 @@ vllm-mlx auto-detects model capabilities by name patterns:
 ### From HuggingFace
 
 ```bash
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit
 ```
 
 ### Local Path
 
 ```bash
-vllm-mlx serve /path/to/local/model
+vmlx-engine serve /path/to/local/model
 ```
 
 ## Finding Models

@@ -25,13 +25,13 @@ export interface AvailableInstaller {
 
 // Common installation paths — uv first (recommended), then pip/brew/conda
 const SEARCH_PATHS = [
-  join(homedir(), '.local', 'bin', 'vllm-mlx'),     // uv tool / pip --user
-  '/opt/homebrew/bin/vllm-mlx',                      // Homebrew (Apple Silicon)
-  '/usr/local/bin/vllm-mlx',                         // Homebrew (Intel)
-  '/usr/bin/vllm-mlx',                               // System pip
-  join(homedir(), 'miniforge3', 'bin', 'vllm-mlx'), // Miniforge
-  join(homedir(), 'anaconda3', 'bin', 'vllm-mlx'),  // Anaconda
-  join(homedir(), 'miniconda3', 'bin', 'vllm-mlx')  // Miniconda
+  join(homedir(), '.local', 'bin', 'vmlx-engine'),     // uv tool / pip --user
+  '/opt/homebrew/bin/vmlx-engine',                      // Homebrew (Apple Silicon)
+  '/usr/local/bin/vmlx-engine',                         // Homebrew (Intel)
+  '/usr/bin/vmlx-engine',                               // System pip
+  join(homedir(), 'miniforge3', 'bin', 'vmlx-engine'), // Miniforge
+  join(homedir(), 'anaconda3', 'bin', 'vmlx-engine'),  // Anaconda
+  join(homedir(), 'miniconda3', 'bin', 'vmlx-engine')  // Miniconda
 ]
 
 /**
@@ -46,7 +46,7 @@ export function getBundledPythonPath(): string | null {
 }
 
 /**
- * Check if vllm-mlx is installed and where
+ * Check if vmlx-engine is installed and where
  */
 export async function checkVllmInstallation(): Promise<VllmInstallation> {
   console.log('[vLLM Manager] Checking installation...')
@@ -55,15 +55,15 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
   const bundledPython = getBundledPythonPath()
   if (bundledPython) {
     try {
-      const ver = execSync(`"${bundledPython}" -s -c "import vllm_mlx; print(vllm_mlx.__version__)"`, {
+      const ver = execSync(`"${bundledPython}" -s -c "import vmlx_engine; print(vmlx_engine.__version__)"`, {
         encoding: 'utf-8',
         timeout: 10000,
         env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
       }).trim()
-      console.log(`[vLLM Manager] Found bundled Python with vllm_mlx ${ver}`)
+      console.log(`[vLLM Manager] Found bundled Python with vmlx_engine ${ver}`)
       return { installed: true, path: bundledPython, version: ver, method: 'bundled', bundled: true }
     } catch (_) {
-      console.log('[vLLM Manager] Bundled Python found but vllm_mlx import failed, falling through to system')
+      console.log('[vLLM Manager] Bundled Python found but vmlx_engine import failed, falling through to system')
     }
   }
 
@@ -79,7 +79,7 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
 
   // 2. Check PATH
   try {
-    const result = await exec('which vllm-mlx')
+    const result = await exec('which vmlx-engine')
     const path = result.stdout.trim()
 
     if (path) {
@@ -98,7 +98,7 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
 }
 
 /**
- * Get version from vllm-mlx binary
+ * Get version from vmlx-engine binary
  */
 async function getVersionFromBinary(path: string): Promise<string> {
   // Get version via Python package metadata (works with editable installs)
@@ -106,7 +106,7 @@ async function getVersionFromBinary(path: string): Promise<string> {
     const shebangResult = await exec(`head -1 "${path}"`)
     const shebang = shebangResult.stdout.trim().replace(/^#\!/, '').trim()
     if (shebang) {
-      const pyResult = await exec(`"${shebang}" -c "import importlib.metadata; print(importlib.metadata.version('vllm-mlx'))"`)
+      const pyResult = await exec(`"${shebang}" -c "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"`)
       const ver = pyResult.stdout.trim()
       if (/^\d+\.\d+\.\d+/.test(ver)) {
         console.log(`[vLLM Manager] Version: ${ver}`)
@@ -215,22 +215,22 @@ export async function detectAvailableInstallers(): Promise<AvailableInstaller[]>
 }
 
 /**
- * Find the bundled vllm-mlx source directory.
- * In packaged app: Resources/vllm-mlx-source/
+ * Find the bundled vmlx-engine source directory.
+ * In packaged app: Resources/vmlx-engine-source/
  * In dev mode: monorepo root (../  from panel/)
  */
 export function getBundledSourcePath(): string | null {
   // Packaged app: extraResources lands in process.resourcesPath
   if (app.isPackaged) {
-    const bundled = join(process.resourcesPath, 'vllm-mlx-source')
-    if (existsSync(join(bundled, 'pyproject.toml')) && existsSync(join(bundled, 'vllm_mlx'))) {
+    const bundled = join(process.resourcesPath, 'vmlx-engine-source')
+    if (existsSync(join(bundled, 'pyproject.toml')) && existsSync(join(bundled, 'vmlx_engine'))) {
       return bundled
     }
   }
 
   // Dev mode: monorepo root is one level up from panel/
   const devPath = join(app.getAppPath(), '..')
-  if (existsSync(join(devPath, 'pyproject.toml')) && existsSync(join(devPath, 'vllm_mlx'))) {
+  if (existsSync(join(devPath, 'pyproject.toml')) && existsSync(join(devPath, 'vmlx_engine'))) {
     return devPath
   }
 
@@ -248,7 +248,7 @@ function buildInstallCommand(
 ): { cmd: string; args: string[] } {
   const bundledSource = getBundledSourcePath()
   // Use bundled source path if available, otherwise fall back to PyPI package name
-  const pkg = bundledSource || 'vllm-mlx'
+  const pkg = bundledSource || 'vmlx-engine'
 
   if (method === 'uv') {
     const cmd = installerPath || 'uv'
@@ -258,7 +258,7 @@ function buildInstallCommand(
       // uv tool upgrade doesn't support local paths — reinstall with --force
       return bundledSource
         ? { cmd, args: ['tool', 'install', '--force', pkg] }
-        : { cmd, args: ['tool', 'upgrade', 'vllm-mlx'] }
+        : { cmd, args: ['tool', 'upgrade', 'vmlx-engine'] }
     }
   } else {
     const cmd = installerPath || 'pip3'
@@ -274,10 +274,10 @@ function buildInstallCommand(
 let activeInstall: ChildProcess | null = null
 
 /**
- * Install or upgrade vllm-mlx with streaming output.
+ * Install or upgrade vmlx-engine with streaming output.
  * Calls onLog for each line of output, onComplete when done.
  *
- * method='bundled-update' reinstalls vllm-mlx from bundled source into bundled Python
+ * method='bundled-update' reinstalls vmlx-engine from bundled source into bundled Python
  * (fast, no-deps reinstall for engine updates).
  */
 export function installVllmStreaming(
@@ -371,13 +371,13 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
 
   let current = ''
   try {
-    current = execSync(`"${bundledPython}" -s -c "import vllm_mlx; print(getattr(vllm_mlx, '__version__', 'unknown'))"`, {
+    current = execSync(`"${bundledPython}" -s -c "import vmlx_engine; print(getattr(vmlx_engine, '__version__', 'unknown'))"`, {
       encoding: 'utf-8',
       timeout: 10000,
       env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
     }).trim()
   } catch (_) {
-    // Can't import vllm_mlx at all — needs install, not just update
+    // Can't import vmlx_engine at all — needs install, not just update
     current = 'unknown'
   }
 

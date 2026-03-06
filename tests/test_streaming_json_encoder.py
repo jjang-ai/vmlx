@@ -15,7 +15,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_completion_chunk(self):
         """Test encoding a single completion chunk with content."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-abc123",
@@ -46,7 +46,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_completion_chunk_with_finish_reason(self):
         """Test encoding a completion chunk with finish_reason."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-abc123",
@@ -68,7 +68,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_chat_chunk_with_role(self):
         """Test encoding a chat chunk with role (first chunk)."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="chatcmpl-xyz789",
@@ -95,7 +95,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_chat_chunk_with_content(self):
         """Test encoding a chat chunk with content."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="chatcmpl-xyz789",
@@ -120,7 +120,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_chat_chunk_with_finish_reason(self):
         """Test encoding a chat chunk with finish_reason."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="chatcmpl-xyz789",
@@ -141,7 +141,7 @@ class TestStreamingJSONEncoder:
 
     def test_escape_special_characters(self):
         """Test that special JSON characters are properly escaped."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",
@@ -167,7 +167,7 @@ class TestStreamingJSONEncoder:
 
     def test_escape_unicode_characters(self):
         """Test that unicode characters are handled correctly."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",
@@ -191,7 +191,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_done_message(self):
         """Test encoding the [DONE] message."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",
@@ -205,7 +205,7 @@ class TestStreamingJSONEncoder:
 
     def test_created_timestamp_is_present(self):
         """Test that created timestamp is included."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
         import time
 
         before = int(time.time())
@@ -232,7 +232,7 @@ class TestStreamingJSONEncoder:
 
     def test_encode_completion_chunk_with_usage(self):
         """Test encoding a completion chunk with usage stats."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",
@@ -266,7 +266,7 @@ class TestStreamingJSONEncoderPerformance:
 
     def test_encoder_produces_same_output_as_json_dumps(self):
         """Verify encoder output matches what json.dumps would produce."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
         import time
 
         response_id = "cmpl-perf123"
@@ -319,7 +319,7 @@ class TestStreamingJSONEncoderBenchmark:
 
         This test simulates streaming 100 tokens and compares performance.
         """
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
         import time
 
         num_tokens = 100
@@ -374,7 +374,7 @@ class TestStreamingJSONEncoderEdgeCases:
 
     def test_empty_text(self):
         """Test encoding empty text."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",
@@ -395,7 +395,7 @@ class TestStreamingJSONEncoderEdgeCases:
 
     def test_very_long_text(self):
         """Test encoding very long text."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",
@@ -418,7 +418,7 @@ class TestStreamingJSONEncoderEdgeCases:
 
     def test_model_name_with_special_chars(self):
         """Test model name with special characters."""
-        from vllm_mlx.api.streaming import StreamingJSONEncoder
+        from vmlx_engine.api.streaming import StreamingJSONEncoder
 
         encoder = StreamingJSONEncoder(
             response_id="cmpl-test",

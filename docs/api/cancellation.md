@@ -247,7 +247,7 @@ async function cancelMessage() {
 
 **Solution**: Use `--continuous-batching` flag:
 ```bash
-vllm-mlx serve model --continuous-batching
+vmlx-engine serve model --continuous-batching
 ```
 
 ### No request ID in response

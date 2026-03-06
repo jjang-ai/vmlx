@@ -11,8 +11,8 @@ import time
 import pytest
 from unittest.mock import MagicMock
 
-from vllm_mlx.request import Request, SamplingParams
-from vllm_mlx.scheduler import Scheduler, SchedulerConfig
+from vmlx_engine.request import Request, SamplingParams
+from vmlx_engine.scheduler import Scheduler, SchedulerConfig
 
 
 class TestContinuousBatchingBasic:
@@ -69,7 +69,7 @@ class TestContinuousBatchingIntegration:
 
     async def test_single_request(self, small_model):
         """Test single request processing."""
-        from vllm_mlx import (
+        from vmlx_engine import (
             AsyncEngineCore,
             EngineConfig,
             SamplingParams,
@@ -106,7 +106,7 @@ class TestContinuousBatchingIntegration:
 
     async def test_concurrent_requests(self, small_model):
         """Test multiple concurrent requests are batched."""
-        from vllm_mlx import (
+        from vmlx_engine import (
             AsyncEngineCore,
             EngineConfig,
             SamplingParams,
@@ -156,7 +156,7 @@ class TestContinuousBatchingIntegration:
 
     async def test_batching_improves_throughput(self, small_model):
         """Test that batching improves throughput vs sequential."""
-        from vllm_mlx import (
+        from vmlx_engine import (
             AsyncEngineCore,
             EngineConfig,
             SamplingParams,
@@ -228,7 +228,7 @@ if __name__ == "__main__":
 
     async def run_benchmark():
         from mlx_lm import load
-        from vllm_mlx import (
+        from vmlx_engine import (
             AsyncEngineCore,
             EngineConfig,
             SamplingParams,

@@ -23,7 +23,7 @@ class TestRequestModels:
 
     def test_chat_message_text_only(self):
         """Test chat message with text content."""
-        from vllm_mlx.server import Message
+        from vmlx_engine.server import Message
 
         msg = Message(role="user", content="Hello")
         assert msg.role == "user"
@@ -31,7 +31,7 @@ class TestRequestModels:
 
     def test_chat_message_multimodal(self):
         """Test chat message with multimodal content."""
-        from vllm_mlx.server import Message
+        from vmlx_engine.server import Message
 
         content = [
             {"type": "text", "text": "What's this?"},
@@ -45,7 +45,7 @@ class TestRequestModels:
 
     def test_image_url_model(self):
         """Test ImageUrl model."""
-        from vllm_mlx.server import ImageUrl
+        from vmlx_engine.server import ImageUrl
 
         img_url = ImageUrl(url="https://example.com/image.jpg")
         assert img_url.url == "https://example.com/image.jpg"
@@ -53,14 +53,14 @@ class TestRequestModels:
 
     def test_video_url_model(self):
         """Test VideoUrl model."""
-        from vllm_mlx.server import VideoUrl
+        from vmlx_engine.server import VideoUrl
 
         video_url = VideoUrl(url="https://example.com/video.mp4")
         assert video_url.url == "https://example.com/video.mp4"
 
     def test_content_part_text(self):
         """Test ContentPart with text."""
-        from vllm_mlx.server import ContentPart
+        from vmlx_engine.server import ContentPart
 
         part = ContentPart(type="text", text="Hello world")
         assert part.type == "text"
@@ -68,7 +68,7 @@ class TestRequestModels:
 
     def test_content_part_image(self):
         """Test ContentPart with image_url."""
-        from vllm_mlx.server import ContentPart
+        from vmlx_engine.server import ContentPart
 
         part = ContentPart(
             type="image_url", image_url={"url": "https://example.com/img.jpg"}
@@ -82,7 +82,7 @@ class TestRequestModels:
 
     def test_content_part_video(self):
         """Test ContentPart with video."""
-        from vllm_mlx.server import ContentPart
+        from vmlx_engine.server import ContentPart
 
         part = ContentPart(type="video", video="/path/to/video.mp4")
         assert part.type == "video"
@@ -90,7 +90,7 @@ class TestRequestModels:
 
     def test_content_part_video_url(self):
         """Test ContentPart with video_url."""
-        from vllm_mlx.server import ContentPart
+        from vmlx_engine.server import ContentPart
 
         part = ContentPart(
             type="video_url", video_url={"url": "https://example.com/video.mp4"}
@@ -108,7 +108,7 @@ class TestChatCompletionRequest:
 
     def test_basic_request(self):
         """Test basic chat completion request."""
-        from vllm_mlx.server import ChatCompletionRequest, Message
+        from vmlx_engine.server import ChatCompletionRequest, Message
 
         request = ChatCompletionRequest(
             model="test-model", messages=[Message(role="user", content="Hello")]
@@ -124,7 +124,7 @@ class TestChatCompletionRequest:
 
     def test_request_with_options(self):
         """Test request with custom options."""
-        from vllm_mlx.server import ChatCompletionRequest, Message
+        from vmlx_engine.server import ChatCompletionRequest, Message
 
         request = ChatCompletionRequest(
             model="test-model",
@@ -140,7 +140,7 @@ class TestChatCompletionRequest:
 
     def test_request_with_video_params(self):
         """Test request with video parameters."""
-        from vllm_mlx.server import ChatCompletionRequest, Message
+        from vmlx_engine.server import ChatCompletionRequest, Message
 
         request = ChatCompletionRequest(
             model="test-model",
@@ -158,7 +158,7 @@ class TestCompletionRequest:
 
     def test_basic_completion_request(self):
         """Test basic completion request."""
-        from vllm_mlx.server import CompletionRequest
+        from vmlx_engine.server import CompletionRequest
 
         request = CompletionRequest(model="test-model", prompt="Once upon a time")
 
@@ -177,7 +177,7 @@ class TestHelperFunctions:
 
     def test_is_mllm_model_patterns(self):
         """Test MLLM model detection patterns."""
-        from vllm_mlx.server import is_mllm_model
+        from vmlx_engine.server import is_mllm_model
 
         # Should detect as MLLM
         assert is_mllm_model("mlx-community/Qwen3-VL-4B-Instruct-3bit")
@@ -194,7 +194,7 @@ class TestHelperFunctions:
 
     def test_extract_multimodal_content_text_only(self):
         """Test extracting content from text-only messages."""
-        from vllm_mlx.server import extract_multimodal_content, Message
+        from vmlx_engine.server import extract_multimodal_content, Message
 
         messages = [
             Message(role="user", content="Hello"),
@@ -210,7 +210,7 @@ class TestHelperFunctions:
 
     def test_extract_multimodal_content_with_image(self):
         """Test extracting content with images."""
-        from vllm_mlx.server import extract_multimodal_content, Message
+        from vmlx_engine.server import extract_multimodal_content, Message
 
         messages = [
             Message(
@@ -234,7 +234,7 @@ class TestHelperFunctions:
 
     def test_extract_multimodal_content_with_video(self):
         """Test extracting content with videos."""
-        from vllm_mlx.server import extract_multimodal_content, Message
+        from vmlx_engine.server import extract_multimodal_content, Message
 
         messages = [
             Message(
@@ -255,7 +255,7 @@ class TestHelperFunctions:
 
     def test_extract_multimodal_content_with_video_url(self):
         """Test extracting content with video_url format."""
-        from vllm_mlx.server import extract_multimodal_content, Message
+        from vmlx_engine.server import extract_multimodal_content, Message
 
         messages = [
             Message(
@@ -285,7 +285,7 @@ class TestRateLimiter:
 
     def test_rate_limiter_disabled_by_default(self):
         """Test that rate limiter allows all requests when disabled."""
-        from vllm_mlx.server import RateLimiter
+        from vmlx_engine.server import RateLimiter
 
         limiter = RateLimiter(requests_per_minute=5, enabled=False)
 
@@ -297,7 +297,7 @@ class TestRateLimiter:
 
     def test_rate_limiter_enforces_limit(self):
         """Test that rate limiter enforces the request limit."""
-        from vllm_mlx.server import RateLimiter
+        from vmlx_engine.server import RateLimiter
 
         limiter = RateLimiter(requests_per_minute=3, enabled=True)
 
@@ -314,7 +314,7 @@ class TestRateLimiter:
 
     def test_rate_limiter_per_client(self):
         """Test that rate limits are tracked per client."""
-        from vllm_mlx.server import RateLimiter
+        from vmlx_engine.server import RateLimiter
 
         limiter = RateLimiter(requests_per_minute=2, enabled=True)
 
@@ -331,7 +331,7 @@ class TestRateLimiter:
     def test_rate_limiter_thread_safety(self):
         """Test that rate limiter is thread-safe."""
         import threading
-        from vllm_mlx.server import RateLimiter
+        from vmlx_engine.server import RateLimiter
 
         limiter = RateLimiter(requests_per_minute=100, enabled=True)
         results = []
@@ -364,7 +364,7 @@ class TestTempFileManager:
         """Test registering and cleaning up a single temp file."""
         import tempfile
         import os
-        from vllm_mlx.models.mllm import TempFileManager
+        from vmlx_engine.models.mllm import TempFileManager
 
         manager = TempFileManager()
 
@@ -387,7 +387,7 @@ class TestTempFileManager:
         """Test cleaning up all registered temp files."""
         import tempfile
         import os
-        from vllm_mlx.models.mllm import TempFileManager
+        from vmlx_engine.models.mllm import TempFileManager
 
         manager = TempFileManager()
         paths = []
@@ -414,7 +414,7 @@ class TestTempFileManager:
 
     def test_cleanup_nonexistent_file(self):
         """Test cleanup of a non-existent file."""
-        from vllm_mlx.models.mllm import TempFileManager
+        from vmlx_engine.models.mllm import TempFileManager
 
         manager = TempFileManager()
 
@@ -426,7 +426,7 @@ class TestTempFileManager:
         """Test that TempFileManager is thread-safe."""
         import threading
         import tempfile
-        from vllm_mlx.models.mllm import TempFileManager
+        from vmlx_engine.models.mllm import TempFileManager
 
         manager = TempFileManager()
         paths = []
@@ -465,7 +465,7 @@ class TestRequestOutputCollectorThreadSafety:
     def test_waiting_consumers_thread_safe(self):
         """Test that _waiting_consumers counter is thread-safe."""
         import threading
-        from vllm_mlx.output_collector import RequestOutputCollector
+        from vmlx_engine.output_collector import RequestOutputCollector
 
         # Reset the counter
         with RequestOutputCollector._waiting_lock:
@@ -496,7 +496,7 @@ class TestRequestOutputCollectorThreadSafety:
 
     def test_has_waiting_consumers_method(self):
         """Test has_waiting_consumers class method."""
-        from vllm_mlx.output_collector import RequestOutputCollector
+        from vmlx_engine.output_collector import RequestOutputCollector
 
         # Reset counter
         with RequestOutputCollector._waiting_lock:
@@ -519,7 +519,7 @@ class TestRequestTimeoutField:
 
     def test_chat_completion_request_timeout_field(self):
         """Test that ChatCompletionRequest has timeout field."""
-        from vllm_mlx.server import ChatCompletionRequest, Message
+        from vmlx_engine.server import ChatCompletionRequest, Message
 
         # Default should be None
         request = ChatCompletionRequest(
@@ -537,7 +537,7 @@ class TestRequestTimeoutField:
 
     def test_completion_request_timeout_field(self):
         """Test that CompletionRequest has timeout field."""
-        from vllm_mlx.server import CompletionRequest
+        from vmlx_engine.server import CompletionRequest
 
         # Default should be None
         request = CompletionRequest(model="test-model", prompt="Once upon a time")
@@ -578,7 +578,7 @@ class TestAPIKeyVerification:
         from fastapi.security import HTTPAuthorizationCredentials
 
         # Import and set up the module
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         original_key = server._api_key
 
@@ -605,7 +605,7 @@ class TestAPIKeyVerification:
         import asyncio
         from fastapi.security import HTTPAuthorizationCredentials
 
-        import vllm_mlx.server as server
+        import vmlx_engine.server as server
 
         original_key = server._api_key
 
@@ -631,7 +631,7 @@ class TestRateLimiterHTTPResponse:
 
     def test_rate_limiter_returns_retry_after(self):
         """Test that rate limiter returns retry_after when limit exceeded."""
-        from vllm_mlx.server import RateLimiter
+        from vmlx_engine.server import RateLimiter
 
         limiter = RateLimiter(requests_per_minute=2, enabled=True)
 
@@ -649,7 +649,7 @@ class TestRateLimiterHTTPResponse:
 
     def test_rate_limiter_window_cleanup(self):
         """Test that rate limiter cleans up old requests from sliding window."""
-        from vllm_mlx.server import RateLimiter
+        from vmlx_engine.server import RateLimiter
         import time
 
         limiter = RateLimiter(requests_per_minute=2, enabled=True)
@@ -743,5 +743,5 @@ def pytest_addoption(parser):
         "--server-url",
         action="store",
         default="http://localhost:8000",
-        help="URL of the vllm-mlx server for integration tests",
+        help="URL of the vmlx-engine server for integration tests",
     )

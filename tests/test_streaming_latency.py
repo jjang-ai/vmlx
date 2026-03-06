@@ -10,7 +10,7 @@ This script measures:
 
 Usage:
     # Start server first:
-    vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit
+    vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit
 
     # Run test:
     python tests/test_streaming_latency.py
@@ -213,8 +213,8 @@ async def test_output_collector():
 
     sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 
-    from vllm_mlx.output_collector import RequestOutputCollector, RequestStreamState
-    from vllm_mlx.request import RequestOutput
+    from vmlx_engine.output_collector import RequestOutputCollector, RequestStreamState
+    from vmlx_engine.request import RequestOutput
 
     print("Testing RequestOutputCollector...")
 

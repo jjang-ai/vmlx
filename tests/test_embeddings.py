@@ -24,7 +24,7 @@ class TestEmbeddingModels:
 
     def test_embedding_request_single_string(self):
         """Test EmbeddingRequest with a single input string."""
-        from vllm_mlx.api.models import EmbeddingRequest
+        from vmlx_engine.api.models import EmbeddingRequest
 
         req = EmbeddingRequest(model="test-model", input="Hello world")
         assert req.model == "test-model"
@@ -33,7 +33,7 @@ class TestEmbeddingModels:
 
     def test_embedding_response_serialization(self):
         """Test that EmbeddingResponse serializes to OpenAI-compatible JSON."""
-        from vllm_mlx.api.models import (
+        from vmlx_engine.api.models import (
             EmbeddingData,
             EmbeddingResponse,
             EmbeddingUsage,
@@ -62,16 +62,16 @@ class TestEmbeddingModels:
 class TestEmbeddingEngine:
     """Test the EmbeddingEngine wrapper."""
 
-    @patch("vllm_mlx.embedding.EmbeddingEngine.load")
+    @patch("vmlx_engine.embedding.EmbeddingEngine.load")
     @patch(
-        "vllm_mlx.embedding.EmbeddingEngine.is_loaded",
+        "vmlx_engine.embedding.EmbeddingEngine.is_loaded",
         new_callable=lambda: property(lambda self: True),
     )
     def test_embed_calls_model_directly(self, _mock_loaded, mock_load):
         """Test embed tokenizes and calls model directly (bypasses generate)."""
         import numpy as np
 
-        from vllm_mlx.embedding import EmbeddingEngine
+        from vmlx_engine.embedding import EmbeddingEngine
 
         engine = EmbeddingEngine("test-model")
 
@@ -100,7 +100,7 @@ class TestEmbeddingEngine:
         """Test that a single string input is wrapped into a list."""
         import numpy as np
 
-        from vllm_mlx.embedding import EmbeddingEngine
+        from vmlx_engine.embedding import EmbeddingEngine
 
         engine = EmbeddingEngine("test-model")
 
@@ -126,7 +126,7 @@ class TestEmbeddingEngine:
 
     def test_count_tokens(self):
         """Test token counting for usage reporting."""
-        from vllm_mlx.embedding import EmbeddingEngine
+        from vmlx_engine.embedding import EmbeddingEngine
 
         engine = EmbeddingEngine("test-model")
         # count_tokens uses inner_tok = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
@@ -155,13 +155,13 @@ class TestEmbeddingsEndpoint:
         """Create a FastAPI test client with mocked embedding engine."""
         from fastapi.testclient import TestClient
 
-        from vllm_mlx.server import app
+        from vmlx_engine.server import app
 
         return TestClient(app)
 
     def test_batch_input_preserves_order(self, client):
         """Test batch embedding returns vectors with correct indices."""
-        import vllm_mlx.server as srv
+        import vmlx_engine.server as srv
 
         texts = ["first", "second", "third"]
         mock_engine = MagicMock()
@@ -194,7 +194,7 @@ class TestEmbeddingsEndpoint:
 
     def test_empty_input_returns_400(self, client):
         """Test that empty input list returns 400 error."""
-        import vllm_mlx.server as srv
+        import vmlx_engine.server as srv
 
         mock_engine = MagicMock()
         mock_engine.model_name = "test-embed"
@@ -213,7 +213,7 @@ class TestEmbeddingsEndpoint:
 
     def test_model_hot_swap(self, client):
         """Test that requesting a different model triggers reload."""
-        import vllm_mlx.server as srv
+        import vmlx_engine.server as srv
 
         mock_engine = MagicMock()
         mock_engine.model_name = "old-model"
@@ -224,7 +224,7 @@ class TestEmbeddingsEndpoint:
         srv._embedding_engine = mock_engine
 
         try:
-            with patch("vllm_mlx.embedding.EmbeddingEngine") as mock_cls:
+            with patch("vmlx_engine.embedding.EmbeddingEngine") as mock_cls:
                 new_engine = MagicMock()
                 new_engine.model_name = "new-model"
                 new_engine.embed.return_value = [[0.9]]
@@ -243,7 +243,7 @@ class TestEmbeddingsEndpoint:
 
     def test_model_locked_rejects_different_model(self, client):
         """Test that a locked embedding model rejects requests for different models."""
-        import vllm_mlx.server as srv
+        import vmlx_engine.server as srv
 
         mock_engine = MagicMock()
         mock_engine.model_name = "locked-model"
@@ -279,7 +279,7 @@ class TestEmbeddingsRealModel:
     @pytest.fixture(scope="class")
     def engine(self):
         pytest.importorskip("mlx_embeddings")
-        from vllm_mlx.embedding import EmbeddingEngine
+        from vmlx_engine.embedding import EmbeddingEngine
 
         eng = EmbeddingEngine("mlx-community/all-MiniLM-L6-v2-4bit")
         eng.load()

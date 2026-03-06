@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
 def mock_mllm_components():
     mock_model = MagicMock()
     mock_processor = MagicMock()
-    from vllm_mlx.mllm_scheduler import MLLMSchedulerConfig
+    from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig
     config = MLLMSchedulerConfig()
     return mock_model, mock_processor, config
 
@@ -40,7 +40,7 @@ class TestMLLMSchedulerStability:
     def test_queue_locks_and_maxsize(self, mock_mllm_components):
         """Test queue sizes and lock existence."""
         model, processor, config = mock_mllm_components
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
         
         scheduler = MLLMScheduler(model, processor, config)
         
@@ -57,11 +57,11 @@ class TestMLLMSchedulerStability:
         # Queue should be bounded to 8192
         assert getattr(q, "_maxsize", getattr(q, "maxsize", None)) == 8192
 
-    @patch("vllm_mlx.mllm_scheduler.logger")
+    @patch("vmlx_engine.mllm_scheduler.logger")
     def test_concurrent_mutations_protected(self, mock_logger, mock_mllm_components):
         """Test that mutations to waiting/running state are fully guarded by lock."""
         model, processor, config = mock_mllm_components
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
         
         scheduler = MLLMScheduler(model, processor, config)
         
@@ -87,18 +87,18 @@ class TestMLLMSchedulerStability:
         stats = scheduler.get_stats()
         assert stats["num_waiting"] == 100
 
-    @patch("vllm_mlx.mllm_scheduler.logger")
+    @patch("vmlx_engine.mllm_scheduler.logger")
     def test_error_recovery_rescheduling(self, mock_logger, mock_mllm_components):
         """Test that generation step errors properly clear caches and reschedule."""
         model, processor, config = mock_mllm_components
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
-        from vllm_mlx.request import RequestStatus
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.request import RequestStatus
 
         scheduler = MLLMScheduler(model, processor, config)
         req_id = scheduler.add_request(prompt="Test failure recovery")
 
         # Mock schedule waiting
-        from vllm_mlx.mllm_scheduler import MLLMRequest
+        from vmlx_engine.mllm_scheduler import MLLMRequest
         req = scheduler.requests[req_id]
         
         scheduler.running[req_id] = req
@@ -122,12 +122,12 @@ class TestMLLMSchedulerStability:
         assert output.has_work is False
         assert len(output.outputs) == 0
 
-    @patch("vllm_mlx.mllm_scheduler.logger")
+    @patch("vmlx_engine.mllm_scheduler.logger")
     def test_fail_all_requests_clears_state(self, mock_logger, mock_mllm_components):
         """Test that _fail_all_requests properly fails all waiting+running requests under lock."""
         model, processor, config = mock_mllm_components
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
-        from vllm_mlx.request import RequestStatus
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.request import RequestStatus
 
         scheduler = MLLMScheduler(model, processor, config)
 
@@ -158,11 +158,11 @@ class TestMLLMSchedulerStability:
         assert len(scheduler.requests) == 0
         assert scheduler.batch_generator is None
 
-    @patch("vllm_mlx.mllm_scheduler.logger")
+    @patch("vmlx_engine.mllm_scheduler.logger")
     def test_reset_no_deadlock(self, mock_logger, mock_mllm_components):
         """Test that reset() doesn't deadlock despite calling abort_request() which also acquires RLock."""
         model, processor, config = mock_mllm_components
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         scheduler = MLLMScheduler(model, processor, config)
 
@@ -180,11 +180,11 @@ class TestMLLMSchedulerStability:
         assert len(scheduler.running) == 0
         assert len(scheduler.requests) == 0
 
-    @patch("vllm_mlx.mllm_scheduler.logger")
+    @patch("vmlx_engine.mllm_scheduler.logger")
     def test_get_stats_thread_safe(self, mock_logger, mock_mllm_components):
         """Test that get_stats returns a consistent snapshot even under concurrent writes."""
         model, processor, config = mock_mllm_components
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         scheduler = MLLMScheduler(model, processor, config)
 

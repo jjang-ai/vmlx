@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vllm-mlx"
+name = "vmlx-engine"
 version = "0.2.9"
 description = "vLLM-like inference for Apple Silicon - GPU-accelerated Text, Image, Video & Audio on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [
-    {name = "vllm-mlx contributors"}
+    {name = "vmlx-engine contributors"}
 ]
 keywords = ["llm", "mlx", "apple-silicon", "vllm", "inference", "transformers"]
 classifiers = [
@@ -52,7 +52,7 @@ dependencies = [
     # JSON Schema validation for structured output
     "jsonschema>=4.0.0",
     # Note: mlx-audio moved to optional [audio] deps due to mlx-lm version conflict
-    # See: https://github.com/waybarrios/vllm-mlx/issues/19
+    # See: https://github.com/waybarrios/vmlx-engine/issues/19
     "mlx-embeddings>=0.0.5"
 ]
 
@@ -97,21 +97,21 @@ audio = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vllm-mlx/vllm-mlx"
-Documentation = "https://github.com/vllm-mlx/vllm-mlx#readme"
-Repository = "https://github.com/vllm-mlx/vllm-mlx"
+Homepage = "https://github.com/vmlxllm/vmlx"
+Documentation = "https://github.com/vmlxllm/vmlx#readme"
+Repository = "https://github.com/vmlxllm/vmlx"
 
 [project.entry-points."vllm.platform_plugins"]
-mlx = "vllm_mlx.plugin:mlx_platform_plugin"
+mlx = "vmlx_engine.plugin:mlx_platform_plugin"
 
 [project.scripts]
-vllm-mlx = "vllm_mlx.cli:main"
-vllm-mlx-chat = "vllm_mlx.gradio_app:main"
-vllm-mlx-bench = "vllm_mlx.benchmark:main"
+vmlx-engine = "vmlx_engine.cli:main"
+vmlx-engine-chat = "vmlx_engine.gradio_app:main"
+vmlx-engine-bench = "vmlx_engine.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["vllm_mlx*"]
+include = ["vmlx_engine*"]
 
 [tool.black]
 line-length = 88

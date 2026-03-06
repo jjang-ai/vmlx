@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to vLLM-MLX will be documented in this file.
+All notable changes to vMLX Engine will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -153,8 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Bundled Python Distribution
 - `panel/scripts/bundle-python.sh` creates relocatable Python 3.12 + all deps for standalone distribution
-- App checks bundled Python first, falls back to system vllm-mlx binary
-- Bundled spawn uses `python3 -m vllm_mlx.cli serve` (avoids shebang issues)
+- App checks bundled Python first, falls back to system vmlx-engine binary
+- Bundled spawn uses `python3 -m vmlx_engine.cli serve` (avoids shebang issues)
 - Engine auto-update on startup: compares installed vs source `pyproject.toml` version
 - Setup screen skipped entirely when bundled Python detected
 

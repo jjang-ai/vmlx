@@ -1,13 +1,13 @@
 # Python API
 
-Direct Python API for programmatic access to vllm-mlx.
+Direct Python API for programmatic access to vmlx-engine.
 
 ## Language Models
 
 ### Basic Usage
 
 ```python
-from vllm_mlx.models import MLXLanguageModel
+from vmlx_engine.models import MLXLanguageModel
 
 # Load model
 model = MLXLanguageModel("mlx-community/Llama-3.2-3B-Instruct-4bit")
@@ -60,7 +60,7 @@ output = model.generate(
 ### Basic Usage
 
 ```python
-from vllm_mlx.models import MLXMultimodalLM
+from vmlx_engine.models import MLXMultimodalLM
 
 # Load model
 mllm = MLXMultimodalLM("mlx-community/Qwen3-VL-4B-Instruct-3bit")
@@ -125,7 +125,7 @@ For advanced use cases, use the engine directly:
 ### Simple Engine
 
 ```python
-from vllm_mlx.engine import SimpleEngine
+from vmlx_engine.engine import SimpleEngine
 
 engine = SimpleEngine("mlx-community/Llama-3.2-3B-Instruct-4bit")
 await engine.start()
@@ -142,7 +142,7 @@ await engine.stop()
 ### Batched Engine
 
 ```python
-from vllm_mlx.engine import BatchedEngine
+from vmlx_engine.engine import BatchedEngine
 
 engine = BatchedEngine("mlx-community/Llama-3.2-3B-Instruct-4bit")
 await engine.start()
@@ -172,7 +172,7 @@ print(output.finish_reason)     # "stop" or "length"
 ## Error Handling
 
 ```python
-from vllm_mlx.models import MLXLanguageModel
+from vmlx_engine.models import MLXLanguageModel
 
 try:
     model = MLXLanguageModel("invalid-model")

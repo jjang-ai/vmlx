@@ -19,7 +19,7 @@ class TestCacheBlock:
 
     def test_cache_block_creation(self):
         """Test creating a CacheBlock."""
-        from vllm_mlx.paged_cache import CacheBlock
+        from vmlx_engine.paged_cache import CacheBlock
 
         block = CacheBlock(block_id=0)
         assert block.block_id == 0
@@ -30,7 +30,7 @@ class TestCacheBlock:
 
     def test_cache_block_is_full(self):
         """Test is_full method."""
-        from vllm_mlx.paged_cache import CacheBlock
+        from vmlx_engine.paged_cache import CacheBlock
 
         block = CacheBlock(block_id=0, token_count=64)
         assert block.is_full(64) is True
@@ -41,7 +41,7 @@ class TestCacheBlock:
 
     def test_cache_block_is_shared(self):
         """Test is_shared method."""
-        from vllm_mlx.paged_cache import CacheBlock
+        from vmlx_engine.paged_cache import CacheBlock
 
         block = CacheBlock(block_id=0, ref_count=1)
         assert block.is_shared() is False
@@ -51,7 +51,7 @@ class TestCacheBlock:
 
     def test_cache_block_touch(self):
         """Test touch updates last_access."""
-        from vllm_mlx.paged_cache import CacheBlock
+        from vmlx_engine.paged_cache import CacheBlock
 
         block = CacheBlock(block_id=0)
         old_time = block.last_access
@@ -65,7 +65,7 @@ class TestBlockTable:
 
     def test_block_table_creation(self):
         """Test creating a BlockTable."""
-        from vllm_mlx.paged_cache import BlockTable
+        from vmlx_engine.paged_cache import BlockTable
 
         table = BlockTable(request_id="req-1")
         assert table.request_id == "req-1"
@@ -75,7 +75,7 @@ class TestBlockTable:
 
     def test_block_table_copy(self):
         """Test copying a BlockTable."""
-        from vllm_mlx.paged_cache import BlockTable
+        from vmlx_engine.paged_cache import BlockTable
 
         table = BlockTable(
             request_id="req-1",
@@ -98,7 +98,7 @@ class TestPagedCacheManager:
 
     def test_initialization(self):
         """Test manager initialization."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=100)
 
@@ -115,7 +115,7 @@ class TestPagedCacheManager:
 
     def test_allocate_block(self):
         """Test block allocation."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
         # Initial: 10 blocks, 1 null block, so 9 free
@@ -131,7 +131,7 @@ class TestPagedCacheManager:
 
     def test_allocate_all_blocks(self):
         """Test allocating all available blocks."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=5)
         # With null block taking 1 slot, we have 4 allocatable blocks
@@ -148,7 +148,7 @@ class TestPagedCacheManager:
 
     def test_free_block(self):
         """Test block deallocation."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
         initial_free = manager.free_blocks  # 9 (10 - 1 null block)
@@ -165,7 +165,7 @@ class TestPagedCacheManager:
 
     def test_reference_counting(self):
         """Test reference counting."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -190,7 +190,7 @@ class TestPagedCacheManager:
 
     def test_allocate_blocks_for_tokens(self):
         """Test allocating blocks for a token count."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=100)
 
@@ -208,7 +208,7 @@ class TestPagedCacheManager:
 
     def test_allocate_blocks_for_tokens_rollback(self):
         """Test rollback when allocation fails."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=3)
         # With null block, we have 2 allocatable blocks
@@ -231,7 +231,7 @@ class TestHashBasedDeduplication:
 
     def test_compute_block_hash(self):
         """Test hash computation."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         tokens1 = [1, 2, 3, 4, 5]
         tokens2 = [1, 2, 3, 4, 5]
@@ -247,7 +247,7 @@ class TestHashBasedDeduplication:
 
     def test_find_cached_block(self):
         """Test finding cached block by tokens."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -272,7 +272,7 @@ class TestBlockTableManagement:
 
     def test_create_block_table(self):
         """Test creating a block table."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -282,7 +282,7 @@ class TestBlockTableManagement:
 
     def test_get_block_table(self):
         """Test getting a block table."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -297,7 +297,7 @@ class TestBlockTableManagement:
 
     def test_delete_block_table(self):
         """Test deleting a block table frees blocks."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
         # Initial: 9 free (10 - 1 null block), 1 allocated (null block)
@@ -322,7 +322,7 @@ class TestPrefixSharing:
 
     def test_find_shared_prefix_no_cache(self):
         """Test finding shared prefix with empty cache."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -334,7 +334,7 @@ class TestPrefixSharing:
 
     def test_find_shared_prefix_with_cache(self):
         """Test finding shared prefix with cached blocks."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -354,7 +354,7 @@ class TestPrefixSharing:
 
     def test_fork_block_table(self):
         """Test forking a block table (COW)."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -382,7 +382,7 @@ class TestCopyOnWrite:
 
     def test_get_blocks_no_cow_needed(self):
         """Test getting blocks when no COW is needed."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -398,7 +398,7 @@ class TestCopyOnWrite:
 
     def test_get_blocks_with_cow(self):
         """Test getting blocks triggers COW for shared blocks."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -427,7 +427,7 @@ class TestEviction:
 
     def test_evict_lru_blocks(self):
         """Test LRU eviction."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=5)
         # With null block, we have 4 allocatable blocks
@@ -456,7 +456,7 @@ class TestEviction:
 
     def test_handle_memory_pressure(self):
         """Test handling memory pressure."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=5)
         # With null block, we have 4 allocatable blocks
@@ -487,7 +487,7 @@ class TestStatistics:
 
     def test_get_memory_usage(self):
         """Test memory usage reporting."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=100)
         # Initial: 99 free (100 - 1 null block), 1 allocated (null block)
@@ -508,7 +508,7 @@ class TestStatistics:
 
     def test_reset_stats(self):
         """Test resetting statistics."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -524,7 +524,7 @@ class TestStatistics:
 
     def test_clear(self):
         """Test clearing all cache."""
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         manager = PagedCacheManager(block_size=64, max_blocks=10)
 
@@ -548,7 +548,7 @@ class TestThreadSafety:
     def test_concurrent_allocation(self):
         """Test concurrent block allocation."""
         import threading
-        from vllm_mlx.paged_cache import PagedCacheManager
+        from vmlx_engine.paged_cache import PagedCacheManager
 
         # Use 101 blocks so we have 100 allocatable (after null block)
         manager = PagedCacheManager(block_size=64, max_blocks=101)
@@ -585,8 +585,8 @@ class TestBlockAwarePrefixCache:
 
     def test_initialization(self):
         """Test cache initialization."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -596,8 +596,8 @@ class TestBlockAwarePrefixCache:
 
     def test_store_and_fetch_cache(self):
         """Test storing and fetching cache."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -619,8 +619,8 @@ class TestBlockAwarePrefixCache:
 
     def test_release_cache(self):
         """Test releasing cache."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -636,8 +636,8 @@ class TestBlockAwarePrefixCache:
 
     def test_fork_cache(self):
         """Test forking cache (COW)."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -657,8 +657,8 @@ class TestBlockAwarePrefixCache:
 
     def test_get_cache_for_generation(self):
         """Test getting cache for generation with COW."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -674,8 +674,8 @@ class TestBlockAwarePrefixCache:
 
     def test_get_cache_for_generation_with_cow(self):
         """Test COW is triggered for shared blocks."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -692,8 +692,8 @@ class TestBlockAwarePrefixCache:
 
     def test_stats(self):
         """Test statistics."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
@@ -707,8 +707,8 @@ class TestBlockAwarePrefixCache:
 
     def test_clear(self):
         """Test clearing cache."""
-        from vllm_mlx.paged_cache import PagedCacheManager
-        from vllm_mlx.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
         paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
         cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)

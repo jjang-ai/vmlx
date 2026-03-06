@@ -8,8 +8,8 @@
 ## Install with uv (Recommended)
 
 ```bash
-git clone https://github.com/waybarrios/vllm-mlx.git
-cd vllm-mlx
+git clone https://github.com/vmlxllm/vmlx.git
+cd vmlx
 
 uv pip install -e .
 ```
@@ -17,8 +17,8 @@ uv pip install -e .
 ## Install with pip
 
 ```bash
-git clone https://github.com/waybarrios/vllm-mlx.git
-cd vllm-mlx
+git clone https://github.com/vmlxllm/vmlx.git
+cd vmlx
 
 pip install -e .
 ```
@@ -57,12 +57,12 @@ pip install mlx-embeddings
 
 ```bash
 # Check CLI commands
-vllm-mlx --help
-vllm-mlx-bench --help
-vllm-mlx-chat --help
+vmlx-engine --help
+vmlx-engine-bench --help
+vmlx-engine-chat --help
 
 # Test with a small model
-vllm-mlx-bench --model mlx-community/Llama-3.2-1B-Instruct-4bit --prompts 1
+vmlx-engine-bench --model mlx-community/Llama-3.2-1B-Instruct-4bit --prompts 1
 ```
 
 ## Troubleshooting
@@ -85,5 +85,5 @@ huggingface-cli login
 
 Use a smaller quantized model:
 ```bash
-vllm-mlx serve mlx-community/Llama-3.2-1B-Instruct-4bit
+vmlx-engine serve mlx-community/Llama-3.2-1B-Instruct-4bit
 ```

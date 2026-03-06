@@ -29,7 +29,7 @@ function buildCommandPreview(
   config: SessionConfig,
   detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string } | null
 ): string {
-  const parts = ['vllm-mlx serve', modelPath]
+  const parts = ['vmlx-engine serve', modelPath]
   // Manual config takes priority over auto-detect for VLM mode
   const isVLM = config.isMultimodal ?? !!detected?.isMultimodal
 
@@ -68,7 +68,7 @@ function buildCommandPreview(
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
   } else {
-    // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx)
+    // Auto-enable continuous batching when prefix cache is on (required by vmlx-engine)
     if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
       parts.push('--continuous-batching')
     }

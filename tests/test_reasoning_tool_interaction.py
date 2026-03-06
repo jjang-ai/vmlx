@@ -28,9 +28,9 @@ from unittest.mock import patch
 
 import pytest
 
-from vllm_mlx.reasoning import DeltaMessage, get_parser
-from vllm_mlx.reasoning.think_parser import BaseThinkingReasoningParser
-from vllm_mlx.tool_parsers import (
+from vmlx_engine.reasoning import DeltaMessage, get_parser
+from vmlx_engine.reasoning.think_parser import BaseThinkingReasoningParser
+from vmlx_engine.tool_parsers import (
     QwenToolParser,
     HermesToolParser,
     LlamaToolParser,
@@ -474,8 +474,8 @@ class TestModelConfigParserMapping:
     @pytest.fixture
     def registry(self):
         """Get registry with all model configs loaded."""
-        from vllm_mlx.model_config_registry import ModelConfigRegistry, get_model_config_registry
-        import vllm_mlx.model_config_registry as mcr
+        from vmlx_engine.model_config_registry import ModelConfigRegistry, get_model_config_registry
+        import vmlx_engine.model_config_registry as mcr
         ModelConfigRegistry._instance = None
         mcr._configs_loaded = False
         return get_model_config_registry()
@@ -484,12 +484,12 @@ class TestModelConfigParserMapping:
     def cleanup_singleton(self):
         """Reset singleton after each test."""
         yield
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
         ModelConfigRegistry._instance = None
 
     def _lookup(self, registry, model_name, model_type):
         registry.clear_cache()
-        with patch("vllm_mlx.model_config_registry.load_config", _mock_load_config(model_type)):
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config(model_type)):
             return registry.lookup(model_name)
 
     def test_qwen3_5_vl_config(self, registry):
@@ -522,7 +522,7 @@ class TestModelConfigParserMapping:
 
     def test_all_reasoning_parsers_importable(self):
         """Every registered reasoning parser should be importable."""
-        from vllm_mlx.reasoning import list_parsers, get_parser as get_reasoning_parser
+        from vmlx_engine.reasoning import list_parsers, get_parser as get_reasoning_parser
         for name in list_parsers():
             parser_cls = get_reasoning_parser(name)
             parser = parser_cls()
@@ -538,7 +538,7 @@ class TestGenericToolCallParsing:
 
     def test_generic_parser_json_array(self):
         """Generic parser should handle raw JSON array tool calls."""
-        from vllm_mlx.api.tool_calling import parse_tool_calls
+        from vmlx_engine.api.tool_calling import parse_tool_calls
         text = '[{"name":"read_file","arguments":{"path":"test.py"}}]'
         cleaned, calls = parse_tool_calls(text)
         # May or may not parse — ensure no crash
@@ -546,7 +546,7 @@ class TestGenericToolCallParsing:
 
     def test_generic_parser_no_tool_calls(self):
         """Generic parser with regular text should return no tool calls."""
-        from vllm_mlx.api.tool_calling import parse_tool_calls
+        from vmlx_engine.api.tool_calling import parse_tool_calls
         text = "Just a normal response without any tool calls."
         cleaned, calls = parse_tool_calls(text)
         assert calls is None or len(calls) == 0

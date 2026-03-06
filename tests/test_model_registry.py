@@ -3,7 +3,7 @@
 
 import gc
 import pytest
-from vllm_mlx import (
+from vmlx_engine import (
     EngineCore,
     EngineConfig,
     SamplingParams,

@@ -21,7 +21,7 @@ def small_model_name():
 
 def test_model_init():
     """Test model initialization."""
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel("some-model")
     assert model.model_name == "some-model"
@@ -30,7 +30,7 @@ def test_model_init():
 
 def test_model_info_not_loaded():
     """Test model info when not loaded."""
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel("some-model")
     info = model.get_model_info()
@@ -41,7 +41,7 @@ def test_model_info_not_loaded():
 
 def test_model_repr():
     """Test model string representation."""
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel("test-model")
     repr_str = repr(model)
@@ -56,7 +56,7 @@ def test_model_load(small_model_name):
     """Test loading a model (slow test, downloads model)."""
     pytest.importorskip("mlx_lm")
 
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel(small_model_name)
     model.load()
@@ -71,7 +71,7 @@ def test_model_generate(small_model_name):
     """Test text generation."""
     pytest.importorskip("mlx_lm")
 
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel(small_model_name)
     model.load()
@@ -88,7 +88,7 @@ def test_model_stream_generate(small_model_name):
     """Test streaming generation."""
     pytest.importorskip("mlx_lm")
 
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel(small_model_name)
     model.load()
@@ -104,7 +104,7 @@ def test_model_chat(small_model_name):
     """Test chat interface."""
     pytest.importorskip("mlx_lm")
 
-    from vllm_mlx.models.llm import MLXLanguageModel
+    from vmlx_engine.models.llm import MLXLanguageModel
 
     model = MLXLanguageModel(small_model_name)
     model.load()

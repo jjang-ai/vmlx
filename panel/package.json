@@ -111,8 +111,8 @@
         ]
       },
       {
-        "from": "../../../mlx/vllm-mlx/vllm_mlx",
-        "to": "vllm-mlx-source/vllm_mlx",
+        "from": "../../../mlx/vllm-mlx/vmlx_engine",
+        "to": "vmlx-engine-source/vmlx_engine",
         "filter": [
           "**/*",
           "!**/__pycache__/**",
@@ -121,7 +121,7 @@
       },
       {
         "from": "../../../mlx/vllm-mlx/pyproject.toml",
-        "to": "vllm-mlx-source/pyproject.toml"
+        "to": "vmlx-engine-source/pyproject.toml"
       }
     ],
     "files": [

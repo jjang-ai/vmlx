@@ -3,7 +3,7 @@ import { resolveBaseUrl } from './utils'
 
 /**
  * Cache management IPC handlers.
- * Proxies to the vllm-mlx server's /v1/cache/* endpoints.
+ * Proxies to the vmlx-engine server's /v1/cache/* endpoints.
  */
 
 export function registerCacheHandlers(): void {

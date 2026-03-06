@@ -7,8 +7,8 @@ preserve_native_format parameter in extract_multimodal_content().
 
 import pytest
 
-from vllm_mlx.api.utils import extract_multimodal_content
-from vllm_mlx.tool_parsers import (
+from vmlx_engine.api.utils import extract_multimodal_content
+from vmlx_engine.tool_parsers import (
     AutoToolParser,
     DeepSeekToolParser,
     FunctionaryToolParser,

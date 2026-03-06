@@ -1,6 +1,6 @@
 # MCP & Tool Calling
 
-vllm-mlx supports the Model Context Protocol (MCP) for integrating external tools with LLMs.
+vmlx-engine supports the Model Context Protocol (MCP) for integrating external tools with LLMs.
 
 ## How Tool Calling Works
 
@@ -52,10 +52,10 @@ Create `mcp.json`:
 
 ```bash
 # Simple mode
-vllm-mlx serve mlx-community/Qwen3-4B-4bit --mcp-config mcp.json
+vmlx-engine serve mlx-community/Qwen3-4B-4bit --mcp-config mcp.json
 
 # Continuous batching
-vllm-mlx serve mlx-community/Qwen3-4B-4bit --mcp-config mcp.json --continuous-batching
+vmlx-engine serve mlx-community/Qwen3-4B-4bit --mcp-config mcp.json --continuous-batching
 ```
 
 ### 3. Verify MCP Status
@@ -228,11 +228,11 @@ python examples/mcp_chat.py
 
 ## Supported Tool Formats
 
-vllm-mlx supports 12 tool call parsers covering all major model families. See [Tool Calling](tool-calling.md) for the full list of parsers, aliases, and examples.
+vmlx-engine supports 12 tool call parsers covering all major model families. See [Tool Calling](tool-calling.md) for the full list of parsers, aliases, and examples.
 
 ## Security
 
-vllm-mlx includes security measures to prevent command injection attacks via MCP servers.
+vmlx-engine includes security measures to prevent command injection attacks via MCP servers.
 
 ### Command Whitelist
 
@@ -294,7 +294,7 @@ For development only, you can bypass security validation:
 To add custom commands to the whitelist programmatically:
 
 ```python
-from vllm_mlx.mcp import MCPCommandValidator, set_validator
+from vmlx_engine.mcp import MCPCommandValidator, set_validator
 
 # Add custom commands
 validator = MCPCommandValidator(
@@ -305,7 +305,7 @@ set_validator(validator)
 
 ## Tool Execution Sandboxing
 
-Beyond command validation, vllm-mlx provides runtime sandboxing for tool executions:
+Beyond command validation, vmlx-engine provides runtime sandboxing for tool executions:
 
 ### Sandbox Features
 
@@ -334,7 +334,7 @@ Tools matching these patterns trigger security warnings:
 ### Custom Sandbox Configuration
 
 ```python
-from vllm_mlx.mcp import ToolSandbox, set_sandbox
+from vmlx_engine.mcp import ToolSandbox, set_sandbox
 
 # Create sandbox with custom settings
 sandbox = ToolSandbox(
@@ -356,7 +356,7 @@ set_sandbox(sandbox)
 ### Accessing Audit Logs
 
 ```python
-from vllm_mlx.mcp import get_sandbox
+from vmlx_engine.mcp import get_sandbox
 
 sandbox = get_sandbox()
 

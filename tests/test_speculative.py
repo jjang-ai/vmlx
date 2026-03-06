@@ -36,7 +36,7 @@ class TestSpeculativeConfig(unittest.TestCase):
 
     def test_default_config_disabled(self):
         """Default config (no model) should be disabled."""
-        from vllm_mlx.speculative import SpeculativeConfig
+        from vmlx_engine.speculative import SpeculativeConfig
         config = SpeculativeConfig()
         self.assertFalse(config.enabled)
         self.assertEqual(config.model, "")  # Default is empty string
@@ -44,20 +44,20 @@ class TestSpeculativeConfig(unittest.TestCase):
 
     def test_config_with_model_enabled(self):
         """Config with model path should be enabled."""
-        from vllm_mlx.speculative import SpeculativeConfig
+        from vmlx_engine.speculative import SpeculativeConfig
         config = SpeculativeConfig(model="some-draft-model")
         self.assertTrue(config.enabled)
         self.assertEqual(config.model, "some-draft-model")
 
     def test_config_custom_num_tokens(self):
         """Custom num_tokens should be preserved."""
-        from vllm_mlx.speculative import SpeculativeConfig
+        from vmlx_engine.speculative import SpeculativeConfig
         config = SpeculativeConfig(model="m", num_tokens=5)
         self.assertEqual(config.num_tokens, 5)
 
     def test_config_num_tokens_clamped_to_min_1(self):
         """num_tokens < 1 should be clamped to 1."""
-        from vllm_mlx.speculative import SpeculativeConfig
+        from vmlx_engine.speculative import SpeculativeConfig
         config = SpeculativeConfig(model="m", num_tokens=0)
         self.assertEqual(config.num_tokens, 1)
         config2 = SpeculativeConfig(model="m", num_tokens=-5)
@@ -66,15 +66,15 @@ class TestSpeculativeConfig(unittest.TestCase):
     def test_config_high_num_tokens_logs_warning(self):
         """num_tokens > 20 should trigger a logger warning (not warnings.warn)."""
         import logging
-        from vllm_mlx.speculative import SpeculativeConfig
-        with self.assertLogs("vllm_mlx.speculative", level="WARNING") as cm:
+        from vmlx_engine.speculative import SpeculativeConfig
+        with self.assertLogs("vmlx_engine.speculative", level="WARNING") as cm:
             config = SpeculativeConfig(model="m", num_tokens=25)
         self.assertTrue(any("25" in msg for msg in cm.output))
         self.assertEqual(config.num_tokens, 25)
 
     def test_config_disable_by_batch_size(self):
         """disable_by_batch_size should be configurable."""
-        from vllm_mlx.speculative import SpeculativeConfig
+        from vmlx_engine.speculative import SpeculativeConfig
         config = SpeculativeConfig(model="m", disable_by_batch_size=4)
         self.assertEqual(config.disable_by_batch_size, 4)
 
@@ -87,7 +87,7 @@ class TestGlobalState(unittest.TestCase):
     """Test global state management (load/unload/enable check)."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
         self._orig_tok = spec._draft_tokenizer
@@ -96,21 +96,21 @@ class TestGlobalState(unittest.TestCase):
         spec._draft_tokenizer = None
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
         spec._draft_tokenizer = self._orig_tok
 
     def test_initial_state_disabled(self):
         """Initially speculative decoding should be disabled."""
-        from vllm_mlx.speculative import is_speculative_enabled, get_draft_model
+        from vmlx_engine.speculative import is_speculative_enabled, get_draft_model
         self.assertFalse(is_speculative_enabled())
         self.assertIsNone(get_draft_model())
 
     def test_state_after_successful_load(self):
         """After mock load, state should reflect enabled."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -125,7 +125,7 @@ class TestGlobalState(unittest.TestCase):
 
     def test_unload_clears_state(self):
         """Unloading should clear all state."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = MagicMock(enabled=True)
         spec._draft_model = MagicMock()
         spec._draft_tokenizer = MagicMock()
@@ -138,8 +138,8 @@ class TestGlobalState(unittest.TestCase):
 
     def test_state_after_disabled_load(self):
         """Loading with disabled config (no model) should return (None, None)."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         config = SpeculativeConfig()  # no model → disabled
         model, tokenizer = spec.load_draft_model(config)
         self.assertIsNone(model)
@@ -155,27 +155,27 @@ class TestGatingLogic(unittest.TestCase):
     """Test should_use_speculative() for all engine/model combinations."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
         self._orig_tok = spec._draft_tokenizer
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
         spec._draft_tokenizer = self._orig_tok
 
     def _enable_spec(self):
         """Helper to enable speculative state."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft", num_tokens=3)
         spec._draft_model = MagicMock()
 
     def test_disabled_when_not_configured(self):
         """Returns False when spec decoding is not configured."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = None
         spec._draft_model = None
         self.assertFalse(spec.should_use_speculative())
@@ -183,31 +183,31 @@ class TestGatingLogic(unittest.TestCase):
     def test_disabled_when_batched(self):
         """Returns False for BatchedEngine even when configured."""
         self._enable_spec()
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self.assertFalse(spec.should_use_speculative(is_batched=True))
 
     def test_disabled_when_mllm(self):
         """Returns False for MLLM/VLM even when configured."""
         self._enable_spec()
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self.assertFalse(spec.should_use_speculative(is_mllm=True))
 
     def test_disabled_when_batched_and_mllm(self):
         """Returns False for batched MLLM."""
         self._enable_spec()
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self.assertFalse(spec.should_use_speculative(is_batched=True, is_mllm=True))
 
     def test_enabled_for_simple_llm(self):
         """Returns True for SimpleEngine + LLM."""
         self._enable_spec()
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self.assertTrue(spec.should_use_speculative(is_batched=False, is_mllm=False))
 
     def test_enabled_default_args(self):
         """Returns True with default args (simple LLM)."""
         self._enable_spec()
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self.assertTrue(spec.should_use_speculative())
 
 
@@ -219,27 +219,27 @@ class TestDraftTokenCount(unittest.TestCase):
     """Test get_num_draft_tokens() accessor."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig = spec._spec_config
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig
 
     def test_zero_when_not_configured(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = None
         self.assertEqual(spec.get_num_draft_tokens(), 0)
 
     def test_returns_configured_value(self):
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="m", num_tokens=5)
         self.assertEqual(spec.get_num_draft_tokens(), 5)
 
     def test_returns_default_3(self):
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="m")
         self.assertEqual(spec.get_num_draft_tokens(), 3)
 
@@ -252,16 +252,16 @@ class TestTokenizerValidation(unittest.TestCase):
     """Test validate_draft_tokenizer() for tokenizer compatibility."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig = spec._draft_tokenizer
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._draft_tokenizer = self._orig
 
     def test_compatible_tokenizers(self):
         """Same vocab, same encoding → True."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         mock_draft = MagicMock()
         mock_draft.__len__ = MagicMock(return_value=32000)
         mock_draft.encode.return_value = [1, 2, 3]
@@ -275,7 +275,7 @@ class TestTokenizerValidation(unittest.TestCase):
 
     def test_vocab_size_mismatch(self):
         """Different vocab sizes → False."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         mock_draft = MagicMock()
         mock_draft.__len__ = MagicMock(return_value=32000)
         spec._draft_tokenizer = mock_draft
@@ -287,7 +287,7 @@ class TestTokenizerValidation(unittest.TestCase):
 
     def test_encoding_mismatch(self):
         """Same vocab but different encodings → False."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         mock_draft = MagicMock()
         mock_draft.__len__ = MagicMock(return_value=32000)
         mock_draft.encode.return_value = [1, 2, 3]
@@ -301,19 +301,19 @@ class TestTokenizerValidation(unittest.TestCase):
 
     def test_none_draft_tokenizer(self):
         """No draft tokenizer → skip validation (True)."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._draft_tokenizer = None
         self.assertTrue(spec.validate_draft_tokenizer(MagicMock()))
 
     def test_none_target_tokenizer(self):
         """No target tokenizer → skip validation (True)."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._draft_tokenizer = MagicMock()
         self.assertTrue(spec.validate_draft_tokenizer(None))
 
     def test_validation_exception_returns_true(self):
         """Exception during validation → don't block (True)."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         mock_draft = MagicMock()
         mock_draft.__len__ = MagicMock(side_effect=Exception("boom"))
         spec._draft_tokenizer = mock_draft
@@ -329,7 +329,7 @@ class TestSpecStats(unittest.TestCase):
     """Test get_spec_stats() reporting."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
         self._orig_tok = spec._draft_tokenizer
@@ -338,22 +338,22 @@ class TestSpecStats(unittest.TestCase):
         spec._draft_tokenizer = None
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
         spec._draft_tokenizer = self._orig_tok
 
     def test_stats_not_configured(self):
         """No config → returns 'not_configured' string."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         stats = spec.get_spec_stats()
         # When not configured, speculative_decoding is a string
         self.assertEqual(stats["speculative_decoding"], "not_configured")
 
     def test_stats_enabled_no_model(self):
         """Config set but model not loaded yet → enabled in config but not loaded."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft-model")
         spec._draft_model = None  # Not loaded
 
@@ -366,8 +366,8 @@ class TestSpecStats(unittest.TestCase):
 
     def test_stats_fully_loaded(self):
         """Config set and model loaded."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft-model", num_tokens=4)
         spec._draft_model = MagicMock()
 
@@ -387,7 +387,7 @@ class TestLoadDraftModelErrors(unittest.TestCase):
     """Test error handling when loading draft model."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
         self._orig_tok = spec._draft_tokenizer
@@ -396,22 +396,22 @@ class TestLoadDraftModelErrors(unittest.TestCase):
         spec._draft_tokenizer = None
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
         spec._draft_tokenizer = self._orig_tok
 
     def test_load_invalid_model_raises_value_error(self):
         """Loading a non-existent model should raise ValueError."""
-        from vllm_mlx.speculative import SpeculativeConfig, load_draft_model
+        from vmlx_engine.speculative import SpeculativeConfig, load_draft_model
         config = SpeculativeConfig(model="definitely-not-a-real-model-path-12345")
         with self.assertRaises(ValueError):
             load_draft_model(config)
 
     def test_load_with_mock_success(self):
         """Mock successful load to verify state management."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
 
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
@@ -437,7 +437,7 @@ class TestCLIArgs(unittest.TestCase):
         """Create a minimal serve parser for testing speculative args."""
         # cli.py doesn't export a separate serve parser function,
         # so we call main's parser builder
-        from vllm_mlx.cli import main
+        from vmlx_engine.cli import main
         parser = argparse.ArgumentParser()
         subparsers = parser.add_subparsers(dest="command")
         serve_parser = subparsers.add_parser("serve")
@@ -466,7 +466,7 @@ class TestCLIArgs(unittest.TestCase):
 
     def test_real_cli_has_speculative_args(self):
         """Verify the real cli.py has the speculative arguments."""
-        import vllm_mlx.cli as cli_module
+        import vmlx_engine.cli as cli_module
         source = inspect.getsource(cli_module)
         self.assertIn("--speculative-model", source)
         self.assertIn("--num-draft-tokens", source)
@@ -479,10 +479,10 @@ class TestCLIArgs(unittest.TestCase):
 class TestLLMDraftModelWiring(unittest.TestCase):
     """Test that llm.py actually passes draft_model to mlx_lm.stream_generate."""
 
-    @patch("vllm_mlx.speculative.is_speculative_enabled", return_value=True)
-    @patch("vllm_mlx.speculative.get_draft_model")
-    @patch("vllm_mlx.speculative.get_num_draft_tokens", return_value=3)
-    @patch("vllm_mlx.speculative.validate_draft_tokenizer", return_value=True)
+    @patch("vmlx_engine.speculative.is_speculative_enabled", return_value=True)
+    @patch("vmlx_engine.speculative.get_draft_model")
+    @patch("vmlx_engine.speculative.get_num_draft_tokens", return_value=3)
+    @patch("vmlx_engine.speculative.validate_draft_tokenizer", return_value=True)
     def test_stream_generate_passes_draft_model(
         self, mock_validate, mock_num, mock_get_draft, mock_enabled
     ):
@@ -502,7 +502,7 @@ class TestLLMDraftModelWiring(unittest.TestCase):
             yield resp
 
         with patch("mlx_lm.stream_generate", side_effect=fake_stream_generate):
-            from vllm_mlx.models.llm import MLXLanguageModel
+            from vmlx_engine.models.llm import MLXLanguageModel
             model = MLXLanguageModel.__new__(MLXLanguageModel)
             model.model = MagicMock()
             model.tokenizer = MagicMock()
@@ -514,7 +514,7 @@ class TestLLMDraftModelWiring(unittest.TestCase):
         self.assertIs(captured_kwargs["draft_model"], mock_draft)
         self.assertEqual(captured_kwargs["num_draft_tokens"], 3)
 
-    @patch("vllm_mlx.speculative.is_speculative_enabled", return_value=False)
+    @patch("vmlx_engine.speculative.is_speculative_enabled", return_value=False)
     def test_stream_generate_no_draft_when_disabled(self, mock_enabled):
         """stream_generate should NOT pass draft_model when spec is disabled."""
         captured_kwargs = {}
@@ -528,7 +528,7 @@ class TestLLMDraftModelWiring(unittest.TestCase):
             yield resp
 
         with patch("mlx_lm.stream_generate", side_effect=fake_stream_generate):
-            from vllm_mlx.models.llm import MLXLanguageModel
+            from vmlx_engine.models.llm import MLXLanguageModel
             model = MLXLanguageModel.__new__(MLXLanguageModel)
             model.model = MagicMock()
             model.tokenizer = MagicMock()
@@ -594,18 +594,18 @@ class TestCacheCompatibility(unittest.TestCase):
     """Verify speculative decoding doesn't conflict with cache subsystems."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
 
     def test_simple_engine_has_no_prefix_cache(self):
         """SimpleEngine doesn't use prefix cache, so no conflict with spec decoding."""
-        from vllm_mlx.engine.simple import SimpleEngine
+        from vmlx_engine.engine.simple import SimpleEngine
         engine = SimpleEngine.__new__(SimpleEngine)
         engine._is_mllm = False
         engine._model = None
@@ -613,8 +613,8 @@ class TestCacheCompatibility(unittest.TestCase):
 
     def test_batched_engine_gated_out(self):
         """BatchedEngine + spec should be gated out by should_use_speculative."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft")
         spec._draft_model = MagicMock()
         self.assertFalse(spec.should_use_speculative(is_batched=True))
@@ -622,8 +622,8 @@ class TestCacheCompatibility(unittest.TestCase):
     def test_spec_decoding_and_prefix_cache_mutually_exclusive_engines(self):
         """Spec decoding (SimpleEngine) and prefix cache (BatchedEngine) run
         in mutually exclusive engine modes, so they can't conflict."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft")
         spec._draft_model = MagicMock()
         self.assertTrue(spec.should_use_speculative(is_batched=False))
@@ -638,20 +638,20 @@ class TestSpeculativeWithServerHealth(unittest.TestCase):
     """Test integration of speculative stats in server health endpoint."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
         self._orig_tok = spec._draft_tokenizer
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
         spec._draft_tokenizer = self._orig_tok
 
     def test_health_includes_spec_stats_when_not_configured(self):
         """Health endpoint should include spec stats even when disabled."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = None
         spec._draft_model = None
         stats = spec.get_spec_stats()
@@ -661,8 +661,8 @@ class TestSpeculativeWithServerHealth(unittest.TestCase):
 
     def test_health_includes_spec_stats_when_configured(self):
         """Health endpoint should show full spec stats when configured."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft-model", num_tokens=4)
         spec._draft_model = MagicMock()
 
@@ -730,19 +730,19 @@ class TestMambaIncompatibility(unittest.TestCase):
     """Test that spec decoding is properly gated for Mamba/hybrid models."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
 
     def test_mllm_gating_covers_mamba_vlm(self):
         """MLLM gating should cover Mamba VLM models."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="draft")
         spec._draft_model = MagicMock()
         self.assertFalse(spec.should_use_speculative(is_mllm=True))
@@ -757,7 +757,7 @@ class TestSpecModuleAPI(unittest.TestCase):
 
     def test_all_exports_available(self):
         """All public functions should be importable."""
-        from vllm_mlx.speculative import (
+        from vmlx_engine.speculative import (
             SpeculativeConfig,
             load_draft_model,
             unload_draft_model,
@@ -786,21 +786,21 @@ class TestEdgeCases(unittest.TestCase):
     """Test edge cases and boundary conditions."""
 
     def setUp(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         self._orig_config = spec._spec_config
         self._orig_model = spec._draft_model
         self._orig_tok = spec._draft_tokenizer
 
     def tearDown(self):
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = self._orig_config
         spec._draft_model = self._orig_model
         spec._draft_tokenizer = self._orig_tok
 
     def test_double_load_replaces_state(self):
         """Loading a second draft model should replace the first."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
 
         mock_model1 = MagicMock(name="model1")
         mock_model2 = MagicMock(name="model2")
@@ -818,7 +818,7 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_unload_when_not_loaded(self):
         """Unloading when nothing is loaded should not error."""
-        import vllm_mlx.speculative as spec
+        import vmlx_engine.speculative as spec
         spec._spec_config = None
         spec._draft_model = None
         spec._draft_tokenizer = None
@@ -827,8 +827,8 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_concurrent_state_reads(self):
         """Multiple reads of global state should be consistent."""
-        import vllm_mlx.speculative as spec
-        from vllm_mlx.speculative import SpeculativeConfig
+        import vmlx_engine.speculative as spec
+        from vmlx_engine.speculative import SpeculativeConfig
         spec._spec_config = SpeculativeConfig(model="m", num_tokens=7)
         spec._draft_model = MagicMock()
 

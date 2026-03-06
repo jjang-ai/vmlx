@@ -18,7 +18,7 @@ class TestResponsesToolDefinitionConversion:
     """Test ResponsesToolDefinition.to_chat_completions_format()."""
 
     def test_basic_conversion(self):
-        from vllm_mlx.api.models import ResponsesToolDefinition
+        from vmlx_engine.api.models import ResponsesToolDefinition
 
         td = ResponsesToolDefinition(
             name="get_weather",
@@ -39,21 +39,21 @@ class TestResponsesToolDefinitionConversion:
         }
 
     def test_with_strict_true(self):
-        from vllm_mlx.api.models import ResponsesToolDefinition
+        from vmlx_engine.api.models import ResponsesToolDefinition
 
         td = ResponsesToolDefinition(name="fn", strict=True)
         result = td.to_chat_completions_format()
         assert result["function"]["strict"] is True
 
     def test_with_strict_false(self):
-        from vllm_mlx.api.models import ResponsesToolDefinition
+        from vmlx_engine.api.models import ResponsesToolDefinition
 
         td = ResponsesToolDefinition(name="fn", strict=False)
         result = td.to_chat_completions_format()
         assert result["function"]["strict"] is False
 
     def test_no_optional_fields(self):
-        from vllm_mlx.api.models import ResponsesToolDefinition
+        from vmlx_engine.api.models import ResponsesToolDefinition
 
         td = ResponsesToolDefinition(name="ping")
         result = td.to_chat_completions_format()
@@ -63,7 +63,7 @@ class TestResponsesToolDefinitionConversion:
         assert "strict" not in result["function"]
 
     def test_type_is_always_function(self):
-        from vllm_mlx.api.models import ResponsesToolDefinition
+        from vmlx_engine.api.models import ResponsesToolDefinition
 
         td = ResponsesToolDefinition(name="test")
         result = td.to_chat_completions_format()
@@ -71,7 +71,7 @@ class TestResponsesToolDefinitionConversion:
 
     def test_roundtrip_through_tool_definition(self):
         """Converted ResponsesToolDefinition should be valid ToolDefinition input."""
-        from vllm_mlx.api.models import ResponsesToolDefinition, ToolDefinition
+        from vmlx_engine.api.models import ResponsesToolDefinition, ToolDefinition
 
         flat = ResponsesToolDefinition(
             name="search",
@@ -92,17 +92,17 @@ class TestConvertToolsForTemplate:
     """Test convert_tools_for_template() with various inputs."""
 
     def test_none_returns_none(self):
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         assert convert_tools_for_template(None) is None
 
     def test_empty_list_returns_none(self):
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         assert convert_tools_for_template([]) is None
 
     def test_chat_completions_format_dict(self):
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         tools = [
             {
@@ -120,8 +120,8 @@ class TestConvertToolsForTemplate:
         assert result[0]["function"]["name"] == "search"
 
     def test_pydantic_tool_definition(self):
-        from vllm_mlx.api.models import ToolDefinition
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.models import ToolDefinition
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         tools = [
             ToolDefinition(
@@ -133,7 +133,7 @@ class TestConvertToolsForTemplate:
         assert result[0]["function"]["name"] == "read_file"
 
     def test_flat_responses_format(self):
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         tools = [
             {"type": "function", "name": "search", "description": "Search", "parameters": {}}
@@ -143,14 +143,14 @@ class TestConvertToolsForTemplate:
         assert result[0]["function"]["name"] == "search"
 
     def test_missing_function_key_skipped(self):
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         tools = [{"type": "web_search"}]
         result = convert_tools_for_template(tools)
         assert result is None  # Non-function tools are skipped
 
     def test_multiple_tools(self):
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         tools = [
             {
@@ -169,7 +169,7 @@ class TestConvertToolsForTemplate:
 
     def test_default_parameters_for_missing_key(self):
         """When parameters is missing, default should be an empty object schema."""
-        from vllm_mlx.api.tool_calling import convert_tools_for_template
+        from vmlx_engine.api.tool_calling import convert_tools_for_template
 
         tools = [
             {"type": "function", "function": {"name": "ping", "description": "Ping"}}
@@ -211,7 +211,7 @@ class TestToolChoiceSuppression:
 
     def test_tool_choice_dict_filter(self):
         """tool_choice as a specific tool dict should filter to that tool."""
-        from vllm_mlx.api.models import ToolDefinition
+        from vmlx_engine.api.models import ToolDefinition
 
         _tool_choice = {"type": "function", "function": {"name": "search"}}
         target_name = _tool_choice.get("function", {}).get("name") or _tool_choice.get(
@@ -237,7 +237,7 @@ class TestToolChoiceSuppression:
 
     def test_tool_choice_dict_no_match_fallback(self):
         """When tool_choice names a non-existent tool, all tools should be sent."""
-        from vllm_mlx.api.models import ToolDefinition
+        from vmlx_engine.api.models import ToolDefinition
 
         target_name = "nonexistent"
         tools = [
@@ -257,19 +257,19 @@ class TestResponsesApiToolChoice:
     """Verify the Responses API path now handles tool_choice."""
 
     def test_responses_request_has_tool_choice(self):
-        from vllm_mlx.api.models import ResponsesRequest
+        from vmlx_engine.api.models import ResponsesRequest
 
         req = ResponsesRequest(model="test", input="hello", tool_choice="none")
         assert req.tool_choice == "none"
 
     def test_responses_request_tool_choice_default_none(self):
-        from vllm_mlx.api.models import ResponsesRequest
+        from vmlx_engine.api.models import ResponsesRequest
 
         req = ResponsesRequest(model="test", input="hello")
         assert req.tool_choice is None
 
     def test_responses_request_tool_choice_dict(self):
-        from vllm_mlx.api.models import ResponsesRequest
+        from vmlx_engine.api.models import ResponsesRequest
 
         req = ResponsesRequest(
             model="test",
@@ -286,8 +286,8 @@ class TestStrictResponseFormat:
     """Test strict=True enforcement in response_format."""
 
     def test_strict_true_valid_json_passes(self):
-        from vllm_mlx.api.models import ResponseFormat, ResponseFormatJsonSchema
-        from vllm_mlx.api.tool_calling import parse_json_output
+        from vmlx_engine.api.models import ResponseFormat, ResponseFormatJsonSchema
+        from vmlx_engine.api.tool_calling import parse_json_output
 
         text = '{"name": "Alice"}'
         schema = ResponseFormatJsonSchema(
@@ -305,8 +305,8 @@ class TestStrictResponseFormat:
         assert error is None or error == ""
 
     def test_strict_true_invalid_json_fails(self):
-        from vllm_mlx.api.models import ResponseFormat, ResponseFormatJsonSchema
-        from vllm_mlx.api.tool_calling import parse_json_output
+        from vmlx_engine.api.models import ResponseFormat, ResponseFormatJsonSchema
+        from vmlx_engine.api.tool_calling import parse_json_output
 
         text = '{"name": 999}'
         schema = ResponseFormatJsonSchema(
@@ -322,7 +322,7 @@ class TestStrictResponseFormat:
         assert is_valid is False
 
     def test_strict_false_is_default(self):
-        from vllm_mlx.api.models import ResponseFormatJsonSchema
+        from vmlx_engine.api.models import ResponseFormatJsonSchema
 
         schema = ResponseFormatJsonSchema(name="test", schema={"type": "object"})
         assert schema.strict is False
@@ -373,13 +373,13 @@ class TestMaxTokensFallback:
         assert effective == 32768
 
     def test_responses_api_max_output_tokens_field(self):
-        from vllm_mlx.api.models import ResponsesRequest
+        from vmlx_engine.api.models import ResponsesRequest
 
         req = ResponsesRequest(model="test", input="hello", max_output_tokens=256)
         assert req.max_output_tokens == 256
 
     def test_chat_completion_max_tokens_none_default(self):
-        from vllm_mlx.api.models import ChatCompletionRequest
+        from vmlx_engine.api.models import ChatCompletionRequest
 
         req = ChatCompletionRequest(
             model="t", messages=[{"role": "user", "content": "hi"}]
@@ -387,7 +387,7 @@ class TestMaxTokensFallback:
         assert req.max_tokens is None
 
     def test_sampling_params_default(self):
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
 
         sp = SamplingParams()
         assert sp.max_tokens == 256
@@ -406,7 +406,7 @@ class TestModelConfigRegistryFlags:
         return None
 
     def test_glm4_moe_flash_reasoning_parser(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "glm4_moe")
@@ -414,7 +414,7 @@ class TestModelConfigRegistryFlags:
         assert config.reasoning_parser == "openai_gptoss"
 
     def test_glm4_moe_flash_think_in_template_false(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "glm4_moe")
@@ -422,7 +422,7 @@ class TestModelConfigRegistryFlags:
         assert config.think_in_template is False
 
     def test_qwen3_think_in_template_true(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "qwen3")
@@ -431,7 +431,7 @@ class TestModelConfigRegistryFlags:
 
     def test_preserve_native_tool_format_is_bool(self):
         """All configs with preserve_native_tool_format set should have a bool value."""
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
         for config in registry._configs:
@@ -442,7 +442,7 @@ class TestModelConfigRegistryFlags:
 
     def test_is_mllm_flag_on_vl_models(self):
         """VL model configs should have is_mllm=True."""
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
         vl_types = ["qwen3_vl", "qwen3_5"]
@@ -461,7 +461,7 @@ class TestAudioModelDefaults:
     """Test audio model request defaults."""
 
     def test_speech_request_defaults(self):
-        from vllm_mlx.api.models import AudioSpeechRequest
+        from vmlx_engine.api.models import AudioSpeechRequest
 
         req = AudioSpeechRequest(input="test")
         assert req.model == "kokoro"
@@ -469,7 +469,7 @@ class TestAudioModelDefaults:
         assert req.speed == 1.0
 
     def test_speech_request_speed_range(self):
-        from vllm_mlx.api.models import AudioSpeechRequest
+        from vmlx_engine.api.models import AudioSpeechRequest
 
         req = AudioSpeechRequest(input="test", speed=0.25)
         assert req.speed == 0.25
@@ -484,7 +484,7 @@ class TestResponsesInputConversion:
     """Test _responses_input_to_messages() conversion."""
 
     def test_string_input(self):
-        from vllm_mlx.server import _responses_input_to_messages
+        from vmlx_engine.server import _responses_input_to_messages
 
         messages = _responses_input_to_messages("hello")
         assert len(messages) == 1
@@ -492,7 +492,7 @@ class TestResponsesInputConversion:
         assert messages[0]["content"] == "hello"
 
     def test_string_input_with_instructions(self):
-        from vllm_mlx.server import _responses_input_to_messages
+        from vmlx_engine.server import _responses_input_to_messages
 
         messages = _responses_input_to_messages("hello", instructions="Be helpful")
         assert len(messages) == 2
@@ -501,7 +501,7 @@ class TestResponsesInputConversion:
         assert messages[1]["role"] == "user"
 
     def test_list_input_user_message(self):
-        from vllm_mlx.server import _responses_input_to_messages
+        from vmlx_engine.server import _responses_input_to_messages
 
         input_data = [{"role": "user", "content": "What is 2+2?"}]
         messages = _responses_input_to_messages(input_data)
@@ -509,7 +509,7 @@ class TestResponsesInputConversion:
         assert messages[0]["content"] == "What is 2+2?"
 
     def test_function_call_output(self):
-        from vllm_mlx.server import _responses_input_to_messages
+        from vmlx_engine.server import _responses_input_to_messages
 
         input_data = [
             {"role": "user", "content": "test"},
@@ -532,7 +532,7 @@ class TestResponsesInputConversion:
         assert any(m["role"] == "tool" for m in messages)
 
     def test_multimodal_preserved_for_mllm(self):
-        from vllm_mlx.server import _responses_input_to_messages
+        from vmlx_engine.server import _responses_input_to_messages
 
         input_data = [
             {
@@ -548,7 +548,7 @@ class TestResponsesInputConversion:
         assert len(messages[0]["content"]) == 2
 
     def test_multimodal_text_only_for_llm(self):
-        from vllm_mlx.server import _responses_input_to_messages
+        from vmlx_engine.server import _responses_input_to_messages
 
         input_data = [
             {
@@ -571,21 +571,21 @@ class TestToolDefinitionValidation:
     """Test ToolDefinition Pydantic model edge cases."""
 
     def test_function_is_dict(self):
-        from vllm_mlx.api.models import ToolDefinition
+        from vmlx_engine.api.models import ToolDefinition
 
         td = ToolDefinition(function={"name": "test"})
         assert isinstance(td.function, dict)
         assert td.function.get("name") == "test"
 
     def test_type_defaults_to_function(self):
-        from vllm_mlx.api.models import ToolDefinition
+        from vmlx_engine.api.models import ToolDefinition
 
         td = ToolDefinition(function={"name": "test"})
         assert td.type == "function"
 
     def test_get_on_function_dict(self):
         """.function is a dict, so .get() is valid (not attribute access)."""
-        from vllm_mlx.api.models import ToolDefinition
+        from vmlx_engine.api.models import ToolDefinition
 
         td = ToolDefinition(function={"name": "test", "description": "Test tool"})
         assert td.function.get("name") == "test"

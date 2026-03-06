@@ -666,7 +666,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       const wireApi = overrides?.wireApi || 'completions'
       const useResponsesApi = wireApi === 'responses'
 
-      // Call API (local vLLM-MLX or remote OpenAI-compatible endpoint)
+      // Call API (local vMLX Engine or remote OpenAI-compatible endpoint)
       const apiUrl = useResponsesApi
         ? `${baseUrl}/v1/responses`
         : `${baseUrl}/v1/chat/completions`
@@ -723,7 +723,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           }
           // enable_thinking: sent to both local and remote (some providers support it)
           obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-          // chat_template_kwargs: local only (vLLM-MLX internal, no remote provider supports this)
+          // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
           if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
           if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
           return obj
@@ -748,7 +748,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           }
           // enable_thinking: sent to both local and remote (some providers support it)
           obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-          // chat_template_kwargs: local only (vLLM-MLX internal, no remote provider supports this)
+          // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
           if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
           if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
           return obj
@@ -1163,7 +1163,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             }
 
             // Handle tool_calls from streaming response
-            // Supports both complete tool calls (vllm-mlx default) and incremental argument
+            // Supports both complete tool calls (vmlx-engine default) and incremental argument
             // streaming (OpenAI-style: first chunk has name, subsequent chunks append arguments)
             if (choice?.tool_calls && Array.isArray(choice.tool_calls)) {
               for (const tc of choice.tool_calls) {
@@ -1341,8 +1341,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                 emitToolStatus(result.is_error ? 'error' : 'result', tc.function.name, resultText, toolIteration)
               }
             } else if (isRemote) {
-              // MCP tool passthrough is only available on local vllm-mlx servers
-              resultText = `MCP tool "${tc.function.name}" is only available with local vllm-mlx sessions.`
+              // MCP tool passthrough is only available on local vmlx-engine servers
+              resultText = `MCP tool "${tc.function.name}" is only available with local vmlx-engine sessions.`
               emitToolStatus('error', tc.function.name, resultText, toolIteration)
             } else {
               const execRes = await fetch(`${baseUrl}/v1/mcp/execute`, {

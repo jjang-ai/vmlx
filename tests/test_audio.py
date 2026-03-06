@@ -14,7 +14,7 @@ class TestSTTEngine:
 
     def test_init_whisper(self):
         """Test STT engine initialization with Whisper."""
-        from vllm_mlx.audio.stt import STTEngine
+        from vmlx_engine.audio.stt import STTEngine
 
         engine = STTEngine("mlx-community/whisper-large-v3-mlx")
         assert engine.model_name == "mlx-community/whisper-large-v3-mlx"
@@ -23,21 +23,21 @@ class TestSTTEngine:
 
     def test_init_parakeet(self):
         """Test STT engine initialization with Parakeet."""
-        from vllm_mlx.audio.stt import STTEngine
+        from vmlx_engine.audio.stt import STTEngine
 
         engine = STTEngine("mlx-community/parakeet-tdt-0.6b-v2")
         assert engine._is_parakeet is True
 
     def test_default_models(self):
         """Test default model constants."""
-        from vllm_mlx.audio.stt import DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL
+        from vmlx_engine.audio.stt import DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL
 
         assert "whisper" in DEFAULT_WHISPER_MODEL.lower()
         assert "parakeet" in DEFAULT_PARAKEET_MODEL.lower()
 
     def test_transcription_result(self):
         """Test TranscriptionResult dataclass."""
-        from vllm_mlx.audio.stt import TranscriptionResult
+        from vmlx_engine.audio.stt import TranscriptionResult
 
         result = TranscriptionResult(
             text="Hello world",
@@ -54,7 +54,7 @@ class TestTTSEngine:
 
     def test_init_kokoro(self):
         """Test TTS engine initialization with Kokoro."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
 
         engine = TTSEngine("mlx-community/Kokoro-82M-bf16")
         assert engine.model_name == "mlx-community/Kokoro-82M-bf16"
@@ -63,28 +63,28 @@ class TestTTSEngine:
 
     def test_init_chatterbox(self):
         """Test TTS engine initialization with Chatterbox."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
 
         engine = TTSEngine("mlx-community/chatterbox-turbo-fp16")
         assert engine._model_family == "chatterbox"
 
     def test_init_vibevoice(self):
         """Test TTS engine initialization with VibeVoice."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
 
         engine = TTSEngine("mlx-community/VibeVoice-Realtime-0.5B-4bit")
         assert engine._model_family == "vibevoice"
 
     def test_init_voxcpm(self):
         """Test TTS engine initialization with VoxCPM."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
 
         engine = TTSEngine("mlx-community/VoxCPM1.5")
         assert engine._model_family == "voxcpm"
 
     def test_available_voices(self):
         """Test voice lists."""
-        from vllm_mlx.audio.tts import KOKORO_VOICES, CHATTERBOX_VOICES
+        from vmlx_engine.audio.tts import KOKORO_VOICES, CHATTERBOX_VOICES
 
         assert "af_heart" in KOKORO_VOICES
         assert len(KOKORO_VOICES) > 5
@@ -92,7 +92,7 @@ class TestTTSEngine:
 
     def test_get_voices(self):
         """Test get_voices method."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
 
         kokoro = TTSEngine("mlx-community/Kokoro-82M-bf16")
         voices = kokoro.get_voices()
@@ -100,7 +100,7 @@ class TestTTSEngine:
 
     def test_audio_output(self):
         """Test AudioOutput dataclass."""
-        from vllm_mlx.audio.tts import AudioOutput
+        from vmlx_engine.audio.tts import AudioOutput
 
         audio = np.zeros(24000, dtype=np.float32)
         output = AudioOutput(
@@ -118,7 +118,7 @@ class TestAudioProcessor:
 
     def test_init(self):
         """Test audio processor initialization."""
-        from vllm_mlx.audio.processor import AudioProcessor
+        from vmlx_engine.audio.processor import AudioProcessor
 
         processor = AudioProcessor("mlx-community/sam-audio-large-fp16")
         assert processor.model_name == "mlx-community/sam-audio-large-fp16"
@@ -126,13 +126,13 @@ class TestAudioProcessor:
 
     def test_default_model(self):
         """Test default SAM-Audio model."""
-        from vllm_mlx.audio.processor import DEFAULT_SAM_MODEL
+        from vmlx_engine.audio.processor import DEFAULT_SAM_MODEL
 
         assert "sam-audio" in DEFAULT_SAM_MODEL.lower()
 
     def test_separation_result(self):
         """Test SeparationResult dataclass."""
-        from vllm_mlx.audio.processor import SeparationResult
+        from vmlx_engine.audio.processor import SeparationResult
 
         target = np.zeros(44100, dtype=np.float32)
         residual = np.zeros(44100, dtype=np.float32)
@@ -153,14 +153,14 @@ class TestAPIModels:
 
     def test_audio_url(self):
         """Test AudioUrl model."""
-        from vllm_mlx.api.models import AudioUrl
+        from vmlx_engine.api.models import AudioUrl
 
         url = AudioUrl(url="file://test.mp3")
         assert url.url == "file://test.mp3"
 
     def test_content_part_audio(self):
         """Test ContentPart with audio."""
-        from vllm_mlx.api.models import ContentPart
+        from vmlx_engine.api.models import ContentPart
 
         part = ContentPart(type="audio_url", audio_url={"url": "test.mp3"})
         assert part.type == "audio_url"
@@ -169,7 +169,7 @@ class TestAPIModels:
 
     def test_speech_request(self):
         """Test AudioSpeechRequest model."""
-        from vllm_mlx.api.models import AudioSpeechRequest
+        from vmlx_engine.api.models import AudioSpeechRequest
 
         req = AudioSpeechRequest(
             model="kokoro",
@@ -187,7 +187,7 @@ class TestAudioImports:
 
     def test_import_audio_module(self):
         """Test importing main audio module."""
-        from vllm_mlx.audio import (
+        from vmlx_engine.audio import (
             STTEngine,
             TTSEngine,
             AudioProcessor,
@@ -199,7 +199,7 @@ class TestAudioImports:
 
     def test_import_api_models(self):
         """Test importing audio API models."""
-        from vllm_mlx.api import (
+        from vmlx_engine.api import (
             AudioUrl,
             AudioSpeechRequest,
         )
@@ -215,7 +215,7 @@ class TestAudioIntegration:
 
     def test_whisper_transcription(self):
         """Test Whisper transcription."""
-        from vllm_mlx.audio import transcribe_audio
+        from vmlx_engine.audio import transcribe_audio
 
         result = transcribe_audio(
             "test_audio.wav",
@@ -225,7 +225,7 @@ class TestAudioIntegration:
 
     def test_kokoro_tts(self):
         """Test Kokoro TTS generation."""
-        from vllm_mlx.audio import generate_speech
+        from vmlx_engine.audio import generate_speech
 
         audio = generate_speech(
             "Hello world",
@@ -237,7 +237,7 @@ class TestAudioIntegration:
 
     def test_sam_audio_separation(self):
         """Test SAM-Audio voice separation."""
-        from vllm_mlx.audio import separate_voice
+        from vmlx_engine.audio import separate_voice
 
         target, residual = separate_voice(
             "test_audio.wav",
@@ -253,7 +253,7 @@ class TestTTSErrorMessages:
 
     def test_tts_load_catches_import_error(self):
         """TTSEngine.load() re-raises ImportError with context."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
         from unittest.mock import patch
 
         engine = TTSEngine("mlx-community/Kokoro-82M-bf16")
@@ -268,7 +268,7 @@ class TestTTSErrorMessages:
 
     def test_tts_transitive_dep_error_preserved(self):
         """TTSEngine.load() preserves transitive dependency error messages."""
-        from vllm_mlx.audio.tts import TTSEngine
+        from vmlx_engine.audio.tts import TTSEngine
         from unittest.mock import patch
 
         engine = TTSEngine("mlx-community/Kokoro-82M-bf16")
@@ -277,7 +277,7 @@ class TestTTSErrorMessages:
         def fake_load_model(*args, **kwargs):
             raise ImportError("No module named 'num2words'")
 
-        with patch("vllm_mlx.audio.tts.TTSEngine.load", side_effect=ImportError("TTS dependency missing: No module named 'num2words'")):
+        with patch("vmlx_engine.audio.tts.TTSEngine.load", side_effect=ImportError("TTS dependency missing: No module named 'num2words'")):
             try:
                 engine.load()
                 assert False, "Should have raised ImportError"
@@ -289,7 +289,7 @@ class TestTTSErrorMessages:
 
     def test_stt_load_catches_import_error(self):
         """STTEngine.load() re-raises ImportError with context."""
-        from vllm_mlx.audio.stt import STTEngine
+        from vmlx_engine.audio.stt import STTEngine
         from unittest.mock import patch
 
         engine = STTEngine("mlx-community/whisper-large-v3-mlx")
@@ -307,7 +307,7 @@ class TestMambaCacheCompat:
 
     def test_batch_mamba_cache_init(self):
         """BatchMambaCache initializes regardless of MambaCache signature."""
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         cache = BatchMambaCache(size=3, left_padding=[0, 0])
         assert cache._batch_size == 2
@@ -315,7 +315,7 @@ class TestMambaCacheCompat:
 
     def test_batch_mamba_cache_init_no_padding(self):
         """BatchMambaCache handles None left_padding."""
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         cache = BatchMambaCache(size=2, left_padding=None)
         assert cache._batch_size == 0
@@ -323,7 +323,7 @@ class TestMambaCacheCompat:
     def test_batch_mamba_cache_extract(self):
         """BatchMambaCache.extract returns a MambaCache with correct structure."""
         import mlx.core as mx
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         cache = BatchMambaCache(size=2, left_padding=[0, 0])
         cache.cache = [
@@ -337,7 +337,7 @@ class TestMambaCacheCompat:
     def test_batch_mamba_cache_merge(self):
         """BatchMambaCache.merge concatenates caches along batch dim."""
         import mlx.core as mx
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache, MambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache, MambaCache
 
         try:
             c1 = MambaCache(2)

@@ -1,6 +1,6 @@
 # OpenAI-Compatible Server
 
-vllm-mlx provides a FastAPI server with full OpenAI API compatibility.
+vmlx-engine provides a FastAPI server with full OpenAI API compatibility.
 
 ## Starting the Server
 
@@ -9,7 +9,7 @@ vllm-mlx provides a FastAPI server with full OpenAI API compatibility.
 Maximum throughput for single user:
 
 ```bash
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
 ```
 
 ### Continuous Batching Mode
@@ -17,7 +17,7 @@ vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
 For multiple concurrent users:
 
 ```bash
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
 ```
 
 ### With Paged Cache
@@ -25,7 +25,7 @@ vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous
 Memory-efficient caching for production:
 
 ```bash
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching --use-paged-cache
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching --use-paged-cache
 ```
 
 ## Server Options
@@ -221,11 +221,11 @@ Reduce prefix cache memory by 2-4x using quantized storage. During inference, fu
 
 ```bash
 # q8 quantization (2x memory reduction, minimal quality loss)
-vllm-mlx serve mlx-community/Qwen3-8B-4bit \
+vmlx-engine serve mlx-community/Qwen3-8B-4bit \
   --continuous-batching --kv-cache-quantization q8
 
 # q4 quantization (4x memory reduction)
-vllm-mlx serve mlx-community/Qwen3-8B-4bit \
+vmlx-engine serve mlx-community/Qwen3-8B-4bit \
   --continuous-batching --kv-cache-quantization q4
 
 # Check quantization is active
@@ -239,7 +239,7 @@ Works with all three cache backends (memory-aware, paged, legacy), continuous ba
 Enable OpenAI-compatible tool calling with `--enable-auto-tool-choice`:
 
 ```bash
-vllm-mlx serve mlx-community/Devstral-Small-2507-4bit \
+vmlx-engine serve mlx-community/Devstral-Small-2507-4bit \
   --enable-auto-tool-choice \
   --tool-call-parser mistral
 ```
@@ -292,10 +292,10 @@ For models that show their thinking process (Qwen3, DeepSeek-R1), use `--reasoni
 
 ```bash
 # Qwen3 models
-vllm-mlx serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
+vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 
 # DeepSeek-R1 models
-vllm-mlx serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
+vmlx-engine serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1
 ```
 
 The API response includes a `reasoning` field with the model's thought process:
@@ -420,17 +420,17 @@ Control streaming behavior with `--stream-interval`:
 
 ```bash
 # Smooth streaming
-vllm-mlx serve model --continuous-batching --stream-interval 1
+vmlx-engine serve model --continuous-batching --stream-interval 1
 
 # Batched streaming (better for high-latency networks)
-vllm-mlx serve model --continuous-batching --stream-interval 5
+vmlx-engine serve model --continuous-batching --stream-interval 5
 ```
 
 ## Open WebUI Integration
 
 ```bash
-# 1. Start vllm-mlx server
-vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+# 1. Start vmlx-engine server
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
 
 # 2. Start Open WebUI
 docker run -d -p 3000:8080 \
@@ -446,16 +446,16 @@ docker run -d -p 3000:8080 \
 
 ### With systemd
 
-Create `/etc/systemd/system/vllm-mlx.service`:
+Create `/etc/systemd/system/vmlx-engine.service`:
 
 ```ini
 [Unit]
-Description=vLLM-MLX Server
+Description=vMLX Engine Server
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/vllm-mlx serve mlx-community/Qwen3-0.6B-8bit \
+ExecStart=/usr/local/bin/vmlx-engine serve mlx-community/Qwen3-0.6B-8bit \
   --continuous-batching --use-paged-cache --port 8000
 Restart=always
 
@@ -464,8 +464,8 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable vllm-mlx
-sudo systemctl start vllm-mlx
+sudo systemctl enable vmlx-engine
+sudo systemctl start vmlx-engine
 ```
 
 ### Recommended Settings
@@ -473,7 +473,7 @@ sudo systemctl start vllm-mlx
 For production with 50+ concurrent users:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-0.6B-8bit \
+vmlx-engine serve mlx-community/Qwen3-0.6B-8bit \
   --continuous-batching \
   --use-paged-cache \
   --api-key your-secret-key \

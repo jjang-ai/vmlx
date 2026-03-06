@@ -7,13 +7,13 @@ Tests the JSON parsing, validation, and response_format handling.
 
 import json
 import pytest
-from vllm_mlx.api.tool_calling import (
+from vmlx_engine.api.tool_calling import (
     validate_json_schema,
     extract_json_from_text,
     parse_json_output,
     build_json_system_prompt,
 )
-from vllm_mlx.api.models import ResponseFormat, ResponseFormatJsonSchema
+from vmlx_engine.api.models import ResponseFormat, ResponseFormatJsonSchema
 
 
 class TestValidateJsonSchema:
@@ -288,7 +288,7 @@ class TestInjectJsonInstruction:
 
     def test_inject_new_system_message(self):
         """Test injecting instruction when no system message exists."""
-        from vllm_mlx.server import _inject_json_instruction
+        from vmlx_engine.server import _inject_json_instruction
 
         messages = [{"role": "user", "content": "Hello"}]
         result = _inject_json_instruction(messages, "Return JSON only")
@@ -300,7 +300,7 @@ class TestInjectJsonInstruction:
 
     def test_append_to_existing_system(self):
         """Test appending to existing system message."""
-        from vllm_mlx.server import _inject_json_instruction
+        from vmlx_engine.server import _inject_json_instruction
 
         messages = [
             {"role": "system", "content": "You are helpful."},
@@ -315,7 +315,7 @@ class TestInjectJsonInstruction:
 
     def test_does_not_modify_original(self):
         """Test that original messages are not modified."""
-        from vllm_mlx.server import _inject_json_instruction
+        from vmlx_engine.server import _inject_json_instruction
 
         original = [{"role": "user", "content": "Hello"}]
         original_content = original[0]["content"]

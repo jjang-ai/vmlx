@@ -2,13 +2,13 @@
 """
 Tests for Pydantic API models.
 
-Tests all request/response models in vllm_mlx/api/models.py.
+Tests all request/response models in vmlx_engine/api/models.py.
 These are pure Pydantic models with no MLX dependency.
 """
 
 import time
 
-from vllm_mlx.api.models import (
+from vmlx_engine.api.models import (
     AssistantMessage,
     AudioSpeechRequest,
     ChatCompletionChunk,
@@ -391,7 +391,7 @@ class TestModelsEndpoint:
         info = ModelInfo(id="mlx-community/Llama-3.2-3B-Instruct-4bit")
         assert info.id == "mlx-community/Llama-3.2-3B-Instruct-4bit"
         assert info.object == "model"
-        assert info.owned_by == "vllm-mlx"
+        assert info.owned_by == "vmlx-engine"
 
     def test_models_response(self):
         resp = ModelsResponse(

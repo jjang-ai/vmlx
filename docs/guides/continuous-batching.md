@@ -5,7 +5,7 @@ Continuous batching enables higher throughput when serving multiple concurrent u
 ## Enabling Continuous Batching
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-0.6B-8bit --continuous-batching
+vmlx-engine serve mlx-community/Qwen3-0.6B-8bit --continuous-batching
 ```
 
 ## With Paged Cache
@@ -13,7 +13,7 @@ vllm-mlx serve mlx-community/Qwen3-0.6B-8bit --continuous-batching
 For memory-efficient prefix sharing:
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-0.6B-8bit --continuous-batching --use-paged-cache
+vmlx-engine serve mlx-community/Qwen3-0.6B-8bit --continuous-batching --use-paged-cache
 ```
 
 ## How It Works
@@ -67,10 +67,10 @@ Control token delivery with `--stream-interval`:
 
 ```bash
 # Every token (smoothest)
-vllm-mlx serve model --continuous-batching --stream-interval 1
+vmlx-engine serve model --continuous-batching --stream-interval 1
 
 # Batch tokens (better for high-latency)
-vllm-mlx serve model --continuous-batching --stream-interval 5
+vmlx-engine serve model --continuous-batching --stream-interval 5
 ```
 
 | Value | Behavior |
@@ -85,13 +85,13 @@ For large models, the prefix cache can consume significant memory. The memory-aw
 
 ```bash
 # Auto-detect (uses 30% of available RAM)
-vllm-mlx serve model --continuous-batching
+vmlx-engine serve model --continuous-batching
 
 # Explicit limit
-vllm-mlx serve model --continuous-batching --cache-memory-mb 2048
+vmlx-engine serve model --continuous-batching --cache-memory-mb 2048
 
 # Custom percentage
-vllm-mlx serve model --continuous-batching --cache-memory-percent 0.10
+vmlx-engine serve model --continuous-batching --cache-memory-percent 0.10
 ```
 
 | Option | Description |
@@ -160,7 +160,7 @@ python tests/test_prefix_cache.py
 Continuous batching and paged cache work with VLM models (Qwen-VL, Gemma 3, etc.):
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
+vmlx-engine serve mlx-community/Qwen3-VL-4B-Instruct-3bit \
   --continuous-batching \
   --use-paged-cache \
   --kv-cache-quantization q8
@@ -193,7 +193,7 @@ The scheduling engines (`LLM` and `MLLM`) use several mechanisms to guarantee st
 ## Production Setup
 
 ```bash
-vllm-mlx serve mlx-community/Qwen3-0.6B-8bit \
+vmlx-engine serve mlx-community/Qwen3-0.6B-8bit \
   --continuous-batching \
   --use-paged-cache \
   --port 8000

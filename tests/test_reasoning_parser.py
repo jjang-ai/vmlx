@@ -23,7 +23,7 @@ Tests cover:
 
 import pytest
 
-from vllm_mlx.reasoning import (
+from vmlx_engine.reasoning import (
     DeltaMessage,
     ReasoningParser,
     get_parser,
@@ -506,7 +506,7 @@ class TestAPIModelsIntegration:
 
     def test_assistant_message_with_reasoning(self):
         """Test that AssistantMessage can hold reasoning content."""
-        from vllm_mlx.api.models import AssistantMessage
+        from vmlx_engine.api.models import AssistantMessage
 
         msg = AssistantMessage(
             content="The answer is 42.", reasoning="Let me think step by step..."
@@ -517,7 +517,7 @@ class TestAPIModelsIntegration:
 
     def test_assistant_message_reasoning_none(self):
         """Test AssistantMessage with no reasoning."""
-        from vllm_mlx.api.models import AssistantMessage
+        from vmlx_engine.api.models import AssistantMessage
 
         msg = AssistantMessage(content="Simple response without reasoning.")
         assert msg.content == "Simple response without reasoning."
@@ -525,7 +525,7 @@ class TestAPIModelsIntegration:
 
     def test_chat_completion_chunk_delta_with_reasoning(self):
         """Test that ChatCompletionChunkDelta can hold reasoning."""
-        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
 
         delta = ChatCompletionChunkDelta(reasoning="thinking...")
         assert delta.reasoning == "thinking..."
@@ -537,7 +537,7 @@ class TestAPIModelsIntegration:
 
     def test_delta_transition(self):
         """Test delta during transition from reasoning to content."""
-        from vllm_mlx.api.models import ChatCompletionChunkDelta
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
 
         # During transition, both might have values
         delta = ChatCompletionChunkDelta(
@@ -1118,7 +1118,7 @@ class TestBatchOffsetSafeCache:
         when sequences have different lengths due to left-padding.
         """
         import mlx.core as mx
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         class FakeCache:
             offset = mx.array([10, 20, 30])
@@ -1129,7 +1129,7 @@ class TestBatchOffsetSafeCache:
     def test_scalar_mx_array_offset(self):
         """Proxy should handle scalar (0-dim) mx.array offset."""
         import mlx.core as mx
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         class FakeCache:
             offset = mx.array(42)
@@ -1139,7 +1139,7 @@ class TestBatchOffsetSafeCache:
 
     def test_int_offset_passthrough(self):
         """Proxy should pass through Python int offset unchanged."""
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         class FakeCache:
             offset = 99
@@ -1148,7 +1148,7 @@ class TestBatchOffsetSafeCache:
 
     def test_attribute_delegation(self):
         """Proxy should delegate non-offset attributes to inner cache."""
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         class FakeCache:
             offset = 0
@@ -1163,7 +1163,7 @@ class TestBatchOffsetSafeCache:
 
     def test_truthiness(self):
         """Proxy should be truthy (used in 'if cache:' checks)."""
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         class FakeCache:
             offset = 0
@@ -1173,7 +1173,7 @@ class TestBatchOffsetSafeCache:
     def test_offset_setter_delegates(self):
         """Setting offset through proxy should update inner cache."""
         import mlx.core as mx
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         class FakeCache:
             offset = 0
@@ -1185,7 +1185,7 @@ class TestBatchOffsetSafeCache:
     def test_wrap_batch_caches_selective(self):
         """_wrap_batch_caches should only wrap BatchKVCache objects."""
         from mlx_lm.models.cache import BatchKVCache, KVCache
-        from vllm_mlx.mllm_batch_generator import (
+        from vmlx_engine.mllm_batch_generator import (
             _BatchOffsetSafeCache,
             _wrap_batch_caches,
         )
@@ -1206,7 +1206,7 @@ class TestBatchOffsetSafeCache:
         invalid positions for shorter sequences.
         """
         import mlx.core as mx
-        from vllm_mlx.mllm_batch_generator import _BatchOffsetSafeCache
+        from vmlx_engine.mllm_batch_generator import _BatchOffsetSafeCache
 
         # Simulate: 3 sequences with different lengths due to left-padding
         # Sequence 0 is shortest (offset 95), sequence 1 is longest (offset 100)
@@ -1228,7 +1228,7 @@ class TestBatchOffsetSafeCache:
         """
         import mlx.core as mx
         from mlx_lm.models.cache import BatchKVCache
-        from vllm_mlx.mllm_batch_generator import (
+        from vmlx_engine.mllm_batch_generator import (
             _BatchOffsetSafeCache,
             _wrap_batch_caches,
         )
@@ -1253,7 +1253,7 @@ class TestBatchOffsetSafeCache:
         [concatenate] (1,3,12288) and (2,1,12288)
         """
         import mlx.core as mx
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         # Simulate a merged batch of 3 requests with left_padding
         cache = BatchMambaCache(size=2, left_padding=[5, 10, 15])
@@ -1276,7 +1276,7 @@ class TestBatchOffsetSafeCache:
     def test_batch_mamba_cache_filter_none_left_padding(self):
         """BatchMambaCache.filter() works when left_padding is None."""
         import mlx.core as mx
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         cache = BatchMambaCache(size=2, left_padding=None)
         cache._batch_size = 3
@@ -1298,7 +1298,7 @@ class TestBatchOffsetSafeCache:
         make_mask() returns None and SSM layers skip masking (correct for decode).
         """
         import mlx.core as mx
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         # Create 3 individual caches (simulating post-prefill per-request caches)
         caches = []
@@ -1327,7 +1327,7 @@ class TestBatchOffsetSafeCache:
         filter to 2, make_mask() must not return a (3, N) mask for batch_size=2.
         """
         import mlx.core as mx
-        from vllm_mlx.utils.mamba_cache import BatchMambaCache
+        from vmlx_engine.utils.mamba_cache import BatchMambaCache
 
         caches = []
         for _ in range(3):

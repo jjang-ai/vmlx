@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vllm_mlx.api.tool_calling import check_and_inject_fallback_tools
+from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
 
 @pytest.fixture

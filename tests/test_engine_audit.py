@@ -33,11 +33,11 @@ class TestGptOssReasoningParser:
 
     @pytest.fixture
     def parser(self):
-        from vllm_mlx.reasoning import get_parser
+        from vmlx_engine.reasoning import get_parser
         return get_parser("openai_gptoss")()
 
     def test_parser_registered(self):
-        from vllm_mlx.reasoning import list_parsers
+        from vmlx_engine.reasoning import list_parsers
         assert "openai_gptoss" in list_parsers()
 
     def test_extract_analysis_and_final(self, parser):
@@ -80,14 +80,14 @@ class TestParserRegistryParity:
     """Tests that all reasoning parsers are properly registered and instantiable."""
 
     def test_all_reasoning_parsers_registered(self):
-        from vllm_mlx.reasoning import list_parsers
+        from vmlx_engine.reasoning import list_parsers
         parsers = list_parsers()
         expected = ["qwen3", "deepseek_r1", "openai_gptoss"]
         for name in expected:
             assert name in parsers, f"Reasoning parser '{name}' not registered"
 
     def test_all_reasoning_parsers_instantiable(self):
-        from vllm_mlx.reasoning import get_parser
+        from vmlx_engine.reasoning import get_parser
         for name in ["qwen3", "deepseek_r1", "openai_gptoss"]:
             parser = get_parser(name)()
             assert hasattr(parser, "extract_reasoning")
@@ -104,18 +104,18 @@ class TestGLM47ToolParser:
     """Tests for the GLM47 tool parser."""
 
     def test_glm47_registered(self):
-        from vllm_mlx.tool_parsers import ToolParserManager
+        from vmlx_engine.tool_parsers import ToolParserManager
         parsers = ToolParserManager.list_registered()
         assert "glm47" in parsers
 
     def test_glm47_instantiation(self):
-        from vllm_mlx.tool_parsers import ToolParserManager
+        from vmlx_engine.tool_parsers import ToolParserManager
         parser_cls = ToolParserManager.get_tool_parser("glm47")
         parser = parser_cls()
         assert hasattr(parser, "extract_tool_calls")
 
     def test_step3p5_registered(self):
-        from vllm_mlx.tool_parsers import ToolParserManager
+        from vmlx_engine.tool_parsers import ToolParserManager
         parsers = ToolParserManager.list_registered()
         assert "step3p5" in parsers
 
@@ -124,11 +124,11 @@ class TestToolParserModelMapping:
     """Tests that model configs map to correct tool parsers."""
 
     def test_model_config_tool_parsers(self):
-        from vllm_mlx.model_configs import register_all
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
 
         # Reset and populate
-        import vllm_mlx.model_config_registry as mcr
+        import vmlx_engine.model_config_registry as mcr
         ModelConfigRegistry._instance = None
         mcr._configs_loaded = False
         registry = ModelConfigRegistry()
@@ -156,10 +156,10 @@ class TestToolParserReasoningParserMapping:
     """Tests that model configs have correct reasoning parsers."""
 
     def test_reasoning_parser_assignments(self):
-        from vllm_mlx.model_configs import register_all
-        from vllm_mlx.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
 
-        import vllm_mlx.model_config_registry as mcr
+        import vmlx_engine.model_config_registry as mcr
         ModelConfigRegistry._instance = None
         mcr._configs_loaded = False
         registry = ModelConfigRegistry()
@@ -192,7 +192,7 @@ class TestSamplingParams:
     """Tests for SamplingParams dataclass fields."""
 
     def test_sampling_params_has_all_fields(self):
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
         sp = SamplingParams(
             max_tokens=100,
             temperature=0.8,
@@ -209,7 +209,7 @@ class TestSamplingParams:
         assert sp.repetition_penalty == 1.2
 
     def test_sampling_params_defaults(self):
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
         sp = SamplingParams()
         assert sp.temperature == 0.7
         assert sp.top_p == 0.9
@@ -222,7 +222,7 @@ class TestMLLMBatchRequestSampling:
     """Tests for MLLM batch request sampling parameter passthrough."""
 
     def test_mllm_batch_request_has_sampling_fields(self):
-        from vllm_mlx.mllm_batch_generator import MLLMBatchRequest
+        from vmlx_engine.mllm_batch_generator import MLLMBatchRequest
         req = MLLMBatchRequest(
             uid=0,
             request_id="test",
@@ -236,7 +236,7 @@ class TestMLLMBatchRequestSampling:
         assert req.repetition_penalty == 1.2
 
     def test_mllm_batch_request_defaults(self):
-        from vllm_mlx.mllm_batch_generator import MLLMBatchRequest
+        from vmlx_engine.mllm_batch_generator import MLLMBatchRequest
         req = MLLMBatchRequest(uid=0, request_id="test", prompt="hello")
         assert req.top_k == 0
         assert req.min_p == 0.0
@@ -248,23 +248,23 @@ class TestServerSamplingResolution:
 
     def test_resolve_temperature_request_value(self):
         """Request value should take priority."""
-        from vllm_mlx.server import _resolve_temperature
+        from vmlx_engine.server import _resolve_temperature
         assert _resolve_temperature(0.5) == 0.5
 
     def test_resolve_temperature_fallback(self):
         """None request should use fallback."""
-        from vllm_mlx.server import _resolve_temperature
+        from vmlx_engine.server import _resolve_temperature
         result = _resolve_temperature(None)
         assert isinstance(result, float)
 
     def test_resolve_top_p_request_value(self):
         """Request value should take priority."""
-        from vllm_mlx.server import _resolve_top_p
+        from vmlx_engine.server import _resolve_top_p
         assert _resolve_top_p(0.95) == 0.95
 
     def test_resolve_top_p_fallback(self):
         """None request should use fallback."""
-        from vllm_mlx.server import _resolve_top_p
+        from vmlx_engine.server import _resolve_top_p
         result = _resolve_top_p(None)
         assert isinstance(result, float)
 
@@ -285,14 +285,14 @@ class TestModelConfigRegistryLookup:
         return None
 
     def test_lookup_qwen3(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "qwen3")
         assert config is not None
         assert config.tool_parser == "qwen"
 
     def test_lookup_glm4_moe(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "glm4_moe")
         assert config is not None
@@ -300,21 +300,21 @@ class TestModelConfigRegistryLookup:
         assert config.reasoning_parser == "openai_gptoss"
 
     def test_lookup_deepseek_v3(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "deepseek_v3")
         assert config is not None
         assert config.reasoning_parser == "deepseek_r1"
 
     def test_lookup_qwen3_5(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "qwen3_5")
         assert config is not None
         assert config.is_mllm is True
 
     def test_lookup_unknown_type_returns_none(self):
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "nonexistent_type_xyz")
         assert config is None
@@ -331,7 +331,7 @@ class TestThinkInTemplate:
 
     def test_glm47_flash_think_in_template_false(self):
         """GLM-4.7 Flash uses Harmony protocol, NOT <think> in template."""
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "glm4_moe")
         assert config is not None
@@ -339,7 +339,7 @@ class TestThinkInTemplate:
 
     def test_qwen3_think_in_template_true(self):
         """Qwen3 uses <think> tag in template."""
-        from vllm_mlx.model_config_registry import get_model_config_registry
+        from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "qwen3")
         if config is not None:
@@ -356,26 +356,26 @@ class TestVisionEmbeddingCacheOrdering:
 
     def test_hash_order_sensitive(self):
         """Different image orderings should produce different hashes."""
-        from vllm_mlx.vision_embedding_cache import compute_images_hash
+        from vmlx_engine.vision_embedding_cache import compute_images_hash
         hash1 = compute_images_hash(["img1.jpg", "img2.jpg"])
         hash2 = compute_images_hash(["img2.jpg", "img1.jpg"])
         assert hash1 != hash2, "Different image orders should produce different hashes"
 
     def test_same_order_same_hash(self):
         """Same image ordering should produce same hash."""
-        from vllm_mlx.vision_embedding_cache import compute_images_hash
+        from vmlx_engine.vision_embedding_cache import compute_images_hash
         hash1 = compute_images_hash(["a.jpg", "b.jpg"])
         hash2 = compute_images_hash(["a.jpg", "b.jpg"])
         assert hash1 == hash2
 
     def test_empty_images(self):
         """Empty list should produce a consistent hash."""
-        from vllm_mlx.vision_embedding_cache import compute_images_hash
+        from vmlx_engine.vision_embedding_cache import compute_images_hash
         assert compute_images_hash([]) == "no_images"
 
     def test_single_image(self):
         """Single image hash should be deterministic."""
-        from vllm_mlx.vision_embedding_cache import compute_images_hash
+        from vmlx_engine.vision_embedding_cache import compute_images_hash
         h1 = compute_images_hash(["test.jpg"])
         h2 = compute_images_hash(["test.jpg"])
         assert h1 == h2
@@ -385,14 +385,14 @@ class TestVisionCacheStats:
     """Tests for VisionCacheStats tracking."""
 
     def test_initial_stats(self):
-        from vllm_mlx.vision_embedding_cache import VisionCacheStats
+        from vmlx_engine.vision_embedding_cache import VisionCacheStats
         stats = VisionCacheStats()
         assert stats.pixel_cache_hits == 0
         assert stats.pixel_cache_misses == 0
         assert stats.pixel_hit_rate == 0.0
 
     def test_hit_rate_calculation(self):
-        from vllm_mlx.vision_embedding_cache import VisionCacheStats
+        from vmlx_engine.vision_embedding_cache import VisionCacheStats
         stats = VisionCacheStats(pixel_cache_hits=3, pixel_cache_misses=7)
         assert stats.pixel_hit_rate == 0.3
 
@@ -401,13 +401,13 @@ class TestRequestStatus:
     """Tests for request status transitions."""
 
     def test_request_status_values(self):
-        from vllm_mlx.request import RequestStatus
+        from vmlx_engine.request import RequestStatus
         assert hasattr(RequestStatus, "FINISHED_STOPPED")
         assert hasattr(RequestStatus, "FINISHED_ABORTED")
         assert hasattr(RequestStatus, "FINISHED_LENGTH_CAPPED")
 
     def test_sampling_params_stop_sequences(self):
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
         sp = SamplingParams(stop=["<|end|>", "\n\n"])
         assert "<|end|>" in sp.stop
         assert "\n\n" in sp.stop
@@ -422,12 +422,12 @@ class TestStandardArchitectures:
     """Tests that _STANDARD_ARCHITECTURES in tokenizer.py includes all key types."""
 
     def test_qwen3_5_in_standard_architectures(self):
-        from vllm_mlx.utils.tokenizer import _STANDARD_ARCHITECTURES
+        from vmlx_engine.utils.tokenizer import _STANDARD_ARCHITECTURES
         assert "qwen3_5" in _STANDARD_ARCHITECTURES
         assert "qwen3_5_moe" in _STANDARD_ARCHITECTURES
 
     def test_common_types_in_standard_architectures(self):
-        from vllm_mlx.utils.tokenizer import _STANDARD_ARCHITECTURES
+        from vmlx_engine.utils.tokenizer import _STANDARD_ARCHITECTURES
         common = ["llama", "qwen2", "qwen3", "gemma2", "gemma3", "mistral",
                   "deepseek_v3", "phi3"]
         for t in common:
@@ -444,7 +444,7 @@ class TestAPIModels:
     """Tests for API request/response models."""
 
     def test_chat_completion_request_has_sampling_fields(self):
-        from vllm_mlx.api.models import ChatCompletionRequest
+        from vmlx_engine.api.models import ChatCompletionRequest
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -461,7 +461,7 @@ class TestAPIModels:
         assert req.repetition_penalty == 1.2
 
     def test_chat_completion_request_defaults(self):
-        from vllm_mlx.api.models import ChatCompletionRequest
+        from vmlx_engine.api.models import ChatCompletionRequest
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -472,7 +472,7 @@ class TestAPIModels:
         assert req.repetition_penalty is None
 
     def test_responses_request_has_sampling_fields(self):
-        from vllm_mlx.api.models import ResponsesRequest
+        from vmlx_engine.api.models import ResponsesRequest
         req = ResponsesRequest(
             model="test",
             input="hello",
@@ -485,7 +485,7 @@ class TestAPIModels:
         assert req.repetition_penalty == 1.2
 
     def test_enable_thinking_field(self):
-        from vllm_mlx.api.models import ChatCompletionRequest
+        from vmlx_engine.api.models import ChatCompletionRequest
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -494,7 +494,7 @@ class TestAPIModels:
         assert req.enable_thinking is True
 
     def test_stream_options_field(self):
-        from vllm_mlx.api.models import ChatCompletionRequest, StreamOptions
+        from vmlx_engine.api.models import ChatCompletionRequest, StreamOptions
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -512,18 +512,18 @@ class TestMLLMStopSequences:
     """Test that MLLM requests properly carry stop sequences."""
 
     def test_sampling_params_stop_sequences_populated(self):
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
         sp = SamplingParams(stop=["<|end|>", "###"])
         assert sp.stop == ["<|end|>", "###"]
 
     def test_sampling_params_stop_default_empty(self):
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
         sp = SamplingParams()
         assert sp.stop == []
 
     def test_mllm_request_accepts_stop(self):
-        from vllm_mlx.mllm_scheduler import MLLMRequest
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.mllm_scheduler import MLLMRequest
+        from vmlx_engine.request import SamplingParams
         sp = SamplingParams(stop=["<|end|>"])
         req = MLLMRequest(
             request_id="test-1",
@@ -557,20 +557,20 @@ class TestImageHashOrdering:
     """Test that image hash preserves order (not sorted)."""
 
     def test_different_order_different_hash(self):
-        from vllm_mlx.mllm_cache import compute_images_hash
+        from vmlx_engine.mllm_cache import compute_images_hash
         # Two different orderings should produce different hashes
         hash1 = compute_images_hash(["image_a.jpg", "image_b.jpg"])
         hash2 = compute_images_hash(["image_b.jpg", "image_a.jpg"])
         assert hash1 != hash2, "Image order should matter for VLM cache hashing"
 
     def test_same_order_same_hash(self):
-        from vllm_mlx.mllm_cache import compute_images_hash
+        from vmlx_engine.mllm_cache import compute_images_hash
         hash1 = compute_images_hash(["img1.jpg", "img2.jpg"])
         hash2 = compute_images_hash(["img1.jpg", "img2.jpg"])
         assert hash1 == hash2
 
     def test_empty_images(self):
-        from vllm_mlx.mllm_cache import compute_images_hash
+        from vmlx_engine.mllm_cache import compute_images_hash
         assert compute_images_hash([]) == "no_images"
         assert compute_images_hash(None) == "no_images"
 
@@ -580,7 +580,7 @@ class TestToolParserConcurrency:
 
     def test_parse_tool_calls_with_parser_no_global_state(self):
         """Verify the function doesn't rely on a global _tool_parser_instance."""
-        import vllm_mlx.server as srv
+        import vmlx_engine.server as srv
         # When auto tool choice is disabled, should fall through to generic parser
         old_val = srv._enable_auto_tool_choice
         try:
@@ -603,7 +603,7 @@ class TestCacheTruncation:
 
     def test_truncation_skips_empty(self):
         """Truncation with 0 or 1 tokens should return None."""
-        from vllm_mlx.scheduler import Scheduler
+        from vmlx_engine.scheduler import Scheduler
         result = Scheduler._truncate_cache_to_prompt_length([], 5)
         assert result is None
         result = Scheduler._truncate_cache_to_prompt_length([MagicMock()], 0)
@@ -620,7 +620,7 @@ class TestMLLMAbortCleanup:
     def test_abort_uses_pop_not_get(self):
         """abort_request must remove (pop) the request, not just read (get) it."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.abort_request)
         # Must use pop to remove the request
@@ -631,7 +631,7 @@ class TestMLLMAbortCleanup:
     def test_abort_cleans_block_table(self):
         """abort_request must clean up paged cache block tables."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.abort_request)
         assert "_request_tables" in source, (
@@ -641,7 +641,7 @@ class TestMLLMAbortCleanup:
     def test_abort_cleans_detokenizer(self):
         """abort_request must clean up detokenizer state."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.abort_request)
         assert "_cleanup_detokenizer" in source, (
@@ -655,7 +655,7 @@ class TestMLLMStepErrorRecovery:
     def test_step_has_try_except(self):
         """step() must wrap batch_generator.next() in try/except."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.step)
         assert "try:" in source, "step() must have try/except for error recovery"
@@ -664,7 +664,7 @@ class TestMLLMStepErrorRecovery:
     def test_step_reschedules_on_error(self):
         """On error, step() must move requests back to waiting."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.step)
         assert "RequestStatus.WAITING" in source, (
@@ -677,14 +677,14 @@ class TestMLLMStopTokenIds:
 
     def test_sampling_params_has_stop_token_ids(self):
         """SamplingParams must include stop_token_ids."""
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
 
         params = SamplingParams(stop_token_ids=[100, 200])
         assert params.stop_token_ids == [100, 200]
 
     def test_stop_token_ids_default_empty(self):
         """stop_token_ids should default to empty list."""
-        from vllm_mlx.request import SamplingParams
+        from vmlx_engine.request import SamplingParams
 
         params = SamplingParams()
         assert params.stop_token_ids == [] or params.stop_token_ids is None
@@ -692,7 +692,7 @@ class TestMLLMStopTokenIds:
     def test_mllm_scheduler_passes_stop_token_ids(self):
         """MLLMScheduler.add_request must pass stop_token_ids to SamplingParams."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.add_request)
         assert "stop_token_ids" in source, (
@@ -706,7 +706,7 @@ class TestMLLMEnsureBatchGeneratorCacheClean:
     def test_clears_cache_on_recreation(self):
         """Must clear paged cache when recreating batch generator."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
         assert "block_aware_cache" in source, (
@@ -719,7 +719,7 @@ class TestMLLMEnsureBatchGeneratorCacheClean:
     def test_no_logits_processors_param(self):
         """MLLMBatchGenerator must not accept logits_processors."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         sig = inspect.signature(MLLMBatchGenerator.__init__)
         assert "logits_processors" not in sig.parameters, (
@@ -729,7 +729,7 @@ class TestMLLMEnsureBatchGeneratorCacheClean:
     def test_scheduler_does_not_pass_logits_processors(self):
         """_ensure_batch_generator must not pass logits_processors."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
         assert "logits_processors" not in source, (
@@ -742,12 +742,12 @@ class TestMLLMDequantizeOnRestore:
 
     def test_dequantize_function_exists(self):
         """_dequantize_cache must exist in mllm_batch_generator."""
-        from vllm_mlx.mllm_batch_generator import _dequantize_cache
+        from vmlx_engine.mllm_batch_generator import _dequantize_cache
         assert callable(_dequantize_cache)
 
     def test_dequantize_passthrough_non_quantized(self):
         """Non-quantized cache should pass through unchanged."""
-        from vllm_mlx.mllm_batch_generator import _dequantize_cache
+        from vmlx_engine.mllm_batch_generator import _dequantize_cache
 
         mock_cache = [MagicMock(), MagicMock()]
         # Not QuantizedKVCache instances — should pass through
@@ -757,7 +757,7 @@ class TestMLLMDequantizeOnRestore:
     def test_dequantize_called_after_reconstruct(self):
         """Paged cache hit path must call _dequantize_cache after reconstruct."""
         import inspect
-        from vllm_mlx.mllm_batch_generator import MLLMBatchGenerator
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
 
         source = inspect.getsource(MLLMBatchGenerator)
         # reconstruct_cache and _dequantize_cache must both appear
@@ -771,7 +771,7 @@ class TestMLLMTotalPromptTokens:
     def test_total_prompt_tokens_incremented(self):
         """_process_batch_responses must increment total_prompt_tokens at finish time."""
         import inspect
-        from vllm_mlx.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         # Prompt token count is only known after the batch generator's first response,
         # so tracking happens at request finish time in _process_batch_responses

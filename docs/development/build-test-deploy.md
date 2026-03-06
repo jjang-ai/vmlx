@@ -6,7 +6,7 @@ Complete guide for building the vMLX desktop app, running the test suite, and de
 
 - **macOS** on Apple Silicon (M1/M2/M3/M4)
 - **Node.js** ≥ 18 and **npm** ≥ 9
-- **Python** 3.12+ with the vllm-mlx venv (`.venv/`)
+- **Python** 3.12+ with the vmlx-engine venv (`.venv/`)
 
 ## Building the Desktop App
 
@@ -59,7 +59,7 @@ The engine test suite lives in `tests/` and uses **pytest** with the project's `
 .venv/bin/python -m pytest tests/test_tool_format.py -v                  # 54 tests
 
 # Run with coverage
-.venv/bin/python -m pytest tests/ --cov=vllm_mlx
+.venv/bin/python -m pytest tests/ --cov=vmlx_engine
 ```
 
 #### Key Test Files
@@ -150,7 +150,7 @@ When a model's chat template silently drops tool definitions (e.g., Qwen 3.5 wit
 2. Injects a standard XML `<tool_call>` instruction set into the system message
 3. Re-applies the chat template with modified messages (tools removed from kwargs)
 
-This is model-agnostic — works for any model family, not just Qwen. The fallback lives in `vllm_mlx/api/tool_calling.py::check_and_inject_fallback_tools()` and is called from both `SimpleEngine` and `BatchedEngine`.
+This is model-agnostic — works for any model family, not just Qwen. The fallback lives in `vmlx_engine/api/tool_calling.py::check_and_inject_fallback_tools()` and is called from both `SimpleEngine` and `BatchedEngine`.
 
 ---
 
