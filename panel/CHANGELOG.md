@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.2 — 2026-03-06 — Reasoning Parser Fix
+
+### Fixed
+- **Reasoning parser for always-thinking models**: MiniMax M2.5 and similar models that always inject `<think>` regardless of `enable_thinking` setting now correctly classify reasoning vs content when user disables reasoning
+- **Parser dropdown UI**: Labels now include model names directly (e.g., "Qwen3 — Qwen / QwQ / MiniMax / StepFun"), help panel auto-opens when manually selecting a parser, more comprehensive model compatibility lists
+
+### Engine (vmlx-engine 0.2.10)
+- Fix `effective_think_in_template` override bug in both Chat Completions and Responses API paths
+
 ## v1.0.0 — 2026-03-05 — Production Release
 
 ### Production Readiness

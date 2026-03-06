@@ -1,5 +1,5 @@
 {
-  "version": "1.1.1",
-  "url": "https://github.com/vmlxllm/vmlx-releases/releases/tag/v1.1.1",
-  "notes": "Bundled mlx-audio (STT/TTS), audio auth fix, macOS 26+ requirement, build safeguards"
+  "version": "1.1.2",
+  "url": "https://github.com/vmlxllm/vmlx-releases/releases/tag/v1.1.2",
+  "notes": "Fix reasoning parser for always-thinking models (MiniMax M2.5), improved parser UI with model compatibility"
 }
