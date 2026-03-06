@@ -3,8 +3,9 @@
  * and that no settings are hardcoded. Tests use buildCommandPreview() which mirrors
  * the actual buildArgs() logic in sessions.ts exactly.
  *
- * Coverage: all 37 SessionConfig fields, context size detection, parser resolution,
- * VLM mode, cache feature gating, and batching parameters.
+ * Coverage: all 43 SessionConfig fields, context size detection, parser resolution,
+ * VLM mode, cache feature gating, batching parameters, speculative decoding,
+ * generation defaults, and embedding model.
  */
 import { describe, it, expect } from 'vitest'
 
@@ -44,6 +45,12 @@ interface SessionConfig {
     toolCallParser: string
     reasoningParser: string
     isMultimodal?: boolean
+    servedModelName: string
+    speculativeModel: string
+    numDraftTokens: number
+    defaultTemperature: number
+    defaultTopP: number
+    embeddingModel: string
     additionalArgs: string
 }
 
@@ -81,6 +88,12 @@ const DEFAULT_CONFIG: SessionConfig = {
     toolCallParser: 'auto',
     reasoningParser: 'auto',
     isMultimodal: undefined,
+    servedModelName: '',
+    speculativeModel: '',
+    numDraftTokens: 3,
+    defaultTemperature: 0,
+    defaultTopP: 0,
+    embeddingModel: '',
     additionalArgs: ''
 }
 
@@ -116,17 +129,19 @@ function buildCommandPreview(
     if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
     if (isVLM) parts.push('--is-mllm')
-    if (config.continuousBatching && !isVLM) parts.push('--continuous-batching')
+    if (config.continuousBatching) parts.push('--continuous-batching')
 
+    // Parser resolution: User explicit choice -> Detected config -> Fallback
+    // (mirrors buildArgs: user choice wins over detection)
     const effectiveToolParser = config.toolCallParser === ''
         ? undefined
-        : detected?.toolParser
-        || (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser : undefined)
+        : (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
+            : detected?.toolParser)
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
     const effectiveReasoningParser = config.reasoningParser === ''
         ? undefined
-        : detected?.reasoningParser
-        || (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser : undefined)
+        : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
+            : detected?.reasoningParser)
 
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
@@ -134,7 +149,8 @@ function buildCommandPreview(
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
     } else {
-        if (!isVLM && !config.continuousBatching && !parts.includes('--continuous-batching')) {
+        // Auto-enable continuous batching when prefix cache is on (required by vllm-mlx)
+        if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
             parts.push('--continuous-batching')
         }
         if ((!config.prefillBatchSize || config.prefillBatchSize === 0) && !parts.some(a => a === '--prefill-batch-size')) {
@@ -188,6 +204,27 @@ function buildCommandPreview(
         if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
     }
     if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
+
+    if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
+
+    // Speculative decoding
+    if (config.speculativeModel) {
+        parts.push('--speculative-model', config.speculativeModel)
+        if (config.numDraftTokens && config.numDraftTokens !== 3) {
+            parts.push('--num-draft-tokens', config.numDraftTokens.toString())
+        }
+    }
+
+    // Generation defaults
+    if (config.defaultTemperature && config.defaultTemperature > 0) {
+        parts.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
+    }
+    if (config.defaultTopP && config.defaultTopP > 0) {
+        parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
+    }
+
+    // Embedding model
+    if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
     if (config.additionalArgs && config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
 
@@ -288,9 +325,16 @@ describe('VLM Mode', () => {
         expect(hasFlag(out, '--is-mllm')).toBe(true)
     })
 
-    it('omits --continuous-batching when VLM', () => {
+    it('VLM gets --continuous-batching for BatchedEngine with MLLMScheduler', () => {
         const out = preview({ isMultimodal: true, continuousBatching: true })
-        expect(hasFlag(out, '--continuous-batching')).toBe(false)
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+    })
+
+    it('VLM without continuous batching gets auto-enabled via prefix cache', () => {
+        const out = preview({ isMultimodal: true, continuousBatching: false, enablePrefixCache: true })
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
     })
 
     it('detects VLM from model config', () => {
@@ -474,8 +518,8 @@ describe('Tool Integration', () => {
         expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(true)
     })
 
-    it('uses detected tool parser', () => {
-        const out = preview({ enableAutoToolChoice: true }, { toolParser: 'qwen' })
+    it('uses detected tool parser when user is auto', () => {
+        const out = preview({ enableAutoToolChoice: true, toolCallParser: 'auto' }, { toolParser: 'qwen' })
         expect(getFlagValue(out, '--tool-call-parser')).toBe('qwen')
     })
 
@@ -484,9 +528,9 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
     })
 
-    it('detected tool parser takes priority over manual', () => {
+    it('manual tool parser takes priority over detected', () => {
         const out = preview({ enableAutoToolChoice: true, toolCallParser: 'llama' }, { toolParser: 'qwen' })
-        expect(getFlagValue(out, '--tool-call-parser')).toBe('qwen')
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
     })
 
     it('empty tool parser disables tool parsing', () => {
@@ -494,8 +538,8 @@ describe('Tool Integration', () => {
         expect(hasFlag(out, '--tool-call-parser')).toBe(false)
     })
 
-    it('uses detected reasoning parser', () => {
-        const out = preview({}, { reasoningParser: 'qwen3' })
+    it('uses detected reasoning parser when user is auto', () => {
+        const out = preview({ reasoningParser: 'auto' }, { reasoningParser: 'qwen3' })
         expect(getFlagValue(out, '--reasoning-parser')).toBe('qwen3')
     })
 
@@ -504,9 +548,123 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--reasoning-parser')).toBe('deepseek_r1')
     })
 
+    it('manual reasoning parser takes priority over detected', () => {
+        const out = preview({ reasoningParser: 'deepseek_r1' }, { reasoningParser: 'qwen3' })
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('deepseek_r1')
+    })
+
     it('empty reasoning parser disables reasoning', () => {
         const out = preview({ reasoningParser: '' }, { reasoningParser: 'qwen3' })
         expect(hasFlag(out, '--reasoning-parser')).toBe(false)
+    })
+})
+
+describe('Served Model Name', () => {
+    it('sets served model name from config', () => {
+        const out = preview({ servedModelName: 'my-custom-model' })
+        expect(getFlagValue(out, '--served-model-name')).toBe('my-custom-model')
+    })
+
+    it('omits served model name when empty', () => {
+        const out = preview({ servedModelName: '' })
+        expect(hasFlag(out, '--served-model-name')).toBe(false)
+    })
+})
+
+describe('Speculative Decoding', () => {
+    it('sets speculative model from config', () => {
+        const out = preview({ speculativeModel: 'mlx-community/Llama-3.2-1B-Instruct-4bit' })
+        expect(getFlagValue(out, '--speculative-model')).toBe('mlx-community/Llama-3.2-1B-Instruct-4bit')
+    })
+
+    it('omits speculative model when empty', () => {
+        const out = preview({ speculativeModel: '' })
+        expect(hasFlag(out, '--speculative-model')).toBe(false)
+    })
+
+    it('omits --num-draft-tokens when default (3)', () => {
+        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 3 })
+        expect(hasFlag(out, '--speculative-model')).toBe(true)
+        expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
+    })
+
+    it('sets --num-draft-tokens when non-default', () => {
+        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 5 })
+        expect(getFlagValue(out, '--num-draft-tokens')).toBe('5')
+    })
+
+    it('omits --num-draft-tokens when no speculative model', () => {
+        const out = preview({ speculativeModel: '', numDraftTokens: 10 })
+        expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
+    })
+
+    it('sets --num-draft-tokens=1 (minimum)', () => {
+        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 1 })
+        expect(getFlagValue(out, '--num-draft-tokens')).toBe('1')
+    })
+
+    it('sets --num-draft-tokens=20 (maximum)', () => {
+        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 20 })
+        expect(getFlagValue(out, '--num-draft-tokens')).toBe('20')
+    })
+})
+
+describe('Generation Defaults', () => {
+    it('sets default temperature (converted from ×100 integer)', () => {
+        const out = preview({ defaultTemperature: 70 })
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
+    })
+
+    it('omits default temperature when 0 (server default)', () => {
+        const out = preview({ defaultTemperature: 0 })
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+    })
+
+    it('sets high temperature (1.50 from 150)', () => {
+        const out = preview({ defaultTemperature: 150 })
+        expect(getFlagValue(out, '--default-temperature')).toBe('1.50')
+    })
+
+    it('sets low temperature (0.05 from 5)', () => {
+        const out = preview({ defaultTemperature: 5 })
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.05')
+    })
+
+    it('sets max temperature (2.00 from 200)', () => {
+        const out = preview({ defaultTemperature: 200 })
+        expect(getFlagValue(out, '--default-temperature')).toBe('2.00')
+    })
+
+    it('sets default top-p (converted from ×100 integer)', () => {
+        const out = preview({ defaultTopP: 90 })
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
+    })
+
+    it('omits default top-p when 0 (server default)', () => {
+        const out = preview({ defaultTopP: 0 })
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
+    })
+
+    it('sets low top-p (0.10 from 10)', () => {
+        const out = preview({ defaultTopP: 10 })
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.10')
+    })
+
+    it('sets top-p 1.00 from 100', () => {
+        const out = preview({ defaultTopP: 100 })
+        expect(getFlagValue(out, '--default-top-p')).toBe('1.00')
+    })
+})
+
+describe('Embedding Model', () => {
+    it('sets embedding model from config', () => {
+        const out = preview({ embeddingModel: 'mlx-community/embeddinggemma-300m-6bit' })
+        expect(getFlagValue(out, '--embedding-model')).toBe('mlx-community/embeddinggemma-300m-6bit')
+    })
+
+    it('omits embedding model when empty', () => {
+        const out = preview({ embeddingModel: '' })
+        expect(hasFlag(out, '--embedding-model')).toBe(false)
     })
 })
 
@@ -566,11 +724,29 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(preview({ maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
         expect(getFlagValue(preview({ maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
     })
+
+    it('changing defaultTemperature produces different CLI output', () => {
+        expect(getFlagValue(preview({ defaultTemperature: 50 }), '--default-temperature')).toBe('0.50')
+        expect(getFlagValue(preview({ defaultTemperature: 100 }), '--default-temperature')).toBe('1.00')
+    })
+
+    it('changing speculativeModel produces different CLI output', () => {
+        const a = preview({ speculativeModel: 'model-a' })
+        const b = preview({ speculativeModel: 'model-b' })
+        expect(a).not.toBe(b)
+        expect(getFlagValue(a, '--speculative-model')).toBe('model-a')
+        expect(getFlagValue(b, '--speculative-model')).toBe('model-b')
+    })
 })
 
 describe('Feature Interaction', () => {
     it('auto-enables continuous batching when prefix cache is on (LLM)', () => {
         const out = preview({ continuousBatching: false, enablePrefixCache: true })
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+    })
+
+    it('auto-enables continuous batching when prefix cache is on (VLM)', () => {
+        const out = preview({ isMultimodal: true, continuousBatching: false, enablePrefixCache: true })
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
     })
 
@@ -582,12 +758,14 @@ describe('Feature Interaction', () => {
     it('VLM with all caching features works together', () => {
         const out = preview({
             isMultimodal: true,
+            continuousBatching: true,
             enablePrefixCache: true,
             usePagedCache: true,
             kvCacheQuantization: 'q8',
             enableBlockDiskCache: true,
         })
         expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
         expect(hasFlag(out, '--use-paged-cache')).toBe(true)
         expect(hasFlag(out, '--kv-cache-quantization')).toBe(true)
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
@@ -606,5 +784,32 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
         expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+    })
+
+    it('speculative decoding with all options set', () => {
+        const out = preview({
+            speculativeModel: 'draft-model',
+            numDraftTokens: 7,
+            defaultTemperature: 80,
+            defaultTopP: 95,
+            embeddingModel: 'embed-model',
+            servedModelName: 'my-model',
+        })
+        expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
+        expect(getFlagValue(out, '--num-draft-tokens')).toBe('7')
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
+        expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
+        expect(getFlagValue(out, '--served-model-name')).toBe('my-model')
+    })
+
+    it('all new features disabled by default (zero values / empty strings)', () => {
+        const out = preview()
+        expect(hasFlag(out, '--speculative-model')).toBe(false)
+        expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
+        expect(hasFlag(out, '--embedding-model')).toBe(false)
+        expect(hasFlag(out, '--served-model-name')).toBe(false)
     })
 })

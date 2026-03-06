@@ -1193,6 +1193,27 @@ export class SessionManager extends EventEmitter {
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
 
+    // Speculative decoding
+    if (config.speculativeModel) {
+      args.push('--speculative-model', config.speculativeModel)
+      if (config.numDraftTokens && config.numDraftTokens !== 3) {
+        args.push('--num-draft-tokens', config.numDraftTokens.toString())
+      }
+    }
+
+    // Generation defaults (slider value is integer ×100, convert to float)
+    if (config.defaultTemperature && config.defaultTemperature > 0) {
+      args.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
+    }
+    if (config.defaultTopP && config.defaultTopP > 0) {
+      args.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
+    }
+
+    // Embedding model
+    if (config.embeddingModel) {
+      args.push('--embedding-model', config.embeddingModel)
+    }
+
     // Additional arguments
     if (config.additionalArgs) {
       args.push(...config.additionalArgs.trim().split(/\s+/))
