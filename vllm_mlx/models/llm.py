@@ -170,16 +170,48 @@ class MLXLanguageModel:
                 repetition_penalty=repetition_penalty,
             )
 
-        # Generate text
-        output_text = generate(
-            self.model,
-            self.tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            sampler=sampler,
-            logits_processors=logits_processors,
-            verbose=False,
-        )
+        # Check for speculative decoding
+        draft_model_arg = None
+        num_draft = 0
+        try:
+            from ..speculative import get_draft_model, get_num_draft_tokens, is_speculative_enabled, validate_draft_tokenizer
+            if is_speculative_enabled():
+                draft_model_arg = get_draft_model()
+                num_draft = get_num_draft_tokens()
+                if draft_model_arg is not None:
+                    validate_draft_tokenizer(self.tokenizer)
+        except ImportError:
+            pass
+
+        if draft_model_arg is not None:
+            # mlx_lm.generate() doesn't accept draft_model, so we use
+            # stream_generate with speculative decoding and collect all output
+            from mlx_lm import stream_generate as sg
+
+            output_text = ""
+            for resp in sg(
+                self.model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                logits_processors=logits_processors,
+                draft_model=draft_model_arg,
+                num_draft_tokens=num_draft,
+            ):
+                # Each resp.text is a new segment from the streaming detokenizer
+                output_text += resp.text
+        else:
+            # Standard non-speculative generation
+            output_text = generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                sampler=sampler,
+                logits_processors=logits_processors,
+                verbose=False,
+            )
 
         # Truncate at first stop sequence (mlx_lm.generate doesn't support stop natively)
         # Note: output_text is generated tokens only (no prompt echo)
@@ -250,6 +282,23 @@ class MLXLanguageModel:
         token_count = 0
         accumulated_text = ""
 
+        # Check for speculative decoding
+        spec_kwargs = {}
+        try:
+            from ..speculative import get_draft_model, get_num_draft_tokens, is_speculative_enabled, validate_draft_tokenizer
+            if is_speculative_enabled():
+                draft_model = get_draft_model()
+                if draft_model is not None:
+                    spec_kwargs["draft_model"] = draft_model
+                    spec_kwargs["num_draft_tokens"] = get_num_draft_tokens()
+                    # Validate tokenizer compatibility on first use
+                    validate_draft_tokenizer(self.tokenizer)
+                    logger.info(
+                        f"Speculative decoding active: draft_tokens={get_num_draft_tokens()}"
+                    )
+        except ImportError:
+            pass
+
         for response in stream_generate(
             self.model,
             self.tokenizer,
@@ -257,6 +306,7 @@ class MLXLanguageModel:
             max_tokens=max_tokens,
             sampler=sampler,
             logits_processors=logits_processors,
+            **spec_kwargs,
         ):
             token_count += 1
             # response.text is the new token text (not accumulated)
