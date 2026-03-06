@@ -316,6 +316,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             chatId={currentChatId}
             onNewChat={handleNewChat}
             sessionEndpoint={{ host: session.host, port: session.port }}
+            sessionId={session.id}
           />
         </div>
         {showSettings && currentChatId && (

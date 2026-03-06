@@ -32,12 +32,15 @@
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--enable-prefix-cache` | Enable prefix caching (requires `--continuous-batching`) | `false` |
 | `--cache-memory-mb` | Cache memory limit in MB | Auto |
 | `--cache-memory-percent` | Fraction of RAM for cache | `0.30` |
 | `--no-memory-aware-cache` | Use legacy entry-count cache | `false` |
-| `--use-paged-cache` | Enable paged KV cache | `false` |
+| `--use-paged-cache` | Enable paged KV cache | `true` |
 | `--paged-cache-block-size` | Tokens per block | `64` |
 | `--max-cache-blocks` | Maximum blocks | `1000` |
+| `--enable-disk-cache` | Enable disk-based KV cache persistence | `false` |
+| `--disk-cache-dir` | Directory for disk cache files | Auto |
 
 ### Tool Calling Options
 
@@ -52,11 +55,29 @@
 |--------|-------------|---------|
 | `--reasoning-parser` | Parser for reasoning models (`auto`, `qwen3`, `deepseek_r1`). Use `auto` to detect from model name. | None |
 
+### Speculative Decoding Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--speculative-model` | Draft model for speculative decoding | None |
+| `--num-draft-tokens` | Tokens to draft per step | `3` |
+
+> **Note:** Speculative decoding uses SimpleEngine (no continuous batching). If `--continuous-batching` is also set, speculative decoding flags are still passed but the server handles the conflict.
+
 ### Embedding Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--embedding-model` | Pre-load an embedding model at startup | None |
+
+### KV Cache Quantization Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--kv-cache-quantization` | KV cache quantization level (`none`, `q4`, `q8`) | `none` |
+| `--kv-cache-group-size` | Group size for quantization | `64` |
+
+> **Note:** Requires `--continuous-batching`. Reduces KV cache memory usage at slight quality cost.
 
 ### MCP Options
 

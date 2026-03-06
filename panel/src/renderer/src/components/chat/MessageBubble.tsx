@@ -34,6 +34,8 @@ interface MessageBubbleProps {
   reasoningContent?: string
   reasoningDone?: boolean
   toolStatuses?: any[]
+  sessionId?: string
+  sessionEndpoint?: { host: string; port: number }
 }
 
 // Custom renderer: wraps code blocks with a copy button
@@ -105,7 +107,7 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
   return { groups, hasOffsets, processingStatus }
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, sessionId, sessionEndpoint }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [zoomedImage, setZoomedImage] = useState<string | null>(null)
 
@@ -307,7 +309,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
 
           {message.role === 'assistant' && !isStreaming && (
             <div className="flex items-center gap-1">
-              <TTSPlayer text={message.content} />
+              <TTSPlayer text={message.content} endpoint={sessionEndpoint} sessionId={sessionId} />
               <button
                 onClick={() => copyToClipboard(message.content)}
                 className="text-xs text-muted-foreground hover:text-foreground"

@@ -63,6 +63,21 @@ else
   echo "  [WARN] Registry mismatch — check model-config-registry.ts vs model_configs.py"
 fi
 
+# Check for editable installs in bundled Python (CRITICAL: prevents shipping dev paths)
+echo ""
+echo "  Editable install check..."
+if [ -d "bundled-python/python/lib/python3.12/site-packages" ]; then
+  EDITABLE=$(find bundled-python/python/lib/python3.12/site-packages -maxdepth 1 -name "__editable__.*" -o -name "__editable___*" 2>/dev/null)
+  if [ -n "$EDITABLE" ]; then
+    echo "  [FAIL] Editable install found in bundled Python!"
+    echo "         $EDITABLE"
+    echo "         This ships hardcoded dev paths. Re-run: bash scripts/bundle-python.sh"
+    exit 1
+  else
+    echo "  [PASS] No editable installs in bundled Python"
+  fi
+fi
+
 # Check critical API field parity
 echo ""
 echo "  API field parity..."

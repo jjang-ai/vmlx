@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { resolveBaseUrl } from './utils'
+import { resolveBaseUrl, getAuthHeaders } from './utils'
 
 /**
  * Audio IPC handlers for STT (transcription) and TTS (speech synthesis).
@@ -15,8 +15,10 @@ export function registerAudioHandlers(): void {
     model?: string
     language?: string
     endpoint?: { host: string; port: number }
+    sessionId?: string
   }) => {
     const baseUrl = await resolveBaseUrl(opts.endpoint)
+    const authHeaders = getAuthHeaders(opts.sessionId)
 
     // Build multipart/form-data with the audio file
     const boundary = `----AudioBoundary${Date.now()}`
@@ -55,7 +57,8 @@ export function registerAudioHandlers(): void {
     const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
       method: 'POST',
       headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        ...authHeaders
       },
       body: bodyBuffer,
       signal: AbortSignal.timeout(60000) // 60s timeout for transcription
@@ -77,8 +80,10 @@ export function registerAudioHandlers(): void {
     voice?: string
     speed?: number
     endpoint?: { host: string; port: number }
+    sessionId?: string
   }) => {
     const baseUrl = await resolveBaseUrl(opts.endpoint)
+    const authHeaders = getAuthHeaders(opts.sessionId)
 
     // Build form-data (the endpoint expects form fields, not JSON)
     const params = new URLSearchParams()
@@ -90,7 +95,7 @@ export function registerAudioHandlers(): void {
 
     const response = await fetch(`${baseUrl}/v1/audio/speech`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...authHeaders },
       body: params.toString(),
       signal: AbortSignal.timeout(120000) // 120s timeout for TTS
     })
@@ -108,11 +113,14 @@ export function registerAudioHandlers(): void {
   ipcMain.handle('audio:voices', async (_, opts: {
     model?: string
     endpoint?: { host: string; port: number }
+    sessionId?: string
   }) => {
     const baseUrl = await resolveBaseUrl(opts.endpoint)
+    const authHeaders = getAuthHeaders(opts.sessionId)
     const model = opts.model || 'kokoro'
 
     const response = await fetch(`${baseUrl}/v1/audio/voices?model=${encodeURIComponent(model)}`, {
+      headers: { ...authHeaders },
       signal: AbortSignal.timeout(10000)
     })
 

@@ -14,9 +14,10 @@ interface InputBoxProps {
   disabled?: boolean
   loading?: boolean
   sessionEndpoint?: { host: string; port: number }
+  sessionId?: string
 }
 
-export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint }: InputBoxProps) {
+export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, sessionId }: InputBoxProps) {
   const [message, setMessage] = useState('')
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -148,6 +149,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint }
         <VoiceChat
           onTranscription={handleTranscription}
           endpoint={sessionEndpoint}
+          sessionId={sessionId}
           disabled={disabled && !loading}
         />
         <textarea

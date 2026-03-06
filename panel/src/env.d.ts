@@ -65,9 +65,9 @@ declare global {
         clear: (cacheType: string, endpoint?: { host: string; port: number }) => Promise<any>
       }
       audio: {
-        transcribe: (opts: { audioBase64: string; model?: string; language?: string; endpoint?: { host: string; port: number } }) => Promise<{ text: string; language?: string; duration?: number }>
-        speak: (opts: { text: string; model?: string; voice?: string; speed?: number; endpoint?: { host: string; port: number } }) => Promise<string>
-        voices: (opts: { model?: string; endpoint?: { host: string; port: number } }) => Promise<{ voices: string[] }>
+        transcribe: (opts: { audioBase64: string; model?: string; language?: string; endpoint?: { host: string; port: number }; sessionId?: string }) => Promise<{ text: string; language?: string; duration?: number }>
+        speak: (opts: { text: string; model?: string; voice?: string; speed?: number; endpoint?: { host: string; port: number }; sessionId?: string }) => Promise<string>
+        voices: (opts: { model?: string; endpoint?: { host: string; port: number }; sessionId?: string }) => Promise<{ voices: string[] }>
       }
       benchmark: {
         run: (sessionId: string, endpoint: { host: string; port: number }, modelPath: string, modelName?: string, options?: { flushCache?: boolean }) => Promise<any>

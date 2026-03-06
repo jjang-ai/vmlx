@@ -71,7 +71,16 @@ class BatchMambaCache(MambaCache):
             size: Number of arrays in the cache (passed to ArraysCache)
             left_padding: Amount of left padding for each sequence in batch
         """
-        super().__init__(size, left_padding=left_padding)
+        # MambaCache.__init__ dropped the `size` param in mlx-lm 0.30.5+
+        # but ArraysCache.__init__ still accepts it. Try the full signature
+        # first, fall back to left_padding only.
+        try:
+            super().__init__(size, left_padding=left_padding)
+        except TypeError:
+            super().__init__(left_padding=left_padding)
+            # Manually set cache list to the requested size
+            if not self.cache or len(self.cache) != size:
+                self.cache = [None] * size
         self._batch_size = len(left_padding) if left_padding else 0
 
     def filter(self, batch_indices) -> None:
@@ -99,7 +108,12 @@ class BatchMambaCache(MambaCache):
             A new MambaCache with the extracted state
         """
         num_arrays = len(self.cache) if self.cache else 2
-        cache = MambaCache(num_arrays)
+        try:
+            cache = MambaCache(num_arrays)
+        except TypeError:
+            # MambaCache no longer accepts size param
+            cache = MambaCache()
+            cache.cache = [None] * num_arrays
         # Extract the state arrays for this index
         cache.cache = [
             mx.contiguous(c[idx : idx + 1]) if c is not None else None
@@ -299,11 +313,15 @@ def patch_mlx_lm_for_mamba():
 
 # Auto-patch when module is imported
 _patched = False
+_patch_lock = __import__("threading").Lock()
 
 
 def ensure_mamba_support():
     """Ensure MambaCache batching support is enabled."""
     global _patched
-    if not _patched:
-        patch_mlx_lm_for_mamba()
-        _patched = True
+    if _patched:
+        return
+    with _patch_lock:
+        if not _patched:
+            patch_mlx_lm_for_mamba()
+            _patched = True

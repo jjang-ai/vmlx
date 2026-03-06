@@ -1106,7 +1106,15 @@ class MLLMScheduler:
                 try:
                     self.output_queues[request_id].put_nowait(None)
                 except asyncio.QueueFull:
-                    pass
+                    # Force-deliver sentinel to prevent stream_outputs hang
+                    try:
+                        self.output_queues[request_id].get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        self.output_queues[request_id].put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass
 
         # Free Metal memory when all requests done
         if not self.running:
@@ -1645,7 +1653,16 @@ class MLLMScheduler:
                     try:
                         queue.put_nowait(req_output)
                     except asyncio.QueueFull:
-                        pass  # Token lost — acceptable for intermediate tokens
+                        if req_output.finished:
+                            # Finished token MUST be delivered — drain one to make room
+                            try:
+                                queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            try:
+                                queue.put_nowait(req_output)
+                            except asyncio.QueueFull:
+                                pass
                     if req_output.finished:
                         # Sentinel MUST be delivered — without it stream_outputs hangs
                         try:

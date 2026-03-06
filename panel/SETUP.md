@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- macOS 12+ (Apple Silicon recommended)
+- macOS 26+ (Tahoe) — Apple Silicon required (MLX Metal shaders require Metal 4.0)
 - Node.js 18+
 - vLLM-MLX (auto-installed on first launch, or install manually)
 

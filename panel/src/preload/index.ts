@@ -157,11 +157,11 @@ const api = {
 
   // Audio: STT and TTS
   audio: {
-    transcribe: (opts: { audioBase64: string; model?: string; language?: string; endpoint?: { host: string; port: number } }) =>
+    transcribe: (opts: { audioBase64: string; model?: string; language?: string; endpoint?: { host: string; port: number }; sessionId?: string }) =>
       ipcRenderer.invoke('audio:transcribe', opts),
-    speak: (opts: { text: string; model?: string; voice?: string; speed?: number; endpoint?: { host: string; port: number } }) =>
+    speak: (opts: { text: string; model?: string; voice?: string; speed?: number; endpoint?: { host: string; port: number }; sessionId?: string }) =>
       ipcRenderer.invoke('audio:speak', opts) as Promise<string>,
-    voices: (opts: { model?: string; endpoint?: { host: string; port: number } }) =>
+    voices: (opts: { model?: string; endpoint?: { host: string; port: number }; sessionId?: string }) =>
       ipcRenderer.invoke('audio:voices', opts) as Promise<{ voices: string[] }>
   },
 

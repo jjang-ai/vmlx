@@ -3,6 +3,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 interface VoiceChatProps {
   onTranscription: (text: string) => void
   endpoint?: { host: string; port: number }
+  sessionId?: string
   sttModel?: string
   disabled?: boolean
 }
@@ -53,7 +54,7 @@ function useAudioSettings() {
  *
  * STT model resolution: explicit prop > settings('sttModel') > 'whisper-large-v3'
  */
-export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: VoiceChatProps) {
+export function VoiceChat({ onTranscription, endpoint, sessionId, sttModel, disabled }: VoiceChatProps) {
   const [state, setState] = useState<RecordingState>('idle')
   const [error, setError] = useState<string | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -115,7 +116,8 @@ export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: Voi
           const result = await window.api.audio.transcribe({
             audioBase64: base64,
             model: effectiveSttModel,
-            endpoint
+            endpoint,
+            sessionId
           })
 
           if (result.text && result.text.trim()) {
@@ -123,7 +125,12 @@ export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: Voi
           }
         } catch (err: any) {
           console.error('Transcription failed:', err)
-          setError(err.message || 'Transcription failed')
+          const msg = err.message || 'Transcription failed'
+          if (msg.includes('mlx-audio') || msg.includes('mlx_audio')) {
+            setError('STT not available — mlx-audio not installed on server')
+          } else {
+            setError(msg.length > 80 ? msg.slice(0, 80) + '…' : msg)
+          }
         } finally {
           setState('idle')
         }
@@ -199,6 +206,7 @@ export function VoiceChat({ onTranscription, endpoint, sttModel, disabled }: Voi
 interface TTSPlayerProps {
   text: string
   endpoint?: { host: string; port: number }
+  sessionId?: string
   ttsModel?: string
   voice?: string
   speed?: number
@@ -211,7 +219,7 @@ interface TTSPlayerProps {
  *
  * TTS settings resolution: explicit prop > settings('ttsModel'/'ttsVoice'/'ttsSpeed') > defaults
  */
-export function TTSPlayer({ text, endpoint, ttsModel, voice, speed, autoPlay }: TTSPlayerProps) {
+export function TTSPlayer({ text, endpoint, sessionId, ttsModel, voice, speed, autoPlay }: TTSPlayerProps) {
   const [playing, setPlaying] = useState(false)
   const [loading, setLoading] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -230,7 +238,8 @@ export function TTSPlayer({ text, endpoint, ttsModel, voice, speed, autoPlay }: 
         model: effectiveModel,
         voice: effectiveVoice,
         speed: effectiveSpeed,
-        endpoint
+        endpoint,
+        sessionId
       })
 
       // Create audio element and play

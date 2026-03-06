@@ -198,12 +198,12 @@ function buildCommandPreview(
         parts.push('--max-tokens', '1000000')
     }
 
-    if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
-    if (effectiveAutoTool) {
-        parts.push('--enable-auto-tool-choice')
-        if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
-    }
+    // Pass resolved parsers directly (mirrors buildArgs lines 1085-1093)
+    if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
     if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
+    if (effectiveAutoTool) parts.push('--enable-auto-tool-choice')
+
+    if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
 
     if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
@@ -811,5 +811,152 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--default-top-p')).toBe(false)
         expect(hasFlag(out, '--embedding-model')).toBe(false)
         expect(hasFlag(out, '--served-model-name')).toBe(false)
+    })
+
+    it('tool parser emitted without auto-tool-choice (matches buildArgs)', () => {
+        // buildArgs emits --tool-call-parser independently of --enable-auto-tool-choice
+        const out = preview(
+            { enableAutoToolChoice: false, toolCallParser: 'llama' },
+        )
+        expect(hasFlag(out, '--tool-call-parser')).toBe(true)
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(false)
+    })
+
+    it('detected tool parser emitted without auto-tool-choice', () => {
+        const out = preview(
+            { enableAutoToolChoice: false, toolCallParser: 'auto' },
+            { toolParser: 'qwen' }
+        )
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('qwen')
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(false)
+    })
+
+    it('MCP tools force prefix cache even when disabled', () => {
+        const out = preview({
+            enablePrefixCache: false,
+            enableAutoToolChoice: true,
+            mcpConfig: '/path/mcp.json',
+            toolCallParser: 'hermes',
+        })
+        // Tools need cache → prefix cache NOT disabled
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--mcp-config')).toBe(true)
+    })
+
+    it('noMemoryAwareCache suppresses memory-aware flags', () => {
+        const out = preview({
+            noMemoryAwareCache: true,
+            cacheMemoryMb: 2048,
+            cacheMemoryPercent: 30,
+            cacheTtlMinutes: 60,
+            prefixCacheSize: 200,
+        })
+        expect(hasFlag(out, '--no-memory-aware-cache')).toBe(true)
+        expect(hasFlag(out, '--prefix-cache-size')).toBe(true)
+        // Memory-aware flags must NOT appear
+        expect(hasFlag(out, '--cache-memory-mb')).toBe(false)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
+        expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
+    })
+
+    it('cacheMemoryPercent default 20 emits 0.2', () => {
+        const out = preview({ cacheMemoryPercent: 20 })
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
+    })
+
+    it('defaultTopP minimum boundary 1 emits 0.01', () => {
+        const out = preview({ defaultTopP: 1 })
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.01')
+    })
+
+    it('numDraftTokens 0 with speculative model omits draft tokens flag', () => {
+        // numDraftTokens 0 is falsy → condition fails → flag omitted → Python uses default (3)
+        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 0 })
+        expect(hasFlag(out, '--speculative-model')).toBe(true)
+        expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
+    })
+
+    it('empty diskCacheDir with enableDiskCache does not emit --disk-cache-dir', () => {
+        const out = preview({ enableDiskCache: true, diskCacheDir: '' })
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--disk-cache-dir')).toBe(false)
+    })
+
+    it('VLM + speculative decoding both emit flags (Python gates server-side)', () => {
+        const out = preview({
+            isMultimodal: true,
+            speculativeModel: 'draft-model',
+            numDraftTokens: 5,
+        })
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--speculative-model')).toBe(true)
+        expect(getFlagValue(out, '--num-draft-tokens')).toBe('5')
+    })
+
+    it('speculative decoding + continuous batching + embedding model combined', () => {
+        const out = preview({
+            speculativeModel: 'draft-model',
+            numDraftTokens: 4,
+            continuousBatching: true,
+            embeddingModel: 'embed-model',
+            defaultTemperature: 70,
+            defaultTopP: 90,
+        })
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+        expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
+        expect(getFlagValue(out, '--num-draft-tokens')).toBe('4')
+        expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
+    })
+})
+
+describe('Update Checker', () => {
+    // Tests for compareVersions logic (extracted from update-checker.ts)
+    function compareVersions(current: string, latest: string): boolean {
+        const a = current.split('.').map(Number)
+        const b = latest.split('.').map(Number)
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+            const av = a[i] || 0
+            const bv = b[i] || 0
+            if (bv > av) return true
+            if (bv < av) return false
+        }
+        return false
+    }
+
+    it('detects newer major version', () => {
+        expect(compareVersions('1.0.0', '2.0.0')).toBe(true)
+    })
+
+    it('detects newer minor version', () => {
+        expect(compareVersions('1.0.0', '1.1.0')).toBe(true)
+    })
+
+    it('detects newer patch version', () => {
+        expect(compareVersions('1.1.0', '1.1.1')).toBe(true)
+    })
+
+    it('returns false when versions are equal', () => {
+        expect(compareVersions('1.1.0', '1.1.0')).toBe(false)
+    })
+
+    it('returns false when current is newer', () => {
+        expect(compareVersions('2.0.0', '1.9.9')).toBe(false)
+    })
+
+    it('handles different version lengths', () => {
+        expect(compareVersions('1.0', '1.0.1')).toBe(true)
+        expect(compareVersions('1.0.1', '1.0')).toBe(false)
+    })
+
+    it('handles major version jump', () => {
+        expect(compareVersions('0.3.0', '1.1.0')).toBe(true)
+    })
+
+    it('handles zero versions', () => {
+        expect(compareVersions('0.0.0', '0.0.1')).toBe(true)
+        expect(compareVersions('0.0.0', '0.0.0')).toBe(false)
     })
 })

@@ -44,9 +44,10 @@ interface ChatInterfaceProps {
   chatId: string | null
   onNewChat?: () => void
   sessionEndpoint?: { host: string; port: number }
+  sessionId?: string
 }
 
-export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterfaceProps) {
+export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }: ChatInterfaceProps) {
   const { showToast } = useToast()
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
@@ -376,6 +377,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
         reasoningDoneMap={reasoningDoneMap}
         toolStatusMap={toolStatusMap}
         hideToolStatus={hideToolStatus}
+        sessionId={sessionId}
+        sessionEndpoint={sessionEndpoint}
       />
       {/* ask_user tool: inline question from model */}
       {askUserQuestion && chatId && (
@@ -426,6 +429,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint }: ChatInterf
         disabled={loading}
         loading={loading}
         sessionEndpoint={sessionEndpoint}
+        sessionId={sessionId}
       />
     </div>
   )
