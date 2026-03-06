@@ -35,6 +35,11 @@ export interface SessionConfig {
   reasoningParser: string
   isMultimodal?: boolean
   servedModelName: string
+  speculativeModel: string
+  numDraftTokens: number
+  defaultTemperature: number
+  defaultTopP: number
+  embeddingModel: string
   additionalArgs: string
 }
 
@@ -73,6 +78,11 @@ export const DEFAULT_CONFIG: SessionConfig = {
   reasoningParser: 'auto',
   isMultimodal: undefined,
   servedModelName: '',
+  speculativeModel: '',
+  numDraftTokens: 3,
+  defaultTemperature: 0,
+  defaultTopP: 0,
+  embeddingModel: '',
   additionalArgs: ''
 }
 
@@ -95,7 +105,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     kvCacheQuant: false,
     diskCache: false,
     performance: false,
-    tools: false
+    tools: false,
+    specDecode: false
   })
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
@@ -506,6 +517,38 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="No limit"
         />
+        <SliderField
+          label="Default Temperature"
+          tooltip="Server-wide default temperature for generation. Controls randomness: 0.0 = deterministic, 1.0 = creative. Overridden by per-request 'temperature' parameter. Set to 'Server default' to use vllm-mlx's built-in default (0.7)."
+          value={config.defaultTemperature}
+          onChange={v => onChange('defaultTemperature', v)}
+          min={0}
+          max={200}
+          step={5}
+          defaultValue={70}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel="Server default"
+        />
+        {config.defaultTemperature > 0 && (
+          <InfoNote text={`Temperature: ${(config.defaultTemperature / 100).toFixed(2)} — ${config.defaultTemperature < 30 ? 'very focused' : config.defaultTemperature < 70 ? 'balanced' : config.defaultTemperature < 120 ? 'creative' : 'very random'}`} />
+        )}
+        <SliderField
+          label="Default Top-P"
+          tooltip="Server-wide default nucleus sampling threshold. Only considers tokens whose cumulative probability ≤ this value. 0.9 = use top 90% of probability mass. Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. Set to 'Server default' to use vllm-mlx's built-in default."
+          value={config.defaultTopP}
+          onChange={v => onChange('defaultTopP', v)}
+          min={1}
+          max={100}
+          step={1}
+          defaultValue={90}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel="Server default"
+        />
+        {config.defaultTopP > 0 && (
+          <InfoNote text={`Top-P: ${(config.defaultTopP / 100).toFixed(2)}`} />
+        )}
       </Section>
 
       {/* Tool Integration */}
@@ -547,6 +590,35 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text="VLM mode forced OFF — auto-detection is bypassed. Use this only if the model is incorrectly detected as multimodal." />
         )}
       </Section>
+
+      {/* Speculative Decoding */}
+      <Section title="Speculative Decoding" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')}>
+        <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
+        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
+        {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
+        <Field label="Draft Model" tooltip="Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.">
+          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder="mlx-community/small-draft-model" className="cfg-input" />
+        </Field>
+        {config.speculativeModel && (
+          <SliderField
+            label="Draft Tokens per Step"
+            tooltip="Number of tokens the draft model proposes per speculative decoding step. Higher values = more potential speedup but lower acceptance rate. Sweet spot is typically 2-5."
+            value={config.numDraftTokens}
+            onChange={v => onChange('numDraftTokens', v)}
+            min={1}
+            max={20}
+            step={1}
+            defaultValue={DEFAULT_CONFIG.numDraftTokens}
+          />
+        )}
+      </Section>
+
+      {/* Embedding Model */}
+      <div className="mb-2">
+        <Field label="Embedding Model" tooltip="Pre-load a separate embedding model at startup for the /v1/embeddings endpoint. Runs alongside the main chat model. Example: mlx-community/embeddinggemma-300m-6bit. Leave empty to disable embeddings endpoint.">
+          <input type="text" value={config.embeddingModel} onChange={e => onChange('embeddingModel', e.target.value)} placeholder="Optional — mlx-community/embedding-model" className="cfg-input" />
+        </Field>
+      </div>
 
       {/* Additional */}
       <div className="mb-4">
