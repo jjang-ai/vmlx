@@ -763,6 +763,14 @@ async def health():
             else:
                 kv_quant_info = {"enabled": False}
 
+    # Include speculative decoding status
+    spec_info = None
+    try:
+        from .speculative import get_spec_stats
+        spec_info = get_spec_stats()
+    except ImportError:
+        pass
+
     result = {
         "status": status,
         "model_loaded": _engine is not None,
@@ -775,6 +783,8 @@ async def health():
         result["memory"] = memory_info
     if kv_quant_info:
         result["kv_cache_quantization"] = kv_quant_info
+    if spec_info:
+        result["speculative_decoding"] = spec_info.get("speculative_decoding", spec_info)
 
     return result
 

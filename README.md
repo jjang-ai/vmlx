@@ -30,7 +30,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 
 ## Key Features
 
-### Inference Engine (v0.2.8)
+### Inference Engine (v0.2.9)
 
 | Feature | Description |
 |---------|-------------|
@@ -43,6 +43,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 | **Streaming Detokenizer** | Per-request UTF-8 buffering — emoji, CJK, Arabic render correctly |
 | **Request Cancellation** | Stop inference mid-stream via API or connection close |
 | **OpenAI-Compatible API** | Chat Completions + Responses API with full streaming support |
+| **Speculative Decoding** | Draft model acceleration (20-90% speedup, zero quality loss) |
 
 ### Desktop App (Panel v0.3.10)
 
@@ -96,6 +97,11 @@ vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous
 
 # With API key
 vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --api-key your-key
+
+# With speculative decoding (20-90% faster)
+vllm-mlx serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 \
+  --speculative-model mlx-community/Llama-3.2-1B-Instruct-4bit \
+  --num-draft-tokens 3
 ```
 
 ### Use with OpenAI SDK
@@ -217,6 +223,11 @@ Plus MCP tool server passthrough for local sessions.
 
 ## Recent Changes
 
+### Engine v0.2.9 (2026-03-05)
+- **Speculative decoding**: `--speculative-model` + `--num-draft-tokens` CLI flags for 20-90% throughput boost
+- **RotatingKVCache confirmed**: Sliding window attention support verified across all cache modules
+- 21 new tests for speculative decoding
+
 ### Engine v0.2.8 (2026-03-03)
 - **Multi-turn VLM fix**: `model_dump(exclude_none=True)` prevents Jinja2 template from double-counting image tokens in multi-turn conversations
 - **Hybrid cache fix**: `_fix_hybrid_cache()` returns fresh full cache on mismatch instead of corrupt short cache
@@ -234,7 +245,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.8** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.9** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 

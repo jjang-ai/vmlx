@@ -111,7 +111,7 @@
         ]
       },
       {
-        "from": "../vllm_mlx",
+        "from": "../../../mlx/vllm-mlx/vllm_mlx",
         "to": "vllm-mlx-source/vllm_mlx",
         "filter": [
           "**/*",
@@ -120,7 +120,7 @@
         ]
       },
       {
-        "from": "../pyproject.toml",
+        "from": "../../../mlx/vllm-mlx/pyproject.toml",
         "to": "vllm-mlx-source/pyproject.toml"
       }
     ],
