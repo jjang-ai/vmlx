@@ -401,5 +401,73 @@ class TestHybridDetectionLogging:
         assert "make_cache() failed" in source
 
 
+class TestRotatingKVCachePreservation:
+    """Tests for RotatingKVCache sliding window parameter preservation."""
+
+    def test_truncate_preserves_rotating_kv_type(self):
+        """_truncate_cache_to_prompt_length should create RotatingKVCache, not KVCache."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+
+        source = inspect.getsource(Scheduler._truncate_cache_to_prompt_length)
+        # Must import and use RotatingKVCache for sliding window layers
+        assert "RotatingKVCache" in source
+        assert "max_size" in source
+
+    def test_block_slice_extracts_rotating_params_from_meta(self):
+        """_extract_block_tensor_slice should read max_size/keep from meta_state."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        import inspect
+
+        source = inspect.getsource(BlockAwarePrefixCache._extract_block_tensor_slice)
+        # Should parse meta_state for RotatingKVCache params
+        assert "meta_state" in source
+        # The meta tuple format is (keep, max_size, ...)
+        assert "int(meta[" in source
+
+
+class TestVLMPrefixCacheImageGuard:
+    """Tests for VLM prefix cache image collision prevention."""
+
+    def test_skip_prefix_cache_when_images_present(self):
+        """Prefix cache fetch should be skipped when request has pixel_values."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        import inspect
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        # Must check has_images before fetching from prefix cache
+        assert "has_images" in source
+        assert "not has_images" in source
+
+
+class TestSSMStateCacheKeyAlignment:
+    """Tests for SSM state cache key alignment between store and fetch."""
+
+    def test_fetch_block_aligns_num_tokens(self):
+        """SSM fetch must block-align num_tokens to match store key."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        import inspect
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        # Fetch path must align to block boundary
+        assert "_fetch_num" in source
+        # The alignment: (_fetch_num // _bs) * _bs
+        assert "_fetch_num // _bs" in source
+
+    def test_ssm_state_cache_key_determinism(self):
+        """Same token prefix should produce same cache key."""
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
+
+        cache = HybridSSMStateCache()
+        tokens = list(range(100))
+        key1 = cache._key(tokens, 64)
+        key2 = cache._key(tokens, 64)
+        assert key1 == key2
+
+        # Different prefix length = different key
+        key3 = cache._key(tokens, 65)
+        assert key1 != key3
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
