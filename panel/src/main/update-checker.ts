@@ -11,11 +11,14 @@ interface LatestRelease {
 }
 
 function compareVersions(current: string, latest: string): boolean {
-  const a = current.split('.').map(Number)
-  const b = latest.split('.').map(Number)
+  // Strip pre-release suffixes (e.g., "1.2.0-beta.1" → "1.2.0")
+  const clean = (v: string) => v.replace(/-.*$/, '')
+  const a = clean(current).split('.').map(Number)
+  const b = clean(latest).split('.').map(Number)
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     const av = a[i] || 0
     const bv = b[i] || 0
+    if (isNaN(av) || isNaN(bv)) return false
     if (bv > av) return true
     if (bv < av) return false
   }
@@ -31,7 +34,11 @@ export function checkForUpdates(getWindow: () => BrowserWindow | null, currentVe
         return
       }
       const data: LatestRelease = await response.json()
-      if (data.version && compareVersions(currentVersion, data.version)) {
+      if (!data.version || !data.url) {
+        console.log('[UPDATE] Invalid manifest: missing version or url')
+        return
+      }
+      if (compareVersions(currentVersion, data.version)) {
         console.log(`[UPDATE] New version available: ${currentVersion} → ${data.version}`)
         const win = getWindow()
         if (win && !win.isDestroyed()) {
