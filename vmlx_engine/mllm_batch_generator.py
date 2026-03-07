@@ -1114,7 +1114,12 @@ class MLLMBatchGenerator:
             # After preprocessing, the prompt is fully tokenized including image patches.
             # Query the BlockAwarePrefixCache for reusable KV blocks.
             # fetch_cache returns (block_table, remaining_tokens) — NOT cache objects!
-            if self.block_aware_cache is not None and req.prompt_cache is None:
+            # IMPORTANT: Skip prefix cache for requests WITH images — image placeholder
+            # tokens are identical for same-sized images regardless of content, so a
+            # cache hit would serve KV states from a different image's vision encoding.
+            # Text-only follow-up requests (no new images) can safely use prefix cache.
+            has_images = req.pixel_values is not None
+            if self.block_aware_cache is not None and req.prompt_cache is None and not has_images:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
@@ -1134,9 +1139,15 @@ class MLLMBatchGenerator:
 
                                 if is_hybrid:
                                     # Check companion SSM state cache BEFORE reconstruction.
+                                    # Block-align num_tokens to match the store key alignment
+                                    # (store uses (prompt_len // bs) * bs).
+                                    _fetch_num = block_table.num_tokens
+                                    if self.block_aware_cache is not None:
+                                        _bs = getattr(self.block_aware_cache, 'block_size', 64)
+                                        _fetch_num = (_fetch_num // _bs) * _bs
                                     ssm_states = self._ssm_state_cache.fetch(
-                                        token_list, block_table.num_tokens
-                                    )
+                                        token_list, _fetch_num
+                                    ) if _fetch_num > 0 else None
                                     if ssm_states is None:
                                         # No SSM state — can't use cached KV, must do full prefill.
                                         # Release the block refs that fetch_cache incremented

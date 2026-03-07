@@ -824,8 +824,19 @@ class BlockAwarePrefixCache:
 
                     # Use rotating_kv tag for RotatingKVCache to preserve params
                     if "Rotating" in class_name:
-                        max_size = layer_state.get("max_size", seq_len)
-                        keep = layer_state.get("keep", 0)
+                        # Extract max_size/keep from meta_state tuple
+                        # RotatingKVCache.meta_state returns (keep, max_size, ...)
+                        meta = layer_state.get("meta_state", ())
+                        if meta and len(meta) >= 2:
+                            try:
+                                keep = int(meta[0])
+                                max_size = int(meta[1])
+                            except (ValueError, TypeError):
+                                max_size = seq_len
+                                keep = 0
+                        else:
+                            max_size = layer_state.get("max_size", seq_len)
+                            keep = layer_state.get("keep", 0)
                         block_slices.append(("rotating_kv", keys_slice, values_slice, max_size, keep))
                     else:
                         block_slices.append(("kv", keys_slice, values_slice))

@@ -926,7 +926,18 @@ class Scheduler:
                     else:
                         # Standard KVCache / RotatingKVCache: keys/values are tensors
                         from mlx_lm.models.cache import KVCache
-                        new_cache = KVCache()
+                        cls_name = type(layer_cache).__name__
+                        if "Rotating" in cls_name:
+                            try:
+                                from mlx_lm.models.cache import RotatingKVCache
+                                new_cache = RotatingKVCache(
+                                    max_size=getattr(layer_cache, 'max_size', target_len),
+                                    keep=getattr(layer_cache, 'keep', 0),
+                                )
+                            except ImportError:
+                                new_cache = KVCache()
+                        else:
+                            new_cache = KVCache()
                         ndim = k.ndim
                         if ndim == 4:
                             new_cache.keys = k[:, :, :target_len, :]
