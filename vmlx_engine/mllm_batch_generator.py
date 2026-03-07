@@ -806,16 +806,19 @@ class MLLMBatchGenerator:
         self._old_wired_limit = None
         self._old_cache_limit = None
         if mx.metal.is_available():
+            # Use non-deprecated API when available (MLX ≥ 0.25)
+            _device_info = getattr(mx, 'device_info', None) or mx.metal.device_info
+            _set_cache = getattr(mx, 'set_cache_limit', None) or mx.metal.set_cache_limit
             self._old_wired_limit = mx.set_wired_limit(
-                mx.metal.device_info()["max_recommended_working_set_size"]
+                _device_info()["max_recommended_working_set_size"]
             )
             # Set Metal allocator cache limit to 25% of max working set
             # (floor 512MB). This bounds the Metal allocator's free-list,
             # preventing it from hoarding memory that prefix cache / OS needs.
             try:
-                max_ws = mx.metal.device_info()["max_recommended_working_set_size"]
+                max_ws = _device_info()["max_recommended_working_set_size"]
                 cache_limit = max(512 * 1024 * 1024, int(max_ws * 0.25))
-                self._old_cache_limit = mx.metal.set_cache_limit(cache_limit)
+                self._old_cache_limit = _set_cache(cache_limit)
                 logger.info(
                     f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
                     f"(25% of {max_ws / (1024**3):.1f}GB max working set)"
@@ -831,7 +834,8 @@ class MLLMBatchGenerator:
             self._old_wired_limit = None
         if self._old_cache_limit is not None:
             try:
-                mx.metal.set_cache_limit(self._old_cache_limit)
+                _set_cache = getattr(mx, 'set_cache_limit', None) or mx.metal.set_cache_limit
+                _set_cache(self._old_cache_limit)
             except Exception:
                 pass
             self._old_cache_limit = None
@@ -1116,15 +1120,12 @@ class MLLMBatchGenerator:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
                         block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
                         if block_table is not None:
-                            reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
-                            if reconstructed is not None:
-                                reconstructed = _dequantize_cache(reconstructed)
-
                                 # Hybrid models (SSM + attention, e.g. Qwen3.5-VL):
                                 # Prefix cache stores only KVCache (attention) layers.
                                 # SSM layers are cumulative state that must process ALL tokens.
-                                # We can't skip prefix computation — SSM layers would get wrong state.
-                                # So for hybrid models: don't use reconstructed cache for computation.
+                                # For hybrid models without companion SSM state, the cached
+                                # KV blocks are useless — skip reconstruction entirely to
+                                # avoid allocating huge tensors that will be thrown away.
                                 is_hybrid = (
                                     self._hybrid_kv_positions is not None
                                     and self._hybrid_num_layers is not None
@@ -1132,57 +1133,65 @@ class MLLMBatchGenerator:
                                 )
 
                                 if is_hybrid:
-                                    # Hybrid model: check companion SSM state cache.
-                                    # If we have SSM state at this prefix boundary,
-                                    # we can reconstruct full cache and skip prefix.
+                                    # Check companion SSM state cache BEFORE reconstruction.
                                     ssm_states = self._ssm_state_cache.fetch(
                                         token_list, block_table.num_tokens
                                     )
-                                    if ssm_states is not None:
-                                        # Full hybrid cache reconstruction:
-                                        # KV from paged cache + SSM from companion cache
-                                        full_cache = _fix_hybrid_cache(
-                                            reconstructed, self.language_model,
-                                            kv_positions=self._hybrid_kv_positions,
-                                            num_model_layers=self._hybrid_num_layers,
-                                        )
-                                        # Inject stored SSM states at non-KV positions
-                                        kv_set = set(self._hybrid_kv_positions or [])
-                                        ssm_idx = 0
-                                        for layer_idx in range(len(full_cache)):
-                                            if layer_idx not in kv_set and ssm_idx < len(ssm_states):
-                                                full_cache[layer_idx] = ssm_states[ssm_idx]
-                                                ssm_idx += 1
-
-                                        req.prompt_cache = full_cache
-                                        req._cached_tokens = block_table.num_tokens
-                                        if remaining:
-                                            req.input_ids = mx.array([remaining])
-                                            req.pixel_values = None
-                                            req.attention_mask = None
-                                            req.image_grid_thw = None
-                                            logger.info(
-                                                f"VLM HYBRID cache HIT for {req.request_id}: "
-                                                f"{block_table.num_tokens} cached (KV+SSM), "
-                                                f"{len(remaining)} remaining"
-                                            )
-                                        else:
-                                            req.input_ids = mx.array([token_list[-1:]])
-                                            req.pixel_values = None
-                                            req.attention_mask = None
-                                            req.image_grid_thw = None
-                                            logger.info(
-                                                f"VLM HYBRID cache FULL HIT for {req.request_id}: "
-                                                f"{block_table.num_tokens} cached (KV+SSM)"
-                                            )
-                                    else:
+                                    if ssm_states is None:
+                                        # No SSM state — can't use cached KV, must do full prefill.
+                                        # Release the block refs that fetch_cache incremented
+                                        # to prevent ref_count leak → OOM on subsequent requests.
                                         logger.info(
                                             f"VLM prefix cache HIT for {req.request_id}: "
                                             f"{block_table.num_tokens} cached tokens "
                                             f"(hybrid — no SSM state, full prefill required)"
                                         )
-                                        # Don't set req.prompt_cache — fresh cache + full prefill
-                                else:
+                                        self.block_aware_cache.release_cache(req.request_id)
+                                        continue  # Skip reconstruction
+
+                                # Either non-hybrid OR hybrid with SSM state — reconstruct
+                                reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
+                                if reconstructed is not None:
+                                    reconstructed = _dequantize_cache(reconstructed)
+
+                                if is_hybrid and ssm_states is not None and reconstructed is not None:
+                                    # Full hybrid cache reconstruction:
+                                    # KV from paged cache + SSM from companion cache
+                                    full_cache = _fix_hybrid_cache(
+                                        reconstructed, self.language_model,
+                                        kv_positions=self._hybrid_kv_positions,
+                                        num_model_layers=self._hybrid_num_layers,
+                                    )
+                                    # Inject stored SSM states at non-KV positions
+                                    kv_set = set(self._hybrid_kv_positions or [])
+                                    ssm_idx = 0
+                                    for layer_idx in range(len(full_cache)):
+                                        if layer_idx not in kv_set and ssm_idx < len(ssm_states):
+                                            full_cache[layer_idx] = ssm_states[ssm_idx]
+                                            ssm_idx += 1
+
+                                    req.prompt_cache = full_cache
+                                    req._cached_tokens = block_table.num_tokens
+                                    if remaining:
+                                        req.input_ids = mx.array([remaining])
+                                        req.pixel_values = None
+                                        req.attention_mask = None
+                                        req.image_grid_thw = None
+                                        logger.info(
+                                            f"VLM HYBRID cache HIT for {req.request_id}: "
+                                            f"{block_table.num_tokens} cached (KV+SSM), "
+                                            f"{len(remaining)} remaining"
+                                        )
+                                    else:
+                                        req.input_ids = mx.array([token_list[-1:]])
+                                        req.pixel_values = None
+                                        req.attention_mask = None
+                                        req.image_grid_thw = None
+                                        logger.info(
+                                            f"VLM HYBRID cache FULL HIT for {req.request_id}: "
+                                            f"{block_table.num_tokens} cached (KV+SSM)"
+                                        )
+                                elif not is_hybrid and reconstructed is not None:
                                     # Pure attention VLM: can safely skip cached prefix tokens.
                                     # Trim input_ids to only remaining (uncached) tokens.
                                     req.prompt_cache = reconstructed
