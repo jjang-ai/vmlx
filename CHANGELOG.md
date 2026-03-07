@@ -5,6 +5,13 @@ All notable changes to vMLX Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-03-07
+
+### Fixed
+- **Hybrid VLM paged cache OOM crash**: Hybrid models (Qwen3.5-VL, Jamba-VL) with paged cache crashed with `kIOGPUCommandBufferCallbackErrorOutOfMemory` after a few requests. Root cause: `fetch_cache()` incremented block ref_counts, but when hybrid models couldn't use the cached KV blocks (missing companion SSM state), the refs were never decremented — blocks accumulated until Metal GPU memory was exhausted. Fix: check SSM state BEFORE `reconstruct_cache()`, call `release_cache()` to decrement block refs when SSM state is missing, then `continue` to skip reconstruction and do full prefill instead. Added 5 new tests in `test_hybrid_batching.py`.
+- **Suppress reasoning drops thinking entirely**: When reasoning is toggled off for always-thinking models (MiniMax M2.5, Prism Pro), thinking text is now fully hidden instead of being redirected as visible content. Users see a brief pause then only the final answer.
+- **Deprecated MLX API calls**: Replaced `mx.metal.device_info()` → `mx.device_info()` and `mx.metal.set_cache_limit()` → `mx.set_cache_limit()` with backward-compatible fallbacks for older MLX versions.
+
 ## [0.2.10] - 2026-03-06
 
 ### Fixed

@@ -30,7 +30,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 
 ## Key Features
 
-### Inference Engine (v0.2.10)
+### Inference Engine (v0.2.11)
 
 | Feature | Description |
 |---------|-------------|
