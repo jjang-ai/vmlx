@@ -2715,14 +2715,14 @@ async def stream_chat_completion(
                 chunk_usage = get_usage(output) if include_usage else None
 
                 # When reasoning is suppressed (client requested enable_thinking=False but model forces it),
-                # convert the hidden reasoning stream into standard content stream. This prevents the UI
-                # from hanging/buffering since it expects immediate visible content.
+                # drop reasoning chunks entirely so the user only sees the final answer.
+                # The model still thinks internally (template always injects <think>),
+                # but the UI won't show any thinking text — just a brief pause then the answer.
                 if suppress_reasoning:
-                    emit_content = delta_msg.reasoning or delta_msg.content
+                    emit_content = delta_msg.content  # Only emit actual content after </think>
                     emit_reasoning = None
-                    if emit_content and delta_msg.reasoning:
-                        # Transfer accumulated text if we shifted reasoning to content
-                        accumulated_content += delta_msg.reasoning
+                    if delta_msg.reasoning:
+                        accumulated_content += delta_msg.reasoning  # Track for tool call detection
                 else:
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
@@ -3188,10 +3188,10 @@ async def stream_responses_api(
 
                         if not tool_call_buffering:
                             # When reasoning is suppressed (client requested enable_thinking=False
-                            # but model forces it), redirect reasoning as content so the UI
-                            # doesn't hang waiting for visible content.
+                            # but model forces it), drop reasoning entirely so the user only
+                            # sees the final answer after the model finishes thinking.
                             if suppress_reasoning:
-                                emit_content = delta_msg.reasoning or delta_msg.content
+                                emit_content = delta_msg.content  # Only actual content after </think>
                                 emit_reasoning = None
                             else:
                                 emit_reasoning = delta_msg.reasoning

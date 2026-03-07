@@ -140,5 +140,106 @@ class TestHybridBatching:
             assert scheduler.config.use_paged_cache is True
             assert scheduler.block_aware_cache is not None
 
+class TestHybridCacheRefLeak:
+    """Tests for the hybrid model paged cache ref_count leak fix.
+
+    When a hybrid VLM gets a paged cache HIT but has no companion SSM state,
+    the cache blocks are unusable (full prefill required). The fix ensures:
+    1. Block refs are released (not leaked) when cache can't be used
+    2. Reconstruction is skipped entirely (no wasteful tensor allocation)
+    3. The request still processes correctly with full prefill
+    """
+
+    def test_release_cache_called_on_hybrid_no_ssm(self):
+        """Block refs must be released when hybrid cache hit lacks SSM state."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        import inspect
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+
+        # The fix: release_cache is called before continue
+        assert "release_cache(req.request_id)" in source
+        assert "hybrid — no SSM state, full prefill required" in source
+
+    def test_ssm_check_before_reconstruction(self):
+        """SSM state should be checked BEFORE reconstruct_cache to avoid waste."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        import inspect
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        lines = source.split('\n')
+
+        # Find the SSM fetch and reconstruct lines
+        ssm_fetch_line = None
+        reconstruct_line = None
+        for i, line in enumerate(lines):
+            if '_ssm_state_cache.fetch' in line and ssm_fetch_line is None:
+                ssm_fetch_line = i
+            if 'reconstruct_cache(block_table)' in line and reconstruct_line is None:
+                reconstruct_line = i
+
+        assert ssm_fetch_line is not None, "SSM state cache fetch not found"
+        assert reconstruct_line is not None, "reconstruct_cache not found"
+        assert ssm_fetch_line < reconstruct_line, (
+            f"SSM check (line {ssm_fetch_line}) must come BEFORE "
+            f"reconstruct_cache (line {reconstruct_line}) to avoid "
+            f"wasteful tensor allocation for hybrid models without SSM state"
+        )
+
+    def test_continue_skips_reconstruction(self):
+        """When hybrid has no SSM state, continue should skip reconstruction."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        import inspect
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+
+        # After release_cache, continue skips the rest (including reconstruct)
+        assert "release_cache(req.request_id)" in source
+        # The continue must appear near the release_cache call
+        release_idx = source.index("release_cache(req.request_id)")
+        # Find the next 'continue' after release_cache
+        continue_idx = source.index("continue", release_idx)
+        # Should be within ~200 chars (same block)
+        assert continue_idx - release_idx < 200, (
+            "continue should immediately follow release_cache"
+        )
+
+    def test_paged_cache_detach_decrements_refs(self):
+        """delete_block_table should decrement ref_counts via free_block."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        mgr = PagedCacheManager(block_size=4, max_blocks=10)
+
+        # Create a block table and allocate blocks
+        table = mgr.create_block_table("test-req")
+        block = mgr.get_new_blocks(1)[0]
+        block.token_count = 4
+        table.block_ids.append(block.block_id)
+
+        # Increment ref (simulating fetch_cache sharing)
+        mgr.increment_ref(block.block_id)
+        assert block.ref_count == 2
+
+        # delete_block_table should decrement
+        mgr.delete_block_table("test-req")
+        assert block.ref_count == 1  # Back to original ref from cache storage
+
+    def test_detach_does_not_free_blocks(self):
+        """detach_request should NOT decrement ref_counts (by design)."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        mgr = PagedCacheManager(block_size=4, max_blocks=10)
+
+        table = mgr.create_block_table("test-req")
+        block = mgr.get_new_blocks(1)[0]
+        block.token_count = 4
+        table.block_ids.append(block.block_id)
+        original_ref = block.ref_count
+
+        mgr.detach_request("test-req")
+        # ref_count unchanged — detach only removes tracking, not block refs
+        assert block.ref_count == original_ref
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

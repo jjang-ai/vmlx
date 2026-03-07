@@ -171,12 +171,14 @@ class TestEnableThinkingTriState:
         assert "suppress_reasoning = _effective_thinking is False" in source
 
     def test_effective_think_in_template_cleared_when_thinking_false(self):
-        """When enable_thinking=False, effective_think_in_template should be False."""
+        """When enable_thinking=False and template respects it, think_in_template is cleared."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # The code: if _effective_thinking is False: effective_think_in_template = False
-        assert "effective_think_in_template = False" in source
+        # When _effective_thinking is False and _template_always_thinks returns False,
+        # think_in_template is set to False, which flows to effective_think_in_template
+        assert "think_in_template = False" in source
+        assert "effective_think_in_template = think_in_template" in source
 
     def test_parser_gets_think_in_prompt_from_effective(self):
         """Parser reset_state should receive effective_think_in_template, not raw."""
@@ -186,32 +188,32 @@ class TestEnableThinkingTriState:
         assert "think_in_prompt=effective_think_in_template" in source
 
 
-class TestSuppressReasoningRedirect:
-    """Tests for suppress_reasoning converting reasoning to content.
+class TestSuppressReasoningDrop:
+    """Tests for suppress_reasoning dropping reasoning chunks.
 
     When user sets enable_thinking=False but model still produces reasoning
     (e.g., template always thinks), suppress_reasoning=True causes the
-    server to redirect reasoning → content so the UI doesn't hang.
+    server to drop reasoning chunks entirely so only the final answer appears.
     """
 
-    def test_suppress_reasoning_redirect_in_source(self):
-        """Verify suppress_reasoning redirect logic exists in streaming."""
+    def test_suppress_reasoning_drop_in_source(self):
+        """Verify suppress_reasoning drop logic exists in streaming."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         # When suppress_reasoning is True:
-        # emit_content = delta_msg.reasoning or delta_msg.content
+        # emit_content = delta_msg.content (only actual content after </think>)
         # emit_reasoning = None
         assert "suppress_reasoning" in source
-        assert "delta_msg.reasoning or delta_msg.content" in source
         assert "emit_reasoning = None" in source
+        assert "emit_content = delta_msg.content" in source
 
-    def test_suppress_reasoning_accumulates_redirected_content(self):
-        """Redirected reasoning should be tracked in accumulated_content."""
+    def test_suppress_reasoning_tracks_for_tool_detection(self):
+        """Dropped reasoning should still be tracked for tool call detection."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # accumulated_content += delta_msg.reasoning (when reasoning redirected)
+        # accumulated_content += delta_msg.reasoning (for tool call detection)
         assert "accumulated_content += delta_msg.reasoning" in source
 
 
