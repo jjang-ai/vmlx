@@ -118,6 +118,9 @@ function createWindow(): void {
       })
     })
 
+    // App version
+    ipcMain.handle('app:getVersion', () => app.getVersion())
+
     // App-level settings (API keys, preferences)
     ipcMain.handle('settings:get', (_e, key: string) => {
       return db.getSetting(key) ?? null

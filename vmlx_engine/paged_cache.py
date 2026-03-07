@@ -520,6 +520,10 @@ class PagedCacheManager:
         enable_caching: bool = True,
         disk_store: "Optional[Any]" = None,
     ):
+        if block_size < 1:
+            raise ValueError(f"block_size must be >= 1, got {block_size}")
+        if max_blocks < 2:
+            raise ValueError(f"max_blocks must be >= 2 (1 reserved for null block), got {max_blocks}")
         self.block_size = block_size
         self.max_blocks = max_blocks
         self.enable_caching = enable_caching

@@ -1873,8 +1873,11 @@ async def create_chat_completion(
         _, _, _cc_parse_text = content_for_parsing.partition('</think>')
     _cc_parse_text = _cc_parse_text.strip()
 
-    # Parse tool calls from output using configured parser
-    cleaned_text, tool_calls = _parse_tool_calls_with_parser(_cc_parse_text or content_for_parsing, request)
+    # Parse tool calls from output using configured parser (skip when tool_choice="none")
+    cleaned_text, tool_calls = (
+        _parse_tool_calls_with_parser(_cc_parse_text or content_for_parsing, request)
+        if not _suppress_tools else (content_for_parsing, None)
+    )
 
     # Process response_format if specified
     if response_format and not tool_calls:
@@ -2323,8 +2326,11 @@ async def create_response(
         _, _, parse_text = content_for_parsing.partition('</think>')
     parse_text = parse_text.strip()
 
-    # Parse tool calls
-    cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or content_for_parsing, request)
+    # Parse tool calls (skip when tool_choice="none")
+    cleaned_text, tool_calls = (
+        _parse_tool_calls_with_parser(parse_text or content_for_parsing, request)
+        if not _suppress_tools else (content_for_parsing, None)
+    )
 
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
     _text_format = request.text if hasattr(request, "text") else None
@@ -2617,7 +2623,7 @@ async def stream_chat_completion(
     # the buffer for tool calls and emit them as proper tool_calls chunks.
     tool_call_buffering = False  # Are we currently buffering for tool calls?
     tool_call_buffering_notified = False  # Have we sent the buffering signal?
-    tool_call_active = _enable_auto_tool_choice or _tool_call_parser is not None
+    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None) and not _suppress_tools
 
     # Track token counts for usage reporting
     prompt_tokens = 0
@@ -2837,7 +2843,7 @@ async def stream_chat_completion(
 
     # ─── Post-stream: tool call extraction ───────────────────────────────
     # If we buffered text because of tool call markers, parse it now
-    if tool_call_buffering and accumulated_text:
+    if tool_call_buffering and accumulated_text and not _suppress_tools:
         # Strip think tags before parsing — the accumulated text may contain
         # <think>reasoning</think> before the tool call, or the entire text
         # may be inside implicit think context (think_in_template models).
@@ -2959,7 +2965,7 @@ async def stream_chat_completion(
     # producing content after the closing tag.
     # Skip if reasoning was already streamed as reasoning_content chunks — the
     # client already has the text and echoing it as content creates duplicates.
-    if request_parser and not content_was_emitted and accumulated_reasoning and not reasoning_was_streamed:
+    if request_parser and not content_was_emitted and accumulated_reasoning and not reasoning_was_streamed and not suppress_reasoning:
         fallback_chunk = ChatCompletionChunk(
             id=response_id,
             created=_created_ts,
@@ -3070,7 +3076,8 @@ async def stream_responses_api(
         "part": {"type": "output_text", "text": "", "annotations": []},
     })
 
-    tool_call_active = _enable_auto_tool_choice or _tool_call_parser is not None
+    _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
+    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None) and not _suppress_tools
     tool_call_buffering = False
 
     full_text = ""
@@ -3285,8 +3292,8 @@ async def stream_responses_api(
         })
         return
 
-    # Emit reasoning done event if reasoning was produced
-    if accumulated_reasoning:
+    # Emit reasoning done event if reasoning was produced (skip when suppressed)
+    if accumulated_reasoning and not suppress_reasoning:
         yield _sse("response.reasoning.done", {
             "type": "response.reasoning.done",
             "item_id": msg_id,
@@ -3298,15 +3305,18 @@ async def stream_responses_api(
     all_output_items = []
     output_index = 0
 
-    # Parse tool calls from the accumulated text.
+    # Parse tool calls from the accumulated text (skip when tool_choice="none").
     # Strip think tags before parsing — reasoning text may precede tool calls
     # (mirrors the Chat Completions streaming path at lines 2468-2475).
-    parse_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
-    if parse_text == full_text and '</think>' in full_text:
-        # Implicit mode: strip everything before </think>
-        _, _, parse_text = full_text.partition('</think>')
-    parse_text = parse_text.strip()
-    cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or full_text, request)
+    tool_calls = None
+    cleaned_text = full_text
+    if not _suppress_tools:
+        parse_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
+        if parse_text == full_text and '</think>' in full_text:
+            # Implicit mode: strip everything before </think>
+            _, _, parse_text = full_text.partition('</think>')
+        parse_text = parse_text.strip()
+        cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or full_text, request)
 
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
