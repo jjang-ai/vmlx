@@ -325,11 +325,13 @@ class EngineCore:
         return request_id
 
     async def abort_request(self, request_id: str) -> bool:
-        """Abort a request."""
+        """Abort a request. Returns True if the request was found."""
+        # Check if request exists before cleanup
+        found = request_id in self._output_queues or request_id in self._finished_events
         # _cleanup_request handles scheduler.abort_request() internally —
         # don't call it here too (was causing double abort)
         self._cleanup_request(request_id)
-        return True
+        return found
 
     def _cleanup_request(self, request_id: str) -> None:
         """Clean up request tracking.
