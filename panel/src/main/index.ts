@@ -187,39 +187,8 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  createWindow()
-
-  // Restore macOS App Sandbox bookmarks for external directory access
-  try {
-    const bookmarks = db.getAllBookmarks()
-    console.log(`[STARTUP] Restoring ${bookmarks.length} App Sandbox bookmarks`)
-    for (const b of bookmarks) {
-      try {
-        app.startAccessingSecurityScopedResource(b.bookmark)
-      } catch (e) {
-        console.error(`[STARTUP] Failed to restore bookmark for ${b.path}`, e)
-      }
-    }
-  } catch (err) {
-    console.error('[STARTUP] Error fetching bookmarks from DB', err)
-  }
-
-  // Notify user if database was recovered from corruption
-  if (db.recoveryBackupPath && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.once('ready-to-show', () => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        dialog.showMessageBox(mainWindow, {
-          type: 'warning',
-          title: 'Database Recovered',
-          message: 'Your chat database was corrupted and has been recreated.',
-          detail: `Your previous data has been backed up to:\n${db.recoveryBackupPath}`,
-          buttons: ['OK']
-        }).catch(() => { })
-      }
-    })
-  }
-
-  // Check if bundled engine needs updating (source version != installed version)
+  // Check if bundled engine needs updating BEFORE creating window —
+  // prevents race where SetupScreen checks installation mid-pip-reinstall
   try {
     const versionInfo = checkEngineVersion()
     if (versionInfo.needsUpdate) {
@@ -251,6 +220,38 @@ app.whenReady().then(async () => {
     }
   } catch (e) {
     console.error('[STARTUP] Error checking engine version:', e)
+  }
+
+  createWindow()
+
+  // Restore macOS App Sandbox bookmarks for external directory access
+  try {
+    const bookmarks = db.getAllBookmarks()
+    console.log(`[STARTUP] Restoring ${bookmarks.length} App Sandbox bookmarks`)
+    for (const b of bookmarks) {
+      try {
+        app.startAccessingSecurityScopedResource(b.bookmark)
+      } catch (e) {
+        console.error(`[STARTUP] Failed to restore bookmark for ${b.path}`, e)
+      }
+    }
+  } catch (err) {
+    console.error('[STARTUP] Error fetching bookmarks from DB', err)
+  }
+
+  // Notify user if database was recovered from corruption
+  if (db.recoveryBackupPath && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.once('ready-to-show', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          title: 'Database Recovered',
+          message: 'Your chat database was corrupted and has been recreated.',
+          detail: `Your previous data has been backed up to:\n${db.recoveryBackupPath}`,
+          buttons: ['OK']
+        }).catch(() => { })
+      }
+    })
   }
 
   // Check for app updates (non-blocking, fires after 5s delay)
