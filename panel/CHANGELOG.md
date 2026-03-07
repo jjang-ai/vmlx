@@ -1,11 +1,14 @@
 # Changelog
 
-## v1.1.3 — 2026-03-06 — Stop Button & Setup Fix
+## v1.1.3 — 2026-03-07 — Stop Button, Cache OOM & Reasoning Fix
 
 ### Fixed
 - **Stop button stays red forever**: Pressing Stop during generation (especially mid-tool-call) left the button stuck in "Stop" state. Now immediately clears UI state after signaling abort.
 - **Setup screen on first launch after update**: Engine auto-update raced with the setup check, causing the install screen to flash on first launch after updating. Engine update now completes before the window loads.
 - **ask_user tool abort handling**: Aborting during an `ask_user` tool call no longer hangs the IPC handler for up to 5 minutes.
+- **Hybrid VLM paged cache OOM crash**: Hybrid models (Qwen3.5-VL) with paged cache would crash with `kIOGPUCommandBufferCallbackErrorOutOfMemory` after a few requests. Block ref_counts were never decremented when cache hits couldn't be used (missing SSM state), causing blocks to accumulate until Metal GPU memory exhausted.
+- **Reasoning toggle for always-thinking models**: When reasoning is toggled off for models like MiniMax M2.5, thinking text is now fully hidden instead of being shown as regular content. Users see a brief pause then only the final answer.
+- **macOS Gatekeeper blocking app launch**: DMG is now properly notarized with Apple, so users can install and launch without security warnings.
 
 ## v1.1.2 — 2026-03-06 — Reasoning Parser Fix
 
