@@ -5,6 +5,20 @@ All notable changes to vMLX Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-03-07
+
+### Fixed
+- **Critical: tool_choice="none" content swallowing in streaming**: Chat Completions streaming path did not gate `tool_call_active` by `_suppress_tools`, causing content to be silently buffered/swallowed when tool markers were detected despite `tool_choice="none"`. Now correctly disables tool buffering.
+- **suppress_reasoning leaks in Responses API**: `response.reasoning.done` event was emitted even when `suppress_reasoning=True`. Reasoning-only fallback in Chat Completions also leaked reasoning as content when suppressed.
+- **Non-streaming tool_choice="none"**: Both non-streaming Chat Completions and Responses API paths now skip tool parsing when `tool_choice="none"`.
+- **PagedCacheManager crash on invalid input**: `block_size=0` caused `ZeroDivisionError`, `max_blocks<2` caused silent failures. Now raises `ValueError` with clear messages.
+- **Hybrid detection silent failures**: `_is_hybrid_model` now logs warnings when `make_cache()` raises instead of silently swallowing exceptions.
+- **Memory cache 0-memory fallback**: `compute_memory_limit` now logs a warning when psutil returns 0 bytes, explaining the 8GB fallback assumption.
+
+### Improved
+- **First-launch UX**: Auto-creates initial chat for new users instead of showing empty state. Skips `detectConfig` for remote sessions (no local model path to inspect).
+- **About page**: App version now reads dynamically via IPC instead of hardcoded. Correct website and GitHub links.
+
 ## [0.2.11] - 2026-03-07
 
 ### Fixed
