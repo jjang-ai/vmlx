@@ -183,6 +183,10 @@ class MemoryCacheConfig:
             return max(limit, _MIN_MEMORY_BYTES)
 
         # Fallback: assume 8GB system, use configured percent
+        logger.warning(
+            "Could not detect available memory (psutil returned 0). "
+            "Assuming 8GB system for cache sizing. Use --cache-memory-mb to set explicitly."
+        )
         fallback_total = 8 * 1024 * _BYTES_PER_MB
         return int(fallback_total * self.max_memory_percent)
 

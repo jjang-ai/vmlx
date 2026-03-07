@@ -52,17 +52,24 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         setSession(s)
 
         if (s) {
-          // Load chats for this model
+          // Load chats for this model, auto-create first chat if none exist
           const chats = await window.api.chat.getByModel(s.modelPath)
           if (chats.length > 0) {
             setCurrentChatId(chats[0].id)
+          } else {
+            try {
+              const title = `Chat ${new Date().toLocaleString()}`
+              const chat = await window.api.chat.create(title, 'default', undefined, s.modelPath)
+              setCurrentChatId(chat.id)
+            } catch (_) { /* will show empty state */ }
           }
           // Detect effective reasoning parser for chat settings UI
+          // Skip filesystem detection for remote sessions (remote:// paths don't exist on disk)
           try {
             const cfg = s.config ? JSON.parse(s.config) : {}
             if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
               setEffectiveReasoningParser(cfg.reasoningParser)
-            } else {
+            } else if (!s.modelPath.startsWith('remote://')) {
               const detected = await window.api.models.detectConfig(s.modelPath)
               setEffectiveReasoningParser(detected?.reasoningParser || undefined)
             }

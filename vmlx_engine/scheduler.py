@@ -373,7 +373,8 @@ class Scheduler:
                 return False
             # Any non-KV cache type (MambaCache, ArraysCache, etc.) needs paged cache
             return bool(cache_types - kv_only_types)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"make_cache() failed during hybrid detection: {e}")
             return False
 
     def _detect_head_dim(self) -> Optional[int]:

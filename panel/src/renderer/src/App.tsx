@@ -98,13 +98,10 @@ function App() {
                 <p className="text-sm text-muted-foreground">
                   A native macOS application for running local AI models on Apple Silicon.
                 </p>
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <p>Version 0.1.0</p>
-                  <p>&copy; {new Date().getFullYear()} Eric Jang. All rights reserved.</p>
-                </div>
+                <AppVersion />
                 <div className="flex gap-4 text-xs">
-                  <a href="https://ericjang.com/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
-                  <a href="https://github.com/nicholasjng/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
+                  <a href="https://vmlx.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
+                  <a href="https://github.com/vmlxllm/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
                 </div>
                 <ApiKeysSection />
               </div>
@@ -113,6 +110,19 @@ function App() {
         </main>
       </div>
     </ToastProvider>
+  )
+}
+
+function AppVersion() {
+  const [version, setVersion] = useState('...')
+  useEffect(() => {
+    window.api.app.getVersion().then((v: string) => setVersion(v)).catch(() => setVersion('unknown'))
+  }, [])
+  return (
+    <div className="text-xs text-muted-foreground space-y-1">
+      <p>Version {version}</p>
+      <p>&copy; {new Date().getFullYear()} Eric Jang. All rights reserved.</p>
+    </div>
   )
 }
 

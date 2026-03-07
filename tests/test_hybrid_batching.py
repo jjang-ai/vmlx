@@ -241,5 +241,165 @@ class TestHybridCacheRefLeak:
         assert block.ref_count == original_ref
 
 
+class TestPagedCacheValidation:
+    """Tests for PagedCacheManager input validation."""
+
+    def test_block_size_zero_raises(self):
+        """block_size=0 should raise ValueError, not cause ZeroDivisionError later."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        with pytest.raises(ValueError, match="block_size must be >= 1"):
+            PagedCacheManager(block_size=0, max_blocks=10)
+
+    def test_block_size_negative_raises(self):
+        """Negative block_size should raise ValueError."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        with pytest.raises(ValueError, match="block_size must be >= 1"):
+            PagedCacheManager(block_size=-1, max_blocks=10)
+
+    def test_max_blocks_zero_raises(self):
+        """max_blocks=0 should raise ValueError, not crash on null block reserve."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        with pytest.raises(ValueError, match="max_blocks must be >= 2"):
+            PagedCacheManager(block_size=4, max_blocks=0)
+
+    def test_max_blocks_one_raises(self):
+        """max_blocks=1 only fits null block, no usable blocks — should raise."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        with pytest.raises(ValueError, match="max_blocks must be >= 2"):
+            PagedCacheManager(block_size=4, max_blocks=1)
+
+    def test_max_blocks_two_works(self):
+        """max_blocks=2 should work (1 null + 1 usable)."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+
+        mgr = PagedCacheManager(block_size=4, max_blocks=2)
+        assert mgr.stats.free_blocks == 1
+
+
+class TestSuppressReasoningInvariants:
+    """Tests for reasoning suppression invariants across API paths."""
+
+    def test_responses_api_no_reasoning_done_when_suppressed(self):
+        """response.reasoning.done should NOT be emitted when suppress_reasoning=True."""
+        from vmlx_engine.server import stream_responses_api
+        import inspect
+
+        source = inspect.getsource(stream_responses_api)
+        # The guard: accumulated_reasoning and not suppress_reasoning
+        assert "not suppress_reasoning" in source
+        # Find the reasoning.done emission
+        idx = source.index("response.reasoning.done")
+        # Check that the guard appears before this emission in the same block
+        block_start = source.rfind("if ", 0, idx)
+        block_text = source[block_start:idx]
+        assert "not suppress_reasoning" in block_text
+
+    def test_reasoning_fallback_guarded_by_suppress(self):
+        """Reasoning-only fallback should NOT emit as content when suppress_reasoning=True."""
+        from vmlx_engine.server import stream_chat_completion
+        import inspect
+
+        source = inspect.getsource(stream_chat_completion)
+        # Find the fallback: "not content_was_emitted and accumulated_reasoning"
+        idx = source.index("not content_was_emitted and accumulated_reasoning")
+        # The line should also include "not suppress_reasoning"
+        line_start = source.rfind("\n", 0, idx)
+        line_end = source.index("\n", idx)
+        line = source[line_start:line_end]
+        assert "not suppress_reasoning" in line
+
+
+class TestToolChoiceNoneInvariants:
+    """Tests for tool_choice='none' correctly suppressing tool parsing."""
+
+    def test_chat_completions_streaming_guards_tool_parsing(self):
+        """tool_choice='none' should prevent post-stream tool call parsing."""
+        from vmlx_engine.server import stream_chat_completion
+        import inspect
+
+        source = inspect.getsource(stream_chat_completion)
+        # The guard: "not _suppress_tools" should appear before _parse_tool_calls_with_parser
+        # in the tool_call_buffering block
+        assert "and not _suppress_tools" in source
+
+    def test_chat_completions_streaming_tool_call_active_gated(self):
+        """tool_call_active must be gated by _suppress_tools to prevent content swallowing."""
+        from vmlx_engine.server import stream_chat_completion
+        import inspect
+
+        source = inspect.getsource(stream_chat_completion)
+        # Find the tool_call_active assignment line
+        lines = source.split('\n')
+        for line in lines:
+            if 'tool_call_active' in line and '=' in line and 'not _suppress_tools' in line:
+                break
+        else:
+            raise AssertionError(
+                "tool_call_active assignment must include 'not _suppress_tools' guard. "
+                "Without this, tool_choice='none' still buffers content when tool markers "
+                "are detected, swallowing user-visible text."
+            )
+
+    def test_responses_api_guards_tool_call_active(self):
+        """Responses API should set tool_call_active=False when tool_choice='none'."""
+        from vmlx_engine.server import stream_responses_api
+        import inspect
+
+        source = inspect.getsource(stream_responses_api)
+        assert "_suppress_tools" in source
+        assert "not _suppress_tools" in source
+
+
+class TestToolChoiceNoneNonStreaming:
+    """Tests for tool_choice='none' in non-streaming API paths."""
+
+    def test_chat_completions_non_streaming_guards_tool_parsing(self):
+        """Non-streaming Chat Completions should skip tool parsing when tool_choice='none'."""
+        from vmlx_engine.server import create_chat_completion
+        import inspect
+
+        source = inspect.getsource(create_chat_completion)
+        assert "not _suppress_tools" in source
+
+    def test_responses_api_non_streaming_guards_tool_parsing(self):
+        """Non-streaming Responses API should skip tool parsing when tool_choice='none'."""
+        from vmlx_engine.server import create_response
+        import inspect
+
+        source = inspect.getsource(create_response)
+        assert "not _suppress_tools" in source
+
+
+class TestMemoryCacheFallbackWarning:
+    """Tests for memory cache 0-memory fallback warning."""
+
+    def test_compute_memory_limit_logs_on_zero_memory(self):
+        """When available memory is 0, compute_memory_limit should log a warning."""
+        from vmlx_engine.memory_cache import MemoryCacheConfig
+        import inspect
+
+        source = inspect.getsource(MemoryCacheConfig.compute_memory_limit)
+        assert "logger.warning" in source
+        assert "Could not detect available memory" in source
+
+
+class TestHybridDetectionLogging:
+    """Tests for hybrid model detection error handling."""
+
+    def test_is_hybrid_model_logs_exception(self):
+        """_is_hybrid_model should log warning when make_cache() raises."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+
+        source = inspect.getsource(Scheduler._is_hybrid_model)
+        # Should log, not silently swallow
+        assert "logger.warning" in source
+        assert "make_cache() failed" in source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
