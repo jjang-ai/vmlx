@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.3 — 2026-03-06 — Stop Button & Setup Fix
+
+### Fixed
+- **Stop button stays red forever**: Pressing Stop during generation (especially mid-tool-call) left the button stuck in "Stop" state. Now immediately clears UI state after signaling abort.
+- **Setup screen on first launch after update**: Engine auto-update raced with the setup check, causing the install screen to flash on first launch after updating. Engine update now completes before the window loads.
+- **ask_user tool abort handling**: Aborting during an `ask_user` tool call no longer hangs the IPC handler for up to 5 minutes.
+
 ## v1.1.2 — 2026-03-06 — Reasoning Parser Fix
 
 ### Fixed

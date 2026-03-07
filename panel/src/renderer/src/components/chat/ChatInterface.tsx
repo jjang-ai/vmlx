@@ -271,6 +271,12 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
     } catch (err) {
       console.error('Failed to abort:', err)
     }
+    // Immediately clear UI state — don't wait for sendMessage IPC to complete.
+    // The background handler will finish cleanup (DB save, etc.) independently.
+    setLoading(false)
+    setStreamingMessageId(null)
+    setCurrentMetrics(null)
+    setAskUserQuestion(null)
   }
 
   const handleSend = async (content: string, attachments?: ImageAttachment[]) => {

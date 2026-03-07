@@ -1309,19 +1309,32 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               resultText = await new Promise<string>((resolve) => {
                 const win = getWindow()
                 if (!win || win.isDestroyed()) { resolve('(User interface not available)'); return }
+                if (abortController.signal.aborted) { resolve('(Generation was stopped)'); return }
                 win.webContents.send('chat:askUser', { chatId, question })
                 let resolved = false
+                const cleanup = () => {
+                  ipcMain.removeListener('chat:answerUser', handler)
+                  clearTimeout(askTimeout)
+                  abortController.signal.removeEventListener('abort', onAbort)
+                }
                 const handler = (_: any, respondChatId: string, answer: string) => {
                   if (respondChatId === chatId && !resolved) {
                     resolved = true
-                    ipcMain.removeListener('chat:answerUser', handler)
-                    clearTimeout(askTimeout)
+                    cleanup()
                     resolve(answer)
                   }
                 }
+                const onAbort = () => {
+                  if (!resolved) {
+                    resolved = true
+                    cleanup()
+                    resolve('(Generation was stopped)')
+                  }
+                }
                 ipcMain.on('chat:answerUser', handler)
+                abortController.signal.addEventListener('abort', onAbort, { once: true })
                 const askTimeout = setTimeout(() => {
-                  if (!resolved) { resolved = true; ipcMain.removeListener('chat:answerUser', handler); resolve('(User did not respond within 5 minutes)') }
+                  if (!resolved) { resolved = true; cleanup(); resolve('(User did not respond within 5 minutes)') }
                 }, 300000)
               })
               emitToolStatus('result', 'ask_user', resultText, toolIteration)
