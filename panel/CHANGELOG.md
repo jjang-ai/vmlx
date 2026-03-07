@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.1.4 — 2026-03-07 — Tool Choice Fix, First-Launch UX & Input Validation
+
+### Fixed
+- **Critical: tool_choice="none" content swallowing**: Streaming Chat Completions silently swallowed content when tool markers were detected with `tool_choice="none"`. Content buffering now correctly disabled.
+- **suppress_reasoning leaks**: Responses API `reasoning.done` event and Chat Completions reasoning-only fallback no longer leak reasoning when suppressed.
+- **Non-streaming tool_choice="none"**: Both API paths now skip tool parsing when tools are suppressed.
+- **PagedCacheManager input validation**: Rejects `block_size=0` and `max_blocks<2` with clear errors instead of crashing later.
+- **First-launch empty state**: Auto-creates initial chat for new users. Remote sessions skip `detectConfig` (no filesystem path).
+- **About page version**: Now reads dynamically from Electron `app.getVersion()` instead of hardcoded.
+
+### Engine (vmlx-engine 0.2.12)
+- Fix streaming `tool_call_active` gating, suppress_reasoning guards, PagedCacheManager validation
+- Add hybrid detection logging, memory cache fallback warning
+- 14 new invariant tests
+
 ## v1.1.3 — 2026-03-07 — Stop Button, Cache OOM & Reasoning Fix
 
 ### Fixed
