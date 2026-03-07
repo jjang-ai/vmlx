@@ -1092,6 +1092,7 @@ class Scheduler:
                 else:
                     # Reconstruction failed, treat as cache miss
                     request.remaining_tokens = request.prompt_token_ids
+                    request.cached_tokens = 0
                     logger.info(
                         f"Request {request.request_id}: paged cache reconstruction failed"
                     )
@@ -1484,12 +1485,23 @@ class Scheduler:
                 # Post-decode string stop sequence check.
                 # BatchGenerator only handles integer stop_token_ids;
                 # string stop sequences need decoded-text matching.
+                # Skip matching inside <think> blocks — reasoning content
+                # should not trigger user-specified stop sequences.
                 if request.sampling_params.stop:
                     full_text = detok.text
+                    # Strip <think>...</think> blocks before matching
+                    import re
+                    check_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
+                    # Also skip if we're inside an unclosed <think> block
+                    if '<think>' in full_text and '</think>' not in full_text.split('<think>')[-1]:
+                        check_text = ""
                     for stop_str in request.sampling_params.stop:
-                        idx = full_text.find(stop_str)
+                        idx = check_text.find(stop_str)
                         if idx >= 0:
-                            string_stop_truncate = idx
+                            # Map back to full_text position for truncation
+                            string_stop_truncate = full_text.find(stop_str)
+                            if string_stop_truncate < 0:
+                                string_stop_truncate = len(full_text)
                             new_text = ""  # suppress partial output
                             break
             else:
