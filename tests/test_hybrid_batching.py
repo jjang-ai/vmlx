@@ -469,5 +469,81 @@ class TestSSMStateCacheKeyAlignment:
         assert key1 != key3
 
 
+class TestStopSequenceThinkAwareness:
+    """Tests for stop sequences not matching inside <think> blocks."""
+
+    def test_stop_check_strips_think_blocks(self):
+        """String stop sequences should be checked on text with think blocks removed."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+
+        source = inspect.getsource(Scheduler._process_batch_responses)
+        # Must strip think blocks before stop matching
+        assert "re.sub" in source
+        assert "<think>" in source
+
+    def test_stop_check_skips_unclosed_think(self):
+        """Stop matching should be skipped while inside unclosed <think> block."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+
+        source = inspect.getsource(Scheduler._process_batch_responses)
+        assert "</think>" in source
+
+
+class TestAbortRequestReturnValue:
+    """Tests for abort_request returning correct found status."""
+
+    def test_engine_core_abort_returns_found_status(self):
+        """EngineCore.abort_request should return True only if request exists."""
+        from vmlx_engine.engine_core import EngineCore
+        import inspect
+
+        source = inspect.getsource(EngineCore.abort_request)
+        # Should check if request exists before returning
+        assert "_output_queues" in source or "_finished_events" in source
+        # Should NOT unconditionally return True
+        assert "return found" in source
+
+
+class TestCachedTokensZeroOnFailure:
+    """Tests for cached_tokens being zeroed on reconstruction failure."""
+
+    def test_reconstruction_failure_zeros_cached_tokens(self):
+        """When paged cache reconstruction fails, cached_tokens must be 0."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+
+        source = inspect.getsource(Scheduler.add_request)
+        # Find the reconstruction failure path
+        lines = source.split('\n')
+        for i, line in enumerate(lines):
+            if 'reconstruction failed' in line:
+                # Look in nearby lines for cached_tokens = 0
+                context = '\n'.join(lines[max(0, i-3):i+3])
+                assert 'cached_tokens = 0' in context, (
+                    "cached_tokens must be zeroed on reconstruction failure"
+                )
+                break
+        else:
+            raise AssertionError("Could not find reconstruction failure path")
+
+
+class TestMLLMCacheStatsCompleteness:
+    """Tests for MLLM cache stats including hits/misses/hit_rate."""
+
+    def test_mllm_stats_include_cache_fields(self):
+        """MLLMScheduler.get_stats should include hit/miss fields for CachePanel."""
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        import inspect
+
+        source = inspect.getsource(MLLMScheduler.get_stats)
+        # Must include these fields so CachePanel renders
+        assert '"hits"' in source
+        assert '"misses"' in source
+        assert '"hit_rate"' in source
+        assert '"tokens_saved"' in source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

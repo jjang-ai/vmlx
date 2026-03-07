@@ -1964,10 +1964,16 @@ class MLLMScheduler:
             # Cache stats for all cache modes
             if self.block_aware_cache is not None:
                 try:
+                    paged_stats = self.block_aware_cache.get_stats()
                     stats["paged_cache"] = {
                         "type": "paged",
                         "block_size": self.config.paged_cache_block_size,
                         "max_blocks": self.config.max_cache_blocks,
+                        "hits": paged_stats.get("hits", 0),
+                        "misses": paged_stats.get("misses", 0),
+                        "hit_rate": paged_stats.get("hit_rate", 0.0),
+                        "tokens_saved": paged_stats.get("tokens_saved", 0),
+                        "entry_count": paged_stats.get("entry_count", 0),
                     }
                     if self.paged_cache_manager is not None:
                         stats["paged_cache"]["allocated_blocks"] = (
