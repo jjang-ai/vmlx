@@ -705,7 +705,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             instructions,
             temperature: overrides?.temperature ?? 0.7,
             top_p: overrides?.topP ?? 0.9,
-            max_output_tokens: overrides?.maxTokens ?? 4096,
+            ...(overrides?.maxTokens ? { max_output_tokens: overrides.maxTokens } : {}),
             stream: true,
             stream_options: { include_usage: true }
           }
@@ -721,10 +721,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               parameters: t.function.parameters
             }))
           }
-          // enable_thinking: sent to both local and remote (some providers support it)
-          obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
+          // enable_thinking: explicit user override sent to both local and remote.
+          // When undefined (auto), local server auto-detects from model config; remote gets sessionHasReasoningParser as hint.
+          if (overrides?.enableThinking !== undefined) {
+            obj.enable_thinking = overrides.enableThinking
+          } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
+          }
           // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
-          if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+          if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
           if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
           return obj
         } else {
@@ -733,7 +738,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             messages: requestMessages,
             temperature: overrides?.temperature ?? 0.7,
             top_p: overrides?.topP ?? 0.9,
-            max_tokens: overrides?.maxTokens ?? 4096,
+            ...(overrides?.maxTokens ? { max_tokens: overrides.maxTokens } : {}),
             stream: true,
             stream_options: { include_usage: true }
           }
@@ -746,10 +751,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             // e.g. {"type": "function", "function": {"name": ..., "parameters": ...}}
             obj.tools = filterTools(overrides)
           }
-          // enable_thinking: sent to both local and remote (some providers support it)
-          obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
+          // enable_thinking: explicit user override sent to both local and remote.
+          // When undefined (auto), local server auto-detects from model config; remote gets sessionHasReasoningParser as hint.
+          if (overrides?.enableThinking !== undefined) {
+            obj.enable_thinking = overrides.enableThinking
+          } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
+          }
           // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
-          if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+          if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
           if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
           return obj
         }
@@ -1110,7 +1120,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               // and older server versions.
               // chunkCounted tracks whether we've already counted this SSE chunk's token
               // to prevent inflation from think-tag splitting into multiple emitDelta calls.
-              if (!reasoning && sessionHasReasoningParser) {
+              if (!reasoning) {
                 const content = choice.content as string
                 let chunkCounted = !!reasoning // if reasoning was emitted above, counting already happened
                 const emitWithCount = (text: string, isR: boolean) => {
@@ -1801,6 +1811,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           )
           console.log(`[CHAT] Server cancel sent for ${entry.responseId}`)
         } catch (_) { /* server may already be done */ }
+      } else if (!entry.responseId) {
+        // Abort during prefill: responseId not assigned yet. The fetch abort (step 1)
+        // closes the connection; the server will detect disconnect via is_disconnected()
+        // on the next token yield. No explicit cancel needed — prefill is typically <2s.
+        console.log(`[CHAT] Abort during prefill (no responseId yet) — connection closed, server will detect disconnect`)
       }
 
       activeRequests.delete(chatId)

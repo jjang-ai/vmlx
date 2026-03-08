@@ -112,7 +112,7 @@ declare global {
         stop: (sessionId: string) => Promise<{ success: boolean; error?: string }>
         delete: (sessionId: string) => Promise<{ success: boolean; error?: string }>
         detect: () => Promise<any[]>
-        update: (sessionId: string, config: any) => Promise<{ success: boolean; error?: string }>
+        update: (sessionId: string, config: any) => Promise<{ success: boolean; error?: string; restartRequired?: boolean; changedKeys?: string[] }>
         onStarting: (callback: (data: any) => void) => () => void
         onReady: (callback: (data: any) => void) => () => void
         onStopped: (callback: (data: any) => void) => () => void

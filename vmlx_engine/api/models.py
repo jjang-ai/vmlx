@@ -163,11 +163,13 @@ class ChatCompletionRequest(BaseModel):
     stream_options: StreamOptions | None = (
         None  # Streaming options (include_usage, etc.)
     )
-    stop: list[str] | None = None
+    stop: str | list[str] | None = None
     # Extended sampling parameters
     top_k: int | None = None  # Top-k sampling (0 = disabled)
     min_p: float | None = None  # Min-p sampling threshold
     repetition_penalty: float | None = None  # Repetition penalty (1.0 = disabled)
+    frequency_penalty: float | None = None  # Accepted for API compat (not implemented)
+    presence_penalty: float | None = None  # Accepted for API compat (not implemented)
     # Tool calling
     tools: list[ToolDefinition] | None = None
     tool_choice: str | dict | None = None  # "auto", "none", or specific tool
@@ -188,6 +190,14 @@ class ChatCompletionRequest(BaseModel):
     # Standard vLLM convention: {"enable_thinking": true/false, ...}
     # enable_thinking here is used as fallback when top-level enable_thinking is None
     chat_template_kwargs: dict | None = None
+
+    @field_validator("stop")
+    @classmethod
+    def normalize_stop(cls, v):
+        """Normalize bare string to list for consistent iteration."""
+        if isinstance(v, str):
+            return [v]
+        return v
 
     @field_validator("n")
     @classmethod
@@ -262,7 +272,7 @@ class CompletionRequest(BaseModel):
     top_p: float | None = None
     max_tokens: int | None = None
     stream: bool = False
-    stop: list[str] | None = None
+    stop: str | list[str] | None = None
     # Extended sampling parameters
     top_k: int | None = None
     min_p: float | None = None
@@ -458,7 +468,10 @@ class ResponsesFunctionCall(BaseModel):
 class ResponsesTextFormat(BaseModel):
     """Text format specification for Responses API."""
 
+    model_config = {"extra": "allow"}
+
     type: str = "text"  # "text", "json_object", "json_schema"
+    json_schema: dict | None = None  # Schema definition for json_schema type
 
 
 class ResponsesToolDefinition(BaseModel):
@@ -499,6 +512,8 @@ class ResponsesRequest(BaseModel):
     top_k: int | None = None
     min_p: float | None = None
     repetition_penalty: float | None = None
+    frequency_penalty: float | None = None  # Accepted for API compat (not implemented)
+    presence_penalty: float | None = None  # Accepted for API compat (not implemented)
     max_output_tokens: int | None = None
     stop: str | list[str] | None = None
     stream: bool = False

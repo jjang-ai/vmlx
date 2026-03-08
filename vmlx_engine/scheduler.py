@@ -181,6 +181,14 @@ class Scheduler:
         self.batch_generator: Optional[BatchGenerator] = None
         self._current_sampler_params: Optional[Tuple] = None
 
+        # Base stop tokens (model EOS) — used to prevent over-removal in H1 cleanup
+        self.stop_tokens: Set[int] = self._get_stop_tokens()
+
+        # KV cache quantization bits (0 = disabled). Initialized here so all
+        # code paths can use self._kv_cache_bits directly without getattr().
+        self._kv_cache_bits: int = 0
+        self._kv_cache_group_size: int = 64
+
         # Track if model uses mixed cache types (KVCache + MambaCache)
         self._is_hybrid = self._is_hybrid_model(model)
 
@@ -230,8 +238,12 @@ class Scheduler:
                     cache_dir = self.config.block_disk_cache_dir
                     if cache_dir is None and self.config.model_path:
                         import hashlib
+                        # Include quant config in hash to prevent cross-config cache poisoning
+                        # (same fix as prompt disk cache — C3)
+                        quant_tag = self.config.kv_cache_quantization or "none"
+                        block_scope_key = f"{self.config.model_path}:quant={quant_tag}"
                         model_hash = hashlib.sha256(
-                            self.config.model_path.encode()
+                            block_scope_key.encode()
                         ).hexdigest()[:12]
                         cache_dir = os.path.join(
                             os.path.expanduser("~"),
@@ -308,11 +320,15 @@ class Scheduler:
             base_dir = self.config.disk_cache_dir or os.path.expanduser(
                 "~/.cache/vmlx-engine/prompt-cache"
             )
-            # Scope disk cache per model to prevent stale cross-model cache hits.
-            # Uses a short hash of the model path as a subdirectory.
+            # Scope disk cache per model AND quantization to prevent stale cross-config hits.
+            # Uses a short hash of model path + quant config as a subdirectory.
+            # Without this, restarting with different --kv-cache-quantization could load
+            # quantized tensors as unquantized data (or vice versa), producing garbage output.
             if self.config.model_path:
+                quant_tag = self.config.kv_cache_quantization or "none"
+                scope_key = f"{self.config.model_path}:quant={quant_tag}"
                 model_hash = hashlib.sha256(
-                    self.config.model_path.encode()
+                    scope_key.encode()
                 ).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))
                 cache_dir = os.path.join(base_dir, f"{model_slug}_{model_hash}")
@@ -513,7 +529,7 @@ class Scheduler:
         if not getattr(self, '_kv_cache_bits', 0):
             return cache
         try:
-            from mlx_lm.models.cache import QuantizedKVCache
+            from mlx_lm.models.cache import KVCache, QuantizedKVCache
             import mlx.core as mx
         except ImportError:
             return cache
@@ -524,7 +540,8 @@ class Scheduler:
         quantized_count = 0
         for i, layer_cache in enumerate(cache):
             if (
-                type(layer_cache).__name__ == 'KVCache'
+                isinstance(layer_cache, KVCache)
+                and not isinstance(layer_cache, QuantizedKVCache)
                 and layer_cache.keys is not None
             ):
                 try:
@@ -573,28 +590,30 @@ class Scheduler:
 
         result = []
         for i, layer_cache in enumerate(cache):
-            if (
-                isinstance(layer_cache, QuantizedKVCache)
-                and layer_cache.keys is not None
-            ):
-                try:
-                    kv = KVCache()
-                    kv.keys = mx.dequantize(
-                        layer_cache.keys[0], layer_cache.keys[1],
-                        layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
-                    )
-                    kv.values = mx.dequantize(
-                        layer_cache.values[0], layer_cache.values[1],
-                        layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
-                    )
-                    kv.offset = layer_cache.offset
-                    result.append(kv)
-                except Exception as e:
-                    logger.warning(
-                        f"KV cache dequantization failed for layer {i}: {e}. "
-                        f"Treating as cache miss."
-                    )
-                    return None
+            if isinstance(layer_cache, QuantizedKVCache):
+                if layer_cache.keys is not None:
+                    try:
+                        kv = KVCache()
+                        kv.keys = mx.dequantize(
+                            layer_cache.keys[0], layer_cache.keys[1],
+                            layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
+                        )
+                        kv.values = mx.dequantize(
+                            layer_cache.values[0], layer_cache.values[1],
+                            layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
+                        )
+                        kv.offset = layer_cache.offset
+                        result.append(kv)
+                    except Exception as e:
+                        logger.warning(
+                            f"KV cache dequantization failed for layer {i}: {e}. "
+                            f"Treating as cache miss."
+                        )
+                        return None
+                else:
+                    # QuantizedKVCache with keys=None — empty layer, use fresh KVCache
+                    # (BatchGenerator cannot handle QuantizedKVCache objects)
+                    result.append(KVCache())
             else:
                 result.append(layer_cache)
         return result
@@ -930,9 +949,20 @@ class Scheduler:
                         if "Rotating" in cls_name:
                             try:
                                 from mlx_lm.models.cache import RotatingKVCache
+                                max_size = getattr(layer_cache, 'max_size', target_len)
+                                keep = getattr(layer_cache, 'keep', 0)
+                                offset = getattr(layer_cache, 'offset', 0)
+                                _idx = getattr(layer_cache, '_idx', 0)
+
+                                if offset > max_size:
+                                    # Circular buffer has wrapped — slots are NOT in
+                                    # chronological order. Naive slice gives wrong tokens.
+                                    # Skip caching for this layer rather than corrupt.
+                                    return None
+
                                 new_cache = RotatingKVCache(
-                                    max_size=getattr(layer_cache, 'max_size', target_len),
-                                    keep=getattr(layer_cache, 'keep', 0),
+                                    max_size=max_size,
+                                    keep=keep,
                                 )
                             except ImportError:
                                 new_cache = KVCache()
@@ -940,15 +970,37 @@ class Scheduler:
                             new_cache = KVCache()
                         ndim = k.ndim
                         if ndim == 4:
-                            new_cache.keys = k[:, :, :target_len, :]
-                            new_cache.values = v[:, :, :target_len, :]
+                            safe_target = min(target_len, k.shape[2])
+                            new_cache.keys = k[:, :, :safe_target, :]
+                            new_cache.values = v[:, :, :safe_target, :]
                         elif ndim == 3:
-                            new_cache.keys = k[:, :target_len, :]
-                            new_cache.values = v[:, :target_len, :]
+                            safe_target = min(target_len, k.shape[1])
+                            new_cache.keys = k[:, :safe_target, :]
+                            new_cache.values = v[:, :safe_target, :]
                         else:
                             return None
-                        new_cache.offset = target_len
+                        new_cache.offset = min(target_len, safe_target)
+                        # Restore _idx for RotatingKVCache
+                        if "Rotating" in cls_name and hasattr(new_cache, '_idx'):
+                            new_cache._idx = new_cache.offset
                         truncated.append(new_cache)
+                except ImportError:
+                    return None
+            elif hasattr(layer_cache, "caches") and isinstance(
+                getattr(layer_cache, "caches", None), (list, tuple)
+            ):
+                # CacheList (DeepSeek V3.2, Falcon H1): contains sub-caches.
+                # Recursively truncate each sub-cache.
+                sub_result = Scheduler._truncate_cache_to_prompt_length(
+                    layer_cache.caches, prompt_len
+                )
+                if sub_result is None:
+                    return None
+                try:
+                    from mlx_lm.models.cache import CacheList
+                    new_cache_list = CacheList.__new__(CacheList)
+                    new_cache_list.caches = tuple(sub_result)
+                    truncated.append(new_cache_list)
                 except ImportError:
                     return None
             elif hasattr(layer_cache, "cache") and isinstance(
@@ -1164,53 +1216,64 @@ class Scheduler:
             disk_cache = self.disk_cache.fetch(request.prompt_token_ids)
             if disk_cache is not None:
                 # Disk cache stores full-precision N-1 tokens (last prompt token re-fed on hit)
-                request.prompt_cache = disk_cache
-                request.cached_tokens = len(request.prompt_token_ids) - 1
-                request.remaining_tokens = request.prompt_token_ids[-1:]
-                # Also populate L1 memory cache for faster subsequent hits.
-                # Quantize for L1 if KV quant is enabled (disk stores full precision).
-                l1_data = disk_cache
+                # Dequantize if KV cache quantization is active (disk stores full precision
+                # but may have been quantized before storage in some paths)
                 if getattr(self, '_kv_cache_bits', 0):
-                    try:
-                        l1_data = self._quantize_cache_for_storage(disk_cache)
-                    except Exception:
-                        pass  # Store full-precision on quant failure
-                if self.block_aware_cache is not None:
-                    try:
-                        extracted = self._extract_cache_states(l1_data)
-                        if extracted:
-                            self.block_aware_cache.store_cache(
-                                request.request_id,
-                                list(request.prompt_token_ids),
-                                extracted,
+                    disk_cache = self._dequantize_cache_for_use(disk_cache)
+                if disk_cache is None:
+                    # Dequantization failed — treat as full cache miss
+                    logger.info(
+                        f"Request {request.request_id}: disk cache dequantization "
+                        f"failed, treating as cache miss"
+                    )
+                else:
+                    request.prompt_cache = disk_cache
+                    request.cached_tokens = len(request.prompt_token_ids) - 1
+                    request.remaining_tokens = request.prompt_token_ids[-1:]
+                    # Also populate L1 memory cache for faster subsequent hits.
+                    # Quantize for L1 if KV quant is enabled (disk stores full precision).
+                    l1_data = disk_cache
+                    if getattr(self, '_kv_cache_bits', 0):
+                        try:
+                            l1_data = self._quantize_cache_for_storage(disk_cache)
+                        except Exception:
+                            pass  # Store full-precision on quant failure
+                    if self.block_aware_cache is not None:
+                        try:
+                            extracted = self._extract_cache_states(l1_data)
+                            if extracted:
+                                self.block_aware_cache.store_cache(
+                                    request.request_id,
+                                    list(request.prompt_token_ids),
+                                    extracted,
+                                )
+                                # Clean up request table entry — blocks persist via LRU
+                                self.block_aware_cache._request_tables.pop(
+                                    request.request_id, None
+                                )
+                                self.block_aware_cache.paged_cache.detach_request(
+                                    request.request_id
+                                )
+                        except Exception:
+                            pass
+                    elif self.memory_aware_cache is not None:
+                        try:
+                            self.memory_aware_cache.store(
+                                request.prompt_token_ids, l1_data
                             )
-                            # Clean up request table entry — blocks persist via LRU
-                            self.block_aware_cache._request_tables.pop(
-                                request.request_id, None
+                        except Exception:
+                            pass
+                    elif self.prefix_cache is not None:
+                        try:
+                            self.prefix_cache.store_cache(
+                                list(request.prompt_token_ids), l1_data
                             )
-                            self.block_aware_cache.paged_cache.detach_request(
-                                request.request_id
-                            )
-                    except Exception:
-                        pass
-                elif self.memory_aware_cache is not None:
-                    try:
-                        self.memory_aware_cache.store(
-                            request.prompt_token_ids, l1_data
-                        )
-                    except Exception:
-                        pass
-                elif self.prefix_cache is not None:
-                    try:
-                        self.prefix_cache.store_cache(
-                            list(request.prompt_token_ids), l1_data
-                        )
-                    except Exception:
-                        pass
-                logger.info(
-                    f"Request {request.request_id}: disk cache hit (L2), "
-                    f"{request.cached_tokens} tokens restored from disk"
-                )
+                        except Exception:
+                            pass
+                    logger.info(
+                        f"Request {request.request_id}: disk cache hit (L2), "
+                        f"{request.cached_tokens} tokens restored from disk"
+                    )
 
         # Add to tracking
         self.requests[request.request_id] = request
@@ -1391,35 +1454,48 @@ class Scheduler:
                             request.cached_tokens = 0
                             request.remaining_tokens = request.prompt_token_ids
                             tokens_to_process = request.prompt_token_ids
-                    except (ImportError, Exception):
-                        pass  # psutil not available, skip check
+                    except ImportError:
+                        pass  # psutil is a required dep but handle gracefully
+                    except Exception as e:
+                        logger.debug(f"Memory check failed, skipping: {e}")
 
-            # Insert into BatchGenerator with optional cache
+            # Insert into BatchGenerator with optional cache.
+            # Wrapped in try/except to prevent lost requests — if insert fails
+            # completely, put the request back in the waiting queue.
             try:
-                uids = self.batch_generator.insert(
-                    [tokens_to_process],
-                    max_tokens=[request.sampling_params.max_tokens],
-                    caches=[cache_to_use] if cache_to_use else None,
-                )
-            except Exception as e:
-                # Cache-related insertion failure - retry without cache
-                if cache_to_use is not None:
-                    logger.warning(
-                        f"Request {request.request_id}: cache insertion failed "
-                        f"({type(e).__name__}: {e}), retrying without cache"
-                    )
-                    cache_to_use = None
-                    request.prompt_cache = None
-                    request.cached_tokens = 0
-                    request.remaining_tokens = request.prompt_token_ids
-                    tokens_to_process = request.prompt_token_ids
+                try:
                     uids = self.batch_generator.insert(
                         [tokens_to_process],
                         max_tokens=[request.sampling_params.max_tokens],
-                        caches=None,
+                        caches=[cache_to_use] if cache_to_use else None,
                     )
-                else:
-                    raise
+                except Exception as e:
+                    # Cache-related insertion failure - retry without cache
+                    if cache_to_use is not None:
+                        logger.warning(
+                            f"Request {request.request_id}: cache insertion failed "
+                            f"({type(e).__name__}: {e}), retrying without cache"
+                        )
+                        cache_to_use = None
+                        request.prompt_cache = None
+                        request.cached_tokens = 0
+                        request.remaining_tokens = request.prompt_token_ids
+                        tokens_to_process = request.prompt_token_ids
+                        uids = self.batch_generator.insert(
+                            [tokens_to_process],
+                            max_tokens=[request.sampling_params.max_tokens],
+                            caches=None,
+                        )
+                    else:
+                        raise
+            except Exception as e:
+                # Both insert attempts failed — put request back to avoid permanent loss
+                logger.error(
+                    f"Request {request.request_id}: insert failed completely "
+                    f"({type(e).__name__}: {e}), returning to waiting queue"
+                )
+                self.waiting.appendleft(request)
+                break
 
             if uids:
                 uid = uids[0]
@@ -1429,6 +1505,13 @@ class Scheduler:
                 request.status = RequestStatus.RUNNING
                 self.running[request.request_id] = request
                 scheduled.append(request)
+
+                # H1 parity: Add per-request stop tokens to shared batch generator
+                # Track additions so they can be removed on cleanup
+                if request.sampling_params.stop_token_ids and self.batch_generator is not None:
+                    new_tokens = set(request.sampling_params.stop_token_ids)
+                    self.batch_generator.stop_tokens.update(new_tokens)
+                    request._added_stop_tokens = new_tokens
 
                 self.total_prompt_tokens += request.num_prompt_tokens
                 cache_info = (
@@ -1498,9 +1581,15 @@ class Scheduler:
                     for stop_str in request.sampling_params.stop:
                         idx = check_text.find(stop_str)
                         if idx >= 0:
-                            # Map back to full_text position for truncation
-                            string_stop_truncate = full_text.find(stop_str)
+                            # Map position back to full_text: search after
+                            # the last closed </think> block to avoid matching
+                            # inside reasoning content.
+                            last_think_end = full_text.rfind('</think>')
+                            search_start = last_think_end + len('</think>') if last_think_end >= 0 else 0
+                            string_stop_truncate = full_text.find(stop_str, search_start)
                             if string_stop_truncate < 0:
+                                # Fallback: stop string only in check_text
+                                # after stripping — use full_text length
                                 string_stop_truncate = len(full_text)
                             new_text = ""  # suppress partial output
                             break
@@ -1665,6 +1754,13 @@ class Scheduler:
 
     def _cleanup_finished(self, finished_ids: Set[str]) -> None:
         """Clean up finished requests and store caches for reuse."""
+        # H1 parity: Snapshot stop tokens from requests that will SURVIVE this cleanup.
+        # This prevents removing tokens still needed by other running requests.
+        _surviving_stops = set()
+        for rid, req in self.running.items():
+            if rid not in finished_ids:
+                _surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
+
         for request_id in finished_ids:
             request = self.running.get(request_id)
 
@@ -1698,6 +1794,9 @@ class Scheduler:
                             logger.warning(
                                 f"Failed to store paged cache for {request_id}: {e}"
                             )
+                        finally:
+                            # Clear extracted cache reference to help GC
+                            request._extracted_cache = None
                     # NOTE: Do NOT call release_cache() here - that would delete
                     # block tables from the paged cache. Blocks should persist for
                     # future requests to share; LRU eviction handles cleanup.
@@ -1705,8 +1804,6 @@ class Scheduler:
                     # unbounded memory growth.
                     self.block_aware_cache._request_tables.pop(request_id, None)
                     self.block_aware_cache.paged_cache.detach_request(request_id)
-                    # Clear extracted cache reference to help GC
-                    request._extracted_cache = None
 
                 elif self.memory_aware_cache is not None:
                     # Store in memory-aware prefix cache
@@ -1810,6 +1907,16 @@ class Scheduler:
                             # Clear extracted cache reference to help GC
                             request._extracted_cache = None
 
+            # H1 parity: Remove per-request stop tokens from batch generator
+            if (
+                request is not None
+                and self.batch_generator is not None
+                and getattr(request, '_added_stop_tokens', None)
+            ):
+                removable = request._added_stop_tokens - _surviving_stops - self.stop_tokens
+                if removable:
+                    self.batch_generator.stop_tokens -= removable
+
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
 
@@ -1876,6 +1983,11 @@ class Scheduler:
             request.output_token_ids = []
             request.output_text = ""
             request.num_computed_tokens = 0
+
+            # Clear extracted cache to prevent poisoning paged cache with stale
+            # data from the destroyed BatchGenerator context
+            if hasattr(request, '_extracted_cache'):
+                request._extracted_cache = None
 
             # Clear stale detokenizer — request will restart from scratch
             self._cleanup_detokenizer(request_id)

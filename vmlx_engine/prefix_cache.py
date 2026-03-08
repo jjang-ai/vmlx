@@ -13,7 +13,7 @@ This module provides two implementations:
 import copy
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -107,8 +107,9 @@ class PrefixCacheManager:
         # Structure: {model_key: {token1: {token2: {..., "cache": CacheEntry}}}}
         self._cache: Dict[Any, Dict] = {}
 
-        # LRU tracking: (model_key, tuple(tokens)) ordered by access time
-        self._lru: deque = deque()
+        # LRU tracking: OrderedDict keyed by (model_key, tuple(tokens))
+        # O(1) move_to_end, O(1) popitem, no duplicate entries
+        self._lru: OrderedDict = OrderedDict()
 
         # Statistics
         self.stats = PrefixCacheStats()
@@ -150,15 +151,16 @@ class PrefixCacheManager:
             return list(tokens), None, None, 0
 
         # Check for longer cached prefix
-        # DFS to find shortest extension with cache
-        stack = [(current, list(path))]
-        while stack:
-            node, node_path = stack.pop()
+        # BFS to find shortest extension with cache
+        from collections import deque
+        queue = deque([(current, list(path))])
+        while queue:
+            node, node_path = queue.popleft()
             if "cache" in node:
                 return None, None, node_path, len(tokens)
             for tok, child in node.items():
                 if tok != "cache":
-                    stack.append((child, node_path + [tok]))
+                    queue.append((child, node_path + [tok]))
 
         return None, None, None, 0
 
@@ -242,17 +244,15 @@ class PrefixCacheManager:
             current = current[tok]
 
         # Store or update cache entry
+        key = (self.model_key, tokens_tuple)
         if "cache" in current:
             current["cache"].count += 1
-            # Update LRU position
-            try:
-                self._lru.remove((self.model_key, tokens_tuple))
-            except ValueError:
-                pass
         else:
             current["cache"] = CacheEntry(prompt_cache, 1)
 
-        self._lru.append((self.model_key, tokens_tuple))
+        # Move to end (most recently used); OrderedDict handles dedup
+        self._lru[key] = True
+        self._lru.move_to_end(key)
 
         # Evict if over capacity
         while len(self._lru) > self.max_size:
@@ -272,20 +272,19 @@ class PrefixCacheManager:
         return current.get("cache")
 
     def _touch_lru(self, tokens_tuple: tuple) -> None:
-        """Move entry to end of LRU queue (most recently used)."""
+        """Move entry to end of LRU queue (most recently used). O(1)."""
         key = (self.model_key, tokens_tuple)
-        try:
-            self._lru.remove(key)
-        except ValueError:
-            pass
-        self._lru.append(key)
+        if key in self._lru:
+            self._lru.move_to_end(key)
+        else:
+            self._lru[key] = True
 
     def _evict_lru(self) -> None:
-        """Evict least recently used entry."""
+        """Evict least recently used entry. O(1)."""
         if not self._lru:
             return
 
-        model_key, tokens_tuple = self._lru.popleft()
+        (model_key, tokens_tuple), _ = self._lru.popitem(last=False)
         self._delete_cache(model_key, list(tokens_tuple))
         self.stats.evictions += 1
 

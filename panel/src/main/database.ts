@@ -202,7 +202,7 @@ class DatabaseManager {
         model_path TEXT NOT NULL UNIQUE,
         model_name TEXT,
         host TEXT NOT NULL DEFAULT '127.0.0.1',
-        port INTEGER NOT NULL,
+        port INTEGER NOT NULL UNIQUE,
         pid INTEGER,
         status TEXT NOT NULL DEFAULT 'stopped'
           CHECK(status IN ('running','stopped','error','loading')),
@@ -333,6 +333,27 @@ class DatabaseManager {
     }
     if (!sessionColumns.find(c => c.name === 'remote_organization')) {
       this.db.exec('ALTER TABLE sessions ADD COLUMN remote_organization TEXT')
+    }
+
+    // Safe migration: add UNIQUE constraint on sessions.port for existing databases.
+    // Deduplicate any existing port conflicts first (keep most recent session per port).
+    try {
+      const indexInfo = this.db.pragma('index_list(sessions)') as { name: string; unique: number }[]
+      const hasUniquePort = indexInfo.some(idx =>
+        idx.unique === 1 && (this.db.pragma(`index_info(${idx.name})`) as { name: string }[]).some(col => col.name === 'port')
+      )
+      if (!hasUniquePort) {
+        // Remove duplicates: keep the row with the latest updated_at for each port
+        this.db.exec(`
+          DELETE FROM sessions WHERE rowid NOT IN (
+            SELECT MAX(rowid) FROM sessions GROUP BY port
+          )
+        `)
+        this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_port_unique ON sessions(port)')
+        console.log('[DB] Added UNIQUE index on sessions.port')
+      }
+    } catch (e) {
+      console.warn('[DB] Could not add UNIQUE index on sessions.port:', e)
     }
 
     // Prompt templates table

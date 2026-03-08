@@ -125,22 +125,27 @@ def _dequantize_cache(cache: List[Any]) -> List[Any]:
 
     result = []
     for layer_cache in cache:
-        if isinstance(layer_cache, QuantizedKVCache) and layer_cache.keys is not None:
-            try:
-                kv = KVCache()
-                kv.keys = mx.dequantize(
-                    layer_cache.keys[0], layer_cache.keys[1],
-                    layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
-                )
-                kv.values = mx.dequantize(
-                    layer_cache.values[0], layer_cache.values[1],
-                    layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
-                )
-                kv.offset = layer_cache.offset
-                result.append(kv)
-            except Exception as e:
-                logger.warning(f"KV dequantization failed: {e}, using original")
-                result.append(layer_cache)
+        if isinstance(layer_cache, QuantizedKVCache):
+            if layer_cache.keys is not None:
+                try:
+                    kv = KVCache()
+                    kv.keys = mx.dequantize(
+                        layer_cache.keys[0], layer_cache.keys[1],
+                        layer_cache.keys[2], layer_cache.group_size, layer_cache.bits,
+                    )
+                    kv.values = mx.dequantize(
+                        layer_cache.values[0], layer_cache.values[1],
+                        layer_cache.values[2], layer_cache.group_size, layer_cache.bits,
+                    )
+                    kv.offset = layer_cache.offset
+                    result.append(kv)
+                except Exception as e:
+                    logger.warning(f"KV dequantization failed: {e}, using fresh KVCache")
+                    result.append(KVCache())
+            else:
+                # QuantizedKVCache with keys=None — empty layer, use fresh KVCache
+                # (cannot pass QuantizedKVCache to BatchGenerator)
+                result.append(KVCache())
         else:
             result.append(layer_cache)
     return result
@@ -230,7 +235,9 @@ def _fix_hybrid_cache(
         )
         return result
     except Exception as e:
-        logger.warning(f"_fix_hybrid_cache failed: {e}, using original cache")
+        logger.warning(f"_fix_hybrid_cache failed: {e}, returning fresh cache")
+        if hasattr(language_model, 'make_cache'):
+            return language_model.make_cache()
         return cache
 
 
@@ -771,6 +778,7 @@ class MLLMBatchGenerator:
         self.unprocessed_requests: List[MLLMBatchRequest] = []
         self.active_batch: Optional[MLLMBatch] = None
         self.uid_counter = 0
+        self._prefill_errors: List[MLLMBatchResponse] = []  # Failed requests from prefill
 
         # Statistics
         self._stats = MLLMBatchStats()
@@ -1344,6 +1352,9 @@ class MLLMBatchGenerator:
                                         f"has images — full prefill"
                                     )
                                 else:
+                                    # Dequantize if KV cache quantization is active
+                                    if self._kv_cache_bits:
+                                        disk_result = _dequantize_cache(disk_result)
                                     req.prompt_cache = disk_result
                                     req._cached_tokens = len(token_list)
                                     # Disk cache is exact-match (hash-based), all tokens cached.
@@ -1371,27 +1382,23 @@ class MLLMBatchGenerator:
         per_request_caches = []
         first_tokens = []
         all_logprobs = []
+        succeeded_requests = []
 
         for i, req in enumerate(requests):
+          try:
             with mx.stream(MLLMBatchGenerator._stream):
-                # Per-request prefill uses standard KVCache (integer offsets)
-                # so that mlx_vlm model layers can use cache.offset as a Python int.
-                # After all prefills, we merge into a single BatchKVCache for decode.
                 if req.prompt_cache is not None:
-                    # Pre-filled cache from prefix cache — these are KVCache objects.
-                    # For hybrid models (e.g. Qwen3.5 with SSM + attention layers),
-                    # replace KVCache at SSM positions with fresh ArraysCache.
-                    # SSM layers need ArraysCache (cumulative state, not block-cached),
-                    # and using KVCache at SSM positions causes make_mask signature errors.
+                    # Dequantize before _fix_hybrid_cache (it checks KVCache,
+                    # not QuantizedKVCache which inherits from _BaseCache)
+                    cache_for_fix = req.prompt_cache
+                    if self._kv_cache_bits:
+                        cache_for_fix = _dequantize_cache(cache_for_fix)
                     req_cache = _fix_hybrid_cache(
-                        req.prompt_cache, self.language_model,
+                        cache_for_fix, self.language_model,
                         kv_positions=self._hybrid_kv_positions,
                         num_model_layers=self._hybrid_num_layers,
                     )
                 else:
-                    # Create fresh per-request cache using model.make_cache()
-                    # This correctly creates KVCache for attention layers and
-                    # MambaCache/ArraysCache for SSM layers in hybrid models.
                     try:
                         if hasattr(self.language_model, 'make_cache'):
                             req_cache = self.language_model.make_cache()
@@ -1410,14 +1417,10 @@ class MLLMBatchGenerator:
                 logprobs = last_logits - mx.logsumexp(
                     last_logits, axis=-1, keepdims=True
                 )
-                # Use per-request sampler based on temperature/top_p
                 req_sampler = self._make_request_sampler(req)
                 sampled = req_sampler(logprobs)
 
-                # Async eval cache states: KVCache has .state, MambaCache has .cache.
-                # mx.async_eval() submits to GPU without blocking the CPU thread,
-                # allowing the next request's preprocessing to overlap with this
-                # request's GPU computation.
+                # Async submit cache states to GPU for CPU/GPU overlap
                 try:
                     cache_states = []
                     for c in req_cache:
@@ -1431,28 +1434,25 @@ class MLLMBatchGenerator:
                             cache_states.extend(x for x in c.cache if x is not None)
                     mx.async_eval(sampled, logprobs, *cache_states)
                 except Exception as e:
-                    logger.warning(f"Cache state eval error (non-fatal): {e}")
+                    logger.warning(f"Cache state submission error (non-fatal): {e}")
                     mx.async_eval(sampled, logprobs)
 
                 first_tokens.append(sampled.item())
                 all_logprobs.append(logprobs.squeeze(0))
+                succeeded_requests.append(req)
 
-                # Capture SSM state at prompt boundary for hybrid models.
-                # This must happen after eval (state is materialized) and before
-                # cache merge (after merge, per-request state is lost).
+                # Capture SSM state at prompt boundary for hybrid models
                 if (
                     self._hybrid_kv_positions is not None
                     and self._hybrid_num_layers is not None
                     and len(self._hybrid_kv_positions) < self._hybrid_num_layers
-                    and req.prompt_cache is None  # Only for fresh prefill (no cache hit)
+                    and req.prompt_cache is None
                 ):
                     try:
                         kv_set = set(self._hybrid_kv_positions)
                         ssm_layers = []
                         for layer_idx, c in enumerate(req_cache):
                             if layer_idx not in kv_set:
-                                # Deep-copy SSM state: make contiguous copies of arrays
-                                # so they survive batch merge/filter mutations.
                                 if hasattr(c, 'cache') and isinstance(c.cache, list):
                                     from copy import copy
                                     cloned = copy(c)
@@ -1464,10 +1464,6 @@ class MLLMBatchGenerator:
                                 else:
                                     ssm_layers.append(c)
                         if ssm_layers:
-                            # Use pre-mutation full token list for SSM keying.
-                            # CRITICAL: align to block boundary so fetch key matches.
-                            # Fetch uses block_table.num_tokens (block-aligned), so
-                            # store must use the same alignment.
                             all_tokens = getattr(req, '_original_token_ids', None)
                             if all_tokens is None:
                                 all_tokens = input_ids_list[i]
@@ -1486,8 +1482,30 @@ class MLLMBatchGenerator:
                                 )
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
+          except Exception as prefill_err:
+                # Per-request prefill failure (bad image, OOM, etc.)
+                # Queue an immediate error response instead of killing the entire batch.
+                logger.error(
+                    f"Prefill failed for {req.request_id}: {prefill_err} — "
+                    f"other requests in batch will continue"
+                )
+                self._prefill_errors.append(MLLMBatchResponse(
+                    uid=req.uid,
+                    request_id=req.request_id,
+                    token=0,
+                    logprobs=mx.zeros((1,)),
+                    finish_reason="stop",
+                ))
+
+        # Use only the successfully prefilled requests for the batch
+        requests = succeeded_requests
 
         y = mx.array(first_tokens)
+
+        # If all requests failed prefill, return empty batch
+        if not succeeded_requests:
+            self._stats.prompt_time += time.perf_counter() - tic
+            return None
 
         # Merge per-request caches into batch-aware caches for batched decode.
         # Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache, etc.
@@ -1544,11 +1562,14 @@ class MLLMBatchGenerator:
         if rep_penalty is not None and rep_penalty != 1.0:
             from mlx_lm.sample_utils import make_logits_processors
             logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
-            # Flatten prompt to 1D list — input_ids is 2D [1, seq_len] from prepare_inputs
-            ids = request.input_ids
-            prompt_list = ids[0].tolist() if ids is not None and ids.ndim > 1 else (
-                ids.tolist() if ids is not None else []
-            )
+            # Use _original_token_ids (saved before cache fetch trims input_ids)
+            # so repetition penalty covers the full prompt, not just uncached tokens.
+            prompt_list = getattr(request, '_original_token_ids', None)
+            if prompt_list is None:
+                ids = request.input_ids
+                prompt_list = ids[0].tolist() if ids is not None and ids.ndim > 1 else (
+                    ids.tolist() if ids is not None else []
+                )
             def sampler_with_penalty(logits, _req=request, _prompt_list=prompt_list):
                 # Build full token sequence (prompt + generated) so penalty
                 # applies to already-generated tokens, not just the prompt.
@@ -1643,10 +1664,14 @@ class MLLMBatchGenerator:
             self.active_batch = new_batch
             prompt_processing = True
 
+        # Drain any per-request prefill errors (from M6 per-request isolation)
+        prefill_errors = list(self._prefill_errors)
+        self._prefill_errors.clear()
+
         # Generate next token for active batch
         batch = self.active_batch
         if batch is None:
-            return []
+            return prefill_errors
 
         y, logprobs = batch.y, batch.logprobs
         batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
@@ -1722,7 +1747,7 @@ class MLLMBatchGenerator:
                 self.active_batch = None
 
         self._stats.generation_tokens += len(responses)
-        return responses
+        return prefill_errors + responses
 
     def next(self) -> List[MLLMBatchResponse]:
         """

@@ -1,4 +1,4 @@
-import { spawn, ChildProcess, execSync } from 'child_process'
+import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
 import { lookup } from 'dns'
 import { EventEmitter } from 'events'
 import { existsSync, readdirSync, statSync } from 'fs'
@@ -23,6 +23,7 @@ interface ManagedProcess {
   adoptedPid: number | null
   lastStderr?: string  // Last stderr line for error reporting
   exitCode?: number | null
+  exitSignal?: string | null  // Signal that killed the process (e.g. SIGKILL for OOM)
 }
 
 /** Normalize model paths for consistent matching: resolve and strip trailing slashes */
@@ -92,6 +93,8 @@ export class SessionManager extends EventEmitter {
   private failCounts = new Map<string, number>()
   /** Per-session operation lock to prevent concurrent start/stop races */
   private operationLocks = new Map<string, Promise<void>>()
+  /** Global creation lock to prevent port assignment races between concurrent createSession calls */
+  private creationLock: Promise<void> = Promise.resolve()
   /** Timestamp of last successful health check per session (used to skip redundant per-message checks) */
   private lastHealthyAt = new Map<string, number>()
   // Allow up to 60 consecutive health check failures (5s * 60 = 5 min)
@@ -220,6 +223,21 @@ export class SessionManager extends EventEmitter {
   // ─── Session Lifecycle ─────────────────────────────────────────────
 
   async createSession(modelPath: string, config: Partial<ServerConfig>): Promise<Session> {
+    // Serialize all session creation to prevent port assignment race conditions.
+    // Without this, concurrent createSession calls can both see the same DB snapshot
+    // and assign the same port (TOCTOU race in findAvailablePort).
+    let unlock!: () => void
+    const prev = this.creationLock
+    this.creationLock = new Promise<void>(r => { unlock = r })
+    await prev
+    try {
+      return await this._createSessionInner(modelPath, config)
+    } finally {
+      unlock()
+    }
+  }
+
+  private async _createSessionInner(modelPath: string, config: Partial<ServerConfig>): Promise<Session> {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
 
@@ -468,18 +486,26 @@ export class SessionManager extends EventEmitter {
       const lastStderr = managed?.lastStderr
       this.processes.delete(sessionId)
       this.failCounts.delete(sessionId)
-      const crashed = code !== null && code !== 0
+      const killed = signal === 'SIGKILL'
+      const crashed = killed || (code !== null && code !== 0)
       db.updateSession(sessionId, {
         status: crashed ? 'error' : 'stopped',
         pid: undefined,
         lastStoppedAt: Date.now()
       })
       if (crashed) {
-        const reason = lastStderr ? `Process exited with code ${code}: ${lastStderr}` : `Process exited with code ${code}`
+        let reason: string
+        if (killed) {
+          reason = 'Process was killed (SIGKILL) — likely out of memory. Try a smaller/more quantized model, reduce cache size, or close other apps.'
+        } else if (lastStderr) {
+          reason = `Process exited with code ${code}: ${lastStderr}`
+        } else {
+          reason = `Process exited with code ${code}`
+        }
         this.emit('session:error', { sessionId, error: reason })
       }
       // Store exit info for waitForReady to access
-      this.processes.set(sessionId, { process: null, adoptedPid: null, exitCode: code, lastStderr })
+      this.processes.set(sessionId, { process: null, adoptedPid: null, exitCode: code, exitSignal: signal, lastStderr })
       this.emit('session:stopped', { sessionId, code, signal })
       // Clean up the exit info after a delay so waitForReady can read it
       setTimeout(() => {
@@ -612,7 +638,18 @@ export class SessionManager extends EventEmitter {
     this.emit('session:deleted', { sessionId })
   }
 
-  async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<void> {
+  /** Config keys that require a session restart to take effect. */
+  private static readonly RESTART_REQUIRED_KEYS = new Set([
+    'port', 'host', 'modelPath', 'continuousBatching', 'enablePrefixCache',
+    'usePagedCache', 'pagedCacheBlockSize', 'maxCacheBlocks',
+    'noMemoryAwareCache', 'cacheMemoryMb', 'cacheMemoryPercent',
+    'kvCacheQuantization', 'kvCacheGroupSize',
+    'enableDiskCache', 'enableBlockDiskCache',
+    'toolCallParser', 'reasoningParser',
+    'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
+  ])
+
+  async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
     const session = db.getSession(sessionId)
     if (!session) throw new Error(`Session ${sessionId} not found`)
 
@@ -653,6 +690,17 @@ export class SessionManager extends EventEmitter {
       host,
       port
     })
+
+    // H6: Determine if changed keys require a restart
+    const isRunning = session.status === 'running' || session.status === 'loading'
+    const changedKeys = Object.keys(config).filter(k =>
+      SessionManager.RESTART_REQUIRED_KEYS.has(k) &&
+      (config as Record<string, unknown>)[k] !== currentConfig[k]
+    )
+    return {
+      restartRequired: isRunning && changedKeys.length > 0,
+      changedKeys,
+    }
   }
 
   // ─── Discovery & Adoption ─────────────────────────────────────────
@@ -683,8 +731,8 @@ export class SessionManager extends EventEmitter {
           port: proc.port,
           timeout: 300,
           maxNumSeqs: 256,
-          prefillBatchSize: 512,
-          completionBatchSize: 512,
+          prefillBatchSize: 0,
+          completionBatchSize: 0,
           // VLM/MLLM models support continuous batching via MLLMScheduler
           continuousBatching: true,
           enablePrefixCache: true,
@@ -985,6 +1033,8 @@ export class SessionManager extends EventEmitter {
     for (const [, managed] of this.processes) {
       if (managed.process) {
         try { managed.process.kill('SIGTERM') } catch (_) { }
+      } else if (managed.adoptedPid) {
+        this.killPid(managed.adoptedPid, 'SIGTERM')
       }
     }
 
@@ -997,6 +1047,8 @@ export class SessionManager extends EventEmitter {
       for (const [, managed] of this.processes) {
         if (managed.process) {
           try { managed.process.kill('SIGKILL') } catch (_) { }
+        } else if (managed.adoptedPid) {
+          try { process.kill(managed.adoptedPid, 'SIGKILL') } catch (_) { }
         }
       }
     }
@@ -1112,11 +1164,6 @@ export class SessionManager extends EventEmitter {
       if (!config.continuousBatching && !args.includes('--continuous-batching')) {
         args.push('--continuous-batching')
       }
-      // Set safe prefill batch size to prevent Metal GPU crashes with large contexts
-      if ((!config.prefillBatchSize || config.prefillBatchSize === 0) && !args.some(a => a === '--prefill-batch-size')) {
-        args.push('--prefill-batch-size', '4096')
-      }
-
       if (config.noMemoryAwareCache) {
         args.push('--no-memory-aware-cache')
         if (config.prefixCacheSize && config.prefixCacheSize > 0) {
@@ -1306,7 +1353,7 @@ export class SessionManager extends EventEmitter {
     })
   }
 
-  /** Check if a session's process is still alive via PID signal-0 probe. */
+  /** Check if a session's process is still alive (not zombie) via PID probe. */
   private isProcessAlive(sessionId: string, dbPid?: number): boolean {
     // Check managed process first (spawned or adopted)
     const managed = this.processes.get(sessionId)
@@ -1314,10 +1361,19 @@ export class SessionManager extends EventEmitter {
     if (!pid) return false
     try {
       process.kill(pid, 0) // Signal 0: doesn't kill, just checks existence
-      return true
     } catch (_) {
       return false
     }
+    // M7: kill(pid, 0) succeeds for zombies. Check process state to filter them out.
+    try {
+      const state = execFileSync('ps', ['-o', 'state=', '-p', String(pid)],
+        { timeout: 1000 }).toString().trim()
+      if (state.startsWith('Z')) return false // Zombie process
+    } catch (_) {
+      // ps failed — process may have exited between checks
+      return false
+    }
+    return true
   }
 
   private killPid(pid: number, signal: NodeJS.Signals = 'SIGTERM'): void {
@@ -1383,7 +1439,12 @@ export class SessionManager extends EventEmitter {
         const managed = this.processes.get(sessionId)
         if (managed && !managed.process && !managed.adoptedPid) {
           // Process exited — include the reason if available
-          const reason = managed.lastStderr || `exit code ${managed.exitCode ?? 'unknown'}`
+          let reason: string
+          if (managed.exitSignal === 'SIGKILL') {
+            reason = 'Process was killed (SIGKILL) — likely out of memory. Try a smaller/more quantized model, reduce cache size, or close other apps.'
+          } else {
+            reason = managed.lastStderr || `exit code ${managed.exitCode ?? 'unknown'}`
+          }
           throw new Error(`Process exited before becoming ready: ${reason}`)
         }
         if (!managed) {

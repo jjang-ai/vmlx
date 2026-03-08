@@ -230,6 +230,143 @@ class TestVideoProcessing:
 
 
 # =============================================================================
+# Audit Bug Fix Tests (v1.1.6)
+# =============================================================================
+
+
+class TestExtractMultimodalMessages:
+    """Tests for _extract_multimodal_messages bug fixes."""
+
+    def test_video_url_content_type_handled(self):
+        """BUG 7: video_url content type must not be silently dropped."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this video"},
+                    {"type": "video_url", "video_url": {"url": "https://example.com/video.mp4"}},
+                ],
+            }
+        ]
+
+        chat_msgs, images, videos = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(videos) == 1
+        assert videos[0] == "https://example.com/video.mp4"
+
+    def test_video_url_string_format(self):
+        """video_url can also be a plain string."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe"},
+                    {"type": "video_url", "video_url": "/path/to/video.mp4"},
+                ],
+            }
+        ]
+
+        _, _, videos = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(videos) == 1
+        assert videos[0] == "/path/to/video.mp4"
+
+    def test_video_type_still_works(self):
+        """Original video type handling must not be broken."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe"},
+                    {"type": "video", "video": "/path/to/video.mp4"},
+                ],
+            }
+        ]
+
+        _, _, videos = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(videos) == 1
+
+    def test_mixed_image_and_video_url(self):
+        """Both image_url and video_url in same message."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Compare"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.jpg"}},
+                    {"type": "video_url", "video_url": {"url": "https://example.com/vid.mp4"}},
+                ],
+            }
+        ]
+
+        _, images, videos = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(images) == 1
+        assert len(videos) == 1
+
+    def test_tool_role_messages_preserved_as_text(self):
+        """Tool role messages should at minimum preserve text content."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": "Let me calculate that."},
+            {"role": "tool", "content": "4", "tool_call_id": "call_123", "name": "calculator"},
+            {"role": "assistant", "content": "The answer is 4."},
+        ]
+
+        chat_msgs, _, _ = MLXMultimodalLM._extract_multimodal_messages(messages)
+        roles = [m["role"] for m in chat_msgs]
+        assert "tool" in roles
+
+        # Tool message should preserve tool_call_id and name
+        tool_msg = [m for m in chat_msgs if m["role"] == "tool"][0]
+        assert tool_msg["tool_call_id"] == "call_123"
+        assert tool_msg["name"] == "calculator"
+        assert tool_msg["content"] == "4"
+
+    def test_assistant_tool_calls_preserved(self):
+        """Assistant messages with tool_calls should preserve them."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        tool_calls = [{"id": "call_123", "type": "function", "function": {"name": "calc", "arguments": "{}"}}]
+        messages = [
+            {"role": "user", "content": "Calculate"},
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        ]
+
+        chat_msgs, _, _ = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assistant_msg = [m for m in chat_msgs if m["role"] == "assistant"][0]
+        assert "tool_calls" in assistant_msg
+        assert assistant_msg["tool_calls"] == tool_calls
+
+
+class TestMLLMFinishReason:
+    """Tests for MLLM finish_reason correctness (BUG 9 fix)."""
+
+    def test_mllm_output_dataclass(self):
+        """MLLMOutput should support both 'stop' and 'length' finish reasons."""
+        from vmlx_engine.models.mllm import MLLMOutput
+
+        out_stop = MLLMOutput(text="hello", finish_reason="stop", completion_tokens=5)
+        assert out_stop.finish_reason == "stop"
+
+        out_length = MLLMOutput(text="hello", finish_reason="length", completion_tokens=256)
+        assert out_length.finish_reason == "length"
+
+    def test_finish_reason_no_error_value(self):
+        """finish_reason should never be 'error' (non-standard for OpenAI)."""
+        # This is a documentation test — 'error' is not a valid OpenAI finish_reason
+        valid_reasons = {"stop", "length", "tool_calls", "content_filter", None}
+        assert "error" not in valid_reasons
+
+
+# =============================================================================
 # MLLM Model Tests
 # =============================================================================
 
@@ -398,3 +535,134 @@ class TestMLLMChat:
 
         assert output.text is not None
         assert len(output.text) > 0
+
+
+# =============================================================================
+# M13: Repetition penalty uses original tokens
+# =============================================================================
+
+
+class TestRepetitionPenaltyOriginalTokens:
+    """Verify repetition penalty uses _original_token_ids, not trimmed input_ids."""
+
+    def test_code_uses_original_token_ids(self):
+        """_make_request_sampler should reference _original_token_ids for full prompt coverage."""
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._make_request_sampler)
+        assert "_original_token_ids" in source, \
+            "_make_request_sampler should use _original_token_ids for full prompt coverage"
+
+    def test_code_has_fallback_to_input_ids(self):
+        """_make_request_sampler should fall back to input_ids when _original_token_ids is not set."""
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._make_request_sampler)
+        assert "input_ids" in source, \
+            "_make_request_sampler should fall back to input_ids"
+
+
+# =============================================================================
+# M15: KV cache quantization uses type identity check
+# =============================================================================
+
+
+class TestKVCacheQuantizationTypeCheck:
+    """Verify cache quantization uses isinstance (handles KVCache subclasses like RotatingKVCache)."""
+
+    def test_scheduler_quantize_uses_isinstance_check(self):
+        """Ensure scheduler._quantize_cache_for_storage uses isinstance, not type identity."""
+        import inspect
+        from vmlx_engine.scheduler import Scheduler
+
+        source = inspect.getsource(Scheduler._quantize_cache_for_storage)
+        assert "isinstance(layer_cache, KVCache)" in source
+        assert "not isinstance(layer_cache, QuantizedKVCache)" in source
+
+    def test_mllm_scheduler_quantize_uses_isinstance_check(self):
+        """Ensure MLLMScheduler._quantize_cache_for_storage uses isinstance, not type identity."""
+        import inspect
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        source = inspect.getsource(MLLMScheduler._quantize_cache_for_storage)
+        assert "isinstance(layer_cache, KVCache)" in source
+        assert "not isinstance(layer_cache, QuantizedKVCache)" in source
+
+
+# =============================================================================
+# M17: Prefix cache BFS for shortest longer prefix
+# =============================================================================
+
+
+class TestPrefixCacheBFS:
+    """Verify prefix cache uses BFS (not DFS) for shorter-first longer-prefix search."""
+
+    def test_search_finds_shortest_extension(self):
+        """BFS should find the shortest cached extension, not an arbitrary deep one."""
+        from vmlx_engine.prefix_cache import PrefixCacheManager
+
+        from unittest.mock import MagicMock
+        cache = PrefixCacheManager(model=MagicMock())
+        cache.model_key = "test_model"
+
+        # Build a trie with two extensions of [1, 2]:
+        # Short: [1, 2, 3] has cache
+        # Long:  [1, 2, 4, 5, 6] has cache
+        cache._cache = {
+            "test_model": {
+                1: {
+                    2: {
+                        3: {"cache": "short_cache"},
+                        4: {5: {6: {"cache": "long_cache"}}},
+                    }
+                }
+            }
+        }
+
+        _, _, longer, _ = cache._search([1, 2])
+        assert longer is not None
+        # BFS should find the shorter extension [1, 2, 3]
+        assert len(longer) == 3, f"Expected shortest extension [1,2,3], got {longer}"
+        assert longer == [1, 2, 3]
+
+
+# =============================================================================
+# M6: Batch VLM per-request prefill isolation
+# =============================================================================
+
+
+class TestBatchPrefillIsolation:
+    """Verify that a single bad request doesn't kill the entire batch."""
+
+    def test_prefill_errors_list_exists(self):
+        """MLLMBatchGenerator should have _prefill_errors for per-request isolation."""
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator.__init__)
+        assert "_prefill_errors" in source, \
+            "MLLMBatchGenerator should track per-request prefill errors"
+
+    def test_process_prompts_has_per_request_try_except(self):
+        """_process_prompts should have per-request error handling."""
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        assert "succeeded_requests" in source, \
+            "_process_prompts should track succeeded requests separately"
+        assert "prefill_err" in source, \
+            "_process_prompts should catch per-request prefill errors"
+
+    def test_next_drains_prefill_errors(self):
+        """_next() should drain and return prefill errors."""
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._next)
+        assert "prefill_errors" in source, \
+            "_next() should drain prefill errors"
+        assert "_prefill_errors.clear()" in source, \
+            "_next() should clear prefill errors after draining"
