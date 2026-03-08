@@ -39,7 +39,7 @@ const DEFAULT_CONFIG: DetectedConfig = {
 
 // Reproduce MODEL_TYPE_TO_FAMILY from model-config-registry.ts
 const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
-    'qwen3_5': 'qwen3.5-vl', 'qwen3_5_moe': 'qwen3.5-moe',
+    'qwen3_5': 'qwen3.5', 'qwen3_5_moe': 'qwen3.5-moe',
     'qwen3': 'qwen3', 'qwen3_next': 'qwen3-next', 'qwen3_moe': 'qwen3-moe',
     'qwen3_vl': 'qwen3-vl', 'qwen3_vl_moe': 'qwen3-vl',
     'qwen2': 'qwen2', 'qwen2_moe': 'qwen2', 'qwen2_vl': 'qwen2-vl',

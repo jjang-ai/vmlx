@@ -765,7 +765,6 @@ class MLXMultimodalLM:
         """
         if cls._video_processor_patched:
             return
-        cls._video_processor_patched = True
 
         try:
             from transformers.models.auto import video_processing_auto
@@ -783,9 +782,11 @@ class MLXMultimodalLM:
                     raise
 
             video_processing_auto.AutoVideoProcessor.from_pretrained = _patched_from_pretrained
+            cls._video_processor_patched = True
             logger.debug("Patched AutoVideoProcessor for torchvision-free loading")
         except Exception:
-            pass  # If transformers internals changed, let the original error propagate
+            logger.warning("Failed to patch AutoVideoProcessor — torchvision-dependent VLMs may fail to load")
+            cls._video_processor_patched = True  # Don't retry on every load, log warning once
 
     def _prepare_images(self, images: list) -> list[str]:
         """Process image inputs and return local file paths."""

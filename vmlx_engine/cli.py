@@ -249,7 +249,7 @@ def serve_command(args):
 
         # Check if target model is MLLM
         from .api.utils import is_mllm_model
-        is_mllm = is_mllm_model(args.model, force_mllm=getattr(args, 'force_mllm', False))
+        is_mllm = is_mllm_model(args.model, force_mllm=getattr(args, 'is_mllm', False))
         if is_mllm:
             print(
                 "  ⚠️  WARNING: Speculative decoding is incompatible with multimodal (VLM) models.")
