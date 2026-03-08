@@ -228,6 +228,10 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
 _enable_auto_tool_choice: bool = False
 _tool_call_parser: str | None = None  # Parser name: auto, mistral, qwen, llama, hermes
 
+# reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior)
+_EFFORT_THINKING_BUDGET = {"low": 1024, "medium": 8192, "high": 32768}
+_EFFORT_MAX_TOKENS = {"low": 4096, "medium": 16384, "high": 32768}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1519,7 +1523,7 @@ async def create_completion(request: CompletionRequest):
 
     # Non-streaming response with timing and timeout
     start_time = time.perf_counter()
-    timeout = request.timeout or _default_timeout
+    timeout = request.timeout if request.timeout is not None else _default_timeout
     choices = []
     total_completion_tokens = 0
     total_prompt_tokens = 0
@@ -1528,7 +1532,7 @@ async def create_completion(request: CompletionRequest):
         try:
             gen_kwargs = {
                     "prompt": prompt,
-                    "max_tokens": request.max_tokens or _default_max_tokens,
+                    "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
                     "temperature": _resolve_temperature(request.temperature),
                     "top_p": _resolve_top_p(request.top_p),
                     "stop": request.stop,
@@ -1643,6 +1647,18 @@ async def create_chat_completion(
     # Normalize response model field to the resolved name
     request.model = resolved_name
 
+    # Warn about unsupported penalty parameters
+    if request.frequency_penalty and request.frequency_penalty != 0:
+        logger.warning(
+            "frequency_penalty=%.2f is not implemented and will be ignored",
+            request.frequency_penalty,
+        )
+    if request.presence_penalty and request.presence_penalty != 0:
+        logger.warning(
+            "presence_penalty=%.2f is not implemented and will be ignored",
+            request.presence_penalty,
+        )
+
     engine = get_engine()
 
     # For MLLM models, keep original messages with embedded images
@@ -1684,7 +1700,7 @@ async def create_chat_completion(
 
     # Prepare kwargs
     chat_kwargs = {
-        "max_tokens": request.max_tokens or _default_max_tokens,
+        "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -1725,9 +1741,19 @@ async def create_chat_completion(
                     pass
         chat_kwargs["enable_thinking"] = _enable
 
-    # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels)
+    # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
+    # Also map to thinking_budget (Qwen3) and max_tokens ceiling when not explicitly set.
     if request.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = request.reasoning_effort
+        _effort_lower = request.reasoning_effort.lower()
+        _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
+        if _budget:
+            if _ct_kwargs is None:
+                _ct_kwargs = {}
+            _ct_kwargs.setdefault("thinking_budget", _budget)
+        _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
+        if _effort_max and request.max_tokens is None:
+            chat_kwargs["max_tokens"] = _effort_max
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -1823,7 +1849,7 @@ async def create_chat_completion(
 
     # Non-streaming response with timing and timeout
     start_time = time.perf_counter()
-    timeout = request.timeout or _default_timeout
+    timeout = request.timeout if request.timeout is not None else _default_timeout
 
     try:
         output = await asyncio.wait_for(
@@ -1900,6 +1926,21 @@ async def create_chat_completion(
                     detail=f"response_format strict mode: {error}"
                 )
             logger.warning(f"JSON validation failed: {error}")
+
+    # Enforce tool_choice="required": model MUST produce at least one tool call
+    if _tool_choice == "required" and not tool_calls:
+        logger.warning(
+            f"tool_choice='required' but model produced no tool calls. "
+            f"Returning error to client."
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "tool_choice='required' was set but the model did not produce "
+                "any tool calls. Try rephrasing your prompt or using a model "
+                "with better tool-calling support."
+            ),
+        )
 
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
@@ -2119,6 +2160,18 @@ async def create_response(
         )
     request.model = resolved_name
 
+    # Warn about unsupported penalty parameters
+    if request.frequency_penalty and request.frequency_penalty != 0:
+        logger.warning(
+            "frequency_penalty=%.2f is not implemented and will be ignored",
+            request.frequency_penalty,
+        )
+    if request.presence_penalty and request.presence_penalty != 0:
+        logger.warning(
+            "presence_penalty=%.2f is not implemented and will be ignored",
+            request.presence_penalty,
+        )
+
     engine = get_engine()
 
     # Convert Responses API input to chat messages
@@ -2143,7 +2196,7 @@ async def create_response(
 
     # Build kwargs
     chat_kwargs = {
-        "max_tokens": request.max_output_tokens or _default_max_tokens,
+        "max_tokens": request.max_output_tokens if request.max_output_tokens is not None else _default_max_tokens,
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -2182,9 +2235,19 @@ async def create_response(
                     pass
         chat_kwargs["enable_thinking"] = _enable
 
-    # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels)
+    # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
+    # Also map to thinking_budget (Qwen3) and max_output_tokens ceiling when not explicitly set.
     if request.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = request.reasoning_effort
+        _effort_lower = request.reasoning_effort.lower()
+        _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
+        if _budget:
+            if _ct_kwargs is None:
+                _ct_kwargs = {}
+            _ct_kwargs.setdefault("thinking_budget", _budget)
+        _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
+        if _effort_max and request.max_output_tokens is None:
+            chat_kwargs["max_tokens"] = _effort_max
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -2276,7 +2339,7 @@ async def create_response(
 
     # Non-streaming response
     start_time = time.perf_counter()
-    timeout = request.timeout or _default_timeout
+    timeout = request.timeout if request.timeout is not None else _default_timeout
 
     try:
         output = await asyncio.wait_for(
@@ -2352,6 +2415,22 @@ async def create_response(
                     )
                 logger.warning(f"[responses] JSON validation failed: {error}")
 
+    # Enforce tool_choice="required": model MUST produce at least one tool call
+    _resp_tool_choice = getattr(request, 'tool_choice', None)
+    if _resp_tool_choice == "required" and not tool_calls:
+        logger.warning(
+            f"tool_choice='required' but model produced no tool calls. "
+            f"Returning error to client."
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "tool_choice='required' was set but the model did not produce "
+                "any tool calls. Try rephrasing your prompt or using a model "
+                "with better tool-calling support."
+            ),
+        )
+
     # Build output array
     output_items = []
 
@@ -2375,10 +2454,15 @@ async def create_response(
     if tool_calls:
         for tc in tool_calls:
             func = tc.function if hasattr(tc, "function") else tc
-            output_items.append(ResponsesFunctionCall(
+            # Forward tc.id from parser so stateful tool-use loops can correlate results
+            tc_call_id = tc.id if hasattr(tc, "id") and tc.id else None
+            fc_kwargs = dict(
                 name=func.name if hasattr(func, "name") else func.get("name", ""),
                 arguments=func.arguments if hasattr(func, "arguments") else func.get("arguments", ""),
-            ))
+            )
+            if tc_call_id:
+                fc_kwargs["call_id"] = tc_call_id
+            output_items.append(ResponsesFunctionCall(**fc_kwargs))
 
     return ResponsesObject(
         model=request.model,
@@ -2444,7 +2528,7 @@ async def stream_completions_multi(
         try:
             gen_kwargs: dict = {
                 "prompt": prompt,
-                "max_tokens": request.max_tokens or _default_max_tokens,
+                "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
                 "temperature": _resolve_temperature(request.temperature),
                 "top_p": _resolve_top_p(request.top_p),
                 "stop": request.stop,
@@ -2626,6 +2710,7 @@ async def stream_chat_completion(
     # the buffer for tool calls and emit them as proper tool_calls chunks.
     tool_call_buffering = False  # Are we currently buffering for tool calls?
     tool_call_buffering_notified = False  # Have we sent the buffering signal?
+    tool_calls_emitted = False  # Were actual tool calls parsed and emitted?
     _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
     tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None) and not _suppress_tools
 
@@ -2731,8 +2816,8 @@ async def stream_chat_completion(
                 if suppress_reasoning:
                     emit_content = delta_msg.content  # Only emit actual content after </think>
                     emit_reasoning = None
-                    if delta_msg.reasoning:
-                        accumulated_content += delta_msg.reasoning  # Track for tool call detection
+                    # Note: reasoning tool-call markers are already detected at lines above
+                    # via delta_msg.reasoning check — no need to add reasoning to accumulated_content
                 else:
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
@@ -2842,20 +2927,40 @@ async def stream_chat_completion(
             },
         }
         yield f"data: {json.dumps(error_data)}\n\n"
+        # M8: Send usage even on error so client gets partial token counts
+        if include_usage and (prompt_tokens > 0 or completion_tokens > 0):
+            _err_usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            if cached_tokens > 0:
+                _err_usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
+            err_usage_chunk = ChatCompletionChunk(
+                id=response_id,
+                created=_created_ts,
+                model=request.model,
+                choices=[],
+                usage=_err_usage,
+            )
+            yield f"data: {_dump_sse_json(err_usage_chunk)}\n\n"
         yield "data: [DONE]\n\n"
         return
 
     # ─── Post-stream: tool call extraction ───────────────────────────────
     # If we buffered text because of tool call markers, parse it now
     if tool_call_buffering and accumulated_text and not _suppress_tools:
-        # Strip think tags before parsing — the accumulated text may contain
-        # <think>reasoning</think> before the tool call, or the entire text
-        # may be inside implicit think context (think_in_template models).
-        parse_text = re.sub(r'<think>.*?</think>', '', accumulated_text, flags=re.DOTALL)
-        if parse_text == accumulated_text and '</think>' in parse_text:
-            # Implicit mode: strip everything before </think>
-            _, _, parse_text = parse_text.partition('</think>')
-        parse_text = parse_text.strip()
+        # Use content-only text when reasoning parser separated it (avoids losing
+        # tool calls that appear inside <think> blocks during regex stripping).
+        # Fall back to accumulated_text with think-tag stripping when no parser was active.
+        if request_parser and accumulated_content.strip():
+            parse_text = accumulated_content.strip()
+        else:
+            parse_text = re.sub(r'<think>.*?</think>', '', accumulated_text, flags=re.DOTALL)
+            if parse_text == accumulated_text and '</think>' in parse_text:
+                # Implicit mode: strip everything before </think>
+                _, _, parse_text = parse_text.partition('</think>')
+            parse_text = parse_text.strip()
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or accumulated_text, request)
         if tool_calls:
             # Emit any remaining content text before the tool calls,
@@ -2935,6 +3040,7 @@ async def stream_chat_completion(
                     usage=_tc_usage,
                 )
                 yield f"data: {_dump_sse_json(usage_chunk)}\n\n"
+            tool_calls_emitted = True
             yield "data: [DONE]\n\n"
             return
         else:
@@ -3009,6 +3115,55 @@ async def stream_chat_completion(
             ],
         )
         yield f"data: {_dump_sse_json(empty_chunk)}\n\n"
+
+    # Enforce tool_choice="required" in streaming: emit error SSE if no tool calls
+    if getattr(request, 'tool_choice', None) == "required" and not tool_calls_emitted:
+        # tool_calls_emitted is set True only when tool calls were actually parsed and yielded.
+        # tool_call_buffering can be True even on false-positive marker detection with no actual calls.
+        logger.warning(f"Stream {response_id}: tool_choice='required' but no tool calls produced")
+        error_data = {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "error": {
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "type": "invalid_request_error",
+                "code": "tool_calls_required",
+            },
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
+
+    # H4: Validate response_format (json_schema/json_object) at end of stream.
+    # Streaming can't reject mid-stream, so validate the accumulated output and
+    # log a warning. For strict mode, emit an error SSE event.
+    _rf = getattr(request, 'response_format', None)
+    if _rf and content_was_emitted and not tool_call_buffering:
+        _final_text = accumulated_content.strip() if request_parser else accumulated_text.strip()
+        if _final_text:
+            _, parsed_json, is_valid, rf_error = parse_json_output(_final_text, _rf)
+            if not is_valid:
+                _rf_strict = False
+                if isinstance(_rf, dict):
+                    _rf_strict = _rf.get("json_schema", {}).get("strict", False)
+                elif hasattr(_rf, "json_schema") and _rf.json_schema:
+                    _rf_strict = getattr(_rf.json_schema, "strict", False)
+                if _rf_strict:
+                    logger.warning(f"Stream {response_id}: JSON schema validation failed (strict): {rf_error}")
+                    error_data = {
+                        "id": response_id,
+                        "object": "chat.completion.chunk",
+                        "error": {
+                            "message": f"response_format strict mode: {rf_error}",
+                            "type": "invalid_request_error",
+                            "code": "json_validation_failed",
+                        },
+                    }
+                    yield f"data: {json.dumps(error_data)}\n\n"
+                else:
+                    logger.warning(f"Stream {response_id}: JSON validation failed: {rf_error}")
 
     # Send final chunk with usage if requested
     if include_usage:
@@ -3198,6 +3353,14 @@ async def stream_responses_api(
                                 if re.search(r'\bto=\w[\w.]*\s+code\{', _tc_check):
                                     tool_call_buffering = True
 
+                        if tool_call_buffering:
+                            # Emit heartbeat during tool call buffering so the client
+                            # sees activity (matches ChatCompletion heartbeat behavior).
+                            yield _sse("response.heartbeat", {
+                                "type": "response.heartbeat",
+                            })
+                            continue
+
                         if not tool_call_buffering:
                             # When reasoning is suppressed (client requested enable_thinking=False
                             # but model forces it), drop reasoning entirely so the user only
@@ -3205,8 +3368,8 @@ async def stream_responses_api(
                             if suppress_reasoning:
                                 emit_content = delta_msg.content  # Only actual content after </think>
                                 emit_reasoning = None
-                                if delta_msg.reasoning:
-                                    accumulated_content += delta_msg.reasoning  # Track for tool call detection
+                                # Note: reasoning tool-call markers are already detected above
+                                # via delta_msg.reasoning check — no need to add reasoning to accumulated_content
                             else:
                                 emit_reasoning = delta_msg.reasoning
                                 emit_content = delta_msg.content
@@ -3241,7 +3404,12 @@ async def stream_responses_api(
                                 tool_call_buffering = True
                                 break
 
-                    if not tool_call_buffering:
+                    if tool_call_buffering:
+                        # Emit heartbeat during tool call buffering (standard path)
+                        yield _sse("response.heartbeat", {
+                            "type": "response.heartbeat",
+                        })
+                    else:
                         # Add <think> prefix on first chunk for thinking models
                         if is_thinking_model and not think_prefix_sent and content:
                             content = "<think>" + content
@@ -3290,12 +3458,23 @@ async def stream_responses_api(
                 "code": "internal_error",
             },
         })
+        # M8: Include partial usage in failed response so client gets token counts
+        _err_usage = {}
+        if prompt_tokens > 0 or completion_tokens > 0:
+            _err_usage = {
+                "usage": {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+            }
         yield _sse("response.completed", {
             "type": "response.completed",
             "response": {
                 "id": response_id, "object": "response",
                 "status": "failed",
                 "error": {"type": "server_error", "message": str(e)},
+                **_err_usage,
             },
         })
         return
@@ -3319,12 +3498,19 @@ async def stream_responses_api(
     tool_calls = None
     cleaned_text = full_text
     if not _suppress_tools:
-        parse_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
-        if parse_text == full_text and '</think>' in full_text:
-            # Implicit mode: strip everything before </think>
-            _, _, parse_text = full_text.partition('</think>')
-        parse_text = parse_text.strip()
+        # Use content-only text when reasoning parser separated it (avoids losing
+        # tool calls that appear inside <think> blocks during regex stripping).
+        if request_parser and accumulated_content.strip():
+            parse_text = accumulated_content.strip()
+        else:
+            parse_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
+            if parse_text == full_text and '</think>' in full_text:
+                # Implicit mode: strip everything before </think>
+                _, _, parse_text = full_text.partition('</think>')
+            parse_text = parse_text.strip()
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or full_text, request)
+
+    display_text = ""  # initialized here; set properly in else branch or left empty for tool-call path
 
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
@@ -3373,10 +3559,20 @@ async def stream_responses_api(
                 "item": {"id": fc_id, "type": "function_call", "status": "in_progress",
                          "call_id": call_id, "name": tc_name, "arguments": ""},
             })
-            yield _sse("response.function_call_arguments.delta", {
-                "type": "response.function_call_arguments.delta", "item_id": fc_id,
-                "output_index": output_index, "delta": tc_args,
-            })
+            # Emit arguments incrementally in ~16-char chunks per OpenAI spec
+            _ARG_CHUNK = 16
+            if tc_args:
+                for _ci in range(0, len(tc_args), _ARG_CHUNK):
+                    yield _sse("response.function_call_arguments.delta", {
+                        "type": "response.function_call_arguments.delta", "item_id": fc_id,
+                        "output_index": output_index, "delta": tc_args[_ci:_ci + _ARG_CHUNK],
+                    })
+            else:
+                # Empty arguments — emit one delta to satisfy clients
+                yield _sse("response.function_call_arguments.delta", {
+                    "type": "response.function_call_arguments.delta", "item_id": fc_id,
+                    "output_index": output_index, "delta": "",
+                })
             yield _sse("response.function_call_arguments.done", {
                 "type": "response.function_call_arguments.done", "item_id": fc_id,
                 "output_index": output_index, "arguments": tc_args,
@@ -3413,8 +3609,13 @@ async def stream_responses_api(
         if not display_text:
             display_text = clean_output_text(full_text) if full_text else ""
         if not display_text:
-            display_text = "[Model produced no response. Check server logs for details.]"
-            logger.warning(f"Request {response_id}: empty response in Responses API")
+            # If reasoning was suppressed and model produced reasoning, the response
+            # is intentionally empty — don't show error fallback
+            if suppress_reasoning and accumulated_reasoning:
+                display_text = ""
+            else:
+                display_text = "[Model produced no response. Check server logs for details.]"
+                logger.warning(f"Request {response_id}: empty response in Responses API")
 
         yield _sse("response.output_text.done", {
             "type": "response.output_text.done", "item_id": msg_id,
@@ -3435,6 +3636,39 @@ async def stream_responses_api(
             "id": msg_id, "type": "message", "status": "completed",
             "role": "assistant",
             "content": [{"type": "output_text", "text": display_text, "annotations": []}],
+        })
+
+    # H4: Validate text format (json_schema/json_object) at end of stream.
+    _text_fmt = getattr(request, 'text', None)
+    if _text_fmt and isinstance(_text_fmt, dict) and _text_fmt.get("type") not in (None, "text"):
+        _rf_type = _text_fmt.get("type", "")
+        _FALLBACK_MSG = "[Model produced no response. Check server logs for details.]"
+        if _rf_type in ("json_schema", "json_object") and display_text and display_text != _FALLBACK_MSG:
+            _, _pj, _valid, _err = parse_json_output(display_text, _text_fmt)
+            if not _valid:
+                _strict = _text_fmt.get("json_schema", {}).get("strict", False)
+                if _strict:
+                    logger.warning(f"Stream {response_id}: JSON schema validation failed (strict): {_err}")
+                    yield _sse("error", {
+                        "type": "error",
+                        "message": f"response_format strict mode: {_err}",
+                        "code": "json_validation_failed",
+                    })
+                else:
+                    logger.warning(f"Stream {response_id}: JSON validation failed: {_err}")
+
+    # Enforce tool_choice="required" in Responses API streaming
+    _resp_stream_tc = getattr(request, 'tool_choice', None)
+    if _resp_stream_tc == "required" and not tool_calls:
+        logger.warning(f"Stream {response_id}: tool_choice='required' but no tool calls produced")
+        yield _sse("error", {
+            "type": "error",
+            "message": (
+                "tool_choice='required' was set but the model did not produce "
+                "any tool calls. Try rephrasing your prompt or using a model "
+                "with better tool-calling support."
+            ),
+            "code": "tool_calls_required",
         })
 
     # Emit response.completed

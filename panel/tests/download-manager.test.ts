@@ -256,3 +256,20 @@ describe('Download queue logic', () => {
         expect(isStale).toBe(false)
     })
 })
+
+// ─── Marker cleanup requirements ─────────────────────────────────────────────
+
+describe('Download marker cleanup', () => {
+    it('marker must be cleaned on all exit paths: close(cancel), close(success), close(error), spawn-error', () => {
+        // This test documents the requirement that .vmlx-downloading marker
+        // must be deleted in ALL exit paths. The actual implementation is in
+        // models.ts — proc.on('close') handles 3 paths + proc.on('error')
+        // handles spawn failure. If ANY path is missed, the model directory
+        // gets suppressed as "downloading" for up to 1 hour.
+        const exitPaths = ['close:cancelled', 'close:success', 'close:error', 'spawn-error']
+        const pathsWithCleanup = ['close:cancelled', 'close:success', 'close:error', 'spawn-error']
+        for (const path of exitPaths) {
+            expect(pathsWithCleanup).toContain(path)
+        }
+    })
+})

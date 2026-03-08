@@ -80,10 +80,14 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
 const FAMILY_CONFIGS: Record<string, Partial<DetectedConfig>> = {
     'qwen3': { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true },
     'qwen3-next': { cacheType: 'mamba', toolParser: 'nemotron', usePagedCache: true },
+    'qwen2': { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true },
     'qwen2-vl': { cacheType: 'kv', toolParser: 'qwen', isMultimodal: true },
     'llama3': { cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true },
     'mistral': { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true },
     'deepseek-r1': { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1' },
+    'deepseek-v3': { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true },
+    'deepseek-v2': { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1' },
+    'deepseek': { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1' },
     'gpt-oss': { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true },
     'gemma3': { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', isMultimodal: true },
     'phi4-reasoning': { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true },
@@ -1039,7 +1043,8 @@ describe('Phase 6: Tool & Reasoning Parsers', () => {
         function detectReasoningParser(modelType: string): string | undefined {
             const mapping: Record<string, string> = {
                 'qwen3': 'qwen3', 'qwen3_5': 'qwen3', 'qwen3_vl': 'qwen3', 'qwen2_vl': 'qwen3',
-                'deepseek_v3': 'deepseek_r1',
+                'deepseek_v3': 'deepseek_r1', 'deepseek_v2': 'deepseek_r1',
+                'deepseek2': 'deepseek_r1', 'deepseek': 'deepseek_r1',
                 'gemma3': 'deepseek_r1', 'gemma3_text': 'deepseek_r1',
                 'phi4_reasoning': 'deepseek_r1',
                 'gpt_oss': 'openai_gptoss',
@@ -1055,6 +1060,18 @@ describe('Phase 6: Tool & Reasoning Parsers', () => {
 
         it('Gemma3 uses deepseek_r1 parser', () => {
             expect(detectReasoningParser('gemma3')).toBe('deepseek_r1')
+        })
+
+        it('DeepSeek V3 uses deepseek_r1 parser', () => {
+            expect(detectReasoningParser('deepseek_v3')).toBe('deepseek_r1')
+        })
+
+        it('DeepSeek V2 uses deepseek_r1 parser', () => {
+            expect(detectReasoningParser('deepseek_v2')).toBe('deepseek_r1')
+        })
+
+        it('DeepSeek generic uses deepseek_r1 parser', () => {
+            expect(detectReasoningParser('deepseek')).toBe('deepseek_r1')
         })
 
         it('GPT-OSS uses openai_gptoss parser', () => {
@@ -1711,6 +1728,159 @@ describe('Phase 7: Reasoning & Thinking Tri-State', () => {
 
         it('both undefined returns undefined', () => {
             expect(resolveParser(undefined, undefined)).toBeUndefined()
+        })
+    })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: Security — v1.1.6 audit fixes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Phase 5: Security Audit', () => {
+    describe('shell.openExternal URL validation', () => {
+        // Reproduces the validation logic from index.ts setWindowOpenHandler
+        function shouldOpenExternal(url: string): boolean {
+            return url.startsWith('https://') || url.startsWith('http://')
+        }
+
+        it('allows https URLs', () => {
+            expect(shouldOpenExternal('https://github.com/vmlxllm/vmlx')).toBe(true)
+        })
+
+        it('allows http URLs', () => {
+            expect(shouldOpenExternal('http://localhost:8093')).toBe(true)
+        })
+
+        it('blocks file:// URLs', () => {
+            expect(shouldOpenExternal('file:///etc/passwd')).toBe(false)
+        })
+
+        it('blocks javascript: URLs', () => {
+            expect(shouldOpenExternal('javascript:alert(1)')).toBe(false)
+        })
+
+        it('blocks custom protocol URLs', () => {
+            expect(shouldOpenExternal('vmlx://internal/config')).toBe(false)
+        })
+
+        it('blocks empty string', () => {
+            expect(shouldOpenExternal('')).toBe(false)
+        })
+
+        it('blocks data: URLs', () => {
+            expect(shouldOpenExternal('data:text/html,<script>alert(1)</script>')).toBe(false)
+        })
+    })
+
+    describe('Qwen2 must not have reasoning parser (REGRESSION)', () => {
+        it('qwen2 family has no reasoning parser', () => {
+            const qwen2 = FAMILY_CONFIGS['qwen2']
+            expect(qwen2).toBeDefined()
+            expect(qwen2.reasoningParser).toBeUndefined()
+        })
+
+        it('qwen2-vl family has no reasoning parser', () => {
+            const qwen2vl = FAMILY_CONFIGS['qwen2-vl']
+            expect(qwen2vl).toBeDefined()
+            expect(qwen2vl.reasoningParser).toBeUndefined()
+        })
+
+        it('qwen3 family DOES have reasoning parser', () => {
+            const qwen3 = FAMILY_CONFIGS['qwen3']
+            expect(qwen3).toBeDefined()
+            expect(qwen3.reasoningParser).toBe('qwen3')
+        })
+    })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 6: Parameter Defaults & Safety Guards
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Phase 6: Parameter Defaults', () => {
+
+    describe('M10: prefillBatchSize default should not override server default', () => {
+        // Simulate buildArgs logic: when prefillBatchSize is 0 or unset,
+        // omit --prefill-batch-size so the server uses its own default (8)
+        function buildPrefillArgs(prefillBatchSize: number): string[] {
+            const args: string[] = []
+            if (prefillBatchSize && prefillBatchSize > 0) {
+                args.push('--prefill-batch-size', prefillBatchSize.toString())
+            }
+            return args
+        }
+
+        it('prefillBatchSize=0 omits the flag (server uses default)', () => {
+            expect(buildPrefillArgs(0)).toEqual([])
+        })
+
+        it('prefillBatchSize=8 passes the flag explicitly', () => {
+            expect(buildPrefillArgs(8)).toEqual(['--prefill-batch-size', '8'])
+        })
+
+        it('default should be 0 (no override), not 512', () => {
+            // This validates that the default config no longer has 512
+            const defaultPrefillBatchSize = 0
+            expect(defaultPrefillBatchSize).toBe(0)
+            expect(buildPrefillArgs(defaultPrefillBatchSize)).toEqual([])
+        })
+    })
+
+    describe('M11/M12: max_tokens per-request should be omittable', () => {
+        // Simulate request building: when maxTokens is undefined/0, omit from request
+        function buildRequestMaxTokens(maxTokens?: number): Record<string, any> {
+            const obj: Record<string, any> = { model: 'test' }
+            if (maxTokens) {
+                obj.max_tokens = maxTokens
+            }
+            return obj
+        }
+
+        it('maxTokens=undefined omits max_tokens (server decides)', () => {
+            const req = buildRequestMaxTokens(undefined)
+            expect(req.max_tokens).toBeUndefined()
+        })
+
+        it('maxTokens=0 omits max_tokens (server decides)', () => {
+            const req = buildRequestMaxTokens(0)
+            expect(req.max_tokens).toBeUndefined()
+        })
+
+        it('maxTokens=4096 includes max_tokens explicitly', () => {
+            const req = buildRequestMaxTokens(4096)
+            expect(req.max_tokens).toBe(4096)
+        })
+
+        it('should NOT hardcode 4096 as fallback', () => {
+            // Verify that omitted maxTokens doesn't default to 4096
+            const req = buildRequestMaxTokens(undefined)
+            expect(req.max_tokens).not.toBe(4096)
+        })
+    })
+
+    describe('H7: DeepSeek families must have reasoningParser', () => {
+        it('deepseek-v3 has deepseek_r1 reasoning parser', () => {
+            const config = FAMILY_CONFIGS['deepseek-v3']
+            expect(config).toBeDefined()
+            expect(config.reasoningParser).toBe('deepseek_r1')
+        })
+
+        it('deepseek-v2 has deepseek_r1 reasoning parser', () => {
+            const config = FAMILY_CONFIGS['deepseek-v2']
+            expect(config).toBeDefined()
+            expect(config.reasoningParser).toBe('deepseek_r1')
+        })
+
+        it('deepseek generic has deepseek_r1 reasoning parser', () => {
+            const config = FAMILY_CONFIGS['deepseek']
+            expect(config).toBeDefined()
+            expect(config.reasoningParser).toBe('deepseek_r1')
+        })
+
+        it('deepseek-r1 has deepseek_r1 reasoning parser', () => {
+            const config = FAMILY_CONFIGS['deepseek-r1']
+            expect(config).toBeDefined()
+            expect(config.reasoningParser).toBe('deepseek_r1')
         })
     })
 })

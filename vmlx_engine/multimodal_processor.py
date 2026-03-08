@@ -122,15 +122,18 @@ class MultimodalProcessor:
 
         # Process raw images
         all_images = []
+        failed_images = 0
         if images:
             for img in images:
                 try:
                     path = process_image_input(img)
                     all_images.append(path)
                 except Exception as e:
+                    failed_images += 1
                     logger.warning(f"Failed to process image: {e}")
 
         # Extract frames from videos
+        failed_videos = 0
         if videos:
             for video in videos:
                 try:
@@ -144,7 +147,17 @@ class MultimodalProcessor:
                     all_images.extend(frame_paths)
                     logger.debug(f"Extracted {len(frame_paths)} frames from video")
                 except Exception as e:
+                    failed_videos += 1
                     logger.warning(f"Failed to process video: {e}")
+
+        # H3: Raise if ALL media items failed (user would get no visual context)
+        total_inputs = len(images or []) + len(videos or [])
+        if total_inputs > 0 and not all_images:
+            raise ValueError(
+                f"All media inputs failed to process "
+                f"({failed_images} image(s), {failed_videos} video(s) failed). "
+                f"Check URLs/paths and try again."
+            )
 
         # Determine add_special_tokens based on model type
         if self.config and self.config.model_type in ["gemma3", "gemma3n"]:

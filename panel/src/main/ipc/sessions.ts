@@ -73,8 +73,8 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
 
     ipcMain.handle('sessions:update', async (_, sessionId: string, config: Partial<ServerConfig>) => {
       try {
-        await sessionManager.updateSessionConfig(sessionId, config)
-        return { success: true }
+        const result = await sessionManager.updateSessionConfig(sessionId, config)
+        return { success: true, ...result }
       } catch (error) {
         return { success: false, error: (error as Error).message }
       }

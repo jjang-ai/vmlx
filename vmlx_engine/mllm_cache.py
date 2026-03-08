@@ -21,6 +21,7 @@ Based on research from:
 
 import hashlib
 import logging
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -223,6 +224,7 @@ class MLLMPrefixCacheManager:
         self.max_memory = max_memory_mb * 1024 * 1024
         self._cache: OrderedDict[str, MLLMPrefixCacheEntry] = OrderedDict()
         self._current_memory = 0
+        self._lock = threading.Lock()
         self.stats = MLLMCacheStats()
 
     def _make_cache_key(self, images: list[str], prompt: str) -> str:
@@ -275,57 +277,60 @@ class MLLMPrefixCacheManager:
             - entry: The cache entry if found, None otherwise
             - prefix_match_length: Number of tokens that match (0 if miss)
         """
-        self.stats.total_queries += 1
-        cache_key = self._make_cache_key(images, prompt)
+        with self._lock:
+            self.stats.total_queries += 1
+            cache_key = self._make_cache_key(images, prompt)
 
-        if cache_key in self._cache:
-            # Full cache hit - exact image+prompt match
-            entry = self._cache.pop(cache_key)
-            self._cache[cache_key] = entry  # Move to end (LRU)
-            entry.hit_count += 1
+            if cache_key in self._cache:
+                # Full cache hit - exact image+prompt match
+                entry = self._cache.pop(cache_key)
+                self._cache[cache_key] = entry  # Move to end (LRU)
+                entry.hit_count += 1
 
-            self.stats.hits += 1
-            if images:
-                self.stats.image_cache_hits += 1
-            if entry.vision_embeddings is not None:
-                self.stats.vision_encoder_skips += 1
-
-            # Calculate prefix match length
-            match_length = entry.total_tokens
-            if token_ids:
-                match_length = entry.get_prefix_match_length(token_ids)
-                if match_length < entry.total_tokens:
-                    self.stats.partial_hits += 1
-
-            self.stats.tokens_saved += match_length
-            logger.debug(
-                f"MLLM cache HIT: {cache_key[:32]}..., prefix_match={match_length}"
-            )
-
-            return entry, match_length
-
-        # Check for image-only match (can reuse vision embeddings)
-        if images:
-            image_key = self._make_image_only_key(images)
-            for key, entry in self._cache.items():
-                if (
-                    entry.image_hash == image_key
-                    and entry.vision_embeddings is not None
-                ):
-                    # Image match - can reuse vision embeddings!
-                    self.stats.partial_hits += 1
+                self.stats.hits += 1
+                if images:
+                    self.stats.image_cache_hits += 1
+                if entry.vision_embeddings is not None:
                     self.stats.vision_encoder_skips += 1
-                    logger.debug(
-                        f"MLLM cache PARTIAL HIT (vision only): image={image_key[:16]}"
-                    )
 
-                    # Return entry for vision embeddings, but 0 prefix match
-                    # (prompt is different, so KV cache can't be reused)
-                    return entry, 0
+                # Calculate prefix match length
+                match_length = entry.total_tokens
+                if token_ids:
+                    match_length = entry.get_prefix_match_length(token_ids)
+                    if match_length < entry.total_tokens:
+                        self.stats.partial_hits += 1
 
-        self.stats.misses += 1
-        logger.debug(f"MLLM cache MISS: {cache_key[:32]}...")
-        return None, 0
+                self.stats.tokens_saved += match_length
+                logger.debug(
+                    f"MLLM cache HIT: {cache_key[:32]}..., prefix_match={match_length}"
+                )
+
+                return entry, match_length
+
+            # Check for image-only match (can reuse vision embeddings)
+            if images:
+                image_key = self._make_image_only_key(images)
+                for key, entry in self._cache.items():
+                    if (
+                        entry.image_hash == image_key
+                        and entry.vision_embeddings is not None
+                    ):
+                        # Image match - can reuse vision embeddings!
+                        self.stats.partial_hits += 1
+                        self.stats.vision_encoder_skips += 1
+                        # Update LRU position for image-only hit
+                        self._cache.move_to_end(key)
+                        logger.debug(
+                            f"MLLM cache PARTIAL HIT (vision only): image={image_key[:16]}"
+                        )
+
+                        # Return entry for vision embeddings, but 0 prefix match
+                        # (prompt is different, so KV cache can't be reused)
+                        return entry, 0
+
+            self.stats.misses += 1
+            logger.debug(f"MLLM cache MISS: {cache_key[:32]}...")
+            return None, 0
 
     def fetch_cache(
         self,
@@ -379,14 +384,15 @@ class MLLMPrefixCacheManager:
             model_name=model_name,
         )
 
-        # Evict by memory first
-        self._evict_by_memory(entry.memory_size)
+        with self._lock:
+            # Evict by memory first
+            self._evict_by_memory(entry.memory_size)
 
-        # Then evict by count
-        self._evict_by_count()
+            # Then evict by count
+            self._evict_by_count()
 
-        self._cache[cache_key] = entry
-        self._current_memory += entry.memory_size
+            self._cache[cache_key] = entry
+            self._current_memory += entry.memory_size
 
         logger.debug(
             f"MLLM cache STORED: key={cache_key[:32]}..., "
@@ -421,22 +427,25 @@ class MLLMPrefixCacheManager:
 
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
-        stats = self.stats.to_dict()
-        stats["entries"] = len(self._cache)
-        stats["max_entries"] = self.max_size
-        stats["memory_used_mb"] = self._current_memory / 1024 / 1024
-        stats["max_memory_mb"] = self.max_memory / 1024 / 1024
+        with self._lock:
+            stats = self.stats.to_dict()
+            stats["entries"] = len(self._cache)
+            stats["max_entries"] = self.max_size
+            stats["memory_used_mb"] = self._current_memory / 1024 / 1024
+            stats["max_memory_mb"] = self.max_memory / 1024 / 1024
         return stats
 
     def reset_stats(self) -> None:
         """Reset statistics counters."""
-        self.stats = MLLMCacheStats()
+        with self._lock:
+            self.stats = MLLMCacheStats()
 
     def clear(self) -> None:
         """Clear all cached entries and reset stats."""
-        self._cache.clear()
-        self._current_memory = 0
-        self.reset_stats()
+        with self._lock:
+            self._cache.clear()
+            self._current_memory = 0
+            self.stats = MLLMCacheStats()
 
     def __len__(self) -> int:
         """Return number of cached entries."""

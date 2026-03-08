@@ -356,34 +356,39 @@ class TestMLLMBatchExtractContiguous:
 
 
 class TestEnsureBatchGeneratorCacheClearing:
-    """Test that _ensure_batch_generator clears all 3 cache modes."""
+    """Test that _ensure_batch_generator updates sampler in place (preserves caches)."""
 
-    def test_clears_paged_cache(self):
-        """Verify paged cache is cleared on generator rebuild."""
+    def test_updates_sampler_in_place(self):
+        """Verify sampler updated in place without cache invalidation."""
         import inspect
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
-        assert "block_aware_cache" in source
-        assert "block_aware_cache.clear" in source.replace(" ", "").replace("self.", "")
+        assert "batch_generator.sampler" in source, \
+            "Must update sampler in place on existing generator"
 
-    def test_clears_memory_aware_cache(self):
-        """Verify memory-aware cache is cleared on generator rebuild."""
+    def test_preserves_caches_on_param_change(self):
+        """Verify caches NOT cleared when sampling params change."""
         import inspect
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
-        assert "memory_aware_cache" in source
-        assert "memory_aware_cache.clear" in source.replace(" ", "").replace("self.", "")
+        # The old code had cache clearing; now it should NOT clear caches
+        # when only sampling params change (per-request samplers handle it)
+        assert "_current_sampler_params" in source, \
+            "Must track current sampler params"
 
-    def test_clears_legacy_prefix_cache(self):
-        """Verify legacy prefix cache is cleared on generator rebuild."""
+    def test_does_not_clear_caches_on_temp_change(self):
+        """Verify temperature change does NOT wipe all prefix caches."""
         import inspect
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._ensure_batch_generator)
-        assert "prefix_cache" in source
-        assert "prefix_cache.clear" in source.replace(" ", "").replace("self.", "")
+        # When generator already exists, should NOT close and recreate
+        lines = source.split('\n')
+        # Check that the in-place update path exists (batch_generator.sampler = ...)
+        has_inplace = any('batch_generator.sampler' in line for line in lines)
+        assert has_inplace, "Must have in-place sampler update path"
 
 
 # ============================================================

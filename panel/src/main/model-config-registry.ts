@@ -51,8 +51,8 @@ registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'nemotron', usePa
 registerFamily('qwen3-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 })
 registerFamily('qwen3-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 })
 registerFamily('qwen3', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 / QwQ', priority: 10 })
-registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 })
-registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
+registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 })
+registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
 registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
 
 // Llama
@@ -70,14 +70,14 @@ registerFamily('mistral', { cacheType: 'kv', toolParser: 'mistral', enableAutoTo
 // DeepSeek
 registerFamily('deepseek-vl', { cacheType: 'kv', toolParser: 'deepseek', isMultimodal: true, description: 'DeepSeek-VL vision-language', priority: 5 })
 registerFamily('deepseek-r1', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek R1', priority: 5 })
-registerFamily('deepseek-v3', { cacheType: 'kv', toolParser: 'deepseek', enableAutoToolChoice: true, description: 'DeepSeek V3', priority: 5 })
-registerFamily('deepseek-v2', { cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek V2', priority: 10 })
-registerFamily('deepseek', { cacheType: 'kv', toolParser: 'deepseek', description: 'DeepSeek', priority: 50 })
+registerFamily('deepseek-v3', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'DeepSeek V3', priority: 5 })
+registerFamily('deepseek-v2', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek V2', priority: 10 })
+registerFamily('deepseek', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek', priority: 50 })
 
 // GLM
 registerFamily('gpt-oss', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GPT-OSS (Harmony reasoning)', priority: 3 })
 registerFamily('glm47-flash', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GLM-4.7 Flash (reasoning)', priority: 3 })
-registerFamily('glm47', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'GLM-4.7 / GLM-Z1 (reasoning)', priority: 5 })
+registerFamily('glm47', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'GLM-Z1 (deepseek_r1 reasoning)', priority: 5 })
 registerFamily('glm4', { cacheType: 'kv', toolParser: 'glm47', enableAutoToolChoice: true, description: 'GLM-4 (tools only)', priority: 20 })
 
 // Gemma
@@ -334,7 +334,18 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         (typeof parsed.text_config?.max_position_embeddings === 'number' ? parsed.text_config.max_position_embeddings : undefined)
 
       if (modelType && MODEL_TYPE_TO_FAMILY[modelType]) {
-        const familyName = MODEL_TYPE_TO_FAMILY[modelType]
+        let familyName = MODEL_TYPE_TO_FAMILY[modelType]
+
+        // Name-based disambiguation for models sharing model_type:
+        // GLM-Z1 uses model_type "glm4" but needs deepseek_r1 reasoning (not plain glm4)
+        if (modelType === 'glm4' && /glm.?z1/i.test(modelPath)) {
+          familyName = 'glm47'
+        }
+        // MedGemma uses gemma2 model_type but is multimodal
+        if (modelType === 'gemma2' && /medgemma/i.test(modelPath)) {
+          familyName = 'medgemma'
+        }
+
         const config = CONFIG_BY_FAMILY.get(familyName)
         if (config) {
           const detected = configToDetected(familyName, config)

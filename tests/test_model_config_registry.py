@@ -469,25 +469,29 @@ class TestModelConfigs:
         config = self._lookup(registry, "Qwen/Qwen2.5-7B-Instruct", "qwen2")
         assert config.family_name == "qwen2"
         assert config.tool_parser == "qwen"
-        assert config.reasoning_parser == "qwen3"
+        assert config.reasoning_parser is None  # Qwen2 is NOT a reasoning model
+        assert config.think_in_template is False  # No <think> injection
         assert config.supports_native_tools is True
 
     def test_qwen2_moe_config(self, registry):
         config = self._lookup(registry, "Qwen/Qwen2-MoE-57B", "qwen2_moe")
         assert config.family_name == "qwen2"
         assert config.tool_parser == "qwen"
+        assert config.reasoning_parser is None
 
     def test_qwen2_vl_config(self, registry):
         config = self._lookup(registry, "Qwen/Qwen2-VL-7B-Instruct", "qwen2_vl")
         assert config.family_name == "qwen2_vl"
         assert config.is_mllm is True
         assert config.tool_parser == "qwen"
-        assert config.reasoning_parser == "qwen3"
+        assert config.reasoning_parser is None  # Qwen2-VL is NOT a reasoning model
+        assert config.think_in_template is False
 
     def test_qwen2_5_vl_config(self, registry):
         config = self._lookup(registry, "Qwen/Qwen2.5-VL-7B-Instruct", "qwen2_5_vl")
         assert config.family_name == "qwen2_vl"
         assert config.is_mllm is True
+        assert config.reasoning_parser is None
 
     def test_qwen_mamba_config(self, registry):
         config = self._lookup(registry, "Qwen/Qwen-Mamba-7B", "qwen_mamba")
@@ -514,6 +518,26 @@ class TestModelConfigs:
 
     def test_glm4_base_config(self, registry):
         """GLM-4 base (model_type glm4) falls to chatglm family."""
+        config = self._lookup(registry, "THUDM/GLM-4-9B", "glm4")
+        assert config.family_name == "chatglm"
+        assert config.reasoning_parser is None
+
+    def test_glm_z1_config(self, registry):
+        """GLM-Z1 uses model_type glm4 but should get deepseek_r1 reasoning via name match."""
+        config = self._lookup(registry, "zai-org/GLM-Z1-32B-0414", "glm4")
+        assert config.family_name == "glm_z1"
+        assert config.reasoning_parser == "deepseek_r1"
+        assert config.think_in_template is True
+        assert config.tool_parser == "glm47"
+
+    def test_glm_z1_9b_config(self, registry):
+        """GLM-Z1 9B variant also gets deepseek_r1."""
+        config = self._lookup(registry, "zai-org/GLM-Z1-9B-0414", "glm4")
+        assert config.family_name == "glm_z1"
+        assert config.reasoning_parser == "deepseek_r1"
+
+    def test_glm4_base_not_z1(self, registry):
+        """Plain GLM-4 (not Z1) should NOT get deepseek_r1."""
         config = self._lookup(registry, "THUDM/GLM-4-9B", "glm4")
         assert config.family_name == "chatglm"
         assert config.reasoning_parser is None
@@ -786,3 +810,40 @@ class TestModelConfigComprehensiveChecks:
             config = registry.lookup("THUDM/GLM-4-Flash")
         assert config.family_name == "glm4_moe"
         assert config.reasoning_parser == "openai_gptoss"
+
+    def test_qwen2_must_not_have_reasoning(self, registry):
+        """REGRESSION: Qwen2/2.5 are NOT reasoning models. Having reasoning_parser
+        or think_in_template=True causes the parser to treat ALL output as reasoning,
+        making responses invisible to the user (shown only in thinking panel)."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen2")):
+            config = registry.lookup("Qwen/Qwen2.5-72B-Instruct")
+        assert config.reasoning_parser is None, (
+            "Qwen2 must NOT have a reasoning parser — it would classify "
+            "all output as reasoning, hiding it from the user"
+        )
+        assert config.think_in_template is False, (
+            "Qwen2 must NOT have think_in_template=True — its template "
+            "does not inject <think> tags"
+        )
+
+    def test_qwen2_vl_must_not_have_reasoning(self, registry):
+        """REGRESSION: Qwen2-VL/2.5-VL are NOT reasoning models."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen2_vl")):
+            config = registry.lookup("Qwen/Qwen2-VL-72B-Instruct")
+        assert config.reasoning_parser is None
+        assert config.think_in_template is False
+
+    def test_qwen3_is_reasoning_but_qwen2_is_not(self, registry):
+        """Qwen3 IS a reasoning model, Qwen2 is NOT. They must differ."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3")):
+            q3 = registry.lookup("Qwen/Qwen3-8B")
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen2")):
+            q2 = registry.lookup("Qwen/Qwen2.5-7B")
+        assert q3.reasoning_parser == "qwen3"
+        assert q3.think_in_template is True
+        assert q2.reasoning_parser is None
+        assert q2.think_in_template is False

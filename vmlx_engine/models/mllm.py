@@ -494,8 +494,10 @@ def save_base64_image(base64_string: str) -> str:
     _base64_image_cache[image_hash] = path
 
     # Evict oldest entries if cache exceeds size limit
+    # M5: Also delete the temp file on eviction (not just the cache entry)
     while len(_base64_image_cache) > _BASE64_IMAGE_CACHE_MAX_SIZE:
-        _base64_image_cache.popitem(last=False)  # Remove oldest (FIFO order)
+        _, evicted_path = _base64_image_cache.popitem(last=False)
+        _temp_manager.cleanup(evicted_path)
 
     return path
 
@@ -746,12 +748,19 @@ class MLXMultimodalLM:
     def _prepare_images(self, images: list) -> list[str]:
         """Process image inputs and return local file paths."""
         processed = []
+        failed_count = 0
         for img in images:
             try:
                 path = process_image_input(img)
                 processed.append(path)
             except Exception as e:
+                failed_count += 1
                 logger.warning(f"Failed to process image: {e}")
+        if images and not processed:
+            raise ValueError(
+                f"All {failed_count} image(s) failed to process. "
+                f"Check image URLs/paths and try again."
+            )
         return processed
 
     def _prepare_video(
@@ -858,9 +867,21 @@ class MLXMultimodalLM:
                         elif item_type == "video":
                             videos.append(item.get("video", item.get("url", "")))
 
+                        elif item_type == "video_url":
+                            vid_url = item.get("video_url", {})
+                            if isinstance(vid_url, str):
+                                videos.append(vid_url)
+                            else:
+                                videos.append(vid_url.get("url", ""))
+
             # Build properly structured message for Qwen3-VL-MoE
             # Format: {"role": "...", "content": [{"type": "image"}, ..., {"type": "text", "text": "..."}]}
-            if msg_text or msg_image_count > 0:
+            # Preserve tool_calls on assistant messages and tool role fields
+            tool_calls = msg.get("tool_calls")
+            tool_call_id = msg.get("tool_call_id")
+            msg_name = msg.get("name")
+
+            if msg_text or msg_image_count > 0 or tool_calls or role == "tool":
                 if role == "user" and msg_image_count > 0:
                     content_list: list[dict] = []
                     for _ in range(msg_image_count):
@@ -870,7 +891,17 @@ class MLXMultimodalLM:
                     )
                     chat_messages.append({"role": role, "content": content_list})
                 elif role == "assistant":
-                    chat_messages.append({"role": role, "content": msg_text})
+                    out_msg: dict = {"role": role, "content": msg_text}
+                    if tool_calls:
+                        out_msg["tool_calls"] = tool_calls
+                    chat_messages.append(out_msg)
+                elif role == "tool":
+                    out_msg = {"role": role, "content": msg_text}
+                    if tool_call_id:
+                        out_msg["tool_call_id"] = tool_call_id
+                    if msg_name:
+                        out_msg["name"] = msg_name
+                    chat_messages.append(out_msg)
                 else:
                     chat_messages.append(
                         {
@@ -1036,6 +1067,15 @@ class MLXMultimodalLM:
             )
             logger.info(f"Added {len(frames)} frames from video: {video_path}")
 
+        # Guard against excessive total images (including video frames)
+        _max_images = kwargs.get("max_images_per_request", 20)
+        if len(all_images) > _max_images:
+            raise ValueError(
+                f"Total image count ({len(all_images)}, including video frames) "
+                f"exceeds limit of {_max_images}. Reduce images/videos or increase "
+                f"max_images_per_request."
+            )
+
         # Apply chat template if needed
         if all_images and hasattr(self.processor, "apply_chat_template"):
             try:
@@ -1055,11 +1095,25 @@ class MLXMultimodalLM:
         cache_hit = False
 
         if use_cache and self._cache_manager is not None and all_sources:
-            prompt_cache, cache_hit = self._cache_manager.fetch_cache(
-                all_sources, formatted_prompt
-            )
-            if cache_hit:
-                logger.info(f"MLLM cache hit for {len(all_sources)} source(s)")
+            try:
+                tokenizer = (
+                    self.processor.tokenizer
+                    if hasattr(self.processor, "tokenizer")
+                    else self.processor
+                )
+                token_ids = tokenizer.encode(formatted_prompt)
+                cache_entry, prefix_match_len = self._cache_manager.fetch(
+                    all_sources, formatted_prompt, token_ids
+                )
+                if cache_entry and cache_entry.kv_cache is not None:
+                    prompt_cache = cache_entry.kv_cache
+                    cache_hit = True
+                    logger.info(
+                        f"MLLM cache hit for {len(all_sources)} source(s)"
+                        + (f", {prefix_match_len} prefix tokens match" if prefix_match_len > 0 else "")
+                    )
+            except Exception as e:
+                logger.debug(f"Generate cache fetch failed: {e}")
 
         # Create new cache if needed
         if prompt_cache is None and self.model is not None:
@@ -1104,9 +1158,11 @@ class MLXMultimodalLM:
             prompt_tokens = 0
             generation_tokens = 0
 
+        finish_reason = "length" if generation_tokens >= max_tokens else "stop"
+
         return MLLMOutput(
             text=output_text,
-            finish_reason="stop",
+            finish_reason=finish_reason,
             prompt_tokens=prompt_tokens,
             completion_tokens=generation_tokens,
         )
@@ -1119,6 +1175,7 @@ class MLXMultimodalLM:
         max_tokens: int = 256,
         temperature: float = 0.7,
         video_fps: float = DEFAULT_FPS,
+        video_max_frames: int = MAX_FRAMES,
         **kwargs,
     ) -> Iterator[str]:
         """
@@ -1131,6 +1188,7 @@ class MLXMultimodalLM:
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
             video_fps: FPS for video frame extraction
+            video_max_frames: Maximum video frames to extract
             **kwargs: Additional parameters
 
         Yields:
@@ -1164,8 +1222,17 @@ class MLXMultimodalLM:
         if images:
             all_images.extend(self._prepare_images(images))
         for video_path in videos:
-            frames = self._prepare_video(video_path, fps=video_fps)
+            frames = self._prepare_video(video_path, fps=video_fps, max_frames=video_max_frames)
             all_images.extend(frames)
+
+        # Guard against excessive total images (including video frames)
+        _max_images = kwargs.get("max_images_per_request", 20)
+        if len(all_images) > _max_images:
+            raise ValueError(
+                f"Total image count ({len(all_images)}, including video frames) "
+                f"exceeds limit of {_max_images}. Reduce images/videos or increase "
+                f"max_images_per_request."
+            )
 
         # Apply chat template
         if all_images:
@@ -1240,6 +1307,15 @@ class MLXMultimodalLM:
             )
             all_images.extend(frames)
             logger.info(f"Added {len(frames)} frames from video: {video_path}")
+
+        # Guard against excessive total images (including video frames)
+        _max_images = kwargs.get("max_images_per_request", 20)
+        if len(all_images) > _max_images:
+            raise ValueError(
+                f"Total image count ({len(all_images)}, including video frames) "
+                f"exceeds limit of {_max_images}. Reduce images/videos or increase "
+                f"max_images_per_request."
+            )
 
         # Apply chat template
         logger.info(
@@ -1460,9 +1536,11 @@ class MLXMultimodalLM:
             prompt_tokens = 0
             generation_tokens = 0
 
+        finish_reason = "length" if generation_tokens >= max_tokens else "stop"
+
         return MLLMOutput(
             text=output_text,
-            finish_reason="stop",
+            finish_reason=finish_reason,
             prompt_tokens=prompt_tokens,
             completion_tokens=generation_tokens,
         )
@@ -1524,6 +1602,15 @@ class MLXMultimodalLM:
             )
             all_images.extend(frames)
 
+        # Guard against excessive total images (including video frames)
+        _max_images = kwargs.get("max_images_per_request", 20)
+        if len(all_images) > _max_images:
+            raise ValueError(
+                f"Total image count ({len(all_images)}, including video frames) "
+                f"exceeds limit of {_max_images}. Reduce images/videos or increase "
+                f"max_images_per_request."
+            )
+
         # Apply chat template
         enable_thinking = kwargs.pop("enable_thinking", None)
         formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
@@ -1536,11 +1623,28 @@ class MLXMultimodalLM:
         use_cache = kwargs.pop("use_cache", True)
 
         if use_cache and self._cache_manager is not None and all_images:
-            prompt_cache, cache_hit = self._cache_manager.fetch_cache(
-                all_images, formatted_prompt
-            )
-            if cache_hit:
-                logger.debug(f"Stream chat cache hit for {len(all_images)} image(s)")
+            try:
+                tokenizer = (
+                    self.processor.tokenizer
+                    if hasattr(self.processor, "tokenizer")
+                    else self.processor
+                )
+                token_ids = tokenizer.encode(formatted_prompt)
+                cache_entry, prefix_match_len = self._cache_manager.fetch(
+                    all_images, formatted_prompt, token_ids
+                )
+                if cache_entry and cache_entry.kv_cache is not None:
+                    prompt_cache = cache_entry.kv_cache
+                    cache_hit = True
+                    if prefix_match_len > 0:
+                        logger.debug(
+                            f"Stream chat prefix cache hit: {prefix_match_len} tokens, "
+                            f"{len(all_images)} image(s)"
+                        )
+                    else:
+                        logger.debug(f"Stream chat cache hit for {len(all_images)} image(s)")
+            except Exception as e:
+                logger.debug(f"Stream chat cache fetch failed: {e}")
 
         # Create new cache if needed
         if prompt_cache is None and self.model is not None:
@@ -1619,16 +1723,17 @@ class MLXMultimodalLM:
             logger.error(f"VLM stream_generate error: {type(e).__name__}: {e}")
             yield MLLMOutput(
                 text=f"\n\n[Generation error: {type(e).__name__}: {e}]",
-                finish_reason="error",
+                finish_reason="stop",
                 prompt_tokens=0,
                 completion_tokens=token_count,
             )
             return
 
         # Final yield with finish_reason
+        finish_reason = "length" if token_count >= max_tokens else "stop"
         yield MLLMOutput(
             text="",
-            finish_reason="stop",
+            finish_reason=finish_reason,
             prompt_tokens=last_prompt_tokens,
             completion_tokens=token_count,
         )

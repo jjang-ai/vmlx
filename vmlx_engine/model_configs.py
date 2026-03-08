@@ -161,8 +161,6 @@ def register_all(registry=None):
         cache_type="kv",
         eos_tokens=["<|im_end|>"],
         tool_parser="qwen",
-        reasoning_parser="qwen3",
-        think_in_template=True,
         supports_native_tools=True,
         priority=20,
     ))
@@ -173,8 +171,6 @@ def register_all(registry=None):
         cache_type="kv",
         eos_tokens=["<|im_end|>"],
         tool_parser="qwen",
-        reasoning_parser="qwen3",
-        think_in_template=True,
         is_mllm=True,
         priority=10,
     ))
@@ -297,6 +293,19 @@ def register_all(registry=None):
         priority=3,
     ))
 
+    # GLM-Z1: reasoning model using deepseek_r1 (shares model_type "glm4" with base GLM-4,
+    # but detected by name matching in lookup() — see model_config_registry.py)
+    _register(ModelConfig(
+        family_name="glm_z1",
+        model_types=[],  # No unique model_type — disambiguated by name in lookup()
+        cache_type="kv",
+        tool_parser="glm47",
+        reasoning_parser="deepseek_r1",
+        think_in_template=True,
+        chat_template_custom=HARMONY_CHAT_TEMPLATE,
+        priority=2,
+    ))
+
     # GLM-4 / ChatGLM: base model (tools only, no reasoning)
     _register(ModelConfig(
         family_name="chatglm",
@@ -357,6 +366,16 @@ def register_all(registry=None):
         model_types=["gemma", "gemma2"],
         cache_type="kv",
         priority=30,
+    ))
+
+    # MedGemma: multimodal medical model (uses gemma2 model_type,
+    # disambiguated by name matching in lookup())
+    _register(ModelConfig(
+        family_name="medgemma",
+        model_types=[],  # No unique model_type — uses gemma2, disambiguated by name
+        cache_type="kv",
+        is_mllm=True,
+        priority=3,
     ))
 
     _register(ModelConfig(

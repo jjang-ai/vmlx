@@ -528,12 +528,13 @@ export function registerModelHandlers(): void {
       processQueue()
     })
 
-    proc.on('error', (err: Error) => {
+    proc.on('error', async (err: Error) => {
       job.status = 'error'
       job.error = `Failed to start download: ${err.message}`
       activeJob = null
       job.process = undefined
       completedJobs.push(job)
+      try { await unlink(markerFile) } catch (_) { }
       emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: job.error })
       processQueue()
     })

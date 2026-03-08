@@ -229,6 +229,9 @@ class MLLMSchedulerConfig:
     # Hybrid SSM state cache size (companion cache for SSM layer states)
     ssm_state_cache_size: int = 50
 
+    # Maximum images per request (guard against Metal OOM from excessive images)
+    max_images_per_request: int = 20
+
 
 @dataclass
 class MLLMRequest:
@@ -365,6 +368,8 @@ class MLLMScheduler:
 
         # Thread-safe lock for wait/run queues since MLLM step() runs in background thread
         self._queue_lock = threading.RLock()
+        # Separate lock for batch generator next()/remove() to prevent abort race
+        self._batch_lock = threading.RLock()
 
         # Get model config
         self.model_config = getattr(model, "config", None)
@@ -413,8 +418,11 @@ class MLLMScheduler:
                     cache_dir = self.config.block_disk_cache_dir
                     if cache_dir is None and self.config.model_path:
                         import hashlib
+                        # Include quant config in hash to prevent cross-config cache poisoning
+                        quant_tag = self.config.kv_cache_quantization or "none"
+                        block_scope_key = f"{self.config.model_path}:quant={quant_tag}"
                         model_hash = hashlib.sha256(
-                            self.config.model_path.encode()
+                            block_scope_key.encode()
                         ).hexdigest()[:12]
                         cache_dir = os.path.join(
                             os.path.expanduser("~"),
@@ -504,8 +512,10 @@ class MLLMScheduler:
                 "~/.cache/vmlx-engine/prompt-cache"
             )
             if self.config.model_path:
+                quant_tag = self.config.kv_cache_quantization or "none"
+                scope_key = f"{self.config.model_path}:quant={quant_tag}"
                 model_hash = hashlib.sha256(
-                    self.config.model_path.encode()
+                    scope_key.encode()
                 ).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))
                 cache_dir = os.path.join(base_dir, f"{model_slug}_{model_hash}")
@@ -731,7 +741,7 @@ class MLLMScheduler:
         if not self._kv_cache_bits:
             return cache
         try:
-            from mlx_lm.models.cache import QuantizedKVCache
+            from mlx_lm.models.cache import KVCache, QuantizedKVCache
             import mlx.core as mx
         except ImportError:
             return cache
@@ -741,7 +751,8 @@ class MLLMScheduler:
         result = []
         for layer_cache in cache:
             if (
-                type(layer_cache).__name__ == 'KVCache'
+                isinstance(layer_cache, KVCache)
+                and not isinstance(layer_cache, QuantizedKVCache)
                 and layer_cache.keys is not None
             ):
                 try:
@@ -922,45 +933,22 @@ class MLLMScheduler:
 
         new_params = (temp, top_p, top_k, min_p, rep_penalty)
 
-        if (
-            self.batch_generator is not None
-            and self._current_sampler_params == new_params
-        ):
-            return
-
-        # Can't rebuild if there are active requests
-        if self.batch_generator is not None and self.running:
-            logger.warning(
-                "MLLM sampling parameters changed with active requests. "
-                "New requests will use new parameters after current batch completes."
-            )
-            return
-
-        # Close old generator to restore Metal wired/cache limits
         if self.batch_generator is not None:
-            try:
-                self.batch_generator.close()
-            except Exception:
-                pass
-
-        # Clear all caches when BatchGenerator changes — cache objects are
-        # tied to their generator instance
-        if self.batch_generator is not None:
-            if self.block_aware_cache is not None:
-                logger.debug(
-                    "Clearing paged cache: MLLM BatchGenerator being recreated"
+            if self._current_sampler_params != new_params:
+                # Sampling params changed — update the generator's default sampler
+                # in place instead of recreating. Per-request samplers (via
+                # _make_request_sampler) override this anyway, so this only
+                # affects requests without explicit sampling params.
+                # This avoids clearing all caches on temperature changes.
+                self.batch_generator.sampler = make_sampler(
+                    temp=temp, top_p=top_p, min_p=min_p, top_k=top_k
                 )
-                self.block_aware_cache.clear()
-            if self.memory_aware_cache is not None:
+                self._current_sampler_params = new_params
                 logger.debug(
-                    "Clearing memory-aware cache: MLLM BatchGenerator being recreated"
+                    f"Updated MLLM default sampler: temp={temp}, top_p={top_p}, "
+                    f"top_k={top_k}, min_p={min_p}"
                 )
-                self.memory_aware_cache.clear()
-            if self.prefix_cache is not None:
-                logger.debug(
-                    "Clearing legacy prefix cache: MLLM BatchGenerator being recreated"
-                )
-                self.prefix_cache.clear()
+            return
 
         sampler = make_sampler(temp=temp, top_p=top_p, min_p=min_p, top_k=top_k)
 
@@ -1020,6 +1008,14 @@ class MLLMScheduler:
         if request_id is None:
             request_id = str(uuid.uuid4())
 
+        # H2: Guard against excessive images causing Metal OOM
+        if images and len(images) > self.config.max_images_per_request:
+            raise ValueError(
+                f"Request contains {len(images)} images, exceeding the limit of "
+                f"{self.config.max_images_per_request}. Reduce image count or increase "
+                f"max_images_per_request in config."
+            )
+
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
             temperature=temperature,
@@ -1042,6 +1038,8 @@ class MLLMScheduler:
         )
 
         with self._queue_lock:
+            if request_id in self.requests:
+                raise ValueError(f"Request {request_id} already exists")
             self.requests[request_id] = request
             self.waiting.append(request)
 
@@ -1074,11 +1072,12 @@ class MLLMScheduler:
                 except ValueError:
                     pass
     
-            # Remove from batch generator
+            # Remove from batch generator (holds _batch_lock to prevent race with next())
             if request_id in self.request_id_to_uid:
                 uid = self.request_id_to_uid[request_id]
                 if self.batch_generator is not None:
-                    self.batch_generator.remove([uid])
+                    with self._batch_lock:
+                        self.batch_generator.remove([uid])
                 del self.uid_to_request_id[uid]
                 del self.request_id_to_uid[request_id]
     
@@ -1345,6 +1344,13 @@ class MLLMScheduler:
         MLLMRequest by _process_batch_responses() during step(). They are always
         set to None in a finally block after store to prevent memory leaks.
         """
+        # Snapshot stop tokens from requests that will survive this cleanup.
+        # This prevents reading from self.running during the loop (it's mutated per iteration).
+        _surviving_stops = set()
+        for rid, req in self.running.items():
+            if rid not in finished_ids:
+                _surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
+
         for request_id in finished_ids:
             request = self.running.get(request_id)
 
@@ -1465,18 +1471,15 @@ class MLLMScheduler:
                         if request is not None:
                             request._extracted_cache = None
 
-            # Remove per-request stop tokens from batch generator
+            # Remove per-request stop tokens from batch generator.
+            # Use _surviving_stops snapshot (captured before cleanup loop) to avoid
+            # reading from self.running which is mutated during the loop.
             if (
                 request is not None
                 and self.batch_generator is not None
                 and getattr(request, '_added_stop_tokens', None)
             ):
-                # Only remove tokens that no other running request also needs
-                other_stops = set()
-                for other_id, other_req in self.running.items():
-                    if other_id != request_id:
-                        other_stops.update(getattr(other_req, '_added_stop_tokens', set()))
-                removable = request._added_stop_tokens - other_stops - self.stop_tokens
+                removable = request._added_stop_tokens - _surviving_stops - self.stop_tokens
                 self.batch_generator.stop_tokens -= removable
 
             # Clean up streaming detokenizer
@@ -1542,10 +1545,11 @@ class MLLMScheduler:
             # Identify if we have running requests before releasing lock
             has_running = self.batch_generator is not None and len(self.running) > 0
 
-        # Run generation step if we have running requests (OUTSIDE LOCK)
+        # Run generation step if we have running requests (OUTSIDE QUEUE LOCK)
         if has_running:
             try:
-                responses = self.batch_generator.next()
+                with self._batch_lock:
+                    responses = self.batch_generator.next()
             except Exception as step_err:
                 # Cache corruption or GPU error — recover by clearing state
                 # and rescheduling (matching LLM scheduler pattern).
@@ -1575,7 +1579,7 @@ class MLLMScheduler:
                             retryable.append(req_id)
                         else:
                             # Permanent failure — send error response
-                            req.finish_reason = "error"
+                            req.finish_reason = "stop"
                             req.output_text = f"Generation failed: {step_err}"
                             failed.append(req_id)
                         self._cleanup_detokenizer(req_id)
@@ -1602,7 +1606,7 @@ class MLLMScheduler:
                                     request_id=req_id,
                                     output_text=f"Generation failed: {step_err}",
                                     finished=True,
-                                    finish_reason="error",
+                                    finish_reason="stop",
                                 ))
                         self._cleanup_finished(set(failed))
                         logger.error(
@@ -1694,7 +1698,7 @@ class MLLMScheduler:
                             request_id=req_id,
                             output_text=f"[Error: {error_msg}]",
                             finished=True,
-                            finish_reason="error",
+                            finish_reason="stop",
                         ))
                     except asyncio.QueueFull:
                         pass
@@ -1722,7 +1726,7 @@ class MLLMScheduler:
                             request_id=req_id,
                             output_text=f"[Error: {error_msg}]",
                             finished=True,
-                            finish_reason="error",
+                            finish_reason="stop",
                         ))
                     except asyncio.QueueFull:
                         pass
@@ -1933,7 +1937,7 @@ class MLLMScheduler:
                 request_id=request_id,
                 output_text="",
                 finished=True,
-                finish_reason="error",
+                finish_reason="stop",
             )
 
         # Cleanup

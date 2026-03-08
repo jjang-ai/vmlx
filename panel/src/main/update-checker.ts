@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { net } from 'electron'
 
-const LATEST_URL = 'https://raw.githubusercontent.com/vmlxllm/vmlx/main/latest.json'
+const LATEST_URL = 'https://raw.githubusercontent.com/vmlxllm/vmlx-releases/main/latest.json'
 const CHECK_DELAY_MS = 5000 // Wait 5s after startup before checking
 
 interface LatestRelease {
@@ -16,8 +16,8 @@ function compareVersions(current: string, latest: string): boolean {
   const a = clean(current).split('.').map(Number)
   const b = clean(latest).split('.').map(Number)
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const av = a[i] || 0
-    const bv = b[i] || 0
+    const av = a[i] ?? 0
+    const bv = b[i] ?? 0
     if (isNaN(av) || isNaN(bv)) return false
     if (bv > av) return true
     if (bv < av) return false

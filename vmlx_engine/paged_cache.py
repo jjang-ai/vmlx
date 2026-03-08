@@ -74,16 +74,12 @@ def compute_block_hash(
 
         def _hash_extra(obj):
             if isinstance(obj, mx.array):
-                # Hash MLX arrays by shape and a fast checksum of data
-                # to avoid slow full-array copies to CPU for hashing
+                # Hash MLX arrays by shape + actual content bytes for collision safety.
+                # np.array(obj) copies to CPU; for small vision embeddings this is acceptable.
+                import numpy as np
                 shape_bytes = bytes(str(obj.shape), "utf-8")
-                # For deterministic hashing of arrays, we sum them and hash the float
-                # In production, vision embeddings are typically deterministic if the same
-                # image/prompt pair is used.
-                sum_val = mx.sum(obj).item()
-                sum_bytes = bytes(str(sum_val), "utf-8")
                 hasher.update(shape_bytes)
-                hasher.update(sum_bytes)
+                hasher.update(np.array(obj).tobytes())
             elif isinstance(obj, dict):
                 for k in sorted(obj.keys()):
                     hasher.update(bytes(str(k), "utf-8"))

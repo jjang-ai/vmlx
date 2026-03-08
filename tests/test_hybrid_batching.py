@@ -545,5 +545,77 @@ class TestMLLMCacheStatsCompleteness:
         assert '"tokens_saved"' in source
 
 
+class TestEngineCoreAbortAttribute:
+    """Verify EngineCore.abort_request references _output_collectors (not _output_queues)."""
+
+    def test_abort_uses_output_collectors(self):
+        import inspect
+        from vmlx_engine.engine_core import EngineCore
+
+        source = inspect.getsource(EngineCore.abort_request)
+        assert "_output_collectors" in source, (
+            "abort_request must reference self._output_collectors, not _output_queues"
+        )
+        assert "_output_queues" not in source, (
+            "abort_request still references non-existent _output_queues attribute"
+        )
+
+
+class TestCacheEndpointAuth:
+    """Verify all /v1/cache/* endpoints require API key auth."""
+
+    def test_cache_endpoints_have_auth_dependency(self):
+        import inspect
+        from vmlx_engine import server
+
+        source = inspect.getsource(server)
+        # Find each cache endpoint decorator and verify it has verify_api_key
+        endpoints = [
+            "/v1/cache/stats",
+            "/v1/cache/entries",
+            "/v1/cache/warm",
+        ]
+        for endpoint in endpoints:
+            # Find the decorator line containing this endpoint
+            idx = source.find(f'"{endpoint}"')
+            assert idx >= 0, f"Endpoint {endpoint} not found in server.py"
+            # Check the surrounding decorator text (within 200 chars) for auth
+            context = source[max(0, idx - 200):idx + 100]
+            assert "verify_api_key" in context, (
+                f"Endpoint {endpoint} is missing verify_api_key dependency"
+            )
+
+        # DELETE /v1/cache
+        idx = source.find('"/v1/cache"')
+        assert idx >= 0
+        context = source[max(0, idx - 200):idx + 100]
+        assert "verify_api_key" in context, (
+            "DELETE /v1/cache is missing verify_api_key dependency"
+        )
+
+
+class TestStopSequenceThinkPositionMapping:
+    """Verify stop sequence position maps correctly when stop string
+    appears both inside <think> block AND in content."""
+
+    def test_stop_in_think_and_content_finds_content_occurrence(self):
+        """The stop string search should start after the last closed </think>
+        block so it finds the content occurrence, not the reasoning one."""
+        import inspect
+        from vmlx_engine.scheduler import Scheduler
+
+        source = inspect.getsource(Scheduler._process_batch_responses)
+        # Must search from after the last </think> end
+        assert "rfind('</think>')" in source, (
+            "Stop sequence mapping must use rfind('</think>') to skip past "
+            "reasoning blocks when mapping position back to full_text"
+        )
+        # Must NOT use bare full_text.find(stop_str) without offset
+        assert "full_text.find(stop_str)" not in source or "search_start" in source, (
+            "full_text.find(stop_str) must use a search_start offset "
+            "to avoid matching inside <think> blocks"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

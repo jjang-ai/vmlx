@@ -208,13 +208,18 @@ class TestSuppressReasoningDrop:
         assert "emit_reasoning = None" in source
         assert "emit_content = delta_msg.content" in source
 
-    def test_suppress_reasoning_tracks_for_tool_detection(self):
-        """Dropped reasoning should still be tracked for tool call detection."""
+    def test_suppress_reasoning_not_double_accumulated(self):
+        """Reasoning must NOT be added to accumulated_content (V3-H1 fix).
+        Tool-call markers in reasoning are detected via delta_msg.reasoning check,
+        not by polluting accumulated_content."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # accumulated_content += delta_msg.reasoning (for tool call detection)
-        assert "accumulated_content += delta_msg.reasoning" in source
+        # V3-H1: removed accumulated_content += delta_msg.reasoning to prevent
+        # reasoning text from polluting content and triggering false tool-call detection
+        assert "accumulated_content += delta_msg.reasoning" not in source
+        # Tool detection via reasoning is still done via delta_msg.reasoning check
+        assert "delta_msg.reasoning" in source
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

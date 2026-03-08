@@ -251,7 +251,7 @@ class EngineCore:
                 error_output = RequestOutput(
                     request_id=rid,
                     finished=True,
-                    finish_reason="error",
+                    finish_reason="stop",
                     new_text=f"\n\n[Engine error: {error_msg}]",
                 )
                 collector.put(error_output)
@@ -327,7 +327,7 @@ class EngineCore:
     async def abort_request(self, request_id: str) -> bool:
         """Abort a request. Returns True if the request was found."""
         # Check if request exists before cleanup
-        found = request_id in self._output_queues or request_id in self._finished_events
+        found = request_id in self._output_collectors or request_id in self._finished_events
         # _cleanup_request handles scheduler.abort_request() internally —
         # don't call it here too (was causing double abort)
         self._cleanup_request(request_id)
@@ -446,33 +446,34 @@ class EngineCore:
 
         # Wait for completion using event instead of streaming
         # This avoids the waiting_consumer tracking overhead
-        event = self._finished_events.get(request_id)
-        if event is None:
-            raise RuntimeError(f"No event for request {request_id}")
+        try:
+            event = self._finished_events.get(request_id)
+            if event is None:
+                raise RuntimeError(f"No event for request {request_id}")
 
-        # Wait for the request to finish
-        await event.wait()
+            # Wait for the request to finish
+            await event.wait()
 
-        # Get the final output from collector
-        collector = self._output_collectors.get(request_id)
-        if collector is None:
-            raise RuntimeError(f"No collector for request {request_id}")
+            # Get the final output from collector
+            collector = self._output_collectors.get(request_id)
+            if collector is None:
+                raise RuntimeError(f"No collector for request {request_id}")
 
-        # Drain all outputs and get the last one
-        final_output = None
-        while True:
-            output = collector.get_nowait()
-            if output is None:
-                break
-            final_output = output
+            # Drain all outputs and get the last one
+            final_output = None
+            while True:
+                output = collector.get_nowait()
+                if output is None:
+                    break
+                final_output = output
 
-        # Cleanup
-        self._cleanup_request(request_id)
+            if final_output is None:
+                raise RuntimeError(f"No output for request {request_id}")
 
-        if final_output is None:
-            raise RuntimeError(f"No output for request {request_id}")
-
-        return final_output
+            return final_output
+        finally:
+            # Always clean up request state to prevent permanent leaks
+            self._cleanup_request(request_id)
 
     def generate_batch_sync(
         self,

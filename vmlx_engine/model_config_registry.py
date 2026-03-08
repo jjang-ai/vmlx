@@ -135,6 +135,22 @@ class ModelConfigRegistry:
                 logger.warning(f"Could not load config.json for {model_name} to check model_type: {e}")
 
             if model_type:
+                # Name-based disambiguation for models sharing model_type:
+                # GLM-Z1 uses model_type "glm4" but needs deepseek_r1 reasoning
+                if model_type == "glm4" and re.search(r"glm.?z1", model_name, re.IGNORECASE):
+                    for config in self._configs:
+                        if config.family_name == "glm_z1":
+                            self._match_cache[model_name] = config
+                            return config
+                    logger.warning(f"GLM-Z1 model '{model_name}' detected but 'glm_z1' config not registered — falling back to generic glm4 config")
+
+                # MedGemma uses gemma2 model_type but is multimodal
+                if model_type == "gemma2" and re.search(r"medgemma", model_name, re.IGNORECASE):
+                    for config in self._configs:
+                        if config.family_name == "medgemma":
+                            self._match_cache[model_name] = config
+                            return config
+
                 for config in self._configs:
                     if model_type in config.model_types:
                         self._match_cache[model_name] = config
@@ -189,6 +205,7 @@ class ModelConfigRegistry:
 
 
 _configs_loaded = False
+_configs_lock = threading.Lock()
 
 
 def get_model_config_registry() -> ModelConfigRegistry:
@@ -196,10 +213,12 @@ def get_model_config_registry() -> ModelConfigRegistry:
     global _configs_loaded
     registry = ModelConfigRegistry()
     if not _configs_loaded:
-        _configs_loaded = True
-        try:
-            from .model_configs import register_all
-            register_all(registry)
-        except ImportError:
-            pass
+        with _configs_lock:
+            if not _configs_loaded:
+                try:
+                    from .model_configs import register_all
+                    register_all(registry)
+                    _configs_loaded = True
+                except ImportError:
+                    _configs_loaded = True  # No module = nothing to register
     return registry
