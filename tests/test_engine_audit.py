@@ -307,11 +307,13 @@ class TestModelConfigRegistryLookup:
         assert config.reasoning_parser == "deepseek_r1"
 
     def test_lookup_qwen3_5(self):
+        """qwen3_5 model_type is shared between text and VL variants.
+        Registry is_mllm must be False — VLM detection relies on config.json vision_config."""
         from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "qwen3_5")
         assert config is not None
-        assert config.is_mllm is True
+        assert config.is_mllm is False
 
     def test_lookup_unknown_type_returns_none(self):
         from vmlx_engine.model_config_registry import get_model_config_registry

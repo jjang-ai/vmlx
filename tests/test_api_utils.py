@@ -11,7 +11,6 @@ from vmlx_engine.api.utils import (
     extract_multimodal_content,
     is_mllm_model,
     is_vlm_model,
-    MLLM_PATTERNS,
     SPECIAL_TOKENS_PATTERN,
 )
 from vmlx_engine.api.models import Message, ContentPart, ImageUrl
@@ -126,70 +125,60 @@ class TestSpecialTokensPattern:
 
 
 class TestIsMllmModel:
-    """Tests for is_mllm_model function."""
+    """Tests for is_mllm_model function.
 
-    def test_qwen_vl_models(self):
-        assert is_mllm_model("mlx-community/Qwen3-VL-4B-Instruct-3bit") is True
-        assert is_mllm_model("mlx-community/Qwen2-VL-7B-Instruct-4bit") is True
+    VLM detection uses config.json vision_config (for local models) and
+    model config registry (for known model_types). No regex fallback —
+    users can force VLM mode via session settings / --is-mllm flag.
+    """
 
-    def test_llava_models(self):
-        assert is_mllm_model("mlx-community/llava-1.5-7b-4bit") is True
-        assert is_mllm_model("mlx-community/LLaVA-NeXT-7b") is True
+    def test_force_mllm_always_true(self):
+        assert is_mllm_model("any-model-name", force_mllm=True) is True
+        assert is_mllm_model("nonexistent/path", force_mllm=True) is True
 
-    def test_idefics_models(self):
-        assert is_mllm_model("mlx-community/Idefics3-8B-Llama3-4bit") is True
-        assert is_mllm_model("mlx-community/idefics2-8b-4bit") is True
+    def test_local_model_with_vision_config(self, tmp_path):
+        import json
+        config = {"model_type": "qwen3_5", "vision_config": {"hidden_size": 1024}}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert is_mllm_model(str(tmp_path)) is True
 
-    def test_paligemma_models(self):
-        assert is_mllm_model("mlx-community/paligemma2-3b-mix-224-4bit") is True
-        assert is_mllm_model("mlx-community/PaliGemma-3b-mix") is True
+    def test_local_model_without_vision_config(self, tmp_path):
+        import json
+        config = {"model_type": "llama", "hidden_size": 4096}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert is_mllm_model(str(tmp_path)) is False
 
-    def test_gemma3_models(self):
-        assert is_mllm_model("mlx-community/gemma-3-12b-it-4bit") is True
-        assert is_mllm_model("mlx-community/gemma3-4b-it-4bit") is True
+    def test_local_qwen3_5_text_model(self, tmp_path):
+        """qwen3_5 model_type WITHOUT vision_config should NOT be VLM."""
+        import json
+        config = {"model_type": "qwen3_5", "hidden_size": 4096}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert is_mllm_model(str(tmp_path)) is False
 
-    def test_medgemma_models(self):
-        assert is_mllm_model("mlx-community/MedGemma-4b-it-4bit") is True
-        assert is_mllm_model("mlx-community/medgemma-4b") is True
+    def test_local_qwen3_5_vl_model(self, tmp_path):
+        """qwen3_5 model_type WITH vision_config SHOULD be VLM."""
+        import json
+        config = {"model_type": "qwen3_5", "vision_config": {"hidden_size": 1024}}
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        assert is_mllm_model(str(tmp_path)) is True
 
-    def test_pixtral_models(self):
-        assert is_mllm_model("mlx-community/pixtral-12b-4bit") is True
-        assert is_mllm_model("mlx-community/Pixtral-12b-8bit") is True
-
-    def test_molmo_models(self):
-        assert is_mllm_model("mlx-community/Molmo-7B-D-0924-4bit") is True
-        assert is_mllm_model("mlx-community/molmo-7b") is True
-
-    def test_phi3_vision(self):
-        assert is_mllm_model("mlx-community/phi3-vision-128k") is True
-        assert is_mllm_model("mlx-community/phi-3-vision-128k-instruct-4bit") is True
-
-    def test_cogvlm(self):
-        assert is_mllm_model("mlx-community/CogVLM-chat-hf") is True
-        assert is_mllm_model("mlx-community/cogvlm-chat-hf") is True
-
-    def test_internvl(self):
-        assert is_mllm_model("mlx-community/InternVL2-8B") is True
-
-    def test_deepseek_vl(self):
-        assert is_mllm_model("mlx-community/deepseek-vl-7b-chat-4bit") is True
-        assert is_mllm_model("mlx-community/DeepSeek-VL2-small-4bit") is True
+    def test_remote_model_name_returns_false(self):
+        """Remote HF names without local config.json default to non-VLM.
+        Users must force VLM mode via session settings."""
+        assert is_mllm_model("mlx-community/Qwen3-VL-4B-Instruct-3bit") is False
+        assert is_mllm_model("mlx-community/llava-1.5-7b-4bit") is False
 
     def test_non_mllm_models(self):
         assert is_mllm_model("mlx-community/Llama-3.2-3B-Instruct-4bit") is False
-        assert is_mllm_model("mlx-community/Qwen3-8B-4bit") is False
-        assert is_mllm_model("mlx-community/Mistral-7B-Instruct-v0.3-4bit") is False
-        assert is_mllm_model("mlx-community/DeepSeek-R1-Distill-Qwen-7B") is False
-
-    def test_case_insensitive(self):
-        assert is_mllm_model("LLAVA-7B") is True
-        assert is_mllm_model("pixtral-12b") is True
+        assert is_mllm_model("nonexistent-model") is False
 
     def test_backwards_compatibility_alias(self):
         assert is_vlm_model is is_mllm_model
 
-    def test_all_patterns_defined(self):
-        assert len(MLLM_PATTERNS) > 20
+    def test_malformed_config_json(self, tmp_path):
+        """Malformed config.json should fall through gracefully."""
+        (tmp_path / "config.json").write_text("not valid json")
+        assert is_mllm_model(str(tmp_path)) is False
 
 
 class TestExtractMultimodalContent:

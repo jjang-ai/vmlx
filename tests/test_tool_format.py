@@ -441,17 +441,19 @@ class TestModelConfigRegistryFlags:
                 )
 
     def test_is_mllm_flag_on_vl_models(self):
-        """VL model configs should have is_mllm=True."""
+        """Dedicated VL model configs should have is_mllm=True.
+        Shared model_types (qwen3_5) use config.json vision_config instead."""
         from vmlx_engine.model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
-        vl_types = ["qwen3_vl", "qwen3_5"]
-        for vl_type in vl_types:
-            config = self._find_by_model_type(registry, vl_type)
-            if config is not None:
-                assert config.is_mllm is True, (
-                    f"{config.family_name} ({vl_type}) should have is_mllm=True"
-                )
+        # Only dedicated VL model_types
+        config = self._find_by_model_type(registry, "qwen3_vl")
+        if config is not None:
+            assert config.is_mllm is True
+        # Shared model_types must NOT have is_mllm=True
+        config = self._find_by_model_type(registry, "qwen3_5")
+        if config is not None:
+            assert config.is_mllm is False
 
 
 # ─── Audio Model Defaults ───────────────────────────────────────────────────

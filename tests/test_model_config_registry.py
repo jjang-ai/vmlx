@@ -437,18 +437,21 @@ class TestModelConfigs:
     # ── Additional Qwen family coverage ──
 
     def test_qwen3_5_config(self, registry):
+        """qwen3_5 is shared between text and VL. Registry is_mllm=False;
+        VLM detection relies on config.json vision_config."""
         config = self._lookup(registry, "Qwen/Qwen3.5-VL-9B", "qwen3_5")
         assert config.family_name == "qwen3_5"
-        assert config.is_mllm is True
+        assert config.is_mllm is False
         assert config.tool_parser == "qwen"
         assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is True
         assert config.eos_tokens == ["<|im_end|>"]
 
     def test_qwen3_5_moe_config(self, registry):
+        """qwen3_5_moe is shared between text and VL. Registry is_mllm=False."""
         config = self._lookup(registry, "Qwen/Qwen3.5-MoE-VL-38B", "qwen3_5_moe")
         assert config.family_name == "qwen3_5_moe"
-        assert config.is_mllm is True
+        assert config.is_mllm is False
         assert config.reasoning_parser == "qwen3"
 
     def test_qwen3_moe_config(self, registry):
@@ -745,12 +748,15 @@ class TestModelConfigComprehensiveChecks:
                 )
 
     def test_mllm_models_comprehensive(self, registry):
-        """All known VLM/MLLM model families must have is_mllm=True."""
+        """Known VLM/MLLM families with dedicated model_types must have is_mllm=True.
+        Families with shared model_types (qwen3_5, qwen3_5_moe) use config.json
+        vision_config for VLM detection instead of registry is_mllm."""
         mllm_families = {
             c.family_name for c in registry._configs if c.is_mllm
         }
+        # Only families with DEDICATED VLM model_types (not shared with text variants)
         expected_mllm = {
-            "qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen2_vl",
+            "qwen3_vl", "qwen2_vl",
             "pixtral", "deepseek_vl", "gemma3", "paligemma",
             "phi4_multimodal", "phi3_v", "llava", "idefics",
             "cogvlm", "florence", "molmo", "minicpm_v", "smolvlm",
@@ -759,6 +765,13 @@ class TestModelConfigComprehensiveChecks:
         for family in expected_mllm:
             assert family in mllm_families, (
                 f"Expected {family} to be MLLM but is_mllm is False"
+            )
+        # Shared model_types must NOT have is_mllm=True in registry
+        shared_families = {"qwen3_5", "qwen3_5_moe"}
+        for family in shared_families:
+            assert family not in mllm_families, (
+                f"{family} shares model_type with text variants — "
+                f"is_mllm must be False (use config.json vision_config)"
             )
 
     def test_no_duplicate_model_types(self, registry):
