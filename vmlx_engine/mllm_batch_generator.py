@@ -1228,6 +1228,7 @@ class MLLMBatchGenerator:
                                         has_images = img_token_id is not None and img_token_id in remaining
                                         if has_images:
                                             req.prompt_cache = None
+                                            req._cached_tokens = 0  # reset — full prefill needed
                                             logger.info(
                                                 f"VLM prefix cache HIT for {req.request_id}: "
                                                 f"{block_table.num_tokens} cached tokens, "
