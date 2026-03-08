@@ -1056,8 +1056,9 @@ class MLLMBatchGenerator:
             Logits from the forward pass
         """
         kwargs = dict(request.extra_kwargs)
-        if request.pixel_values is not None:
-            kwargs["pixel_values"] = request.pixel_values
+        # Always pass pixel_values — some VLM models (Mistral3/Pixtral, Gemma 3)
+        # require it as a positional argument even for text-only requests.
+        kwargs["pixel_values"] = request.pixel_values
         if request.attention_mask is not None:
             # VLM models use "mask" parameter (not "attention_mask")
             kwargs["mask"] = request.attention_mask
