@@ -2189,7 +2189,7 @@ async def create_response(
         if json_instruction:
             messages = _inject_json_instruction(messages, json_instruction)
     elif hasattr(request.text, "type") and request.text.type != "text":
-        text_dict = request.text.model_dump() if hasattr(request.text, "model_dump") else {"type": request.text.type}
+        text_dict = request.text.model_dump(exclude_none=True) if hasattr(request.text, "model_dump") else {"type": request.text.type}
         json_instruction = build_json_system_prompt(text_dict)
         if json_instruction:
             messages = _inject_json_instruction(messages, json_instruction)
@@ -2397,6 +2397,8 @@ async def create_response(
 
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
     _text_format = request.text if hasattr(request, "text") else None
+    if _text_format and hasattr(_text_format, 'model_dump'):
+        _text_format = _text_format.model_dump(exclude_none=True)
     if _text_format and isinstance(_text_format, dict) and _text_format.get("type") not in (None, "text") and not tool_calls:
         # Build a response_format-compatible dict for parse_json_output
         _rf_type = _text_format.get("type", "")
@@ -3640,6 +3642,9 @@ async def stream_responses_api(
 
     # H4: Validate text format (json_schema/json_object) at end of stream.
     _text_fmt = getattr(request, 'text', None)
+    # Convert Pydantic model to dict for uniform access
+    if _text_fmt and hasattr(_text_fmt, 'model_dump'):
+        _text_fmt = _text_fmt.model_dump(exclude_none=True)
     if _text_fmt and isinstance(_text_fmt, dict) and _text_fmt.get("type") not in (None, "text"):
         _rf_type = _text_fmt.get("type", "")
         _FALLBACK_MSG = "[Model produced no response. Check server logs for details.]"
