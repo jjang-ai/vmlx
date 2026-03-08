@@ -4,7 +4,7 @@ import { readFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerSessionHandlers } from './ipc/sessions'
 import { registerChatHandlers } from './ipc/chat'
-import { registerModelHandlers } from './ipc/models'
+import { registerModelHandlers, killActiveDownload } from './ipc/models'
 import { registerVllmHandlers } from './ipc/vllm'
 import { registerAudioHandlers } from './ipc/audio'
 import { registerCacheHandlers } from './ipc/cache'
@@ -293,6 +293,7 @@ app.on('before-quit', async (e) => {
   e.preventDefault()
   try {
     sessionManager.stopGlobalMonitor()
+    killActiveDownload()  // Kill any active download subprocess
     // B15: Timeout stopAll to prevent app from hanging on quit
     await Promise.race([
       sessionManager.stopAll(),

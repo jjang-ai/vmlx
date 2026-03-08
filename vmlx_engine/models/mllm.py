@@ -831,7 +831,9 @@ class MLXMultimodalLM:
                     if hasattr(item, "model_dump"):
                         item = item.model_dump(exclude_none=True)
                     elif hasattr(item, "dict"):
-                        item = item.model_dump()
+                        item = item.dict()
+                        # Remove None values to match exclude_none behavior
+                        item = {k: v for k, v in item.items() if v is not None}
 
                     if isinstance(item, dict):
                         item_type = item.get("type", "")
