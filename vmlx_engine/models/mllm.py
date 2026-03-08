@@ -730,7 +730,12 @@ class MLXMultimodalLM:
 
             logger.info(f"Loading MLLM: {self.model_name}")
 
-            self.model, self.processor = load(self.model_name)
+            # Suppress torchvision warning — bundled Python doesn't include torch/torchvision
+            # (too large ~2GB). The slow PIL-based image processor works correctly.
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
+                self.model, self.processor = load(self.model_name)
             self.config = load_config(self.model_name)
 
             self._loaded = True
