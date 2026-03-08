@@ -730,12 +730,21 @@ class MLXMultimodalLM:
 
             logger.info(f"Loading MLLM: {self.model_name}")
 
-            # Suppress torchvision warning — bundled Python doesn't include torch/torchvision
-            # (too large ~2GB). The slow PIL-based image processor works correctly.
+            # Bundled Python doesn't include torch/torchvision (~2GB). Suppress warnings
+            # and patch video processor loading for models that require torchvision
+            # (e.g. Qwen3.5-VL which has a video_processor sub-component).
             import warnings
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
-                self.model, self.processor = load(self.model_name)
+                try:
+                    self.model, self.processor = load(self.model_name)
+                except ValueError as e:
+                    if "torchvision" in str(e):
+                        logger.info("Patching video processor (torchvision not available)")
+                        self._patch_video_processor()
+                        self.model, self.processor = load(self.model_name)
+                    else:
+                        raise
             self.config = load_config(self.model_name)
 
             self._loaded = True
@@ -749,6 +758,33 @@ class MLXMultimodalLM:
         except Exception as e:
             logger.error(f"Failed to load MLLM: {e}")
             raise
+
+    @staticmethod
+    def _patch_video_processor():
+        """Patch AutoVideoProcessor to skip torchvision requirement.
+
+        Some VLM models (Qwen3.5-VL) include a video_processor sub-component that
+        requires torchvision. Since we only do image inference and torchvision requires
+        torch (~2GB), we patch the processor to load without it.
+        """
+        try:
+            from transformers.models.auto import video_processing_auto
+
+            _orig_from_pretrained = video_processing_auto.AutoVideoProcessor.from_pretrained
+
+            @classmethod  # type: ignore[misc]
+            def _patched_from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
+                try:
+                    return _orig_from_pretrained.__func__(cls, pretrained_model_name_or_path, *args, **kwargs)
+                except (ValueError, ImportError) as e:
+                    if "torchvision" in str(e):
+                        logger.info("Video processor skipped (torchvision not available) — image-only mode")
+                        return None
+                    raise
+
+            video_processing_auto.AutoVideoProcessor.from_pretrained = _patched_from_pretrained
+        except Exception:
+            pass  # If transformers internals changed, let the original error propagate
 
     def _prepare_images(self, images: list) -> list[str]:
         """Process image inputs and return local file paths."""
