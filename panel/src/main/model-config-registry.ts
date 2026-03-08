@@ -45,8 +45,10 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'pattern' 
 }
 
 // Qwen
-registerFamily('qwen3.5-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3.5 Vision-Language (dense)', priority: 4 })
-registerFamily('qwen3.5-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3.5 MoE Vision-Language', priority: 4 })
+// Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
+// relies on config.json vision_config, not the family's isMultimodal flag.
+registerFamily('qwen3.5', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 (dense)', priority: 4 })
+registerFamily('qwen3.5-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 MoE', priority: 4 })
 registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'nemotron', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 })
 registerFamily('qwen3-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 })
 registerFamily('qwen3-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 })
@@ -175,7 +177,7 @@ registerFamily('rwkv', { cacheType: 'mamba', usePagedCache: true, description: '
  */
 const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Qwen family ──
-  'qwen3_5': 'qwen3.5-vl',
+  'qwen3_5': 'qwen3.5',
   'qwen3_5_moe': 'qwen3.5-moe',
   'qwen3': 'qwen3',
   'qwen3_next': 'qwen3-next',
@@ -350,13 +352,20 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         if (config) {
           const detected = configToDetected(familyName, config)
           detected.maxContextLength = maxContextLength
+          // Authoritative VLM detection: vision_config in config.json overrides family default
+          if ('vision_config' in parsed) {
+            detected.isMultimodal = true
+          }
           return detected
         }
       }
 
-      // Even if model_type isn't recognized, still return context length
+      // Even if model_type isn't recognized, still return context length + VLM detection
       const fallback = { ...DEFAULT_CONFIG }
       if (maxContextLength) fallback.maxContextLength = maxContextLength
+      if ('vision_config' in parsed) {
+        fallback.isMultimodal = true
+      }
       return fallback
     }
   } catch (_) {

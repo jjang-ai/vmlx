@@ -51,48 +51,17 @@ def clean_output_text(text: str) -> str:
 # Model Detection
 # =============================================================================
 
-# Regex patterns for detecting MLLM/VLM models by name.
-# Used as a fallback when config.json and model registry are unavailable
-# (e.g., remote HuggingFace model names without local config).
-MLLM_PATTERNS = [
-    r"qwen.*vl",
-    r"qwen3_5",
-    r"llava",
-    r"idefics",
-    r"paligemma",
-    r"gemma.?3(?!_text)",  # gemma3 but not gemma3_text
-    r"medgemma",
-    r"pixtral",
-    r"molmo",
-    r"phi.?3.?vision",
-    r"phi4mm",
-    r"cogvlm",
-    r"internvl",
-    r"deepseek.?vl",
-    r"florence",
-    r"minicpm.?v",
-    r"smolvlm",
-    r"step1v",
-    r"internlm.?xcomposer",
-    r"bunny",
-    r"fuyu",
-    r"kosmos",
-    r"blip",
-    r"minigpt",
-    r"glm.?4v",
-]
-
-_MLLM_PATTERN_RE = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-
 
 def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
     Check if model is a multimodal language model.
 
-    Primary check: force_mllm flag (highest priority)
+    Primary check: force_mllm flag (highest priority, from --is-mllm / user setting)
     Secondary check: reads the model's config.json for vision_config presence.
     Tertiary: uses the model config registry.
-    Fallback: regex pattern matching on model name.
+
+    No regex fallback — users can force VLM mode via session settings if
+    auto-detection fails for custom/renamed models.
 
     Args:
         model_name: HuggingFace model name or local path
@@ -107,13 +76,16 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     import json
     import os
 
-    # Primary: check config.json for vision_config (authoritative)
+    # Primary: check config.json for vision_config (authoritative for local models)
     config_path = os.path.join(model_name, "config.json")
     if os.path.isfile(config_path):
         try:
             with open(config_path, "r") as f:
                 config = json.load(f)
-            return "vision_config" in config
+            if "vision_config" in config:
+                return True
+            # vision_config not found — fall through to registry
+            # (some models use different keys or the registry may know better)
         except Exception:
             pass  # Fall through to registry
 
@@ -126,10 +98,9 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         if config.family_name != "unknown":
             return config.is_mllm
     except Exception:
-        pass  # Fall through to pattern matching
+        pass
 
-    # Fallback: regex pattern matching on model name
-    return bool(_MLLM_PATTERN_RE.search(model_name))
+    return False
 
 
 # Backwards compatibility alias

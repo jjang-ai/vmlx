@@ -86,6 +86,9 @@ def register_all(registry=None):
 
     # ── Qwen family ──
 
+    # Note: qwen3_5 / qwen3_5_moe model_types are shared between text and VL variants.
+    # VL detection relies on config.json vision_config presence (authoritative check),
+    # NOT the registry's is_mllm flag. Keep is_mllm=False here.
     _register(ModelConfig(
         family_name="qwen3_5",
         model_types=["qwen3_5"],
@@ -94,7 +97,7 @@ def register_all(registry=None):
         tool_parser="qwen",
         reasoning_parser="qwen3",
         think_in_template=True,
-        is_mllm=True,
+        is_mllm=False,
         priority=4,
     ))
 
@@ -106,7 +109,7 @@ def register_all(registry=None):
         tool_parser="qwen",
         reasoning_parser="qwen3",
         think_in_template=True,
-        is_mllm=True,
+        is_mllm=False,
         priority=4,
     ))
 
