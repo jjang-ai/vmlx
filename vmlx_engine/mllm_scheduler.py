@@ -1879,15 +1879,20 @@ class MLLMScheduler:
         if output_queue is None:
             return
 
-        while True:
-            output = await output_queue.get()
-            if output is None:
-                break
-            yield output
-
-        # Cleanup queue
-        if request_id in self.output_queues:
-            del self.output_queues[request_id]
+        try:
+            while True:
+                output = await output_queue.get()
+                if output is None:
+                    break
+                yield output
+        finally:
+            # Cleanup queue — runs on normal exit AND GeneratorExit (client disconnect)
+            if request_id in self.output_queues:
+                del self.output_queues[request_id]
+            # If the request is still running (client disconnected mid-stream),
+            # abort it so the slot is freed
+            if request_id in self.running:
+                self.abort_request(request_id)
 
     async def generate(
         self,

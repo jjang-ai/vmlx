@@ -208,6 +208,12 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
   return models
 }
 
+/** Kill active download subprocess — call on app quit to prevent orphans */
+let _killActiveDownload: (() => void) | null = null
+export function killActiveDownload(): void {
+  _killActiveDownload?.()
+}
+
 export function registerModelHandlers(): void {
   // Scan for available models in all configured directories
   ipcMain.handle('models:scan', async () => {
@@ -358,6 +364,14 @@ export function registerModelHandlers(): void {
   let activeJob: DownloadJob | null = null
   const completedJobs: DownloadJob[] = []
 
+  // Expose kill function for app quit cleanup
+  _killActiveDownload = () => {
+    if (activeJob?.process) {
+      console.log(`[DOWNLOADS] Killing active download on quit: ${activeJob.repoId}`)
+      try { activeJob.process.kill('SIGKILL') } catch (_) { }
+    }
+  }
+
   /** Parse HuggingFace tqdm progress from stderr */
   function parseTqdmProgress(line: string): Partial<DownloadProgress> {
     const result: Partial<DownloadProgress> = { raw: line.trim() }
@@ -473,6 +487,7 @@ export function registerModelHandlers(): void {
       console.log(`[DOWNLOADS] Process exited: ${job.repoId} code=${code} cancelled=${job.wasCancelled}`)
 
       if (job.wasCancelled) {
+        try { await unlink(markerFile) } catch (_) { }
         job.status = 'cancelled'
         emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
       } else if (code === 0) {
@@ -486,6 +501,7 @@ export function registerModelHandlers(): void {
           if (lines.length > 0) {
             const result = JSON.parse(lines[lines.length - 1])
             if (result.status === 'cancelled') {
+              try { await unlink(markerFile) } catch (_) { }
               job.status = 'cancelled'
               emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
               activeJob = null

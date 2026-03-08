@@ -807,7 +807,7 @@ def _get_scheduler():
     return None
 
 
-@app.get("/v1/cache/stats")
+@app.get("/v1/cache/stats", dependencies=[Depends(verify_api_key)])
 async def cache_stats():
     """Get cache statistics for debugging and monitoring."""
     result = {}
@@ -880,7 +880,7 @@ async def cache_stats():
     return result
 
 
-@app.get("/v1/cache/entries")
+@app.get("/v1/cache/entries", dependencies=[Depends(verify_api_key)])
 async def cache_entries():
     """List cached prefix entries with metadata."""
     scheduler = _get_scheduler()
@@ -925,7 +925,7 @@ async def cache_entries():
     }
 
 
-@app.post("/v1/cache/warm")
+@app.post("/v1/cache/warm", dependencies=[Depends(verify_api_key)])
 async def cache_warm(request: dict):
     """
     Warm the prefix cache by pre-computing KV states for given prompts.
@@ -997,7 +997,7 @@ async def cache_warm(request: dict):
     return await asyncio.to_thread(_do_warm)
 
 
-@app.delete("/v1/cache")
+@app.delete("/v1/cache", dependencies=[Depends(verify_api_key)])
 async def clear_cache(cache_type: str = Query("all", alias="type")):
     """
     Clear caches.
@@ -2439,6 +2439,8 @@ async def stream_completions_multi(
     created = int(time.time())
 
     for prompt_index, prompt in enumerate(prompts):
+        # Per-prompt request_id so abort targets the correct engine request
+        prompt_request_id = f"{response_id}-{prompt_index}"
         try:
             gen_kwargs: dict = {
                 "prompt": prompt,
@@ -2446,6 +2448,7 @@ async def stream_completions_multi(
                 "temperature": _resolve_temperature(request.temperature),
                 "top_p": _resolve_top_p(request.top_p),
                 "stop": request.stop,
+                "request_id": prompt_request_id,
             }
             if request.top_k is not None:
                 gen_kwargs["top_k"] = request.top_k
@@ -2473,7 +2476,7 @@ async def stream_completions_multi(
         except Exception as e:
             logger.error(f"Stream error for {response_id}: {e}", exc_info=True)
             if hasattr(engine, "abort_request"):
-                await engine.abort_request(response_id)
+                await engine.abort_request(prompt_request_id)
             error_data = {
                 "id": response_id,
                 "object": "text_completion",
@@ -2623,6 +2626,7 @@ async def stream_chat_completion(
     # the buffer for tool calls and emit them as proper tool_calls chunks.
     tool_call_buffering = False  # Are we currently buffering for tool calls?
     tool_call_buffering_notified = False  # Have we sent the buffering signal?
+    _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
     tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None) and not _suppress_tools
 
     # Track token counts for usage reporting
@@ -3085,6 +3089,7 @@ async def stream_responses_api(
     accumulated_content = ""  # Content-only text for tool call marker detection
     accumulated_reasoning = ""  # Reasoning text for fallback
     content_was_emitted = False
+    reasoning_was_streamed = False  # Whether reasoning was sent to client as deltas
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
@@ -3200,12 +3205,15 @@ async def stream_responses_api(
                             if suppress_reasoning:
                                 emit_content = delta_msg.content  # Only actual content after </think>
                                 emit_reasoning = None
+                                if delta_msg.reasoning:
+                                    accumulated_content += delta_msg.reasoning  # Track for tool call detection
                             else:
                                 emit_reasoning = delta_msg.reasoning
                                 emit_content = delta_msg.content
 
                             # Emit reasoning as custom event
                             if emit_reasoning:
+                                reasoning_was_streamed = True
                                 yield _sse("response.reasoning.delta", {
                                     "type": "response.reasoning.delta",
                                     "item_id": msg_id,
@@ -3390,8 +3398,9 @@ async def stream_responses_api(
             # Reasoning was already emitted during streaming — use content-only text
             if accumulated_content:
                 display_text = accumulated_content
-            elif accumulated_reasoning:
-                # Model only produced reasoning with no content — use as fallback
+            elif accumulated_reasoning and not reasoning_was_streamed and not suppress_reasoning:
+                # Model only produced reasoning with no content — use as fallback.
+                # Skip if reasoning was already streamed as deltas (avoids duplication).
                 display_text = accumulated_reasoning
             elif display_text:
                 # Fallback: re-parse if streaming didn't accumulate
