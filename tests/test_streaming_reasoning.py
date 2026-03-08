@@ -714,23 +714,23 @@ class TestQwen35ModelConfig:
             yield
 
     def test_qwen3_5_properties(self):
-        """qwen3_5 config must have correct parser and template settings."""
+        """qwen3_5 config — shared model_type, is_mllm=False (uses config.json vision_config)."""
         config = _find_config_by_model_type(self._registry, "qwen3_5")
         assert config.family_name == "qwen3_5"
         assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is True
         assert config.tool_parser == "qwen"
-        assert config.is_mllm is True
+        assert config.is_mllm is False
         assert config.cache_type == "kv"
 
     def test_qwen3_5_moe_properties(self):
-        """qwen3_5_moe config must match qwen3_5."""
+        """qwen3_5_moe config — shared model_type, is_mllm=False."""
         config = _find_config_by_model_type(self._registry,"qwen3_5_moe")
         assert config.family_name == "qwen3_5_moe"
         assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is True
         assert config.tool_parser == "qwen"
-        assert config.is_mllm is True
+        assert config.is_mllm is False
 
     def test_qwen3_properties(self):
         """qwen3 config must support native tools."""
@@ -965,48 +965,6 @@ class TestParserRegistryCompleteness:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 9: MLLM Pattern Detection
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestMLLMPatternDetection:
-    """Tests for MLLM_PATTERNS regex-based VLM detection fallback."""
-
-    def test_qwen3_5_detected_as_mllm(self):
-        """qwen3_5 pattern should match Qwen3.5 model names."""
-        from vmlx_engine.api.utils import MLLM_PATTERNS
-        pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-        assert pattern.search("Qwen3.5-VL-72B")
-        assert pattern.search("qwen3_5_moe")
-
-    def test_qwen_vl_detected(self):
-        from vmlx_engine.api.utils import MLLM_PATTERNS
-        pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-        assert pattern.search("Qwen2-VL-7B")
-        assert pattern.search("qwen-vl-chat")
-
-    def test_gemma3_detected_but_not_text(self):
-        """gemma3 should be detected but gemma3_text should NOT."""
-        from vmlx_engine.api.utils import MLLM_PATTERNS
-        pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-        assert pattern.search("gemma-3-27b")
-        assert not pattern.search("gemma3_text-only")
-
-    def test_pixtral_detected(self):
-        from vmlx_engine.api.utils import MLLM_PATTERNS
-        pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-        assert pattern.search("pixtral-12b")
-
-    def test_llava_detected(self):
-        from vmlx_engine.api.utils import MLLM_PATTERNS
-        pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-        assert pattern.search("llava-1.5-7b")
-
-    def test_text_only_not_detected(self):
-        """Text-only models should NOT match MLLM patterns."""
-        from vmlx_engine.api.utils import MLLM_PATTERNS
-        pattern = re.compile("|".join(MLLM_PATTERNS), re.IGNORECASE)
-        assert not pattern.search("Llama-3-8B")
-        assert not pattern.search("Mistral-7B")
-        assert not pattern.search("DeepSeek-V3")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

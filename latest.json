@@ -1,5 +1,5 @@
 {
-  "version": "1.1.8",
-  "url": "https://github.com/vmlxllm/vmlx-releases/releases/tag/v1.1.8",
-  "notes": "Fix Qwen3.5-VL and other video-capable VLMs failing to load without torchvision"
+  "version": "1.1.9",
+  "url": "https://github.com/vmlxllm/vmlx-releases/releases/tag/v1.1.9",
+  "notes": "Remove regex-based VLM detection, preemptive torchvision patch, fix shared qwen3_5 model_type, config.json vision_config as authoritative VLM source"
 }

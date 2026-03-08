@@ -730,21 +730,14 @@ class MLXMultimodalLM:
 
             logger.info(f"Loading MLLM: {self.model_name}")
 
-            # Bundled Python doesn't include torch/torchvision (~2GB). Suppress warnings
-            # and patch video processor loading for models that require torchvision
-            # (e.g. Qwen3.5-VL which has a video_processor sub-component).
+            # Bundled Python doesn't include torch/torchvision (~2GB). Preemptively
+            # patch video processor loading and suppress warnings so models with
+            # video_processor sub-components (Qwen3.5-VL, InternVL, etc.) load cleanly.
+            self._patch_video_processor()
             import warnings
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
-                try:
-                    self.model, self.processor = load(self.model_name)
-                except ValueError as e:
-                    if "torchvision" in str(e):
-                        logger.info("Patching video processor (torchvision not available)")
-                        self._patch_video_processor()
-                        self.model, self.processor = load(self.model_name)
-                    else:
-                        raise
+                self.model, self.processor = load(self.model_name)
             self.config = load_config(self.model_name)
 
             self._loaded = True
@@ -759,14 +752,21 @@ class MLXMultimodalLM:
             logger.error(f"Failed to load MLLM: {e}")
             raise
 
-    @staticmethod
-    def _patch_video_processor():
+    _video_processor_patched = False
+
+    @classmethod
+    def _patch_video_processor(cls):
         """Patch AutoVideoProcessor to skip torchvision requirement.
 
-        Some VLM models (Qwen3.5-VL) include a video_processor sub-component that
-        requires torchvision. Since we only do image inference and torchvision requires
-        torch (~2GB), we patch the processor to load without it.
+        Some VLM models (Qwen3.5-VL, InternVL) include a video_processor
+        sub-component that requires torchvision. Since we only do image inference
+        and torchvision requires torch (~2GB), we patch the processor to load
+        without it. Called preemptively before first model load. Idempotent.
         """
+        if cls._video_processor_patched:
+            return
+        cls._video_processor_patched = True
+
         try:
             from transformers.models.auto import video_processing_auto
 
@@ -783,6 +783,7 @@ class MLXMultimodalLM:
                     raise
 
             video_processing_auto.AutoVideoProcessor.from_pretrained = _patched_from_pretrained
+            logger.debug("Patched AutoVideoProcessor for torchvision-free loading")
         except Exception:
             pass  # If transformers internals changed, let the original error propagate
 

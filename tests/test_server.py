@@ -175,22 +175,34 @@ class TestCompletionRequest:
 class TestHelperFunctions:
     """Test server helper functions."""
 
-    def test_is_mllm_model_patterns(self):
-        """Test MLLM model detection patterns."""
+    def test_is_mllm_model_detection(self, tmp_path):
+        """Test MLLM model detection via config.json and force flag.
+        No regex fallback — remote names without local config return False."""
+        import json
         from vmlx_engine.server import is_mllm_model
 
-        # Should detect as MLLM
-        assert is_mllm_model("mlx-community/Qwen3-VL-4B-Instruct-3bit")
-        assert is_mllm_model("mlx-community/llava-1.5-7b-4bit")
-        assert is_mllm_model("mlx-community/paligemma-3b-mix-224-4bit")
-        assert is_mllm_model("mlx-community/pixtral-12b-4bit")
-        assert is_mllm_model("mlx-community/Idefics3-8B-Llama3-4bit")
-        assert is_mllm_model("mlx-community/deepseek-vl-7b-chat-4bit")
+        # force_mllm always returns True
+        assert is_mllm_model("anything", force_mllm=True)
 
-        # Should NOT detect as MLLM
+        # Remote names without local config.json return False
+        assert not is_mllm_model("mlx-community/Qwen3-VL-4B-Instruct-3bit")
         assert not is_mllm_model("mlx-community/Llama-3.2-1B-Instruct-4bit")
-        assert not is_mllm_model("mlx-community/Mistral-7B-Instruct-4bit")
-        assert not is_mllm_model("mlx-community/Qwen2-7B-Instruct-4bit")
+
+        # Local model with vision_config returns True
+        vlm_dir = tmp_path / "vlm-model"
+        vlm_dir.mkdir()
+        (vlm_dir / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5", "vision_config": {"hidden_size": 1024}
+        }))
+        assert is_mllm_model(str(vlm_dir))
+
+        # Local model without vision_config returns False
+        llm_dir = tmp_path / "llm-model"
+        llm_dir.mkdir()
+        (llm_dir / "config.json").write_text(json.dumps({
+            "model_type": "llama", "hidden_size": 4096
+        }))
+        assert not is_mllm_model(str(llm_dir))
 
     def test_extract_multimodal_content_text_only(self):
         """Test extracting content from text-only messages."""
