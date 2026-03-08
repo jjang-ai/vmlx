@@ -54,6 +54,7 @@ class SimpleEngine(BaseEngine):
         self._generation_lock = asyncio.Lock()
         # Abort flag — checked between tokens in stream_generate
         self._abort_requested = False
+        self._current_request_id: str | None = None
 
     @property
     def model_name(self) -> str:
@@ -188,6 +189,7 @@ class SimpleEngine(BaseEngine):
             completion_tokens = 0
             finished = False
             self._abort_requested = False  # Reset at start of generation
+            self._current_request_id = kwargs.pop("request_id", None)
 
             try:
                 stream_iter = self._model.stream_generate(
@@ -274,6 +276,8 @@ class SimpleEngine(BaseEngine):
                     finished=True,
                     finish_reason="stop" if completion_tokens > 0 else None,
                 )
+
+            self._current_request_id = None
 
     async def chat(
         self,
@@ -484,6 +488,7 @@ class SimpleEngine(BaseEngine):
             last_prompt_tokens = 0
             finished = False
             self._abort_requested = False
+            self._current_request_id = request_id
 
             # Pass enable_thinking to MLLM for models that support it (Qwen3-VL, etc.)
             mllm_kwargs = dict(kwargs)
@@ -519,7 +524,7 @@ class SimpleEngine(BaseEngine):
                         prompt_tokens=0,
                         completion_tokens=0,
                         finished=True,
-                        finish_reason="error",
+                        finish_reason="stop",
                     )
                     return
 
@@ -547,7 +552,7 @@ class SimpleEngine(BaseEngine):
                             prompt_tokens=0,
                             completion_tokens=token_count,
                             finished=True,
-                            finish_reason="error",
+                            finish_reason="stop",
                         )
                         return
 
@@ -600,6 +605,7 @@ class SimpleEngine(BaseEngine):
                         finished=True,
                         finish_reason="stop",
                     )
+            self._current_request_id = None
             return
 
         # For LLM, apply chat template and stream
@@ -686,12 +692,16 @@ class SimpleEngine(BaseEngine):
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
+            request_id=request_id,
             **kwargs,
         ):
             yield output
 
     async def abort_request(self, request_id: str) -> bool:
-        """Abort the current generation. Sets a flag checked between tokens."""
+        """Abort the current generation if request_id matches (or unconditionally if no tracking)."""
+        if self._current_request_id and request_id != self._current_request_id:
+            logger.info(f"SimpleEngine: abort_request({request_id}) ignored — current request is {self._current_request_id}")
+            return False
         self._abort_requested = True
         logger.info(f"SimpleEngine: abort_request({request_id}) — flagging for abort")
         return True

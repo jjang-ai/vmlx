@@ -83,10 +83,11 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       const result = await window.api.sessions.update(session.id, config)
       if (result.success) {
         setDirty(false)
-        const isRunning = session.status === 'running' || session.status === 'loading'
         setMessage({
           type: 'success',
-          text: isRemote ? 'Saved. Applies to next request.' : (isRunning ? 'Saved. Restart to apply.' : 'Settings saved.')
+          text: isRemote ? 'Saved. Applies to next request.' : (
+            result.restartRequired ? `Saved. Restart to apply (${result.changedKeys?.join(', ')}).` : 'Settings saved.'
+          )
         })
         onSessionUpdate?.()
       } else {

@@ -72,11 +72,6 @@ function buildCommandPreview(
     if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
       parts.push('--continuous-batching')
     }
-    // Safe prefill default
-    if ((!config.prefillBatchSize || config.prefillBatchSize === 0) && !parts.some(a => a === '--prefill-batch-size')) {
-      parts.push('--prefill-batch-size', '4096')
-    }
-
     if (config.noMemoryAwareCache) {
       parts.push('--no-memory-aware-cache')
       if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
@@ -236,11 +231,10 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
       const result = await window.api.sessions.update(sessionId, config)
       if (result.success) {
         setDirty(false)
-        const isRunning = session?.status === 'running' || session?.status === 'loading'
         setMessage({
           type: 'success',
-          text: isRunning
-            ? 'Settings saved. Restart the session for changes to take effect.'
+          text: result.restartRequired
+            ? `Settings saved. Restart the session for changes to take effect (${result.changedKeys?.join(', ')}).`
             : 'Settings saved.'
         })
         // Refresh session data

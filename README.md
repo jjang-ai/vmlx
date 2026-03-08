@@ -148,8 +148,8 @@ vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
 | Parser | Models | Format |
 |--------|--------|--------|
 | `qwen3` | Qwen3, QwQ, MiniMax M2/M2.5, StepFun | `<think>` / `</think>` tags |
-| `deepseek_r1` | DeepSeek-R1, Gemma 3, Phi-4 Reasoning | Lenient `<think>` (handles missing open tag) |
-| `openai_gptoss` | GLM-4.7, GLM-4.7 Flash, GLM-Z1, GPT-OSS | Harmony `<\|channel\|>analysis/final` protocol |
+| `deepseek_r1` | DeepSeek-R1, Gemma 3, Phi-4 Reasoning, GLM-4.7, GLM-Z1 | Lenient `<think>` (handles missing open tag) |
+| `openai_gptoss` | GLM-4.7 Flash, GPT-OSS | Harmony `<\|channel\|>analysis/final` protocol |
 
 ---
 
