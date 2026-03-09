@@ -250,7 +250,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.18** / **Panel v1.2.1** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.18** / **Panel v1.2.1** — macOS 26+ (Tahoe) for local inference, macOS 14+ for remote endpoints. Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 
