@@ -94,7 +94,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
               <span className="truncate font-medium" title={active.repoId}>
                 {shortName(active.repoId)}
               </span>
-              {p?.percent != null && p.percent > 0 ? (
+              {p?.percent != null ? (
                 <>
                   <span className="text-muted-foreground">{p.percent}%</span>
                   {p?.speed && <span className="text-muted-foreground">{p.speed}</span>}
@@ -111,7 +111,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
                 <span className="text-muted-foreground">+{queue.length} queued</span>
               )}
             </div>
-            {p?.percent != null && p.percent > 0 && (
+            {p?.percent != null && (
               <div className="mt-0.5 h-1 bg-muted rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-all duration-300"

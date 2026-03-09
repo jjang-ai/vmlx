@@ -226,6 +226,10 @@ class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_benchmarks_model ON benchmarks(model_path);
     `)
 
+    // Run all migrations inside a transaction for atomicity — if the app crashes
+    // mid-migration, the transaction rolls back so we don't end up in a partial state.
+    const runMigrations = this.db.transaction(() => {
+
     // Safe migration: add model_path column to chats if missing
     const chatColumns = this.db.pragma('table_info(chats)') as { name: string }[]
     if (!chatColumns.find(c => c.name === 'model_path')) {
@@ -386,6 +390,9 @@ class DatabaseManager {
         ins.run(t.id, t.name, t.content, t.category, now)
       }
     }
+
+    }) // end runMigrations transaction
+    runMigrations()
   }
 
   // Folders

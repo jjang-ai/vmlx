@@ -174,15 +174,16 @@ _template_always_thinks_cache: dict[str, bool] = {}
 
 # Tool call markers to detect in streaming output for buffering
 _TOOL_CALL_MARKERS = [
-    "<tool_call>", 
-    "<|tool_call|>", 
-    "[TOOL_CALLS]", 
-    "<function=", 
-    "<minimax:tool_call>", 
-    "[Calling tool:", 
+    "<tool_call>",
+    "<|tool_call|>",
+    "[TOOL_CALLS]",
+    "<function=",
+    "<minimax:tool_call>",
+    "[Calling tool:",
     "<|recipient|>",
     "<|tool_calls_section_begin|>",
     "<|tool_call_begin|>",
+    "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
 ]
 
 
@@ -1748,8 +1749,6 @@ async def create_chat_completion(
         _effort_lower = request.reasoning_effort.lower()
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
-            if _ct_kwargs is None:
-                _ct_kwargs = {}
             _ct_kwargs.setdefault("thinking_budget", _budget)
         _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
         if _effort_max and request.max_tokens is None:
@@ -2242,8 +2241,6 @@ async def create_response(
         _effort_lower = request.reasoning_effort.lower()
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
-            if _ct_kwargs is None:
-                _ct_kwargs = {}
             _ct_kwargs.setdefault("thinking_budget", _budget)
         _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
         if _effort_max and request.max_output_tokens is None:
@@ -2765,8 +2762,10 @@ async def stream_chat_completion(
 
                 # Check for tool call markers — separate logic for content vs reasoning:
                 # - Content: check accumulated_content (markers can span deltas)
-                # - Reasoning: check ONLY current delta (avoids false positives from
-                #   reasoning that casually mentions tool formats like "<function=")
+                # - Reasoning: check a trailing window of accumulated_reasoning
+                #   (catches markers split across chunk boundaries, but avoids
+                #   false positives from earlier reasoning that casually mentions
+                #   tool formats like "<function=")
                 if tool_call_active and not tool_call_buffering:
                     if delta_msg.content and accumulated_content:
                         for marker in _TOOL_CALL_MARKERS:
@@ -2774,14 +2773,16 @@ async def stream_chat_completion(
                                 tool_call_buffering = True
                                 break
                     if not tool_call_buffering and delta_msg.reasoning:
+                        # Use trailing window (last 30 chars covers longest marker)
+                        _reasoning_tail = accumulated_reasoning[-30:] if len(accumulated_reasoning) > 30 else accumulated_reasoning
                         for marker in _TOOL_CALL_MARKERS:
-                            if marker in delta_msg.reasoning:
+                            if marker in _reasoning_tail:
                                 tool_call_buffering = True
                                 break
                     # GPT-OSS/Harmony native tool format: to=<name> code{...}
                     # Uses regex for specificity (plain "to=" is too broad for markers list)
                     if not tool_call_buffering:
-                        _tc_check = accumulated_content or delta_msg.reasoning or ""
+                        _tc_check = accumulated_content or (accumulated_reasoning[-30:] if accumulated_reasoning else "") or ""
                         if re.search(r'\bto=\w[\w.]*\s+code\{', _tc_check):
                             tool_call_buffering = True
 
@@ -2954,9 +2955,14 @@ async def stream_chat_completion(
     if tool_call_buffering and accumulated_text and not _suppress_tools:
         # Use content-only text when reasoning parser separated it (avoids losing
         # tool calls that appear inside <think> blocks during regex stripping).
+        # If content is empty but reasoning has tool markers, check reasoning too
+        # (model may emit tool calls in analysis channel instead of final channel).
         # Fall back to accumulated_text with think-tag stripping when no parser was active.
         if request_parser and accumulated_content.strip():
             parse_text = accumulated_content.strip()
+        elif request_parser and accumulated_reasoning.strip():
+            # Tool call markers were in reasoning — try parsing reasoning text
+            parse_text = accumulated_reasoning.strip()
         else:
             parse_text = re.sub(r'<think>.*?</think>', '', accumulated_text, flags=re.DOTALL)
             if parse_text == accumulated_text and '</think>' in parse_text:
@@ -3336,7 +3342,7 @@ async def stream_responses_api(
                         if delta_msg.reasoning:
                             accumulated_reasoning += delta_msg.reasoning
 
-                        # Check for tool call markers in content
+                        # Check for tool call markers in content and reasoning
                         if tool_call_active and not tool_call_buffering:
                             if delta_msg.content and accumulated_content:
                                 for marker in _TOOL_CALL_MARKERS:
@@ -3344,14 +3350,14 @@ async def stream_responses_api(
                                         tool_call_buffering = True
                                         break
                             if not tool_call_buffering and delta_msg.reasoning:
+                                _reasoning_tail = accumulated_reasoning[-30:] if len(accumulated_reasoning) > 30 else accumulated_reasoning
                                 for marker in _TOOL_CALL_MARKERS:
-                                    if marker in delta_msg.reasoning:
+                                    if marker in _reasoning_tail:
                                         tool_call_buffering = True
                                         break
                             # GPT-OSS/Harmony native tool format: to=<name> code{...}
-                            # Uses regex for specificity (plain "to=" is too broad for markers list)
                             if not tool_call_buffering:
-                                _tc_check = accumulated_content or delta_msg.reasoning or ""
+                                _tc_check = accumulated_content or (accumulated_reasoning[-30:] if accumulated_reasoning else "") or ""
                                 if re.search(r'\bto=\w[\w.]*\s+code\{', _tc_check):
                                     tool_call_buffering = True
 
@@ -3502,8 +3508,11 @@ async def stream_responses_api(
     if not _suppress_tools:
         # Use content-only text when reasoning parser separated it (avoids losing
         # tool calls that appear inside <think> blocks during regex stripping).
+        # If content is empty but reasoning has tool markers, check reasoning too.
         if request_parser and accumulated_content.strip():
             parse_text = accumulated_content.strip()
+        elif request_parser and accumulated_reasoning.strip():
+            parse_text = accumulated_reasoning.strip()
         else:
             parse_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
             if parse_text == full_text and '</think>' in full_text:

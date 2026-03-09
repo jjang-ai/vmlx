@@ -1,6 +1,6 @@
 {
   "name": "vmlx",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "description": "The most complete MLX inference engine for Mac — voice, vision, Mamba, 5-layer caching, 20+ agentic tools",
   "main": "dist/main/index.mjs",
   "author": "ShieldStack LLC",
@@ -78,7 +78,7 @@
       "notarize": {
         "teamId": "55KGF2S5AY"
       },
-      "minimumSystemVersion": "26.0.0"
+      "minimumSystemVersion": "14.0.0"
     },
     "dmg": {
       "background": "build/dmg-background.png",

@@ -9,7 +9,7 @@ request management system, simplified for MLX backend.
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 if TYPE_CHECKING:
     from .paged_cache import BlockTable
@@ -115,6 +115,9 @@ class Request:
     # Paged cache fields (for BlockAwarePrefixCache)
     block_table: Optional["BlockTable"] = None  # Block table for paged cache
     shared_prefix_blocks: int = 0  # Number of shared prefix blocks
+
+    # Per-request stop tokens added to shared BatchGenerator (for cleanup on abort)
+    _added_stop_tokens: Set[int] = field(default_factory=set)
 
     # Multimodal content (images, video) - raw inputs
     images: Optional[List[Any]] = None

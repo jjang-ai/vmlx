@@ -5,6 +5,25 @@ All notable changes to vMLX Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.18] - 2026-03-09
+
+### Fixed
+- **Stop token cleanup on abort**: Per-request stop tokens added to `BatchGenerator.stop_tokens` are now properly cleaned up when a request is aborted. Previously, stop tokens accumulated indefinitely, eventually causing false-positive stops for unrelated requests.
+- **Ghost request time-based reaping**: Ghost requests (orphaned in the engine loop) now have a 30-second time-based fallback in addition to the existing count threshold. Prevents ghosts from stalling indefinitely at just below the count threshold.
+- **reasoning_effort dead code**: Removed impossible `if _ct_kwargs is None:` guard in both Chat Completions and Responses API streaming paths. `_ct_kwargs` is always `{}` from `request.chat_template_kwargs or {}`.
+- **Disk cache flag without paged cache**: `--enable-block-disk-cache` without `--use-paged-cache` now correctly disables disk cache instead of just warning.
+- **Module-level `re` import in scheduler**: Moved `import re` out of per-token hot loop in string stop token matching to module-level imports.
+- **CancelledError SSE hang**: Engine loop `CancelledError` handler now calls `_fail_active_requests()` to unblock waiting SSE consumers. Previously, cancellation left active streams hanging.
+- **Paged cache block leak on abort**: `abort_request` now uses `delete_block_table()` (decrements ref_counts) instead of `detach_request()` (preserves for LRU). Aborted requests don't enter prefix cache, so `detach` would orphan blocks with permanently elevated ref_counts. Fixed in both `Scheduler` and `MLLMScheduler` (abort + error-recovery paths).
+- **VLM disk cache key mismatch**: Disk cache store used `truncated_tokens` (N-1) but fetch used `token_list` (N), causing 100% cache miss rate. Now both use `token_list`.
+- **KV dequantize None crash**: `_dequantize_cache()` can return `None` on failure but 3 callers didn't guard against it — passing `None` to `_fix_hybrid_cache` or assigning it as `req.prompt_cache` with truncated `input_ids`. All callers now check for `None` and fall back to full prefill.
+- **Reasoning trailing window false positives**: Tool call marker detection searched the full `accumulated_reasoning` buffer, triggering false positives when earlier reasoning text discussed tool syntax. Now uses a 30-char trailing window.
+- **DeepSeek Unicode tool markers**: Added `<\uff5ctool\u2581calls\u2581begin\uff5c>` (Unicode fullwidth/block chars) to `_TOOL_CALL_MARKERS` for DeepSeek model variants.
+- **GPT-OSS fallback threshold too high**: `_FALLBACK_THRESHOLD` reduced from 10 to 3 chars. Previously, short non-Harmony responses ("Hi", "Yes", "OK") were swallowed.
+- **GPT-OSS strip_partial_marker too aggressive**: Minimum partial match length raised from 3 to 5 chars. Previously, common Python keywords ("class", "pass") were falsely stripped.
+- **Tool fallback first-tool-only check**: `check_and_inject_fallback_tools()` now verifies ALL tool names are in the prompt (using `all()`), not just the first one. Templates that only rendered some tools went undetected.
+- **Mistral tool parser invalid JSON**: New-format tool calls now validated with `json.loads()` — malformed JSON arguments are rejected instead of passed through.
+
 ## [0.2.12] - 2026-03-07
 
 ### Fixed
