@@ -22,7 +22,7 @@ HARMONY_CHAT_TEMPLATE = """\
         {{- "\\n" }}
         {{- tool | tojson }}
     {%- endfor %}
-    {{- "\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags. ALWAYS use this exact format:\\n<tool_call>\\n{\\"name\\": <function-name>, \\"arguments\\": <args-json-object>}\\n</tool_call>\\nDo NOT use any other tool call format such as to=name code{} syntax.<|end|>\\n" }}
+    {{- "\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\"name\\": <function-name>, \\"arguments\\": <args-json-object>}\\n</tool_call>\\nYou may also use the native format: to=<function-name> code{<args-json-object>}\\nYou MUST call tools when the task requires external information or actions. Do not just describe what you would do — actually call the tool.<|end|>\\n" }}
 {%- else %}
     {%- if messages[0].role == 'system' %}
         {{- '<|start|>system<|message|>' + messages[0].content + '<|end|>\\n' }}
@@ -282,6 +282,7 @@ def register_all(registry=None):
         tool_parser="glm47",
         reasoning_parser="openai_gptoss",
         chat_template_custom=HARMONY_CHAT_TEMPLATE,
+        preserve_native_tool_format=True,
         priority=3,
     ))
 
@@ -293,6 +294,7 @@ def register_all(registry=None):
         tool_parser="glm47",
         reasoning_parser="openai_gptoss",
         chat_template_custom=HARMONY_CHAT_TEMPLATE,
+        preserve_native_tool_format=True,
         priority=3,
     ))
 
@@ -306,6 +308,7 @@ def register_all(registry=None):
         reasoning_parser="deepseek_r1",
         think_in_template=True,
         chat_template_custom=HARMONY_CHAT_TEMPLATE,
+        preserve_native_tool_format=True,
         priority=2,
     ))
 
@@ -316,6 +319,7 @@ def register_all(registry=None):
         cache_type="kv",
         tool_parser="glm47",
         chat_template_custom=HARMONY_CHAT_TEMPLATE,
+        preserve_native_tool_format=True,
         priority=20,
     ))
 

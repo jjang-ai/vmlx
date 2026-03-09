@@ -30,7 +30,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 
 ## Key Features
 
-### Inference Engine (v0.2.11)
+### Inference Engine (v0.2.18)
 
 | Feature | Description |
 |---------|-------------|
@@ -45,7 +45,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 | **OpenAI-Compatible API** | Chat Completions + Responses API with full streaming support |
 | **Speculative Decoding** | Draft model acceleration (20-90% speedup, zero quality loss) |
 
-### Desktop App (Panel v0.3.10)
+### Desktop App (Panel v1.2.0)
 
 | Feature | Description |
 |---------|-------------|
@@ -186,7 +186,7 @@ Plus MCP tool server passthrough for local sessions.
               │
               ▼
 ┌─────────────────────────────────────────────────────────┐
-│                    vMLX Engine Engine                        │
+│                      vMLX Engine                             │
 │         (FastAPI + MLX inference + caching)               │
 └─────────────────────────────────────────────────────────┘
               │
@@ -213,31 +213,29 @@ Plus MCP tool server passthrough for local sessions.
 | Desktop app | Electron 28 + React 18 + TypeScript |
 | Styling | Tailwind CSS |
 | Database | SQLite (WAL mode, better-sqlite3) |
-| Inference engine | vMLX Engine v0.2.8 (Python, FastAPI) |
+| Inference engine | vMLX Engine v0.2.18 (Python, FastAPI) |
 | ML framework | Apple MLX (Metal GPU acceleration) |
 | Build | electron-vite + electron-builder |
-| Tests | Vitest (panel: 80 tests), pytest (engine: 1295+ tests) |
+| Tests | Vitest (panel: 530 tests), pytest (engine: 1595 tests) |
 | Python | Bundled relocatable Python 3.12 |
 
 ---
 
 ## Recent Changes
 
-### Engine v0.2.10 (2026-03-05)
-- **Speculative decoding**: `--speculative-model` + `--num-draft-tokens` CLI flags for 20-90% throughput boost
-- **RotatingKVCache confirmed**: Sliding window attention support verified across all cache modules
-- 21 new tests for speculative decoding
+### Panel v1.2.0 / Engine v0.2.18 (2026-03-09)
+- **HuggingFace download fix**: Download progress no longer stuck at 0% — tqdm `\r` chunk splitting, ANSI stripping, highest-percent extraction
+- **HF browser NaN/Unknown fix**: Model ages and authors display correctly (uses `createdAt` fallback, extracts author from modelId)
+- **macOS 15 launch fix**: `minimumSystemVersion` corrected from 26.0.0 to 14.0.0 (fixes GitHub #10)
+- **Deep stability audit**: 14 fixes across paged cache block lifecycle, KV dequantize safety, reasoning marker detection, tool fallback, Mistral JSON validation
+- **CancelledError SSE hang**: Engine cancellation now unblocks all waiting SSE consumers
+- **2125 total tests**: 1595 engine + 530 panel with full regression coverage
 
-### Engine v0.2.8 (2026-03-03)
-- **Multi-turn VLM fix**: `model_dump(exclude_none=True)` prevents Jinja2 template from double-counting image tokens in multi-turn conversations
-- **Hybrid cache fix**: `_fix_hybrid_cache()` returns fresh full cache on mismatch instead of corrupt short cache
-- **SimpleEngine MLLM kwargs**: `reasoning_effort` and `chat_template_kwargs` now properly forwarded in VLM paths
-- **1295+ tests**: Comprehensive model config registry tests (89) + MLLM serialization tests (64)
-
-### Panel v0.3.10 (2026-03-02)
-- **Bug fix**: `abortByEndpoint()` now correctly aborts remote session chat requests
-- **HF model sizes**: Search results show model file sizes from safetensors metadata
-- **Test suite**: 80 tests across 3 test files (vitest)
+### Panel v1.1.4 / Engine v0.2.12 (2026-03-07)
+- **tool_choice="none" fix**: Content no longer swallowed when tool markers detected with tools suppressed
+- **suppress_reasoning**: Reasoning leaks plugged in both API paths
+- **First-launch UX**: Auto-creates initial chat, dynamic About page version
+- **1571 engine tests**, **530 panel tests** across 6 vitest suites
 
 See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) for full history.
 
@@ -245,7 +243,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.10** / **Panel v0.3.10** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.18** / **Panel v1.2.0** — macOS Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 

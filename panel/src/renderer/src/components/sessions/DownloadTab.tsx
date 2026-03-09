@@ -22,8 +22,10 @@ function formatNumber(n: number): string {
   return n.toString()
 }
 
-function timeAgo(dateStr: string): string {
+function timeAgo(dateStr: string | null | undefined): string {
+  if (!dateStr) return ''
   const diff = Date.now() - new Date(dateStr).getTime()
+  if (isNaN(diff)) return ''
   const days = Math.floor(diff / 86400000)
   if (days < 1) return 'today'
   if (days < 30) return `${days}d ago`
@@ -238,7 +240,7 @@ function ModelCard({ model, isDownloading, onDownload }: {
             <span title="Downloads">{formatNumber(model.downloads)} downloads</span>
             <span title="Likes">{model.likes} likes</span>
             {model.size && <span title="Model size">{model.size}</span>}
-            <span>{timeAgo(model.lastModified)}</span>
+            {timeAgo(model.lastModified) && <span>{timeAgo(model.lastModified)}</span>}
           </div>
           {model.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">

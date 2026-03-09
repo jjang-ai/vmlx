@@ -390,7 +390,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     if (existing) {
       const age = Date.now() - existing.startedAt
       // Use the timeout configured when that request started, plus 30s buffer
-      const staleLockMs = existing.timeoutMs + 30_000
+      // Cap at 10 minutes to prevent indefinite lock (e.g., when serverTimeout is 86400s)
+      const staleLockMs = Math.min(existing.timeoutMs + 30_000, 10 * 60 * 1000)
       if (age > staleLockMs) {
         // Lock is stale — abort and clear it
         console.log(`[CHAT] Clearing stale lock for ${chatId} (${Math.round(age / 1000)}s old, limit ${Math.round(staleLockMs / 1000)}s)`)
@@ -785,7 +786,17 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
       if (!response.ok) {
         const errorText = await response.text()
-        throw new Error(`API error: ${response.status} ${response.statusText} - ${errorText}`)
+        // Try to extract structured error detail from JSON responses
+        let errorDetail = errorText
+        try {
+          const parsed = JSON.parse(errorText)
+          if (parsed.detail) {
+            errorDetail = typeof parsed.detail === 'string' ? parsed.detail
+              : Array.isArray(parsed.detail) ? parsed.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ')
+              : JSON.stringify(parsed.detail)
+          }
+        } catch { /* use raw text */ }
+        throw new Error(`API error: ${response.status} - ${errorDetail}`)
       }
 
       // Stream response
@@ -1054,6 +1065,13 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               if (parsed.usage.input_tokens_details?.cached_tokens) cachedTokens = parsed.usage.input_tokens_details.cached_tokens
             }
 
+            // Handle error events from Responses API
+            if (currentEventType === 'response.error' || currentEventType === 'response.failed') {
+              const errDetail = parsed.error?.message || parsed.error?.code || parsed.detail || JSON.stringify(parsed)
+              console.error(`[CHAT] Responses API error event: ${errDetail}`)
+              throw new Error(`Server error: ${errDetail}`)
+            }
+
             // Final usage from response.completed event
             // Server wraps in { response: { usage: { input_tokens, output_tokens } } }
             const respUsage = parsed.response?.usage || parsed.usage
@@ -1192,9 +1210,14 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                   }
                   console.log(`[CHAT] Tool call detected: ${fn.name}(${(fn.arguments || '').slice(0, 100)})`)
                   emitToolStatus('calling', fn.name, fn.arguments || '{}', toolIteration)
-                } else if (fn?.arguments && idx >= 0 && receivedToolCalls[idx]) {
+                } else if (fn?.arguments && idx >= 0) {
                   // Incremental argument chunk: accumulate arguments for existing tool call
-                  receivedToolCalls[idx].function.arguments += fn.arguments
+                  if (receivedToolCalls[idx]) {
+                    receivedToolCalls[idx].function.arguments += fn.arguments
+                  } else {
+                    // Out-of-order index: initialize a placeholder to prevent sparse array crash
+                    receivedToolCalls[idx] = { id: tc.id || `call_${uuidv4().replace(/-/g, '').slice(0, 16)}`, function: { name: '', arguments: fn.arguments } }
+                  }
                 }
               }
             }

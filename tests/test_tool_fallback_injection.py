@@ -44,8 +44,8 @@ def mock_messages():
 def test_fallback_not_triggered_when_tools_present(mock_tools, mock_messages):
     """If the original chat template outputs the tool names, fallback is skipped."""
     mock_tokenizer = MagicMock()
-    # The prompt ALREADY contains the tools
-    original_prompt = "<system>Tools: read_file</system><user>Hello</user>"
+    # The prompt ALREADY contains ALL tools
+    original_prompt = "<system>Tools: read_file, list_directory</system><user>Hello</user>"
     
     result = check_and_inject_fallback_tools(
         prompt=original_prompt,
@@ -150,6 +150,53 @@ def test_fallback_skips_when_no_tools_requested(mock_messages):
         tokenizer=mock_tokenizer,
         template_kwargs={}
     )
-    
+
     assert result2 == "prompt"
+    mock_tokenizer.apply_chat_template.assert_not_called()
+
+
+def test_fallback_triggered_when_one_tool_missing(mock_tools, mock_messages):
+    """If prompt has one tool but not all, fallback must trigger."""
+    mock_tokenizer = MagicMock()
+
+    # Only 'read_file' is in the prompt, 'list_directory' is missing
+    original_prompt = "<system>Tools: read_file</system><user>Hello</user>"
+
+    def mock_apply(messages, **kwargs):
+        return messages[0]["content"] if messages[0]["role"] == "system" else ""
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt=original_prompt,
+        messages=mock_messages,
+        template_tools=mock_tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={}
+    )
+
+    # Fallback should trigger because 'list_directory' is missing
+    mock_tokenizer.apply_chat_template.assert_called_once()
+    assert "list_directory" in result
+
+
+def test_fallback_with_empty_name_tools(mock_messages):
+    """Tools with empty function names should not cause errors."""
+    mock_tokenizer = MagicMock()
+
+    # Tools with empty name
+    tools_with_empty = [
+        {"type": "function", "function": {"name": "", "description": "No name"}},
+    ]
+
+    result = check_and_inject_fallback_tools(
+        prompt="prompt",
+        messages=mock_messages,
+        template_tools=tools_with_empty,
+        tokenizer=mock_tokenizer,
+        template_kwargs={}
+    )
+
+    # Should return prompt unchanged (no valid tool names to check)
+    assert result == "prompt"
     mock_tokenizer.apply_chat_template.assert_not_called()
