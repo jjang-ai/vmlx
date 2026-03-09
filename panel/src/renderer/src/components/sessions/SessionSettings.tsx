@@ -120,11 +120,16 @@ function buildCommandPreview(
     parts.push('--max-tokens', '1000000')
   }
 
-  // Tool integration
-  // Pass resolved parsers directly (mirrors buildArgs lines 1085-1093)
-  if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
+  // Tool integration — mirrors buildArgs lines 1136-1147
+  if (effectiveToolParser) {
+    parts.push('--tool-call-parser', effectiveToolParser)
+    if (effectiveAutoTool || config.enableAutoToolChoice === undefined) {
+      parts.push('--enable-auto-tool-choice')
+    }
+  } else if (effectiveAutoTool) {
+    parts.push('--enable-auto-tool-choice')
+  }
   if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
-  if (effectiveAutoTool) parts.push('--enable-auto-tool-choice')
 
   if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.2.1 — 2026-03-09 — Tool Calling Fix, MCP Safety
+
+### Fixed
+- **Critical: Auto-tool-choice default blocked all tool calling**: `DEFAULT_CONFIG.enableAutoToolChoice` was `false`, which blocked auto-detection via `??` operator (`false ?? true` returns `false`). Changed to `undefined` (auto-detect from model config). MCP tools and built-in tools now work out of the box.
+- **MCP tool result truncation**: MCP tool results had no size limit (unlike built-in tools' 50KB cap), risking context overflow with large tool outputs. Now applies same truncation.
+- **buildCommandPreview diverged from buildArgs**: SessionSettings command preview used `if (effectiveAutoTool)` but actual buildArgs uses `if (effectiveAutoTool || config.enableAutoToolChoice === undefined)`. Preview now matches actual behavior.
+- **Old config migration**: Stored sessions with `enableAutoToolChoice: false` (the broken default) auto-migrate to `undefined` when loaded from database.
+
+### Tests
+- 1595 engine tests, 542 panel tests (2137 total)
+- 6 new enableAutoToolChoice regression tests in settings-flow
+- 6 new MCP tool result truncation tests in comprehensive-audit
+
 ## v1.2.0 — 2026-03-09 — Download Progress Fix, Deep Stability Audit
 
 ### Fixed

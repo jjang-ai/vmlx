@@ -495,6 +495,9 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                           if (existing?.config) {
                             try {
                               const stored = JSON.parse(existing.config)
+                              // Migrate old default: enableAutoToolChoice: false was the broken default
+                              // that blocked auto-detection. Convert to undefined (auto-detect).
+                              if (stored.enableAutoToolChoice === false) delete stored.enableAutoToolChoice
                               setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
                               // Still detect cache type for UI gating (Mamba vs KV, VLM)
                               try {

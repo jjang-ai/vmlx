@@ -45,7 +45,7 @@ vMLX is a native macOS application for running AI models on Apple Silicon. It bu
 | **OpenAI-Compatible API** | Chat Completions + Responses API with full streaming support |
 | **Speculative Decoding** | Draft model acceleration (20-90% speedup, zero quality loss) |
 
-### Desktop App (Panel v1.2.0)
+### Desktop App (Panel v1.2.1)
 
 | Feature | Description |
 |---------|-------------|
@@ -216,12 +216,19 @@ Plus MCP tool server passthrough for local sessions.
 | Inference engine | vMLX Engine v0.2.18 (Python, FastAPI) |
 | ML framework | Apple MLX (Metal GPU acceleration) |
 | Build | electron-vite + electron-builder |
-| Tests | Vitest (panel: 530 tests), pytest (engine: 1595 tests) |
+| Tests | Vitest (panel: 542 tests), pytest (engine: 1595 tests) |
 | Python | Bundled relocatable Python 3.12 |
 
 ---
 
 ## Recent Changes
+
+### Panel v1.2.1 / Engine v0.2.18 (2026-03-09)
+- **Tool calling fix**: `enableAutoToolChoice` default changed from `false` to `undefined` (auto-detect) — MCP and built-in tools now work out of the box without manual enable
+- **MCP tool result truncation**: MCP tool results now capped at same limit as built-in tools (50KB default) to prevent context overflow
+- **Command preview parity**: `buildCommandPreview` in SessionSettings now matches actual `buildArgs` logic for auto-tool-choice flags
+- **Old config migration**: Stored sessions with `enableAutoToolChoice: false` auto-migrate to `undefined` on load
+- **2137 total tests**: 1595 engine + 542 panel (12 new regression tests for tool calling and MCP)
 
 ### Panel v1.2.0 / Engine v0.2.18 (2026-03-09)
 - **HuggingFace download fix**: Download progress no longer stuck at 0% — tqdm `\r` chunk splitting, ANSI stripping, highest-percent extraction
@@ -243,7 +250,7 @@ See [Panel Changelog](panel/CHANGELOG.md) and [Engine Changelog](CHANGELOG.md) f
 
 ## Current Version
 
-**Engine v0.2.18** / **Panel v1.2.0** — macOS Apple Silicon (M1, M2, M3, M4)
+**Engine v0.2.18** / **Panel v1.2.1** — macOS Apple Silicon (M1, M2, M3, M4)
 
 ## Links
 

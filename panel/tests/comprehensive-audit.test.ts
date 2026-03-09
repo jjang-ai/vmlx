@@ -1885,3 +1885,55 @@ describe('Phase 6: Parameter Defaults', () => {
     })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 6: MCP Tool Result Truncation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('MCP Tool Result Truncation', () => {
+    // Simulates the truncation logic added to chat.ts MCP tool execution path
+    function truncateMcpResult(resultText: string, maxChars?: number): string {
+        const limit = maxChars || 50000
+        if (resultText.length > limit) {
+            return resultText.slice(0, limit) + `\n\n[Truncated — showing first ${limit} of ${resultText.length} characters]`
+        }
+        return resultText
+    }
+
+    it('does not truncate results under 50KB default', () => {
+        const small = 'a'.repeat(49999)
+        expect(truncateMcpResult(small)).toBe(small)
+    })
+
+    it('truncates results over 50KB default', () => {
+        const large = 'x'.repeat(60000)
+        const result = truncateMcpResult(large)
+        expect(result.length).toBeLessThan(large.length)
+        expect(result).toContain('[Truncated')
+        expect(result).toContain('50000 of 60000')
+    })
+
+    it('respects custom maxChars override', () => {
+        const data = 'y'.repeat(5000)
+        const result = truncateMcpResult(data, 2000)
+        expect(result).toContain('[Truncated')
+        expect(result).toContain('2000 of 5000')
+    })
+
+    it('does not truncate at exact boundary', () => {
+        const exact = 'z'.repeat(50000)
+        expect(truncateMcpResult(exact)).toBe(exact)
+    })
+
+    it('handles empty result', () => {
+        expect(truncateMcpResult('')).toBe('')
+    })
+
+    it('handles JSON object results', () => {
+        // MCP results may be JSON.stringify'd objects
+        const obj = { data: 'x'.repeat(60000) }
+        const jsonStr = JSON.stringify(obj, null, 2)
+        const result = truncateMcpResult(jsonStr)
+        expect(result).toContain('[Truncated')
+    })
+})
+

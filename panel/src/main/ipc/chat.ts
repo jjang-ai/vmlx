@@ -1413,6 +1413,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                   resultText = typeof result.content === 'string'
                     ? result.content
                     : JSON.stringify(result.content, null, 2)
+                  // Apply same truncation as built-in tools to prevent context overflow
+                  const mcpMaxChars = overrides?.toolResultMaxChars || 50000
+                  if (resultText.length > mcpMaxChars) {
+                    resultText = resultText.slice(0, mcpMaxChars) + `\n\n[Truncated — showing first ${mcpMaxChars} of ${resultText.length} characters]`
+                  }
                   emitToolStatus('result', tc.function.name, resultText, toolIteration)
                 }
               }
