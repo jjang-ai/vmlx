@@ -41,7 +41,7 @@ interface SessionConfig {
     streamInterval: number
     maxTokens: number
     mcpConfig: string
-    enableAutoToolChoice: boolean
+    enableAutoToolChoice?: boolean
     toolCallParser: string
     reasoningParser: string
     isMultimodal?: boolean
@@ -84,7 +84,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     streamInterval: 1,
     maxTokens: 32768,
     mcpConfig: '',
-    enableAutoToolChoice: false,
+    // enableAutoToolChoice intentionally omitted (undefined = auto-detect)
     toolCallParser: 'auto',
     reasoningParser: 'auto',
     isMultimodal: undefined,
@@ -198,10 +198,16 @@ function buildCommandPreview(
         parts.push('--max-tokens', '1000000')
     }
 
-    // Pass resolved parsers directly (mirrors buildArgs lines 1085-1093)
-    if (effectiveToolParser) parts.push('--tool-call-parser', effectiveToolParser)
+    // Pass resolved parsers directly (mirrors buildArgs lines 1139-1150)
+    if (effectiveToolParser) {
+        parts.push('--tool-call-parser', effectiveToolParser)
+        if (effectiveAutoTool || config.enableAutoToolChoice === undefined) {
+            parts.push('--enable-auto-tool-choice')
+        }
+    } else if (effectiveAutoTool) {
+        parts.push('--enable-auto-tool-choice')
+    }
     if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
-    if (effectiveAutoTool) parts.push('--enable-auto-tool-choice')
 
     if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
 
@@ -551,6 +557,55 @@ describe('Tool Integration', () => {
     it('manual reasoning parser takes priority over detected', () => {
         const out = preview({ reasoningParser: 'deepseek_r1' }, { reasoningParser: 'qwen3' })
         expect(getFlagValue(out, '--reasoning-parser')).toBe('deepseek_r1')
+    })
+
+    // ── enableAutoToolChoice auto-detection regression tests ──
+    // Bug: DEFAULT_CONFIG had enableAutoToolChoice: false, which blocked auto-detection
+    // because ?? doesn't fall through on false (only null/undefined).
+    // Fix: enableAutoToolChoice now defaults to undefined, allowing auto-detection.
+
+    it('undefined enableAutoToolChoice allows auto-detection (the fix)', () => {
+        // With undefined (new default) + detected enableAutoToolChoice: true
+        // → --enable-auto-tool-choice MUST be emitted
+        const out = preview({ toolCallParser: 'auto' }, { toolParser: 'qwen', enableAutoToolChoice: true })
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(true)
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('qwen')
+    })
+
+    it('explicit false enableAutoToolChoice blocks auto-detection', () => {
+        // User explicitly disabled → must NOT emit --enable-auto-tool-choice
+        const out = preview({ enableAutoToolChoice: false, toolCallParser: 'auto' }, { toolParser: 'qwen', enableAutoToolChoice: true })
+        expect(hasFlag(out, '--tool-call-parser')).toBe(true)
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(false)
+    })
+
+    it('explicit true enableAutoToolChoice overrides detection', () => {
+        // User explicitly enabled → must emit even without detection
+        const out = preview({ enableAutoToolChoice: true, toolCallParser: 'llama' })
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(true)
+    })
+
+    it('default config (no enableAutoToolChoice) with detected parser enables auto-tool-choice', () => {
+        // This is the exact scenario from the bug report:
+        // User creates session with default settings, model has tool support detected
+        const out = preview({}, { toolParser: 'qwen', enableAutoToolChoice: true })
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(true)
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('qwen')
+    })
+
+    it('default config without detected parser does not enable auto-tool-choice', () => {
+        // Unknown model, no detection → no auto-tool-choice
+        const out = preview({})
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(false)
+        expect(hasFlag(out, '--tool-call-parser')).toBe(false)
+    })
+
+    it('MCP config with auto-detected tools works with default settings', () => {
+        // User sets MCP config path but doesn't touch enableAutoToolChoice
+        // Should auto-detect and enable tool calling
+        const out = preview({ mcpConfig: '/Volumes/Data/mcp.json' }, { toolParser: 'qwen', enableAutoToolChoice: true })
+        expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(true)
+        expect(getFlagValue(out, '--mcp-config')).toBe('/Volumes/Data/mcp.json')
     })
 
     it('empty reasoning parser disables reasoning', () => {

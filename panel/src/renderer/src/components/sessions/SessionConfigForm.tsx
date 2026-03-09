@@ -30,7 +30,7 @@ export interface SessionConfig {
   streamInterval: number
   maxTokens: number
   mcpConfig: string
-  enableAutoToolChoice: boolean
+  enableAutoToolChoice?: boolean
   toolCallParser: string
   reasoningParser: string
   isMultimodal?: boolean
@@ -73,7 +73,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
   streamInterval: 1,
   maxTokens: 32768,
   mcpConfig: '',
-  enableAutoToolChoice: false,
+  // enableAutoToolChoice intentionally omitted (undefined = auto-detect from model config).
+  // false blocks auto-detection because ?? doesn't fall through on false.
   toolCallParser: 'auto',
   reasoningParser: 'auto',
   isMultimodal: undefined,
@@ -557,7 +558,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <Field label="MCP Config File" tooltip="Path to a JSON config file defining MCP (Model Context Protocol) tool servers. When configured, the model can call external tools during generation. The config file defines tool server endpoints, authentication, and available capabilities.">
           <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder="/path/to/mcp-config.json" className="cfg-input" />
         </Field>
-        <CheckField label="Enable Auto Tool Choice" tooltip="When enabled, the model automatically decides when to call tools based on the conversation context. Requires a model that supports tool calling (Qwen, Llama 3+, Mistral, Gemma 3, Phi-4, Hermes, DeepSeek, GLM, Granite, Kimi, xLAM, Functionary, MiniMax, StepFun). The model will format tool calls according to the selected parser." checked={config.enableAutoToolChoice} onChange={v => onChange('enableAutoToolChoice', v)} />
+        <CheckField label="Enable Auto Tool Choice" tooltip="When enabled, the model automatically decides when to call tools based on the conversation context. Requires a model that supports tool calling (Qwen, Llama 3+, Mistral, Gemma 3, Phi-4, Hermes, DeepSeek, GLM, Granite, Kimi, xLAM, Functionary, MiniMax, StepFun). The model will format tool calls according to the selected parser. Leave unchecked for auto-detection (recommended)." checked={config.enableAutoToolChoice ?? false} onChange={v => onChange('enableAutoToolChoice', v || undefined)} />
+        {config.enableAutoToolChoice === undefined && (
+          <InfoNote text="Auto-detect: most models enable this automatically when a tool parser is detected." />
+        )}
         <ParserField
           label="Tool Call Parser"
           tooltip="Specifies how to parse the model's tool call output. Each model family uses a different format (Qwen, Llama, Mistral, Hermes, DeepSeek, GLM, etc). 'Auto-detect' reads config.json to pick the right one. If auto-detection fails (e.g. GGUF, renamed fine-tunes), select the parser matching your model's base architecture. Click '?' to see format examples and supported models for each parser."
