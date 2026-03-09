@@ -211,7 +211,8 @@ def serve_command(args):
         elif enable_prefix_cache:
             print(f"Prefix cache: max_entries={args.prefix_cache_size}")
         if not args.use_paged_cache and args.enable_block_disk_cache:
-            print("  WARNING: --enable-block-disk-cache requires --use-paged-cache, ignoring")
+            print("  WARNING: --enable-block-disk-cache requires --use-paged-cache, disabling disk cache")
+            args.enable_block_disk_cache = False
         if args.kv_cache_quantization != "none":
             print(f"KV cache quantization: {args.kv_cache_quantization} (group_size={args.kv_cache_group_size})")
     else:

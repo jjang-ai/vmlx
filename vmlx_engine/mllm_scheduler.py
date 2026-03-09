@@ -1085,10 +1085,11 @@ class MLLMScheduler:
                 del self.running[request_id]
     
             # Clean up paged cache block tables (prevent leak)
+            # Use delete_block_table on abort so ref_counts are decremented
             if self.block_aware_cache is not None:
                 self.block_aware_cache._request_tables.pop(request_id, None)
                 if self.paged_cache_manager is not None:
-                    self.paged_cache_manager.detach_request(request_id)
+                    self.paged_cache_manager.delete_block_table(request_id)
     
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
@@ -1376,9 +1377,10 @@ class MLLMScheduler:
                                 else:
                                     truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
                                     # L2: persist to disk before quantization
+                                    # Key uses full token_list (matching fetch path), cache data is N-1 tokens
                                     if self.disk_cache is not None:
                                         try:
-                                            self.disk_cache.store(truncated_tokens, cache_blocks)
+                                            self.disk_cache.store(token_list, cache_blocks)
                                         except Exception as de:
                                             logger.debug(f"VLM disk cache store failed for {request_id}: {de}")
                                     if getattr(self, '_kv_cache_bits', 0):
@@ -1590,7 +1592,7 @@ class MLLMScheduler:
                             self.block_aware_cache._request_tables.pop(req_id, None)
                     if self.paged_cache_manager is not None:
                         for req_id in self.running:
-                            self.paged_cache_manager.detach_request(req_id)
+                            self.paged_cache_manager.delete_block_table(req_id)
 
                     self.running.clear()
                     self.request_id_to_uid.clear()

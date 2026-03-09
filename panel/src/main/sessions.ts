@@ -1133,15 +1133,20 @@ export class SessionManager extends EventEmitter {
       : (userReasoningParser && userReasoningParser !== 'auto' ? userReasoningParser
         : detected.reasoningParser)  // Fallback to detection if auto or missing
 
-    // Pass resolved parsers directly to the CLI so backend doesn't guess
+    // Pass resolved parsers directly to the CLI so backend doesn't guess.
+    // When a tool parser is set, --enable-auto-tool-choice is required by the engine
+    // (cli.py gates on both flags). Enable it unless user explicitly disabled auto-tool-choice.
     if (effectiveToolParser) {
       args.push('--tool-call-parser', effectiveToolParser)
+      // Ensure --enable-auto-tool-choice is set when a parser is present
+      if (effectiveAutoTool || config.enableAutoToolChoice === undefined) {
+        args.push('--enable-auto-tool-choice')
+      }
+    } else if (effectiveAutoTool) {
+      args.push('--enable-auto-tool-choice')
     }
     if (effectiveReasoningParser) {
       args.push('--reasoning-parser', effectiveReasoningParser)
-    }
-    if (effectiveAutoTool) {
-      args.push('--enable-auto-tool-choice')
     }
     // Pass custom served model name if configured
     if (config.servedModelName) {

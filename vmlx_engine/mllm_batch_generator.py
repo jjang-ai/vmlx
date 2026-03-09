@@ -140,8 +140,8 @@ def _dequantize_cache(cache: List[Any]) -> List[Any]:
                     kv.offset = layer_cache.offset
                     result.append(kv)
                 except Exception as e:
-                    logger.warning(f"KV dequantization failed: {e}, using fresh KVCache")
-                    result.append(KVCache())
+                    logger.warning(f"KV dequantization failed: {e}, discarding cached prefix")
+                    return None  # Caller should do full prefill instead of using broken cache
             else:
                 # QuantizedKVCache with keys=None — empty layer, use fresh KVCache
                 # (cannot pass QuantizedKVCache to BatchGenerator)
@@ -1273,6 +1273,8 @@ class MLLMBatchGenerator:
                                 # Dequantize if KV cache quantization is active
                                 if self._kv_cache_bits:
                                     cache = _dequantize_cache(cache)
+                                    if cache is None:
+                                        continue  # Dequantize failed, full prefill
 
                                 # Hybrid model check (same logic as paged path)
                                 is_hybrid = (
@@ -1357,18 +1359,21 @@ class MLLMBatchGenerator:
                                     # Dequantize if KV cache quantization is active
                                     if self._kv_cache_bits:
                                         disk_result = _dequantize_cache(disk_result)
-                                    req.prompt_cache = disk_result
-                                    req._cached_tokens = len(token_list)
-                                    # Disk cache is exact-match (hash-based), all tokens cached.
-                                    # Set input to last token only for decode phase.
-                                    req.input_ids = mx.array([token_list[-1:]])
-                                    req.pixel_values = None
-                                    req.attention_mask = None
-                                    req.image_grid_thw = None
-                                    logger.info(
-                                        f"VLM disk cache (L2) HIT for {req.request_id}: "
-                                        f"{len(token_list)} cached tokens"
-                                    )
+                                    if disk_result is None:
+                                        pass  # Dequantize failed, full prefill
+                                    else:
+                                        req.prompt_cache = disk_result
+                                        req._cached_tokens = len(token_list)
+                                        # Disk cache is exact-match (hash-based), all tokens cached.
+                                        # Set input to last token only for decode phase.
+                                        req.input_ids = mx.array([token_list[-1:]])
+                                        req.pixel_values = None
+                                        req.attention_mask = None
+                                        req.image_grid_thw = None
+                                        logger.info(
+                                            f"VLM disk cache (L2) HIT for {req.request_id}: "
+                                            f"{len(token_list)} cached tokens"
+                                        )
                     except Exception as e:
                         logger.debug(f"VLM disk cache fetch failed for {req.request_id}: {e}")
 
@@ -1395,6 +1400,12 @@ class MLLMBatchGenerator:
                     cache_for_fix = req.prompt_cache
                     if self._kv_cache_bits:
                         cache_for_fix = _dequantize_cache(cache_for_fix)
+                        if cache_for_fix is None:
+                            # Dequantize failed — discard cache, full prefill
+                            req.prompt_cache = None
+                if req.prompt_cache is not None:
+                    if not self._kv_cache_bits:
+                        cache_for_fix = req.prompt_cache
                     req_cache = _fix_hybrid_cache(
                         cache_for_fix, self.language_model,
                         kv_positions=self._hybrid_kv_positions,

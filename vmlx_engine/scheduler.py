@@ -13,6 +13,7 @@ The scheduler follows vLLM's design with:
 
 import logging
 import os
+import re
 import time
 import traceback
 from collections import deque
@@ -1312,6 +1313,20 @@ class Scheduler:
             except ValueError:
                 pass
 
+        # Clean up per-request stop tokens from shared BatchGenerator
+        # Must happen BEFORE removing from running, so we can still check
+        # which tokens are still needed by surviving requests.
+        added_stops = getattr(request, '_added_stop_tokens', None)
+        if added_stops and self.batch_generator is not None:
+            # Only remove tokens not needed by other running requests
+            surviving_stops = set()
+            for rid, req in self.running.items():
+                if rid != request.request_id:
+                    surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
+            removable = added_stops - surviving_stops
+            if removable:
+                self.batch_generator.stop_tokens -= removable
+
         # Remove from running (BatchGenerator)
         if request.request_id in self.request_id_to_uid:
             uid = self.request_id_to_uid[request.request_id]
@@ -1321,9 +1336,12 @@ class Scheduler:
             del self.request_id_to_uid[request.request_id]
 
         # Clean up paged cache tracking (prevent block table leaks)
+        # Use delete_block_table (not detach_request) so ref_counts are
+        # decremented — aborted requests don't store blocks in prefix cache,
+        # so detach would orphan them with permanently elevated ref_count.
         if self.block_aware_cache is not None:
             self.block_aware_cache._request_tables.pop(request_id, None)
-            self.block_aware_cache.paged_cache.detach_request(request_id)
+            self.block_aware_cache.paged_cache.delete_block_table(request_id)
 
         # Clear extracted cache reference to help GC
         if hasattr(request, '_extracted_cache'):
@@ -1573,7 +1591,6 @@ class Scheduler:
                 if request.sampling_params.stop:
                     full_text = detok.text
                     # Strip <think>...</think> blocks before matching
-                    import re
                     check_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
                     # Also skip if we're inside an unclosed <think> block
                     if '<think>' in full_text and '</think>' not in full_text.split('<think>')[-1]:

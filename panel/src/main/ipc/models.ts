@@ -374,14 +374,16 @@ export function registerModelHandlers(): void {
 
   /** Parse HuggingFace tqdm progress from stderr */
   function parseTqdmProgress(line: string): Partial<DownloadProgress> {
-    const result: Partial<DownloadProgress> = { raw: line.trim() }
+    // Strip ANSI escape codes before parsing
+    const clean = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+    const result: Partial<DownloadProgress> = { raw: clean.trim() }
 
     // Match filename from "Downloading <filename>:" or "Fetching N files:" patterns
-    const fileMatch = line.match(/(?:Downloading|Fetching)\s+(.+?)(?:\s*:|\s*\|)/)
+    const fileMatch = clean.match(/(?:Downloading|Fetching)\s+(.+?)(?:\s*:|\s*\|)/)
     if (fileMatch) result.currentFile = fileMatch[1].trim()
 
     // Match tqdm bar: "  45%|████      | 1.2G/4.5G [01:30<02:30, 45.2MB/s]"
-    const tqdmMatch = line.match(/(\d+)%\|[^|]*\|\s*([\d.]+\w*)\/([\d.]+\w*)\s*\[([^\]<]*)<([^\],]*),\s*([^\]]+)\]/)
+    const tqdmMatch = clean.match(/(\d+)%\|[^|]*\|\s*([\d.]+\w*)\/([\d.]+\w*)\s*\[([^\]<]*)<([^\],]*),\s*([^\]]+)\]/)
     if (tqdmMatch) {
       result.percent = parseInt(tqdmMatch[1], 10)
       result.downloaded = tqdmMatch[2]
@@ -389,13 +391,13 @@ export function registerModelHandlers(): void {
       result.eta = tqdmMatch[5].trim()
       result.speed = tqdmMatch[6].trim()
     } else {
-      // Simpler percent match: "  45%|"
-      const simplePercent = line.match(/\s(\d+)%\|/)
+      // Simpler percent match: " 45%|" or "45%|" (tqdm may start at line beginning after \r)
+      const simplePercent = clean.match(/\b(\d+)%\|/)
       if (simplePercent) result.percent = parseInt(simplePercent[1], 10)
     }
 
     // Match "Fetching N files:  45%|" for files progress
-    const filesMatch = line.match(/Fetching\s+(\d+)\s+files.*?(\d+)%/)
+    const filesMatch = clean.match(/Fetching\s+(\d+)\s+files.*?(\d+)%/)
     if (filesMatch) result.filesProgress = `${Math.round(parseInt(filesMatch[2]) * parseInt(filesMatch[1]) / 100)}/${filesMatch[1]}`
 
     return result
@@ -470,11 +472,31 @@ export function registerModelHandlers(): void {
     })
 
     proc.stderr?.on('data', (data: Buffer) => {
-      const line = data.toString()
-      lastStderr = line
-      const parsed = parseTqdmProgress(line)
+      const chunk = data.toString()
+      lastStderr = chunk
+      // tqdm uses \r to overwrite progress lines — split on \r and \n to get each update
+      const segments = chunk.split(/[\r\n]+/).filter(s => s.trim())
+      // Parse each segment and keep the best (highest percent) result
+      let bestParsed: Partial<DownloadProgress> = { raw: chunk.trim() }
+      let bestPercent = lastProgress.percent ?? -1
+      for (const seg of segments) {
+        const parsed = parseTqdmProgress(seg)
+        if (parsed.percent != null && parsed.percent >= bestPercent) {
+          bestParsed = { ...bestParsed, ...parsed }
+          bestPercent = parsed.percent
+        } else if (parsed.currentFile || parsed.filesProgress) {
+          // Merge metadata even if percent didn't improve
+          if (parsed.currentFile) bestParsed.currentFile = parsed.currentFile
+          if (parsed.filesProgress) bestParsed.filesProgress = parsed.filesProgress
+        }
+      }
+      // If no segment had percent but we got metadata, still merge
+      if (bestParsed.percent == null && segments.length > 0) {
+        const lastSeg = parseTqdmProgress(segments[segments.length - 1])
+        bestParsed = { ...bestParsed, ...lastSeg }
+      }
       // Merge with last known progress (tqdm lines may only have partial info)
-      lastProgress = { ...lastProgress, ...parsed }
+      lastProgress = { ...lastProgress, ...bestParsed }
       job.progress = lastProgress as DownloadProgress
       emitToRenderer('models:downloadProgress', {
         jobId: job.id,
@@ -516,6 +538,7 @@ export function registerModelHandlers(): void {
         if (!errorMsg.includes(lastStderr.slice(0, 100)) && lastStderr.trim()) {
           errorMsg += `: ${lastStderr.slice(0, 200)}`
         }
+        try { await unlink(markerFile) } catch (_) { }
         job.status = 'error'
         job.error = errorMsg
         emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: errorMsg })
@@ -573,6 +596,24 @@ export function registerModelHandlers(): void {
   cleanStaleMarkers().catch(() => { })
 
   // Search HuggingFace for MLX models
+
+  /** Map raw HF API model object to our HFModel shape.
+   *  The list endpoint omits lastModified, author, and safetensors —
+   *  use createdAt as date fallback, extract author from modelId. */
+  function mapHFModel(m: any) {
+    const modelId = m.modelId || m.id || ''
+    return {
+      id: modelId,
+      author: m.author || modelId.split('/')[0] || 'Unknown',
+      downloads: m.downloads ?? 0,
+      likes: m.likes ?? 0,
+      lastModified: m.lastModified || m.createdAt,
+      tags: m.tags || [],
+      pipelineTag: m.pipeline_tag,
+      size: extractModelSize(m)
+    }
+  }
+
   /** Extract total model size from HF API safetensors metadata */
   function extractModelSize(m: any): string | undefined {
     try {
@@ -607,16 +648,7 @@ export function registerModelHandlers(): void {
     if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
     const models = await response.json()
 
-    return models.map((m: any) => ({
-      id: m.modelId || m.id,
-      author: m.author || 'Unknown',
-      downloads: m.downloads ?? 0,
-      likes: m.likes ?? 0,
-      lastModified: m.lastModified,
-      tags: m.tags || [],
-      pipelineTag: m.pipeline_tag,
-      size: extractModelSize(m)
-    }))
+    return models.map((m: any) => mapHFModel(m))
   })
 
   // Get recommended models from shieldstackllc
@@ -628,16 +660,7 @@ export function registerModelHandlers(): void {
     if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
     const models = await response.json()
 
-    return models.map((m: any) => ({
-      id: m.modelId || m.id,
-      author: m.author || 'Unknown',
-      downloads: m.downloads ?? 0,
-      likes: m.likes ?? 0,
-      lastModified: m.lastModified,
-      tags: m.tags || [],
-      pipelineTag: m.pipeline_tag,
-      size: extractModelSize(m)
-    }))
+    return models.map((m: any) => mapHFModel(m))
   })
 
   // Start a download (non-blocking — returns jobId immediately)

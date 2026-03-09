@@ -140,6 +140,20 @@ class TestMistralToolParser:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0]["name"] == "get_weather"
 
+    def test_new_format_invalid_json_rejected(self, parser):
+        """New format with invalid JSON args should be silently rejected."""
+        text = '[TOOL_CALLS]get_weather{invalid json here}'
+        result = parser.extract_tool_calls(text)
+        assert not result.tools_called
+
+    def test_new_format_valid_after_invalid(self, parser):
+        """Valid tool call should be parsed even if preceded by invalid one."""
+        # Two tool calls separated by [TOOL_CALLS] — first invalid, second valid
+        text = '[TOOL_CALLS] [{"name": "good_tool", "arguments": {"x": 1}}]'
+        result = parser.extract_tool_calls(text)
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "good_tool"
+
     def test_no_tool_call(self, parser):
         """Test that regular text is not parsed as tool call."""
         text = "Hello, how can I help you today?"

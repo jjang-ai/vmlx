@@ -190,9 +190,9 @@ class GptOssReasoningParser(ReasoningParser):
         return reasoning_parts, content_parts
 
     # Characters to buffer before concluding the model isn't using Harmony
-    # protocol. The <|channel|> marker is 11 chars; 10 gives enough room for
-    # split-chunk detection without a perceptible delay for non-Harmony models.
-    _FALLBACK_THRESHOLD = 10
+    # protocol. The <|channel|> marker starts with "<|" (2 chars); buffer just
+    # enough to detect the opening without swallowing short non-Harmony responses.
+    _FALLBACK_THRESHOLD = 3
 
     def extract_reasoning_streaming(
         self,
@@ -330,7 +330,7 @@ class GptOssReasoningParser(ReasoningParser):
             return text[:-len("assistant")].rstrip()
         # Strip partial "assistant" at the end (e.g., "assistan", "assist")
         word = "assistant"
-        for length in range(len(word) - 1, 2, -1):  # min 3 chars to avoid false positives
+        for length in range(len(word) - 1, 4, -1):  # min 5 chars ("assis") to avoid stripping words like "class"
             if text.endswith(word[:length]):
                 return text[:-length]
         return text

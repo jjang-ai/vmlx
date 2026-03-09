@@ -1503,10 +1503,14 @@ class TestV4FixHybridCacheDequantize:
         # Find the prefill section where _fix_hybrid_cache is called on req.prompt_cache
         idx = source.find("req_cache = _fix_hybrid_cache(")
         assert idx != -1
-        # Look at the ~300 chars before this call
-        before = source[max(0, idx - 300):idx]
+        # Look at the ~500 chars before this call (accounts for None guard block)
+        before = source[max(0, idx - 500):idx]
         assert "_dequantize_cache" in before, (
             "Must call _dequantize_cache before _fix_hybrid_cache in prefill path"
+        )
+        # Verify None guard exists after dequantize
+        assert "cache_for_fix is None" in before, (
+            "Must guard against _dequantize_cache returning None"
         )
 
 
@@ -1956,4 +1960,196 @@ class TestV5PortUniqueMigration:
         )
         assert "GROUP BY port" in source, (
             "Deduplication must group by port to keep only one session per port"
+        )
+
+
+# ================================================================
+# V6: Regression tests for v1.2.0 audit fixes
+# ================================================================
+
+class TestV6CancelledErrorCallsFailActive:
+    """CancelledError in engine loop must call _fail_active_requests."""
+
+    def test_cancelled_error_handler_exists(self):
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/engine_core.py").read_text()
+        # Find CancelledError handler inside engine loop (the one that calls _fail_active_requests)
+        # There are two: one in stop() and one in the engine loop. We need the engine loop one.
+        idx = source.find("except asyncio.CancelledError:")
+        # Skip the first one (in stop()) and find the second one (in engine loop)
+        idx2 = source.find("except asyncio.CancelledError:", idx + 1)
+        assert idx2 != -1, "Engine loop must have its own CancelledError handler"
+        handler = source[idx2:idx2 + 200]
+        assert "_fail_active_requests" in handler, (
+            "CancelledError handler must call _fail_active_requests to unblock SSE consumers"
+        )
+
+
+class TestV6AbortUsesDeleteBlockTable:
+    """abort_request must use delete_block_table (not detach_request) for paged cache."""
+
+    def test_scheduler_abort_uses_delete(self):
+        import inspect
+        from vmlx_engine.scheduler import Scheduler
+        source = inspect.getsource(Scheduler.abort_request)
+        assert "delete_block_table" in source, (
+            "Scheduler.abort_request must use delete_block_table to decrement ref_counts"
+        )
+        # Must NOT call detach_request (the word may appear in comments, check for actual call)
+        assert ".detach_request(" not in source, (
+            "Scheduler.abort_request must NOT call detach_request (leaks ref_counts)"
+        )
+
+    def test_mllm_scheduler_abort_uses_delete(self):
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        # Find the abort_request method
+        start = source.find("def abort_request(self, request_id")
+        assert start != -1
+        # Find the next method definition
+        end = source.find("\n    def ", start + 20)
+        abort_body = source[start:end]
+        assert "delete_block_table" in abort_body, (
+            "MLLMScheduler.abort_request must use delete_block_table"
+        )
+
+    def test_mllm_scheduler_error_recovery_uses_delete(self):
+        """Error-recovery path must also use delete_block_table."""
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        # Find the error-recovery block (paged_cache_manager.delete_block_table in error path)
+        # This is in the step() method's except block
+        idx = source.find("# Clean up paged cache block tables for all running")
+        assert idx != -1, "Error-recovery cache cleanup comment must exist"
+        nearby = source[idx:idx + 500]
+        assert "delete_block_table" in nearby, (
+            "Error-recovery path must use delete_block_table (not detach_request)"
+        )
+
+    def test_completion_path_uses_detach(self):
+        """Normal completion path should use detach_request (preserves blocks for LRU)."""
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        # The completion path is in _finish_completed_requests or similar
+        # It stores blocks for prefix cache, so it uses detach_request
+        completion_idx = source.find("detach_request")
+        assert completion_idx != -1, (
+            "Normal completion path must use detach_request to preserve blocks for LRU reuse"
+        )
+
+
+class TestV6VLMDiskCacheKeyConsistency:
+    """VLM disk cache store key must match fetch key (full token_list, not truncated)."""
+
+    def test_store_uses_token_list_not_truncated(self):
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        # Find the VLM cache store path with the comment about matching fetch path
+        idx = source.find("# Key uses full token_list (matching fetch path)")
+        assert idx != -1, "Must have comment documenting key consistency"
+        # The store call must use token_list, not truncated_tokens
+        store_line = source[idx:idx + 400]
+        assert "disk_cache.store(token_list" in store_line, (
+            "VLM disk cache store must use token_list (not truncated_tokens) to match fetch key"
+        )
+
+
+class TestV6DequantizeNoneGuards:
+    """All callers of _dequantize_cache must guard against None return."""
+
+    def test_dequantize_returns_none_on_failure(self):
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        func_start = source.find("def _dequantize_cache(")
+        func_end = source.find("\ndef ", func_start + 10)
+        func_body = source[func_start:func_end]
+        assert "return None" in func_body, (
+            "_dequantize_cache must return None on dequantization failure"
+        )
+
+    def test_memory_aware_caller_guards_none(self):
+        """Memory-aware cache path must guard _dequantize_cache returning None."""
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        # Find the memory-aware cache path with dequantize call
+        # There are multiple dequantize call sites; find the one with "continue" after None check
+        idx = source.find("_dequantize_cache(cache)")
+        assert idx != -1
+        after = source[idx:idx + 150]
+        assert "if cache is None" in after or "is None" in after, (
+            "Memory-aware path must check for None after _dequantize_cache"
+        )
+
+    def test_hybrid_cache_caller_guards_none(self):
+        """Hybrid cache path must guard _dequantize_cache returning None before _fix_hybrid_cache."""
+        source = Path("/Users/eric/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        # The hybrid cache path should check cache_for_fix is None
+        idx = source.find("_dequantize_cache(cache_for_fix)")
+        assert idx != -1
+        after = source[idx:idx + 200]
+        assert "cache_for_fix is None" in after, (
+            "Hybrid cache path must check cache_for_fix is None after _dequantize_cache"
+        )
+
+
+class TestV6MinimumSystemVersion:
+    """macOS minimumSystemVersion must not block current macOS users."""
+
+    def test_minimum_version_not_too_high(self):
+        pkg_path = os.path.join(
+            os.path.dirname(__file__), '..', 'panel', 'package.json'
+        )
+        with open(pkg_path) as f:
+            pkg = json.load(f)
+        min_ver = pkg.get("build", {}).get("mac", {}).get("minimumSystemVersion", "")
+        assert min_ver, "minimumSystemVersion must be set"
+        major = int(min_ver.split(".")[0])
+        # macOS versions: 14 = Sonoma, 15 = Sequoia, 26 = Tahoe (2025)
+        # Must support at least macOS 14+ (Sonoma) for M-series Macs
+        assert major <= 15, (
+            f"minimumSystemVersion {min_ver} is too high — "
+            f"blocks users on macOS Sequoia (15) and earlier"
+        )
+
+
+class TestV6MapHFModel:
+    """mapHFModel must handle missing lastModified and author from HF list API."""
+
+    def test_map_hf_model_function_exists(self):
+        models_path = os.path.join(
+            os.path.dirname(__file__), '..', 'panel', 'src', 'main', 'ipc', 'models.ts'
+        )
+        with open(models_path) as f:
+            source = f.read()
+        assert "function mapHFModel" in source, "mapHFModel helper must exist"
+
+    def test_map_hf_model_uses_created_at_fallback(self):
+        models_path = os.path.join(
+            os.path.dirname(__file__), '..', 'panel', 'src', 'main', 'ipc', 'models.ts'
+        )
+        with open(models_path) as f:
+            source = f.read()
+        # Must use createdAt as fallback for lastModified
+        assert "createdAt" in source, (
+            "mapHFModel must use createdAt as fallback when lastModified is missing"
+        )
+
+    def test_map_hf_model_extracts_author_from_model_id(self):
+        models_path = os.path.join(
+            os.path.dirname(__file__), '..', 'panel', 'src', 'main', 'ipc', 'models.ts'
+        )
+        with open(models_path) as f:
+            source = f.read()
+        func_start = source.find("function mapHFModel")
+        func_body = source[func_start:func_start + 400]
+        # Must extract author from modelId (split('/')[0]) as fallback
+        assert "split('/')[0]" in func_body, (
+            "mapHFModel must extract author from modelId.split('/')[0] as fallback"
+        )
+
+    def test_search_and_recommended_use_map_hf_model(self):
+        """Both searchHF and getRecommendedModels must use mapHFModel."""
+        models_path = os.path.join(
+            os.path.dirname(__file__), '..', 'panel', 'src', 'main', 'ipc', 'models.ts'
+        )
+        with open(models_path) as f:
+            source = f.read()
+        # Count usages of mapHFModel (should be used in both handlers)
+        usages = source.count("mapHFModel(")
+        assert usages >= 2, (
+            f"mapHFModel must be used in both searchHF and getRecommendedModels "
+            f"(found {usages} usage(s), expected >= 2)"
         )

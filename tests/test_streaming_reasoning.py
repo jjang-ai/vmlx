@@ -483,10 +483,29 @@ class TestGptOssParserComplete:
         assert GptOssReasoningParser._strip_partial_marker("Hello assistant") == "Hello"
 
     def test_strip_partial_assistant_fragment(self):
-        """Trailing partial 'assistan' (3+ chars) should be stripped."""
+        """Trailing partial 'assis'+ (5+ chars) should be stripped."""
         from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
         result = GptOssReasoningParser._strip_partial_marker("Hello assista")
         assert "assista" not in result
+
+    def test_strip_partial_preserves_class(self):
+        """Words like 'class' must NOT be stripped (4 chars, below min 5)."""
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
+        assert GptOssReasoningParser._strip_partial_marker("Hello class") == "Hello class"
+        assert GptOssReasoningParser._strip_partial_marker("define a class") == "define a class"
+        assert GptOssReasoningParser._strip_partial_marker("pass") == "pass"
+
+    def test_strip_partial_5char_boundary(self):
+        """'assis' (exactly 5 chars, valid prefix of 'assistant') should be stripped."""
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
+        result = GptOssReasoningParser._strip_partial_marker("Hello assis")
+        assert result == "Hello "
+
+    def test_strip_partial_4char_not_stripped(self):
+        """'assi' (4 chars, below minimum) should NOT be stripped."""
+        from vmlx_engine.reasoning.gptoss_parser import GptOssReasoningParser
+        result = GptOssReasoningParser._strip_partial_marker("Hello assi")
+        assert result == "Hello assi"
 
     def test_strip_no_partial(self):
         """Text without partial markers should pass through."""
@@ -496,24 +515,32 @@ class TestGptOssParserComplete:
     # --- Streaming with fallback ---
 
     def test_streaming_fallback_threshold(self, parser):
-        """Below fallback threshold, non-Harmony text returns None."""
+        """Below fallback threshold (3 chars), non-Harmony text returns None."""
         parser.reset_state()
 
-        # Short text below threshold (10 chars)
+        # 2 chars — below threshold of 3
         accumulated = "Hi"
         result = parser.extract_reasoning_streaming("", accumulated, accumulated)
         assert result is None
 
+    def test_streaming_fallback_exact_boundary(self, parser):
+        """At exactly threshold (3 chars), fallback emits — threshold uses strict <."""
+        parser.reset_state()
+        accumulated = "Yes"
+        result = parser.extract_reasoning_streaming("", accumulated, accumulated)
+        assert result is not None  # len("Yes") == 3, not < 3, so content emits
+        assert result.content == "Yes"
+
     def test_streaming_fallback_above_threshold(self, parser):
-        """Above fallback threshold, non-Harmony text becomes content."""
+        """Above fallback threshold (>3 chars), non-Harmony text becomes content."""
         parser.reset_state()
 
-        # Build up past threshold (10 chars)
-        text = "A" * 20
+        # Build up past threshold (3 chars)
+        text = "A" * 10
         accumulated = ""
         results = []
-        for i in range(0, len(text), 10):
-            chunk = text[i:i+10]
+        for i in range(0, len(text), 5):
+            chunk = text[i:i+5]
             prev = accumulated
             accumulated += chunk
             result = parser.extract_reasoning_streaming(prev, accumulated, chunk)
@@ -523,6 +550,21 @@ class TestGptOssParserComplete:
         content_parts = [r.content for r in results if r.content]
         assert len(content_parts) > 0
         assert "A" in "".join(content_parts)
+
+    def test_streaming_fallback_short_response_not_swallowed(self, parser):
+        """Short non-Harmony responses like 'Sure.' must emit content."""
+        parser.reset_state()
+        text = "Sure."
+        accumulated = ""
+        results = []
+        for ch in text:
+            prev = accumulated
+            accumulated += ch
+            result = parser.extract_reasoning_streaming(prev, accumulated, ch)
+            if result:
+                results.append(result)
+        content_parts = [r.content for r in results if r.content]
+        assert len(content_parts) > 0, "Short response must not be swallowed"
 
     def test_streaming_harmony_active_mode(self, parser):
         """With harmony_active=True, reasoning is emitted immediately."""
@@ -1355,7 +1397,8 @@ class TestToolCallBufferingStructure:
 
     Tool call markers in content vs reasoning are handled differently:
     - Content: check accumulated_content (markers can span deltas)
-    - Reasoning: check ONLY current delta (avoids false positives)
+    - Reasoning: check trailing window of accumulated_reasoning (catches
+      split-chunk markers without false positives from earlier reasoning)
     """
 
     def test_content_uses_accumulated(self):
@@ -1366,14 +1409,21 @@ class TestToolCallBufferingStructure:
         assert "accumulated_content" in source
         assert "marker in accumulated_content" in source
 
-    def test_reasoning_uses_delta_only(self):
-        """Reasoning tool call detection should use delta only."""
+    def test_reasoning_uses_trailing_window(self):
+        """Reasoning tool call detection should use a trailing window of accumulated_reasoning."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        assert "delta_msg.reasoning" in source
-        # Verify there's a check for markers in reasoning delta
-        assert "marker in delta_msg.reasoning" in source
+        # Uses trailing window to catch split-chunk markers without false positives
+        assert "_reasoning_tail" in source
+        assert "marker in _reasoning_tail" in source
+
+    def test_deepseek_unicode_marker_in_markers_list(self):
+        """DeepSeek Unicode tool call marker must be in _TOOL_CALL_MARKERS."""
+        from vmlx_engine.server import _TOOL_CALL_MARKERS
+        # U+FF5C = fullwidth vertical line, U+2581 = lower one eighth block
+        deepseek_marker = "<\uff5ctool\u2581calls\u2581begin\uff5c>"
+        assert deepseek_marker in _TOOL_CALL_MARKERS
 
     def test_harmony_tool_format_detection(self):
         """GPT-OSS/Harmony native tool format (to=name code{}) detection."""

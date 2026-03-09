@@ -93,6 +93,11 @@ class MistralToolParser(ToolParser):
                 args_str = raw_tool_call[end_name:]
 
                 if tool_name:
+                    # Validate JSON before accepting
+                    try:
+                        json.loads(args_str)
+                    except json.JSONDecodeError:
+                        continue
                     tool_calls.append(
                         {
                             "id": generate_mistral_tool_id(),

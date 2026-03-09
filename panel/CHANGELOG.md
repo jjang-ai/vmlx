@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.2.0 — 2026-03-09 — Download Progress Fix, Deep Stability Audit
+
+### Fixed
+- **Critical: HuggingFace download stuck at 0%**: tqdm progress bars use `\r` carriage returns that arrive as multi-segment chunks. Parser now splits on `\r`/`\n`, takes the highest percent from each chunk, and strips ANSI escape codes. Downloads show real-time progress from the first byte.
+- **NaN model age / Unknown author in HF browser**: HuggingFace list API omits `lastModified` and `author` fields. Added `mapHFModel()` helper that uses `createdAt` as date fallback and extracts author from `modelId.split('/')[0]`. Both `searchHF` and `getRecommendedModels` use it.
+- **macOS 15 launch blocked (GitHub #10)**: `minimumSystemVersion` was set to `26.0.0` (macOS Tahoe), blocking all users on Sonoma (14) and Sequoia (15). Fixed to `14.0.0`.
+- **Download progress bar visibility**: Progress bar now appears at 0% (`p.percent != null` instead of `p.percent > 0`).
+- **Download marker cleanup on error**: Failed downloads now clean up the `.downloading` marker file, preventing models from appearing permanently stuck.
+- **Responses API error events**: SSE parser now handles `response.error` and `response.failed` events, surfacing server errors to the user instead of silently dropping them.
+- **Stale lock timeout cap**: Lock timeout escalation now capped at 10 minutes (`Math.min(existing.timeoutMs + 30_000, 10 * 60 * 1000)`).
+- **Sparse tool calls array**: Out-of-order tool call indices no longer crash — placeholder entries are initialized for gaps.
+- **4xx error detail parsing**: HTTP error responses with JSON bodies now extract and display the `detail` message instead of generic status text.
+- **Database migration atomicity**: All schema migrations now wrapped in transactions — partial migration failures can't corrupt the database.
+- **Auto-add `--enable-auto-tool-choice`**: When a tool call parser is configured, `--enable-auto-tool-choice` is now automatically added to engine args if not explicitly disabled.
+
+### Engine (vmlx-engine 0.2.18)
+- Fix CancelledError SSE hang, paged cache block leak on abort, VLM disk cache key mismatch
+- Fix KV dequantize None crash (3 callers), reasoning trailing window false positives
+- Add DeepSeek Unicode tool markers, reduce fallback threshold (10→3), raise strip_partial min (3→5)
+- Fix tool fallback all-tools check, Mistral JSON validation
+- Stop token leak on abort, ghost request 30s time-based reaping
+
+### Tests
+- 1595 engine tests, 530 panel tests (2125 total)
+- 14 new regression tests covering all audit fixes
+
 ## v1.1.4 — 2026-03-07 — Tool Choice Fix, First-Launch UX & Input Validation
 
 ### Fixed
@@ -377,5 +403,5 @@ Complete redesign from tab-based single-server to session-centric multi-instance
 
 ---
 
-**Current Version:** v1.0.0
+**Current Version:** v1.2.0
 **Status:** Production release — macOS Apple Silicon

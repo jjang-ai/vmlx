@@ -46,8 +46,8 @@ def check_and_inject_fallback_tools(
     if not tool_names:
         return prompt
         
-    # If the first tool name is in the prompt, we assume the template handled tools correctly
-    if tool_names[0] in prompt:
+    # If ALL tool names made it into the prompt, the template handled tools correctly
+    if all(name in prompt for name in tool_names):
         return prompt
         
     import logging

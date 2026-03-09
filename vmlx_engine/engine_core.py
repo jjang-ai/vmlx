@@ -142,6 +142,7 @@ class EngineCore:
         # (outputs with no matching collector). If this exceeds a threshold,
         # those requests are aborted to prevent a permanent spin loop.
         orphan_counts: dict[str, int] = {}
+        orphan_first_seen: dict[str, float] = {}
         _ORPHAN_ABORT_THRESHOLD = 10  # abort after 10 consecutive orphan outputs
 
         # Periodic check for scheduler/collector mismatch (ghost requests
@@ -187,6 +188,7 @@ class EngineCore:
                             if collector is not None:
                                 # Has a consumer — clear orphan tracking
                                 orphan_counts.pop(rid, None)
+                                orphan_first_seen.pop(rid, None)
                                 # Optimized: skip stream_interval check when interval=1
                                 if use_simple_streaming:
                                     collector.put(req_output)
@@ -202,16 +204,23 @@ class EngineCore:
                                 # No collector — ghost/orphan request
                                 count = orphan_counts.get(rid, 0) + 1
                                 orphan_counts[rid] = count
-                                if count >= _ORPHAN_ABORT_THRESHOLD:
+                                # Track first-seen time for time-based reaping
+                                if rid not in orphan_first_seen:
+                                    orphan_first_seen[rid] = time.monotonic()
+                                elapsed = time.monotonic() - orphan_first_seen[rid]
+                                if count >= _ORPHAN_ABORT_THRESHOLD or elapsed > 30.0:
                                     logger.warning(
                                         f"Aborting ghost request {rid}: "
-                                        f"{count} outputs with no consumer"
+                                        f"{count} outputs with no consumer "
+                                        f"({elapsed:.1f}s elapsed)"
                                     )
                                     self.scheduler.abort_request(rid)
                                     orphan_counts.pop(rid, None)
+                                    orphan_first_seen.pop(rid, None)
 
                             if req_output.finished:
                                 orphan_counts.pop(rid, None)
+                                orphan_first_seen.pop(rid, None)
                                 event = events.get(rid)
                                 if event:
                                     event.set()
@@ -226,12 +235,14 @@ class EngineCore:
                     await asyncio.sleep(step_interval)
 
             except asyncio.CancelledError:
+                self._fail_active_requests("Engine cancelled")
                 break
             except Exception as e:
                 logger.error(f"Engine loop error: {e}", exc_info=True)
                 # Signal all active requests as failed so consumers don't hang
                 self._fail_active_requests(str(e))
                 orphan_counts.clear()
+                orphan_first_seen.clear()
                 await asyncio.sleep(0.1)
 
     def _fail_active_requests(self, error_msg: str) -> None:
