@@ -56,7 +56,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   enablePrefixCache: true,
   prefixCacheSize: 100,
   cacheMemoryMb: 0,
-  cacheMemoryPercent: 20,
+  cacheMemoryPercent: 30,
   cacheTtlMinutes: 0,
   noMemoryAwareCache: false,
   usePagedCache: true,
@@ -115,7 +115,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
-  const isMambaCache = detectedCacheType === 'mamba'
+  const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
 
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }))
@@ -195,20 +195,20 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.maxNumSeqs}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="No limit"
+          unlimitedLabel="Default (256)"
         />
         <SliderField
           label="Prefill Batch Size"
-          tooltip="Maximum number of tokens to process in a single prefill (prompt processing) step. Larger batches use more memory but process prompts faster. Reduce if you're running out of memory during prompt processing. Default 512 works well for most models."
+          tooltip="Maximum number of tokens to process in a single prefill (prompt processing) step. Larger batches use more memory but process prompts faster. Reduce if you're running out of memory during prompt processing."
           value={config.prefillBatchSize}
           onChange={v => onChange('prefillBatchSize', v)}
           min={1}
           max={4096}
           step={64}
-          defaultValue={DEFAULT_CONFIG.prefillBatchSize}
+          defaultValue={512}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="No limit"
+          unlimitedLabel="Default (8)"
         />
         <SliderField
           label="Completion Batch Size"
@@ -218,10 +218,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           min={1}
           max={4096}
           step={64}
-          defaultValue={DEFAULT_CONFIG.completionBatchSize}
+          defaultValue={512}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="No limit"
+          unlimitedLabel="Default (32)"
         />
         <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
         <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
@@ -255,7 +255,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   defaultValue={DEFAULT_CONFIG.prefixCacheSize}
                   allowUnlimited
                   unlimitedValue={0}
-                  unlimitedLabel="No limit"
+                  unlimitedLabel="Default (100)"
                 />
               </>
             ) : (
@@ -275,7 +275,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 />
                 <SliderField
                   label="Cache Memory %"
-                  tooltip="Percentage of available system RAM to allocate for the prefix cache. Only used when Cache Memory Limit is set to 'Auto-detect'. Default 20% is a good balance — lower this for large models that leave little headroom (e.g. 10-15% for 120GB+ models on 256GB systems). Higher values cache more prefixes but risk memory pressure during long generations."
+                  tooltip="Percentage of available system RAM to allocate for the prefix cache. Only used when Cache Memory Limit is set to 'Auto-detect'. Default 30% is a good balance — lower this for large models that leave little headroom (e.g. 10-15% for 120GB+ models on 256GB systems). Higher values cache more prefixes but risk memory pressure during long generations."
                   value={config.cacheMemoryPercent}
                   onChange={v => onChange('cacheMemoryPercent', v)}
                   min={1}
@@ -384,7 +384,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               defaultValue={DEFAULT_CONFIG.maxCacheBlocks}
               allowUnlimited
               unlimitedValue={0}
-              unlimitedLabel="No limit"
+              unlimitedLabel="Default (1000)"
             />
             <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} />
             {config.enableBlockDiskCache && (
@@ -650,24 +650,44 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
 export function Tooltip({ text }: { text: string }) {
   const [show, setShow] = useState(false)
+  const [pinned, setPinned] = useState(false)
   const [above, setAbove] = useState(true)
   const triggerRef = useRef<HTMLSpanElement>(null)
 
-  const handleEnter = () => {
+  const updatePosition = () => {
     if (triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
       setAbove(rect.top > 130)
     }
-    setShow(true)
+  }
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    updatePosition()
+    const willPin = !pinned
+    setPinned(willPin)
+    setShow(willPin)
+  }
+
+  const handleEnter = () => {
+    if (!pinned) {
+      updatePosition()
+      setShow(true)
+    }
+  }
+
+  const handleLeave = () => {
+    if (!pinned) setShow(false)
   }
 
   return (
     <span className="relative inline-flex ml-1">
       <span
         ref={triggerRef}
-        className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-muted text-muted-foreground text-[10px] font-bold cursor-help select-none"
+        className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[10px] font-bold cursor-help select-none ${pinned ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}
+        onClick={handleClick}
         onMouseEnter={handleEnter}
-        onMouseLeave={() => setShow(false)}
+        onMouseLeave={handleLeave}
       >
         ?
       </span>
