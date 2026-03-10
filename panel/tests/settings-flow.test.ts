@@ -67,7 +67,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     enablePrefixCache: true,
     prefixCacheSize: 100,
     cacheMemoryMb: 0,
-    cacheMemoryPercent: 20,
+    cacheMemoryPercent: 30,
     cacheTtlMinutes: 0,
     noMemoryAwareCache: false,
     usePagedCache: true,
@@ -153,16 +153,13 @@ function buildCommandPreview(
         if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
             parts.push('--continuous-batching')
         }
-        if ((!config.prefillBatchSize || config.prefillBatchSize === 0) && !parts.some(a => a === '--prefill-batch-size')) {
-            parts.push('--prefill-batch-size', '4096')
-        }
         if (config.noMemoryAwareCache) {
             parts.push('--no-memory-aware-cache')
             if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
         } else {
             if (config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
             if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
-            if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
+            if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !(config.usePagedCache ?? detected?.usePagedCache)) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
         }
     }
 
@@ -179,7 +176,7 @@ function buildCommandPreview(
         }
     }
 
-    if (!prefixCacheOff && config.enableDiskCache) {
+    if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected?.usePagedCache)) {
         parts.push('--enable-disk-cache')
         if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
         if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
@@ -381,9 +378,14 @@ describe('Prefix Cache', () => {
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
-    it('sets --cache-ttl-minutes when > 0', () => {
-        const out = preview({ cacheTtlMinutes: 60 })
+    it('sets --cache-ttl-minutes when > 0 and paged cache off', () => {
+        const out = preview({ cacheTtlMinutes: 60, usePagedCache: false })
         expect(getFlagValue(out, '--cache-ttl-minutes')).toBe('60')
+    })
+
+    it('suppresses --cache-ttl-minutes when paged cache is on', () => {
+        const out = preview({ cacheTtlMinutes: 60, usePagedCache: true })
+        expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
     })
 })
 
@@ -805,9 +807,9 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
     })
 
-    it('sets safe prefill default when prefillBatchSize is 0 and prefix cache on', () => {
+    it('prefillBatchSize 0 omits flag (uses backend default 8)', () => {
         const out = preview({ prefillBatchSize: 0, enablePrefixCache: true })
-        expect(getFlagValue(out, '--prefill-batch-size')).toBe('4096')
+        expect(hasFlag(out, '--prefill-batch-size')).toBe(false)
     })
 
     it('VLM with all caching features works together', () => {
@@ -915,9 +917,9 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
     })
 
-    it('cacheMemoryPercent default 20 emits 0.2', () => {
-        const out = preview({ cacheMemoryPercent: 20 })
-        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
+    it('cacheMemoryPercent default 30 emits 0.3', () => {
+        const out = preview({ cacheMemoryPercent: 30 })
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
     it('defaultTopP minimum boundary 1 emits 0.01', () => {
@@ -933,9 +935,14 @@ describe('Feature Interaction', () => {
     })
 
     it('empty diskCacheDir with enableDiskCache does not emit --disk-cache-dir', () => {
-        const out = preview({ enableDiskCache: true, diskCacheDir: '' })
+        const out = preview({ enableDiskCache: true, diskCacheDir: '', usePagedCache: false })
         expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
         expect(hasFlag(out, '--disk-cache-dir')).toBe(false)
+    })
+
+    it('enableDiskCache suppressed when usePagedCache is on', () => {
+        const out = preview({ enableDiskCache: true, usePagedCache: true })
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
     })
 
     it('VLM + speculative decoding both emit flags (Python gates server-side)', () => {

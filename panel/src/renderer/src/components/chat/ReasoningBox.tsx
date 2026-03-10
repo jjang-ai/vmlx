@@ -19,6 +19,7 @@ function sanitizeHtml(html: string): string {
 
 export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps) {
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const [isMaximized, setIsMaximized] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)
 
@@ -29,14 +30,14 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
     }
   }, [isStreaming, isDone])
 
-  // Auto-collapse when reasoning ends and content starts
+  // Auto-collapse when reasoning ends and content starts (skip if user maximized)
   useEffect(() => {
-    if (isDone && !isStreaming) {
+    if (isDone && !isStreaming && !isMaximized) {
       const timer = setTimeout(() => setIsCollapsed(true), 1000)
       return () => clearTimeout(timer)
     }
     return undefined
-  }, [isDone, isStreaming])
+  }, [isDone, isStreaming, isMaximized])
 
   // Auto-scroll to bottom when new content arrives (unless user scrolled up)
   useEffect(() => {
@@ -103,14 +104,24 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
             </span>
           )}
         </span>
-        <span className="ml-auto text-[10px] opacity-60">{content.length} chars</span>
+        <span className="ml-auto flex items-center gap-2">
+          <span className="text-[10px] opacity-60">{content.length} chars</span>
+          <span
+            role="button"
+            onClick={(e) => { e.stopPropagation(); setIsMaximized(!isMaximized) }}
+            className="text-[10px] opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+            title={isMaximized ? 'Restore size' : 'Maximize'}
+          >
+            {isMaximized ? '\u25a3' : '\u25a1'}
+          </span>
+        </span>
       </button>
 
       {!isCollapsed && (
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="px-3 py-2 border-t border-border text-xs text-muted-foreground max-h-[300px] overflow-y-auto"
+          className={`px-3 py-2 border-t border-border text-xs text-muted-foreground overflow-y-auto ${isMaximized ? '' : 'max-h-[300px]'}`}
           style={{ lineHeight: '1.6' }}
         >
           <div
