@@ -864,6 +864,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // a single SSE chunk is split into multiple emitDelta calls by think-tag extraction,
       // so we only count once per SSE chunk, not once per emitDelta call)
       const emitDelta = (delta: string, isReasoningDelta: boolean, skipClientCount = false) => {
+        // Skip emission if abort already fired — prevents stale tokens from reaching renderer
+        if (abortController.signal.aborted) return
         // Track raw content BEFORE stripping for tool call marker detection
         if (!isReasoningDelta) {
           rawAccumulated += delta
@@ -1236,18 +1238,25 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         const dec = new TextDecoder()
         let buf = ''
         while (true) {
+          // Check abort before each read — fast models can buffer many chunks
+          if (abortController.signal.aborted) break
           const { value, done } = await rdr.read()
           if (done) break
           buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n')
           buf = lines.pop() || ''
-          for (const line of lines) processLine(line.trim())
+          for (const line of lines) {
+            if (abortController.signal.aborted) break
+            processLine(line.trim())
+          }
         }
+        if (abortController.signal.aborted) return
         const rem = dec.decode() // flush TextDecoder streaming buffer
         if (rem) buf += rem
         // Process remaining lines (may contain multiple newline-separated events)
         if (buf.trim()) {
           for (const line of buf.split('\n')) {
+            if (abortController.signal.aborted) break
             if (line.trim()) processLine(line.trim())
           }
         }
@@ -1833,12 +1842,14 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             ? `/v1/responses/${entry.responseId}/cancel`
             : `/v1/chat/completions/${entry.responseId}/cancel`
           const cancelBase = entry.baseUrl || `http://${entry.endpoint!.host}:${entry.endpoint!.port}`
-          await fetch(
+          const cancelRes = await fetch(
             `${cancelBase}${cancelPath}`,
             { method: 'POST', headers: entry.authHeaders || {}, signal: AbortSignal.timeout(2000) }
           )
-          console.log(`[CHAT] Server cancel sent for ${entry.responseId}`)
-        } catch (_) { /* server may already be done */ }
+          console.log(`[CHAT] Server cancel sent for ${entry.responseId} — status ${cancelRes.status}`)
+        } catch (cancelErr: any) {
+          console.log(`[CHAT] Server cancel failed for ${entry.responseId}: ${cancelErr.message || cancelErr}`)
+        }
       } else if (!entry.responseId) {
         // Abort during prefill: responseId not assigned yet. The fetch abort (step 1)
         // closes the connection; the server will detect disconnect via is_disconnected()

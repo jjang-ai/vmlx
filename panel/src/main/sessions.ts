@@ -1181,8 +1181,8 @@ export class SessionManager extends EventEmitter {
         if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) {
           args.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
         }
-        // Cache TTL (time-to-live for cache entries) — only meaningful for memory-aware cache
-        if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0) {
+        // Cache TTL (time-to-live for cache entries) — only meaningful for memory-aware cache, not paged cache
+        if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !(config.usePagedCache ?? detected.usePagedCache)) {
           args.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
         }
       }
@@ -1208,8 +1208,8 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Disk cache (L2 persistent cache) — only meaningful with prefix cache
-    if (!prefixCacheOff && config.enableDiskCache) {
+    // Disk cache (L2 persistent cache) — only meaningful with prefix cache, incompatible with paged cache
+    if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected.usePagedCache)) {
       args.push('--enable-disk-cache')
       if (config.diskCacheDir) {
         args.push('--disk-cache-dir', config.diskCacheDir)

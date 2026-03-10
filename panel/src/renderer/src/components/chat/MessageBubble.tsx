@@ -142,7 +142,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     return (
       <div
         key={key}
-        className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all"
+        className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:my-2"
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleProseClick}
       />
@@ -226,7 +226,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     const html = sanitizeHtml(marked.parse(content) as string)
     return (
       <div
-        className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all"
+        className="prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:my-2"
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleProseClick}
       />

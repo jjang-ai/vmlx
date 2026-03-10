@@ -78,7 +78,7 @@ function buildCommandPreview(
     } else {
       if (config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
       if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
-      if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
+      if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !(config.usePagedCache ?? detected?.usePagedCache)) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
     }
   }
 
@@ -98,8 +98,8 @@ function buildCommandPreview(
     }
   }
 
-  // Disk cache (mirrors buildArgs line 1138) — requires prefix cache ON
-  if (!prefixCacheOff && config.enableDiskCache) {
+  // Disk cache (mirrors buildArgs) — requires prefix cache ON, incompatible with paged cache
+  if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected?.usePagedCache)) {
     parts.push('--enable-disk-cache')
     if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
     if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
