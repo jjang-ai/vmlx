@@ -220,7 +220,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           <button
             onClick={handleSaveAndRestart}
             disabled={saving || restarting}
-            className="flex-1 px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-40"
+            className="flex-1 px-3 py-1.5 text-sm bg-success text-success-foreground rounded hover:bg-success/90 disabled:opacity-40"
           >
             {restarting ? 'Restarting...' : 'Save & Restart'}
           </button>
