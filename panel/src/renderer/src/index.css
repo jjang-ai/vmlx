@@ -3,35 +3,69 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    /* Midnight Steel theme — dark blue + charcoal grey
-       Values are RGB triplets for Tailwind opacity support (bg-primary/90 etc) */
+  /* Midnight Steel — dark theme (default, matches vmlx.net/theme.md exactly) */
+  :root,
+  .dark {
     --background: 10 12 16;          /* #0a0c10 */
     --foreground: 226 228 234;       /* #e2e4ea */
     --card: 17 20 25;               /* #111419 */
-    --card-foreground: 226 228 234;  /* #e2e4ea */
+    --card-foreground: 226 228 234;
     --popover: 24 28 36;            /* #181c24 */
-    --popover-foreground: 226 228 234; /* #e2e4ea */
+    --popover-foreground: 226 228 234;
     --primary: 59 130 246;          /* #3b82f6 */
-    --primary-foreground: 255 255 255; /* #ffffff */
+    --primary-foreground: 255 255 255;
     --secondary: 24 28 36;          /* #181c24 */
-    --secondary-foreground: 226 228 234; /* #e2e4ea */
+    --secondary-foreground: 226 228 234;
     --muted: 30 35 48;              /* #1e2330 */
     --muted-foreground: 139 144 160; /* #8b90a0 */
     --accent: 37 44 59;             /* #252c3b */
-    --accent-foreground: 255 255 255; /* #ffffff */
+    --accent-foreground: 255 255 255;
     --destructive: 239 68 68;       /* #ef4444 */
-    --destructive-foreground: 255 255 255; /* #ffffff */
+    --destructive-foreground: 255 255 255;
     --border: 30 35 48;             /* #1e2330 */
     --input: 37 44 59;              /* #252c3b */
     --ring: 59 130 246;             /* #3b82f6 */
     --warning: 245 158 11;          /* #f59e0b */
-    --warning-foreground: 255 255 255; /* #ffffff */
+    --warning-foreground: 255 255 255;
+    --success: 34 197 94;           /* #22c55e — green-500 */
+    --success-foreground: 255 255 255;
+    --sidebar: 13 16 22;            /* slightly darker than background */
+    --sidebar-foreground: 226 228 234;
+    --sidebar-border: 22 27 38;
     --radius: 10px;
   }
-}
 
-@layer base {
+  /* Studio Light theme */
+  .light {
+    --background: 250 250 252;      /* #fafafc */
+    --foreground: 15 17 22;         /* #0f1116 */
+    --card: 255 255 255;            /* #ffffff */
+    --card-foreground: 15 17 22;
+    --popover: 255 255 255;
+    --popover-foreground: 15 17 22;
+    --primary: 59 130 246;          /* same blue accent */
+    --primary-foreground: 255 255 255;
+    --secondary: 244 245 247;       /* #f4f5f7 */
+    --secondary-foreground: 15 17 22;
+    --muted: 241 242 246;           /* #f1f2f6 */
+    --muted-foreground: 100 106 122; /* #646a7a */
+    --accent: 237 239 244;          /* #edeff4 */
+    --accent-foreground: 15 17 22;
+    --destructive: 239 68 68;
+    --destructive-foreground: 255 255 255;
+    --border: 226 228 234;          /* #e2e4ea */
+    --input: 226 228 234;
+    --ring: 59 130 246;
+    --warning: 245 158 11;
+    --warning-foreground: 255 255 255;
+    --success: 34 197 94;
+    --success-foreground: 255 255 255;
+    --sidebar: 245 246 250;         /* #f5f6fa */
+    --sidebar-foreground: 15 17 22;
+    --sidebar-border: 226 228 234;
+    --radius: 10px;
+  }
+
   * {
     @apply border-border;
   }
@@ -58,7 +92,7 @@ input[type="range"].cfg-slider {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
-  background: rgb(30 35 48);
+  background: rgb(var(--muted));
 }
 
 input[type="range"].cfg-slider::-webkit-slider-thumb {
@@ -106,8 +140,8 @@ button, input, select, textarea, a {
   -webkit-app-region: no-drag;
 }
 
-/* Prose overrides for Midnight Steel theme (requires @tailwindcss/typography) */
-.prose {
+/* Dark prose overrides for Midnight Steel (requires @tailwindcss/typography) */
+.dark .prose {
   --tw-prose-body: #e2e4ea;
   --tw-prose-headings: #ffffff;
   --tw-prose-lead: #8b90a0;
@@ -124,35 +158,38 @@ button, input, select, textarea, a {
   --tw-prose-pre-bg: #0a0c10;
   --tw-prose-th-borders: #1e2330;
   --tw-prose-td-borders: #1e2330;
-  /* Invert variants for prose-invert */
-  --tw-prose-invert-body: #e2e4ea;
-  --tw-prose-invert-headings: #ffffff;
-  --tw-prose-invert-lead: #8b90a0;
-  --tw-prose-invert-links: #60a5fa;
-  --tw-prose-invert-bold: #ffffff;
-  --tw-prose-invert-counters: #8b90a0;
-  --tw-prose-invert-bullets: #8b90a0;
-  --tw-prose-invert-hr: #1e2330;
-  --tw-prose-invert-quotes: #e2e4ea;
-  --tw-prose-invert-quote-borders: #3b82f6;
-  --tw-prose-invert-captions: #8b90a0;
-  --tw-prose-invert-code: #60a5fa;
-  --tw-prose-invert-pre-code: #e2e4ea;
-  --tw-prose-invert-pre-bg: #0a0c10;
-  --tw-prose-invert-th-borders: #1e2330;
-  --tw-prose-invert-td-borders: #1e2330;
 }
 
-/* Code block styling — positioned relative for copy button overlay */
+/* Light prose overrides */
+.light .prose {
+  --tw-prose-body: #0f1116;
+  --tw-prose-headings: #0f1116;
+  --tw-prose-lead: #646a7a;
+  --tw-prose-links: #2563eb;
+  --tw-prose-bold: #0f1116;
+  --tw-prose-counters: #646a7a;
+  --tw-prose-bullets: #646a7a;
+  --tw-prose-hr: #e2e4ea;
+  --tw-prose-quotes: #0f1116;
+  --tw-prose-quote-borders: #3b82f6;
+  --tw-prose-captions: #646a7a;
+  --tw-prose-code: #2563eb;
+  --tw-prose-pre-code: #0f1116;
+  --tw-prose-pre-bg: #f1f2f6;
+  --tw-prose-th-borders: #e2e4ea;
+  --tw-prose-td-borders: #e2e4ea;
+}
+
+/* Code block styling */
 .prose pre {
   position: relative;
-  border: 1px solid rgb(30 35 48);
+  border: 1px solid rgb(var(--border));
   border-radius: 8px;
 }
 
 /* Inline code styling */
 .prose :not(pre) > code {
-  background: rgb(24 28 36);
+  background: rgb(var(--popover));
   padding: 0.15em 0.4em;
   border-radius: 4px;
   font-size: 0.875em;
@@ -165,9 +202,9 @@ button, input, select, textarea, a {
   right: 6px;
   padding: 2px 8px;
   font-size: 11px;
-  color: #8b90a0;
-  background: rgb(17 20 25 / 0.8);
-  border: 1px solid rgb(30 35 48);
+  color: rgb(var(--muted-foreground));
+  background: rgb(var(--card) / 0.8);
+  border: 1px solid rgb(var(--border));
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
@@ -175,10 +212,16 @@ button, input, select, textarea, a {
   z-index: 1;
 }
 .prose pre:hover .code-copy-btn { opacity: 1; }
-.code-copy-btn:hover { color: #e2e4ea; background: rgb(24 28 36); }
+.code-copy-btn:hover { color: rgb(var(--foreground)); background: rgb(var(--popover)); }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgb(30 35 48); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgb(85 91 110); }
+/* Custom scrollbar — dark */
+.dark ::-webkit-scrollbar { width: 6px; }
+.dark ::-webkit-scrollbar-track { background: transparent; }
+.dark ::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 3px; }
+.dark ::-webkit-scrollbar-thumb:hover { background: rgb(85 91 110); }
+
+/* Custom scrollbar — light */
+.light ::-webkit-scrollbar { width: 6px; }
+.light ::-webkit-scrollbar-track { background: transparent; }
+.light ::-webkit-scrollbar-thumb { background: rgb(var(--border)); border-radius: 3px; }
+.light ::-webkit-scrollbar-thumb:hover { background: rgb(180 184 196); }
