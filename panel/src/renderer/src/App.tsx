@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
+import { ArrowLeft } from 'lucide-react'
+import { ThemeToggle } from './components/ui/theme-toggle'
 import { SessionDashboard } from './components/sessions/SessionDashboard'
 import { CreateSession } from './components/sessions/CreateSession'
 import { SessionView } from './components/sessions/SessionView'
@@ -34,15 +36,17 @@ function App() {
             {view.type !== 'dashboard' && view.type !== 'setup' && (
               <button
                 onClick={() => setView({ type: 'dashboard' })}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
               >
-                ← Home
+                <ArrowLeft className="h-3 w-3" />
+                Home
               </button>
             )}
           </div>
           <span className="text-xs text-muted-foreground flex-1 text-center font-medium tracking-wide">vMLX</span>
-          {/* About button */}
-          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} className="px-3">
+          {/* Theme toggle + About button */}
+          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} className="flex items-center gap-1 px-3">
+            <ThemeToggle />
             <button
               onClick={() => setView({ type: 'about' })}
               className={`text-xs px-2 py-0.5 rounded ${view.type === 'about' ? 'bg-accent' : 'hover:bg-accent'}`}
