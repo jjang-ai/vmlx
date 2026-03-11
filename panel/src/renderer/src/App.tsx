@@ -77,6 +77,11 @@ function App() {
     }
   }, [sessions, setMode, dispatch, openChat])
 
+  const handleSessionChange = useCallback((sessionId: string) => {
+    // Switch the active session for the current chat
+    dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId || '', sessionId })
+  }, [dispatch, state.activeChatId])
+
   // Setup screen
   if (checkingSetup) return null
   if (!setupDone) {
@@ -115,6 +120,7 @@ function App() {
                 sessionEndpoint={sessionEndpoint}
                 activeSessionId={state.activeSessionId}
                 onNewChat={handleNewChat}
+                onSessionChange={handleSessionChange}
               />
             )}
 
@@ -130,11 +136,12 @@ function App() {
 
 // ─── Chat Mode Content ──────────────────────────────────────────────────────
 
-function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNewChat }: {
+function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNewChat, onSessionChange }: {
   activeChatId: string | null
   sessionEndpoint?: { host: string; port: number }
   activeSessionId: string | null
   onNewChat: () => void
+  onSessionChange: (sessionId: string) => void
 }) {
   if (!activeChatId) {
     return <ChatEmptyState onNewChat={onNewChat} />
@@ -145,6 +152,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
       <ChatModeToolbar
         activeChatId={activeChatId}
         activeSessionId={activeSessionId}
+        onSessionChange={onSessionChange}
       />
       <div className="flex-1 overflow-hidden">
         <ChatInterface
