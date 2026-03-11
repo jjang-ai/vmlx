@@ -33,7 +33,7 @@ export function UpdateBanner() {
           e.preventDefault()
           window.open(update.url)
         }}
-        className="text-blue-400 hover:text-blue-300 font-medium"
+        className="text-primary hover:text-primary/80 font-medium"
       >
         Download
       </a>

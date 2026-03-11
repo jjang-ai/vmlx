@@ -181,7 +181,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const isRemote = session.type === 'remote'
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const statusColor = session.status === 'running'
-    ? (isRemote ? 'bg-green-500' : 'bg-primary')
+    ? (isRemote ? 'bg-success' : 'bg-primary')
     : session.status === 'loading' ? 'bg-warning' : 'bg-destructive'
 
   return (
@@ -270,7 +270,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           {session.status === 'running' && (
             <>
               {isRemote && (
-                <span className="text-xs text-green-500 font-medium px-1">
+                <span className="text-xs text-success font-medium px-1">
                   Connected{session.latencyMs != null ? ` · ${session.latencyMs}ms` : ''}
                 </span>
               )}
@@ -289,7 +289,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               )}
               <button
                 onClick={handleStart}
-                className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                className="text-xs px-2 py-1 bg-success text-success-foreground rounded hover:bg-success/90"
               >
                 {isRemote ? (session.status === 'error' ? 'Reconnect' : 'Connect') : 'Start'}
               </button>
