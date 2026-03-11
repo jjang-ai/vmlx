@@ -13,6 +13,7 @@ import { DownloadStatusBar } from './components/DownloadStatusBar'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useAppState } from './contexts/AppStateContext'
 import { useSessionsContext } from './contexts/SessionsContext'
+import { ChatModeToolbar } from './components/layout/ChatModeToolbar'
 
 function App() {
   const [setupDone, setSetupDone] = useState(false)
@@ -140,12 +141,20 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
   }
 
   return (
-    <ChatInterface
-      chatId={activeChatId}
-      onNewChat={onNewChat}
-      sessionEndpoint={sessionEndpoint}
-      sessionId={activeSessionId || undefined}
-    />
+    <div className="flex flex-col h-full relative">
+      <ChatModeToolbar
+        activeChatId={activeChatId}
+        activeSessionId={activeSessionId}
+      />
+      <div className="flex-1 overflow-hidden">
+        <ChatInterface
+          chatId={activeChatId}
+          onNewChat={onNewChat}
+          sessionEndpoint={sessionEndpoint}
+          sessionId={activeSessionId || undefined}
+        />
+      </div>
+    </div>
   )
 }
 
