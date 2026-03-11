@@ -106,7 +106,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
         className="w-full px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-accent/30 transition-colors"
       >
         {isGenerating ? (
-          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse flex-shrink-0" />
+          <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse flex-shrink-0" />
         ) : isActive ? (
           <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse flex-shrink-0" />
         ) : errorCount > 0 ? (
@@ -138,7 +138,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                 <div key={gi} className="flex items-center gap-2 text-muted-foreground py-1">
                   {isActive && lastStatus.phase === 'generating' ? (
                     <>
-                      <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+                      <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
                       <span>Generating tool call...</span>
                     </>
                   ) : (
