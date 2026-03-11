@@ -1,0 +1,162 @@
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+
+export interface SessionSummary {
+  id: string
+  modelPath: string
+  modelName?: string
+  host: string
+  port: number
+  status: 'running' | 'stopped' | 'error' | 'loading'
+  type?: 'local' | 'remote'
+  remoteUrl?: string
+}
+
+interface SessionsContextValue {
+  sessions: SessionSummary[]
+  loadingSessions: Set<string>
+  ensureSessionRunning: (modelPath: string) => Promise<SessionSummary>
+  refreshSessions: () => Promise<void>
+}
+
+const SessionsContext = createContext<SessionsContextValue>(null!)
+
+export function useSessionsContext() {
+  return useContext(SessionsContext)
+}
+
+export function SessionsProvider({ children }: { children: React.ReactNode }) {
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set())
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const list = await window.api.sessions.list()
+      setSessions(list)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    refreshSessions()
+
+    const unsubs = [
+      window.api.sessions.onCreated(() => refreshSessions()),
+      window.api.sessions.onDeleted(() => refreshSessions()),
+      window.api.sessions.onStarting((data: any) => {
+        setSessions(prev => prev.map(s => s.id === data.sessionId ? { ...s, status: 'loading' as const } : s))
+      }),
+      window.api.sessions.onReady((data: any) => {
+        setSessions(prev => prev.map(s =>
+          s.id === data.sessionId
+            ? { ...s, status: 'running' as const, ...(data.pid ? { pid: data.pid } : {}), ...(data.port ? { port: data.port } : {}) }
+            : s
+        ))
+        setLoadingSessions(prev => {
+          const next = new Set(prev)
+          const session = sessionsRef.current.find(s => s.id === data.sessionId)
+          if (session) next.delete(session.modelPath)
+          return next
+        })
+      }),
+      window.api.sessions.onStopped((data: any) => {
+        setSessions(prev => prev.map(s => s.id === data.sessionId ? { ...s, status: 'stopped' as const } : s))
+      }),
+      window.api.sessions.onError((data: any) => {
+        setSessions(prev => prev.map(s => s.id === data.sessionId ? { ...s, status: 'error' as const } : s))
+        setLoadingSessions(prev => {
+          const next = new Set(prev)
+          const session = sessionsRef.current.find(s => s.id === data.sessionId)
+          if (session) next.delete(session.modelPath)
+          return next
+        })
+      }),
+      window.api.sessions.onHealth((data: any) => {
+        setSessions(prev => prev.map(s =>
+          s.id === data.sessionId ? { ...s, status: 'running' as const, ...(data.modelName ? { modelName: data.modelName } : {}) } : s
+        ))
+      }),
+    ]
+
+    return () => unsubs.forEach(fn => fn())
+  }, [])
+
+  const ensureSessionRunning = useCallback(async (modelPath: string): Promise<SessionSummary> => {
+    const current = sessionsRef.current
+
+    // Check if already running
+    const existing = current.find(s => s.modelPath === modelPath && s.status === 'running')
+    if (existing) return existing
+
+    // Check if loading
+    const loading = current.find(s => s.modelPath === modelPath && s.status === 'loading')
+    if (loading) {
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => { unsub(); reject(new Error('Session start timed out')) }, 60000)
+        const unsub = window.api.sessions.onReady((data: any) => {
+          if (data.sessionId === loading.id) {
+            clearTimeout(timeout)
+            unsub()
+            refreshSessions().then(() => {
+              resolve({ ...loading, status: 'running', ...(data.port ? { port: data.port } : {}) })
+            })
+          }
+        })
+      })
+    }
+
+    // Find stopped session or create new
+    setLoadingSessions(prev => new Set(prev).add(modelPath))
+
+    let session = current.find(s => s.modelPath === modelPath)
+    if (!session) {
+      const result = await window.api.sessions.create(modelPath, {})
+      if (!result.success) {
+        setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
+        throw new Error(result.error || 'Failed to create session')
+      }
+      await refreshSessions()
+      const updated = await window.api.sessions.list()
+      session = updated.find((s: any) => s.modelPath === modelPath)
+      if (!session) {
+        setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
+        throw new Error('Session created but not found')
+      }
+    }
+
+    // Start the session
+    if (session.status !== 'running' && session.status !== 'loading') {
+      const result = await window.api.sessions.start(session.id)
+      if (!result.success) {
+        setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
+        throw new Error(result.error || 'Failed to start session')
+      }
+    }
+
+    // Wait for ready
+    const sessionId = session.id
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        unsub()
+        setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
+        reject(new Error('Session start timed out after 60s'))
+      }, 60000)
+      const unsub = window.api.sessions.onReady((data: any) => {
+        if (data.sessionId === sessionId) {
+          clearTimeout(timeout)
+          unsub()
+          setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
+          refreshSessions().then(() => {
+            resolve({ ...session!, status: 'running', ...(data.port ? { port: data.port } : {}) })
+          })
+        }
+      })
+    })
+  }, [refreshSessions])
+
+  return (
+    <SessionsContext.Provider value={{ sessions, loadingSessions, ensureSessionRunning, refreshSessions }}>
+      {children}
+    </SessionsContext.Provider>
+  )
+}
