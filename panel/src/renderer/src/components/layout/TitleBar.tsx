@@ -1,0 +1,87 @@
+import { MessageSquare, Server, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { ThemeToggle } from '../ui/theme-toggle'
+import { useAppState } from '../../contexts/AppStateContext'
+import type { AppMode } from '../../types/app-state'
+
+export function TitleBar() {
+  const { state, setMode, dispatch } = useAppState()
+
+  return (
+    <div
+      className="flex items-center h-10 bg-card border-b border-border flex-shrink-0"
+      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+    >
+      {/* macOS traffic light spacer + sidebar toggle */}
+      <div
+        className="flex items-center gap-1 pl-[72px] pr-2"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        {state.mode === 'chat' && (
+          <button
+            onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
+            className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors"
+            title={state.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          >
+            {state.sidebarCollapsed
+              ? <PanelLeft className="h-3.5 w-3.5" />
+              : <PanelLeftClose className="h-3.5 w-3.5" />
+            }
+          </button>
+        )}
+      </div>
+
+      {/* Center: mode toggle */}
+      <div className="flex-1 flex justify-center">
+        <div
+          className="flex items-center bg-muted rounded-md p-0.5 gap-0.5"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <ModeButton
+            mode="chat"
+            active={state.mode === 'chat'}
+            onClick={() => setMode('chat')}
+            icon={<MessageSquare className="h-3 w-3" />}
+            label="Chat"
+          />
+          <ModeButton
+            mode="server"
+            active={state.mode === 'server'}
+            onClick={() => setMode('server')}
+            icon={<Server className="h-3 w-3" />}
+            label="Server"
+          />
+        </div>
+      </div>
+
+      {/* Right: theme toggle */}
+      <div
+        className="flex items-center gap-1 px-3"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <ThemeToggle />
+      </div>
+    </div>
+  )
+}
+
+function ModeButton({ active, onClick, icon, label }: {
+  mode: AppMode
+  active: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  label: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-all ${
+        active
+          ? 'bg-background text-foreground shadow-sm'
+          : 'text-muted-foreground hover:text-foreground'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
