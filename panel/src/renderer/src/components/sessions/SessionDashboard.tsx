@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { FolderOpen, X, Cpu } from 'lucide-react'
 import { SessionCard } from './SessionCard'
 import { useToast } from '../Toast'
 
@@ -175,7 +176,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
             }`}
             title="Configure model scan directories"
           >
-            📁 Directories
+            <FolderOpen className="h-4 w-4" /> Directories
           </button>
           <button
             onClick={handleDetect}
@@ -225,7 +226,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
                     className="text-destructive hover:text-destructive/80 flex-shrink-0"
                     title="Remove directory"
                   >
-                    ✕
+                    <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ))}
@@ -264,7 +265,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
 
       {sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20">
-          <div className="text-6xl mb-4">🚀</div>
+          <Cpu className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
           <h2 className="text-xl font-semibold mb-2">No Sessions Yet</h2>
           <p className="text-muted-foreground text-center mb-6 max-w-md">
             Create a session to load a model and start an inference server.

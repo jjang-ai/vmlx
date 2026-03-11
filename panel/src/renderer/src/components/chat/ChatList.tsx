@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { Pencil, Trash2, Folder, X } from 'lucide-react'
 
 interface Chat {
   id: string
@@ -222,7 +223,7 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
               className="text-xs hover:text-foreground"
               title="Rename"
             >
-              ✏️
+              <Pencil className="h-3 w-3" />
             </button>
             <div className="relative">
               <button
@@ -259,7 +260,7 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
               className="text-xs hover:text-destructive"
               title="Delete"
             >
-              🗑️
+              <Trash2 className="h-3 w-3" />
             </button>
           </div>
         )}
@@ -309,7 +310,7 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
                 autoFocus
               />
               <button onClick={handleCreateFolder} className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded">OK</button>
-              <button onClick={() => setShowNewFolder(false)} className="text-xs px-1 py-1 text-muted-foreground">✕</button>
+              <button onClick={() => setShowNewFolder(false)} className="text-xs px-1 py-1 text-muted-foreground"><X className="h-3 w-3" /></button>
             </div>
           ) : (
             <button
@@ -333,14 +334,14 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
             {byFolder.filter(g => g.chats.length > 0).map(({ folder, chats: folderChats }) => (
               <div key={folder.id} className="mb-2">
                 <div className="group flex items-center gap-1 px-2 py-1 text-xs font-medium text-muted-foreground">
-                  <span>📁 {folder.name}</span>
+                  <span className="flex items-center gap-1"><Folder className="h-3 w-3" /> {folder.name}</span>
                   <span className="text-[10px] opacity-60">({folderChats.length})</span>
                   <button
                     onClick={(e) => handleDeleteFolder(folder.id, e)}
                     className="ml-auto opacity-0 group-hover:opacity-100 text-[10px] hover:text-destructive"
                     title="Delete folder"
                   >
-                    ✕
+                    <X className="h-3 w-3" />
                   </button>
                 </div>
                 <div className="pl-2">

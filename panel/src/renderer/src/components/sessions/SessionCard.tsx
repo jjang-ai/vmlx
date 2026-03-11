@@ -1,3 +1,5 @@
+import { Settings } from 'lucide-react'
+
 interface Session {
   id: string
   modelPath: string
@@ -99,7 +101,7 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
             title="Configure session settings"
           >
-            ⚙
+            <Settings className="h-4 w-4" />
           </button>
         )}
 

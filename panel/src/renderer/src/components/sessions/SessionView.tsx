@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ArrowLeft, Menu, Settings, X } from 'lucide-react'
 import { ChatInterface } from '../chat/ChatInterface'
 import { ChatList } from '../chat/ChatList'
 import { ChatSettings } from '../chat/ChatSettings'
@@ -187,8 +188,8 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
     <div className="flex flex-col h-full">
       {/* Session Header */}
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card/50 flex-shrink-0">
-        <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-sm">
-          ← Sessions
+        <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1">
+          <ArrowLeft className="h-3.5 w-3.5" /> Sessions
         </button>
         <div className="w-px h-4 bg-border" />
 
@@ -212,7 +213,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             onClick={() => setShowChatList(!showChatList)}
             className="text-sm hover:bg-accent px-2 py-1 rounded"
           >
-            {showChatList ? '←' : '☰'}
+            {showChatList ? <ArrowLeft className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </button>
           <button
             onClick={handleNewChat}
@@ -225,14 +226,14 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             className={`text-sm px-2 py-1 rounded ${showSettings ? 'bg-accent' : 'hover:bg-accent'}`}
             title="Chat inference settings"
           >
-            ⚙ Chat
+            <Settings className="h-3.5 w-3.5" /> Chat
           </button>
           <button
             onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) { setShowSettings(false); setShowCache(false) } }}
             className={`text-sm px-2 py-1 rounded ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
             title={isRemote ? 'Connection Settings' : 'Server Settings'}
           >
-            {isRemote ? '⚙ Connection' : '⚙ Server'}
+            <Settings className="h-3.5 w-3.5" /> {isRemote ? 'Connection' : 'Server'}
           </button>
           {!isRemote && session.status === 'running' && (
             <>
@@ -358,7 +359,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <div className="w-80 border-l border-border bg-card overflow-y-auto flex-shrink-0">
             <div className="flex items-center justify-between p-3 border-b border-border">
               <h3 className="text-sm font-medium">Cache Management</h3>
-              <button onClick={() => setShowCache(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+              <button onClick={() => setShowCache(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
             </div>
             <div className="p-3">
               <CachePanel endpoint={{ host: session.host, port: session.port }} sessionStatus={session.status} />
@@ -369,7 +370,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <div className="w-96 border-l border-border bg-card overflow-y-auto flex-shrink-0">
             <div className="flex items-center justify-between p-3 border-b border-border">
               <h3 className="text-sm font-medium">Benchmark</h3>
-              <button onClick={() => setShowBenchmark(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+              <button onClick={() => setShowBenchmark(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
             </div>
             <div className="p-3">
               <BenchmarkPanel
@@ -386,7 +387,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <div className="w-80 border-l border-border bg-card overflow-y-auto flex-shrink-0">
             <div className="flex items-center justify-between p-3 border-b border-border">
               <h3 className="text-sm font-medium">Embeddings</h3>
-              <button onClick={() => setShowEmbeddings(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+              <button onClick={() => setShowEmbeddings(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
             </div>
             <div className="p-3">
               <EmbeddingsPanel
@@ -401,7 +402,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <div className="w-80 border-l border-border bg-card overflow-y-auto flex-shrink-0">
             <div className="flex items-center justify-between p-3 border-b border-border">
               <h3 className="text-sm font-medium">Performance</h3>
-              <button onClick={() => setShowPerformance(false)} className="text-muted-foreground hover:text-foreground text-sm">x</button>
+              <button onClick={() => setShowPerformance(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
             </div>
             <div className="p-3">
               <PerformancePanel
