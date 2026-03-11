@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { ArrowLeft, X } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { DownloadTab } from './DownloadTab'
 
@@ -249,8 +250,8 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
       <div className="p-6 overflow-auto h-full">
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center gap-3 mb-6">
-            <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
-              ← Back
+            <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-1">
+              <ArrowLeft className="h-3.5 w-3.5" /> Back
             </button>
             <h1 className="text-2xl font-bold">Create Session</h1>
           </div>
@@ -415,7 +416,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
                             className="text-destructive hover:text-destructive/80 flex-shrink-0"
                             title="Remove directory"
                           >
-                            ✕
+                            <X className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       ))}
@@ -609,8 +610,8 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
     <div className="p-6 overflow-auto h-full">
       <div className="max-w-2xl mx-auto">
         <div className="flex items-center gap-3 mb-6">
-          <button onClick={() => setStep(1)} className="text-muted-foreground hover:text-foreground">
-            ← Back
+          <button onClick={() => setStep(1)} className="text-muted-foreground hover:text-foreground flex items-center gap-1">
+            <ArrowLeft className="h-3.5 w-3.5" /> Back
           </button>
           <h1 className="text-2xl font-bold">Create Session</h1>
           <span className="text-sm text-muted-foreground">Step 2: Configure</span>

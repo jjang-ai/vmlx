@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { X } from 'lucide-react'
 
 interface UpdateInfo {
   currentVersion: string
@@ -41,7 +42,7 @@ export function UpdateBanner() {
         className="ml-auto text-muted-foreground hover:text-foreground"
         title="Dismiss"
       >
-        ✕
+        <X className="h-3.5 w-3.5" />
       </button>
     </div>
   )

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { X } from 'lucide-react'
 import { createPortal } from 'react-dom'
 
 interface ModalProps {
@@ -40,7 +41,7 @@ export function Modal({ title, onClose, children, className = '' }: ModalProps) 
                         className="text-muted-foreground hover:text-foreground transition-colors text-lg leading-none"
                         aria-label="Close"
                     >
-                        ✕
+                        <X className="h-4 w-4" />
                     </button>
                 </div>
                 {children}

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { X } from 'lucide-react'
 
 interface DownloadProgress {
   percent: number
@@ -151,7 +152,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
                 className="text-destructive hover:text-destructive/80"
                 title="Cancel"
               >
-                x
+                <X className="h-3 w-3" />
               </button>
             </span>
           ))}
