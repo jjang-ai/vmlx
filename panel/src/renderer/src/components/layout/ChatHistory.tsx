@@ -97,7 +97,8 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     await window.api.chat.delete(id)
-    setChats(prev => prev.filter(c => c.id !== id))
+    // Reload from DB to get a consistent view (avoids stale backfill on next refresh)
+    loadChats()
   }
 
   // Filter by search
