@@ -480,6 +480,25 @@ class DatabaseManager {
     }))
   }
 
+  getRecentChats(limit: number = 100) {
+    this.ensureOpen()
+    return this.db.prepare(`
+      SELECT c.id, c.title, c.model_id, c.model_path, c.created_at, c.updated_at,
+             (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) as message_count
+      FROM chats c
+      ORDER BY c.updated_at DESC
+      LIMIT ?
+    `).all(limit).map((row: any) => ({
+      id: row.id,
+      title: row.title,
+      modelId: row.model_id,
+      modelPath: row.model_path,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      messageCount: row.message_count
+    }))
+  }
+
   updateChat(id: string, updates: Partial<Chat>): void {
     const fields: string[] = []
     const values: any[] = []

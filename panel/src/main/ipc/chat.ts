@@ -341,6 +341,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     return db.getChatsByModelPath(modelPath)
   })
 
+  ipcMain.handle('chat:getRecent', async (_, limit: number) => {
+    return db.getRecentChats(limit)
+  })
+
   ipcMain.handle('chat:getAll', async (_, folderId?: string) => {
     return db.getChats(folderId)
   })
