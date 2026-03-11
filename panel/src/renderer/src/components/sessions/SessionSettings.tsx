@@ -415,7 +415,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
             <button
               onClick={handleSaveAndRestart}
               disabled={saving || restarting}
-              className="px-6 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 font-medium disabled:opacity-40"
+              className="px-6 py-2 bg-success text-success-foreground rounded hover:bg-success/90 font-medium disabled:opacity-40"
             >
               {restarting ? 'Restarting...' : 'Save & Restart'}
             </button>

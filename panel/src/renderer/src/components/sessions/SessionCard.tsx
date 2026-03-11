@@ -51,7 +51,7 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0 mr-2">
           <div className="flex items-center gap-1.5">
-            {isRemote && <span className="text-xs bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded flex-shrink-0">Remote</span>}
+            {isRemote && <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded flex-shrink-0">Remote</span>}
             <h3 className="font-semibold text-sm truncate" title={session.modelPath}>
               {shortName}
             </h3>
@@ -89,7 +89,7 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
         {session.status === 'stopped' || session.status === 'error' ? (
           <button
             onClick={() => onStart(session.id)}
-            className="flex-1 px-3 py-1.5 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700"
+            className="flex-1 px-3 py-1.5 bg-success text-success-foreground text-sm rounded hover:bg-success/90"
           >
             {isRemote ? 'Connect' : 'Start'}
           </button>
