@@ -1,121 +1,239 @@
-import { useState, useEffect, useRef } from 'react'
-import { ArrowLeft } from 'lucide-react'
-import { ThemeToggle } from './components/ui/theme-toggle'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { MessageSquare, ArrowLeft } from 'lucide-react'
+import { TitleBar } from './components/layout/TitleBar'
+import { Sidebar } from './components/layout/Sidebar'
 import { SessionDashboard } from './components/sessions/SessionDashboard'
 import { CreateSession } from './components/sessions/CreateSession'
 import { SessionView } from './components/sessions/SessionView'
 import { SessionSettings } from './components/sessions/SessionSettings'
+import { ChatInterface } from './components/chat/ChatInterface'
 import { SetupScreen } from './components/setup/SetupScreen'
 import { ToastProvider } from './components/Toast'
 import { DownloadStatusBar } from './components/DownloadStatusBar'
 import { UpdateBanner } from './components/UpdateBanner'
-
-type View =
-  | { type: 'setup' }
-  | { type: 'dashboard' }
-  | { type: 'create' }
-  | { type: 'session'; sessionId: string }
-  | { type: 'sessionSettings'; sessionId: string }
-  | { type: 'about' }
+import { useAppState } from './contexts/AppStateContext'
+import { useSessionsContext } from './contexts/SessionsContext'
 
 function App() {
-  const [view, setView] = useState<View>({ type: 'setup' })
+  const [setupDone, setSetupDone] = useState(false)
+  const [checkingSetup, setCheckingSetup] = useState(true)
+  const { state, dispatch, setMode, openChat } = useAppState()
+  const { sessions } = useSessionsContext()
 
-  // Clear any stale chat locks on app mount (handles window reload recovery)
+  // Check if engine is already installed (skip setup screen if so)
   useEffect(() => {
-    window.api.chat.clearAllLocks().catch(() => { })
+    window.api.vllm.checkInstallation()
+      .then((result: any) => {
+        if (result.installed) setSetupDone(true)
+      })
+      .catch(() => {})
+      .finally(() => setCheckingSetup(false))
   }, [])
+
+  // Clear stale chat locks on mount
+  useEffect(() => {
+    window.api.chat.clearAllLocks().catch(() => {})
+  }, [])
+
+  // Resolve the endpoint for the active session
+  const activeSession = sessions.find(s => s.id === state.activeSessionId)
+  const sessionEndpoint = activeSession?.status === 'running'
+    ? { host: activeSession.host, port: activeSession.port }
+    : undefined
+
+  const handleChatSelect = useCallback((chatId: string, modelPath: string) => {
+    // Find the session for this model
+    const session = sessions.find(s => s.modelPath === modelPath)
+    if (session) {
+      openChat(chatId, session.id)
+    } else {
+      // Open chat without a session — user will need to start one
+      dispatch({ type: 'OPEN_CHAT', chatId, sessionId: '' })
+    }
+  }, [sessions, openChat, dispatch])
+
+  const handleNewChat = useCallback(async () => {
+    // Find the first running session, or any session
+    const running = sessions.find(s => s.status === 'running')
+    const target = running || sessions[0]
+
+    if (!target) {
+      // No sessions — switch to server mode to create one
+      setMode('server')
+      dispatch({ type: 'SET_SERVER_PANEL', panel: 'create' })
+      return
+    }
+
+    const modelName = target.modelName || target.modelPath.split('/').pop() || 'New Chat'
+    const result = await window.api.chat.create(
+      `Chat with ${modelName}`,
+      target.modelPath,
+      undefined,
+      target.modelPath
+    )
+    if (result?.id) {
+      openChat(result.id, target.id)
+    }
+  }, [sessions, setMode, dispatch, openChat])
+
+  // Setup screen
+  if (checkingSetup) return null
+  if (!setupDone) {
+    return (
+      <ToastProvider>
+        <div className="flex flex-col h-screen bg-background text-foreground">
+          <SetupScreen onReady={() => setSetupDone(true)} />
+        </div>
+      </ToastProvider>
+    )
+  }
 
   return (
     <ToastProvider>
       <div className="flex flex-col h-screen bg-background text-foreground">
-        {/* Window drag bar */}
-        <div className="flex items-center h-8 bg-card border-b border-border flex-shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-          {/* Back button + title in drag bar (no-drag region) — pl-[72px] clears macOS traffic lights */}
-          <div className="flex items-center gap-2 pl-[72px] pr-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-            {view.type !== 'dashboard' && view.type !== 'setup' && (
-              <button
-                onClick={() => setView({ type: 'dashboard' })}
-                className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-              >
-                <ArrowLeft className="h-3 w-3" />
-                Home
-              </button>
-            )}
-          </div>
-          <span className="text-xs text-muted-foreground flex-1 text-center font-medium tracking-wide">vMLX</span>
-          {/* Theme toggle + About button */}
-          <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties} className="flex items-center gap-1 px-3">
-            <ThemeToggle />
-            <button
-              onClick={() => setView({ type: 'about' })}
-              className={`text-xs px-2 py-0.5 rounded ${view.type === 'about' ? 'bg-accent' : 'hover:bg-accent'}`}
-            >
-              About
-            </button>
-          </div>
-        </div>
-
-        {/* Update notification + download status */}
+        <TitleBar />
         <UpdateBanner />
         <DownloadStatusBar />
 
-        {/* Main content */}
-        <main className="flex-1 overflow-hidden">
-          {view.type === 'setup' && (
-            <SetupScreen onReady={() => setView({ type: 'dashboard' })} />
-          )}
-
-          {view.type === 'dashboard' && (
-            <SessionDashboard
-              onOpenSession={(sessionId) => setView({ type: 'session', sessionId })}
-              onConfigureSession={(sessionId) => setView({ type: 'sessionSettings', sessionId })}
-              onCreateSession={() => setView({ type: 'create' })}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Sidebar — chat mode only */}
+          {state.mode === 'chat' && (
+            <Sidebar
+              collapsed={state.sidebarCollapsed}
+              currentChatId={state.activeChatId}
+              onChatSelect={handleChatSelect}
+              onNewChat={handleNewChat}
             />
           )}
 
-          {view.type === 'create' && (
-            <CreateSession
-              onBack={() => setView({ type: 'dashboard' })}
-              onCreated={(sessionId) => setView({ type: 'session', sessionId })}
-            />
-          )}
+          {/* Main content area */}
+          <main className="flex-1 overflow-hidden">
+            {state.mode === 'chat' && (
+              <ChatModeContent
+                activeChatId={state.activeChatId}
+                sessionEndpoint={sessionEndpoint}
+                activeSessionId={state.activeSessionId}
+                onNewChat={handleNewChat}
+              />
+            )}
 
-          {view.type === 'session' && (
-            <SessionView
-              sessionId={view.sessionId}
-              onBack={() => setView({ type: 'dashboard' })}
-            />
-          )}
-
-          {view.type === 'sessionSettings' && (
-            <SessionSettings
-              sessionId={view.sessionId}
-              onBack={() => setView({ type: 'dashboard' })}
-            />
-          )}
-
-          {view.type === 'about' && (
-            <div className="p-8 overflow-auto h-full">
-              <div className="max-w-3xl mx-auto space-y-6">
-                <h2 className="text-2xl font-bold">About vMLX</h2>
-                <p className="text-sm text-muted-foreground">
-                  A native macOS application for running local AI models on Apple Silicon.
-                </p>
-                <AppVersion />
-                <div className="flex gap-4 text-xs">
-                  <a href="https://vmlx.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
-                  <a href="https://github.com/vmlxllm/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
-                </div>
-                <ApiKeysSection />
-              </div>
-            </div>
-          )}
-        </main>
+            {state.mode === 'server' && (
+              <ServerModeContent />
+            )}
+          </main>
+        </div>
       </div>
     </ToastProvider>
   )
 }
+
+// ─── Chat Mode Content ──────────────────────────────────────────────────────
+
+function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNewChat }: {
+  activeChatId: string | null
+  sessionEndpoint?: { host: string; port: number }
+  activeSessionId: string | null
+  onNewChat: () => void
+}) {
+  if (!activeChatId) {
+    return <ChatEmptyState onNewChat={onNewChat} />
+  }
+
+  return (
+    <ChatInterface
+      chatId={activeChatId}
+      onNewChat={onNewChat}
+      sessionEndpoint={sessionEndpoint}
+      sessionId={activeSessionId || undefined}
+    />
+  )
+}
+
+function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-center px-8">
+      <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+        <MessageSquare className="h-8 w-8 text-primary" />
+      </div>
+      <h2 className="text-lg font-semibold mb-2">Start a conversation</h2>
+      <p className="text-sm text-muted-foreground mb-6 max-w-sm">
+        Select a chat from the sidebar or create a new one to begin.
+      </p>
+      <button
+        onClick={onNewChat}
+        className="px-4 py-2 bg-primary text-primary-foreground text-sm rounded-md hover:bg-primary/90 transition-colors"
+      >
+        New Chat
+      </button>
+    </div>
+  )
+}
+
+// ─── Server Mode Content ────────────────────────────────────────────────────
+
+function ServerModeContent() {
+  const { state, dispatch } = useAppState()
+  const { serverPanel, serverSessionId } = state
+
+  return (
+    <>
+      {serverPanel === 'dashboard' && (
+        <SessionDashboard
+          onOpenSession={(sessionId) => dispatch({ type: 'SET_SERVER_PANEL', panel: 'session', sessionId })}
+          onConfigureSession={(sessionId) => dispatch({ type: 'SET_SERVER_PANEL', panel: 'settings', sessionId })}
+          onCreateSession={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'create' })}
+        />
+      )}
+
+      {serverPanel === 'create' && (
+        <CreateSession
+          onBack={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })}
+          onCreated={(sessionId) => dispatch({ type: 'SET_SERVER_PANEL', panel: 'session', sessionId })}
+        />
+      )}
+
+      {serverPanel === 'session' && serverSessionId && (
+        <SessionView
+          sessionId={serverSessionId}
+          onBack={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })}
+        />
+      )}
+
+      {serverPanel === 'settings' && serverSessionId && (
+        <SessionSettings
+          sessionId={serverSessionId}
+          onBack={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })}
+        />
+      )}
+
+      {serverPanel === 'about' && (
+        <div className="p-8 overflow-auto h-full">
+          <div className="max-w-3xl mx-auto space-y-6">
+            <button
+              onClick={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })}
+              className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+            >
+              <ArrowLeft className="h-3 w-3" />
+              Back
+            </button>
+            <h2 className="text-2xl font-bold">About vMLX</h2>
+            <p className="text-sm text-muted-foreground">
+              A native macOS application for running local AI models on Apple Silicon.
+            </p>
+            <AppVersion />
+            <div className="flex gap-4 text-xs">
+              <a href="https://vmlx.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
+              <a href="https://github.com/vmlxllm/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
+            </div>
+            <ApiKeysSection />
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ─── Shared Components ──────────────────────────────────────────────────────
 
 function AppVersion() {
   const [version, setVersion] = useState('...')
@@ -129,8 +247,6 @@ function AppVersion() {
     </div>
   )
 }
-
-// ─── API Keys Section (About page) ─────────────────────────────────────────
 
 function ApiKeysSection() {
   const [braveKey, setBraveKey] = useState('')
