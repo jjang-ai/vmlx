@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 
 interface Session {
@@ -339,8 +340,8 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
       <div className="max-w-2xl mx-auto">
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
-          <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
-            ← Back
+          <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-1">
+            <ArrowLeft className="h-3.5 w-3.5" /> Back
           </button>
           <h1 className="text-2xl font-bold">Session Settings</h1>
         </div>
@@ -389,7 +390,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
             onClick={() => setShowPreview(!showPreview)}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
-            {showPreview ? '▼' : '▶'} CLI Command Preview
+            <ChevronRight className={`h-4 w-4 transition-transform ${showPreview ? 'rotate-90' : ''}`} /> CLI Command Preview
           </button>
           {showPreview && (
             <pre className="mt-2 p-3 bg-background/80 text-primary text-xs font-mono rounded-lg overflow-x-auto whitespace-pre-wrap">

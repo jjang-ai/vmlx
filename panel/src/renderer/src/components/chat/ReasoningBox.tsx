@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -93,9 +94,7 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
         onClick={() => setIsCollapsed(!isCollapsed)}
         className="w-full px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
-        <span className="text-[10px] transition-transform duration-150" style={{ transform: isCollapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}>
-          &#9654;
-        </span>
+        <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
         <span className="font-medium">
           {label}
           {isStreaming && !isDone && (
@@ -112,7 +111,7 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
             className="text-[10px] opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
             title={isMaximized ? 'Restore size' : 'Maximize'}
           >
-            {isMaximized ? '\u25a3' : '\u25a1'}
+            {isMaximized ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
           </span>
         </span>
       </button>

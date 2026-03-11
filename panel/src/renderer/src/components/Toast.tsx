@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, createContext, useContext } from 'react'
+import { XCircle, AlertTriangle, Info, CheckCircle, X } from 'lucide-react'
 
 interface ToastMessage {
   id: number
@@ -65,10 +66,10 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
   }
 
   const icons = {
-    error: '✕',
-    warning: '⚠',
-    info: 'ℹ',
-    success: '✓',
+    error: <XCircle className="h-4 w-4" />,
+    warning: <AlertTriangle className="h-4 w-4" />,
+    info: <Info className="h-4 w-4" />,
+    success: <CheckCircle className="h-4 w-4" />,
   }
 
   const iconColors = {
@@ -97,7 +98,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
           onClick={() => onDismiss(toast.id)}
           className="text-muted-foreground hover:text-foreground text-xs flex-shrink-0 ml-2"
         >
-          ✕
+          <X className="h-3 w-3" />
         </button>
       </div>
     </div>

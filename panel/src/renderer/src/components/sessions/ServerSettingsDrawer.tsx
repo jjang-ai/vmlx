@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { X } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
 
 interface Session {
@@ -163,7 +164,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
         <span className="font-medium text-sm">{isRemote ? 'Connection Settings' : 'Server Settings'}</span>
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm px-1">
-          ✕
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
