@@ -2184,3 +2184,36 @@ describe('MCP Tool Result Truncation', () => {
     })
 })
 
+// Quantization detection from model name
+describe('Quantization detection from model name', () => {
+  function detectQuantFromName(name: string): string {
+    const lower = name.toLowerCase()
+    const match = lower.match(/\b(4bit|8bit|3bit|6bit|fp16|bf16|fp32)\b/)
+    return match ? match[1] : ''
+  }
+
+  it('detects 4bit', () => {
+    expect(detectQuantFromName('Qwen2.5-7B-Instruct-4bit')).toBe('4bit')
+  })
+
+  it('detects 8bit', () => {
+    expect(detectQuantFromName('Llama-3-8B-8bit')).toBe('8bit')
+  })
+
+  it('detects fp16', () => {
+    expect(detectQuantFromName('Mistral-7B-fp16')).toBe('fp16')
+  })
+
+  it('detects bf16', () => {
+    expect(detectQuantFromName('Model-bf16-weights')).toBe('bf16')
+  })
+
+  it('returns empty for no quantization indicator', () => {
+    expect(detectQuantFromName('Qwen2.5-7B-Instruct')).toBe('')
+  })
+
+  it('returns empty for partial matches', () => {
+    expect(detectQuantFromName('Qwen2.5-7B-bit')).toBe('')
+  })
+})
+

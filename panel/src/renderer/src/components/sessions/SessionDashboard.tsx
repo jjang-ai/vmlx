@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { FolderOpen, X, Cpu } from 'lucide-react'
+import { FolderOpen, Cpu } from 'lucide-react'
 import { SessionCard } from './SessionCard'
+import { DirectoryManager } from './DirectoryManager'
 import { useToast } from '../Toast'
 
 interface Session {
@@ -32,7 +33,6 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
   const [userDirs, setUserDirs] = useState<string[]>([])
   const [builtinDirs, setBuiltinDirs] = useState<string[]>([])
   const [dirError, setDirError] = useState<string | null>(null)
-  const [manualPath, setManualPath] = useState('')
 
   const loadSessions = async () => {
     try {
@@ -131,11 +131,10 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
     await addDirectory(result.path)
   }
 
-  const handleAddManualPath = async () => {
-    if (!manualPath.trim()) return
+  const handleAddManualPath = async (path: string) => {
+    if (!path) return
     setDirError(null)
-    await addDirectory(manualPath.trim())
-    setManualPath('')
+    await addDirectory(path)
   }
 
   const addDirectory = async (dirPath: string) => {
@@ -196,91 +195,38 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
       {/* Directory Manager Panel */}
       {showDirManager && (
         <div className="mb-6 p-4 bg-card border border-border rounded-lg">
-          <h3 className="text-sm font-semibold mb-3">Model Scan Directories</h3>
-          <p className="text-xs text-muted-foreground mb-3">
-            vMLX scans these directories for models when creating a new session.
-          </p>
-
-          {/* Built-in directories */}
-          {builtinDirs.length > 0 && (
-            <div className="mb-3">
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Default</span>
-              {builtinDirs.map(dir => (
-                <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs text-muted-foreground">
-                  <span className="truncate flex-1" title={dir}>{dir}</span>
-                  <span className="text-xs opacity-50 flex-shrink-0">built-in</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* User directories */}
-          {userDirs.length > 0 && (
-            <div className="mb-3">
-              <span className="text-xs text-muted-foreground uppercase tracking-wider">Custom</span>
-              {userDirs.map(dir => (
-                <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs">
-                  <span className="truncate flex-1" title={dir}>{dir}</span>
-                  <button
-                    onClick={() => handleRemoveDirectory(dir)}
-                    className="text-destructive hover:text-destructive/80 flex-shrink-0"
-                    title="Remove directory"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Add directory */}
-          <div className="flex items-center gap-2 mt-2">
-            <input
-              type="text"
-              placeholder="Enter path or browse..."
-              value={manualPath}
-              onChange={(e) => { setManualPath(e.target.value); setDirError(null) }}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleAddManualPath() }}
-              className="flex-1 px-2 py-1.5 bg-background border border-input rounded text-xs"
-            />
-            <button
-              onClick={handleAddManualPath}
-              disabled={!manualPath.trim()}
-              className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent disabled:opacity-50"
-            >
-              Add
-            </button>
-            <button
-              onClick={handleBrowseDirectory}
-              className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent"
-            >
-              Browse...
-            </button>
-          </div>
-          {dirError && (
-            <p className="text-xs text-destructive mt-1">{dirError}</p>
-          )}
+          <DirectoryManager
+            userDirs={userDirs}
+            builtinDirs={builtinDirs}
+            dirError={dirError}
+            onAdd={handleAddManualPath}
+            onRemove={handleRemoveDirectory}
+            onBrowse={handleBrowseDirectory}
+            onClearError={() => setDirError(null)}
+            description="vMLX scans these directories for models when creating a new session."
+          />
         </div>
       )}
 
       {sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20">
-          <Cpu className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-xl font-semibold mb-2">No Sessions Yet</h2>
-          <p className="text-muted-foreground text-center mb-6 max-w-md">
-            Create a session to load a model and start an inference server.
-            Or click "Detect Processes" to detect running servers.
+          <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+            <Cpu className="h-7 w-7 text-primary" />
+          </div>
+          <h2 className="text-xl font-semibold mb-2">No sessions yet</h2>
+          <p className="text-sm text-muted-foreground text-center mb-6 max-w-sm">
+            Create a session to load a model and start chatting, or detect a running server.
           </p>
           <div className="flex gap-3">
             <button
               onClick={onCreateSession}
-              className="px-6 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+              className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 font-medium text-sm transition-colors"
             >
               Create Session
             </button>
             <button
               onClick={handleDetect}
-              className="px-6 py-2 border border-border rounded hover:bg-accent"
+              className="px-5 py-2.5 border border-border rounded-xl hover:bg-accent text-sm transition-colors"
             >
               Detect Running
             </button>

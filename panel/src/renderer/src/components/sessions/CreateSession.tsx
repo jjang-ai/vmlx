@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { ArrowLeft, X } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { DownloadTab } from './DownloadTab'
+import { DirectoryManager } from './DirectoryManager'
 
 interface ModelInfo {
   path: string
@@ -32,7 +33,6 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
   const [userDirs, setUserDirs] = useState<string[]>([])
   const [builtinDirs, setBuiltinDirs] = useState<string[]>([])
   const [dirError, setDirError] = useState<string | null>(null)
-  const [manualPath, setManualPath] = useState('')
   const logEndRef = useRef<HTMLDivElement>(null)
   const launchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -215,11 +215,10 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
     await addDirectory(result.path)
   }
 
-  const handleAddManualPath = async () => {
-    if (!manualPath.trim()) return
+  const handleAddManualPath = async (path: string) => {
+    if (!path) return
     setDirError(null)
-    await addDirectory(manualPath.trim())
-    setManualPath('')
+    await addDirectory(path)
   }
 
   const addDirectory = async (dirPath: string) => {
@@ -389,67 +388,15 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
               {/* Directory Manager Panel */}
               {showDirManager && (
                 <div className="mb-4 p-4 bg-card border border-border rounded-lg">
-                  <h3 className="text-sm font-semibold mb-3">Model Scan Directories</h3>
-
-                  {/* Built-in directories */}
-                  {builtinDirs.length > 0 && (
-                    <div className="mb-3">
-                      <span className="text-xs text-muted-foreground uppercase tracking-wider">Default</span>
-                      {builtinDirs.map(dir => (
-                        <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs text-muted-foreground">
-                          <span className="truncate flex-1" title={dir}>{dir}</span>
-                          <span className="text-xs opacity-50 flex-shrink-0">built-in</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* User directories */}
-                  {userDirs.length > 0 && (
-                    <div className="mb-3">
-                      <span className="text-xs text-muted-foreground uppercase tracking-wider">Custom</span>
-                      {userDirs.map(dir => (
-                        <div key={dir} className="flex items-center gap-2 mt-1 px-2 py-1.5 bg-muted/50 rounded text-xs">
-                          <span className="truncate flex-1" title={dir}>{dir}</span>
-                          <button
-                            onClick={() => handleRemoveDirectory(dir)}
-                            className="text-destructive hover:text-destructive/80 flex-shrink-0"
-                            title="Remove directory"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Add directory */}
-                  <div className="flex items-center gap-2 mt-2">
-                    <input
-                      type="text"
-                      placeholder="Enter path or browse..."
-                      value={manualPath}
-                      onChange={(e) => { setManualPath(e.target.value); setDirError(null) }}
-                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddManualPath() }}
-                      className="flex-1 px-2 py-1.5 bg-background border border-input rounded text-xs"
-                    />
-                    <button
-                      onClick={handleAddManualPath}
-                      disabled={!manualPath.trim()}
-                      className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent disabled:opacity-50"
-                    >
-                      Add
-                    </button>
-                    <button
-                      onClick={handleBrowseDirectory}
-                      className="px-2 py-1.5 text-xs border border-border rounded hover:bg-accent"
-                    >
-                      Browse...
-                    </button>
-                  </div>
-                  {dirError && (
-                    <p className="text-xs text-destructive mt-1">{dirError}</p>
-                  )}
+                  <DirectoryManager
+                    userDirs={userDirs}
+                    builtinDirs={builtinDirs}
+                    dirError={dirError}
+                    onAdd={handleAddManualPath}
+                    onRemove={handleRemoveDirectory}
+                    onBrowse={handleBrowseDirectory}
+                    onClearError={() => setDirError(null)}
+                  />
                 </div>
               )}
 

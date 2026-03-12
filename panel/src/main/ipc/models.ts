@@ -44,6 +44,7 @@ interface ModelInfo {
   path: string
   size?: string
   format?: 'mlx' | 'gguf' | 'unknown'
+  quantization?: string
 }
 
 /** Check if a model directory contains MLX-format files (safetensors + config.json) */
@@ -161,12 +162,27 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
             }
           }
 
+          // Detect quantization: try config.json first, fall back to directory name
+          let quantization: string | undefined
+          try {
+            const configRaw = await readFile(join(currentPath, 'config.json'), 'utf-8')
+            const configJson = JSON.parse(configRaw)
+            if (typeof configJson.quantization === 'string' && configJson.quantization) {
+              quantization = configJson.quantization
+            }
+          } catch { /* no config or parse error */ }
+          if (!quantization) {
+            const nameMatch = id.toLowerCase().match(/\b(4bit|8bit|3bit|6bit|fp16|bf16|fp32)\b/)
+            if (nameMatch) quantization = nameMatch[1]
+          }
+
           models.push({
             id,
             name: id,
             path: currentPath,
             size: formatSize(size),
-            format
+            format,
+            quantization
           })
         }
 
