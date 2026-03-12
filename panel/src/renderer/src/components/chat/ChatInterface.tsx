@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Sparkles } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { InputBox, ImageAttachment } from './InputBox'
 import { useToast } from '../Toast'
@@ -101,6 +102,14 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
       if (Object.keys(restoredReasoning).length > 0) {
         setReasoningMap(restoredReasoning)
         setReasoningDoneMap(restoredReasoningDone)
+      }
+    })
+
+    // Check if generation is still active for this chat (handles switch-away-and-back)
+    window.api.chat.isStreaming(chatId).then((isActive: boolean) => {
+      if (isActive) {
+        setLoading(true)
+        // streamingMessageId will be set by the next stream event
       }
     })
 
@@ -336,10 +345,15 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
       const msg = error?.message || 'Unknown error'
       showToast('error', 'Message failed', msg)
       // Reload messages from DB to restore consistent state
-      const freshMessages = await window.api.chat.getMessages(chatId)
-      if (freshMessages.length > 0) {
-        setMessages(hydrateMessages(freshMessages))
-      } else {
+      try {
+        const freshMessages = await window.api.chat.getMessages(chatId)
+        if (freshMessages.length > 0) {
+          setMessages(hydrateMessages(freshMessages))
+        } else {
+          setMessages(prev => prev.filter(m => m.id !== tempId))
+        }
+      } catch {
+        // If reload also fails, at least remove the temp message
         setMessages(prev => prev.filter(m => m.id !== tempId))
       }
     } finally {
@@ -351,23 +365,22 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
   if (!chatId) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="text-center max-w-md">
-          <div className="text-4xl mb-6 text-primary font-bold">$_</div>
-          <h2 className="text-2xl font-bold mb-2">vMLX Chat</h2>
-          <p className="text-muted-foreground mb-6">
-            Start a conversation with your local LLM. Make sure you have a model loaded first.
+        <div className="text-center max-w-sm">
+          <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+            <Sparkles className="h-6 w-6 text-primary" />
+          </div>
+          <h2 className="text-xl font-semibold mb-2">Start a conversation</h2>
+          <p className="text-sm text-muted-foreground mb-6">
+            Chat with your local model. Load a model first, then start typing.
           </p>
           {onNewChat && (
             <button
               onClick={onNewChat}
-              className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 font-medium"
+              className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 font-medium text-sm transition-colors"
             >
-              + New Chat
+              New Chat
             </button>
           )}
-          <p className="text-xs text-muted-foreground mt-4">
-            Or click the menu in the sidebar to see existing chats
-          </p>
         </div>
       </div>
     )
@@ -427,6 +440,24 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
               </button>
             </form>
           </div>
+        </div>
+      )}
+      {/* Model not running banner */}
+      {!sessionEndpoint && sessionId && !loading && (
+        <div className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-warning/5">
+          <span className="text-xs text-muted-foreground">Model is not running.</span>
+          <button
+            onClick={async () => {
+              try {
+                await window.api.sessions.start(sessionId)
+              } catch (e) {
+                showToast('error', 'Failed to start', (e as Error).message)
+              }
+            }}
+            className="text-xs px-3 py-1 bg-success text-success-foreground rounded hover:bg-success/90 transition-colors font-medium"
+          >
+            Load Model
+          </button>
         </div>
       )}
       <InputBox
