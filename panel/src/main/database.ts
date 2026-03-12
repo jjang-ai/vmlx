@@ -1,7 +1,18 @@
 import Database from 'better-sqlite3'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, unlinkSync, renameSync } from 'fs'
+
+function encryptValue(value: string): string {
+  if (!value || !safeStorage.isEncryptionAvailable()) return value
+  return 'enc:' + safeStorage.encryptString(value).toString('base64')
+}
+
+function decryptValue(value: string): string {
+  if (!value || !value.startsWith('enc:')) return value  // legacy plaintext
+  if (!safeStorage.isEncryptionAvailable()) return ''
+  return safeStorage.decryptString(Buffer.from(value.slice(4), 'base64'))
+}
 
 export interface Chat {
   id: string
@@ -310,16 +321,16 @@ class DatabaseManager {
     const tableInfo = this.db.pragma('table_info(chat_overrides)') as { name: string; dflt_value: string | null }[]
     const etCol = tableInfo.find(c => c.name === 'enable_thinking')
     if (etCol && etCol.dflt_value === '1') {
-      // Reset all rows that have the DEFAULT value (1) to NULL (Auto)
-      this.db.exec('UPDATE chat_overrides SET enable_thinking = NULL WHERE enable_thinking = 1')
-      // Recreate the column with correct default by rebuilding the table
-      // SQLite doesn't support ALTER COLUMN, but we can work around it:
-      // The DEFAULT in schema only affects future INSERTs without explicit value,
-      // and our INSERT OR REPLACE always specifies the value explicitly.
-      // So the stale DEFAULT 1 won't cause further issues — the UPDATE above
-      // fixes existing rows. Log for visibility.
-      console.log('[DB] Fixed enable_thinking DEFAULT 1 → reset affected rows to NULL (Auto)')
+      // Only run UPDATE if there are actually rows with enable_thinking = 1
+      const affected = this.db.prepare('SELECT COUNT(*) as cnt FROM chat_overrides WHERE enable_thinking = 1').get() as { cnt: number }
+      if (affected.cnt > 0) {
+        this.db.exec('UPDATE chat_overrides SET enable_thinking = NULL WHERE enable_thinking = 1')
+        console.log(`[DB] Fixed enable_thinking DEFAULT 1 → reset ${affected.cnt} affected rows to NULL (Auto)`)
+      }
     }
+
+    // Clean up orphan benchmarks from deleted sessions
+    this.db.exec('DELETE FROM benchmarks WHERE session_id NOT IN (SELECT id FROM sessions)')
 
     // Safe migration: add remote session columns to sessions table
     const sessionColumns = this.db.pragma('table_info(sessions)') as { name: string }[]
@@ -701,7 +712,7 @@ class DatabaseManager {
       session.id, session.modelPath, session.modelName, session.host, session.port,
       session.pid, session.status, session.config, session.createdAt, session.updatedAt,
       session.lastStartedAt, session.lastStoppedAt,
-      session.type || 'local', session.remoteUrl, session.remoteApiKey, session.remoteModel, session.remoteOrganization
+      session.type || 'local', session.remoteUrl, session.remoteApiKey ? encryptValue(session.remoteApiKey) : null, session.remoteModel, session.remoteOrganization
     )
   }
 
@@ -744,7 +755,7 @@ class DatabaseManager {
     if ('lastStoppedAt' in updates) { fields.push('last_stopped_at = ?'); values.push(updates.lastStoppedAt ?? null) }
     if (updates.type !== undefined) { fields.push('type = ?'); values.push(updates.type) }
     if ('remoteUrl' in updates) { fields.push('remote_url = ?'); values.push(updates.remoteUrl ?? null) }
-    if ('remoteApiKey' in updates) { fields.push('remote_api_key = ?'); values.push(updates.remoteApiKey ?? null) }
+    if ('remoteApiKey' in updates) { fields.push('remote_api_key = ?'); values.push(updates.remoteApiKey ? encryptValue(updates.remoteApiKey) : null) }
     if ('remoteModel' in updates) { fields.push('remote_model = ?'); values.push(updates.remoteModel ?? null) }
     if ('remoteOrganization' in updates) { fields.push('remote_organization = ?'); values.push(updates.remoteOrganization ?? null) }
 
@@ -781,7 +792,7 @@ class DatabaseManager {
       lastStoppedAt: row.last_stopped_at,
       type: row.type || 'local',
       remoteUrl: row.remote_url,
-      remoteApiKey: row.remote_api_key,
+      remoteApiKey: row.remote_api_key ? decryptValue(row.remote_api_key) : undefined,
       remoteModel: row.remote_model,
       remoteOrganization: row.remote_organization
     }
@@ -791,12 +802,16 @@ class DatabaseManager {
   getSetting(key: string): string | undefined {
     const stmt = this.db.prepare('SELECT value FROM settings WHERE key = ?')
     const row = stmt.get(key) as { value: string } | undefined
-    return row?.value
+    if (!row?.value) return row?.value
+    return (key.toLowerCase().includes('apikey') || key.toLowerCase().includes('api_key'))
+      ? decryptValue(row.value) : row.value
   }
 
   setSetting(key: string, value: string): void {
+    const encValue = (key.toLowerCase().includes('apikey') || key.toLowerCase().includes('api_key'))
+      ? encryptValue(value) : value
     const stmt = this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
-    stmt.run(key, value)
+    stmt.run(key, encValue)
   }
 
   deleteSetting(key: string): void {
