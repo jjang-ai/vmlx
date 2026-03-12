@@ -178,6 +178,8 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
   onNewChat: () => void
   onSessionChange: (sessionId: string) => void
 }) {
+  const [overridesVersion, setOverridesVersion] = useState(0)
+
   if (!activeChatId) {
     return <ChatEmptyState onNewChat={onNewChat} />
   }
@@ -188,6 +190,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
         activeChatId={activeChatId}
         activeSessionId={activeSessionId}
         onSessionChange={onSessionChange}
+        onOverridesChanged={() => setOverridesVersion(v => v + 1)}
       />
       <div className="flex-1 overflow-hidden">
         <ChatInterface
@@ -195,6 +198,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
           onNewChat={onNewChat}
           sessionEndpoint={sessionEndpoint}
           sessionId={activeSessionId || undefined}
+          overridesVersion={overridesVersion}
         />
       </div>
     </div>

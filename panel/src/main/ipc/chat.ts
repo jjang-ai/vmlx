@@ -336,6 +336,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
   })
 
   ipcMain.handle('chat:addMessage', async (_, chatId: string, role: string, content: string) => {
+    // Ensure chat exists (FK constraint on messages.chat_id)
+    const chat = db.getChat(chatId)
+    if (!chat) {
+      throw new Error(`Cannot add message: chat ${chatId} not found`)
+    }
     const message: Message = {
       id: uuidv4(),
       chatId,

@@ -8,6 +8,7 @@ interface ChatModeToolbarProps {
   activeChatId: string | null
   activeSessionId: string | null
   onSessionChange: (sessionId: string) => void
+  onOverridesChanged?: () => void
 }
 
 interface SessionDetail {
@@ -24,7 +25,7 @@ interface SessionDetail {
   remoteModel?: string
 }
 
-export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange }: ChatModeToolbarProps) {
+export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange, onOverridesChanged }: ChatModeToolbarProps) {
   const { sessions, refreshSessions } = useSessionsContext()
   const [showChatSettings, setShowChatSettings] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
@@ -433,6 +434,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
             }}
             reasoningParser={effectiveReasoningParser}
             onClose={() => setShowChatSettings(false)}
+            onOverridesChanged={onOverridesChanged}
           />
         </div>
       )}
