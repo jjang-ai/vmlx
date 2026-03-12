@@ -591,6 +591,14 @@ class DatabaseManager {
 
   // Chat Overrides
   setChatOverrides(overrides: ChatOverrides): void {
+    // Ensure chat row exists (FK constraint) — create stub if needed
+    const exists = this.db.prepare('SELECT 1 FROM chats WHERE id = ?').get(overrides.chatId)
+    if (!exists) {
+      const now = Date.now()
+      this.db.prepare(
+        'INSERT OR IGNORE INTO chats (id, title, folder_id, created_at, updated_at, model_id) VALUES (?, ?, NULL, ?, ?, ?)'
+      ).run(overrides.chatId, 'New Chat', now, now, 'default')
+    }
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO chat_overrides
       (chat_id, temperature, top_p, top_k, min_p, max_tokens, repeat_penalty,
