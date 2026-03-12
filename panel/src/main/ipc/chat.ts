@@ -181,6 +181,16 @@ function filterTools(overrides: any): any[] {
 const activeRequests = new Map<string, { controller: AbortController; startedAt: number; timeoutMs: number; responseId?: string; endpoint?: { host: string; port: number }; baseUrl?: string; authHeaders?: Record<string, string> }>()
 // Stale lock: each request stores its timeoutMs; stale check uses timeoutMs + 30s buffer
 
+// ask_user: single global listener with Map-based resolver (prevents listener accumulation)
+const askUserResolvers = new Map<string, (answer: string) => void>()
+ipcMain.on('chat:answerUser', (_, chatId: string, answer: string) => {
+  const resolve = askUserResolvers.get(chatId)
+  if (resolve) {
+    askUserResolvers.delete(chatId)
+    resolve(answer)
+  }
+})
+
 /** Abort all active chat requests targeting a specific endpoint (called when session stops) */
 export function abortByEndpoint(host: string, port: number): number {
   let count = 0
@@ -1310,30 +1320,24 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                 if (!win || win.isDestroyed()) { resolve('(User interface not available)'); return }
                 if (abortController.signal.aborted) { resolve('(Generation was stopped)'); return }
                 win.webContents.send('chat:askUser', { chatId, question })
-                let resolved = false
+                // Use Map-based resolver (single global listener, no per-call listener accumulation)
                 const cleanup = () => {
-                  ipcMain.removeListener('chat:answerUser', handler)
+                  askUserResolvers.delete(chatId)
                   clearTimeout(askTimeout)
                   abortController.signal.removeEventListener('abort', onAbort)
                 }
-                const handler = (_: any, respondChatId: string, answer: string) => {
-                  if (respondChatId === chatId && !resolved) {
-                    resolved = true
-                    cleanup()
-                    resolve(answer)
-                  }
-                }
+                askUserResolvers.set(chatId, (answer: string) => {
+                  cleanup()
+                  resolve(answer)
+                })
                 const onAbort = () => {
-                  if (!resolved) {
-                    resolved = true
-                    cleanup()
-                    resolve('(Generation was stopped)')
-                  }
+                  cleanup()
+                  resolve('(Generation was stopped)')
                 }
-                ipcMain.on('chat:answerUser', handler)
                 abortController.signal.addEventListener('abort', onAbort, { once: true })
                 const askTimeout = setTimeout(() => {
-                  if (!resolved) { resolved = true; cleanup(); resolve('(User did not respond within 5 minutes)') }
+                  cleanup()
+                  resolve('(User did not respond within 5 minutes)')
                 }, 300000)
               })
               emitToolStatus('result', 'ask_user', resultText, toolIteration)
