@@ -620,6 +620,57 @@ describe('ask_user Map-based resolver', () => {
   })
 })
 
+// Already-downloaded model detection
+describe('Already-downloaded model detection', () => {
+  // Pure function: build local model ID set from scan results
+  function buildLocalModelIds(models: Array<{ id?: string; path?: string }>): Set<string> {
+    const ids = new Set<string>()
+    for (const m of models) {
+      if (m.id) ids.add(m.id)
+      if (m.path) {
+        const parts = m.path.replace(/\\/g, '/').split('/')
+        if (parts.length >= 2) {
+          ids.add(`${parts[parts.length - 2]}/${parts[parts.length - 1]}`)
+        }
+      }
+    }
+    return ids
+  }
+
+  it('matches by id', () => {
+    const ids = buildLocalModelIds([{ id: 'mlx-community/Qwen2.5-7B-4bit', path: '/models/mlx-community/Qwen2.5-7B-4bit' }])
+    expect(ids.has('mlx-community/Qwen2.5-7B-4bit')).toBe(true)
+  })
+
+  it('matches by path segments', () => {
+    const ids = buildLocalModelIds([{ path: '/Users/eric/models/mlx-community/Llama-3-8B-4bit' }])
+    expect(ids.has('mlx-community/Llama-3-8B-4bit')).toBe(true)
+  })
+
+  it('handles Windows paths', () => {
+    const ids = buildLocalModelIds([{ path: 'C:\\Users\\eric\\models\\mlx-community\\Qwen2.5-7B-4bit' }])
+    expect(ids.has('mlx-community/Qwen2.5-7B-4bit')).toBe(true)
+  })
+
+  it('does not match unrelated model', () => {
+    const ids = buildLocalModelIds([{ id: 'mlx-community/Qwen2.5-7B-4bit' }])
+    expect(ids.has('mlx-community/Llama-3-8B-4bit')).toBe(false)
+  })
+
+  it('handles empty scan results', () => {
+    const ids = buildLocalModelIds([])
+    expect(ids.size).toBe(0)
+  })
+
+  it('deduplicates id and path-based entries', () => {
+    const ids = buildLocalModelIds([
+      { id: 'mlx-community/Qwen2.5-7B-4bit', path: '/models/mlx-community/Qwen2.5-7B-4bit' }
+    ])
+    // Both id and path produce the same key
+    expect(ids.size).toBe(1)
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3: Chat Pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
