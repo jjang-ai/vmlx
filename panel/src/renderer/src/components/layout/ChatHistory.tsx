@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Pencil, Trash2, X, Check } from 'lucide-react'
+import { Pencil, Trash2, X, Check, MessageSquare, Search } from 'lucide-react'
 
 interface ChatSummary {
   id: string
@@ -114,8 +114,19 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
 
   if (filtered.length === 0) {
     return (
-      <div className="px-3 py-8 text-center text-xs text-muted-foreground">
-        {searchQuery ? 'No chats match your search' : 'No chats yet'}
+      <div className="px-3 py-8 flex flex-col items-center text-center">
+        {searchQuery ? (
+          <>
+            <Search className="h-5 w-5 text-muted-foreground/40 mb-2" />
+            <span className="text-xs text-muted-foreground">No chats match your search</span>
+          </>
+        ) : (
+          <>
+            <MessageSquare className="h-5 w-5 text-muted-foreground/40 mb-2" />
+            <span className="text-xs text-muted-foreground">No chats yet</span>
+            <span className="text-[10px] text-muted-foreground/50 mt-0.5">Start a new chat to begin</span>
+          </>
+        )}
       </div>
     )
   }

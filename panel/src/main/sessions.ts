@@ -97,6 +97,9 @@ export class SessionManager extends EventEmitter {
   private creationLock: Promise<void> = Promise.resolve()
   /** Timestamp of last successful health check per session (used to skip redundant per-message checks) */
   private lastHealthyAt = new Map<string, number>()
+  /** Per-session ring buffer for log lines (capped at LOG_BUFFER_MAX_LINES) */
+  private logBuffers = new Map<string, string[]>()
+  private static readonly LOG_BUFFER_MAX_LINES = 2000
   // Allow up to 60 consecutive health check failures (5s * 60 = 5 min)
   // before marking session as down. Long prefill operations (e.g. 44k+
   // tokens) can block the server's event loop for 30+ seconds.
@@ -109,6 +112,34 @@ export class SessionManager extends EventEmitter {
   /** Get timestamp of last successful health check for a session (0 if never checked) */
   getLastHealthyAt(sessionId: string): number {
     return this.lastHealthyAt.get(sessionId) || 0
+  }
+
+  /** Append log data to the per-session ring buffer */
+  pushLog(sessionId: string, data: string): void {
+    let buffer = this.logBuffers.get(sessionId)
+    if (!buffer) {
+      buffer = []
+      this.logBuffers.set(sessionId, buffer)
+    }
+    const timestamp = new Date().toISOString().slice(11, 23) // HH:mm:ss.SSS
+    const lines = data.split('\n')
+    for (const line of lines) {
+      if (!line && lines.length > 1) continue // skip empty splits from trailing newline
+      buffer.push(`[${timestamp}] ${line}`)
+    }
+    if (buffer.length > SessionManager.LOG_BUFFER_MAX_LINES) {
+      buffer.splice(0, buffer.length - SessionManager.LOG_BUFFER_MAX_LINES)
+    }
+  }
+
+  /** Get all buffered log lines for a session */
+  getLogs(sessionId: string): string[] {
+    return this.logBuffers.get(sessionId) || []
+  }
+
+  /** Clear the log buffer for a session */
+  clearLogs(sessionId: string): void {
+    this.logBuffers.delete(sessionId)
   }
 
   /**
@@ -442,6 +473,7 @@ export class SessionManager extends EventEmitter {
         PYTHONPATH: undefined,  // Clear any inherited PYTHONPATH
       }
       const fullCmd = `${vllmResult.pythonPath} -s -m vmlx_engine.cli ${args.join(' ')}`
+      this.pushLog(sessionId, `$ ${fullCmd}`)
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
       proc = spawn(vllmResult.pythonPath, ['-s', '-m', 'vmlx_engine.cli', ...args], {
         env: bundledEnv,
@@ -451,6 +483,7 @@ export class SessionManager extends EventEmitter {
     } else {
       // System binary: spawn vmlx-engine directly
       const fullCmd = `${vllmResult.binaryPath} ${args.join(' ')}`
+      this.pushLog(sessionId, `$ ${fullCmd}`)
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
       proc = spawn(vllmResult.binaryPath, args, {
         env: spawnEnv,
@@ -462,10 +495,13 @@ export class SessionManager extends EventEmitter {
     this.processes.set(sessionId, { process: proc, adoptedPid: null })
 
     proc.stdout?.on('data', (data) => {
-      this.emit('session:log', { sessionId, data: data.toString() })
+      const text = data.toString()
+      this.pushLog(sessionId, text)
+      this.emit('session:log', { sessionId, data: text })
     })
     proc.stderr?.on('data', (data) => {
       const text = data.toString()
+      this.pushLog(sessionId, text)
       // Log errors to main console for diagnostics
       if (text.includes('ERROR') || text.includes('Traceback') || text.includes('Exception')) {
         console.error(`[SERVER] ${text.trimEnd()}`)
@@ -502,7 +538,10 @@ export class SessionManager extends EventEmitter {
         } else {
           reason = `Process exited with code ${code}`
         }
+        this.pushLog(sessionId, `[ERROR] ${reason}`)
         this.emit('session:error', { sessionId, error: reason })
+      } else {
+        this.pushLog(sessionId, `[INFO] Process stopped (exit code ${code})`)
       }
       // Store exit info for waitForReady to access
       this.processes.set(sessionId, { process: null, adoptedPid: null, exitCode: code, exitSignal: signal, lastStderr })
@@ -544,6 +583,7 @@ export class SessionManager extends EventEmitter {
   private async _connectRemoteSession(session: Session): Promise<void> {
     db.updateSession(session.id, { status: 'loading', lastStartedAt: Date.now() })
     this.emit('session:starting', { sessionId: session.id, modelPath: session.modelPath })
+    this.pushLog(session.id, `[INFO] Connecting to remote endpoint...`)
 
     const baseUrl = session.remoteUrl!.replace(/\/+$/, '')
     const headers: Record<string, string> = {}
@@ -552,6 +592,7 @@ export class SessionManager extends EventEmitter {
 
     const url = `${baseUrl}/v1/models`
     const resolvedUrl = await resolveUrl(url)
+    this.pushLog(session.id, `[INFO] GET ${url}${resolvedUrl !== url ? ` (resolved: ${resolvedUrl})` : ''}`)
     console.log(`[SESSION] Connecting to remote: ${url}${resolvedUrl !== url ? ` (resolved: ${resolvedUrl})` : ''}`)
 
     // Retry up to 3 times with increasing delay to handle transient DNS/network issues
@@ -564,6 +605,7 @@ export class SessionManager extends EventEmitter {
         })
         if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`)
 
+        this.pushLog(session.id, `[INFO] Connected to remote endpoint (attempt ${attempt})`)
         console.log(`[SESSION] Remote connected: ${url} (attempt ${attempt})`)
         db.updateSession(session.id, { status: 'running' })
         this.lastHealthyAt.set(session.id, Date.now())
@@ -571,11 +613,13 @@ export class SessionManager extends EventEmitter {
         return
       } catch (err) {
         lastErr = err as Error
+        this.pushLog(session.id, `WARNING: Connect attempt ${attempt}/3 failed: ${lastErr.message}`)
         console.log(`[SESSION] Remote connect attempt ${attempt}/3 failed: ${lastErr.message}`)
         if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1000))
       }
     }
 
+    this.pushLog(session.id, `[ERROR] Cannot connect to remote endpoint: ${lastErr!.message}`)
     db.updateSession(session.id, { status: 'error' })
     this.emit('session:error', { sessionId: session.id, error: `${lastErr!.message} (${url})` })
     throw new Error(`Cannot connect to remote endpoint ${url}: ${lastErr!.message}`)
@@ -587,6 +631,7 @@ export class SessionManager extends EventEmitter {
 
     // Remote sessions just disconnect (no process to kill) — no lock needed
     if (session.type === 'remote') {
+      this.pushLog(sessionId, '[INFO] Disconnected from remote endpoint')
       this.failCounts.delete(sessionId)
       db.updateSession(sessionId, { status: 'stopped', lastStoppedAt: Date.now() })
       this.emit('session:stopped', { sessionId })
@@ -634,6 +679,7 @@ export class SessionManager extends EventEmitter {
 
     this.processes.delete(sessionId)
     this.failCounts.delete(sessionId)
+    this.logBuffers.delete(sessionId)
     db.deleteSession(sessionId)
     this.emit('session:deleted', { sessionId })
   }
@@ -981,6 +1027,7 @@ export class SessionManager extends EventEmitter {
         // Remote endpoint truly unreachable after sustained failures — mark as error.
         // Unlike local sessions, there's no process to kill. The user needs to know
         // the endpoint is down so they can fix it or restart.
+        this.pushLog(sessionId, '[ERROR] Remote endpoint unreachable after sustained failures')
         console.log(`[SESSIONS] handleSessionDown: remote session ${sessionId} ("${session.modelName}") unreachable, marking error`)
         db.updateSession(sessionId, { status: 'error' })
         this.failCounts.delete(sessionId)
@@ -1108,9 +1155,8 @@ export class SessionManager extends EventEmitter {
       args.push('--completion-batch-size', config.completionBatchSize.toString())
     }
 
-    // Auto-detect tool/reasoning parser from model's config.json (authoritative) first,
-    // then fall back to name-based regex matching. This prevents misdetection of fine-tunes
-    // (e.g., a Qwen3 model named "Nemotron-Orchestrator" getting hybrid cache config).
+    // Auto-detect tool/reasoning parser from model's config.json model_type field.
+    // No name-based regex detection — config.json is authoritative.
     const detected = detectModelConfigFromDir(config.modelPath)
 
     // VLM detection: tri-state — undefined=auto, true=force on, false=force off.

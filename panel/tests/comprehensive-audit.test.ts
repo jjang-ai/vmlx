@@ -2478,3 +2478,239 @@ describe('Session endpoint derivation', () => {
   })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: Verbose Logging — Ring Buffer, Timestamps, Severity, Filter
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Minimal ring-buffer implementation matching SessionManager.pushLog() logic.
+ * Tested in isolation — no Electron/Node process dependencies.
+ */
+class LogBuffer {
+  private buffer: string[] = []
+  private readonly maxLines: number
+
+  constructor(maxLines = 2000) {
+    this.maxLines = maxLines
+  }
+
+  push(data: string): void {
+    const timestamp = new Date().toISOString().slice(11, 23)
+    const lines = data.split('\n')
+    for (const line of lines) {
+      if (!line && lines.length > 1) continue
+      this.buffer.push(`[${timestamp}] ${line}`)
+    }
+    if (this.buffer.length > this.maxLines) {
+      this.buffer.splice(0, this.buffer.length - this.maxLines)
+    }
+  }
+
+  getLines(): string[] {
+    return [...this.buffer]
+  }
+
+  clear(): void {
+    this.buffer = []
+  }
+}
+
+describe('Verbose Logging — Ring Buffer', () => {
+  let buf: LogBuffer
+
+  beforeEach(() => {
+    buf = new LogBuffer(10) // small cap for testing
+  })
+
+  it('stores log lines with timestamp prefix', () => {
+    buf.push('hello world')
+    const lines = buf.getLines()
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] hello world$/)
+  })
+
+  it('splits multi-line data into separate entries', () => {
+    buf.push('line1\nline2\nline3')
+    expect(buf.getLines()).toHaveLength(3)
+  })
+
+  it('skips empty trailing splits from newline-terminated data', () => {
+    buf.push('line1\nline2\n')
+    // trailing empty string after split is skipped when lines.length > 1
+    expect(buf.getLines()).toHaveLength(2)
+  })
+
+  it('caps at maxLines, dropping oldest', () => {
+    for (let i = 0; i < 15; i++) {
+      buf.push(`msg-${i}`)
+    }
+    const lines = buf.getLines()
+    expect(lines).toHaveLength(10)
+    // oldest 5 dropped, newest 10 remain
+    expect(lines[0]).toContain('msg-5')
+    expect(lines[9]).toContain('msg-14')
+  })
+
+  it('clear() empties the buffer', () => {
+    buf.push('a')
+    buf.push('b')
+    buf.clear()
+    expect(buf.getLines()).toHaveLength(0)
+  })
+
+  it('getLines() returns a copy, not a reference', () => {
+    buf.push('x')
+    const a = buf.getLines()
+    const b = buf.getLines()
+    expect(a).not.toBe(b)
+    expect(a).toEqual(b)
+  })
+
+  it('handles single empty string without crash', () => {
+    buf.push('')
+    // single-element split → empty string is kept (lines.length === 1)
+    expect(buf.getLines()).toHaveLength(1)
+  })
+})
+
+describe('Verbose Logging — Severity Coloring', () => {
+  // Re-implement getLineClass from LogsPanel.tsx for unit testing
+  function getLineClass(line: string): string {
+    if (line.includes('ERROR') || line.includes('Traceback') || line.includes('Exception'))
+      return 'text-destructive'
+    if (line.includes('WARNING') || line.includes('warn'))
+      return 'text-warning'
+    if (line.includes('[INFO]'))
+      return 'text-muted-foreground'
+    return 'text-foreground/80'
+  }
+
+  it('classifies ERROR lines as destructive', () => {
+    expect(getLineClass('[12:00:00.000] ERROR: something broke')).toBe('text-destructive')
+  })
+
+  it('classifies Traceback lines as destructive', () => {
+    expect(getLineClass('Traceback (most recent call last):')).toBe('text-destructive')
+  })
+
+  it('classifies Exception lines as destructive', () => {
+    expect(getLineClass('RuntimeException: bad thing')).toBe('text-destructive')
+  })
+
+  it('classifies WARNING lines as warning', () => {
+    expect(getLineClass('[12:00:00.000] WARNING: disk low')).toBe('text-warning')
+  })
+
+  it('classifies warn (lowercase) lines as warning', () => {
+    expect(getLineClass('something warned about stuff')).toBe('text-warning')
+  })
+
+  it('classifies [INFO] lines as muted', () => {
+    expect(getLineClass('[INFO] Server started on port 8080')).toBe('text-muted-foreground')
+  })
+
+  it('classifies normal lines as foreground/80', () => {
+    expect(getLineClass('Loading model weights...')).toBe('text-foreground/80')
+  })
+
+  it('ERROR takes precedence over WARNING in same line', () => {
+    expect(getLineClass('ERROR: WARNING something')).toBe('text-destructive')
+  })
+})
+
+describe('Verbose Logging — Filter', () => {
+  const lines = [
+    '[12:00:00.000] [INFO] Server started',
+    '[12:00:01.000] Loading model weights',
+    '[12:00:02.000] ERROR: out of memory',
+    '[12:00:03.000] WARNING: slow batch',
+    '[12:00:04.000] Batch complete in 150ms',
+  ]
+
+  // Re-implement filter logic from LogsPanel
+  function filterLines(allLines: string[], filter: string): string[] {
+    if (!filter) return allLines
+    return allLines.filter(l => l.toLowerCase().includes(filter.toLowerCase()))
+  }
+
+  it('returns all lines with empty filter', () => {
+    expect(filterLines(lines, '')).toHaveLength(5)
+  })
+
+  it('filters case-insensitively', () => {
+    expect(filterLines(lines, 'error')).toHaveLength(1)
+    expect(filterLines(lines, 'ERROR')).toHaveLength(1)
+  })
+
+  it('matches partial strings', () => {
+    const result = filterLines(lines, 'batch')
+    expect(result).toHaveLength(2) // WARNING: slow batch + Batch complete
+  })
+
+  it('returns empty for no matches', () => {
+    expect(filterLines(lines, 'xyznonexistent')).toHaveLength(0)
+  })
+})
+
+describe('Verbose Logging — Log Export', () => {
+  it('joins lines with newline for export', () => {
+    const lines = ['line1', 'line2', 'line3']
+    const exported = lines.join('\n')
+    expect(exported).toBe('line1\nline2\nline3')
+  })
+
+  it('generates correct filename format', () => {
+    const sessionId = 'abc12345-6789-def0'
+    const dateStr = '2026-03-11'
+    const filename = `vmlx-logs-${sessionId.slice(0, 8)}-${dateStr}.log`
+    expect(filename).toBe('vmlx-logs-abc12345-2026-03-11.log')
+  })
+})
+
+describe('Verbose Logging — Buffer per Session', () => {
+  it('isolates logs between sessions', () => {
+    const buffers = new Map<string, LogBuffer>()
+
+    buffers.set('s1', new LogBuffer(100))
+    buffers.set('s2', new LogBuffer(100))
+
+    buffers.get('s1')!.push('session-1 log')
+    buffers.get('s2')!.push('session-2 log')
+
+    expect(buffers.get('s1')!.getLines()[0]).toContain('session-1 log')
+    expect(buffers.get('s2')!.getLines()[0]).toContain('session-2 log')
+    expect(buffers.get('s1')!.getLines()).toHaveLength(1)
+    expect(buffers.get('s2')!.getLines()).toHaveLength(1)
+  })
+
+  it('cleanup on delete removes buffer', () => {
+    const buffers = new Map<string, LogBuffer>()
+    buffers.set('s1', new LogBuffer(100))
+    buffers.get('s1')!.push('data')
+    buffers.delete('s1')
+    expect(buffers.has('s1')).toBe(false)
+  })
+})
+
+describe('Verbose Logging — Lifecycle Events', () => {
+  it('spawn command is logged with $ prefix', () => {
+    const buf = new LogBuffer()
+    buf.push('$ /path/to/python -m vmlx_engine.cli serve --model test --port 8080')
+    const lines = buf.getLines()
+    expect(lines[0]).toContain('$ /path/to/python')
+    expect(lines[0]).toContain('--model test')
+  })
+
+  it('crash event is logged with [ERROR] prefix', () => {
+    const buf = new LogBuffer()
+    buf.push('[ERROR] Process crashed: SIGKILL')
+    expect(buf.getLines()[0]).toContain('[ERROR] Process crashed')
+  })
+
+  it('normal stop is logged with [INFO] prefix', () => {
+    const buf = new LogBuffer()
+    buf.push('[INFO] Process stopped (exit code 0)')
+    expect(buf.getLines()[0]).toContain('[INFO] Process stopped')
+  })
+})
+

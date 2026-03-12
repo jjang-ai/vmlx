@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { Pencil, Trash2, Folder, X } from 'lucide-react'
+import { Pencil, Trash2, Folder, X, MessageSquare, Search } from 'lucide-react'
 
 interface Chat {
   id: string
@@ -325,8 +325,18 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {displayChats.length === 0 ? (
-          <div className="text-center text-muted-foreground text-sm p-4">
-            {searchResults !== null ? 'No results' : 'No chats yet'}
+          <div className="flex flex-col items-center text-center p-6">
+            {searchResults !== null ? (
+              <>
+                <Search className="h-5 w-5 text-muted-foreground/40 mb-2" />
+                <span className="text-sm text-muted-foreground">No results</span>
+              </>
+            ) : (
+              <>
+                <MessageSquare className="h-5 w-5 text-muted-foreground/40 mb-2" />
+                <span className="text-sm text-muted-foreground">No chats yet</span>
+              </>
+            )}
           </div>
         ) : (
           <>

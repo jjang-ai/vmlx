@@ -123,7 +123,17 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         return
       }
 
-      await new Promise(r => setTimeout(r, 2500))
+      // Wait for session:stopped event instead of fixed delay (avoids port race)
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 15000) // hard cap at 15s
+        const unsub = window.api.sessions.onStopped((data: any) => {
+          if (data.sessionId === session.id) {
+            clearTimeout(timeout)
+            unsub()
+            resolve()
+          }
+        })
+      })
       setMessage({ type: 'success', text: 'Starting with new settings...' })
       const startResult = await window.api.sessions.start(session.id)
       if (!startResult.success) {

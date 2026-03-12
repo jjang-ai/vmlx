@@ -80,6 +80,15 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       }
     })
 
+    ipcMain.handle('sessions:getLogs', async (_, sessionId: string) => {
+      return sessionManager.getLogs(sessionId)
+    })
+
+    ipcMain.handle('sessions:clearLogs', async (_, sessionId: string) => {
+      sessionManager.clearLogs(sessionId)
+      return { success: true }
+    })
+
     handlersRegistered = true
   }
 

@@ -2,12 +2,9 @@
  * Model configuration registry for auto-detecting tool/reasoning parsers.
  * Mirrors the Python model_configs.py patterns for client-side detection.
  *
- * Detection strategy:
- * 1. Read model's config.json → use model_type/architectures for authoritative detection
- * 2. Fall back to name/path regex matching (for GGUF models without config.json, etc.)
- *
- * This prevents misdetection of fine-tunes (e.g., a Qwen3 model named "Nemotron-Orchestrator"
- * would be incorrectly flagged as hybrid Nemotron by name alone, but config.json reveals Qwen3).
+ * Detection: reads model's config.json model_type field and maps to a registered family.
+ * No name-based regex detection — config.json is authoritative.
+ * Users can always override auto-detected values via Server Settings UI.
  */
 
 import { readFileSync, existsSync } from 'fs'
@@ -15,7 +12,6 @@ import { join } from 'path'
 
 interface ModelConfig {
   familyName: string
-  pattern: RegExp
   cacheType: 'kv' | 'mamba' | 'hybrid' | 'rotating_kv'
   toolParser?: string
   reasoningParser?: string
@@ -40,7 +36,7 @@ export interface DetectedConfig {
 
 const CONFIG_BY_FAMILY = new Map<string, Omit<ModelConfig, 'pattern' | 'familyName'>>()
 
-function registerFamily(familyName: string, config: Omit<ModelConfig, 'pattern' | 'familyName'>) {
+function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyName'>) {
   CONFIG_BY_FAMILY.set(familyName, config)
 }
 
