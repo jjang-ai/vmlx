@@ -291,6 +291,12 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
   const handleSend = async (content: string, attachments?: ImageAttachment[]) => {
     if (!chatId || (!content.trim() && (!attachments || attachments.length === 0))) return
 
+    // Guard: don't send if model isn't running (prevents fallback to wrong endpoint)
+    if (!sessionEndpoint && sessionId) {
+      showToast('error', 'Model not running', 'Start the model before sending a message.')
+      return
+    }
+
     setLoading(true)
     setStreamingMessageId(null)
     setCurrentMetrics(null)
@@ -463,7 +469,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
       <InputBox
         onSend={handleSend}
         onAbort={handleAbort}
-        disabled={loading}
+        disabled={loading || (!sessionEndpoint && !!sessionId)}
         loading={loading}
         sessionEndpoint={sessionEndpoint}
         sessionId={sessionId}
