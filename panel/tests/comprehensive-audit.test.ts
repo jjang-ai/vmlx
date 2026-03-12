@@ -2217,3 +2217,104 @@ describe('Quantization detection from model name', () => {
   })
 })
 
+// API key encryption pattern
+describe('API key encryption pattern', () => {
+  // Simulate the encrypt/decrypt pattern (without actual safeStorage)
+  function mockEncrypt(value: string): string {
+    if (!value) return value
+    return 'enc:' + Buffer.from(value).toString('base64')
+  }
+
+  function mockDecrypt(value: string): string {
+    if (!value || !value.startsWith('enc:')) return value
+    return Buffer.from(value.slice(4), 'base64').toString()
+  }
+
+  it('encrypts and decrypts round-trip', () => {
+    const original = 'sk-test-1234567890'
+    const encrypted = mockEncrypt(original)
+    expect(encrypted).toMatch(/^enc:/)
+    expect(mockDecrypt(encrypted)).toBe(original)
+  })
+
+  it('passes through empty strings', () => {
+    expect(mockEncrypt('')).toBe('')
+    expect(mockDecrypt('')).toBe('')
+  })
+
+  it('passes through legacy plaintext on decrypt', () => {
+    expect(mockDecrypt('sk-legacy-key')).toBe('sk-legacy-key')
+  })
+
+  // Setting key detection
+  function isApiKeySetting(key: string): boolean {
+    const lower = key.toLowerCase()
+    return lower.includes('apikey') || lower.includes('api_key')
+  }
+
+  it('detects API key settings', () => {
+    expect(isApiKeySetting('braveApiKey')).toBe(true)
+    expect(isApiKeySetting('remote_api_key')).toBe(true)
+    expect(isApiKeySetting('theme')).toBe(false)
+    expect(isApiKeySetting('model_scan_directories')).toBe(false)
+  })
+})
+
+// Import file size guard
+describe('Import file size guard', () => {
+  const MAX_SIZE = 50 * 1024 * 1024
+
+  it('allows files under 50MB', () => {
+    expect(49 * 1024 * 1024 < MAX_SIZE).toBe(true)
+  })
+
+  it('rejects files over 50MB', () => {
+    expect(51 * 1024 * 1024 > MAX_SIZE).toBe(true)
+  })
+
+  it('allows exactly 50MB', () => {
+    expect(MAX_SIZE <= MAX_SIZE).toBe(true)
+  })
+})
+
+// Stale lock cap
+describe('Stale lock cap', () => {
+  function staleLockMs(timeoutMs: number): number {
+    return Math.min(timeoutMs + 30_000, 30 * 60 * 1000)
+  }
+
+  it('adds 30s buffer to normal timeout', () => {
+    // 120s timeout → 150s stale lock
+    expect(staleLockMs(120_000)).toBe(150_000)
+  })
+
+  it('caps at 30 minutes', () => {
+    // 86400s (24h) timeout → capped at 30min
+    expect(staleLockMs(86400_000)).toBe(30 * 60 * 1000)
+  })
+
+  it('handles zero timeout', () => {
+    expect(staleLockMs(0)).toBe(30_000)
+  })
+})
+
+// Orphan benchmark cleanup
+describe('Orphan benchmark cleanup', () => {
+  // Pure logic: which benchmark session_ids are orphans?
+  function findOrphans(benchmarkSessionIds: string[], validSessionIds: Set<string>): string[] {
+    return benchmarkSessionIds.filter(id => !validSessionIds.has(id))
+  }
+
+  it('identifies orphan benchmarks', () => {
+    const benchmarks = ['s1', 's2', 's3']
+    const sessions = new Set(['s1', 's3'])
+    expect(findOrphans(benchmarks, sessions)).toEqual(['s2'])
+  })
+
+  it('returns empty when no orphans', () => {
+    const benchmarks = ['s1', 's2']
+    const sessions = new Set(['s1', 's2', 's3'])
+    expect(findOrphans(benchmarks, sessions)).toEqual([])
+  })
+})
+

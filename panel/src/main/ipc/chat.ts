@@ -358,7 +358,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       const age = Date.now() - existing.startedAt
       // Use the timeout configured when that request started, plus 30s buffer
       // Cap at 10 minutes to prevent indefinite lock (e.g., when serverTimeout is 86400s)
-      const staleLockMs = Math.min(existing.timeoutMs + 30_000, 10 * 60 * 1000)
+      const staleLockMs = Math.min(existing.timeoutMs + 30_000, 30 * 60 * 1000)
       if (age > staleLockMs) {
         // Lock is stale — abort and clear it
         console.log(`[CHAT] Clearing stale lock for ${chatId} (${Math.round(age / 1000)}s old, limit ${Math.round(staleLockMs / 1000)}s)`)

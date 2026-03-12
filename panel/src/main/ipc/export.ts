@@ -1,5 +1,5 @@
 import { ipcMain, dialog } from 'electron'
-import { writeFileSync, readFileSync } from 'fs'
+import { writeFileSync, readFileSync, statSync } from 'fs'
 import { db } from '../database'
 import { randomUUID } from 'crypto'
 
@@ -92,6 +92,12 @@ export function registerExportHandlers(): void {
           app.startAccessingSecurityScopedResource(result.bookmarks![0])
         } catch (e) { }
       })
+    }
+
+    // Guard against excessively large files
+    const fileStats = statSync(filePath)
+    if (fileStats.size > 50 * 1024 * 1024) {
+      throw new Error('File too large (max 50MB)')
     }
 
     const raw = readFileSync(filePath, 'utf-8')
