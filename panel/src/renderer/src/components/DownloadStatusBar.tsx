@@ -26,7 +26,7 @@ interface QueuedDownload {
 export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
   const [active, setActive] = useState<ActiveDownload | null>(null)
   const [queue, setQueue] = useState<QueuedDownload[]>([])
-  const [collapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
   // Poll initial status on mount
   useEffect(() => {
@@ -112,7 +112,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
                 <span className="text-muted-foreground">+{queue.length} queued</span>
               )}
             </div>
-            {p?.percent != null && (
+            {!collapsed && p?.percent != null && (
               <div className="mt-0.5 h-1 bg-muted rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-all duration-300"
@@ -129,6 +129,14 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
             </span>
           )}
 
+          {/* Collapse toggle */}
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="text-[10px] text-muted-foreground hover:text-foreground px-1 flex-shrink-0"
+            title={collapsed ? 'Show details' : 'Hide details'}
+          >
+            {collapsed ? '\u25B8' : '\u25BE'}
+          </button>
           {/* Cancel button */}
           <button
             onClick={() => window.api.models.cancelDownload(active.jobId)}
