@@ -673,7 +673,8 @@ class DatabaseManager {
     const stmt = this.db.prepare(`
       SELECT DISTINCT c.* FROM chats c
       LEFT JOIN messages m ON c.id = m.chat_id
-      WHERE c.title LIKE ? OR m.content LIKE ?
+      WHERE c.title LIKE ?
+         OR (m.content LIKE ? AND m.content NOT LIKE '[{"type":%')
       ORDER BY c.updated_at DESC
       LIMIT 50
     `)
