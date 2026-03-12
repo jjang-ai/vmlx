@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { ArrowDown, MessageCircle } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 
 interface MessageMetrics {
@@ -37,13 +38,20 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
+  const [showScrollBtn, setShowScrollBtn] = useState(false)
 
   // Track whether user is near the bottom of the chat
-  const handleScroll = () => {
+  const handleScroll = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100
-  }
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    isNearBottomRef.current = distFromBottom < 100
+    setShowScrollBtn(distFromBottom > 200)
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [])
 
   // Auto-scroll to bottom when new messages arrive, BUT only if user is near bottom.
   // This lets users scroll up to read earlier content without being yanked back.
@@ -65,29 +73,48 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
   if (messages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-muted-foreground">
-          Start a conversation by typing a message below
-        </p>
+        <div className="text-center">
+          <MessageCircle className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground/60">
+            Send a message to start the conversation
+          </p>
+          <p className="text-xs text-muted-foreground/40 mt-1">
+            Press Enter to send, Shift+Enter for new line
+          </p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4">
-      {messages.map(message => (
-        <MessageBubble
-          key={message.id}
-          message={message}
-          isStreaming={message.id === streamingMessageId}
-          metrics={message.id === streamingMessageId ? currentMetrics : message.metrics}
-          reasoningContent={reasoningMap?.[message.id]}
-          reasoningDone={reasoningDoneMap?.[message.id] ?? false}
-          toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
-          sessionId={sessionId}
-          sessionEndpoint={sessionEndpoint}
-        />
-      ))}
-      <div ref={bottomRef} />
+    <div className="relative flex-1 overflow-hidden">
+      <div ref={containerRef} onScroll={handleScroll} className="h-full overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5 w-full">
+        {messages.map(message => (
+          <MessageBubble
+            key={message.id}
+            message={message}
+            isStreaming={message.id === streamingMessageId}
+            metrics={message.id === streamingMessageId ? currentMetrics : message.metrics}
+            reasoningContent={reasoningMap?.[message.id]}
+            reasoningDone={reasoningDoneMap?.[message.id] ?? false}
+            toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
+            sessionId={sessionId}
+            sessionEndpoint={sessionEndpoint}
+          />
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Scroll-to-bottom button — appears when user scrolls up */}
+      {showScrollBtn && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 p-2 rounded-full bg-card border border-border shadow-lg hover:bg-accent transition-all text-muted-foreground hover:text-foreground"
+          title="Scroll to bottom"
+        >
+          <ArrowDown className="h-4 w-4" />
+        </button>
+      )}
     </div>
   )
 }

@@ -8,6 +8,7 @@ import { CachePanel } from './CachePanel'
 import { BenchmarkPanel } from './BenchmarkPanel'
 import { EmbeddingsPanel } from './EmbeddingsPanel'
 import { PerformancePanel } from './PerformancePanel'
+import { LogsPanel } from './LogsPanel'
 import { useToast } from '../Toast'
 
 interface Session {
@@ -43,6 +44,8 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const [showBenchmark, setShowBenchmark] = useState(false)
   const [showEmbeddings, setShowEmbeddings] = useState(false)
   const [showPerformance, setShowPerformance] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+  const [overridesVersion, setOverridesVersion] = useState(0)
   const [effectiveReasoningParser, setEffectiveReasoningParser] = useState<string | undefined>(undefined)
 
   // Load session and its chats
@@ -222,15 +225,15 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             + Chat
           </button>
           <button
-            onClick={() => { setShowSettings(!showSettings); if (!showSettings) setShowServerSettings(false) }}
-            className={`text-sm px-2 py-1 rounded ${showSettings ? 'bg-accent' : 'hover:bg-accent'}`}
+            onClick={() => { setShowSettings(!showSettings); if (!showSettings) { setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
+            className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${showSettings ? 'bg-accent' : 'hover:bg-accent'}`}
             title="Chat inference settings"
           >
             <Settings className="h-3.5 w-3.5" /> Chat
           </button>
           <button
-            onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) { setShowSettings(false); setShowCache(false) } }}
-            className={`text-sm px-2 py-1 rounded ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
+            onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) { setShowSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
+            className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
             title={isRemote ? 'Connection Settings' : 'Server Settings'}
           >
             <Settings className="h-3.5 w-3.5" /> {isRemote ? 'Connection' : 'Server'}
@@ -238,28 +241,28 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           {!isRemote && session.status === 'running' && (
             <>
               <button
-                onClick={() => { setShowCache(!showCache); if (!showCache) { setShowSettings(false); setShowServerSettings(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false) } }}
+                onClick={() => { setShowCache(!showCache); if (!showCache) { setShowSettings(false); setShowServerSettings(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
                 className={`text-sm px-2 py-1 rounded ${showCache ? 'bg-accent' : 'hover:bg-accent'}`}
                 title="Cache Management"
               >
                 Cache
               </button>
               <button
-                onClick={() => { setShowBenchmark(!showBenchmark); if (!showBenchmark) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowEmbeddings(false); setShowPerformance(false) } }}
+                onClick={() => { setShowBenchmark(!showBenchmark); if (!showBenchmark) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
                 className={`text-sm px-2 py-1 rounded ${showBenchmark ? 'bg-accent' : 'hover:bg-accent'}`}
                 title="Run Benchmark"
               >
                 Bench
               </button>
               <button
-                onClick={() => { setShowEmbeddings(!showEmbeddings); if (!showEmbeddings) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowPerformance(false) } }}
+                onClick={() => { setShowEmbeddings(!showEmbeddings); if (!showEmbeddings) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowPerformance(false); setShowLogs(false) } }}
                 className={`text-sm px-2 py-1 rounded ${showEmbeddings ? 'bg-accent' : 'hover:bg-accent'}`}
                 title="Embeddings"
               >
                 Embed
               </button>
               <button
-                onClick={() => { setShowPerformance(!showPerformance); if (!showPerformance) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false) } }}
+                onClick={() => { setShowPerformance(!showPerformance); if (!showPerformance) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowLogs(false) } }}
                 className={`text-sm px-2 py-1 rounded ${showPerformance ? 'bg-accent' : 'hover:bg-accent'}`}
                 title="Performance Monitor"
               >
@@ -267,6 +270,13 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               </button>
             </>
           )}
+          <button
+            onClick={() => { setShowLogs(!showLogs); if (!showLogs) { setShowSettings(false); setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false) } }}
+            className={`text-sm px-2 py-1 rounded ${showLogs ? 'bg-accent' : 'hover:bg-accent'}`}
+            title={isRemote ? 'Connection Logs' : 'Server Logs'}
+          >
+            Logs
+          </button>
           {session.status === 'running' && (
             <>
               {isRemote && (
@@ -325,6 +335,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             onNewChat={handleNewChat}
             sessionEndpoint={{ host: session.host, port: session.port }}
             sessionId={session.id}
+            overridesVersion={overridesVersion}
           />
         </div>
         {showSettings && currentChatId && (
@@ -342,6 +353,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             }}
             reasoningParser={effectiveReasoningParser}
             onClose={() => setShowSettings(false)}
+            onOverridesChanged={() => setOverridesVersion(v => v + 1)}
           />
         )}
         {showServerSettings && (
@@ -410,6 +422,15 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
                 sessionStatus={session.status}
               />
             </div>
+          </div>
+        )}
+        {showLogs && (
+          <div className="w-96 border-l border-border bg-card flex-shrink-0 flex flex-col">
+            <div className="flex items-center justify-between p-3 border-b border-border flex-shrink-0">
+              <h3 className="text-sm font-medium">{isRemote ? 'Connection Logs' : 'Server Logs'}</h3>
+              <button onClick={() => setShowLogs(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
+            </div>
+            <LogsPanel sessionId={session.id} sessionStatus={session.status} isRemote={isRemote} />
           </div>
         )}
       </div>

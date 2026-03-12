@@ -231,6 +231,8 @@ const api = {
     delete: (sessionId: string) => ipcRenderer.invoke('sessions:delete', sessionId),
     detect: () => ipcRenderer.invoke('sessions:detect'),
     update: (sessionId: string, config: any) => ipcRenderer.invoke('sessions:update', sessionId, config),
+    getLogs: (sessionId: string) => ipcRenderer.invoke('sessions:getLogs', sessionId),
+    clearLogs: (sessionId: string) => ipcRenderer.invoke('sessions:clearLogs', sessionId),
 
     // Events — each returns an unsubscribe function for targeted cleanup
     onStarting: (callback: (data: any) => void) => {

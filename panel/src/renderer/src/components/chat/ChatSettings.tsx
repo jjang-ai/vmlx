@@ -45,9 +45,10 @@ interface ChatSettingsProps {
   session: SessionInfo
   reasoningParser?: string
   onClose: () => void
+  onOverridesChanged?: () => void
 }
 
-export function ChatSettings({ chatId, session, reasoningParser, onClose }: ChatSettingsProps) {
+export function ChatSettings({ chatId, session, reasoningParser, onClose, onOverridesChanged }: ChatSettingsProps) {
   const { showToast } = useToast()
   const [overrides, setOverrides] = useState<ChatOverrides>({})
   const [dirty, setDirty] = useState(false)
@@ -71,6 +72,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
     try {
       await window.api.chat.setOverrides(chatId, overrides)
       setDirty(false)
+      onOverridesChanged?.()
     } catch (e) {
       showToast('error', 'Failed to save settings', (e as Error).message)
     } finally {
@@ -111,6 +113,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
     await window.api.chat.setOverrides(chatId, defaults)
     setOverrides(defaults)
     setDirty(false)
+    onOverridesChanged?.()
   }
 
   const shortModel = session.modelName || session.modelPath.split('/').pop() || session.modelPath
@@ -120,7 +123,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose }: Chat
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
         <span className="font-medium text-sm">Chat Settings</span>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm px-1">
+        <button
+          onClick={() => {
+            if (dirty && !confirm('You have unsaved changes. Discard them?')) return
+            onClose()
+          }}
+          className="text-muted-foreground hover:text-foreground text-sm px-1"
+        >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>

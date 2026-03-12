@@ -180,7 +180,52 @@ button, input, select, textarea, a {
   --tw-prose-td-borders: #e2e4ea;
 }
 
-/* Code block styling */
+/* Code block wrapper */
+.code-block-wrapper {
+  border: 1px solid rgb(var(--border));
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.code-block-wrapper pre {
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+/* Code block header bar */
+.code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: rgb(var(--popover));
+  border-bottom: 1px solid rgb(var(--border));
+  font-size: 11px;
+}
+
+.code-lang {
+  color: rgb(var(--muted-foreground));
+  user-select: none;
+}
+
+/* Code block copy button */
+.code-copy-btn {
+  padding: 1px 8px;
+  font-size: 11px;
+  color: rgb(var(--muted-foreground));
+  background: transparent;
+  border: 1px solid rgb(var(--border));
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.code-block-wrapper:hover .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { color: rgb(var(--foreground)); background: rgb(var(--popover)); }
+
+/* Standalone pre (no wrapper — legacy) */
 .prose pre {
   position: relative;
   border: 1px solid rgb(var(--border));
@@ -194,25 +239,6 @@ button, input, select, textarea, a {
   border-radius: 4px;
   font-size: 0.875em;
 }
-
-/* Code block copy button */
-.code-copy-btn {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  padding: 2px 8px;
-  font-size: 11px;
-  color: rgb(var(--muted-foreground));
-  background: rgb(var(--card) / 0.8);
-  border: 1px solid rgb(var(--border));
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 1;
-}
-.prose pre:hover .code-copy-btn { opacity: 1; }
-.code-copy-btn:hover { color: rgb(var(--foreground)); background: rgb(var(--popover)); }
 
 /* Custom scrollbar — dark */
 .dark ::-webkit-scrollbar { width: 6px; }

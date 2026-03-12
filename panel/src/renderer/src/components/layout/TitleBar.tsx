@@ -1,4 +1,4 @@
-import { MessageSquare, Server, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { MessageSquare, Server, PanelLeftClose, PanelLeft, Info } from 'lucide-react'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { useAppState } from '../../contexts/AppStateContext'
 import type { AppMode } from '../../types/app-state'
@@ -53,12 +53,22 @@ export function TitleBar() {
         </div>
       </div>
 
-      {/* Right: theme toggle */}
+      {/* Right: about + theme toggle */}
       <div
         className="flex items-center gap-1 px-3"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <ThemeToggle />
+        <button
+          onClick={() => {
+            dispatch({ type: 'SET_MODE', mode: 'server' } as any)
+            dispatch({ type: 'SET_SERVER_PANEL', panel: 'about' })
+          }}
+          className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors"
+          title="About & Settings"
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   )

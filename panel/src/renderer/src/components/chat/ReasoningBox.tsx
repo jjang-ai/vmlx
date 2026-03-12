@@ -23,17 +23,19 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
   const [isMaximized, setIsMaximized] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolledUp = useRef(false)
+  const userToggledRef = useRef(false)
 
-  // Auto-expand when streaming starts
+  // Auto-expand when streaming starts (reset user toggle tracking for new stream)
   useEffect(() => {
     if (isStreaming && !isDone) {
+      userToggledRef.current = false
       setIsCollapsed(false)
     }
   }, [isStreaming, isDone])
 
-  // Auto-collapse when reasoning ends and content starts (skip if user maximized)
+  // Auto-collapse when reasoning ends — skip if user manually toggled or maximized
   useEffect(() => {
-    if (isDone && !isStreaming && !isMaximized) {
+    if (isDone && !isStreaming && !isMaximized && !userToggledRef.current) {
       const timer = setTimeout(() => setIsCollapsed(true), 1000)
       return () => clearTimeout(timer)
     }
@@ -91,7 +93,7 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
     } bg-popover`}
     >
       <button
-        onClick={() => setIsCollapsed(!isCollapsed)}
+        onClick={() => { userToggledRef.current = true; setIsCollapsed(!isCollapsed) }}
         className="w-full px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
       >
         <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />

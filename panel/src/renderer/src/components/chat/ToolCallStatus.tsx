@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { formatJson } from './InlineToolCall'
+import { Check, X, Square, ChevronRight, AlertTriangle, Loader2, StopCircle } from 'lucide-react'
+import { formatJson } from './chat-utils'
 
 export interface ToolStatus {
   phase: 'calling' | 'executing' | 'result' | 'error' | 'processing' | 'done' | 'generating' | 'asking'
@@ -41,8 +42,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
       groups.push(current)
       lastProcessingIdx = -1
     } else if (s.phase === 'generating') {
-      // "Generating tool call..." — show as a standalone spinner before any calling events
-      if (lastProcessingIdx >= 0) {
+      if (lastProcessingIdx >= 0 && lastProcessingIdx < groups.length) {
         groups[lastProcessingIdx] = { name: '', statuses: [s] }
       } else {
         lastProcessingIdx = groups.length
@@ -50,8 +50,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
       }
       current = null
     } else if (s.phase === 'processing') {
-      // Collapse multiple processing events into one
-      if (lastProcessingIdx >= 0) {
+      if (lastProcessingIdx >= 0 && lastProcessingIdx < groups.length) {
         groups[lastProcessingIdx] = { name: '', statuses: [s] }
       } else {
         lastProcessingIdx = groups.length
@@ -78,13 +77,21 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   const lastStatus = statuses[statuses.length - 1]
   const isActive = isStreaming && lastStatus.phase !== 'done'
 
+  // Check if any tool calls were interrupted (not completed)
+  const hasInterrupted = !isActive && toolCallGroups.some(g => {
+    const last = g.statuses[g.statuses.length - 1]
+    return last.phase !== 'result' && last.phase !== 'error'
+  })
+
   // Build summary text
   const isGenerating = lastStatus.phase === 'generating'
   const summaryParts: string[] = []
   if (isGenerating) {
-    summaryParts.push('Generating tool call...')
+    summaryParts.push('Generating tool call\u2026')
   } else if (isActive) {
-    summaryParts.push(`Using ${toolCount} tool${toolCount !== 1 ? 's' : ''}...`)
+    summaryParts.push(`Using ${toolCount} tool${toolCount !== 1 ? 's' : ''}\u2026`)
+  } else if (hasInterrupted) {
+    summaryParts.push(`${toolCount} tool${toolCount !== 1 ? 's' : ''} interrupted`)
   } else {
     summaryParts.push(`Used ${toolCount} tool${toolCount !== 1 ? 's' : ''}`)
   }
@@ -97,7 +104,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   const toolNames = [...new Set(toolCallGroups.map(g => g.name))].filter(Boolean)
 
   return (
-    <div className={`my-2 rounded border overflow-hidden transition-all duration-200 ${
+    <div className={`my-2 rounded-lg border overflow-hidden transition-all duration-200 ${
       isActive ? 'border-warning/40 border-l-warning border-l-2' : 'border-border'
     } bg-popover`}>
       {/* Compact header — always visible */}
@@ -106,13 +113,15 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
         className="w-full px-3 py-1.5 flex items-center gap-2 text-xs hover:bg-accent/30 transition-colors"
       >
         {isGenerating ? (
-          <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse flex-shrink-0" />
+          <Loader2 className="h-3.5 w-3.5 text-primary animate-spin flex-shrink-0" />
         ) : isActive ? (
-          <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse flex-shrink-0" />
+          <Loader2 className="h-3.5 w-3.5 text-warning animate-spin flex-shrink-0" />
         ) : errorCount > 0 ? (
-          <span className="text-warning flex-shrink-0">&#9888;</span>
+          <AlertTriangle className="h-3.5 w-3.5 text-warning flex-shrink-0" />
+        ) : hasInterrupted ? (
+          <StopCircle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
         ) : (
-          <span className="text-primary flex-shrink-0">&#10003;</span>
+          <Check className="h-3.5 w-3.5 text-primary flex-shrink-0" />
         )}
 
         <span className="text-muted-foreground">{summary}</span>
@@ -124,9 +133,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
           </span>
         )}
 
-        <span className="ml-auto text-[10px] text-muted-foreground opacity-60 flex-shrink-0">
-          {sectionOpen ? '[-]' : '[+]'}
-        </span>
+        <ChevronRight className={`ml-auto h-3 w-3 text-muted-foreground/50 flex-shrink-0 transition-transform duration-150 ${sectionOpen ? 'rotate-90' : ''}`} />
       </button>
 
       {/* Expanded detail view */}
@@ -138,12 +145,12 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                 <div key={gi} className="flex items-center gap-2 text-muted-foreground py-1">
                   {isActive && lastStatus.phase === 'generating' ? (
                     <>
-                      <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
-                      <span>Generating tool call...</span>
+                      <Loader2 className="h-3 w-3 text-primary animate-spin" />
+                      <span>Generating tool call\u2026</span>
                     </>
                   ) : (
                     <>
-                      <span className="text-primary">&#10003;</span>
+                      <Check className="h-3 w-3 text-primary" />
                       <span>Tool call generated</span>
                     </>
                   )}
@@ -156,12 +163,12 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                 <div key={gi} className="flex items-center gap-2 text-muted-foreground py-1">
                   {isActive && lastStatus.phase === 'processing' ? (
                     <>
-                      <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse" />
-                      <span>Processing tool results...</span>
+                      <Loader2 className="h-3 w-3 text-warning animate-spin" />
+                      <span>Processing tool results\u2026</span>
                     </>
                   ) : (
                     <>
-                      <span className="text-primary">&#10003;</span>
+                      <Check className="h-3 w-3 text-primary" />
                       <span>Tool results processed</span>
                     </>
                   )}
@@ -175,7 +182,6 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
             const isDone = lastPhase.phase === 'result' || lastPhase.phase === 'error'
             const isItemExpanded = expanded[gi] ?? false
 
-            // Get args from 'calling' phase
             const callingStatus = group.statuses.find(s => s.phase === 'calling')
             const resultStatus = group.statuses.find(s => s.phase === 'result' || s.phase === 'error')
 
@@ -185,28 +191,27 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                   onClick={() => setExpanded(prev => ({ ...prev, [gi]: !prev[gi] }))}
                   className="flex items-center gap-2 w-full text-left hover:text-foreground transition-colors"
                 >
-                  {/* Phase indicator */}
                   {isDone ? (
                     resultStatus?.phase === 'error'
-                      ? <span className="text-destructive text-[10px]">&#10007;</span>
-                      : <span className="text-primary text-[10px]">&#10003;</span>
+                      ? <X className="h-3 w-3 text-destructive flex-shrink-0" />
+                      : <Check className="h-3 w-3 text-primary flex-shrink-0" />
+                  ) : isActive ? (
+                    <Loader2 className="h-3 w-3 text-warning animate-spin flex-shrink-0" />
                   ) : (
-                    <span className="w-1.5 h-1.5 bg-warning rounded-full animate-pulse" />
+                    <StopCircle className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                   )}
 
                   <span className="font-mono text-foreground">{group.name}</span>
 
-                  {/* Current phase label */}
                   <span className="text-muted-foreground">
-                    {lastPhase.phase === 'calling' && 'detected'}
-                    {lastPhase.phase === 'executing' && 'running...'}
-                    {lastPhase.phase === 'result' && 'done'}
-                    {lastPhase.phase === 'error' && 'failed'}
+                    {!isDone && !isActive ? 'interrupted' :
+                      lastPhase.phase === 'calling' ? 'detected' :
+                      lastPhase.phase === 'executing' ? 'running\u2026' :
+                      lastPhase.phase === 'result' ? 'done' :
+                      lastPhase.phase === 'error' ? 'failed' : ''}
                   </span>
 
-                  <span className="ml-auto text-[10px] text-muted-foreground opacity-60">
-                    {isItemExpanded ? '[-]' : '[+]'}
-                  </span>
+                  <ChevronRight className={`ml-auto h-3 w-3 text-muted-foreground/50 flex-shrink-0 transition-transform duration-150 ${isItemExpanded ? 'rotate-90' : ''}`} />
                 </button>
 
                 {isItemExpanded && (
@@ -239,4 +244,3 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
     </div>
   )
 }
-

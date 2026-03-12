@@ -46,9 +46,10 @@ interface ChatInterfaceProps {
   onNewChat?: () => void
   sessionEndpoint?: { host: string; port: number }
   sessionId?: string
+  overridesVersion?: number
 }
 
-export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }: ChatInterfaceProps) {
+export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, overridesVersion }: ChatInterfaceProps) {
   const { showToast } = useToast()
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
@@ -111,11 +112,6 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
         setLoading(true)
         // streamingMessageId will be set by the next stream event
       }
-    })
-
-    // Load hideToolStatus from chat overrides
-    window.api.chat.getOverrides(chatId).then((o: any) => {
-      setHideToolStatus(o?.hideToolStatus ?? false)
     })
 
     // Typing indicator: model is processing, waiting for first token
@@ -272,6 +268,14 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId }:
       setAskUserQuestion(null)
     }
   }, [chatId])
+
+  // Sync hideToolStatus from chat overrides (re-reads when settings are saved)
+  useEffect(() => {
+    if (!chatId) return
+    window.api.chat.getOverrides(chatId).then((o: any) => {
+      setHideToolStatus(o?.hideToolStatus ?? false)
+    })
+  }, [chatId, overridesVersion])
 
   const handleAbort = async () => {
     if (!chatId) return
