@@ -36,6 +36,28 @@ function App() {
     window.api.chat.clearAllLocks().catch(() => {})
   }, [])
 
+  // Listen for navigation events from child components (e.g. toolbar "Add a model")
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail?.mode) setMode(detail.mode)
+      if (detail?.panel) dispatch({ type: 'SET_SERVER_PANEL', panel: detail.panel })
+    }
+    window.addEventListener('vmlx:navigate', handler)
+    return () => window.removeEventListener('vmlx:navigate', handler)
+  }, [setMode, dispatch])
+
+  // If the active session was deleted, fall back to another session
+  useEffect(() => {
+    if (state.activeSessionId && sessions.length > 0 && !sessions.find(s => s.id === state.activeSessionId)) {
+      // Active session no longer exists — switch to first available
+      const fallback = sessions.find(s => s.status === 'running') || sessions[0]
+      if (fallback && state.activeChatId) {
+        openChat(state.activeChatId, fallback.id)
+      }
+    }
+  }, [sessions, state.activeSessionId, state.activeChatId, openChat])
+
   // Resolve the endpoint for the active session
   const activeSession = sessions.find(s => s.id === state.activeSessionId)
   const sessionEndpoint = activeSession?.status === 'running'
@@ -43,12 +65,16 @@ function App() {
     : undefined
 
   const handleChatSelect = useCallback((chatId: string, modelPath: string) => {
-    // Find the session for this model
-    const session = sessions.find(s => s.modelPath === modelPath)
+    // Find the session for this model — prefer running, then any matching, then first available
+    const exactRunning = sessions.find(s => s.modelPath === modelPath && s.status === 'running')
+    const exactAny = sessions.find(s => s.modelPath === modelPath)
+    const fallback = sessions.find(s => s.status === 'running') || sessions[0]
+    const session = exactRunning || exactAny || fallback
+
     if (session) {
       openChat(chatId, session.id)
     } else {
-      // Open chat without a session — user will need to start one
+      // Truly no sessions at all — open chat without one, toolbar will handle
       dispatch({ type: 'OPEN_CHAT', chatId, sessionId: '' })
     }
   }, [sessions, openChat, dispatch])
@@ -77,10 +103,19 @@ function App() {
     }
   }, [sessions, setMode, dispatch, openChat])
 
-  const handleSessionChange = useCallback((sessionId: string) => {
-    // Switch the active session for the current chat
-    dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId || '', sessionId })
-  }, [dispatch, state.activeChatId])
+  const handleSessionChange = useCallback(async (sessionId: string) => {
+    if (!state.activeChatId) return
+    // Find the new session to get its modelPath
+    const newSession = sessions.find(s => s.id === sessionId)
+    if (newSession) {
+      // Update the chat's model_path in DB so it persists across reloads
+      await window.api.chat.update(state.activeChatId, {
+        modelId: newSession.modelPath,
+        modelPath: newSession.modelPath
+      } as any).catch(() => {})
+    }
+    dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId, sessionId })
+  }, [dispatch, state.activeChatId, sessions])
 
   // Setup screen
   if (checkingSetup) return null

@@ -2318,3 +2318,163 @@ describe('Orphan benchmark cleanup', () => {
   })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 6: Chat-Session Lifecycle Audit
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Session deletion — active state cleanup
+describe('Session deletion active state cleanup', () => {
+  interface SessionSummary { id: string; status: string; modelPath: string }
+
+  // Pure function: find fallback session when active session is deleted
+  function findFallbackSession(
+    sessions: SessionSummary[],
+    deletedSessionId: string
+  ): SessionSummary | null {
+    if (sessions.find(s => s.id === deletedSessionId)) return null // not deleted
+    const running = sessions.find(s => s.status === 'running')
+    return running || sessions[0] || null
+  }
+
+  it('returns running session as fallback', () => {
+    const sessions: SessionSummary[] = [
+      { id: 's1', status: 'stopped', modelPath: '/m1' },
+      { id: 's2', status: 'running', modelPath: '/m2' },
+    ]
+    expect(findFallbackSession(sessions, 's-deleted')?.id).toBe('s2')
+  })
+
+  it('returns first session when none running', () => {
+    const sessions: SessionSummary[] = [
+      { id: 's1', status: 'stopped', modelPath: '/m1' },
+    ]
+    expect(findFallbackSession(sessions, 's-deleted')?.id).toBe('s1')
+  })
+
+  it('returns null when no sessions remain', () => {
+    expect(findFallbackSession([], 's-deleted')).toBeNull()
+  })
+
+  it('returns null when session not actually deleted', () => {
+    const sessions: SessionSummary[] = [
+      { id: 's1', status: 'running', modelPath: '/m1' },
+    ]
+    expect(findFallbackSession(sessions, 's1')).toBeNull()
+  })
+})
+
+// Send guard — model not running
+describe('Send guard when model not running', () => {
+  function canSend(opts: {
+    sessionEndpoint?: { host: string; port: number }
+    sessionId?: string
+    loading: boolean
+    hasContent: boolean
+  }): { allowed: boolean; reason?: string } {
+    if (!opts.hasContent) return { allowed: false, reason: 'empty' }
+    if (opts.loading) return { allowed: false, reason: 'loading' }
+    if (!opts.sessionEndpoint && opts.sessionId) return { allowed: false, reason: 'model-not-running' }
+    return { allowed: true }
+  }
+
+  it('allows send when model running', () => {
+    expect(canSend({ sessionEndpoint: { host: '127.0.0.1', port: 8093 }, sessionId: 's1', loading: false, hasContent: true }))
+      .toEqual({ allowed: true })
+  })
+
+  it('blocks send when model stopped', () => {
+    expect(canSend({ sessionEndpoint: undefined, sessionId: 's1', loading: false, hasContent: true }))
+      .toEqual({ allowed: false, reason: 'model-not-running' })
+  })
+
+  it('blocks send when loading', () => {
+    expect(canSend({ sessionEndpoint: { host: '127.0.0.1', port: 8093 }, sessionId: 's1', loading: true, hasContent: true }))
+      .toEqual({ allowed: false, reason: 'loading' })
+  })
+
+  it('blocks send with empty content', () => {
+    expect(canSend({ sessionEndpoint: { host: '127.0.0.1', port: 8093 }, sessionId: 's1', loading: false, hasContent: false }))
+      .toEqual({ allowed: false, reason: 'empty' })
+  })
+
+  it('allows send without session (no session at all)', () => {
+    // Edge case: chat with no session bound (shouldn't happen in practice)
+    expect(canSend({ sessionEndpoint: undefined, sessionId: undefined, loading: false, hasContent: true }))
+      .toEqual({ allowed: true })
+  })
+})
+
+// Chat selection — session resolution
+describe('Chat selection session resolution', () => {
+  interface Session { id: string; modelPath: string; status: string }
+
+  function resolveSession(sessions: Session[], modelPath: string): Session | null {
+    const exactRunning = sessions.find(s => s.modelPath === modelPath && s.status === 'running')
+    const exactAny = sessions.find(s => s.modelPath === modelPath)
+    const fallback = sessions.find(s => s.status === 'running') || sessions[0]
+    return exactRunning || exactAny || fallback || null
+  }
+
+  it('prefers running session with matching model', () => {
+    const sessions: Session[] = [
+      { id: 's1', modelPath: '/m1', status: 'stopped' },
+      { id: 's2', modelPath: '/m1', status: 'running' },
+    ]
+    expect(resolveSession(sessions, '/m1')?.id).toBe('s2')
+  })
+
+  it('falls back to stopped session with matching model', () => {
+    const sessions: Session[] = [
+      { id: 's1', modelPath: '/m1', status: 'stopped' },
+      { id: 's2', modelPath: '/m2', status: 'running' },
+    ]
+    expect(resolveSession(sessions, '/m1')?.id).toBe('s1')
+  })
+
+  it('falls back to any running session', () => {
+    const sessions: Session[] = [
+      { id: 's1', modelPath: '/m2', status: 'running' },
+    ]
+    expect(resolveSession(sessions, '/m-unknown')?.id).toBe('s1')
+  })
+
+  it('falls back to first session when none running', () => {
+    const sessions: Session[] = [
+      { id: 's1', modelPath: '/m1', status: 'stopped' },
+    ]
+    expect(resolveSession(sessions, '/m-unknown')?.id).toBe('s1')
+  })
+
+  it('returns null when no sessions', () => {
+    expect(resolveSession([], '/m1')).toBeNull()
+  })
+})
+
+// Session endpoint resolution
+describe('Session endpoint derivation', () => {
+  interface SessionSummary { id: string; status: string; host: string; port: number }
+
+  function deriveEndpoint(session: SessionSummary | undefined): { host: string; port: number } | undefined {
+    return session?.status === 'running' ? { host: session.host, port: session.port } : undefined
+  }
+
+  it('returns endpoint for running session', () => {
+    expect(deriveEndpoint({ id: 's1', status: 'running', host: '127.0.0.1', port: 8093 }))
+      .toEqual({ host: '127.0.0.1', port: 8093 })
+  })
+
+  it('returns undefined for stopped session', () => {
+    expect(deriveEndpoint({ id: 's1', status: 'stopped', host: '127.0.0.1', port: 8093 }))
+      .toBeUndefined()
+  })
+
+  it('returns undefined for loading session', () => {
+    expect(deriveEndpoint({ id: 's1', status: 'loading', host: '127.0.0.1', port: 8093 }))
+      .toBeUndefined()
+  })
+
+  it('returns undefined for no session', () => {
+    expect(deriveEndpoint(undefined)).toBeUndefined()
+  })
+})
+
