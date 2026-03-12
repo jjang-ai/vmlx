@@ -638,7 +638,7 @@ export class SessionManager extends EventEmitter {
     this.emit('session:deleted', { sessionId })
   }
 
-  /** Config keys that require a session restart to take effect. */
+  /** Config keys that require a session restart to take effect (all CLI args). */
   private static readonly RESTART_REQUIRED_KEYS = new Set([
     'port', 'host', 'modelPath', 'continuousBatching', 'enablePrefixCache',
     'usePagedCache', 'pagedCacheBlockSize', 'maxCacheBlocks',
@@ -647,6 +647,12 @@ export class SessionManager extends EventEmitter {
     'enableDiskCache', 'enableBlockDiskCache',
     'toolCallParser', 'reasoningParser',
     'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
+    'timeout', 'streamInterval', 'apiKey', 'rateLimit',
+    'maxTokens', 'mcpConfig', 'servedModelName',
+    'speculativeModel', 'numDraftTokens',
+    'defaultTemperature', 'defaultTopP',
+    'embeddingModel', 'additionalArgs',
+    'enableAutoToolChoice',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -972,15 +978,14 @@ export class SessionManager extends EventEmitter {
     const session = db.getSession(sessionId)
     if (session && (session.status === 'running' || session.status === 'loading')) {
       if (session.type === 'remote') {
-        // Remote sessions: do NOT abort active inference. The remote server is
-        // likely just busy with a long generation (prefill or decode), causing
-        // health checks to time out. Aborting would kill perfectly valid in-flight
-        // requests. Instead, just log and let the request's own timeout handle it.
-        // The session stays 'running' — the health monitor will eventually reconnect.
-        console.log(`[SESSIONS] handleSessionDown: remote session ${sessionId} ("${session.modelName}") health check failed — NOT aborting (server likely busy)`)
-        // Reset fail count so the monitor keeps trying
+        // Remote endpoint truly unreachable after sustained failures — mark as error.
+        // Unlike local sessions, there's no process to kill. The user needs to know
+        // the endpoint is down so they can fix it or restart.
+        console.log(`[SESSIONS] handleSessionDown: remote session ${sessionId} ("${session.modelName}") unreachable, marking error`)
+        db.updateSession(sessionId, { status: 'error' })
         this.failCounts.delete(sessionId)
-        return  // Do NOT mark session as stopped or abort inference
+        this.emit('session:error', { sessionId, error: 'Remote endpoint unreachable' })
+        return
       } else {
         // Kill the process before marking stopped — without this, the Python
         // process continues running as an orphan consuming RAM/CPU.
