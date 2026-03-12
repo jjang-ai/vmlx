@@ -267,70 +267,23 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     }
     db.createChat(chat)
 
-    // Inherit chat overrides: prefer most recent sibling chat's settings, else model defaults
+    // Apply model defaults from generation_config.json (not from sibling chats)
     if (modelPath) {
-      let inherited = false
       try {
-        const siblings = db.getChatsByModelPath(modelPath)
-        // Find the most recent OTHER chat (sorted by updatedAt DESC) that has overrides
-        for (const sib of siblings) {
-          if (sib.id === chat.id) continue
-          const sibOverrides = db.getChatOverrides(sib.id)
-          if (sibOverrides) {
-            db.setChatOverrides({
-              chatId: chat.id,
-              temperature: sibOverrides.temperature,
-              topP: sibOverrides.topP,
-              topK: sibOverrides.topK,
-              minP: sibOverrides.minP,
-              maxTokens: sibOverrides.maxTokens,
-              repeatPenalty: sibOverrides.repeatPenalty,
-              systemPrompt: sibOverrides.systemPrompt,
-              stopSequences: sibOverrides.stopSequences,
-              wireApi: sibOverrides.wireApi,
-              maxToolIterations: sibOverrides.maxToolIterations,
-              builtinToolsEnabled: sibOverrides.builtinToolsEnabled,
-              workingDirectory: sibOverrides.workingDirectory,
-              enableThinking: sibOverrides.enableThinking,
-              reasoningEffort: sibOverrides.reasoningEffort,
-              hideToolStatus: sibOverrides.hideToolStatus,
-              webSearchEnabled: sibOverrides.webSearchEnabled,
-              braveSearchEnabled: sibOverrides.braveSearchEnabled,
-              fetchUrlEnabled: sibOverrides.fetchUrlEnabled,
-              fileToolsEnabled: sibOverrides.fileToolsEnabled,
-              searchToolsEnabled: sibOverrides.searchToolsEnabled,
-              shellEnabled: sibOverrides.shellEnabled,
-              toolResultMaxChars: sibOverrides.toolResultMaxChars,
-              gitEnabled: sibOverrides.gitEnabled,
-              utilityToolsEnabled: sibOverrides.utilityToolsEnabled
-            })
-            console.log(`[CHAT] Inherited overrides from chat ${sib.id} for ${chat.id}`)
-            inherited = true
-            break
-          }
+        const defaults = await readGenerationDefaults(modelPath)
+        if (defaults) {
+          db.setChatOverrides({
+            chatId: chat.id,
+            temperature: defaults.temperature,
+            topP: defaults.topP,
+            topK: defaults.topK,
+            minP: defaults.minP,
+            repeatPenalty: defaults.repeatPenalty
+          })
+          console.log(`[CHAT] Applied generation defaults for ${chat.id}:`, defaults)
         }
       } catch (e) {
-        console.error('[CHAT] Failed to inherit overrides:', e)
-      }
-
-      // Fallback: read from model's generation_config.json
-      if (!inherited) {
-        try {
-          const defaults = await readGenerationDefaults(modelPath)
-          if (defaults) {
-            db.setChatOverrides({
-              chatId: chat.id,
-              temperature: defaults.temperature,
-              topP: defaults.topP,
-              topK: defaults.topK,
-              minP: defaults.minP,
-              repeatPenalty: defaults.repeatPenalty
-            })
-            console.log(`[CHAT] Applied generation defaults for ${chat.id}:`, defaults)
-          }
-        } catch (e) {
-          console.error('[CHAT] Failed to read generation defaults:', e)
-        }
+        console.error('[CHAT] Failed to read generation defaults:', e)
       }
     }
 
@@ -1865,6 +1818,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       return { success: true }
     }
     return { success: false, error: 'No active request for this chat' }
+  })
+
+  // Check if a chat has an active streaming generation (used for re-sync on tab switch)
+  ipcMain.handle('chat:isStreaming', (_, chatId: string) => {
+    return activeRequests.has(chatId)
   })
 
   // Clear all active locks (called on window reload/close)

@@ -96,6 +96,7 @@ const api = {
       return () => { ipcRenderer.removeListener('chat:toolStatus', handler) }
     },
     abort: (chatId: string) => ipcRenderer.invoke('chat:abort', chatId),
+    isStreaming: (chatId: string) => ipcRenderer.invoke('chat:isStreaming', chatId),
     clearAllLocks: () => ipcRenderer.invoke('chat:clearAllLocks'),
 
     // ask_user tool: model asks user a question mid-tool-loop
