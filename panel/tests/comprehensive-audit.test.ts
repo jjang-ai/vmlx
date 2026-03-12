@@ -565,6 +565,61 @@ describe('Chat-switch streaming re-sync', () => {
   })
 })
 
+// ask_user Map-based resolver pattern
+describe('ask_user Map-based resolver', () => {
+  it('resolves for matching chatId', () => {
+    const resolvers = new Map<string, (answer: string) => void>()
+    let result = ''
+    resolvers.set('chat-1', (answer) => { result = answer; resolvers.delete('chat-1') })
+
+    // Simulate answer arriving
+    const resolve = resolvers.get('chat-1')
+    expect(resolve).toBeDefined()
+    resolve!('hello')
+    expect(result).toBe('hello')
+    expect(resolvers.has('chat-1')).toBe(false)
+  })
+
+  it('ignores answer for different chatId', () => {
+    const resolvers = new Map<string, (answer: string) => void>()
+    let result = ''
+    resolvers.set('chat-1', (answer) => { result = answer })
+
+    const resolve = resolvers.get('chat-2')
+    expect(resolve).toBeUndefined()
+    expect(result).toBe('')
+  })
+
+  it('handles cleanup preventing double-resolve', () => {
+    const resolvers = new Map<string, (answer: string) => void>()
+    let callCount = 0
+    resolvers.set('chat-1', () => { callCount++; resolvers.delete('chat-1') })
+
+    // First resolve
+    resolvers.get('chat-1')!('answer1')
+    // Second attempt (simulating race with timeout)
+    const secondResolve = resolvers.get('chat-1')
+    expect(secondResolve).toBeUndefined()
+    expect(callCount).toBe(1)
+  })
+
+  it('allows sequential ask_user calls without accumulation', () => {
+    const resolvers = new Map<string, (answer: string) => void>()
+    const results: string[] = []
+
+    // First ask_user
+    resolvers.set('chat-1', (a) => { results.push(a); resolvers.delete('chat-1') })
+    resolvers.get('chat-1')!('answer1')
+
+    // Second ask_user (same chat) — should work without issues
+    resolvers.set('chat-1', (a) => { results.push(a); resolvers.delete('chat-1') })
+    resolvers.get('chat-1')!('answer2')
+
+    expect(results).toEqual(['answer1', 'answer2'])
+    expect(resolvers.size).toBe(0)
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3: Chat Pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
