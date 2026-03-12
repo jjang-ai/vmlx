@@ -671,6 +671,57 @@ describe('Already-downloaded model detection', () => {
   })
 })
 
+// Chat search — skip base64 image content
+describe('Chat search skip base64', () => {
+  // Pure function: should a message content be searched?
+  function isSearchableContent(content: string): boolean {
+    return !content.startsWith('[{"type":')
+  }
+
+  it('allows plain text messages', () => {
+    expect(isSearchableContent('Hello, how are you?')).toBe(true)
+  })
+
+  it('allows code blocks', () => {
+    expect(isSearchableContent('```python\nprint("hello")\n```')).toBe(true)
+  })
+
+  it('skips multimodal JSON content arrays', () => {
+    const content = '[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBOR..."}}]'
+    expect(isSearchableContent(content)).toBe(false)
+  })
+
+  it('skips mixed text+image content arrays', () => {
+    const content = '[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}},{"type":"text","text":"describe this"}]'
+    expect(isSearchableContent(content)).toBe(false)
+  })
+
+  it('allows JSON that does not start with [{"type":', () => {
+    expect(isSearchableContent('{"key": "value"}')).toBe(true)
+    expect(isSearchableContent('[1, 2, 3]')).toBe(true)
+  })
+})
+
+// DownloadStatusBar collapse toggle
+describe('DownloadStatusBar collapse toggle', () => {
+  // Pure function: should progress details be visible?
+  function showProgressDetails(collapsed: boolean, hasPercent: boolean): boolean {
+    return !collapsed && hasPercent
+  }
+
+  it('shows details when expanded with progress', () => {
+    expect(showProgressDetails(false, true)).toBe(true)
+  })
+
+  it('hides details when collapsed', () => {
+    expect(showProgressDetails(true, true)).toBe(false)
+  })
+
+  it('hides details when no progress data', () => {
+    expect(showProgressDetails(false, false)).toBe(false)
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3: Chat Pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
