@@ -475,6 +475,60 @@ describe('Phase 2: Session Lifecycle', () => {
     })
 })
 
+// Remote session health — mark down after sustained failure
+describe('Remote session health mark-down', () => {
+  // Pure function mirroring the handleSessionDown decision logic
+  function handleSessionDownAction(session: { type: string; status: string } | null): 'error' | 'kill-and-stop' | 'noop' {
+    if (!session || (session.status !== 'running' && session.status !== 'loading')) return 'noop'
+    if (session.type === 'remote') return 'error'
+    return 'kill-and-stop'
+  }
+
+  it('marks remote session as error', () => {
+    expect(handleSessionDownAction({ type: 'remote', status: 'running' })).toBe('error')
+  })
+
+  it('marks remote loading session as error', () => {
+    expect(handleSessionDownAction({ type: 'remote', status: 'loading' })).toBe('error')
+  })
+
+  it('kills and stops local session', () => {
+    expect(handleSessionDownAction({ type: 'local', status: 'running' })).toBe('kill-and-stop')
+  })
+
+  it('no-ops for already stopped session', () => {
+    expect(handleSessionDownAction({ type: 'remote', status: 'stopped' })).toBe('noop')
+    expect(handleSessionDownAction({ type: 'local', status: 'stopped' })).toBe('noop')
+  })
+
+  it('no-ops for null session', () => {
+    expect(handleSessionDownAction(null)).toBe('noop')
+  })
+
+  // Test the fail count accumulation for remote sessions
+  describe('Remote fail count accumulation', () => {
+    function shouldCallHandleDown(failCount: number, maxFails: number): boolean {
+      return failCount >= maxFails
+    }
+
+    it('does not mark down before max fails', () => {
+      expect(shouldCallHandleDown(59, 60)).toBe(false)
+    })
+
+    it('marks down at exactly max fails', () => {
+      expect(shouldCallHandleDown(60, 60)).toBe(true)
+    })
+
+    it('respects scaled max fails from timeout config', () => {
+      // timeout 600s / 5s interval = 120 max fails
+      const maxFails = Math.max(60, Math.ceil(600 / 5))
+      expect(maxFails).toBe(120)
+      expect(shouldCallHandleDown(119, maxFails)).toBe(false)
+      expect(shouldCallHandleDown(120, maxFails)).toBe(true)
+    })
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3: Chat Pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
