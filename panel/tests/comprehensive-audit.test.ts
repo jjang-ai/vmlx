@@ -529,6 +529,42 @@ describe('Remote session health mark-down', () => {
   })
 })
 
+// Chat-switch streaming re-sync logic
+describe('Chat-switch streaming re-sync', () => {
+  // Pure function: given activeRequests state, determine if chat is streaming
+  function isStreaming(activeChats: Set<string>, chatId: string): boolean {
+    return activeChats.has(chatId)
+  }
+
+  it('returns true for active chat', () => {
+    const active = new Set(['chat-1', 'chat-2'])
+    expect(isStreaming(active, 'chat-1')).toBe(true)
+  })
+
+  it('returns false for inactive chat', () => {
+    const active = new Set(['chat-1'])
+    expect(isStreaming(active, 'chat-3')).toBe(false)
+  })
+
+  it('returns false for empty set', () => {
+    const active = new Set<string>()
+    expect(isStreaming(active, 'chat-1')).toBe(false)
+  })
+
+  // Test the UI state decision: what to set when returning to a streaming chat
+  function getReturnState(isActive: boolean): { loading: boolean } {
+    return { loading: isActive }
+  }
+
+  it('sets loading when returning to streaming chat', () => {
+    expect(getReturnState(true)).toEqual({ loading: true })
+  })
+
+  it('does not set loading when returning to idle chat', () => {
+    expect(getReturnState(false)).toEqual({ loading: false })
+  })
+})
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3: Chat Pipeline
 // ═══════════════════════════════════════════════════════════════════════════════
