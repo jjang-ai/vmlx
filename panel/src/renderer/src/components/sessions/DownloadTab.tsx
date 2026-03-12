@@ -48,11 +48,28 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // Download directory
   const [downloadDir, setDownloadDir] = useState('')
 
+  // Track locally available models for "already downloaded" detection
+  const [localModelIds, setLocalModelIds] = useState<Set<string>>(new Set())
+
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load recommended models and download dir on mount
   useEffect(() => {
     window.api.models.getDownloadDir().then(setDownloadDir)
+    window.api.models.scan().then((models: any[]) => {
+      // Build a set of local model identifiers for matching against HF repo IDs
+      const ids = new Set<string>()
+      for (const m of models) {
+        if (m.id) ids.add(m.id)
+        if (m.path) {
+          const parts = m.path.replace(/\\/g, '/').split('/')
+          if (parts.length >= 2) {
+            ids.add(`${parts[parts.length - 2]}/${parts[parts.length - 1]}`)
+          }
+        }
+      }
+      setLocalModelIds(ids)
+    }).catch(() => {})
     window.api.models.getRecommendedModels()
       .then(setRecommended)
       .catch(err => console.error('Failed to load recommended models:', err))
@@ -79,7 +96,23 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         next.delete(data.repoId)
         return next
       })
-      if (data.status === 'complete') onDownloadComplete()
+      if (data.status === 'complete') {
+        onDownloadComplete()
+        // Refresh local model list so the "Downloaded" badge appears immediately
+        window.api.models.scan().then((models: any[]) => {
+          const ids = new Set<string>()
+          for (const m of models) {
+            if (m.id) ids.add(m.id)
+            if (m.path) {
+              const parts = m.path.replace(/\\/g, '/').split('/')
+              if (parts.length >= 2) {
+                ids.add(`${parts[parts.length - 2]}/${parts[parts.length - 1]}`)
+              }
+            }
+          }
+          setLocalModelIds(ids)
+        }).catch(() => {})
+      }
     })
 
     const unsubError = window.api.models.onDownloadError((data: any) => {
@@ -211,6 +244,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
                 key={model.id}
                 model={model}
                 isDownloading={downloadingRepos.has(model.id)}
+                isDownloaded={localModelIds.has(model.id)}
                 onDownload={() => handleDownload(model.id)}
               />
             ))
@@ -221,9 +255,10 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   )
 }
 
-function ModelCard({ model, isDownloading, onDownload }: {
+function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
   model: HFModel
   isDownloading: boolean
+  isDownloaded: boolean
   onDownload: () => void
 }) {
   const shortName = model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id
@@ -263,13 +298,19 @@ function ModelCard({ model, isDownloading, onDownload }: {
           >
             ↗
           </button>
-          <button
-            onClick={onDownload}
-            disabled={isDownloading}
-            className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap"
-          >
-            {isDownloading ? 'Downloading...' : 'Download'}
-          </button>
+          {isDownloaded && !isDownloading ? (
+            <span className="px-3 py-1.5 text-xs text-primary border border-primary/30 rounded whitespace-nowrap">
+              Downloaded
+            </span>
+          ) : (
+            <button
+              onClick={onDownload}
+              disabled={isDownloading}
+              className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap"
+            >
+              {isDownloading ? 'Downloading...' : 'Download'}
+            </button>
+          )}
         </div>
       </div>
     </div>
