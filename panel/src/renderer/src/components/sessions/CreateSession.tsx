@@ -37,6 +37,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
   const logEndRef = useRef<HTMLDivElement>(null)
   const launchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const launchSessionIdRef = useRef<string | null>(null)
+  const mountedRef = useRef(true)
 
   // Remote session fields
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -45,9 +46,10 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
   const [remoteOrganization, setRemoteOrganization] = useState('')
   const [remoteConnecting, setRemoteConnecting] = useState(false)
 
-  // Cleanup launch timer on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
+      mountedRef.current = false
       if (launchTimerRef.current) clearTimeout(launchTimerRef.current)
     }
   }, [])
@@ -189,6 +191,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
 
     try {
       const createResult = await window.api.sessions.create(selectedModel, config)
+      if (!mountedRef.current) return
       if (!createResult.success) {
         throw new Error(createResult.error || 'Failed to create session')
       }
@@ -197,6 +200,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
       setLogs(prev => [...prev, `Session created: ${session.id}`, 'Starting server...'])
 
       const result = await window.api.sessions.start(session.id)
+      if (!mountedRef.current) return
       if (result.success) {
         setLogs(prev => [...prev, 'Server is ready!'])
         launchTimerRef.current = setTimeout(() => onCreated(session.id), 500)
@@ -207,6 +211,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
         setLaunching(false)
       }
     } catch (error) {
+      if (!mountedRef.current) return
       const errorMsg = (error as Error).message
       setLogs(prev => [...prev, `\nERROR: ${errorMsg}`])
       setLaunchError(errorMsg)
