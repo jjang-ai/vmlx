@@ -1,6 +1,7 @@
-import { exec as execCallback, spawn, execSync, ChildProcess } from 'child_process'
+import { exec as execCallback, spawn, execSync, execFileSync, ChildProcess } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readFileSync, realpathSync } from 'fs'
+import { createHash } from 'crypto'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { app } from 'electron'
@@ -367,6 +368,41 @@ export function installVllmStreaming(
 }
 
 /**
+ * Hash key Python source files to detect code changes without version bump.
+ * Hashes pyproject.toml + all .py files in vmlx_engine/ (non-recursive top level + key subdirs).
+ */
+function hashSourceFiles(basePath: string): string | null {
+  try {
+    const hash = createHash('sha256')
+    const engineDir = join(basePath, 'vmlx_engine')
+    if (!existsSync(engineDir)) return null
+
+    // Hash pyproject.toml
+    const pyproject = join(basePath, 'pyproject.toml')
+    if (existsSync(pyproject)) hash.update(readFileSync(pyproject))
+
+    // Hash all .py files in vmlx_engine/ (top-level only for speed)
+    for (const f of readdirSync(engineDir).sort()) {
+      if (f.endsWith('.py')) {
+        hash.update(readFileSync(join(engineDir, f)))
+      }
+    }
+    // Also hash key subdirectories
+    for (const subdir of ['utils', 'reasoning', 'tool_parsers', 'api', 'engine', 'commands']) {
+      const sub = join(engineDir, subdir)
+      if (existsSync(sub)) {
+        for (const f of readdirSync(sub).sort()) {
+          if (f.endsWith('.py')) hash.update(readFileSync(join(sub, f)))
+        }
+      }
+    }
+    return hash.digest('hex').slice(0, 16)
+  } catch (_) {
+    return null
+  }
+}
+
+/**
  * Check if the bundled engine source is newer than the installed version.
  * Used for auto-update on startup.
  */
@@ -398,8 +434,29 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
     return { current, bundled: '', needsUpdate: false }
   }
 
-  // Update if versions differ OR if current version is unknown (old install without __version__)
-  const needsUpdate = !!(bundled && (current !== bundled))
+  // Update if versions differ OR if source content changed (catches code changes without version bump)
+  let needsUpdate = !!(bundled && (current !== bundled))
+
+  if (!needsUpdate && bundled && sourcePath) {
+    // Hash key source files to detect code changes without version bump
+    const sourceHash = hashSourceFiles(sourcePath)
+    if (sourceHash) {
+      try {
+        const installed = execFileSync(bundledPython, ['-s', '-c', 'import vmlx_engine; import pathlib; print(pathlib.Path(vmlx_engine.__file__).parent)'], {
+          encoding: 'utf-8', timeout: 10000,
+          env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+        }).trim()
+        if (installed && existsSync(installed)) {
+          const installedHash = hashSourceFiles(join(installed, '..'))
+          if (installedHash && installedHash !== sourceHash) {
+            needsUpdate = true
+            console.log(`[vLLM Manager] Source content changed (hash mismatch) — triggering update`)
+          }
+        }
+      } catch (_) { /* hash comparison optional — fall back to version check */ }
+    }
+  }
+
   console.log(`[vLLM Manager] Engine version check: installed=${current}, source=${bundled}, needsUpdate=${needsUpdate}`)
   return { current, bundled, needsUpdate }
 }

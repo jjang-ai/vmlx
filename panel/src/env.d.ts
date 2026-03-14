@@ -13,7 +13,7 @@ declare global {
         browseDirectory: () => Promise<{ canceled: boolean; path?: string }>
         detectConfig: (modelPath: string) => Promise<{ family: string; toolParser?: string; reasoningParser?: string; cacheType: string; usePagedCache: boolean; enableAutoToolChoice: boolean; isMultimodal: boolean; description: string }>
         getGenerationDefaults: (modelPath: string) => Promise<{ temperature?: number; topP?: number; topK?: number; repeatPenalty?: number } | null>
-        searchHF: (query: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
+        searchHF: (query: string, sortBy?: string, sortDir?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
         cancelDownload: (jobId?: string) => Promise<{ success: boolean; error?: string }>

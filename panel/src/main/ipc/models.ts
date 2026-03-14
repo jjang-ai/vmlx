@@ -135,6 +135,15 @@ function formatSize(bytes: number): string {
   return `~${mb.toFixed(0)} MB`
 }
 
+/** Parse size string like "~4.2 GB" back to bytes for sorting */
+function parseSizeBytes(size: string | undefined): number {
+  if (!size) return 0
+  const match = size.match(/~?([\d.]+)\s*(GB|MB)/i)
+  if (!match) return 0
+  const val = parseFloat(match[1])
+  return match[2].toUpperCase() === 'GB' ? val * 1024 * 1024 * 1024 : val * 1024 * 1024
+}
+
 async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
   const models: ModelInfo[] = []
   // Skip common system and git directories. We keep 'snapshots' unskipped so it can descend into standard HF Hub caches if needed.
@@ -656,22 +665,41 @@ export function registerModelHandlers(): void {
     return undefined
   }
 
-  ipcMain.handle('models:searchHF', async (_, query: string) => {
+  ipcMain.handle('models:searchHF', async (_, query: string, sortBy?: string, sortDir?: string) => {
     const params = new URLSearchParams({
       search: query,
       filter: 'mlx',
-      sort: 'downloads',
-      direction: '-1',
       limit: '30'
     })
+    const direction = sortDir === 'asc' ? '1' : '-1'
+    // HF API sort options: downloads, likes, lastModified, trending
+    // "relevance" = omit sort (HF default), "size" = client-side sort
+    if (sortBy && sortBy !== 'relevance' && sortBy !== 'size') {
+      params.set('sort', sortBy)
+      params.set('direction', direction)
+    } else if (!sortBy || sortBy === 'downloads') {
+      params.set('sort', 'downloads')
+      params.set('direction', direction)
+    }
     const url = `https://huggingface.co/api/models?${params}`
-    console.log(`[MODELS] Searching HuggingFace: ${query}`)
+    console.log(`[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
 
     const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
     if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
     const models = await response.json()
 
-    return models.map((m: any) => mapHFModel(m))
+    let results = models.map((m: any) => mapHFModel(m))
+
+    // Client-side sort by model size (HF API doesn't support this)
+    if (sortBy === 'size') {
+      results.sort((a: any, b: any) => {
+        const sizeA = parseSizeBytes(a.size)
+        const sizeB = parseSizeBytes(b.size)
+        return sortDir === 'asc' ? sizeA - sizeB : sizeB - sizeA
+      })
+    }
+
+    return results
   })
 
   // Get recommended models from shieldstackllc

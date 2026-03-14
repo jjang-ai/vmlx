@@ -458,7 +458,7 @@ def register_all(registry=None):
         eos_tokens=["<|im_end|>"],
         tool_parser="nemotron",
         reasoning_parser="deepseek_r1",
-        think_in_template=True,
+        think_in_template=False,
         tokenizer_fallback=True,
         priority=10,
     ))
@@ -470,7 +470,7 @@ def register_all(registry=None):
         eos_tokens=["<|im_end|>"],
         tool_parser="nemotron",
         reasoning_parser="deepseek_r1",
-        think_in_template=True,
+        think_in_template=False,
         tokenizer_fallback=True,
         priority=10,
     ))
