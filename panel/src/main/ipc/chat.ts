@@ -545,9 +545,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       requestMessages.push({ role: 'system', content: overrides!.systemPrompt! })
     } else if (overrides?.builtinToolsEnabled) {
       requestMessages.push({ role: 'system', content: AGENTIC_SYSTEM_PROMPT })
-    } else {
-      requestMessages.push({ role: 'system', content: 'You are a helpful assistant.' })
     }
+    // No default system prompt injected — let the model's native template handle defaults.
+    // Injecting "You are a helpful assistant." reinforces safety behavior in abliterated/CRACK models.
 
     // Add conversation messages (skip any existing system messages to avoid duplicates)
     // Messages with JSON content arrays (multimodal) are parsed back to content parts for the API
