@@ -14,7 +14,7 @@ const api = {
     detectConfig: (modelPath: string) => ipcRenderer.invoke('models:detect-config', modelPath),
     getGenerationDefaults: (modelPath: string) => ipcRenderer.invoke('models:getGenerationDefaults', modelPath),
     // HuggingFace search & download
-    searchHF: (query: string) => ipcRenderer.invoke('models:searchHF', query),
+    searchHF: (query: string, sortBy?: string, sortDir?: string) => ipcRenderer.invoke('models:searchHF', query, sortBy, sortDir),
     getRecommendedModels: () => ipcRenderer.invoke('models:getRecommendedModels'),
     downloadModel: (repoId: string) => ipcRenderer.invoke('models:downloadModel', repoId),
     startDownload: (repoId: string) => ipcRenderer.invoke('models:startDownload', repoId),

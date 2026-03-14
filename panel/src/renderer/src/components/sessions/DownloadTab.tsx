@@ -35,6 +35,8 @@ function timeAgo(dateStr: string | null | undefined): string {
 
 export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [searchQuery, setSearchQuery] = useState('')
+  const [sortBy, setSortBy] = useState<string>('downloads')
+  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [searchResults, setSearchResults] = useState<HFModel[]>([])
   const [recommended, setRecommended] = useState<HFModel[]>([])
   const [loading, setLoading] = useState(false)
@@ -134,30 +136,52 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   }, [])
 
   // Debounced search
-  const handleSearch = useCallback((query: string) => {
-    setSearchQuery(query)
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
-
+  const doSearch = useCallback(async (query: string, sort: string, dir: 'desc' | 'asc') => {
     if (!query.trim()) {
       setSearchResults([])
       setError(null)
       return
     }
-
-    searchTimerRef.current = setTimeout(async () => {
-      setLoading(true)
-      setError(null)
-      try {
-        const results = await window.api.models.searchHF(query.trim())
-        setSearchResults(results)
-      } catch (err) {
-        setError((err as Error).message)
-        setSearchResults([])
-      } finally {
-        setLoading(false)
-      }
-    }, 400)
+    setLoading(true)
+    setError(null)
+    try {
+      const results = await window.api.models.searchHF(query.trim(), sort, dir)
+      setSearchResults(results)
+    } catch (err) {
+      setError((err as Error).message)
+      setSearchResults([])
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  const handleSearch = useCallback((query: string) => {
+    setSearchQuery(query)
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    if (!query.trim()) {
+      setSearchResults([])
+      setError(null)
+      return
+    }
+    searchTimerRef.current = setTimeout(() => doSearch(query, sortBy, sortDir), 400)
+  }, [doSearch, sortBy, sortDir])
+
+  const handleSortChange = useCallback((newSort: string) => {
+    setSortBy(newSort)
+    if (searchQuery.trim()) {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+      doSearch(searchQuery, newSort, sortDir)
+    }
+  }, [doSearch, searchQuery, sortDir])
+
+  const handleDirToggle = useCallback(() => {
+    const newDir = sortDir === 'desc' ? 'asc' : 'desc'
+    setSortDir(newDir)
+    if (searchQuery.trim()) {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+      doSearch(searchQuery, sortBy, newDir)
+    }
+  }, [doSearch, searchQuery, sortBy, sortDir])
 
   const handleDownload = async (repoId: string) => {
     setDownloadError(null)
@@ -206,7 +230,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         </button>
       </div>
 
-      {/* Search */}
+      {/* Search + Sort */}
       <div className="flex items-center gap-2">
         <input
           type="text"
@@ -215,6 +239,28 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           onChange={(e) => handleSearch(e.target.value)}
           className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"
         />
+        <select
+          value={sortBy}
+          onChange={(e) => handleSortChange(e.target.value)}
+          className="px-2 py-2 bg-background border border-input rounded text-xs text-foreground"
+          title="Sort results by"
+        >
+          <option value="downloads">Downloads</option>
+          <option value="relevance">Relevance</option>
+          <option value="lastModified">Recently Updated</option>
+          <option value="trending">Trending</option>
+          <option value="likes">Likes</option>
+          <option value="size">Model Size</option>
+        </select>
+        {sortBy !== 'relevance' && (
+          <button
+            onClick={handleDirToggle}
+            className="px-1.5 py-2 bg-background border border-input rounded text-xs text-foreground hover:bg-accent"
+            title={sortDir === 'desc' ? 'Highest first' : 'Lowest first'}
+          >
+            {sortDir === 'desc' ? '\u2193' : '\u2191'}
+          </button>
+        )}
         {loading && <span className="text-xs text-muted-foreground">Searching...</span>}
       </div>
 
