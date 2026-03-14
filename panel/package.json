@@ -1,6 +1,6 @@
 {
   "name": "vmlx",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "The most complete MLX inference engine for Mac — voice, vision, Mamba, 5-layer caching, 20+ agentic tools",
   "main": "dist/main/index.mjs",
   "author": "ShieldStack LLC",
