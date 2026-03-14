@@ -184,11 +184,11 @@ def _fix_hybrid_cache(
             # Not a hybrid model (all layers are KVCache) — no fix needed
             if len(kv_positions) == num_model_layers:
                 return cache
-            # Cache already correct length — no expansion needed
+            # Cache already correct length — still need type-mismatch check below
             if len(cache) == num_model_layers:
-                return cache
+                pass  # Fall through to type-mismatch repair at line 203+
             # Cache length doesn't match expected KV layer count — return fresh cache
-            if len(cache) != len(kv_positions):
+            elif len(cache) != len(kv_positions):
                 logger.warning(
                     f"Cache length mismatch: {len(cache)} reconstructed vs "
                     f"{len(kv_positions)} KV positions in {num_model_layers}-layer model, "
@@ -871,7 +871,7 @@ class MLLMBatchGenerator:
         """
         if caches is None:
             caches = [None] * len(requests)
-            
+
         uids = []
         for req, c in zip(requests, caches):
             req.uid = self.uid_counter
@@ -1467,8 +1467,9 @@ class MLLMBatchGenerator:
                         for layer_idx, c in enumerate(req_cache):
                             if layer_idx not in kv_set:
                                 if hasattr(c, 'cache') and isinstance(c.cache, list):
-                                    from copy import copy
-                                    cloned = copy(c)
+                                    from copy import deepcopy
+                                    cloned = deepcopy(c)
+                                    # Ensure MLX arrays are fully materialized copies
                                     cloned.cache = [
                                         mx.contiguous(mx.array(a)) if a is not None else None
                                         for a in c.cache
@@ -1533,10 +1534,18 @@ class MLLMBatchGenerator:
             else:
                 batch_cache = _merge_caches(per_request_caches)
         except Exception as e:
-            logger.error(f"Cache merge failed, creating fresh batch cache: {e}")
-            from mlx_lm.models.cache import BatchKVCache
-            num_layers = len(per_request_caches[0]) if per_request_caches else len(self.language_model.layers)
-            batch_cache = [BatchKVCache([0] * len(per_request_caches)) for _ in range(num_layers)]
+            logger.error(f"Cache merge failed: {e}")
+            for req in requests:
+                self._prefill_errors.append(
+                    MLLMBatchResponse(
+                        uid=req.uid,
+                        request_id=req.request_id,
+                        token=0,
+                        logprobs=mx.zeros((1,)),
+                        finish_reason="stop",
+                    )
+                )
+            return None
 
         self._stats.prompt_time += time.perf_counter() - tic
 

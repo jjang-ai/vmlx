@@ -12,6 +12,7 @@ import { registerBenchmarkHandlers } from './ipc/benchmark'
 import { registerEmbeddingHandlers } from './ipc/embeddings'
 import { registerExportHandlers } from './ipc/export'
 import { registerPerformanceHandlers } from './ipc/performance'
+import { registerDeveloperHandlers, killActiveOperation } from './ipc/developer'
 import { sessionManager } from './sessions'
 import { db } from './database'
 import { checkEngineVersion, installVllmStreaming } from './vllm-manager'
@@ -80,6 +81,7 @@ function createWindow(): void {
     registerEmbeddingHandlers()
     registerExportHandlers()
     registerPerformanceHandlers()
+    registerDeveloperHandlers(() => mainWindow)
 
     // Folder picker for built-in tools working directory
     ipcMain.handle('dialog:openDirectory', async () => {
@@ -297,6 +299,7 @@ app.on('before-quit', async (e) => {
   try {
     sessionManager.stopGlobalMonitor()
     killActiveDownload()  // Kill any active download subprocess
+    killActiveOperation()  // Kill any active developer tool subprocess
     // B15: Timeout stopAll to prevent app from hanging on quit
     await Promise.race([
       sessionManager.stopAll(),

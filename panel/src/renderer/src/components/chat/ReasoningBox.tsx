@@ -92,31 +92,32 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
         : 'border-border'
     } bg-popover`}
     >
-      <button
-        onClick={() => { userToggledRef.current = true; setIsCollapsed(!isCollapsed) }}
-        className="w-full px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
-        <span className="font-medium">
-          {label}
-          {isStreaming && !isDone && (
-            <span className="inline-flex ml-1">
-              <span className="animate-pulse">...</span>
-            </span>
-          )}
-        </span>
+      <div className="w-full px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <button
+          onClick={() => { userToggledRef.current = true; setIsCollapsed(!isCollapsed) }}
+          className="flex items-center gap-2 hover:text-foreground transition-colors"
+        >
+          <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
+          <span className="font-medium">
+            {label}
+            {isStreaming && !isDone && (
+              <span className="inline-flex ml-1">
+                <span className="animate-pulse">...</span>
+              </span>
+            )}
+          </span>
+        </button>
         <span className="ml-auto flex items-center gap-2">
           <span className="text-[10px] opacity-60">{content.length} chars</span>
-          <span
-            role="button"
-            onClick={(e) => { e.stopPropagation(); setIsMaximized(!isMaximized) }}
-            className="text-[10px] opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+          <button
+            onClick={() => setIsMaximized(!isMaximized)}
+            className="text-[10px] opacity-40 hover:opacity-80 transition-opacity"
             title={isMaximized ? 'Restore size' : 'Maximize'}
           >
             {isMaximized ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-          </span>
+          </button>
         </span>
-      </button>
+      </div>
 
       {!isCollapsed && (
         <div

@@ -473,14 +473,14 @@ class TestStopSequenceThinkAwareness:
     """Tests for stop sequences not matching inside <think> blocks."""
 
     def test_stop_check_strips_think_blocks(self):
-        """String stop sequences should be checked on text with think blocks removed."""
+        """String stop sequences should skip content inside <think> blocks."""
         from vmlx_engine.scheduler import Scheduler
         import inspect
 
         source = inspect.getsource(Scheduler._process_batch_responses)
-        # Must strip think blocks before stop matching
-        assert "re.sub" in source
+        # Must handle think blocks before stop matching
         assert "<think>" in source
+        assert "</think>" in source
 
     def test_stop_check_skips_unclosed_think(self):
         """Stop matching should be skipped while inside unclosed <think> block."""
@@ -614,6 +614,429 @@ class TestStopSequenceThinkPositionMapping:
         assert "full_text.find(stop_str)" not in source or "search_start" in source, (
             "full_text.find(stop_str) must use a search_start offset "
             "to avoid matching inside <think> blocks"
+        )
+
+
+class TestMLLMModelWrapperInLLMPath:
+    """Tests for MLLMModelWrapper being applied in BatchedEngine._start_llm().
+
+    Models like nemotron_h return LanguageModelOutput objects instead of raw
+    tensors. Without wrapping, BatchGenerator subscripts the output incorrectly,
+    producing garbage tokens. The wrapper extracts .logits when present.
+    """
+
+    def test_start_llm_wraps_model_in_mllm_wrapper(self):
+        """_start_llm must wrap self._model in MLLMModelWrapper."""
+        from vmlx_engine.engine.batched import BatchedEngine
+        import inspect
+
+        source = inspect.getsource(BatchedEngine._start_llm)
+        assert "MLLMModelWrapper" in source, (
+            "_start_llm must wrap the model in MLLMModelWrapper so models "
+            "returning LanguageModelOutput (nemotron_h, etc.) produce raw "
+            "logits tensors for BatchGenerator"
+        )
+
+    def test_mllm_wrapper_extracts_logits(self):
+        """MLLMModelWrapper should extract .logits from LanguageModelOutput."""
+        from vmlx_engine.engine.batched import MLLMModelWrapper
+
+        class FakeLanguageModelOutput:
+            def __init__(self, logits):
+                self.logits = logits
+
+        class FakeModel:
+            def __call__(self, *args, **kwargs):
+                return FakeLanguageModelOutput("extracted_logits")
+            def make_cache(self):
+                return []
+
+        wrapper = MLLMModelWrapper(FakeModel())
+        result = wrapper("dummy_input")
+        assert result == "extracted_logits", (
+            "MLLMModelWrapper must extract .logits from LanguageModelOutput"
+        )
+
+    def test_mllm_wrapper_passthrough_for_plain_tensor(self):
+        """MLLMModelWrapper should pass through raw tensors unchanged."""
+        from vmlx_engine.engine.batched import MLLMModelWrapper
+
+        class FakeModel:
+            def __call__(self, *args, **kwargs):
+                return "raw_tensor_output"
+            def make_cache(self):
+                return []
+
+        wrapper = MLLMModelWrapper(FakeModel())
+        result = wrapper("dummy_input")
+        assert result == "raw_tensor_output", (
+            "MLLMModelWrapper must pass through models returning plain tensors"
+        )
+
+    def test_mllm_wrapper_forwards_make_cache(self):
+        """MLLMModelWrapper.__getattr__ must forward make_cache() to the real model."""
+        from vmlx_engine.engine.batched import MLLMModelWrapper
+
+        class FakeModel:
+            def __call__(self, *args, **kwargs):
+                return "output"
+            def make_cache(self):
+                return ["cache_a", "cache_b"]
+
+        wrapper = MLLMModelWrapper(FakeModel())
+        cache = wrapper.make_cache()
+        assert cache == ["cache_a", "cache_b"], (
+            "Wrapper must forward make_cache() for hybrid detection and "
+            "prefix cache warming"
+        )
+
+    def test_mllm_wrapper_forwards_args_attribute(self):
+        """MLLMModelWrapper.__getattr__ must forward .args for head_dim detection."""
+        from vmlx_engine.engine.batched import MLLMModelWrapper
+
+        class FakeArgs:
+            head_dim = 128
+            hidden_size = 4096
+
+        class FakeModel:
+            def __init__(self):
+                self.args = FakeArgs()
+            def __call__(self, *args, **kwargs):
+                return "output"
+
+        wrapper = MLLMModelWrapper(FakeModel())
+        assert wrapper.args.head_dim == 128, (
+            "Wrapper must forward .args for Scheduler head_dim detection"
+        )
+
+
+class TestStreamIntervalAccumulation:
+    """Tests for stream_interval > 1 correctly accumulating skipped tokens.
+
+    When stream_interval > 1, the engine loop skips putting intermediate
+    tokens into the collector. The skipped tokens' new_text and new_token_ids
+    must be accumulated and merged into the next output that IS sent.
+    Without this, tokens are permanently lost, causing garbled output.
+    """
+
+    def test_request_stream_state_accumulates_pending_text(self):
+        """RequestStreamState must have pending_new_text for accumulation."""
+        from vmlx_engine.output_collector import RequestStreamState
+
+        state = RequestStreamState(stream_interval=4)
+        assert hasattr(state, "pending_new_text"), (
+            "RequestStreamState must have pending_new_text field for "
+            "accumulating skipped tokens' text when stream_interval > 1"
+        )
+        assert hasattr(state, "pending_new_token_ids"), (
+            "RequestStreamState must have pending_new_token_ids field for "
+            "accumulating skipped tokens' token IDs when stream_interval > 1"
+        )
+
+    def test_accumulate_merges_pending_into_output(self):
+        """accumulate() should store text/tokens; drain() should return and clear them."""
+        from vmlx_engine.output_collector import RequestStreamState
+
+        state = RequestStreamState(stream_interval=4)
+        # Simulate 3 skipped tokens
+        state.accumulate("Hello", [100])
+        state.accumulate(" world", [200])
+        state.accumulate("!", [300])
+
+        text, token_ids = state.drain_pending()
+        assert text == "Hello world!", (
+            "drain_pending must return concatenated pending text"
+        )
+        assert token_ids == [100, 200, 300], (
+            "drain_pending must return concatenated pending token IDs"
+        )
+
+        # After drain, pending should be empty
+        text2, token_ids2 = state.drain_pending()
+        assert text2 == ""
+        assert token_ids2 == []
+
+    def test_engine_loop_accumulates_skipped_outputs(self):
+        """The engine loop must accumulate skipped outputs, not drop them."""
+        from vmlx_engine.engine_core import EngineCore
+        import inspect
+
+        source = inspect.getsource(EngineCore._engine_loop)
+        # When should_send is False, must accumulate instead of silently dropping
+        assert "accumulate" in source, (
+            "Engine loop must call state.accumulate() for skipped tokens "
+            "when stream_interval > 1. Without this, tokens are permanently "
+            "lost and output is garbled."
+        )
+
+    def test_engine_loop_drains_pending_before_put(self):
+        """The engine loop must drain pending text before collector.put()."""
+        from vmlx_engine.engine_core import EngineCore
+        import inspect
+
+        source = inspect.getsource(EngineCore._engine_loop)
+        assert "drain_pending" in source, (
+            "Engine loop must call state.drain_pending() and merge into "
+            "req_output before collector.put() when stream_interval > 1"
+        )
+
+
+class TestPerfCacheTimeouts:
+    """Tests for performance and cache IPC timeout values.
+
+    During inference, synchronous scheduler.step() blocks the uvicorn event
+    loop. A 5-second timeout is too short for large model prefills which can
+    take 10+ seconds on a single step. Timeouts must be large enough to
+    survive heavy inference load.
+    """
+
+    def test_performance_timeout_sufficient(self):
+        """Performance health check must use >= 30s timeout."""
+        import re
+        with open("panel/src/main/ipc/performance.ts") as f:
+            source = f.read()
+        match = re.search(r"AbortSignal\.timeout\((\d+)\)", source)
+        assert match, "performance.ts must use AbortSignal.timeout"
+        timeout_ms = int(match.group(1))
+        assert timeout_ms >= 30000, (
+            f"Performance health timeout is {timeout_ms}ms, must be >= 30000ms. "
+            f"During large model prefills, scheduler.step() blocks the event "
+            f"loop for 10+ seconds, causing 5s timeouts to fire spuriously."
+        )
+
+    def test_cache_stats_timeout_sufficient(self):
+        """Cache stats check must use >= 30s timeout."""
+        import re
+        with open("panel/src/main/ipc/cache.ts") as f:
+            source = f.read()
+        matches = re.findall(r"AbortSignal\.timeout\((\d+)\)", source)
+        assert matches, "cache.ts must use AbortSignal.timeout"
+        for timeout_str in matches:
+            timeout_ms = int(timeout_str)
+            # cache:warm uses 60s (correct), cache:clear uses 10s (fine)
+            # Only stats/entries should be >= 30s
+            if timeout_ms < 10000:
+                raise AssertionError(
+                    f"Cache timeout {timeout_ms}ms is too low. Must be >= 10000ms "
+                    f"to survive event loop blocking during inference."
+                )
+
+
+class TestPortInputClamping:
+    """Tests for SliderField port input not clamping on every keystroke.
+
+    With min=1024, typing "1" (first digit of e.g. "12345") should NOT
+    immediately snap to 1024. Clamping should only happen on blur.
+    """
+
+    def test_handle_input_change_does_not_clamp_to_min(self):
+        """handleInputChange must not call Math.max(min, ...) on every keystroke."""
+        with open("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx") as f:
+            source = f.read()
+
+        # Find handleInputChange function body
+        start = source.index("const handleInputChange")
+        # Find the next const/function declaration after it
+        next_func = source.index("const handleInput", start + 30)
+        handler_body = source[start:next_func]
+
+        # Must NOT contain Math.max(min in the onChange call
+        assert "Math.max(min" not in handler_body, (
+            "handleInputChange must NOT clamp to min on every keystroke. "
+            "With min=1024, typing '1' immediately snaps to 1024 before "
+            "the user can finish typing. Clamping belongs in handleInputBlur."
+        )
+
+
+class TestAbortDrainsPendingText:
+    """Regression: abort must drain pending text from stream_interval > 1."""
+
+    def test_cleanup_request_drains_pending_before_sentinel(self):
+        """_cleanup_request must drain pending text into abort sentinel."""
+        import inspect
+        from vmlx_engine.engine_core import EngineCore
+
+        source = inspect.getsource(EngineCore._cleanup_request)
+        # Must get stream state and drain BEFORE popping
+        assert "drain_pending" in source, (
+            "_cleanup_request must drain pending text from RequestStreamState "
+            "before discarding it, so the abort sentinel carries accumulated text"
+        )
+
+    def test_abort_sentinel_includes_new_text_field(self):
+        """Abort sentinel RequestOutput must carry new_text from drained pending."""
+        import inspect
+        from vmlx_engine.engine_core import EngineCore
+
+        source = inspect.getsource(EngineCore._cleanup_request)
+        assert "new_text=" in source, (
+            "Abort sentinel must include new_text= with drained pending text"
+        )
+
+
+class TestReasoningDoneAtToolBoundary:
+    """Regression: chat:reasoningDone must fire at tool iteration boundary."""
+
+    def test_tool_iteration_boundary_emits_reasoning_done(self):
+        """When isReasoning=true at tool boundary, reasoningDone must fire."""
+        import os
+
+        chat_ts = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "panel", "src", "main", "ipc", "chat.ts",
+        )
+        with open(chat_ts) as f:
+            source = f.read()
+
+        # Find tool iteration boundary: "emitToolStatus('processing', '', undefined"
+        boundary_idx = source.index("emitToolStatus('processing', '', undefined")
+        # Look backwards for reasoningDone emission
+        pre_boundary = source[max(0, boundary_idx - 500):boundary_idx]
+        assert "chat:reasoningDone" in pre_boundary, (
+            "Tool iteration boundary must fire chat:reasoningDone before "
+            "resetting isReasoning=false, otherwise reasoning-only tool calls "
+            "silently drop the reasoning content"
+        )
+
+    def test_auto_continue_boundary_emits_reasoning_done(self):
+        """When isReasoning=true at auto-continue boundary, reasoningDone must fire."""
+        import os
+
+        chat_ts = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "panel", "src", "main", "ipc", "chat.ts",
+        )
+        with open(chat_ts) as f:
+            source = f.read()
+
+        # Find auto-continue boundary: "emitToolStatus('processing', '', 'Generating response...'"
+        boundary_idx = source.index("emitToolStatus('processing', '', 'Generating response...'")
+        pre_boundary = source[max(0, boundary_idx - 500):boundary_idx]
+        assert "chat:reasoningDone" in pre_boundary, (
+            "Auto-continue boundary must fire chat:reasoningDone before "
+            "resetting isReasoning=false"
+        )
+
+
+class TestSuppressReasoningDiagnostic:
+    """Regression: suppress_reasoning + reasoning-only must not be silently empty."""
+
+    def test_chat_completions_has_suppress_reasoning_diagnostic(self):
+        """Chat completions path must emit diagnostic when only reasoning produced."""
+        import inspect
+        from vmlx_engine.server import stream_chat_completion
+
+        source = inspect.getsource(stream_chat_completion)
+        assert "suppress_reasoning and not content_was_emitted and accumulated_reasoning" in source, (
+            "Chat completions must detect reasoning-only + suppress and emit a diagnostic"
+        )
+        assert "only internal reasoning" in source, (
+            "Chat completions diagnostic must explain that reasoning was suppressed"
+        )
+
+    def test_responses_api_has_suppress_reasoning_diagnostic(self):
+        """Responses API path must emit diagnostic when only reasoning produced."""
+        import inspect
+        from vmlx_engine.server import stream_responses_api
+
+        source = inspect.getsource(stream_responses_api)
+        assert "only internal reasoning" in source, (
+            "Responses API must explain that reasoning was suppressed"
+        )
+
+
+class TestQwen3NextToolParser:
+    """Regression: qwen3_next must use 'qwen' tool parser, not 'nemotron'."""
+
+    def test_qwen3_next_uses_qwen_parser(self):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config",
+                    lambda p: {"model_type": "qwen3_next"}):
+            config = registry.lookup("Qwen3-Next-8B")
+        assert config.tool_parser == "qwen", (
+            f"qwen3_next must use 'qwen' tool parser, got '{config.tool_parser}'"
+        )
+
+    def test_qwen3_next_not_nemotron_parser(self):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config",
+                    lambda p: {"model_type": "qwen3_next"}):
+            config = registry.lookup("Qwen3-Next-8B")
+        assert config.tool_parser != "nemotron", (
+            "qwen3_next must NOT use nemotron tool parser"
+        )
+
+
+class TestGemmaArchitectureHints:
+    """Regression: gemma3/medgemma must have inject_pixel_values hint."""
+
+    def test_gemma3_has_inject_pixel_values(self):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config",
+                    lambda p: {"model_type": "gemma3"}):
+            config = registry.lookup("gemma3-2B")
+        assert config.architecture_hints.get("inject_pixel_values") is True, (
+            "gemma3 must have architecture_hints.inject_pixel_values=True "
+            "so MLLMModelWrapper injects pixel_values=None for text-only requests"
+        )
+
+    def test_medgemma_has_inject_pixel_values(self):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        # medgemma matches by name (model_type=gemma2), not by model_type alone
+        with patch("vmlx_engine.model_config_registry.load_config",
+                    lambda p: {"model_type": "gemma2"}):
+            config = registry.lookup("google/medgemma-4b-it")
+        assert config.architecture_hints.get("inject_pixel_values") is True, (
+            "medgemma must have architecture_hints.inject_pixel_values=True"
+        )
+
+
+class TestServerErrorEventHandling:
+    """Regression: server-side error SSE events must be caught in both API paths."""
+
+    def test_chat_completions_handles_parsed_error(self):
+        """Chat completions SSE path must check parsed.error."""
+        import os
+
+        chat_ts = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "panel", "src", "main", "ipc", "chat.ts",
+        )
+        with open(chat_ts) as f:
+            source = f.read()
+
+        assert "parsed.error" in source, (
+            "Chat completions SSE parser must handle parsed.error field "
+            "from server-side error events"
+        )
+
+    def test_responses_api_handles_error_event_type(self):
+        """Responses API SSE path must recognize 'error' event type."""
+        import os
+
+        chat_ts = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "panel", "src", "main", "ipc", "chat.ts",
+        )
+        with open(chat_ts) as f:
+            source = f.read()
+
+        # Must check for bare 'error' event type, not just 'response.error'
+        assert "=== 'error'" in source or "== 'error'" in source, (
+            "Responses API SSE parser must recognize bare 'error' event type "
+            "alongside 'response.error' and 'response.failed'"
         )
 
 

@@ -40,9 +40,9 @@ class HermesToolParser(ToolParser):
     REASONING_PATTERN = re.compile(
         r"<tool_call_reasoning>(.*?)</tool_call_reasoning>", re.DOTALL
     )
-    # Fallback pattern for raw JSON tool calls (without tags)
-    RAW_JSON_TOOL_PATTERN = re.compile(
-        r'\{"name":\s*"([^"]+)",\s*"arguments":\s*(\{[^}]*\})\}', re.DOTALL
+    # Fallback pattern for raw JSON tool calls (without tags) — matches start only
+    RAW_JSON_TOOL_START_PATTERN = re.compile(
+        r'\{"name":\s*"([^"]+)",\s*"arguments":\s*\{', re.DOTALL
     )
 
     def extract_tool_calls(
@@ -113,15 +113,24 @@ class HermesToolParser(ToolParser):
                     continue
 
         # Fallback 2: try raw JSON format if no tagged tool calls found
-        # Only parse the FIRST valid tool call to avoid hallucinated multiple calls
+        # Uses json.JSONDecoder.raw_decode for robust nested-object parsing
         if not tool_calls:
-            raw_matches = self.RAW_JSON_TOOL_PATTERN.findall(cleaned_text)
-            if raw_matches:
-                # Only take the first match to avoid hallucinated tool calls
-                name, args_str = raw_matches[0]
+            raw_match = self.RAW_JSON_TOOL_START_PATTERN.search(cleaned_text)
+            if raw_match:
+                name = raw_match.group(1)
+                json_start = raw_match.start()
+                data = None
+                json_end = json_start
                 try:
-                    arguments = json.loads(args_str)
-                    # Validate: only accept if tool name exists in request tools
+                    decoder = json.JSONDecoder()
+                    data, consumed = decoder.raw_decode(cleaned_text, json_start)
+                    json_end = json_start + consumed
+                except (json.JSONDecodeError, ValueError):
+                    data = None
+
+                if data and isinstance(data, dict):
+                    name = data.get("name", name)
+                    arguments = data.get("arguments", {})
                     valid_tool = True
                     if request and "tools" in request:
                         tool_names = [
@@ -136,15 +145,16 @@ class HermesToolParser(ToolParser):
                             {
                                 "id": generate_tool_id(),
                                 "name": name,
-                                "arguments": json.dumps(arguments, ensure_ascii=False),
+                                "arguments": (
+                                    json.dumps(arguments, ensure_ascii=False)
+                                    if isinstance(arguments, dict)
+                                    else str(arguments)
+                                ),
                             }
                         )
-                        # Remove the matched tool call from text
-                        cleaned_text = self.RAW_JSON_TOOL_PATTERN.sub(
-                            "", cleaned_text, count=1
+                        cleaned_text = (
+                            cleaned_text[:json_start] + cleaned_text[json_end:]
                         ).strip()
-                except json.JSONDecodeError:
-                    pass
 
         # Include reasoning in content if present
         if reasoning_matches:

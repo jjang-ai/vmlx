@@ -12,15 +12,16 @@ interface ModelInfo {
 }
 
 interface CreateSessionProps {
+  initialModelPath?: string | null
   onBack: () => void
   onCreated: (sessionId: string) => void
 }
 
-export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
+export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSessionProps) {
   const [sessionType, setSessionType] = useState<'local' | 'remote' | 'download'>('local')
-  const [step, setStep] = useState<1 | 2>(1)
+  const [step, setStep] = useState<1 | 2>(initialModelPath ? 2 : 1)
   const [models, setModels] = useState<ModelInfo[]>([])
-  const [selectedModel, setSelectedModel] = useState<string>('')
+  const [selectedModel, setSelectedModel] = useState<string>(initialModelPath || '')
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [detectedCacheType, setDetectedCacheType] = useState<string | undefined>()
@@ -35,6 +36,7 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
   const [dirError, setDirError] = useState<string | null>(null)
   const logEndRef = useRef<HTMLDivElement>(null)
   const launchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const launchSessionIdRef = useRef<string | null>(null)
 
   // Remote session fields
   const [remoteUrl, setRemoteUrl] = useState('')
@@ -91,6 +93,28 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
     assignPort()
   }, [])
 
+  // Auto-detect config when arriving with a pre-selected model (e.g. from Developer Tools "Serve")
+  useEffect(() => {
+    if (!initialModelPath) return
+    const detect = async () => {
+      try {
+        const detected = await window.api.models.detectConfig(initialModelPath) as any
+        if (detected && detected.family !== 'unknown') {
+          setConfig(prev => ({
+            ...prev,
+            enableAutoToolChoice: detected.enableAutoToolChoice,
+            toolCallParser: 'auto',
+            reasoningParser: 'auto',
+            usePagedCache: detected.usePagedCache,
+          }))
+          setDetectedCacheType(detected.cacheType || 'kv')
+          if (detected.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
+        }
+      } catch (_) { }
+    }
+    detect()
+  }, [initialModelPath])
+
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
     setConfig(prev => ({ ...prev, [key]: value }))
   }
@@ -115,11 +139,14 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
     if (!launching) return
 
     const unsubLog = window.api.sessions.onLog((data: any) => {
+      // Only show logs for the session being launched (not other running sessions)
+      if (launchSessionIdRef.current && data.sessionId !== launchSessionIdRef.current) return
       setLogs(prev => [...prev.slice(-200), data.data])
     })
 
     // Also listen for errors during launch
     const unsubError = window.api.sessions.onError((data: any) => {
+      if (launchSessionIdRef.current && data.sessionId !== launchSessionIdRef.current) return
       setLogs(prev => [...prev, `ERROR: ${data.error}`])
       setLaunchError(data.error)
     })
@@ -161,7 +188,12 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
     setLogs(['Creating session...'])
 
     try {
-      const session = await window.api.sessions.create(selectedModel, config)
+      const createResult = await window.api.sessions.create(selectedModel, config)
+      if (!createResult.success) {
+        throw new Error(createResult.error || 'Failed to create session')
+      }
+      const session = createResult.session
+      launchSessionIdRef.current = session.id
       setLogs(prev => [...prev, `Session created: ${session.id}`, 'Starting server...'])
 
       const result = await window.api.sessions.start(session.id)
@@ -188,12 +220,16 @@ export function CreateSession({ onBack, onCreated }: CreateSessionProps) {
     setRemoteConnecting(true)
 
     try {
-      const session = await window.api.sessions.createRemote({
+      const remoteResult = await window.api.sessions.createRemote({
         remoteUrl: remoteUrl.trim(),
         remoteApiKey: remoteApiKey.trim() || undefined,
         remoteModel: remoteModel.trim(),
         remoteOrganization: remoteOrganization.trim() || undefined
       })
+      if (!remoteResult.success) {
+        throw new Error(remoteResult.error || 'Failed to create remote session')
+      }
+      const session = remoteResult.session
 
       const result = await window.api.sessions.start(session.id)
       if (result.success) {

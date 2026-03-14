@@ -27,7 +27,12 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
     })
 
     ipcMain.handle('sessions:create', async (_, modelPath: string, config: Partial<ServerConfig>) => {
-      return await sessionManager.createSession(modelPath, config)
+      try {
+        const session = await sessionManager.createSession(modelPath, config)
+        return { success: true, session }
+      } catch (error) {
+        return { success: false, error: (error as Error).message }
+      }
     })
 
     ipcMain.handle('sessions:start', async (_, sessionId: string) => {
@@ -64,7 +69,12 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
     })
 
     ipcMain.handle('sessions:createRemote', async (_, params: { remoteUrl: string; remoteApiKey?: string; remoteModel: string; remoteOrganization?: string }) => {
-      return await sessionManager.createRemoteSession(params)
+      try {
+        const session = await sessionManager.createRemoteSession(params)
+        return { success: true, session }
+      } catch (error) {
+        return { success: false, error: (error as Error).message }
+      }
     })
 
     ipcMain.handle('sessions:detect', async () => {

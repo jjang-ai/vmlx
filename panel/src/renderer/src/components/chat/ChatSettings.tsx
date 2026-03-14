@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { useToast } from '../Toast'
 
@@ -107,6 +107,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         if (gen.temperature != null) defaults.temperature = gen.temperature
         if (gen.topP != null) defaults.topP = gen.topP
         if (gen.topK != null) defaults.topK = gen.topK
+        if (gen.minP != null) defaults.minP = gen.minP
         if (gen.repeatPenalty != null) defaults.repeatPenalty = gen.repeatPenalty
       }
     } catch (_) {}
@@ -596,11 +597,15 @@ function NumberField({ label, value, onChange, placeholder, help }: {
 function BraveSearchToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   const [key, setKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
+  const checkedRef = useRef(checked)
+  const onChangeRef = useRef(onChange)
+  checkedRef.current = checked
+  onChangeRef.current = onChange
 
   useEffect(() => {
     window.api.settings.get('braveApiKey').then((val: string | null) => {
       if (val) { setKey(val); setHasKey(true) }
-      else if (checked) onChange(false) // correct stale enabled state when key was deleted
+      else if (checkedRef.current) onChangeRef.current(false) // correct stale enabled state when key was deleted
     })
   }, [])
 

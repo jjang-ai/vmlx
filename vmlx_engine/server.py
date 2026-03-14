@@ -159,7 +159,7 @@ _mcp_manager = None
 # Global embedding engine (lazy loaded)
 _embedding_engine = None
 _embedding_model_locked: str | None = None  # Set when --embedding-model is used
-_embedding_lock = asyncio.Lock()  # Serialize load-and-use to prevent hot-swap races
+_embedding_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
 
 # API key authentication
 _api_key: str | None = None
@@ -222,6 +222,49 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
         logger.debug(f"_template_always_thinks check failed for {model_name}: {e}")
 
     _template_always_thinks_cache[model_name] = result
+    return result
+
+
+# Cache: does a model's template complete thinking in the generation prompt?
+# Some templates (e.g., Nemotron CRACK) use an "S5 seed" approach:
+# generation prompt = <think>\nOK.\n</think>\n — the model output is plain text.
+_template_completes_thinking_cache: dict[str, bool] = {}
+
+
+def _template_completes_thinking(tokenizer, model_name: str) -> bool:
+    """Check if template completes the thinking block inside the generation prompt.
+
+    Some models use an "S5 seed" approach where the generation prompt includes
+    a complete <think>...</think> block (e.g., <think>\\nOK.\\n</think>\\n).
+    The model output starts AFTER the closed thinking block and is plain text.
+
+    When detected, think_in_template should be False because the model output
+    won't contain any <think>/<\/think> tags — they're all in the prompt.
+    """
+    if model_name in _template_completes_thinking_cache:
+        return _template_completes_thinking_cache[model_name]
+
+    result = False
+    try:
+        import re
+
+        test_msgs = [{"role": "user", "content": "__test__"}]
+        rendered = tokenizer.apply_chat_template(
+            test_msgs, enable_thinking=True,
+            add_generation_prompt=True, tokenize=False,
+        )
+        # Check if generation prompt ends with </think> (+ optional whitespace)
+        # This means thinking is completed in the prompt, model outputs plain text
+        if re.search(r"</think>\s*$", rendered):
+            result = True
+            logger.info(
+                f"Template for {model_name} completes thinking in prompt "
+                "(S5 seed — model output is plain text, disabling think_in_template)"
+            )
+    except Exception as e:
+        logger.debug(f"_template_completes_thinking check failed for {model_name}: {e}")
+
+    _template_completes_thinking_cache[model_name] = result
     return result
 
 
@@ -293,7 +336,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="vmlx-engine API",
     description="OpenAI-compatible API for MLX LLM/MLLM inference on Apple Silicon",
-    version="0.2.8",
+    version=__import__("vmlx_engine").__version__,
     lifespan=lifespan,
 )
 
@@ -497,7 +540,7 @@ def _detect_native_tool_support() -> bool:
         if _mc.preserve_native_tool_format:
             return True
     except Exception:
-        pass
+        logger.debug("Model config registry lookup failed, skipping native format detection")
 
     return False
 
@@ -627,10 +670,7 @@ def load_model(
         logger.info(f"Loading model with SimpleEngine: {model_name}")
         _engine = SimpleEngine(model_name=model_name, force_mllm=force_mllm)
         # Start SimpleEngine synchronously (no background loop)
-        # Use new_event_loop() for Python 3.10+ compatibility (get_event_loop() is deprecated)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_engine.start())
+        asyncio.run(_engine.start())
         model_type = "MLLM" if _engine.is_mllm else "LLM"
         logger.info(f"{model_type} model loaded (simple mode): {model_name}")
 
@@ -1232,7 +1272,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
                 ),
             )
 
-        # Normalise input to list
+        # Normalize input to list
         texts = request.input if isinstance(request.input, list) else [request.input]
 
         if not texts:
@@ -1240,6 +1280,9 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
 
         # Lock protects the load-and-use sequence so a concurrent request
         # cannot hot-swap _embedding_engine between load and embed calls.
+        global _embedding_lock
+        if _embedding_lock is None:
+            _embedding_lock = asyncio.Lock()
         async with _embedding_lock:
             # Lazy-load or swap embedding engine
             load_embedding_model(model_name, lock=False, reuse_existing=True)
@@ -1401,7 +1444,8 @@ async def create_transcription(
             _stt_engine.load()
 
         # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        ext = os.path.splitext(file.filename)[1] if file.filename else ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext or ".wav") as tmp:
             content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
@@ -1900,8 +1944,8 @@ async def create_chat_completion(
 
     # Parse tool calls from output using configured parser (skip when tool_choice="none")
     cleaned_text, tool_calls = (
-        _parse_tool_calls_with_parser(_cc_parse_text or content_for_parsing, request)
-        if not _suppress_tools else (content_for_parsing, None)
+        _parse_tool_calls_with_parser(_cc_parse_text, request)
+        if not _suppress_tools else (_cc_parse_text or content_for_parsing, None)
     )
 
     # Process response_format if specified
@@ -2043,8 +2087,14 @@ def _responses_input_to_messages(
     for item in input_data:
         if not isinstance(item, dict):
             if hasattr(item, "role"):
+                role = _normalize_role(item.role)
                 raw = item.content if hasattr(item, "content") else ""
-                messages.append({"role": _normalize_role(item.role), "content": _resolve_content(raw)})
+                msg: dict = {"role": role, "content": _resolve_content(raw)}
+                if hasattr(item, "tool_calls") and item.tool_calls:
+                    msg["tool_calls"] = item.tool_calls if isinstance(item.tool_calls, list) else [item.tool_calls]
+                if hasattr(item, "tool_call_id") and item.tool_call_id:
+                    msg["tool_call_id"] = item.tool_call_id
+                messages.append(msg)
             continue
 
         item_type = item.get("type", "")
@@ -2388,8 +2438,8 @@ async def create_response(
 
     # Parse tool calls (skip when tool_choice="none")
     cleaned_text, tool_calls = (
-        _parse_tool_calls_with_parser(parse_text or content_for_parsing, request)
-        if not _suppress_tools else (content_for_parsing, None)
+        _parse_tool_calls_with_parser(parse_text, request)
+        if not _suppress_tools else (parse_text or content_for_parsing, None)
     )
 
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
@@ -2645,6 +2695,14 @@ async def stream_chat_completion(
                 logger.info("Detected think_in_template from tokenizer vocabulary")
         except Exception:
             pass
+
+    # S5 seed detection: some templates (e.g., Nemotron CRACK) complete the
+    # thinking block in the generation prompt (<think>\nOK.\n</think>\n).
+    # The model output is plain text — think_in_template must be False so
+    # the parser doesn't misclassify all output as reasoning.
+    if think_in_template:
+        if _template_completes_thinking(engine.tokenizer, _model_name or request.model):
+            think_in_template = False
 
     # When user explicitly disables thinking, check if template actually respects it.
     # Templates like Qwen3 honor enable_thinking=False (no <think> injected).
@@ -3064,6 +3122,9 @@ async def stream_chat_completion(
             else:
                 remainder = full if not content_was_emitted else ""
             if remainder:
+                # Use the engine's actual finish_reason (e.g., "length" if max_tokens
+                # was hit) instead of hardcoding "stop"
+                _flush_reason = (last_output.finish_reason if last_output and last_output.finish_reason else "stop")
                 flush_chunk = ChatCompletionChunk(
                     id=response_id,
                     created=_created_ts,
@@ -3071,7 +3132,7 @@ async def stream_chat_completion(
                     choices=[
                         ChatCompletionChunkChoice(
                             delta=ChatCompletionChunkDelta(content=remainder),
-                            finish_reason="stop",
+                            finish_reason=_flush_reason,
                         )
                     ],
                 )
@@ -3098,6 +3159,25 @@ async def stream_chat_completion(
             ],
         )
         yield f"data: {_dump_sse_json(fallback_chunk)}\n\n"
+
+    # When reasoning is suppressed and the model produced ONLY reasoning (no content),
+    # emit a diagnostic so the client isn't left with a completely silent empty response.
+    if suppress_reasoning and not content_was_emitted and accumulated_reasoning:
+        logger.info(f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting")
+        diag_chunk = ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[
+                ChatCompletionChunkChoice(
+                    delta=ChatCompletionChunkDelta(
+                        content="[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]",
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+        yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
 
     # Safeguard: if model generated zero tokens (empty stream), emit a diagnostic
     # chunk so clients always get feedback instead of a silent empty response.
@@ -3256,6 +3336,7 @@ async def stream_responses_api(
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
+    last_output = None  # Track last engine output for finish_reason (status: incomplete)
 
     # Resolve effective enable_thinking:
     # Priority: top-level field > chat_template_kwargs > auto-detect
@@ -3280,6 +3361,11 @@ async def stream_responses_api(
                 think_in_template = True
         except Exception:
             pass
+
+    # S5 seed detection (mirrors Chat Completions path)
+    if think_in_template:
+        if _template_completes_thinking(engine.tokenizer, _model_name or request.model):
+            think_in_template = False
 
     # When user explicitly disables thinking, check if template actually respects it
     if _effective_thinking is False and think_in_template:
@@ -3321,7 +3407,18 @@ async def stream_responses_api(
                     await engine.abort_request(response_id)
                 break
 
+            last_output = output
             delta_text = output.new_text
+
+            # Track token counts from output BEFORE any continue statements
+            # (must run unconditionally — reasoning parser's continue skips
+            # code below, so token tracking must happen first)
+            if hasattr(output, "prompt_tokens") and output.prompt_tokens:
+                prompt_tokens = output.prompt_tokens
+            if hasattr(output, "completion_tokens") and output.completion_tokens:
+                completion_tokens = output.completion_tokens
+            _cached = getattr(output, "cached_tokens", 0)
+
             if delta_text:
                 full_text += delta_text
 
@@ -3333,8 +3430,10 @@ async def stream_responses_api(
                     )
 
                     if delta_msg is None:
-                        # Skip this chunk (e.g., <think> token itself)
-                        pass
+                        # Skip this chunk entirely (e.g., <think> token itself)
+                        # Must use continue (not pass) to avoid falling through
+                        # to token tracking and usage emission below.
+                        continue
                     else:
                         # Accumulate for marker detection (before buffering check)
                         if delta_msg.content:
@@ -3417,6 +3516,7 @@ async def stream_responses_api(
                         yield _sse("response.heartbeat", {
                             "type": "response.heartbeat",
                         })
+                        continue
                     else:
                         # Add <think> prefix on first chunk for thinking models
                         if is_thinking_model and not think_prefix_sent and content:
@@ -3431,13 +3531,6 @@ async def stream_responses_api(
                                 "output_index": 0, "content_index": 0,
                                 "delta": content,
                             })
-
-            # Track token counts from output (updated each chunk)
-            if hasattr(output, "prompt_tokens") and output.prompt_tokens:
-                prompt_tokens = output.prompt_tokens
-            if hasattr(output, "completion_tokens") and output.completion_tokens:
-                completion_tokens = output.completion_tokens
-            _cached = getattr(output, "cached_tokens", 0)
 
             # Emit per-chunk usage when include_usage is enabled (for real-time metrics)
             if include_usage and (prompt_tokens or completion_tokens):
@@ -3521,7 +3614,7 @@ async def stream_responses_api(
             parse_text = parse_text.strip()
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or full_text, request)
 
-    display_text = ""  # initialized here; set properly in else branch or left empty for tool-call path
+    display_text = ""
 
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
@@ -3623,7 +3716,8 @@ async def stream_responses_api(
             # If reasoning was suppressed and model produced reasoning, the response
             # is intentionally empty — don't show error fallback
             if suppress_reasoning and accumulated_reasoning:
-                display_text = ""
+                display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
+                logger.info(f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting")
             else:
                 display_text = "[Model produced no response. Check server logs for details.]"
                 logger.warning(f"Request {response_id}: empty response in Responses API")
@@ -3685,13 +3779,19 @@ async def stream_responses_api(
             "code": "tool_calls_required",
         })
 
-    # Emit response.completed
+    # Emit response.completed — use "incomplete" status when max_tokens was hit
+    _resp_finish = getattr(last_output, 'finish_reason', None) if last_output else None
+    _resp_status = "incomplete" if _resp_finish == "length" else "completed"
+    _resp_extra: dict = {}
+    if _resp_status == "incomplete":
+        _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
     yield _sse("response.completed", {
         "type": "response.completed",
         "response": {
             "id": response_id, "object": "response", "created_at": created_at,
-            "status": "completed", "model": request.model,
+            "status": _resp_status, "model": request.model,
             "output": all_output_items,
+            **_resp_extra,
             "usage": {
                 "input_tokens": prompt_tokens, "output_tokens": completion_tokens,
                 "total_tokens": prompt_tokens + completion_tokens,
@@ -3851,6 +3951,12 @@ Examples:
         default=None,
         help="Tool call parser to use (auto, hermes, qwen, llama, step3p5, mistral, etc.)",
     )
+    parser.add_argument(
+        "--served-model-name",
+        type=str,
+        default=None,
+        help="Custom model name exposed via the API (overrides actual model name in /v1/models)",
+    )
 
     args = parser.parse_args()
 
@@ -3961,6 +4067,7 @@ Examples:
         use_batching=args.continuous_batching,
         max_tokens=args.max_tokens,
         force_mllm=args.mllm,
+        served_model_name=args.served_model_name,
     )
 
     # Start server

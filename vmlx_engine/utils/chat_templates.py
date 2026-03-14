@@ -21,6 +21,7 @@ NEMOTRON_CHAT_TEMPLATE = """\
     {%- endif %}
 {% endmacro %}
 {%- set enable_thinking = enable_thinking if enable_thinking is defined else True %}
+{%- set low_effort = low_effort if low_effort is defined else False %}
 {%- set truncate_history_thinking = truncate_history_thinking if truncate_history_thinking is defined else True %}
 
 {%- set ns = namespace(last_user_idx = -1) %}
@@ -187,7 +188,11 @@ NEMOTRON_CHAT_TEMPLATE = """\
     {%- elif message.role == "user" or message.role == "system" %}
         {{- '<|im_start|>' + message.role + '\\n' }}
         {%- set content = message.content | string %}
-        {{- content }}
+        {%- if message.role == "user" and loop.index0 == ns.last_user_idx and low_effort %}
+            {{- content + '\\n\\n{reasoning effort: low}' }}
+        {%- else %}
+            {{- content }}
+        {%- endif %}
         {{- '<|im_end|>\\n' }}
     {%- elif message.role == "tool" %}
         {%- if loop.previtem and loop.previtem.role != "tool" %}
@@ -221,5 +226,6 @@ DEFAULT_CHATML_TEMPLATE = """\
 <|im_start|>{{ message['role'] }}
 {{ message['content'] }}<|im_end|>
 {% endfor %}\
-<|im_start|>assistant
+{% if add_generation_prompt %}<|im_start|>assistant
+{% endif %}
 """

@@ -153,8 +153,8 @@ const UTILITY_TOOLS = new Set(['count_tokens', 'clipboard_read', 'clipboard_writ
 // ask_user is intentionally excluded from UTILITY_TOOLS — it's a core IPC tool that should
 // always be available regardless of the utilityToolsEnabled toggle.
 
-/** Filter BUILTIN_TOOLS based on per-category toggle overrides */
-function filterTools(overrides: any): any[] {
+/** Build set of disabled tool names based on per-category toggle overrides */
+function getDisabledTools(overrides: any): Set<string> {
   const disabled = new Set<string>()
   if (overrides.fileToolsEnabled === false) FILE_TOOLS.forEach(t => disabled.add(t))
   if (overrides.searchToolsEnabled === false) SEARCH_TOOLS.forEach(t => disabled.add(t))
@@ -173,6 +173,12 @@ function filterTools(overrides: any): any[] {
       disabled.add('web_search')
     }
   }
+  return disabled
+}
+
+/** Filter BUILTIN_TOOLS based on per-category toggle overrides */
+function filterTools(overrides: any): any[] {
+  const disabled = getDisabledTools(overrides)
   if (disabled.size === 0) return BUILTIN_TOOLS
   return BUILTIN_TOOLS.filter((t: any) => !disabled.has(t.function.name))
 }
@@ -548,6 +554,12 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     for (const m of messages) {
       if (m.role === 'system' && (hasSystemPrompt || overrides?.builtinToolsEnabled)) continue
       let msgContent: any = m.content
+      // Strip "[Generation interrupted]" markers from previous assistant messages —
+      // these are UI-only annotations saved to DB on abort, not meant for the model
+      if (m.role === 'assistant' && typeof msgContent === 'string') {
+        msgContent = msgContent.replace(/\n\n\[Generation interrupted\]$/, '').replace(/^\[Generation interrupted\]$/, '')
+        if (!msgContent.trim()) continue // Skip entirely empty aborted messages
+      }
       // Detect JSON content arrays (multimodal messages with images)
       if (m.role === 'user' && m.content.startsWith('[')) {
         try {
@@ -676,8 +688,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             model: modelName,
             input: inputMessages,
             instructions,
-            temperature: overrides?.temperature ?? 0.7,
-            top_p: overrides?.topP ?? 0.9,
+            // Only send temperature/top_p when explicitly set in chat overrides.
+            // When omitted, the server uses its --default-temperature/--default-top-p CLI args.
+            ...(overrides?.temperature != null ? { temperature: overrides.temperature } : {}),
+            ...(overrides?.topP != null ? { top_p: overrides.topP } : {}),
             ...(overrides?.maxTokens ? { max_output_tokens: overrides.maxTokens } : {}),
             stream: true,
             stream_options: { include_usage: true }
@@ -709,8 +723,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           const obj: Record<string, any> = {
             model: modelName,
             messages: requestMessages,
-            temperature: overrides?.temperature ?? 0.7,
-            top_p: overrides?.topP ?? 0.9,
+            // Only send temperature/top_p when explicitly set in chat overrides.
+            // When omitted, the server uses its --default-temperature/--default-top-p CLI args.
+            ...(overrides?.temperature != null ? { temperature: overrides.temperature } : {}),
+            ...(overrides?.topP != null ? { top_p: overrides.topP } : {}),
             ...(overrides?.maxTokens ? { max_tokens: overrides.maxTokens } : {}),
             stream: true,
             stream_options: { include_usage: true }
@@ -968,7 +984,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           currentEventType = trimmed.slice(7)
           return
         }
-        if (!trimmed || !trimmed.startsWith('data: ')) return
+        if (!trimmed) { currentEventType = ''; return }  // Blank line = SSE event boundary, reset type
+        if (!trimmed.startsWith('data: ')) return
         const data = trimmed.slice(6)
         if (data === '[DONE]') { currentEventType = ''; return }
 
@@ -1040,7 +1057,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             }
 
             // Handle error events from Responses API
-            if (currentEventType === 'response.error' || currentEventType === 'response.failed') {
+            // Server may emit "error", "response.error", or "response.failed" event types
+            if (currentEventType === 'error' || currentEventType === 'response.error' || currentEventType === 'response.failed') {
               const errDetail = parsed.error?.message || parsed.error?.code || parsed.detail || JSON.stringify(parsed)
               console.error(`[CHAT] Responses API error event: ${errDetail}`)
               throw new Error(`Server error: ${errDetail}`)
@@ -1098,6 +1116,13 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             // Track finish_reason (length = truncated, content_filter = filtered)
             const finishReason = parsed.choices?.[0]?.finish_reason
             if (finishReason) lastFinishReason = finishReason
+
+            // Handle error chunks from Chat Completions (tool_choice/JSON schema failures)
+            if (parsed.error) {
+              const errDetail = parsed.error.message || parsed.error.code || JSON.stringify(parsed.error)
+              console.error(`[CHAT] Chat completions error chunk: ${errDetail}`)
+              throw new Error(`Server error: ${errDetail}`)
+            }
 
             // Handle reasoning_content from reasoning parser
             const reasoning = choice?.reasoning_content || choice?.reasoning
@@ -1183,7 +1208,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                     receivedToolCalls.push(toolCall)
                   }
                   console.log(`[CHAT] Tool call detected: ${fn.name}(${(fn.arguments || '').slice(0, 100)})`)
-                  emitToolStatus('calling', fn.name, fn.arguments || '{}', toolIteration)
+                  // Don't emit arguments here — during incremental streaming,
+                  // arguments may be empty/partial. Final args shown after execution.
+                  emitToolStatus('calling', fn.name, '', toolIteration)
                 } else if (fn?.arguments && idx >= 0) {
                   // Incremental argument chunk: accumulate arguments for existing tool call
                   if (receivedToolCalls[idx]) {
@@ -1197,11 +1224,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             }
           }
 
-          // Reset event type after processing data
-          currentEventType = ''
         } catch (e) {
-          // Skip malformed JSON — reset event type to avoid stale context
-          currentEventType = ''
+          // Skip malformed JSON
         }
       }
 
@@ -1347,11 +1371,18 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               })
               emitToolStatus('result', 'ask_user', resultText, toolIteration)
             } else if (isBuiltinTool(tc.function.name)) {
-              const workDir = overrides?.workingDirectory
-              if (!workDir) {
+              // Enforce tool category toggles at execution time (defense-in-depth:
+              // filterTools removes disabled tools from definitions sent to model,
+              // but models can hallucinate tool calls not in the provided list)
+              const disabledSet = getDisabledTools(overrides || {})
+              if (disabledSet.has(tc.function.name)) {
+                resultText = `Tool "${tc.function.name}" is disabled in chat settings.`
+                emitToolStatus('error', tc.function.name, resultText, toolIteration)
+              } else if (!(overrides?.workingDirectory)) {
                 resultText = 'Error: Working directory not set. Configure it in Chat Settings.'
                 emitToolStatus('error', tc.function.name, resultText, toolIteration)
               } else {
+                const workDir = overrides.workingDirectory
                 console.log(`[CHAT] Builtin tool: ${tc.function.name}`)
                 const result = await executeBuiltinTool(tc.function.name, toolArgs, workDir, overrides?.toolResultMaxChars)
                 resultText = result.content
@@ -1482,6 +1513,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           iterationTokenCount = 0
           tpsSnapshots.length = 0; liveTps = 0; tpsTokenBase = tokenCount // Reset rolling TPS for fresh generation phase
           serverSendsUsage = false // Re-detect for new HTTP request (server restarts completion_tokens from 1)
+          // Fire reasoningDone if model was still in reasoning mode when tool calls appeared
+          if (isReasoning && reasoningContent) {
+            try {
+              const win = getWindow()
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('chat:reasoningDone', { chatId, messageId: assistantMessage.id, reasoningContent })
+              }
+            } catch (_) { }
+          }
           isReasoning = false // Reset reasoning state for new iteration
           emitToolStatus('processing', '', undefined, toolIteration)
           if (!await sendFollowUp()) break
@@ -1525,6 +1565,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           iterationTokenCount = 0
           tpsSnapshots.length = 0; liveTps = 0; tpsTokenBase = tokenCount // Reset rolling TPS for fresh generation phase
           serverSendsUsage = false // Re-detect for new HTTP request (server restarts completion_tokens from 1)
+          // Fire reasoningDone if model was still in reasoning mode at auto-continue boundary
+          if (isReasoning && reasoningContent) {
+            try {
+              const win = getWindow()
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('chat:reasoningDone', { chatId, messageId: assistantMessage.id, reasoningContent })
+              }
+            } catch (_) { }
+          }
           isReasoning = false // Reset reasoning state for new iteration
           emitToolStatus('processing', '', 'Generating response...', toolIteration)
           if (!await sendFollowUp()) break
@@ -1679,7 +1728,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
       // Save partial response: combine all content from previous tool iterations + current.
       // allGeneratedContent holds text from completed iterations; fullContent has current iteration.
-      let lastFinishReason: string | null = null
+      const abortFinishReason = lastFinishReason ?? null
       let partialContent = ''
       if (allGeneratedContent.trim() && fullContent.trim()) {
         partialContent = allGeneratedContent.trim() + '\n\n' + fullContent.trim()
@@ -1748,7 +1797,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               messageId: assistantMessage.id,
               content: assistantMessage.content,
               reasoningContent: reasoningContent || undefined,
-              finishReason: lastFinishReason,
+              finishReason: abortFinishReason,
               metrics: abortMetrics
             })
           }
@@ -1837,16 +1886,40 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
   // Clear all active locks (called on window reload/close)
   ipcMain.handle('chat:clearAllLocks', async () => {
     const count = activeRequests.size
-    for (const [, entry] of activeRequests) {
+    for (const [chatId, entry] of activeRequests) {
+      // 1. Abort the SSE fetch stream
       try { entry.controller.abort() } catch (_) { }
+      // 2. Send server-side cancel to free GPU (same logic as chat:abort)
+      if (entry.responseId && (entry.endpoint || entry.baseUrl)) {
+        try {
+          const cancelPath = entry.responseId.startsWith('resp_')
+            ? `/v1/responses/${entry.responseId}/cancel`
+            : `/v1/chat/completions/${entry.responseId}/cancel`
+          const cancelBase = entry.baseUrl || `http://${entry.endpoint!.host}:${entry.endpoint!.port}`
+          fetch(`${cancelBase}${cancelPath}`, {
+            method: 'POST', headers: entry.authHeaders || {}, signal: AbortSignal.timeout(2000)
+          }).catch(() => {}) // Fire-and-forget, don't block window close
+          console.log(`[CHAT] clearAllLocks: cancel sent for ${chatId} (${entry.responseId})`)
+        } catch (_) { }
+      }
     }
     activeRequests.clear()
     return { cleared: count }
   })
 
-  // Overrides
+  // Overrides — validate numeric bounds to prevent garbage values from reaching the engine
   ipcMain.handle('chat:setOverrides', async (_, chatId: string, overrides: any) => {
-    db.setChatOverrides({ chatId, ...overrides })
+    const clamp = (v: any, lo: number, hi: number) => typeof v === 'number' ? Math.max(lo, Math.min(hi, v)) : v
+    const sanitized = { ...overrides }
+    if (sanitized.temperature != null) sanitized.temperature = clamp(sanitized.temperature, 0, 10)
+    if (sanitized.topP != null) sanitized.topP = clamp(sanitized.topP, 0, 1)
+    if (sanitized.topK != null) sanitized.topK = clamp(sanitized.topK, 0, 1000)
+    if (sanitized.minP != null) sanitized.minP = clamp(sanitized.minP, 0, 1)
+    if (sanitized.maxTokens != null) sanitized.maxTokens = clamp(sanitized.maxTokens, 1, 1000000)
+    if (sanitized.repeatPenalty != null) sanitized.repeatPenalty = clamp(sanitized.repeatPenalty, 0, 10)
+    if (sanitized.maxToolIterations != null) sanitized.maxToolIterations = clamp(sanitized.maxToolIterations, 1, 100)
+    if (sanitized.toolResultMaxChars != null) sanitized.toolResultMaxChars = clamp(sanitized.toolResultMaxChars, 100, 500000)
+    db.setChatOverrides({ chatId, ...sanitized })
     return { success: true }
   })
 

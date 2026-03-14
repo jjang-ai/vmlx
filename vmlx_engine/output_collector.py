@@ -8,7 +8,7 @@ providing non-blocking output collection with intelligent aggregation.
 
 import asyncio
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from .request import RequestOutput
@@ -183,10 +183,16 @@ class RequestStreamState:
 
     This is used to implement stream_interval batching,
     allowing tokens to be accumulated before sending.
+
+    When stream_interval > 1, intermediate tokens are not sent immediately.
+    Their new_text and new_token_ids are accumulated in pending buffers
+    and merged into the next output that IS sent, preventing token loss.
     """
 
     stream_interval: int = 1
     sent_tokens: int = 0
+    pending_new_text: str = ""
+    pending_new_token_ids: list = field(default_factory=list)
 
     def should_send(self, total_tokens: int, finished: bool) -> bool:
         """
@@ -207,6 +213,29 @@ class RequestStreamState:
             return True
         # Send if we've accumulated enough tokens
         return (total_tokens - self.sent_tokens) >= self.stream_interval
+
+    def accumulate(self, new_text: str, new_token_ids: list) -> None:
+        """
+        Accumulate a skipped token's text and IDs for later merging.
+
+        Called when should_send() returns False — the token is not sent
+        yet but its content must be preserved for the next send.
+        """
+        self.pending_new_text += new_text
+        self.pending_new_token_ids.extend(new_token_ids)
+
+    def drain_pending(self) -> tuple:
+        """
+        Return and clear accumulated pending text and token IDs.
+
+        Returns:
+            Tuple of (pending_new_text, pending_new_token_ids)
+        """
+        text = self.pending_new_text
+        token_ids = self.pending_new_token_ids
+        self.pending_new_text = ""
+        self.pending_new_token_ids = []
+        return text, token_ids
 
     def mark_sent(self, total_tokens: int) -> None:
         """

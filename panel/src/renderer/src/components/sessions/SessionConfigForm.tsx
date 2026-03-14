@@ -985,23 +985,27 @@ export function SliderField({
   disabled = false
 }: SliderFieldProps) {
   const isUnlimited = allowUnlimited && value === unlimitedValue
+  // Local string state for the number input so typing isn't clamped mid-keystroke.
+  // Without this, min=1024 causes typing "1" to immediately snap to 1024.
+  const [localInput, setLocalInput] = useState<string | null>(null)
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onChange(Number(e.target.value))
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value
-    if (raw === '') return
-    const num = Math.round(Number(raw))
-    if (!isNaN(num)) {
-      // Allow values beyond slider max via direct input (no upper clamp)
-      onChange(Math.max(min, num))
-    }
+    // Store raw typed value locally — no clamping until blur
+    setLocalInput(e.target.value)
   }
 
-  const handleInputBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    const raw = e.target.value
+  const handleInputFocus = () => {
+    // Initialize local state with current value when focus starts
+    setLocalInput(isUnlimited ? '' : String(value))
+  }
+
+  const handleInputBlur = () => {
+    const raw = localInput ?? ''
+    setLocalInput(null)
     if (raw === '') {
       onChange(defaultValue)
       return
@@ -1025,6 +1029,8 @@ export function SliderField({
 
   // Clamp slider display value to range (for when input allows beyond max)
   const sliderValue = isUnlimited ? min : Math.min(Math.max(value, min), max)
+  // Show local input while editing, parent value otherwise
+  const displayValue = localInput !== null ? localInput : (isUnlimited ? '' : value)
 
   return (
     <div className={`block ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -1061,8 +1067,9 @@ export function SliderField({
         <input
           type="number"
           className="w-20 px-2 py-1 bg-background border border-input rounded text-sm text-right tabular-nums"
-          value={isUnlimited ? '' : value}
+          value={displayValue}
           onChange={handleInputChange}
+          onFocus={handleInputFocus}
           onBlur={handleInputBlur}
           placeholder={isUnlimited ? unlimitedLabel : undefined}
           disabled={disabled || isUnlimited}

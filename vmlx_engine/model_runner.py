@@ -5,10 +5,8 @@ MLX Model Runner for vLLM.
 This module implements the model runner that bridges vLLM's request
 handling with mlx-lm's inference capabilities.
 
-Includes low-level optimizations:
-- mx.compile() for kernel fusion
-- Memory bandwidth optimization
-- Prefill chunking for L2 cache efficiency
+Note: This is a vLLM v1 platform plugin shim. The real inference path
+uses Scheduler.step() with mlx-lm's BatchGenerator, not this runner.
 """
 
 import logging
@@ -52,18 +50,15 @@ class MLXModelRunnerOutput:
 
 class MLXModelRunner:
     """
-    Model runner that uses mlx-lm for inference.
+    Model runner that uses mlx-lm for inference (vLLM v1 compat shim).
 
     This class handles:
     - Model loading via mlx-lm
     - Converting vLLM requests to mlx-lm format
-    - Running inference and returning results in vLLM format
-    - KV cache management (delegated to mlx-lm)
+    - Hardware detection and cache spec calculation
 
-    Optimizations:
-    - mx.compile() for kernel fusion (fuses multiple ops into single Metal kernel)
-    - Memory optimization for bandwidth efficiency
-    - Prefill chunking for L2 cache utilization
+    Note: The real inference path uses Scheduler.step() with BatchGenerator.
+    This runner exists for vLLM platform plugin compatibility.
     """
 
     def __init__(self, vllm_config: "VllmConfig", enable_optimizations: bool = True):
@@ -83,9 +78,6 @@ class MLXModelRunner:
         self.model = None
         self.tokenizer = None
         self._loaded = False
-
-        # Sampler for generation
-        self._sampler = None
 
         # Cache for prompt processing
         self._prompt_cache = None
@@ -127,9 +119,6 @@ class MLXModelRunner:
             logger.info(f"Model loaded in {load_time:.2f}s")
 
             self._loaded = True
-
-            # Create default sampler
-            self._create_default_sampler()
 
             # Apply low-level optimizations
             if self._enable_optimizations:
@@ -186,18 +175,6 @@ class MLXModelRunner:
             logger.warning(f"Failed to compile forward pass: {e}")
             self._compiled_forward = None
 
-    def _create_default_sampler(self) -> None:
-        """Create default sampler for generation."""
-        try:
-            from mlx_lm.sample_utils import make_sampler
-
-            self._sampler = make_sampler(
-                temp=0.7,
-                top_p=0.9,
-            )
-        except ImportError:
-            logger.warning("Could not create sampler, using defaults")
-
     def initialize_cache(self, num_blocks: int) -> None:
         """Initialize KV cache."""
         self._num_cache_blocks = num_blocks
@@ -230,7 +207,7 @@ class MLXModelRunner:
         num_layers = getattr(config, "num_hidden_layers", 32)
         block_size = self.cache_config.block_size
 
-        # 2 for K and V, 2 bytes for float16
+        # K+V (×2) × float16 (×2 bytes) per element
         return 2 * block_size * num_layers * num_kv_heads * head_size * 2
 
     def warm_up(self) -> None:
@@ -334,6 +311,7 @@ class MLXModelRunner:
             Tuple of (logits, updated_cache)
         """
         def get_optimal_prefill_size(seq_len):
+            # 512 tokens fits comfortably in Apple Silicon L2 cache
             return min(512, seq_len)
 
         seq_len = input_ids.shape[-1] if len(input_ids.shape) > 1 else len(input_ids)
@@ -393,17 +371,14 @@ class MLXModelRunner:
 
             generated_ids = []
 
-            # Generate tokens
-            for token_info in generate_step(
+            # Generate tokens — generate_step yields (token_id, logprobs) tuples
+            for token_id, _logprobs in generate_step(
                 prompt=prompt,
                 model=self.model,
                 max_tokens=max_tokens,
                 sampler=sampler,
             ):
-                if hasattr(token_info, "token"):
-                    generated_ids.append(token_info.token)
-                elif isinstance(token_info, tuple) and len(token_info) > 0:
-                    generated_ids.append(token_info[0])
+                generated_ids.append(token_id.item() if hasattr(token_id, "item") else int(token_id))
 
                 if len(generated_ids) >= max_tokens:
                     break

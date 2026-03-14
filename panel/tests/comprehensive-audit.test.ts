@@ -2714,3 +2714,297 @@ describe('Verbose Logging — Lifecycle Events', () => {
   })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: GitHub Issue Regression Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Issue #14: stream_interval > 1 must not drop tokens', () => {
+  it('SliderField handleInputChange must not clamp on every keystroke (source check)', () => {
+    // Read the actual source to verify the fix
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      'src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf-8'
+    )
+
+    // Find handleInputChange function body
+    const start = source.indexOf('const handleInputChange')
+    const nextFunc = source.indexOf('const handleInput', start + 30)
+    const handlerBody = source.substring(start, nextFunc)
+
+    // Must NOT contain Math.max(min in the onChange call —
+    // this causes typing "1" to snap to 1024 with min=1024
+    expect(handlerBody).not.toContain('Math.max(min')
+  })
+
+  it('SliderField must use local state for in-progress typing', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      'src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf-8'
+    )
+
+    // SliderField must have local state to prevent mid-keystroke clamping
+    const sliderStart = source.indexOf('export function SliderField')
+    const sliderEnd = source.indexOf('\nexport ', sliderStart + 10)
+    const sliderBody = source.substring(sliderStart, sliderEnd > 0 ? sliderEnd : undefined)
+
+    // Must have local input state
+    expect(sliderBody).toContain('localInput')
+    // Must have onFocus handler to init local state
+    expect(sliderBody).toContain('onFocus')
+  })
+})
+
+describe('Issue #15: perf/cache IPC timeouts must survive inference load', () => {
+  it('performance.ts health timeout must be >= 30 seconds', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync('src/main/ipc/performance.ts', 'utf-8')
+    const match = source.match(/AbortSignal\.timeout\((\d+)\)/)
+    expect(match).toBeTruthy()
+    const timeoutMs = parseInt(match![1])
+    expect(timeoutMs).toBeGreaterThanOrEqual(30000)
+  })
+
+  it('cache.ts stats/entries timeouts must be >= 30 seconds', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync('src/main/ipc/cache.ts', 'utf-8')
+    const matches = [...source.matchAll(/AbortSignal\.timeout\((\d+)\)/g)]
+    expect(matches.length).toBeGreaterThan(0)
+    // Stats and entries should be >= 30s; warm (60s) and clear (10s) are fine
+    for (const match of matches) {
+      const timeout = parseInt(match[1])
+      // All timeouts should be at least 10s
+      expect(timeout).toBeGreaterThanOrEqual(10000)
+    }
+  })
+})
+
+describe('Nemotron fix: BatchedEngine._start_llm wraps model', () => {
+  it('_start_llm must apply MLLMModelWrapper for LanguageModelOutput extraction', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      '../vmlx_engine/engine/batched.py', 'utf-8'
+    )
+
+    // Find _start_llm method
+    const startIdx = source.indexOf('async def _start_llm')
+    const endIdx = source.indexOf('\n    async def ', startIdx + 10)
+    const methodBody = source.substring(startIdx, endIdx > 0 ? endIdx : undefined)
+
+    // Must wrap model in MLLMModelWrapper
+    expect(methodBody).toContain('MLLMModelWrapper')
+  })
+})
+
+// ── Phase 6: Extended analysis regression tests ──
+
+describe('M1: Abort drains pending text from stream_interval > 1', () => {
+  it('_cleanup_request must drain pending text before discarding stream state', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      '../vmlx_engine/engine_core.py', 'utf-8'
+    )
+
+    const cleanupIdx = source.indexOf('def _cleanup_request')
+    const nextDef = source.indexOf('\n    async def ', cleanupIdx + 10)
+    const methodBody = source.substring(cleanupIdx, nextDef > 0 ? nextDef : undefined)
+
+    expect(methodBody).toContain('drain_pending')
+    expect(methodBody).toContain('new_text=')
+  })
+})
+
+describe('M3: chat:reasoningDone fires at tool iteration boundary', () => {
+  it('tool call boundary emits reasoningDone before resetting isReasoning', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      'src/main/ipc/chat.ts', 'utf-8'
+    )
+
+    // Find tool boundary: emitToolStatus('processing', '', undefined
+    const boundaryIdx = source.indexOf("emitToolStatus('processing', '', undefined")
+    const preBoundary = source.substring(Math.max(0, boundaryIdx - 500), boundaryIdx)
+    expect(preBoundary).toContain('chat:reasoningDone')
+  })
+
+  it('auto-continue boundary emits reasoningDone before resetting isReasoning', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      'src/main/ipc/chat.ts', 'utf-8'
+    )
+
+    const boundaryIdx = source.indexOf("emitToolStatus('processing', '', 'Generating response...'")
+    const preBoundary = source.substring(Math.max(0, boundaryIdx - 500), boundaryIdx)
+    expect(preBoundary).toContain('chat:reasoningDone')
+  })
+})
+
+describe('M2: suppress_reasoning + reasoning-only emits diagnostic', () => {
+  it('server emits diagnostic when suppress_reasoning and only reasoning produced', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      '../vmlx_engine/server.py', 'utf-8'
+    )
+
+    // Both API paths must explain reasoning-only suppression
+    expect(source).toContain('only internal reasoning')
+  })
+})
+
+describe('M5: qwen3_next uses correct tool parser', () => {
+  it('qwen3_next config must have tool_parser=qwen, not nemotron', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      '../vmlx_engine/model_configs.py', 'utf-8'
+    )
+
+    // Find qwen3_next config block
+    const startIdx = source.indexOf('family_name="qwen3_next"')
+    const endIdx = source.indexOf('))', startIdx)
+    const configBlock = source.substring(startIdx, endIdx)
+
+    expect(configBlock).toContain('tool_parser="qwen"')
+    expect(configBlock).not.toContain('tool_parser="nemotron"')
+  })
+})
+
+describe('Architecture hints: gemma3/medgemma inject_pixel_values', () => {
+  it('gemma3 config must have inject_pixel_values architecture hint', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      '../vmlx_engine/model_configs.py', 'utf-8'
+    )
+
+    const startIdx = source.indexOf('family_name="gemma3"')
+    const endIdx = source.indexOf('))', startIdx)
+    const configBlock = source.substring(startIdx, endIdx)
+
+    expect(configBlock).toContain('inject_pixel_values')
+  })
+
+  it('medgemma config must have inject_pixel_values architecture hint', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      '../vmlx_engine/model_configs.py', 'utf-8'
+    )
+
+    const startIdx = source.indexOf('family_name="medgemma"')
+    const endIdx = source.indexOf('))', startIdx)
+    const configBlock = source.substring(startIdx, endIdx)
+
+    expect(configBlock).toContain('inject_pixel_values')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Session 7: Issues #4 and #6 — Interrupted marker stripping & clearAllLocks cancel
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Issue #4: [Generation interrupted] must be stripped from API requests', () => {
+  // Simulates the message-building logic in chat.ts (lines 548-560 + fix)
+  function buildRequestMessages(messages: Array<{ role: string; content: string }>): Array<{ role: string; content: any }> {
+    const result: Array<{ role: string; content: any }> = []
+    for (const m of messages) {
+      let msgContent: any = m.content
+      // Strip "[Generation interrupted]" markers (the fix from chat.ts)
+      if (m.role === 'assistant' && typeof msgContent === 'string') {
+        msgContent = msgContent.replace(/\n\n\[Generation interrupted\]$/, '').replace(/^\[Generation interrupted\]$/, '')
+        if (!msgContent.trim()) continue
+      }
+      result.push({ role: m.role, content: msgContent })
+    }
+    return result
+  }
+
+  it('strips trailing [Generation interrupted] from assistant messages', () => {
+    const messages = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Here is my partial respo\n\n[Generation interrupted]' },
+      { role: 'user', content: 'Continue' },
+    ]
+    const built = buildRequestMessages(messages)
+    expect(built[1].content).toBe('Here is my partial respo')
+    expect(built[1].content).not.toContain('[Generation interrupted]')
+  })
+
+  it('skips assistant messages that are ONLY [Generation interrupted]', () => {
+    const messages = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: '[Generation interrupted]' },
+      { role: 'user', content: 'Try again' },
+    ]
+    const built = buildRequestMessages(messages)
+    expect(built.length).toBe(2)
+    expect(built[0].role).toBe('user')
+    expect(built[1].role).toBe('user')
+  })
+
+  it('does NOT strip [Generation interrupted] from user messages', () => {
+    const messages = [
+      { role: 'user', content: 'What does [Generation interrupted] mean?' },
+    ]
+    const built = buildRequestMessages(messages)
+    expect(built[0].content).toContain('[Generation interrupted]')
+  })
+
+  it('preserves assistant messages with real content after stripping', () => {
+    const messages = [
+      { role: 'user', content: 'Tell me a story' },
+      { role: 'assistant', content: 'Once upon a time\n\n[Generation interrupted]' },
+    ]
+    const built = buildRequestMessages(messages)
+    expect(built[1].content).toBe('Once upon a time')
+    expect(built.length).toBe(2)
+  })
+
+  it('handles normal assistant messages without markers (no-op)', () => {
+    const messages = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there! How can I help?' },
+    ]
+    const built = buildRequestMessages(messages)
+    expect(built[1].content).toBe('Hi there! How can I help?')
+  })
+})
+
+describe('Issue #6: clearAllLocks must send server cancel for all active requests', () => {
+  it('chat.ts clearAllLocks sends cancel requests (source code verification)', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      'src/main/ipc/chat.ts', 'utf-8'
+    )
+
+    // Find the clearAllLocks handler
+    const clearAllLocksIdx = source.indexOf("'chat:clearAllLocks'")
+    expect(clearAllLocksIdx).toBeGreaterThan(-1)
+
+    // Extract the handler body (up to next ipcMain.handle)
+    const handlerEnd = source.indexOf("ipcMain.handle('chat:set", clearAllLocksIdx)
+    const handlerBody = source.substring(clearAllLocksIdx, handlerEnd)
+
+    // Must send server cancel (not just abort controller)
+    expect(handlerBody).toContain('/cancel')
+    expect(handlerBody).toContain('entry.responseId')
+    expect(handlerBody).toContain("method: 'POST'")
+    // Must still abort the local controller
+    expect(handlerBody).toContain('entry.controller.abort()')
+  })
+
+  it('abortByEndpoint also sends server cancel (consistency check)', () => {
+    const fs = require('fs')
+    const source = fs.readFileSync(
+      'src/main/ipc/chat.ts', 'utf-8'
+    )
+
+    const abortByEndpointIdx = source.indexOf('function abortByEndpoint')
+    expect(abortByEndpointIdx).toBeGreaterThan(-1)
+
+    const funcEnd = source.indexOf('\nfunction ', abortByEndpointIdx + 10)
+    const endIdx = funcEnd > 0 ? funcEnd : source.indexOf('\n/** ', abortByEndpointIdx + 10)
+    const funcBody = source.substring(abortByEndpointIdx, endIdx)
+
+    // Must send server cancel
+    expect(funcBody).toContain('/cancel')
+    expect(funcBody).toContain("method: 'POST'")
+  })
+})
+

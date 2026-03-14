@@ -69,7 +69,11 @@ export function registerExportHandlers(): void {
 
     if (result.canceled || !result.filePath) return { success: false }
 
-    writeFileSync(result.filePath, content, 'utf-8')
+    try {
+      writeFileSync(result.filePath, content, 'utf-8')
+    } catch (err) {
+      throw new Error(`Failed to write file: ${(err as Error).message}`)
+    }
     return { success: true, path: result.filePath }
   })
 
@@ -86,12 +90,15 @@ export function registerExportHandlers(): void {
 
     const filePath = result.filePaths[0]
 
+    // Security-scoped bookmark: start access before reading, stop after.
+    // showOpenDialog grants temporary access, but with securityScopedBookmarks
+    // we must explicitly manage the lifecycle.
+    let stopAccess: (() => void) | undefined
     if (result.bookmarks && result.bookmarks.length > 0) {
-      import('electron').then(({ app }) => {
-        try {
-          app.startAccessingSecurityScopedResource(result.bookmarks![0])
-        } catch (e) { }
-      })
+      try {
+        const { app } = await import('electron')
+        stopAccess = app.startAccessingSecurityScopedResource(result.bookmarks[0])
+      } catch (_) { }
     }
 
     // Guard against excessively large files
@@ -101,12 +108,18 @@ export function registerExportHandlers(): void {
     }
 
     const raw = readFileSync(filePath, 'utf-8')
+    stopAccess?.()
 
     let title = 'Imported Chat'
     let messages: Array<{ role: string; content: string; reasoning?: string }> = []
 
     if (filePath.endsWith('.json')) {
-      const parsed = JSON.parse(raw)
+      let parsed: any
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        throw new Error('Invalid JSON file — could not parse')
+      }
 
       // ShareGPT format
       if (parsed.conversations && Array.isArray(parsed.conversations)) {

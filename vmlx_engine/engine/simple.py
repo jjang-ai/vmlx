@@ -399,7 +399,7 @@ class SimpleEngine(BaseEngine):
                                 continue
                         if prompt is None:
                             prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
-                            
+
                     prompt = check_and_inject_fallback_tools(
                         prompt, messages, template_tools, tokenizer, tpl_kwargs
                     )
@@ -647,7 +647,6 @@ class SimpleEngine(BaseEngine):
                 # Progressively strip non-essential kwargs to preserve tools/thinking.
                 # Strip order: extra kwargs first, then tools, then enable_thinking.
                 logger.warning(f"Chat template first attempt failed (will retry with fewer kwargs): {template_err}")
-                had_tools = "tools" in template_kwargs
                 strip_order = [
                     k for k in template_kwargs
                     if k not in ("tokenize", "add_generation_prompt")
@@ -674,7 +673,7 @@ class SimpleEngine(BaseEngine):
                         # Last resort: manual prompt formatting
                         prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                         prompt += "\nassistant:"
-                        
+
             prompt = check_and_inject_fallback_tools(
                 prompt, messages, template_tools, tokenizer, template_kwargs
             )

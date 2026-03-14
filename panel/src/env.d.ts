@@ -16,7 +16,7 @@ declare global {
         searchHF: (query: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
-        cancelDownload: (jobId: string) => Promise<{ success: boolean; error?: string }>
+        cancelDownload: (jobId?: string) => Promise<{ success: boolean; error?: string }>
         getDownloadDir: () => Promise<string>
         setDownloadDir: (dir: string) => Promise<{ success: boolean }>
         browseDownloadDir: () => Promise<{ canceled: boolean; path?: string }>
@@ -47,7 +47,9 @@ declare global {
         onTyping: (callback: (data: any) => void) => () => void
         onToolStatus: (callback: (data: any) => void) => () => void
         abort: (chatId: string) => Promise<void>
+        isStreaming: (chatId: string) => Promise<boolean>
         clearAllLocks: () => Promise<{ cleared: number }>
+        getRecent: (limit?: number) => Promise<any[]>
         onAskUser: (callback: (data: any) => void) => () => void
         answerUser: (chatId: string, answer: string) => void
         setOverrides: (chatId: string, overrides: any) => Promise<{ success: boolean }>
@@ -101,7 +103,17 @@ declare global {
         delete: (key: string) => Promise<{ success: boolean }>
       }
       app: {
+        getVersion: () => Promise<string>
         onUpdateAvailable: (callback: (data: { currentVersion: string; latestVersion: string; url: string; notes?: string }) => void) => () => void
+      }
+      developer: {
+        info: (modelPath: string) => Promise<{ success: boolean; output: string; error?: string }>
+        doctor: (modelPath: string, options?: { noInference?: boolean }) => Promise<{ success: boolean; error?: string }>
+        convert: (args: { model: string; output?: string; bits: number; groupSize: number; mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean }) => Promise<{ success: boolean; error?: string }>
+        cancelOp: () => Promise<{ success: boolean; error?: string }>
+        browseOutputDir: () => Promise<string | null>
+        onLog: (callback: (data: { data: string }) => void) => () => void
+        onComplete: (callback: (data: { success: boolean; cancelled?: boolean; error?: string }) => void) => () => void
       }
       sessions: {
         list: () => Promise<any[]>
@@ -113,6 +125,8 @@ declare global {
         delete: (sessionId: string) => Promise<{ success: boolean; error?: string }>
         detect: () => Promise<any[]>
         update: (sessionId: string, config: any) => Promise<{ success: boolean; error?: string; restartRequired?: boolean; changedKeys?: string[] }>
+        getLogs: (sessionId: string) => Promise<string[]>
+        clearLogs: (sessionId: string) => Promise<{ success: boolean }>
         onStarting: (callback: (data: any) => void) => () => void
         onReady: (callback: (data: any) => void) => () => void
         onStopped: (callback: (data: any) => void) => () => void

@@ -126,8 +126,8 @@ class ModelConfigRegistry:
             try:
                 global load_config
                 if load_config is None:
-                    from mlx_lm.utils import load_config as _lc
-                    load_config = _lc
+                    from mlx_lm.utils import load_config as _load_config_fn
+                    load_config = _load_config_fn
                 from pathlib import Path
                 model_config = load_config(Path(model_name))
                 model_type = model_config.get("model_type", "").lower()

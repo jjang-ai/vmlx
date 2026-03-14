@@ -103,10 +103,15 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
 async function getVersionFromBinary(path: string): Promise<string> {
   // Get version via Python package metadata (works with editable installs)
   try {
-    const shebangResult = await exec(`head -1 "${path}"`)
-    const shebang = shebangResult.stdout.trim().replace(/^#\!/, '').trim()
-    if (shebang) {
-      const pyResult = await exec(`"${shebang}" -c "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"`)
+    const { readFileSync } = await import('fs')
+    const firstLine = readFileSync(path, 'utf-8').split('\n')[0]
+    const shebang = firstLine.trim().replace(/^#\!/, '').trim()
+    // Validate shebang is a plausible Python path (no shell metacharacters)
+    if (shebang && /^[/\w.\-]+$/.test(shebang)) {
+      const { execFile: execFileCb } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFileCb)
+      const pyResult = await execFileAsync(shebang, ['-c', "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"])
       const ver = pyResult.stdout.trim()
       if (/^\d+\.\d+\.\d+/.test(ver)) {
         console.log(`[vLLM Manager] Version: ${ver}`)

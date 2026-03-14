@@ -298,7 +298,7 @@ class MCPClient:
 
         try:
             # Call with timeout
-            timeout = timeout or self.config.timeout
+            timeout = timeout if timeout is not None else self.config.timeout
 
             result = await asyncio.wait_for(
                 self._session.call_tool(tool_name, arguments),

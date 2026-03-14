@@ -148,6 +148,7 @@ class EngineCore:
         # Periodic check for scheduler/collector mismatch (ghost requests
         # in scheduler.running with no output collector). Runs every N steps.
         _GHOST_CHECK_INTERVAL = 50  # check every 50 steps
+        _ORPHAN_TIMEOUT_S = 30.0  # abort after 30s with no consumer
         _ghost_check_counter = 0
 
         while self._running:
@@ -198,8 +199,16 @@ class EngineCore:
                                         req_output.completion_tokens,
                                         req_output.finished,
                                     ):
+                                        # Merge any accumulated text from skipped tokens
+                                        pending_text, pending_ids = state.drain_pending()
+                                        if pending_text or pending_ids:
+                                            req_output.new_text = pending_text + req_output.new_text
+                                            req_output.new_token_ids = pending_ids + req_output.new_token_ids
                                         collector.put(req_output)
                                         state.mark_sent(req_output.completion_tokens)
+                                    elif state:
+                                        # Not sending yet — accumulate for next send
+                                        state.accumulate(req_output.new_text, req_output.new_token_ids)
                             else:
                                 # No collector — ghost/orphan request
                                 count = orphan_counts.get(rid, 0) + 1
@@ -208,7 +217,7 @@ class EngineCore:
                                 if rid not in orphan_first_seen:
                                     orphan_first_seen[rid] = time.monotonic()
                                 elapsed = time.monotonic() - orphan_first_seen[rid]
-                                if count >= _ORPHAN_ABORT_THRESHOLD or elapsed > 30.0:
+                                if count >= _ORPHAN_ABORT_THRESHOLD or elapsed > _ORPHAN_TIMEOUT_S:
                                     logger.warning(
                                         f"Aborting ghost request {rid}: "
                                         f"{count} outputs with no consumer "
@@ -362,9 +371,19 @@ class EngineCore:
             # Don't call clear() after — let the consumer read the sentinel.
             # The collector is already popped from _output_collectors so the
             # engine loop won't send more outputs to it.
+            #
+            # Drain any pending accumulated text from stream_interval > 1
+            # so the abort sentinel carries the full output so far.
+            state = self._stream_states.get(request_id)
+            pending_text = ""
+            pending_ids: list = []
+            if state:
+                pending_text, pending_ids = state.drain_pending()
             try:
                 collector.put(RequestOutput(
                     request_id=request_id,
+                    new_text=pending_text,
+                    new_token_ids=pending_ids,
                     finished=True,
                     finish_reason="aborted",
                 ))
@@ -528,12 +547,19 @@ class EngineCore:
                 if req_output.finished:
                     results[req_output.request_id] = req_output
 
-        # Cleanup
+        # Cleanup — use abort_request for complete cleanup (BatchGenerator UIDs,
+        # paged cache tracking, detokenizer, UID mappings). remove_finished_request
+        # only removes from the running dict, leaving ghost entries elsewhere.
         for rid in request_ids:
-            self.scheduler.remove_finished_request(rid)
+            self.scheduler.abort_request(rid)
 
-        # Return in original order
-        return [results[rid] for rid in request_ids]
+        # Return in original order — use .get() to handle requests that were
+        # aborted or never produced output (avoids KeyError on missing keys)
+        return [results.get(rid, RequestOutput(
+            request_id=rid,
+            finished=True,
+            finish_reason="aborted",
+        )) for rid in request_ids]
 
     def get_stats(self) -> Dict[str, Any]:
         """Get engine statistics."""

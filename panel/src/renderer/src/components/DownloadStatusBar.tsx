@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 
 interface DownloadProgress {
@@ -27,6 +27,8 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
   const [active, setActive] = useState<ActiveDownload | null>(null)
   const [queue, setQueue] = useState<QueuedDownload[]>([])
   const [collapsed, setCollapsed] = useState(false)
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
 
   // Poll initial status on mount
   useEffect(() => {
@@ -51,7 +53,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
     })
 
     const unsubComplete = window.api.models.onDownloadComplete((data: any) => {
-      if (data.status === 'complete') onComplete?.()
+      if (data.status === 'complete') onCompleteRef.current?.()
       setActive(prev => prev?.jobId === data.jobId ? null : prev)
       // Re-poll to get updated queue
       window.api.models.getDownloadStatus().then((status: any) => {
@@ -76,7 +78,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
       unsubComplete()
       unsubError()
     }
-  }, [onComplete])
+  }, [])
 
   // Don't render if nothing is happening
   if (!active && queue.length === 0) return null

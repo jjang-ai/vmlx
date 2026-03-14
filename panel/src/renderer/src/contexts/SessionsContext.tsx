@@ -92,14 +92,23 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
     const loading = current.find(s => s.modelPath === modelPath && s.status === 'loading')
     if (loading) {
       return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => { unsub(); reject(new Error('Session start timed out')) }, 60000)
-        const unsub = window.api.sessions.onReady((data: any) => {
+        const timeout = setTimeout(() => { unsubReady(); unsubErr(); reject(new Error('Session start timed out')) }, 60000)
+        const unsubReady = window.api.sessions.onReady((data: any) => {
           if (data.sessionId === loading.id) {
             clearTimeout(timeout)
-            unsub()
+            unsubReady()
+            unsubErr()
             refreshSessions().then(() => {
               resolve({ ...loading, status: 'running', ...(data.port ? { port: data.port } : {}) })
             })
+          }
+        })
+        const unsubErr = window.api.sessions.onError((data: any) => {
+          if (data.sessionId === loading.id) {
+            clearTimeout(timeout)
+            unsubReady()
+            unsubErr()
+            reject(new Error(data.error || 'Session failed to start'))
           }
         })
       })
@@ -116,8 +125,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
         throw new Error(result.error || 'Failed to create session')
       }
       await refreshSessions()
-      const updated = await window.api.sessions.list()
-      session = updated.find((s: any) => s.modelPath === modelPath)
+      session = sessionsRef.current.find(s => s.modelPath === modelPath)
       if (!session) {
         setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
         throw new Error('Session created but not found')
@@ -137,18 +145,29 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
     const sessionId = session.id
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        unsub()
+        unsubReady()
+        unsubErr()
         setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
         reject(new Error('Session start timed out after 60s'))
       }, 60000)
-      const unsub = window.api.sessions.onReady((data: any) => {
+      const unsubReady = window.api.sessions.onReady((data: any) => {
         if (data.sessionId === sessionId) {
           clearTimeout(timeout)
-          unsub()
+          unsubReady()
+          unsubErr()
           setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
           refreshSessions().then(() => {
             resolve({ ...session!, status: 'running', ...(data.port ? { port: data.port } : {}) })
           })
+        }
+      })
+      const unsubErr = window.api.sessions.onError((data: any) => {
+        if (data.sessionId === sessionId) {
+          clearTimeout(timeout)
+          unsubReady()
+          unsubErr()
+          setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
+          reject(new Error(data.error || 'Session failed to start'))
         }
       })
     })

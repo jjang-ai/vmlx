@@ -692,7 +692,9 @@ class MLLMScheduler:
             except Exception:
                 pass
             if needs_patch:
-                QuantizedKVCache.size = lambda self: getattr(self, 'offset', 0)
+                def _qkv_size(self):
+                    return getattr(self, 'offset', 0)
+                QuantizedKVCache.size = _qkv_size
                 logger.debug("Patched QuantizedKVCache.size() to return self.offset")
             QuantizedKVCache._size_patched = True
 
@@ -761,7 +763,8 @@ class MLLMScheduler:
                     qkv.values = mx.quantize(layer_cache.values, group_size=group_size, bits=bits)
                     qkv.offset = layer_cache.offset
                     result.append(qkv)
-                except Exception:
+                except Exception as exc:
+                    logger.debug("KV quantization failed for layer, keeping original: %s", exc)
                     result.append(layer_cache)
             else:
                 result.append(layer_cache)
@@ -1064,14 +1067,14 @@ class MLLMScheduler:
             request = self.requests.pop(request_id, None)
             if request is None:
                 return False
-    
+
             # Remove from waiting queue
             if request.status == RequestStatus.WAITING:
                 try:
                     self.waiting.remove(request)
                 except ValueError:
                     pass
-    
+
             # Remove from batch generator (holds _batch_lock to prevent race with next())
             if request_id in self.request_id_to_uid:
                 uid = self.request_id_to_uid[request_id]
@@ -1080,23 +1083,23 @@ class MLLMScheduler:
                         self.batch_generator.remove([uid])
                 del self.uid_to_request_id[uid]
                 del self.request_id_to_uid[request_id]
-    
+
             if request_id in self.running:
                 del self.running[request_id]
-    
+
             # Clean up paged cache block tables (prevent leak)
             # Use delete_block_table on abort so ref_counts are decremented
             if self.block_aware_cache is not None:
                 self.block_aware_cache._request_tables.pop(request_id, None)
                 if self.paged_cache_manager is not None:
                     self.paged_cache_manager.delete_block_table(request_id)
-    
+
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
-    
+
             # Clear extracted cache GC reference
             request._extracted_cache = None
-    
+
             # Mark as aborted
             request.status = RequestStatus.FINISHED_ABORTED
             self.finished_req_ids.add(request_id)
@@ -1256,14 +1259,24 @@ class MLLMScheduler:
                 # Post-decode string stop sequence check.
                 # MLLMBatchGenerator only handles EOS stop tokens;
                 # string stop sequences need decoded-text matching.
+                # Skip matching inside <think> blocks — reasoning content
+                # should not trigger user-specified stop sequences.
                 if request.sampling_params.stop:
                     full_text = detok.text
-                    for stop_str in request.sampling_params.stop:
-                        idx = full_text.find(stop_str)
-                        if idx >= 0:
-                            string_stop_truncate = idx
-                            new_text = ""  # suppress partial output
-                            break
+                    # Skip matching inside unclosed <think> blocks
+                    in_think = '<think>' in full_text and '</think>' not in full_text.split('<think>')[-1]
+                    if not in_think:
+                        max_stop_len = max(len(s) for s in request.sampling_params.stop)
+                        search_start = max(0, len(full_text) - len(new_text) - max_stop_len + 1)
+                        last_think_end = full_text.rfind('</think>')
+                        if last_think_end >= 0:
+                            search_start = max(search_start, last_think_end + len('</think>'))
+                        for stop_str in request.sampling_params.stop:
+                            idx = full_text.find(stop_str, search_start)
+                            if idx >= 0:
+                                string_stop_truncate = idx
+                                new_text = ""
+                                break
             else:
                 new_text = ""
 
@@ -1543,7 +1556,7 @@ class MLLMScheduler:
             scheduled = self._schedule_waiting()
             output.scheduled_request_ids = [r.request_id for r in scheduled]
             output.num_scheduled_tokens = sum(r.num_prompt_tokens for r in scheduled)
-    
+
             # Identify if we have running requests before releasing lock
             has_running = self.batch_generator is not None and len(self.running) > 0
 
@@ -1614,7 +1627,7 @@ class MLLMScheduler:
                         logger.error(
                             f"MLLM scheduler: {len(failed)} requests failed permanently"
                         )
-    
+
                     if retryable:
                         logger.info(
                             f"MLLM scheduler recovered: "

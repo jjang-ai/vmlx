@@ -289,13 +289,14 @@ class MCPClientManager:
         Args:
             server_name: Specific server to reconnect, or None for all
         """
-        if server_name:
-            client = self._clients.get(server_name)
-            if client:
-                await client.disconnect()
-                await client.connect()
-        else:
-            # Reconnect all
-            for client in self._clients.values():
-                await client.disconnect()
-                await client.connect()
+        async with self._lock:
+            if server_name:
+                client = self._clients.get(server_name)
+                if client:
+                    await client.disconnect()
+                    await client.connect()
+            else:
+                # Reconnect all
+                for client in self._clients.values():
+                    await client.disconnect()
+                    await client.connect()

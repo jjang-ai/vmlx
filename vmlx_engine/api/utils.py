@@ -3,6 +3,8 @@
 Utility functions for text processing and model detection.
 """
 
+import json
+import os
 import re
 
 from .models import Message
@@ -72,9 +74,6 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
     if force_mllm:
         return True
-
-    import json
-    import os
 
     # Primary: check config.json for vision_config (authoritative for local models)
     config_path = os.path.join(model_name, "config.json")

@@ -1,7 +1,7 @@
-import { MessageSquare, Server, PanelLeftClose, PanelLeft, Info } from 'lucide-react'
+import { MessageSquare, Server, Wrench, PanelLeftClose, PanelLeft, Info } from 'lucide-react'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { useAppState } from '../../contexts/AppStateContext'
-import type { AppMode } from '../../types/app-state'
+
 
 export function TitleBar() {
   const { state, setMode, dispatch } = useAppState()
@@ -37,18 +37,25 @@ export function TitleBar() {
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <ModeButton
-            mode="chat"
             active={state.mode === 'chat'}
             onClick={() => setMode('chat')}
             icon={<MessageSquare className="h-3 w-3" />}
             label="Chat"
           />
           <ModeButton
-            mode="server"
             active={state.mode === 'server'}
-            onClick={() => setMode('server')}
+            onClick={() => {
+              setMode('server')
+              if (state.serverPanel === 'about') dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })
+            }}
             icon={<Server className="h-3 w-3" />}
             label="Server"
+          />
+          <ModeButton
+            active={state.mode === 'tools'}
+            onClick={() => setMode('tools')}
+            icon={<Wrench className="h-3 w-3" />}
+            label="Tools"
           />
         </div>
       </div>
@@ -61,7 +68,7 @@ export function TitleBar() {
         <ThemeToggle />
         <button
           onClick={() => {
-            dispatch({ type: 'SET_MODE', mode: 'server' } as any)
+            dispatch({ type: 'SET_MODE', mode: 'server' })
             dispatch({ type: 'SET_SERVER_PANEL', panel: 'about' })
           }}
           className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent transition-colors"
@@ -75,7 +82,6 @@ export function TitleBar() {
 }
 
 function ModeButton({ active, onClick, icon, label }: {
-  mode: AppMode
   active: boolean
   onClick: () => void
   icon: React.ReactNode
