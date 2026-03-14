@@ -239,7 +239,7 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
     The model output starts AFTER the closed thinking block and is plain text.
 
     When detected, think_in_template should be False because the model output
-    won't contain any <think>/<\/think> tags — they're all in the prompt.
+    won't contain any <think>/</think> tags — they're all in the prompt.
     """
     if model_name in _template_completes_thinking_cache:
         return _template_completes_thinking_cache[model_name]
@@ -1768,22 +1768,20 @@ async def create_chat_completion(
     elif "enable_thinking" in _ct_kwargs:
         chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
     else:
-        # Auto-detect from model config + tokenizer fallback
+        # Auto-detect from model config + tokenizer vocabulary.
+        # IMPORTANT: reasoning_parser existence does NOT mean enable_thinking=True.
+        # A model can have a reasoning parser but think_in_template=False (e.g.,
+        # Nemotron S5 seed templates), meaning the template should NOT inject <think>.
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
         _enable = _mc.think_in_template
         if not _enable:
-            # Models with a reasoning_parser are reasoning models — enable thinking
-            # so the appropriate prefix/protocol is activated (e.g., Harmony analysis channel)
-            if _mc.reasoning_parser:
-                _enable = True
-            else:
-                try:
-                    _tok = engine.tokenizer
-                    if getattr(_tok, 'has_thinking', False):
-                        _enable = True
-                except Exception:
-                    pass
+            try:
+                _tok = engine.tokenizer
+                if getattr(_tok, 'has_thinking', False):
+                    _enable = True
+            except Exception:
+                pass
         chat_kwargs["enable_thinking"] = _enable
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
@@ -2268,20 +2266,20 @@ async def create_response(
     elif "enable_thinking" in _ct_kwargs:
         chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
     else:
-        # Auto-detect from model config + tokenizer fallback
+        # Auto-detect from model config + tokenizer vocabulary.
+        # IMPORTANT: reasoning_parser existence does NOT mean enable_thinking=True.
+        # A model can have a reasoning parser but think_in_template=False (e.g.,
+        # Nemotron S5 seed templates), meaning the template should NOT inject <think>.
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
         _enable = _mc.think_in_template
         if not _enable:
-            if _mc.reasoning_parser:
-                _enable = True
-            else:
-                try:
-                    _tok = engine.tokenizer
-                    if getattr(_tok, 'has_thinking', False):
-                        _enable = True
-                except Exception:
-                    pass
+            try:
+                _tok = engine.tokenizer
+                if getattr(_tok, 'has_thinking', False):
+                    _enable = True
+            except Exception:
+                pass
         chat_kwargs["enable_thinking"] = _enable
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).

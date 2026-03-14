@@ -19,11 +19,21 @@ let handlersRegistered = false
 export function registerSessionHandlers(getWindow: () => BrowserWindow | null): void {
   if (!handlersRegistered) {
     ipcMain.handle('sessions:list', async () => {
-      return sessionManager.getSessions()
+      try {
+        return sessionManager.getSessions()
+      } catch (error) {
+        console.error('[SESSION] Failed to list sessions:', error)
+        return []
+      }
     })
 
     ipcMain.handle('sessions:get', async (_, id: string) => {
-      return sessionManager.getSession(id)
+      try {
+        return sessionManager.getSession(id)
+      } catch (error) {
+        console.error('[SESSION] Failed to get session:', error)
+        return null
+      }
     })
 
     ipcMain.handle('sessions:create', async (_, modelPath: string, config: Partial<ServerConfig>) => {
@@ -78,7 +88,12 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
     })
 
     ipcMain.handle('sessions:detect', async () => {
-      return await sessionManager.detectAndAdoptAll()
+      try {
+        return await sessionManager.detectAndAdoptAll()
+      } catch (error) {
+        console.error('[SESSION] Failed to detect sessions:', error)
+        return []
+      }
     })
 
     ipcMain.handle('sessions:update', async (_, sessionId: string, config: Partial<ServerConfig>) => {
@@ -91,7 +106,12 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
     })
 
     ipcMain.handle('sessions:getLogs', async (_, sessionId: string) => {
-      return sessionManager.getLogs(sessionId)
+      try {
+        return sessionManager.getLogs(sessionId)
+      } catch (error) {
+        console.error('[SESSION] Failed to get logs:', error)
+        return []
+      }
     })
 
     ipcMain.handle('sessions:clearLogs', async (_, sessionId: string) => {
