@@ -239,27 +239,31 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           onChange={(e) => handleSearch(e.target.value)}
           className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"
         />
-        <select
-          value={sortBy}
-          onChange={(e) => handleSortChange(e.target.value)}
-          className="px-2 py-2 bg-background border border-input rounded text-xs text-foreground"
-          title="Sort results by"
-        >
-          <option value="downloads">Downloads</option>
-          <option value="relevance">Relevance</option>
-          <option value="lastModified">Recently Updated</option>
-          <option value="trending">Trending</option>
-          <option value="likes">Likes</option>
-          <option value="size">Model Size</option>
-        </select>
-        {sortBy !== 'relevance' && (
-          <button
-            onClick={handleDirToggle}
-            className="px-1.5 py-2 bg-background border border-input rounded text-xs text-foreground hover:bg-accent"
-            title={sortDir === 'desc' ? 'Highest first' : 'Lowest first'}
-          >
-            {sortDir === 'desc' ? '\u2193' : '\u2191'}
-          </button>
+        {searchQuery.trim() && (
+          <>
+            <select
+              value={sortBy}
+              onChange={(e) => handleSortChange(e.target.value)}
+              className="px-2 py-2 bg-background border border-input rounded text-xs text-foreground"
+              title="Sort results by"
+            >
+              <option value="downloads">Downloads</option>
+              <option value="relevance">Relevance</option>
+              <option value="lastModified">Recently Updated</option>
+              <option value="trending">Trending</option>
+              <option value="likes">Likes</option>
+              <option value="size">Model Size</option>
+            </select>
+            {sortBy !== 'relevance' && (
+              <button
+                onClick={handleDirToggle}
+                className="px-1.5 py-2 bg-background border border-input rounded text-xs text-foreground hover:bg-accent"
+                title={sortDir === 'desc' ? 'Highest first' : 'Lowest first'}
+              >
+                {sortDir === 'desc' ? '\u2193' : '\u2191'}
+              </button>
+            )}
+          </>
         )}
         {loading && <span className="text-xs text-muted-foreground">Searching...</span>}
       </div>

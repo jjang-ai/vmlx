@@ -127,10 +127,10 @@ async function getDirectorySize(dirPath: string): Promise<number> {
 }
 
 function formatSize(bytes: number): string {
+  const tb = bytes / (1024 * 1024 * 1024 * 1024)
+  if (tb >= 1) return `~${tb.toFixed(1)} TB`
   const gb = bytes / (1024 * 1024 * 1024)
-  if (gb >= 1) {
-    return `~${gb.toFixed(1)} GB`
-  }
+  if (gb >= 1) return `~${gb.toFixed(1)} GB`
   const mb = bytes / (1024 * 1024)
   return `~${mb.toFixed(0)} MB`
 }
@@ -138,10 +138,13 @@ function formatSize(bytes: number): string {
 /** Parse size string like "~4.2 GB" back to bytes for sorting */
 function parseSizeBytes(size: string | undefined): number {
   if (!size) return 0
-  const match = size.match(/~?([\d.]+)\s*(GB|MB)/i)
+  const match = size.match(/~?([\d.]+)\s*(TB|GB|MB)/i)
   if (!match) return 0
   const val = parseFloat(match[1])
-  return match[2].toUpperCase() === 'GB' ? val * 1024 * 1024 * 1024 : val * 1024 * 1024
+  const unit = match[2].toUpperCase()
+  if (unit === 'TB') return val * 1024 * 1024 * 1024 * 1024
+  if (unit === 'GB') return val * 1024 * 1024 * 1024
+  return val * 1024 * 1024
 }
 
 async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
