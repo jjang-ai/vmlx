@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { readdir, stat, access, readFile, mkdir, writeFile, unlink } from 'fs/promises'
+import { readdir, stat, access, readFile, mkdir, writeFile, unlink, rm } from 'fs/promises'
 import { join, basename } from 'path'
 import { homedir } from 'os'
 import { spawn, ChildProcess } from 'child_process'
@@ -379,6 +379,11 @@ export function registerModelHandlers(): void {
   const downloadQueue: DownloadJob[] = []
   let activeJob: DownloadJob | null = null
   const completedJobs: DownloadJob[] = []
+  const MAX_COMPLETED_JOBS = 100
+  const trackCompleted = (job: DownloadJob) => {
+    completedJobs.push(job)
+    if (completedJobs.length > MAX_COMPLETED_JOBS) completedJobs.splice(0, completedJobs.length - MAX_COMPLETED_JOBS)
+  }
 
   // Expose kill function for app quit cleanup
   _killActiveDownload = () => {
@@ -526,6 +531,8 @@ export function registerModelHandlers(): void {
 
       if (job.wasCancelled) {
         try { await unlink(markerFile) } catch (_) { }
+        // Remove partial model directory to prevent incomplete models from appearing in scan
+        try { await rm(job.modelDir, { recursive: true, force: true }) } catch (_) { }
         job.status = 'cancelled'
         emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
       } else if (code === 0) {
@@ -544,7 +551,7 @@ export function registerModelHandlers(): void {
               emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
               activeJob = null
               job.process = undefined
-              completedJobs.push(job)
+              trackCompleted(job)
               processQueue()
               return
             }
@@ -562,7 +569,7 @@ export function registerModelHandlers(): void {
 
       activeJob = null
       job.process = undefined
-      completedJobs.push(job)
+      trackCompleted(job)
       // Process next in queue
       processQueue()
     })
@@ -572,7 +579,7 @@ export function registerModelHandlers(): void {
       job.error = `Failed to start download: ${err.message}`
       activeJob = null
       job.process = undefined
-      completedJobs.push(job)
+      trackCompleted(job)
       try { await unlink(markerFile) } catch (_) { }
       emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: job.error })
       processQueue()
@@ -686,6 +693,11 @@ export function registerModelHandlers(): void {
     const queued = downloadQueue.find(j => j.repoId === repoId)
     if (queued) return { jobId: queued.id, status: 'already_queued' }
 
+    // Validate repoId to prevent path traversal (must be "org/model" format)
+    if (!repoId || repoId.includes('..') || repoId.startsWith('/') || !/^[^/]+\/[^/]+$/.test(repoId)) {
+      throw new Error(`Invalid repository ID: ${repoId}`)
+    }
+
     const id = `dl_${++jobIdCounter}_${Date.now()}`
     const targetDir = getDownloadDirectory()
     const modelDir = join(targetDir, repoId)
@@ -707,7 +719,7 @@ export function registerModelHandlers(): void {
     if (qIdx >= 0) {
       const removed = downloadQueue.splice(qIdx, 1)[0]
       removed.status = 'cancelled'
-      completedJobs.push(removed)
+      trackCompleted(removed)
       console.log(`[DOWNLOADS] Cancelled queued: ${removed.repoId}`)
       emitToRenderer('models:downloadComplete', { jobId: removed.id, repoId: removed.repoId, status: 'cancelled' })
       return { success: true }
@@ -735,6 +747,11 @@ export function registerModelHandlers(): void {
 
   // Legacy blocking download (backward compat — wraps the new queue system)
   ipcMain.handle('models:downloadModel', async (_, repoId: string) => {
+    // Validate repoId to prevent path traversal (must be "org/model" format)
+    if (!repoId || repoId.includes('..') || repoId.startsWith('/') || !/^[^/]+\/[^/]+$/.test(repoId)) {
+      throw new Error(`Invalid repository ID: ${repoId}`)
+    }
+
     // Check if already queued or downloading
     if (activeJob?.repoId === repoId || downloadQueue.find(j => j.repoId === repoId)) {
       throw new Error(`Already downloading ${repoId}`)

@@ -333,7 +333,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <ChatInterface
             chatId={currentChatId}
             onNewChat={handleNewChat}
-            sessionEndpoint={{ host: session.host, port: session.port }}
+            sessionEndpoint={session.status === 'running' ? { host: session.host, port: session.port } : undefined}
             sessionId={session.id}
             overridesVersion={overridesVersion}
           />

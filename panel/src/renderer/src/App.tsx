@@ -14,6 +14,10 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { useAppState } from './contexts/AppStateContext'
 import { useSessionsContext } from './contexts/SessionsContext'
 import { ChatModeToolbar } from './components/layout/ChatModeToolbar'
+import { ToolsDashboard } from './components/tools/ToolsDashboard'
+import { ModelInspector } from './components/tools/ModelInspector'
+import { ModelDoctor } from './components/tools/ModelDoctor'
+import { ModelConverter } from './components/tools/ModelConverter'
 
 function App() {
   const [setupDone, setSetupDone] = useState(false)
@@ -41,7 +45,13 @@ function App() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail
       if (detail?.mode) setMode(detail.mode)
-      if (detail?.panel) dispatch({ type: 'SET_SERVER_PANEL', panel: detail.panel })
+      if (detail?.panel) {
+        if (detail.mode === 'tools') {
+          dispatch({ type: 'SET_TOOLS_PANEL', panel: detail.panel, modelPath: detail.modelPath })
+        } else {
+          dispatch({ type: 'SET_SERVER_PANEL', panel: detail.panel, modelPath: detail.modelPath })
+        }
+      }
     }
     window.addEventListener('vmlx:navigate', handler)
     return () => window.removeEventListener('vmlx:navigate', handler)
@@ -65,6 +75,12 @@ function App() {
     : undefined
 
   const handleChatSelect = useCallback((chatId: string, modelPath: string) => {
+    // Empty chatId means deselect (e.g. after deleting the active chat)
+    if (!chatId) {
+      dispatch({ type: 'CLOSE_CHAT' })
+      return
+    }
+
     // Find the session for this model — prefer running, then any matching, then first available
     const exactRunning = sessions.find(s => s.modelPath === modelPath && s.status === 'running')
     const exactAny = sessions.find(s => s.modelPath === modelPath)
@@ -162,6 +178,10 @@ function App() {
             {state.mode === 'server' && (
               <ServerModeContent />
             )}
+
+            {state.mode === 'tools' && (
+              <ToolsModeContent />
+            )}
           </main>
         </div>
       </div>
@@ -229,7 +249,7 @@ function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
 
 function ServerModeContent() {
   const { state, dispatch } = useAppState()
-  const { serverPanel, serverSessionId } = state
+  const { serverPanel, serverSessionId, serverInitialModelPath } = state
 
   return (
     <>
@@ -243,6 +263,7 @@ function ServerModeContent() {
 
       {serverPanel === 'create' && (
         <CreateSession
+          initialModelPath={serverInitialModelPath}
           onBack={() => dispatch({ type: 'SET_SERVER_PANEL', panel: 'dashboard' })}
           onCreated={(sessionId) => dispatch({ type: 'SET_SERVER_PANEL', panel: 'session', sessionId })}
         />
@@ -284,6 +305,67 @@ function ServerModeContent() {
             <ApiKeysSection />
           </div>
         </div>
+      )}
+    </>
+  )
+}
+
+// ─── Tools Mode Content ─────────────────────────────────────────────────────
+
+function ToolsModeContent() {
+  const { state, dispatch } = useAppState()
+  const { toolsPanel, toolsModelPath } = state
+  const [scannedModels, setScannedModels] = useState<Array<{ name: string; path: string }>>([])
+
+  // Single model scan shared by all sub-panels
+  useEffect(() => {
+    window.api.models.scan().then(setScannedModels).catch(() => {})
+  }, [])
+
+  const navigateTo = (panel: 'dashboard' | 'inspector' | 'doctor' | 'converter', modelPath?: string) => {
+    dispatch({ type: 'SET_TOOLS_PANEL', panel, modelPath: modelPath !== undefined ? (modelPath || null) : undefined })
+  }
+
+  const handleServe = (modelPath?: string) => {
+    window.dispatchEvent(new CustomEvent('vmlx:navigate', {
+      detail: { mode: 'server', panel: 'create', modelPath }
+    }))
+  }
+
+  return (
+    <>
+      {toolsPanel === 'dashboard' && (
+        <ToolsDashboard
+          onInspect={(path) => navigateTo('inspector', path)}
+          onDiagnose={(path) => navigateTo('doctor', path)}
+          onConvert={(path) => navigateTo('converter', path)}
+          onServe={(path) => handleServe(path)}
+        />
+      )}
+
+      {toolsPanel === 'inspector' && (
+        <ModelInspector
+          initialModelPath={toolsModelPath}
+          onBack={() => navigateTo('dashboard')}
+          models={scannedModels}
+        />
+      )}
+
+      {toolsPanel === 'doctor' && (
+        <ModelDoctor
+          initialModelPath={toolsModelPath}
+          onBack={() => navigateTo('dashboard')}
+          models={scannedModels}
+        />
+      )}
+
+      {toolsPanel === 'converter' && (
+        <ModelConverter
+          initialModelPath={toolsModelPath}
+          onBack={() => navigateTo('dashboard')}
+          onServe={(path) => handleServe(path)}
+          models={scannedModels}
+        />
       )}
     </>
   )

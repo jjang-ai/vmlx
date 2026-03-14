@@ -833,6 +833,7 @@ class Scheduler:
                     return False
                 if not self._validate_single_cache(layer_cache):
                     return False
+            return True
 
         # Check CacheList structure
         if hasattr(cache, "caches"):
@@ -981,9 +982,9 @@ class Scheduler:
                         else:
                             return None
                         new_cache.offset = min(target_len, safe_target)
-                        # Restore _idx for RotatingKVCache
+                        # Restore _idx for RotatingKVCache — use original _idx clamped to truncated length
                         if "Rotating" in cls_name and hasattr(new_cache, '_idx'):
-                            new_cache._idx = new_cache.offset
+                            new_cache._idx = min(_idx, safe_target)
                         truncated.append(new_cache)
                 except ImportError:
                     return None
@@ -1108,6 +1109,14 @@ class Scheduler:
             else:
                 request.prompt_token_ids = list(request.prompt)
             request.num_prompt_tokens = len(request.prompt_token_ids)
+
+        # Reject empty prompts — they would spin forever in the scheduler
+        # since there are no tokens to prefill and the request never finishes
+        if not request.prompt_token_ids or len(request.prompt_token_ids) == 0:
+            raise ValueError(
+                f"Request {request.request_id} has empty prompt tokens. "
+                "Cannot schedule a request with no input tokens."
+            )
 
         # Check prefix cache for cached KV state
         if self.block_aware_cache is not None:
@@ -1590,26 +1599,20 @@ class Scheduler:
                 # should not trigger user-specified stop sequences.
                 if request.sampling_params.stop:
                     full_text = detok.text
-                    # Strip <think>...</think> blocks before matching
-                    check_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
-                    # Also skip if we're inside an unclosed <think> block
-                    if '<think>' in full_text and '</think>' not in full_text.split('<think>')[-1]:
-                        check_text = ""
-                    for stop_str in request.sampling_params.stop:
-                        idx = check_text.find(stop_str)
-                        if idx >= 0:
-                            # Map position back to full_text: search after
-                            # the last closed </think> block to avoid matching
-                            # inside reasoning content.
-                            last_think_end = full_text.rfind('</think>')
-                            search_start = last_think_end + len('</think>') if last_think_end >= 0 else 0
-                            string_stop_truncate = full_text.find(stop_str, search_start)
-                            if string_stop_truncate < 0:
-                                # Fallback: stop string only in check_text
-                                # after stripping — use full_text length
-                                string_stop_truncate = len(full_text)
-                            new_text = ""  # suppress partial output
-                            break
+                    # Skip matching inside unclosed <think> blocks
+                    in_think = '<think>' in full_text and '</think>' not in full_text.split('<think>')[-1]
+                    if not in_think:
+                        max_stop_len = max(len(s) for s in request.sampling_params.stop)
+                        search_start = max(0, len(full_text) - len(new_text) - max_stop_len + 1)
+                        last_think_end = full_text.rfind('</think>')
+                        if last_think_end >= 0:
+                            search_start = max(search_start, last_think_end + len('</think>'))
+                        for stop_str in request.sampling_params.stop:
+                            idx = full_text.find(stop_str, search_start)
+                            if idx >= 0:
+                                string_stop_truncate = idx
+                                new_text = ""
+                                break
             else:
                 # Stop token: don't decode it, just flush any buffered text
                 new_text = ""

@@ -242,6 +242,12 @@ class BatchedEngine(BaseEngine):
             tokenizer_config=tokenizer_config,
         )
 
+        # Wrap model so BatchGenerator gets raw logits tensors.
+        # Some models (nemotron_h, etc.) return LanguageModelOutput objects
+        # instead of plain tensors. MLLMModelWrapper extracts .logits when
+        # present and is a no-op passthrough for models returning tensors.
+        self._model = MLLMModelWrapper(self._model, model_name=self._model_name)
+
         # Create engine config
         scheduler_config = self._scheduler_config or SchedulerConfig()
         engine_config = EngineConfig(
@@ -403,11 +409,11 @@ class BatchedEngine(BaseEngine):
                 if prompt is None:
                     # All kwargs stripped and still failing — last resort
                     prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-                
+
             prompt = check_and_inject_fallback_tools(
                 prompt, messages, tools, tokenizer, template_kwargs
             )
-            
+
             if enable_thinking is False and prompt.endswith("<think>\n"):
                 prompt = prompt[:-8]
             elif enable_thinking is False and prompt.endswith("<think>"):

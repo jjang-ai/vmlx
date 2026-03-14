@@ -72,10 +72,13 @@ export function LogsPanel({ sessionId, sessionStatus, isRemote }: LogsPanelProps
     const blob = new Blob([lines.join('\n')], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
+    a.style.display = 'none'
     a.href = url
     a.download = `vmlx-logs-${sessionId.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.log`
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 5000)
   }
 
   // Filter lines by search term

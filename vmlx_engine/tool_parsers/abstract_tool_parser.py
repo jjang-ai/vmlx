@@ -134,7 +134,7 @@ class ToolParser(ABC):
         Returns:
             ExtractedToolCallInformation with parsed tool calls
         """
-        raise NotImplementedError
+        ...
 
     def extract_tool_calls_streaming(
         self,

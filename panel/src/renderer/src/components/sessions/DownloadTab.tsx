@@ -52,6 +52,8 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [localModelIds, setLocalModelIds] = useState<Set<string>>(new Set())
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const onDownloadCompleteRef = useRef(onDownloadComplete)
+  onDownloadCompleteRef.current = onDownloadComplete
 
   // Load recommended models and download dir on mount
   useEffect(() => {
@@ -97,7 +99,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         return next
       })
       if (data.status === 'complete') {
-        onDownloadComplete()
+        onDownloadCompleteRef.current()
         // Refresh local model list so the "Downloaded" badge appears immediately
         window.api.models.scan().then((models: any[]) => {
           const ids = new Set<string>()
@@ -129,7 +131,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       unsubComplete()
       unsubError()
     }
-  }, [onDownloadComplete])
+  }, [])
 
   // Debounced search
   const handleSearch = useCallback((query: string) => {

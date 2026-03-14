@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { ArrowDown, MessageCircle } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 
@@ -59,8 +59,8 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
   // 'smooth' only when a new message appears.
   const prevMsgCountRef = useRef(messages.length)
   // Derive a cheap change signal from reasoning/tool maps without deep-comparing objects
-  const reasoningVersion = reasoningMap ? Object.values(reasoningMap).reduce((n, s) => n + s.length, 0) : 0
-  const toolStatusVersion = toolStatusMap ? Object.values(toolStatusMap).reduce((n, arr) => n + arr.length, 0) : 0
+  const reasoningVersion = useMemo(() => reasoningMap ? Object.values(reasoningMap).reduce((n, s) => n + s.length, 0) : 0, [reasoningMap])
+  const toolStatusVersion = useMemo(() => toolStatusMap ? Object.values(toolStatusMap).reduce((n, arr) => n + arr.length, 0) : 0, [toolStatusMap])
   useEffect(() => {
     const isNewMessage = messages.length !== prevMsgCountRef.current
     prevMsgCountRef.current = messages.length

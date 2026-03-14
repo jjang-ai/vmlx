@@ -154,7 +154,7 @@ def register_all(registry=None):
         model_types=["qwen3_next"],
         cache_type="mamba",
         eos_tokens=["<|im_end|>"],
-        tool_parser="nemotron",
+        tool_parser="qwen",
         priority=1,
     ))
 
@@ -356,6 +356,7 @@ def register_all(registry=None):
         tool_parser="hermes",
         reasoning_parser="deepseek_r1",
         is_mllm=True,
+        architecture_hints={"inject_pixel_values": True},
         priority=10,
     ))
 
@@ -382,6 +383,7 @@ def register_all(registry=None):
         model_types=[],  # No unique model_type — uses gemma2, disambiguated by name
         cache_type="kv",
         is_mllm=True,
+        architecture_hints={"inject_pixel_values": True},
         priority=3,
     ))
 
@@ -451,10 +453,24 @@ def register_all(registry=None):
 
     _register(ModelConfig(
         family_name="nemotron",
-        model_types=["nemotron", "nemotron_h"],
-        cache_type="hybrid",
+        model_types=["nemotron"],
+        cache_type="kv",
+        eos_tokens=["<|im_end|>"],
         tool_parser="nemotron",
         reasoning_parser="deepseek_r1",
+        think_in_template=True,
+        tokenizer_fallback=True,
+        priority=10,
+    ))
+
+    _register(ModelConfig(
+        family_name="nemotron_h",
+        model_types=["nemotron_h"],
+        cache_type="hybrid",
+        eos_tokens=["<|im_end|>"],
+        tool_parser="nemotron",
+        reasoning_parser="deepseek_r1",
+        think_in_template=True,
         tokenizer_fallback=True,
         priority=10,
     ))

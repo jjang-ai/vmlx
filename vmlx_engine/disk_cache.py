@@ -393,7 +393,9 @@ class DiskCacheManager:
                     try:
                         file_path.unlink()
                     except Exception:
-                        pass
+                        # File deletion failed — skip this entry to avoid
+                        # orphaning the file (DB row gone but file remains)
+                        continue
                 conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
                 total -= file_size
                 evicted += 1

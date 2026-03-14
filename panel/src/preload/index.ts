@@ -147,14 +147,14 @@ const api = {
 
   // Cache management
   cache: {
-    stats: (endpoint?: { host: string; port: number }) =>
-      ipcRenderer.invoke('cache:stats', endpoint),
-    entries: (endpoint?: { host: string; port: number }) =>
-      ipcRenderer.invoke('cache:entries', endpoint),
-    warm: (prompts: string[], endpoint?: { host: string; port: number }) =>
-      ipcRenderer.invoke('cache:warm', prompts, endpoint),
-    clear: (cacheType: string, endpoint?: { host: string; port: number }) =>
-      ipcRenderer.invoke('cache:clear', cacheType, endpoint)
+    stats: (endpoint?: { host: string; port: number }, sessionId?: string) =>
+      ipcRenderer.invoke('cache:stats', endpoint, sessionId),
+    entries: (endpoint?: { host: string; port: number }, sessionId?: string) =>
+      ipcRenderer.invoke('cache:entries', endpoint, sessionId),
+    warm: (prompts: string[], endpoint?: { host: string; port: number }, sessionId?: string) =>
+      ipcRenderer.invoke('cache:warm', prompts, endpoint, sessionId),
+    clear: (cacheType: string, endpoint?: { host: string; port: number }, sessionId?: string) =>
+      ipcRenderer.invoke('cache:clear', cacheType, endpoint, sessionId)
   },
 
   // Audio: STT and TTS
@@ -200,6 +200,29 @@ const api = {
     save: (template: { id: string; name: string; content: string; category: string }) =>
       ipcRenderer.invoke('templates:save', template),
     delete: (id: string) => ipcRenderer.invoke('templates:delete', id)
+  },
+
+  // Developer tools (convert, doctor, info)
+  developer: {
+    info: (modelPath: string) => ipcRenderer.invoke('developer:info', modelPath),
+    doctor: (modelPath: string, options?: { noInference?: boolean }) =>
+      ipcRenderer.invoke('developer:doctor', modelPath, options || {}),
+    convert: (args: {
+      model: string; output?: string; bits: number; groupSize: number;
+      mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean
+    }) => ipcRenderer.invoke('developer:convert', args),
+    cancelOp: () => ipcRenderer.invoke('developer:cancelOp'),
+    browseOutputDir: () => ipcRenderer.invoke('developer:browseOutputDir') as Promise<string | null>,
+    onLog: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('developer:log', handler)
+      return () => { ipcRenderer.removeListener('developer:log', handler) }
+    },
+    onComplete: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('developer:complete', handler)
+      return () => { ipcRenderer.removeListener('developer:complete', handler) }
+    }
   },
 
   // App-level events
