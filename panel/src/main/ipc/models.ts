@@ -674,15 +674,17 @@ export function registerModelHandlers(): void {
       filter: 'mlx',
       limit: '30'
     })
-    const direction = sortDir === 'asc' ? '1' : '-1'
+    // HF API only supports direction=-1 (descending). For ascending, we fetch
+    // descending and reverse client-side.
+    const wantAsc = sortDir === 'asc'
     // HF API sort options: downloads, likes, lastModified, trending
     // "relevance" = omit sort (HF default), "size" = client-side sort
     if (sortBy && sortBy !== 'relevance' && sortBy !== 'size') {
       params.set('sort', sortBy)
-      params.set('direction', direction)
+      params.set('direction', '-1')
     } else if (!sortBy || sortBy === 'downloads') {
       params.set('sort', 'downloads')
-      params.set('direction', direction)
+      params.set('direction', '-1')
     }
     const url = `https://huggingface.co/api/models?${params}`
     console.log(`[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
@@ -692,6 +694,9 @@ export function registerModelHandlers(): void {
     const models = await response.json()
 
     let results = models.map((m: any) => mapHFModel(m))
+
+    // HF API only returns descending — reverse for ascending
+    if (wantAsc && sortBy !== 'size') results.reverse()
 
     // Client-side sort by model size (HF API doesn't support this)
     if (sortBy === 'size') {
