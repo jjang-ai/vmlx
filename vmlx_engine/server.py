@@ -1769,12 +1769,15 @@ async def create_chat_completion(
         chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
     else:
         # Auto-detect from model config + tokenizer vocabulary.
-        # IMPORTANT: reasoning_parser existence does NOT mean enable_thinking=True.
-        # A model can have a reasoning parser but think_in_template=False (e.g.,
-        # Nemotron S5 seed templates), meaning the template should NOT inject <think>.
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
         _enable = _mc.think_in_template
+        if not _enable and _mc.reasoning_parser:
+            # Model has a reasoning parser — enable thinking by default.
+            # For <think>-based models, this makes the template inject thinking tags.
+            # For Harmony models (GPT-OSS), the template ignores it but the server
+            # uses it to trigger analysis prefix injection.
+            _enable = True
         if not _enable:
             try:
                 _tok = engine.tokenizer
@@ -2267,12 +2270,15 @@ async def create_response(
         chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
     else:
         # Auto-detect from model config + tokenizer vocabulary.
-        # IMPORTANT: reasoning_parser existence does NOT mean enable_thinking=True.
-        # A model can have a reasoning parser but think_in_template=False (e.g.,
-        # Nemotron S5 seed templates), meaning the template should NOT inject <think>.
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
         _enable = _mc.think_in_template
+        if not _enable and _mc.reasoning_parser:
+            # Model has a reasoning parser — enable thinking by default.
+            # For <think>-based models, this makes the template inject thinking tags.
+            # For Harmony models (GPT-OSS), the template ignores it but the server
+            # uses it to trigger analysis prefix injection.
+            _enable = True
         if not _enable:
             try:
                 _tok = engine.tokenizer
