@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
 
@@ -28,6 +28,8 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
+  const restartingRef = useRef(false)
+  restartingRef.current = restarting
 
   useEffect(() => {
     try {
@@ -60,7 +62,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       }
     })
     const unsubError = window.api.sessions.onError((data: any) => {
-      if (data.sessionId === session.id && restarting) {
+      if (data.sessionId === session.id && restartingRef.current) {
         setRestarting(false)
         setMessage({ type: 'error', text: `Restart failed: ${data.error}` })
       }
@@ -69,7 +71,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       unsubReady()
       unsubError()
     }
-  }, [session.id, restarting])
+  }, [session.id])
 
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
     setConfig(prev => ({ ...prev, [key]: value }))

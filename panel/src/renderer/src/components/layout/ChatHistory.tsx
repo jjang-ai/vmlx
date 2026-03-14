@@ -57,6 +57,8 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameRef = useRef<HTMLInputElement>(null)
+  const chatsRef = useRef(chats)
+  chatsRef.current = chats
 
   const loadChats = async () => {
     try {
@@ -73,7 +75,7 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
 
   // Refresh when a new chat is opened that we don't know about
   useEffect(() => {
-    if (currentChatId && !chats.find(c => c.id === currentChatId)) {
+    if (currentChatId && !chatsRef.current.find(c => c.id === currentChatId)) {
       loadChats()
     }
   }, [currentChatId])
@@ -96,7 +98,12 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!confirm('Delete this chat?')) return
     await window.api.chat.delete(id)
+    // Deselect if the deleted chat was the active one
+    if (id === currentChatId) {
+      onChatSelect('', '')
+    }
     // Reload from DB to get a consistent view (avoids stale backfill on next refresh)
     loadChats()
   }

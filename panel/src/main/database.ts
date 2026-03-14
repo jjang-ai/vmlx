@@ -309,10 +309,10 @@ class DatabaseManager {
       this.db.exec('ALTER TABLE chat_overrides ADD COLUMN tool_result_max_chars INTEGER')
     }
     if (!overrideColumns.find(c => c.name === 'git_enabled')) {
-      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN git_enabled INTEGER')
+      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN git_enabled INTEGER DEFAULT 1')
     }
     if (!overrideColumns.find(c => c.name === 'utility_tools_enabled')) {
-      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN utility_tools_enabled INTEGER')
+      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN utility_tools_enabled INTEGER DEFAULT 1')
     }
 
     // Fix: older migration used DEFAULT 1 for enable_thinking, corrupting existing
@@ -327,6 +327,17 @@ class DatabaseManager {
         this.db.exec('UPDATE chat_overrides SET enable_thinking = NULL WHERE enable_thinking = 1')
         console.log(`[DB] Fixed enable_thinking DEFAULT 1 → reset ${affected.cnt} affected rows to NULL (Auto)`)
       }
+    }
+
+    // Fix: older migration added git_enabled/utility_tools_enabled without DEFAULT 1.
+    // Existing rows with NULL values should be treated as enabled (1).
+    const gitCol = tableInfo.find(c => c.name === 'git_enabled')
+    if (gitCol && gitCol.dflt_value === null) {
+      this.db.exec('UPDATE chat_overrides SET git_enabled = 1 WHERE git_enabled IS NULL')
+    }
+    const utilCol = tableInfo.find(c => c.name === 'utility_tools_enabled')
+    if (utilCol && utilCol.dflt_value === null) {
+      this.db.exec('UPDATE chat_overrides SET utility_tools_enabled = 1 WHERE utility_tools_enabled IS NULL')
     }
 
     // Clean up orphan benchmarks from deleted sessions
@@ -408,6 +419,7 @@ class DatabaseManager {
 
   // Folders
   createFolder(folder: Folder): void {
+    this.ensureOpen()
     const stmt = this.db.prepare(`
       INSERT INTO folders (id, name, parent_id, color, icon, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -416,6 +428,7 @@ class DatabaseManager {
   }
 
   getFolders(): Folder[] {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM folders ORDER BY name')
     return stmt.all().map((row: any) => ({
       id: row.id,
@@ -428,6 +441,7 @@ class DatabaseManager {
   }
 
   deleteFolder(id: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM folders WHERE id = ?')
     stmt.run(id)
   }
@@ -463,6 +477,7 @@ class DatabaseManager {
   }
 
   getChat(id: string): Chat | undefined {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM chats WHERE id = ?')
     const row = stmt.get(id) as any
     if (!row) return undefined
@@ -479,6 +494,7 @@ class DatabaseManager {
   }
 
   getChatsByModelPath(modelPath: string): Chat[] {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM chats WHERE model_path = ? ORDER BY updated_at DESC')
     return stmt.all(modelPath).map((row: any) => ({
       id: row.id,
@@ -511,6 +527,7 @@ class DatabaseManager {
   }
 
   updateChat(id: string, updates: Partial<Chat>): void {
+    this.ensureOpen()
     const fields: string[] = []
     const values: any[] = []
 
@@ -543,6 +560,7 @@ class DatabaseManager {
   }
 
   deleteChat(id: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM chats WHERE id = ?')
     stmt.run(id)
   }
@@ -550,14 +568,17 @@ class DatabaseManager {
   // Messages
   addMessage(message: Message): void {
     this.ensureOpen()
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO messages (id, chat_id, role, content, timestamp, tokens, metrics_json, tool_calls_json, reasoning_content)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    stmt.run(message.id, message.chatId, message.role, message.content, message.timestamp, message.tokens, message.metricsJson, message.toolCallsJson, message.reasoningContent)
+    const insertAndUpdate = this.db.transaction(() => {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO messages (id, chat_id, role, content, timestamp, tokens, metrics_json, tool_calls_json, reasoning_content)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      stmt.run(message.id, message.chatId, message.role, message.content, message.timestamp, message.tokens, message.metricsJson, message.toolCallsJson, message.reasoningContent)
 
-    // Update chat's updatedAt
-    this.updateChat(message.chatId, { updatedAt: message.timestamp })
+      // Update chat's updatedAt atomically with the message insert
+      this.updateChat(message.chatId, { updatedAt: message.timestamp })
+    })
+    insertAndUpdate()
   }
 
   /** Update an existing message's content in-place (for incremental persistence during streaming) */
@@ -571,10 +592,12 @@ class DatabaseManager {
 
   /** Delete a message by ID (used to clean up empty pre-inserted placeholders on error) */
   deleteMessage(messageId: string): void {
+    this.ensureOpen()
     this.db.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
   }
 
   getMessages(chatId: string): Message[] {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp ASC')
     return stmt.all(chatId).map((row: any) => ({
       id: row.id,
@@ -591,6 +614,8 @@ class DatabaseManager {
 
   // Chat Overrides
   setChatOverrides(overrides: ChatOverrides): void {
+    this.ensureOpen()
+    const upsert = this.db.transaction(() => {
     // Ensure chat row exists (FK constraint) — create stub if needed
     const exists = this.db.prepare('SELECT 1 FROM chats WHERE id = ?').get(overrides.chatId)
     if (!exists) {
@@ -641,9 +666,12 @@ class DatabaseManager {
       overrides.gitEnabled === false ? 0 : 1,
       overrides.utilityToolsEnabled === false ? 0 : 1
     )
+    }) // end upsert transaction
+    upsert()
   }
 
   getChatOverrides(chatId: string): ChatOverrides | undefined {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT * FROM chat_overrides WHERE chat_id = ?')
     const row = stmt.get(chatId) as any
     if (!row) return undefined
@@ -683,12 +711,14 @@ class DatabaseManager {
   }
 
   clearChatOverrides(chatId: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM chat_overrides WHERE chat_id = ?')
     stmt.run(chatId)
   }
 
   // Search
   searchChats(query: string): Chat[] {
+    this.ensureOpen()
     const stmt = this.db.prepare(`
       SELECT DISTINCT c.* FROM chats c
       LEFT JOIN messages m ON c.id = m.chat_id
@@ -739,6 +769,7 @@ class DatabaseManager {
   }
 
   getSessionByModelPath(modelPath: string): Session | undefined {
+    this.ensureOpen()
     // Normalize trailing slashes: try both with and without to handle legacy data
     const normalized = modelPath.replace(/\/+$/, '')
     const stmt = this.db.prepare('SELECT * FROM sessions WHERE model_path = ? OR model_path = ?')
@@ -808,6 +839,7 @@ class DatabaseManager {
 
   // Settings (key-value store)
   getSetting(key: string): string | undefined {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT value FROM settings WHERE key = ?')
     const row = stmt.get(key) as { value: string } | undefined
     if (!row?.value) return row?.value
@@ -816,6 +848,7 @@ class DatabaseManager {
   }
 
   setSetting(key: string, value: string): void {
+    this.ensureOpen()
     const encValue = (key.toLowerCase().includes('apikey') || key.toLowerCase().includes('api_key'))
       ? encryptValue(value) : value
     const stmt = this.db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
@@ -823,6 +856,7 @@ class DatabaseManager {
   }
 
   deleteSetting(key: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM settings WHERE key = ?')
     stmt.run(key)
   }
@@ -830,23 +864,27 @@ class DatabaseManager {
   // ─── Sandboxed Bookmarks ────────────────────────────────────────────────────────
 
   saveBookmark(path: string, bookmark: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('INSERT OR REPLACE INTO bookmarks (path, bookmark) VALUES (?, ?)')
     stmt.run(path, bookmark)
   }
 
   getBookmark(path: string): string | null {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT bookmark FROM bookmarks WHERE path = ?')
     const result = stmt.get(path) as { bookmark: string } | undefined
     return result ? result.bookmark : null
   }
 
   getAllBookmarks(): { path: string; bookmark: string }[] {
+    this.ensureOpen()
     const stmt = this.db.prepare('SELECT path, bookmark FROM bookmarks')
     return stmt.all() as { path: string; bookmark: string }[]
   }
 
   // Benchmarks
   saveBenchmark(b: BenchmarkResult): void {
+    this.ensureOpen()
     const stmt = this.db.prepare(
       'INSERT INTO benchmarks (id, session_id, model_path, model_name, results_json, created_at) VALUES (?, ?, ?, ?, ?, ?)'
     )
@@ -854,6 +892,7 @@ class DatabaseManager {
   }
 
   getBenchmarks(modelPath?: string): BenchmarkResult[] {
+    this.ensureOpen()
     const query = modelPath
       ? 'SELECT * FROM benchmarks WHERE model_path = ? ORDER BY created_at DESC LIMIT 50'
       : 'SELECT * FROM benchmarks ORDER BY created_at DESC LIMIT 50'
@@ -870,12 +909,14 @@ class DatabaseManager {
   }
 
   deleteBenchmark(id: string): void {
+    this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM benchmarks WHERE id = ?')
     stmt.run(id)
   }
 
   // Prompt Templates
   getPromptTemplates(): Array<{ id: string; name: string; content: string; category: string; isBuiltin: boolean; createdAt: number }> {
+    this.ensureOpen()
     const rows = this.db.prepare('SELECT * FROM prompt_templates ORDER BY is_builtin DESC, name ASC').all() as any[]
     return rows.map(r => ({
       id: r.id,
@@ -888,12 +929,14 @@ class DatabaseManager {
   }
 
   savePromptTemplate(t: { id: string; name: string; content: string; category: string }): void {
+    this.ensureOpen()
     this.db.prepare(
       'INSERT OR REPLACE INTO prompt_templates (id, name, content, category, is_builtin, created_at) VALUES (?, ?, ?, ?, 0, ?)'
     ).run(t.id, t.name, t.content, t.category, Date.now())
   }
 
   deletePromptTemplate(id: string): void {
+    this.ensureOpen()
     this.db.prepare('DELETE FROM prompt_templates WHERE id = ? AND is_builtin = 0').run(id)
   }
 

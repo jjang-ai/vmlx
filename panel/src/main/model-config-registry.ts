@@ -45,7 +45,7 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
 // relies on config.json vision_config, not the family's isMultimodal flag.
 registerFamily('qwen3.5', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 (dense)', priority: 4 })
 registerFamily('qwen3.5-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 MoE', priority: 4 })
-registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'nemotron', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 })
+registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 })
 registerFamily('qwen3-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 })
 registerFamily('qwen3-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 })
 registerFamily('qwen3', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 / QwQ', priority: 10 })
@@ -97,7 +97,8 @@ registerFamily('phi3', { cacheType: 'kv', description: 'Phi 3', priority: 20 })
 registerFamily('hermes', { cacheType: 'kv', toolParser: 'hermes', enableAutoToolChoice: true, description: 'Hermes', priority: 30 })
 
 // Nemotron
-registerFamily('nemotron', { cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', usePagedCache: true, description: 'Nemotron (Hybrid)', priority: 10 })
+registerFamily('nemotron', { cacheType: 'kv', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', description: 'Nemotron', priority: 10 })
+registerFamily('nemotron-h', { cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', usePagedCache: true, description: 'Nemotron Hybrid', priority: 10 })
 
 // Jamba
 registerFamily('jamba', { cacheType: 'hybrid', usePagedCache: true, description: 'Jamba (Hybrid)', priority: 10 })
@@ -244,7 +245,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'rwkv6': 'rwkv',
   // ── NVIDIA ──
   'nemotron': 'nemotron',
-  'nemotron_h': 'nemotron',
+  'nemotron_h': 'nemotron-h',
   // ── IBM ──
   'granite': 'granite',
   'granite_moe': 'granite',

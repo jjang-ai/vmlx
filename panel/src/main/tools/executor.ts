@@ -1125,8 +1125,23 @@ function readImage(path: string, workingDir: string): ToolResult {
 
 // ─── Background Process ──────────────────────────────────────────────────────
 
+/** Clean up finished processes to prevent unbounded memory growth. */
+function cleanupFinishedProcesses(): void {
+  const MAX_FINISHED_AGE = 600_000 // 10 minutes after stop
+  const now = Date.now()
+  for (const [id, entry] of spawnedProcesses) {
+    if (!entry.running && now - entry.startedAt > MAX_FINISHED_AGE) {
+      spawnedProcesses.delete(id)
+    }
+  }
+}
+
 function spawnProcess(command: string, workingDir: string): ToolResult {
   if (!command) return { content: 'Missing required parameter: command', is_error: true }
+
+  // Clean up old finished processes before creating new ones
+  cleanupFinishedProcesses()
+
   const id = `proc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
   const proc = spawn('/bin/sh', ['-c', command], {
@@ -1245,8 +1260,10 @@ function getCurrentDatetime(): ToolResult {
 function gitCommand(command: string, workingDir: string): ToolResult {
   if (!command) return { content: 'Missing required parameter: command', is_error: true }
 
-  // Block shell metacharacters that could enable command injection via /bin/sh -c
-  if (/[;|&`$(){}]/.test(command)) {
+  // Block shell metacharacters that could enable command injection via /bin/sh -c.
+  // Includes newlines (\n, \r) which bypass single-line metachar checks but still
+  // inject separate commands when passed to /bin/sh -c, and < > for redirection.
+  if (/[;|&`$(){}<>\n\r]/.test(command)) {
     return { content: `Blocked: "git ${command}" contains shell metacharacters. Use run_command for complex shell commands.`, is_error: true }
   }
 

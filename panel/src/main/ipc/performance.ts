@@ -11,7 +11,7 @@ export function registerPerformanceHandlers(): void {
     try {
       const baseUrl = await resolveUrl(`http://${endpoint.host}:${endpoint.port}`)
       const res = await fetch(`${baseUrl}/health`, {
-        signal: AbortSignal.timeout(5000)
+        signal: AbortSignal.timeout(30000)
       })
       if (!res.ok) {
         throw new Error(`Health check failed: ${res.status}`)

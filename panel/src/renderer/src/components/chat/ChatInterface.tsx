@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Sparkles } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { InputBox, ImageAttachment } from './InputBox'
@@ -52,6 +52,10 @@ interface ChatInterfaceProps {
 export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, overridesVersion }: ChatInterfaceProps) {
   const { showToast } = useToast()
   const [messages, setMessages] = useState<Message[]>([])
+  // Track current chatId via ref so async handleSend can detect stale closures
+  const chatIdRef = useRef(chatId)
+  chatIdRef.current = chatId
+
   const [loading, setLoading] = useState(false)
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
   const [currentMetrics, setCurrentMetrics] = useState<MessageMetrics | null>(null)
@@ -72,6 +76,12 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, o
       setMessages([])
       return
     }
+
+    // Reset streaming state for the new chat — prevents stale loading
+    // from the previous chat leaking into this one
+    setLoading(false)
+    setStreamingMessageId(null)
+    setCurrentMetrics(null)
 
     // Load existing messages (hydrate persisted metrics, tool calls, reasoning)
     window.api.chat.getMessages(chatId).then(msgs => {
@@ -329,12 +339,17 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, o
       // Returns: assistant message object (success or abort with content), or null (abort before content).
       // Only throws on real errors (timeout, connection lost, API errors).
       const result = await window.api.chat.sendMessage(chatId, content, sessionEndpoint, attachments)
+
+      // Guard: if user switched chats while we were awaiting, don't touch state
+      if (chatIdRef.current !== chatId) return
+
       const assistantId = result?.id
 
       // Replace the temp user message with the real one from DB, but keep
       // the streamed assistant message in place to avoid a full re-render
       // that causes stutter at end of generation.
       const freshMessages = await window.api.chat.getMessages(chatId)
+      if (chatIdRef.current !== chatId) return
       setMessages(prev => {
         const streamedAssistant = assistantId
           ? prev.find(m => m.id === assistantId && m.role === 'assistant')
@@ -351,12 +366,15 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, o
         return hydrateMessages(freshMessages)
       })
     } catch (error: any) {
+      // Guard: if user switched chats, don't show error or touch state
+      if (chatIdRef.current !== chatId) return
       console.error('Failed to send message:', error)
       const msg = error?.message || 'Unknown error'
       showToast('error', 'Message failed', msg)
       // Reload messages from DB to restore consistent state
       try {
         const freshMessages = await window.api.chat.getMessages(chatId)
+        if (chatIdRef.current !== chatId) return
         if (freshMessages.length > 0) {
           setMessages(hydrateMessages(freshMessages))
         } else {
@@ -364,11 +382,16 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, o
         }
       } catch {
         // If reload also fails, at least remove the temp message
-        setMessages(prev => prev.filter(m => m.id !== tempId))
+        if (chatIdRef.current === chatId) {
+          setMessages(prev => prev.filter(m => m.id !== tempId))
+        }
       }
     } finally {
-      setLoading(false)
-      setStreamingMessageId(null)
+      // Only reset loading state if still on the same chat
+      if (chatIdRef.current === chatId) {
+        setLoading(false)
+        setStreamingMessageId(null)
+      }
     }
   }
 

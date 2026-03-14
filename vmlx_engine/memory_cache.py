@@ -602,7 +602,7 @@ class MemoryAwarePrefixCache:
             gc.collect()
             logger.info(
                 f"TTL eviction: removed {len(expired_keys)} expired entries, "
-                f"freed memory, {len(self._entries)} entries remaining"
+                f"{len(self._entries)} entries remaining"
             )
 
         return len(expired_keys)

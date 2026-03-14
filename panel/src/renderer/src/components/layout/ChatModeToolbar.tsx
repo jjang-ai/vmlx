@@ -113,11 +113,15 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
     setRemoteConnecting(true)
 
     try {
-      const session = await window.api.sessions.createRemote({
+      const remoteResult = await window.api.sessions.createRemote({
         remoteUrl: remoteUrl.trim(),
         remoteApiKey: remoteApiKey.trim() || undefined,
         remoteModel: remoteModel.trim(),
       })
+      if (!remoteResult.success) {
+        throw new Error(remoteResult.error || 'Failed to create remote session')
+      }
+      const session = remoteResult.session
 
       const result = await window.api.sessions.start(session.id)
       if (result.success) {
@@ -149,7 +153,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
           <span className="text-xs text-muted-foreground">No models configured.</span>
           <button
             onClick={() => {
-              const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'server', panel: 'create' } })
+              const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'server', panel: 'create', modelPath: null } })
               window.dispatchEvent(event)
             }}
             className="text-xs text-primary hover:text-primary/80 font-medium"
@@ -271,7 +275,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
               <button
                 onClick={() => {
                   setShowModelPicker(false)
-                  const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'server', panel: 'create' } })
+                  const event = new CustomEvent('vmlx:navigate', { detail: { mode: 'server', panel: 'create', modelPath: null } })
                   window.dispatchEvent(event)
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"

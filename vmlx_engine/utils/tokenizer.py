@@ -95,7 +95,7 @@ def _needs_tokenizer_fallback(model_name: str) -> bool:
                 f"skipping tokenizer fallback for {model_name}"
             )
             return False
-        if model_type == "nemotron":
+        if model_type in ("nemotron", "nemotron_h"):
             return True
 
     # 2. Try registry (name-based pattern matching)
@@ -168,6 +168,10 @@ def _load_with_tokenizer_fallback(model_name: str):
         from huggingface_hub import snapshot_download
         model_path = Path(snapshot_download(model_name))
 
+    # Apply LatentMoE patch before model load (must happen before NemotronHBlock init)
+    from .nemotron_latent_moe import ensure_latent_moe_support
+    ensure_latent_moe_support(str(model_path))
+
     # Load model
     model, _ = load_model(model_path)
 
@@ -203,18 +207,32 @@ def _load_with_tokenizer_fallback(model_name: str):
             pad_token="<pad>",
         )
 
-        # Set chat template if available
+        # Set chat template: tokenizer_config.json > chat_template.jinja > fallback
         if chat_template:
             tokenizer.chat_template = chat_template
             logger.info("Chat template loaded from tokenizer_config.json")
-        elif _needs_tokenizer_fallback(model_name):
-            # Use official Nemotron chat template with thinking support
-            tokenizer.chat_template = NEMOTRON_CHAT_TEMPLATE
-            logger.info("Using official Nemotron chat template with thinking support")
         else:
-            # Default simple ChatML format for other models
-            tokenizer.chat_template = DEFAULT_CHATML_TEMPLATE
-            logger.info("Using default ChatML chat template")
+            # Check for chat_template.jinja file (common with community models)
+            jinja_path = model_path / "chat_template.jinja"
+            if jinja_path.exists():
+                try:
+                    jinja_template = jinja_path.read_text()
+                    tokenizer.chat_template = jinja_template
+                    logger.info("Chat template loaded from chat_template.jinja")
+                except Exception as e:
+                    logger.warning(f"Failed to read chat_template.jinja: {e}")
+                    jinja_template = None
+            else:
+                jinja_template = None
+
+            # Fall back to built-in templates if no model template found
+            if not getattr(tokenizer, 'chat_template', None):
+                if _needs_tokenizer_fallback(model_name):
+                    tokenizer.chat_template = NEMOTRON_CHAT_TEMPLATE
+                    logger.info("Using fallback Nemotron chat template")
+                else:
+                    tokenizer.chat_template = DEFAULT_CHATML_TEMPLATE
+                    logger.info("Using default ChatML chat template")
 
         logger.info("Tokenizer loaded via fallback successfully")
         return model, tokenizer

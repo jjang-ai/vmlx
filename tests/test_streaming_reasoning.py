@@ -799,10 +799,10 @@ class TestQwen35ModelConfig:
         assert config.think_in_template is True
 
     def test_qwen3_next_properties(self):
-        """qwen3_next uses mamba cache."""
+        """qwen3_next uses mamba cache and qwen tool parser."""
         config = _find_config_by_model_type(self._registry,"qwen3_next")
         assert config.cache_type == "mamba"
-        assert config.tool_parser == "nemotron"
+        assert config.tool_parser == "qwen"
 
 
 class TestGLMModelConfig:
@@ -895,9 +895,15 @@ class TestOtherModelConfigs:
         assert config.family_name == "kimi"
         assert config.tool_parser == "kimi"
 
-    def test_nemotron_hybrid_cache(self):
-        """Nemotron should use hybrid cache."""
+    def test_nemotron_kv_cache(self):
+        """Plain Nemotron should use KV cache."""
         config = _find_config_by_model_type(self._registry,"nemotron")
+        assert config.cache_type == "kv"
+        assert config.reasoning_parser == "deepseek_r1"
+
+    def test_nemotron_h_hybrid_cache(self):
+        """Nemotron-H should use hybrid cache."""
+        config = _find_config_by_model_type(self._registry,"nemotron_h")
         assert config.cache_type == "hybrid"
         assert config.reasoning_parser == "deepseek_r1"
 

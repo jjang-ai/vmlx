@@ -1,4 +1,4 @@
-import { createContext, useContext, useReducer, useEffect } from 'react'
+import { createContext, useContext, useReducer, useEffect, useRef } from 'react'
 import type { AppState, AppAction, AppMode } from '../types/app-state'
 
 const initialState: AppState = {
@@ -7,6 +7,9 @@ const initialState: AppState = {
   activeSessionId: null,
   serverPanel: 'dashboard',
   serverSessionId: null,
+  serverInitialModelPath: null,
+  toolsPanel: 'dashboard',
+  toolsModelPath: null,
   sidebarCollapsed: false,
 }
 
@@ -19,7 +22,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'CLOSE_CHAT':
       return { ...state, activeChatId: null, activeSessionId: null }
     case 'SET_SERVER_PANEL':
-      return { ...state, serverPanel: action.panel, serverSessionId: action.sessionId ?? state.serverSessionId }
+      return { ...state, serverPanel: action.panel, serverSessionId: action.sessionId ?? state.serverSessionId, serverInitialModelPath: action.modelPath !== undefined ? (action.modelPath || null) : state.serverInitialModelPath }
+    case 'SET_TOOLS_PANEL':
+      return { ...state, toolsPanel: action.panel, toolsModelPath: action.modelPath !== undefined ? action.modelPath : state.toolsModelPath }
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed }
     case 'RESTORE_STATE':
@@ -44,6 +49,7 @@ export function useAppState() {
 
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState)
+  const restoredRef = useRef(false)
 
   // Restore persisted state on mount
   useEffect(() => {
@@ -63,19 +69,25 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           },
         })
       } catch { /* first launch, use defaults */ }
+      restoredRef.current = true
     }
     restore()
   }, [])
 
-  // Persist state changes
+  // Persist state changes — skip until restore completes to avoid overwriting saved values
   useEffect(() => {
+    if (!restoredRef.current) return
     window.api.settings.set('appMode', state.mode).catch(() => {})
     window.api.settings.set('sidebarCollapsed', String(state.sidebarCollapsed)).catch(() => {})
     if (state.activeChatId) {
       window.api.settings.set('lastActiveChatId', state.activeChatId).catch(() => {})
+    } else {
+      window.api.settings.delete('lastActiveChatId').catch(() => {})
     }
     if (state.activeSessionId) {
       window.api.settings.set('lastActiveSessionId', state.activeSessionId).catch(() => {})
+    } else {
+      window.api.settings.delete('lastActiveSessionId').catch(() => {})
     }
   }, [state.mode, state.sidebarCollapsed, state.activeChatId, state.activeSessionId])
 

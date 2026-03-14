@@ -139,8 +139,8 @@ class MLXWorker:
             return available
 
         except Exception as e:
-            logger.warning(f"Could not determine memory: {e}, using default 4GB")
-            return 4 * 1024 * 1024 * 1024  # 4GB default
+            logger.warning(f"Could not determine memory: {e}, using 4 GB default")
+            return 4 * 1024**3
 
     def initialize_cache(self, num_gpu_blocks: int, num_cpu_blocks: int) -> None:
         """Initialize KV cache with the given size."""

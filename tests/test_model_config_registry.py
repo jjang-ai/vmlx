@@ -356,6 +356,11 @@ class TestModelConfigs:
     # Nemotron
     def test_nemotron_config(self, registry):
         config = self._lookup(registry, "nvidia/Nemotron-4-340B-Instruct", "nemotron")
+        assert config.cache_type == "kv"
+        assert config.tokenizer_fallback is True
+
+    def test_nemotron_h_config(self, registry):
+        config = self._lookup(registry, "nvidia/Nemotron-H-47B-Instruct", "nemotron_h")
         assert config.cache_type == "hybrid"
         assert config.tokenizer_fallback is True
 
@@ -466,7 +471,7 @@ class TestModelConfigs:
         config = self._lookup(registry, "Qwen/Qwen3-Next-7B", "qwen3_next")
         assert config.family_name == "qwen3_next"
         assert config.cache_type == "mamba"
-        assert config.tool_parser == "nemotron"
+        assert config.tool_parser == "qwen"
 
     def test_qwen2_config(self, registry):
         config = self._lookup(registry, "Qwen/Qwen2.5-7B-Instruct", "qwen2")

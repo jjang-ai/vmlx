@@ -24,6 +24,7 @@ interface ManagedProcess {
   lastStderr?: string  // Last stderr line for error reporting
   exitCode?: number | null
   exitSignal?: string | null  // Signal that killed the process (e.g. SIGKILL for OOM)
+  intentionalStop?: boolean   // Set true when stopSession sends SIGTERM — prevents crash misreport
 }
 
 /** Normalize model paths for consistent matching: resolve and strip trailing slashes */
@@ -146,25 +147,23 @@ export class SessionManager extends EventEmitter {
    * Acquire a per-session operation lock. Serializes start/stop operations
    * for the same session to prevent race conditions (e.g. stop during start,
    * start during stop, rapid start/stop/start).
+   *
+   * Uses promise-chaining: each caller atomically chains onto the tail of
+   * the previous operation. No TOCTOU window between await and set.
    */
-  private async withSessionLock(sessionId: string, fn: () => Promise<void>): Promise<void> {
-    // Wait for any pending operation on this session to finish
-    const pending = this.operationLocks.get(sessionId)
-    if (pending) {
-      await pending.catch(() => { })
-    }
-
-    // Create a lock promise that resolves when our operation completes
-    let unlock!: () => void
-    const lock = new Promise<void>(r => { unlock = r })
-    this.operationLocks.set(sessionId, lock)
-
-    try {
-      await fn()
-    } finally {
-      unlock()
-      this.operationLocks.delete(sessionId)
-    }
+  private withSessionLock(sessionId: string, fn: () => Promise<void>): Promise<void> {
+    const prev = this.operationLocks.get(sessionId) ?? Promise.resolve()
+    const next = prev.catch(() => {}).then(() => fn())
+    const tail = next.catch(() => {})
+    // Store the chain tail so the next caller awaits us
+    this.operationLocks.set(sessionId, tail)
+    // Clean up once our operation settles (avoids unbounded map growth)
+    tail.then(() => {
+      if (this.operationLocks.get(sessionId) === tail) {
+        this.operationLocks.delete(sessionId)
+      }
+    })
+    return next
   }
 
   // ─── Process Detection (reused from ServerManager) ─────────────────
@@ -334,7 +333,10 @@ export class SessionManager extends EventEmitter {
 
     const id = uuidv4()
     const host = url.hostname
-    const port = parseInt(url.port) || (url.protocol === 'https:' ? 443 : 80)
+    // Remote sessions don't bind a local port — the port field is just a DB key.
+    // Use findAvailablePort to avoid UNIQUE constraint conflicts when multiple
+    // remote sessions point to different models on the same host (e.g., port 443).
+    const port = await this.findAvailablePort()
     const now = Date.now()
 
     const session: Session = {
@@ -520,10 +522,11 @@ export class SessionManager extends EventEmitter {
     proc.on('exit', (code, signal) => {
       const managed = this.processes.get(sessionId)
       const lastStderr = managed?.lastStderr
+      const intentional = managed?.intentionalStop === true
       this.processes.delete(sessionId)
       this.failCounts.delete(sessionId)
       const killed = signal === 'SIGKILL'
-      const crashed = killed || (code !== null && code !== 0)
+      const crashed = !intentional && (killed || (code !== null && code !== 0))
       db.updateSession(sessionId, {
         status: crashed ? 'error' : 'stopped',
         pid: undefined,
@@ -644,6 +647,7 @@ export class SessionManager extends EventEmitter {
       const managed = this.processes.get(sessionId)
 
       if (managed?.process) {
+        managed.intentionalStop = true
         await this.killChildProcess(managed.process)
         this.processes.delete(sessionId)
       } else if (managed?.adoptedPid) {
@@ -666,6 +670,8 @@ export class SessionManager extends EventEmitter {
         pid: undefined,
         lastStoppedAt: Date.now()
       })
+      // Clear log buffer so a fresh restart doesn't show old logs
+      this.logBuffers.delete(sessionId)
       this.emit('session:stopped', { sessionId })
     })
   }
@@ -677,11 +683,14 @@ export class SessionManager extends EventEmitter {
       await this.stopSession(sessionId)
     }
 
-    this.processes.delete(sessionId)
-    this.failCounts.delete(sessionId)
-    this.logBuffers.delete(sessionId)
-    db.deleteSession(sessionId)
-    this.emit('session:deleted', { sessionId })
+    // Acquire lock to prevent race with concurrent startSession
+    await this.withSessionLock(sessionId, async () => {
+      this.processes.delete(sessionId)
+      this.failCounts.delete(sessionId)
+      this.logBuffers.delete(sessionId)
+      db.deleteSession(sessionId)
+      this.emit('session:deleted', { sessionId })
+    })
   }
 
   /** Config keys that require a session restart to take effect (all CLI args). */
@@ -690,7 +699,9 @@ export class SessionManager extends EventEmitter {
     'usePagedCache', 'pagedCacheBlockSize', 'maxCacheBlocks',
     'noMemoryAwareCache', 'cacheMemoryMb', 'cacheMemoryPercent',
     'kvCacheQuantization', 'kvCacheGroupSize',
-    'enableDiskCache', 'enableBlockDiskCache',
+    'enableDiskCache', 'diskCacheMaxGb', 'diskCacheDir',
+    'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
+    'prefixCacheSize', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
     'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
     'timeout', 'streamInterval', 'apiKey', 'rateLimit',
@@ -1058,16 +1069,16 @@ export class SessionManager extends EventEmitter {
         this.processes.delete(sessionId)
       }
       this.failCounts.delete(sessionId)
-      // Abort any in-flight SSE streams before marking stopped
+      // Abort any in-flight SSE streams before marking down
       if (session.host && session.port) {
         this.emit('session:abortInference', { sessionId, host: session.host, port: session.port })
       }
       db.updateSession(sessionId, {
-        status: 'stopped',
+        status: 'error',
         pid: undefined,
         lastStoppedAt: Date.now()
       })
-      this.emit('session:stopped', { sessionId })
+      this.emit('session:error', { sessionId, error: 'Session became unresponsive' })
     }
   }
 
@@ -1445,10 +1456,17 @@ export class SessionManager extends EventEmitter {
     try {
       const output = execSync(`lsof -ti tcp:${port}`, { encoding: 'utf-8', timeout: 5000 }).trim()
       if (output) {
-        for (const pidStr of output.split('\n')) {
-          this.killPid(parseInt(pidStr))
-        }
+        const pids = output.split('\n').map(s => parseInt(s)).filter(n => !isNaN(n))
+        for (const pid of pids) this.killPid(pid)
         await new Promise(r => setTimeout(r, 1500))
+        // Escalate to SIGKILL if processes still hold the port
+        try {
+          const check = execSync(`lsof -ti tcp:${port}`, { encoding: 'utf-8', timeout: 3000 }).trim()
+          if (check) {
+            for (const pidStr of check.split('\n')) this.killPid(parseInt(pidStr), 'SIGKILL')
+            await new Promise(r => setTimeout(r, 500))
+          }
+        } catch (_) { /* port freed */ }
       }
     } catch (_) { }
   }

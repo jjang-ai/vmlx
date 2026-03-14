@@ -36,7 +36,7 @@ def serve_command(args):
     # If the user passes --tool-call-parser qwen, we use qwen.
     # If it's "auto", we auto-detect via model_config_registry.
     # If it's "none" or omitted, tool calling is disabled.
-    
+
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     server._default_timeout = args.timeout
     if args.rate_limit > 0:
@@ -164,6 +164,11 @@ def serve_command(args):
         # Handle prefix cache flags
         enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
 
+        # Validate flag combinations BEFORE building config
+        if not args.use_paged_cache and args.enable_block_disk_cache:
+            print("  WARNING: --enable-block-disk-cache requires --use-paged-cache, disabling disk cache")
+            args.enable_block_disk_cache = False
+
         scheduler_config = SchedulerConfig(
             max_num_seqs=args.max_num_seqs,
             prefill_batch_size=args.prefill_batch_size,
@@ -210,9 +215,6 @@ def serve_command(args):
             print(f"Memory-aware cache: {cache_info}")
         elif enable_prefix_cache:
             print(f"Prefix cache: max_entries={args.prefix_cache_size}")
-        if not args.use_paged_cache and args.enable_block_disk_cache:
-            print("  WARNING: --enable-block-disk-cache requires --use-paged-cache, disabling disk cache")
-            args.enable_block_disk_cache = False
         if args.kv_cache_quantization != "none":
             print(f"KV cache quantization: {args.kv_cache_quantization} (group_size={args.kv_cache_group_size})")
     else:
@@ -428,7 +430,6 @@ def bench_detok_command(args):
         prompt=prompt,
         max_tokens=2000,
         verbose=False,
-        force_mllm=getattr(args, 'is_mllm', False),
     )
 
     prompt_tokens = tokenizer.encode(prompt)
@@ -1022,6 +1023,79 @@ Examples:
         "--iterations", type=int, default=5, help="Benchmark iterations (default: 5)"
     )
 
+    # Convert command
+    convert_parser = subparsers.add_parser(
+        "convert", help="Convert HuggingFace model to quantized MLX format"
+    )
+    convert_parser.add_argument(
+        "model", type=str,
+        help="HuggingFace model name or local path to convert",
+    )
+    convert_parser.add_argument(
+        "--output", "-o", type=str, default=None,
+        help="Output directory (default: auto-generated from model name)",
+    )
+    convert_parser.add_argument(
+        "--bits", "-b", type=int, required=True, choices=[2, 3, 4, 6, 8],
+        help="Quantization bit-width",
+    )
+    convert_parser.add_argument(
+        "--group-size", type=int, required=True,
+        help="Quantization group size",
+    )
+    convert_parser.add_argument(
+        "--mode", type=str, default="default",
+        choices=["default", "NF4"],
+        help="Quantization mode (default: default)",
+    )
+    convert_parser.add_argument(
+        "--dtype", type=str, default=None,
+        help="Non-quantized layer dtype (e.g. float16, bfloat16)",
+    )
+    convert_parser.add_argument(
+        "--force", action="store_true",
+        help="Overwrite existing output directory",
+    )
+    convert_parser.add_argument(
+        "--skip-verify", action="store_true",
+        help="Skip post-conversion smoke test",
+    )
+    convert_parser.add_argument(
+        "--trust-remote-code", action="store_true",
+        help="Trust remote code from HuggingFace",
+    )
+
+    # Info command
+    info_parser = subparsers.add_parser(
+        "info", help="Display model metadata"
+    )
+    info_parser.add_argument(
+        "model", type=str,
+        help="Model path or HuggingFace name to inspect",
+    )
+
+    # List command
+    list_parser = subparsers.add_parser(
+        "list", help="List models in a directory"
+    )
+    list_parser.add_argument(
+        "directory", type=str,
+        help="Directory to scan for models",
+    )
+
+    # Doctor command
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Run diagnostics on a model directory"
+    )
+    doctor_parser.add_argument(
+        "model", type=str,
+        help="Model path or HuggingFace name to diagnose",
+    )
+    doctor_parser.add_argument(
+        "--no-inference", action="store_true",
+        help="Skip inference smoke test",
+    )
+
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -1030,6 +1104,18 @@ Examples:
         bench_command(args)
     elif args.command == "bench-detok":
         bench_detok_command(args)
+    elif args.command == "convert":
+        from .commands.convert import convert_command
+        convert_command(args)
+    elif args.command == "info":
+        from .commands.info import info_command
+        info_command(args)
+    elif args.command == "list":
+        from .commands.list import list_command
+        list_command(args)
+    elif args.command == "doctor":
+        from .commands.doctor import doctor_command
+        doctor_command(args)
     else:
         parser.print_help()
         sys.exit(1)
