@@ -198,6 +198,46 @@ except FileNotFoundError:
     print('  Skipped: qwen3_5/language.py not found (model not in this mlx-vlm version)')
 "
 
+# --- Patch: mlx_lm/models/ssm.py (Mamba/Nemotron-H hybrid state space model) ---
+# Fix 1: mx.clip(dt, ...) upper-clips dt values, corrupting Mamba state transitions.
+#         Replace with mx.maximum(dt, time_step_limit[0]) — only lower-clip.
+# Fix 2: output_dtypes=[input_type, input_type] stores SSM state in bfloat16,
+#         causing precision loss. State must be float32.
+echo "  Patching mlx_lm/models/ssm.py (Mamba state fixes)..."
+python3 -c "
+import os, glob
+base = '$BUNDLE_DIR/python/lib/python3.*/site-packages/mlx_lm/models/ssm.py'
+paths = glob.glob(base)
+if not paths:
+    print('  Skipped: ssm.py not found')
+else:
+    path = paths[0]
+    with open(path, 'r') as f:
+        content = f.read()
+    changed = False
+    # Fix 1: clip -> maximum (line 10)
+    old1 = 'return mx.clip(dt, time_step_limit[0], time_step_limit[1])'
+    new1 = 'return mx.maximum(dt, time_step_limit[0])'
+    if old1 in content:
+        content = content.replace(old1, new1)
+        changed = True
+        print('  Patched: ssm.py dt clip -> maximum')
+    else:
+        print('  Already patched or structure changed: ssm.py dt fix')
+    # Fix 2: state output dtype must be float32
+    old2 = 'output_dtypes=[input_type, input_type]'
+    new2 = 'output_dtypes=[input_type, mx.float32]'
+    if old2 in content:
+        content = content.replace(old2, new2)
+        changed = True
+        print('  Patched: ssm.py state dtype -> float32')
+    else:
+        print('  Already patched or structure changed: ssm.py dtype fix')
+    if changed:
+        with open(path, 'w') as f:
+            f.write(content)
+"
+
 echo "==> Patches applied."
 
 # ====================================================================
