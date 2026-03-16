@@ -398,35 +398,42 @@ export class SessionManager extends EventEmitter {
 
     const vllmResult = this.findVllmMlx()
     if (!vllmResult) throw new Error('vmlx-engine not found. Please install it first.')
-    if (!existsSync(config.modelPath)) throw new Error(`Model not found at: ${config.modelPath}`)
 
-    // Validate model format: vmlx-engine only supports MLX (safetensors) models
-    try {
-      const files = readdirSync(config.modelPath)
-      const hasGGUF = files.some(f => f.endsWith('.gguf') || f.endsWith('.gguf.part'))
-      const hasSafetensors = files.some(f => f.endsWith('.safetensors'))
-      const hasConfig = files.includes('config.json')
+    // Image models may use mflux named models (e.g., "schnell") that are NOT filesystem paths
+    // — skip path/format validation for image sessions, let the Python server handle it
+    const isImageSession = config.modelType === 'image'
 
-      if (hasGGUF && !hasSafetensors) {
-        throw new Error(
-          'This model is in GGUF format, which is not supported by vmlx-engine. ' +
-          'Please download an MLX-format version (safetensors) from HuggingFace Hub.'
-        )
+    if (!isImageSession) {
+      if (!existsSync(config.modelPath)) throw new Error(`Model not found at: ${config.modelPath}`)
+
+      // Validate model format: vmlx-engine only supports MLX (safetensors) models
+      try {
+        const files = readdirSync(config.modelPath)
+        const hasGGUF = files.some(f => f.endsWith('.gguf') || f.endsWith('.gguf.part'))
+        const hasSafetensors = files.some(f => f.endsWith('.safetensors'))
+        const hasConfig = files.includes('config.json')
+
+        if (hasGGUF && !hasSafetensors) {
+          throw new Error(
+            'This model is in GGUF format, which is not supported by vmlx-engine. ' +
+            'Please download an MLX-format version (safetensors) from HuggingFace Hub.'
+          )
+        }
+        // Diffusers image models have model_index.json instead of config.json — that's valid
+        const hasModelIndex = files.includes('model_index.json')
+        const hasTransformerDir = files.includes('transformer')
+        if (!hasConfig && !hasModelIndex && !hasTransformerDir) {
+          throw new Error(
+            'Model directory is missing config.json (text) or model_index.json (image). ' +
+            'vmlx-engine requires MLX-format models with config.json and .safetensors files, ' +
+            'or diffusers-format image models with model_index.json.'
+          )
+        }
+      } catch (e) {
+        if ((e as Error).message.includes('GGUF format') || (e as Error).message.includes('missing config.json') || (e as Error).message.includes('model_index.json')) throw e
+        // Ignore filesystem errors — let the server handle them
       }
-      // Diffusers image models have model_index.json instead of config.json — that's valid
-      const hasModelIndex = files.includes('model_index.json')
-      const hasTransformerDir = files.includes('transformer')
-      if (!hasConfig && !hasModelIndex && !hasTransformerDir) {
-        throw new Error(
-          'Model directory is missing config.json (text) or model_index.json (image). ' +
-          'vmlx-engine requires MLX-format models with config.json and .safetensors files, ' +
-          'or diffusers-format image models with model_index.json.'
-        )
-      }
-    } catch (e) {
-      if ((e as Error).message.includes('GGUF format') || (e as Error).message.includes('missing config.json') || (e as Error).message.includes('model_index.json')) throw e
-      // Ignore filesystem errors — let the server handle them
-    }
+    } // end if (!isImageSession)
 
     // Memory estimation: warn if model is too large for available RAM
     const modelSizeBytes = estimateModelMemory(config.modelPath)
