@@ -748,6 +748,17 @@ def load_model(
         force_mllm: Force loading as MLLM even if not auto-detected
     """
     global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata
+
+    # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
+    # Note: load_model() is only called from CLI startup (before uvicorn), never during live serving.
+    if _engine is not None:
+        try:
+            if hasattr(_engine, '_scheduler') and hasattr(_engine._scheduler, 'deep_reset'):
+                _engine._scheduler.deep_reset()
+        except Exception as e:
+            logger.warning(f"Failed to stop previous engine: {e}")
+        _engine = None
+
     _model_load_error = None  # Clear any previous error
     _jang_metadata = None  # Clear any previous JANG metadata
 
@@ -1865,10 +1876,13 @@ async def create_image(request: Request):
                     detail="mflux not installed. Install with: pip install mflux"
                 )
 
-        # If pre-loaded (from serve command), skip re-loading unless explicitly different model
+        # If pre-loaded (from serve command), skip re-loading unless explicitly different model.
+        # Check against all name variants: resolved model name, directory basename,
+        # full model path, and served model name (custom alias).
         already_loaded = _image_gen.is_loaded and (
             not model or model == _image_gen.model_name or
-            model == _model_name or model == _served_model_name
+            model == _model_name or model == _served_model_name or
+            model == _model_path
         )
         if not already_loaded:
             try:
@@ -1905,6 +1919,12 @@ async def create_image(request: Request):
     return {
         "created": int(time.time()),
         "data": images,
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "images_generated": len(images),
+        },
     }
 
 

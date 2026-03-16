@@ -71,8 +71,8 @@ class TestMemoryCacheConfig:
         ):
             config = MemoryCacheConfig(max_memory_percent=0.25)
             limit = config.compute_memory_limit()
-            # Fallback: 25% of 8GB = 2GB
-            assert limit == 2 * 1024 * 1024 * 1024
+            # Fallback: 25% of 4GB available = 1GB
+            assert limit == 1 * 1024 * 1024 * 1024
 
 
 class TestCacheStats:

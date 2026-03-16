@@ -100,6 +100,22 @@ class SimpleEngine(BaseEngine):
         self._loaded = True
         logger.info(f"SimpleEngine loaded: {self._model_name} (MLLM={self._is_mllm})")
 
+        # Check for hybrid SSM model (MambaCache + KVCache layers)
+        raw_model = getattr(self._model, "model", None)
+        if raw_model is not None and hasattr(raw_model, "make_cache"):
+            try:
+                cache = raw_model.make_cache()
+                cache_types = {type(c).__name__ for c in cache}
+                kv_only = {"KVCache", "RotatingKVCache", "QuantizedKVCache"}
+                if cache_types and not cache_types.issubset(kv_only):
+                    logger.warning(
+                        "Hybrid SSM model detected in simple mode — batch SSM "
+                        "features not available. Use --continuous-batching for "
+                        "full hybrid support."
+                    )
+            except Exception:
+                pass
+
     async def stop(self) -> None:
         """Stop the engine and cleanup resources."""
         self._model = None

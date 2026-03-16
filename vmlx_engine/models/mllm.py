@@ -878,8 +878,11 @@ class MLXMultimodalLM:
                         msg_text += item
                         continue
 
-                    # Convert Pydantic models to dicts (exclude_none prevents
-                    # false key-existence checks in downstream templates)
+                    # Convert Pydantic models to dicts.
+                    # exclude_none=True prevents Jinja2 false key-existence bugs
+                    # (checking 'if image_url' returns True for None values). If a
+                    # field should be explicitly None (not absent), it would need
+                    # special handling.
                     if hasattr(item, "model_dump"):
                         item = item.model_dump(exclude_none=True)
                     elif hasattr(item, "dict"):

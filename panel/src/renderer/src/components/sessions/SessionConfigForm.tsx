@@ -103,9 +103,12 @@ interface SessionConfigFormProps {
   detectedCacheType?: string
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
+  /** Model type — image models show minimal settings */
+  modelType?: 'text' | 'image'
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType }: SessionConfigFormProps) {
+  const isImage = modelType === 'image'
   const [expandedSections, setExpandedSections] = useState({
     server: true,
     concurrent: false,
@@ -192,7 +195,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Concurrent Processing */}
-      <Section title="Concurrent Processing - Caching Engine" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')}>
+      {isImage && (
+        <div className="px-4 py-3 text-xs text-muted-foreground border-b border-border">
+          This is an image generation server. Only server settings (host, port, timeout) apply.
+          Use the Image tab to generate images or call <code className="bg-muted px-1 rounded">/v1/images/generations</code>.
+        </div>
+      )}
+
+      <Section title="Concurrent Processing" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')} hidden={isImage}>
         <div className="flex items-center gap-2 mb-2">
           <PerformanceHint text="Controls how many requests your server handles at once. Keep Continuous Batching ON to enable the caching engine." />
           <button
@@ -253,7 +263,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Prefix Cache */}
-      <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')}>
+      <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
         <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
@@ -375,7 +385,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Paged Cache */}
-      <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')}>
+      <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
@@ -442,7 +452,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* KV Cache Quantization */}
-      <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')}>
+      <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
@@ -474,8 +484,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Disk Cache (L2 Persistent) */}
-      <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')}>
+      <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
+        <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
@@ -513,8 +524,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Performance */}
-      <Section title="Performance & Generation" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')}>
+      <Section title="Performance & Generation" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
+        {/* JIT is not available for image models (mflux uses its own GPU pipeline).
+            Image models never reach this form — CreateSession.tsx renders a simplified
+            settings block for filterType === 'image' instead of SessionConfigForm. */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -589,7 +603,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Tool Integration */}
-      <Section title="Tool Integration (MCP)" expanded={expandedSections.tools} onToggle={() => toggleSection('tools')}>
+      <Section title="Tool Integration (MCP)" expanded={expandedSections.tools} onToggle={() => toggleSection('tools')} hidden={isImage}>
         <PerformanceHint text="Lets the model call external tools (web search, code execution, etc.) during conversations. Requires a model that supports tool calling." />
         <Field label="MCP Config File" tooltip="Path to a JSON config file defining MCP (Model Context Protocol) tool servers. When configured, the model can call external tools during generation. The config file defines tool server endpoints, authentication, and available capabilities.">
           <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder="/path/to/mcp-config.json" className="cfg-input" />
@@ -632,7 +646,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Speculative Decoding */}
-      <Section title="Speculative Decoding" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')}>
+      <Section title="Speculative Decoding" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage}>
         <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
         {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
         {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
@@ -654,11 +668,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Embedding Model */}
+      {!isImage && (
       <div className="mb-2">
         <Field label="Embedding Model" tooltip="Pre-load a separate embedding model at startup for the /v1/embeddings endpoint. Runs alongside the main chat model. Example: mlx-community/embeddinggemma-300m-6bit. Leave empty to disable embeddings endpoint.">
           <input type="text" value={config.embeddingModel} onChange={e => onChange('embeddingModel', e.target.value)} placeholder="Optional — mlx-community/embedding-model" className="cfg-input" />
         </Field>
       </div>
+      )}
 
       {/* Additional */}
       <div className="mb-4">
@@ -949,9 +965,10 @@ function PerformanceHint({ text }: { text: string }) {
   )
 }
 
-export function Section({ title, expanded, onToggle, children }: {
-  title: string; expanded: boolean; onToggle: () => void; children: React.ReactNode
+export function Section({ title, expanded, onToggle, children, hidden }: {
+  title: string; expanded: boolean; onToggle: () => void; children: React.ReactNode; hidden?: boolean
 }) {
+  if (hidden) return null
   return (
     <div className="mb-3 border border-border rounded">
       <button onClick={onToggle} className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium hover:bg-accent rounded-t">

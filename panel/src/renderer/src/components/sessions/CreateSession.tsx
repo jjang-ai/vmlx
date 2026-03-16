@@ -19,11 +19,12 @@ interface CreateSessionProps {
   filterType?: 'text' | 'image'
 }
 
-export function CreateSession({ initialModelPath, onBack, onCreated, filterType }: CreateSessionProps) {
+export function CreateSession({ initialModelPath, onBack, onCreated, filterType: filterTypeProp }: CreateSessionProps) {
   const [sessionType, setSessionType] = useState<'local' | 'remote' | 'download'>('local')
   const [step, setStep] = useState<1 | 2>(initialModelPath ? 2 : 1)
   const [models, setModels] = useState<ModelInfo[]>([])
   const [selectedModel, setSelectedModel] = useState<string>(initialModelPath || '')
+  const [autoDetectedType, setAutoDetectedType] = useState<'text' | 'image' | undefined>(filterTypeProp)
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [detectedCacheType, setDetectedCacheType] = useState<string | undefined>()
@@ -48,6 +49,15 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
   const [remoteOrganization, setRemoteOrganization] = useState('')
   const [remoteConnecting, setRemoteConnecting] = useState(false)
 
+  // Auto-detect image model type on mount when initialModelPath is provided
+  useEffect(() => {
+    if (initialModelPath && !filterTypeProp) {
+      window.api.models.detectTypes([initialModelPath]).then((types: any) => {
+        if (types?.[initialModelPath] === 'image') setAutoDetectedType('image')
+      }).catch(() => {})
+    }
+  }, [initialModelPath, filterTypeProp])
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -59,7 +69,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
   const scanModels = async () => {
     setScanLoading(true)
     try {
-      const scanned = await window.api.models.scan(filterType)
+      const scanned = await window.api.models.scan(filterTypeProp)
       setModels(scanned)
     } catch (err) {
       console.error('Failed to scan models:', err)
@@ -70,7 +80,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
 
   const loadDirectories = async () => {
     try {
-      const result = await window.api.models.getDirectories(filterType)
+      const result = await window.api.models.getDirectories(filterTypeProp)
       setUserDirs(result.userDirectories)
       setBuiltinDirs(result.builtinDirectories)
     } catch (err) {
@@ -174,7 +184,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
     // Pre-validate before entering launch state
     try {
       // Check vmlx-engine installation
-      const installation = await window.api.vllm.checkInstallation()
+      const installation = await window.api.engine.checkInstallation()
       if (!installation?.installed) {
         setLaunchError(
           'Inference engine not found. Restart vMLX to run first-time setup, ' +
@@ -193,7 +203,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
 
     try {
       // Set model type so buildArgs skips text-specific flags for image models
-      const launchConfig = filterType === 'image' ? { ...config, modelType: 'image' as const } : config
+      const launchConfig = (autoDetectedType || filterTypeProp) === 'image' ? { ...config, modelType: 'image' as const } : config
       const createResult = await window.api.sessions.create(selectedModel, launchConfig)
       if (!mountedRef.current) return
       if (!createResult.success) {
@@ -267,7 +277,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
   }
 
   const addDirectory = async (dirPath: string) => {
-    const result = await window.api.models.addDirectory(dirPath, filterType)
+    const result = await window.api.models.addDirectory(dirPath, filterTypeProp)
     if (result.success) {
       await loadDirectories()
       // Rescan with the new directory
@@ -278,7 +288,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
   }
 
   const handleRemoveDirectory = async (dirPath: string) => {
-    await window.api.models.removeDirectory(dirPath, filterType)
+    await window.api.models.removeDirectory(dirPath, filterTypeProp)
     await loadDirectories()
     await scanModels()
   }
@@ -498,6 +508,12 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
                                 if (det?.cacheType) setDetectedCacheType(det.cacheType)
                                 if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
                               } catch (_) { }
+                              // Auto-detect image model
+                              try {
+                                const types = await window.api.models.detectTypes([model.path])
+                                if (types?.[model.path] === 'image') setAutoDetectedType('image')
+                                else setAutoDetectedType('text')
+                              } catch (_) { setAutoDetectedType(undefined) }
                               setStep(2)
                               return // skip auto-detect for config — existing config already has everything
                             } catch (_) { }
@@ -520,6 +536,12 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
                         } catch (_) {
                           // Auto-detect failed — user can configure manually
                         }
+                        // Auto-detect image model
+                        try {
+                          const types = await window.api.models.detectTypes([model.path])
+                          if (types?.[model.path] === 'image') setAutoDetectedType('image')
+                          else setAutoDetectedType('text')
+                        } catch (_) { setAutoDetectedType(undefined) }
                         setStep(2)
                       }}
                       className={`w-full text-left p-3 rounded border transition-colors ${selectedModel === model.path
@@ -623,7 +645,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType 
         </div>
 
         {/* Config Form — image models get simplified settings */}
-        {filterType === 'image' ? (
+        {(autoDetectedType || filterTypeProp) === 'image' ? (
           <div className="space-y-4 border border-border rounded p-4">
             <h3 className="text-sm font-medium">Image Server Settings</h3>
             <div className="grid grid-cols-2 gap-3 text-sm">

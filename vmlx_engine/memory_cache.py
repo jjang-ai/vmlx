@@ -25,6 +25,7 @@ Example:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import OrderedDict
 import gc
@@ -38,6 +39,8 @@ _BYTES_PER_MB = 1024 * 1024
 _DEFAULT_MEMORY_PERCENT = 0.30  # 30% of available RAM
 _MIN_MEMORY_BYTES = 100 * _BYTES_PER_MB  # Minimum 100MB
 _MAX_ENTRIES_FALLBACK = 50  # Fallback if memory detection fails
+_PRESSURE_CHECK_INTERVAL = 60.0  # Seconds between memory pressure checks
+_PRESSURE_THRESHOLD = 0.20  # Reduce budget when <20% of total RAM available
 
 
 def _get_available_memory() -> int:
@@ -174,25 +177,28 @@ class MemoryCacheConfig:
         Returns:
             Memory limit in bytes.
         """
+        # 32GB hard cap — Metal GPU doesn't get 100% of system RAM
+        max_cache_bytes = 32 * 1024 * 1024 * 1024
+
         if self.max_memory_mb is not None:
-            return self.max_memory_mb * _BYTES_PER_MB
+            # Explicit MB setting capped at 32GB for safety, but no minimum floor
+            # (user/test may intentionally set a very small cache)
+            limit = self.max_memory_mb * _BYTES_PER_MB
+            return min(limit, max_cache_bytes)
 
         available = _get_available_memory()
         if available > 0:
             limit = int(available * self.max_memory_percent)
-            # Cap at 32GB to prevent OOM on high-RAM systems (256GB+ Macs)
-            # Metal GPU doesn't get 100% of system RAM — macOS reserves significant memory
-            max_cache_bytes = 32 * 1024 * 1024 * 1024  # 32GB hard cap
             limit = min(limit, max_cache_bytes)
             return max(limit, _MIN_MEMORY_BYTES)
 
-        # Fallback: assume 8GB system, use configured percent
+        # Fallback: assume 4GB available (typical on 8GB Mac), use configured percent
         logger.warning(
             "Could not detect available memory (psutil returned 0). "
-            "Assuming 8GB system for cache sizing. Use --cache-memory-mb to set explicitly."
+            "Assuming 4GB available for cache sizing. Use --cache-memory-mb to set explicitly."
         )
-        fallback_total = 8 * 1024 * _BYTES_PER_MB
-        return int(fallback_total * self.max_memory_percent)
+        fallback_available = 4 * 1024 * _BYTES_PER_MB
+        return max(min(int(fallback_available * self.max_memory_percent), max_cache_bytes), _MIN_MEMORY_BYTES)
 
 
 @dataclass
@@ -272,7 +278,9 @@ class MemoryAwarePrefixCache:
     - OrderedDict for O(1) LRU operations
 
     Thread Safety:
-        This class is NOT thread-safe. Use external locking if needed.
+        All public mutating methods (store, fetch) are protected by a
+        threading.Lock. The lock is non-reentrant since these methods
+        do not call each other recursively.
     """
 
     def __init__(
@@ -290,13 +298,21 @@ class MemoryAwarePrefixCache:
         self._model_id = id(model)
         self._config = config or MemoryCacheConfig()
 
+        # Thread safety: non-reentrant lock (store/fetch/_evict_lru don't
+        # recurse into each other, so RLock is unnecessary overhead).
+        self._lock = threading.Lock()
+
         # OrderedDict maintains insertion order for LRU
         # Key: tuple(tokens), Value: _CacheEntry
         self._entries: OrderedDict[tuple[int, ...], _CacheEntry] = OrderedDict()
 
         # Memory tracking
-        self._max_memory = self._config.compute_memory_limit()
+        self._base_memory_limit = self._config.compute_memory_limit()
+        self._max_memory = self._base_memory_limit
         self._current_memory = 0
+
+        # Periodic memory pressure tracking (Issue #53)
+        self._last_pressure_check: float = time.monotonic()
 
         # TTL configuration (seconds, 0 = disabled)
         self._ttl_seconds = self._config.ttl_minutes * 60.0 if self._config.ttl_minutes > 0 else 0.0
@@ -384,6 +400,52 @@ class MemoryAwarePrefixCache:
 
         return truncated
 
+    def _check_memory_pressure(self) -> None:
+        """
+        Periodically re-check system memory and reduce the effective budget
+        if available RAM has dropped below the pressure threshold.
+
+        Called from store() at most once every _PRESSURE_CHECK_INTERVAL seconds.
+        When available memory is less than _PRESSURE_THRESHOLD (20%) of total RAM,
+        the effective budget is temporarily reduced to half of available memory,
+        preventing the cache from causing swap pressure. The budget is restored
+        to the original limit once memory pressure subsides.
+        """
+        now = time.monotonic()
+        if now - self._last_pressure_check < _PRESSURE_CHECK_INTERVAL:
+            return
+        self._last_pressure_check = now
+
+        try:
+            import psutil
+            vm = psutil.virtual_memory()
+        except (ImportError, Exception):
+            return
+
+        available_fraction = vm.available / vm.total if vm.total > 0 else 1.0
+
+        if available_fraction < _PRESSURE_THRESHOLD:
+            # Under pressure: shrink budget to half of currently available RAM,
+            # but never below the minimum floor.
+            reduced = max(vm.available // 2, _MIN_MEMORY_BYTES)
+            if reduced < self._max_memory:
+                logger.warning(
+                    f"Memory pressure detected: {available_fraction:.0%} of RAM available. "
+                    f"Reducing cache budget from {self._max_memory / _BYTES_PER_MB:.0f}MB "
+                    f"to {reduced / _BYTES_PER_MB:.0f}MB"
+                )
+                self._max_memory = reduced
+                self._stats.max_memory_bytes = self._max_memory
+        else:
+            # Pressure relieved: restore original budget
+            if self._max_memory < self._base_memory_limit:
+                logger.info(
+                    f"Memory pressure relieved ({available_fraction:.0%} available). "
+                    f"Restoring cache budget to {self._base_memory_limit / _BYTES_PER_MB:.0f}MB"
+                )
+                self._max_memory = self._base_memory_limit
+                self._stats.max_memory_bytes = self._max_memory
+
     def fetch(self, tokens: list[int]) -> tuple[list[Any] | None, list[int]]:
         """
         Find cached KV state for the given tokens.
@@ -412,72 +474,84 @@ class MemoryAwarePrefixCache:
             self._stats.misses += 1
             return None, tokens
 
-        # Evict expired entries before lookup
-        if self._ttl_seconds > 0:
-            self._evict_expired()
+        with self._lock:
+            # Evict expired entries before lookup
+            if self._ttl_seconds > 0:
+                self._evict_expired()
 
-        tokens_key = tuple(tokens)
+            tokens_key = tuple(tokens)
 
-        # Check for exact match
-        if tokens_key in self._entries:
-            entry = self._entries[tokens_key]
-            # Move to end (most recently used) and update access time
-            self._entries.move_to_end(tokens_key)
-            entry.touch()
-            self._stats.hits += 1
-            self._stats.tokens_saved += len(tokens)
-            # Return reference directly - MLX arrays are immutable
-            return entry.cache, []
-
-        # Check for prefix matches in both directions
-        best_forward_match: _CacheEntry | None = None
-        best_forward_length = 0
-        best_reverse_match: _CacheEntry | None = None
-        best_reverse_length = 0
-
-        for cached_key, entry in self._entries.items():
-            cached_len = len(cached_key)
-
-            if cached_len < len(tokens):
-                # Forward: cached sequence is a prefix of requested tokens
-                if (
-                    cached_len > best_forward_length
-                    and tokens_key[:cached_len] == cached_key
-                ):
-                    best_forward_match = entry
-                    best_forward_length = cached_len
-
-            elif cached_len > len(tokens):
-                # Reverse: requested tokens are a prefix of cached sequence
-                # This handles repeated prompts where cache stores prompt+output
-                if (
-                    len(tokens) > best_reverse_length
-                    and cached_key[: len(tokens)] == tokens_key
-                ):
-                    best_reverse_match = entry
-                    best_reverse_length = len(tokens)
-
-        # Prefer forward match (exact prefix reuse, no truncation needed)
-        if best_forward_match is not None:
-            self._entries.move_to_end(best_forward_match.tokens)
-            best_forward_match.touch()
-            self._stats.hits += 1
-            self._stats.tokens_saved += best_forward_length
-            remaining = tokens[best_forward_length:]
-            return best_forward_match.cache, remaining
-
-        # Fall back to reverse match with cache truncation
-        if best_reverse_match is not None:
-            truncated = self._truncate_cache(best_reverse_match.cache, len(tokens))
-            if truncated is not None:
-                self._entries.move_to_end(best_reverse_match.tokens)
-                best_reverse_match.touch()
+            # Check for exact match
+            if tokens_key in self._entries:
+                entry = self._entries[tokens_key]
+                # Move to end (most recently used) and update access time
+                self._entries.move_to_end(tokens_key)
+                entry.touch()
                 self._stats.hits += 1
                 self._stats.tokens_saved += len(tokens)
-                return truncated, []
+                # Return reference directly - MLX arrays are immutable
+                return entry.cache, []
 
-        self._stats.misses += 1
-        return None, tokens
+            # Prefix scan: O(n) over all entries (Issue #62).
+            #
+            # This is an intentional design trade-off. A trie would give O(k)
+            # lookup (k = token length), but adds significant complexity for
+            # insertion, eviction, and memory tracking. The flat OrderedDict
+            # approach is simpler, easier to reason about for correctness, and
+            # performs well in practice because:
+            #   - max_entries defaults to 1000 (config.max_entries), bounding n
+            #   - Prefix comparison short-circuits on first mismatch (tuple ==)
+            #   - The exact-match dict lookup above handles the common case in O(1)
+            # If profiling shows this scan as a bottleneck with large entry counts,
+            # consider replacing OrderedDict with a trie + LRU linked list.
+            best_forward_match: _CacheEntry | None = None
+            best_forward_length = 0
+            best_reverse_match: _CacheEntry | None = None
+            best_reverse_length = 0
+
+            for cached_key, entry in self._entries.items():
+                cached_len = len(cached_key)
+
+                if cached_len < len(tokens):
+                    # Forward: cached sequence is a prefix of requested tokens
+                    if (
+                        cached_len > best_forward_length
+                        and tokens_key[:cached_len] == cached_key
+                    ):
+                        best_forward_match = entry
+                        best_forward_length = cached_len
+
+                elif cached_len > len(tokens):
+                    # Reverse: requested tokens are a prefix of cached sequence
+                    # This handles repeated prompts where cache stores prompt+output
+                    if (
+                        len(tokens) > best_reverse_length
+                        and cached_key[: len(tokens)] == tokens_key
+                    ):
+                        best_reverse_match = entry
+                        best_reverse_length = len(tokens)
+
+            # Prefer forward match (exact prefix reuse, no truncation needed)
+            if best_forward_match is not None:
+                self._entries.move_to_end(best_forward_match.tokens)
+                best_forward_match.touch()
+                self._stats.hits += 1
+                self._stats.tokens_saved += best_forward_length
+                remaining = tokens[best_forward_length:]
+                return best_forward_match.cache, remaining
+
+            # Fall back to reverse match with cache truncation
+            if best_reverse_match is not None:
+                truncated = self._truncate_cache(best_reverse_match.cache, len(tokens))
+                if truncated is not None:
+                    self._entries.move_to_end(best_reverse_match.tokens)
+                    best_reverse_match.touch()
+                    self._stats.hits += 1
+                    self._stats.tokens_saved += len(tokens)
+                    return truncated, []
+
+            self._stats.misses += 1
+            return None, tokens
 
     def store(self, tokens: list[int], cache: list[Any]) -> bool:
         """
@@ -486,6 +560,9 @@ class MemoryAwarePrefixCache:
         This method stores the cache reference directly (no copy) and
         tracks memory usage. If memory limit is exceeded, LRU entries
         are evicted until there's room.
+
+        Every 60 seconds, re-checks system memory pressure and temporarily
+        reduces the effective budget if available RAM drops below 20% of total.
 
         Args:
             tokens: Token sequence that was processed.
@@ -497,62 +574,70 @@ class MemoryAwarePrefixCache:
         if not tokens or not cache:
             return False
 
-        tokens_key = tuple(tokens)
+        with self._lock:
+            # Periodic memory pressure adaptation (Issue #53)
+            self._check_memory_pressure()
 
-        # If already cached, just update LRU order
-        if tokens_key in self._entries:
-            self._entries.move_to_end(tokens_key)
+            tokens_key = tuple(tokens)
+
+            # If already cached, just update LRU order
+            if tokens_key in self._entries:
+                self._entries.move_to_end(tokens_key)
+                return True
+
+            # Evict expired entries first to free space before LRU eviction
+            if self._ttl_seconds > 0:
+                self._evict_expired()
+
+            # Create entry and estimate memory
+            entry = _CacheEntry.create(tokens, cache)
+
+            # Check if single entry exceeds limit (95% of total cache budget)
+            _max_entry_bytes = int(self._max_memory * 0.95)
+            if entry.memory_bytes > _max_entry_bytes:
+                logger.info(
+                    f"Cache entry too large: "
+                    f"{entry.memory_bytes / _BYTES_PER_MB:.1f}MB "
+                    f"(limit {_max_entry_bytes / _BYTES_PER_MB:.0f}MB) - skipping"
+                )
+                return False
+
+            # Evict until we have room
+            evicted_any = False
+            while (
+                self._current_memory + entry.memory_bytes > self._max_memory
+                or len(self._entries) >= self._config.max_entries
+            ) and self._entries:
+                self._evict_lru()
+                evicted_any = True
+
+            # After batch eviction, run GC to release Python references.
+            # We do NOT call mx.clear_memory_cache() here because it can
+            # interfere with in-flight GPU operations during active prefills.
+            # Metal will reclaim memory naturally when tensors are deallocated.
+            if evicted_any:
+                gc.collect()
+
+            # Store entry
+            self._entries[tokens_key] = entry
+            self._current_memory += entry.memory_bytes
+            self._stats.entry_count = len(self._entries)
+            self._stats.current_memory_bytes = self._current_memory
+
+            logger.debug(
+                f"Stored cache: {len(tokens)} tokens, "
+                f"{entry.memory_bytes / _BYTES_PER_MB:.2f}MB, "
+                f"total={self._current_memory / _BYTES_PER_MB:.1f}MB"
+            )
+
             return True
 
-        # Evict expired entries first to free space before LRU eviction
-        if self._ttl_seconds > 0:
-            self._evict_expired()
-
-        # Create entry and estimate memory
-        entry = _CacheEntry.create(tokens, cache)
-
-        # Check if single entry exceeds limit (95% of total cache budget)
-        _max_entry_bytes = int(self._max_memory * 0.95)
-        if entry.memory_bytes > _max_entry_bytes:
-            logger.info(
-                f"Cache entry too large: "
-                f"{entry.memory_bytes / _BYTES_PER_MB:.1f}MB "
-                f"(limit {_max_entry_bytes / _BYTES_PER_MB:.0f}MB) - skipping"
-            )
-            return False
-
-        # Evict until we have room
-        evicted_any = False
-        while (
-            self._current_memory + entry.memory_bytes > self._max_memory
-            or len(self._entries) >= self._config.max_entries
-        ) and self._entries:
-            self._evict_lru()
-            evicted_any = True
-
-        # After batch eviction, run GC to release Python references.
-        # We do NOT call mx.clear_memory_cache() here because it can
-        # interfere with in-flight GPU operations during active prefills.
-        # Metal will reclaim memory naturally when tensors are deallocated.
-        if evicted_any:
-            gc.collect()
-
-        # Store entry
-        self._entries[tokens_key] = entry
-        self._current_memory += entry.memory_bytes
-        self._stats.entry_count = len(self._entries)
-        self._stats.current_memory_bytes = self._current_memory
-
-        logger.debug(
-            f"Stored cache: {len(tokens)} tokens, "
-            f"{entry.memory_bytes / _BYTES_PER_MB:.2f}MB, "
-            f"total={self._current_memory / _BYTES_PER_MB:.1f}MB"
-        )
-
-        return True
-
     def _evict_lru(self) -> None:
-        """Evict the least recently used entry."""
+        """Evict the least recently used entry.
+
+        Caller MUST hold self._lock. This is a private method only called
+        from store() which acquires the lock before entering the eviction loop.
+        """
         if not self._entries:
             return
 

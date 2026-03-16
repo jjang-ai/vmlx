@@ -10,7 +10,7 @@ const exec = promisify(execCallback)
 
 export type InstallMethod = 'uv' | 'pip' | 'brew' | 'conda' | 'manual' | 'bundled' | 'unknown'
 
-export interface VllmInstallation {
+export interface EngineInstallation {
   installed: boolean
   path?: string
   version?: string
@@ -49,8 +49,8 @@ export function getBundledPythonPath(): string | null {
 /**
  * Check if vmlx-engine is installed and where
  */
-export async function checkVllmInstallation(): Promise<VllmInstallation> {
-  console.log('[vLLM Manager] Checking installation...')
+export async function checkEngineInstallation(): Promise<EngineInstallation> {
+  console.log('[Engine Manager] Checking installation...')
 
   // 0. Check bundled Python first (standalone distribution)
   const bundledPython = getBundledPythonPath()
@@ -61,17 +61,17 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
         timeout: 10000,
         env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
       }).trim()
-      console.log(`[vLLM Manager] Found bundled Python with vmlx_engine ${ver}`)
+      console.log(`[Engine Manager] Found bundled Python with vmlx_engine ${ver}`)
       return { installed: true, path: bundledPython, version: ver, method: 'bundled', bundled: true }
     } catch (_) {
-      console.log('[vLLM Manager] Bundled Python found but vmlx_engine import failed, falling through to system')
+      console.log('[Engine Manager] Bundled Python found but vmlx_engine import failed, falling through to system')
     }
   }
 
   // 1. Check common paths
   for (const path of SEARCH_PATHS) {
     if (existsSync(path)) {
-      console.log(`[vLLM Manager] Found at: ${path}`)
+      console.log(`[Engine Manager] Found at: ${path}`)
       const version = await getVersionFromBinary(path)
       const method = detectInstallMethod(path)
       return { installed: true, path, version, method }
@@ -84,7 +84,7 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
     const path = result.stdout.trim()
 
     if (path) {
-      console.log(`[vLLM Manager] Found in PATH: ${path}`)
+      console.log(`[Engine Manager] Found in PATH: ${path}`)
       const version = await getVersionFromBinary(path)
       const method = detectInstallMethod(path)
       return { installed: true, path, version, method }
@@ -94,7 +94,7 @@ export async function checkVllmInstallation(): Promise<VllmInstallation> {
   }
 
   // 3. Not found
-  console.log('[vLLM Manager] Not installed')
+  console.log('[Engine Manager] Not installed')
   return { installed: false }
 }
 
@@ -115,7 +115,7 @@ async function getVersionFromBinary(path: string): Promise<string> {
       const pyResult = await execFileAsync(shebang, ['-c', "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"])
       const ver = pyResult.stdout.trim()
       if (/^\d+\.\d+\.\d+/.test(ver)) {
-        console.log(`[vLLM Manager] Version: ${ver}`)
+        console.log(`[Engine Manager] Version: ${ver}`)
         return ver
       }
     }
@@ -126,7 +126,7 @@ async function getVersionFromBinary(path: string): Promise<string> {
     const result = await exec(`"${path}" --version 2>&1`)
     const match = (result.stdout || result.stderr).match(/(\d+\.\d+\.\d+)/)
     if (match) {
-      console.log(`[vLLM Manager] Version: ${match[1]}`)
+      console.log(`[Engine Manager] Version: ${match[1]}`)
       return match[1]
     }
   } catch (_) { /* not supported */ }
@@ -225,7 +225,7 @@ export async function detectAvailableInstallers(): Promise<AvailableInstaller[]>
  * In packaged app: Resources/vmlx-engine-source/
  * In dev mode: monorepo root (../  from panel/)
  */
-export function getBundledSourcePath(): string | null {
+function getBundledSourcePath(): string | null {
   // Packaged app: extraResources lands in process.resourcesPath
   if (app.isPackaged) {
     const bundled = join(process.resourcesPath, 'vmlx-engine-source')
@@ -286,7 +286,7 @@ let activeInstall: ChildProcess | null = null
  * method='bundled-update' reinstalls vmlx-engine from bundled source into bundled Python
  * (fast, no-deps reinstall for engine updates).
  */
-export function installVllmStreaming(
+export function installEngineStreaming(
   method: 'uv' | 'pip' | 'bundled-update',
   action: 'install' | 'upgrade',
   installerPath: string | undefined,
@@ -327,7 +327,7 @@ export function installVllmStreaming(
   }
 
   const fullCmd = `${cmd} ${args.join(' ')}`
-  console.log(`[vLLM Manager] Running: ${fullCmd}`)
+  console.log(`[Engine Manager] Running: ${fullCmd}`)
   onLog(`$ ${fullCmd}\n`)
 
   const installEnv: Record<string, string | undefined> = { ...process.env }
@@ -352,17 +352,17 @@ export function installVllmStreaming(
   proc.on('exit', (code) => {
     activeInstall = null
     if (code === 0) {
-      console.log('[vLLM Manager] Install/update completed successfully')
+      console.log('[Engine Manager] Install/update completed successfully')
       onComplete({ success: true })
     } else {
-      console.error(`[vLLM Manager] Install/update failed with code ${code}`)
+      console.error(`[Engine Manager] Install/update failed with code ${code}`)
       onComplete({ success: false, error: `Process exited with code ${code}` })
     }
   })
 
   proc.on('error', (err) => {
     activeInstall = null
-    console.error('[vLLM Manager] Install/update error:', err)
+    console.error('[Engine Manager] Install/update error:', err)
     onComplete({ success: false, error: err.message })
   })
 }
@@ -450,14 +450,14 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
           const installedHash = hashSourceFiles(join(installed, '..'))
           if (installedHash && installedHash !== sourceHash) {
             needsUpdate = true
-            console.log(`[vLLM Manager] Source content changed (hash mismatch) — triggering update`)
+            console.log(`[Engine Manager] Source content changed (hash mismatch) — triggering update`)
           }
         }
       } catch (_) { /* hash comparison optional — fall back to version check */ }
     }
   }
 
-  console.log(`[vLLM Manager] Engine version check: installed=${current}, source=${bundled}, needsUpdate=${needsUpdate}`)
+  console.log(`[Engine Manager] Engine version check: installed=${current}, source=${bundled}, needsUpdate=${needsUpdate}`)
   return { current, bundled, needsUpdate }
 }
 
@@ -472,4 +472,3 @@ export function cancelInstall(): boolean {
   }
   return false
 }
-

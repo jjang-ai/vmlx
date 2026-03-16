@@ -359,6 +359,11 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     elif raw_profile.isdigit():
         # User passed a number like "2" or "4"
         profile = profile_for_bits(int(raw_profile))
+        # Fallback: jang-tools may return profiles not in JANG_PROFILES (e.g., JANG_3K)
+        if profile not in JANG_PROFILES:
+            _fallback_map = {1: "JANG_1L", 2: "JANG_2S", 3: "JANG_3S", 4: "JANG_4S",
+                             5: "JANG_5M", 6: "JANG_6M", 7: "JANG_7L", 8: "JANG_8L"}
+            profile = _fallback_map.get(int(raw_profile), profile)
         print(f"Bit target {raw_profile} → using profile {profile}")
     else:
         profile = raw_profile.upper()
@@ -414,13 +419,18 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
         info = None
 
     # Memory warning (conversion needs source weights + quantized output in RAM)
+    # Use profile-aware multiplier: source + (target_bits/16 * source) + 0.3 overhead
+    # e.g. 2-bit target: 1 + 0.125 + 0.3 = 1.425x, 8-bit: 1 + 0.5 + 0.3 = 1.8x
     try:
         available = available_memory_gb()
         total = total_memory_gb()
         source_gb = sum(f.stat().st_size for f in Path(model_path).glob("*.safetensors")) / (1024**3)
-        needed = source_gb * 2.5  # source + quantized + overhead
+        # Determine target bits from the COMPRESS tier (smallest, most layers)
+        target_bits = comp
+        multiplier = 1.0 + target_bits / 16.0 + 0.3
+        needed = source_gb * multiplier
         print(f"Memory estimate:")
-        print(f"  Conversion needs: ~{needed:.1f} GB")
+        print(f"  Conversion needs: ~{needed:.1f} GB (profile {profile}: {target_bits}-bit target, {multiplier:.2f}x)")
         print(f"  Available: {available:.1f} GB / {total:.0f} GB total")
         if needed > total:
             print(f"\n  WARNING: This model may be too large for your system.")

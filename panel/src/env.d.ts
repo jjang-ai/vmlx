@@ -83,7 +83,7 @@ declare global {
       performance: {
         health: (endpoint: { host: string; port: number }) => Promise<any>
       }
-      vllm: {
+      engine: {
         checkInstallation: () => Promise<{ installed: boolean; path?: string; version?: string; method?: string; bundled?: boolean }>
         detectInstallers: () => Promise<any[]>
         checkEngineVersion: () => Promise<{ current: string; bundled: string; needsUpdate: boolean }>

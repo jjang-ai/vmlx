@@ -41,7 +41,8 @@ from typing import List, Optional
 
 import mlx.core as mx
 
-# MambaCache was removed in mlx-lm 0.30.6 - make import conditional
+# MambaCache removed in mlx-lm >= 0.30.6, replaced by ArraysCache.
+# If upstream adds batch methods to ArraysCache, this wrapper may need updates.
 try:
     from mlx_lm.models.cache import MambaCache
 
@@ -140,8 +141,9 @@ class BatchMambaCache(MambaCache):
         batch_size = len(caches)
         num_arrays = len(caches[0].cache) if caches[0].cache else 2
 
-        # Don't set left_padding: merged caches from prefill don't need padding
-        # masks. Setting [0]*N creates a no-op mask (all True) that still causes
+        # Merged caches from prefill don't need padding masks. If decode phase
+        # needs SSM padding, this would need to be reconstructed.
+        # Setting [0]*N creates a no-op mask (all True) that still causes
         # shape mismatches after filter() shrinks the batch — ArraysCache.filter()
         # doesn't filter left_padding, so make_mask() would return a mask with
         # stale batch dimension. With left_padding=None, make_mask() returns None
@@ -152,12 +154,19 @@ class BatchMambaCache(MambaCache):
         # Merge each array in the cache
         merged_cache.cache = []
 
-        for i in range(num_arrays):
-            arrays = [c.cache[i] for c in caches if c.cache[i] is not None]
-            if arrays:
-                merged_cache.cache.append(mx.concatenate(arrays, axis=0))
-            else:
-                merged_cache.cache.append(None)
+        try:
+            for i in range(num_arrays):
+                arrays = [c.cache[i] for c in caches if c.cache[i] is not None]
+                if arrays:
+                    merged_cache.cache.append(mx.concatenate(arrays, axis=0))
+                else:
+                    merged_cache.cache.append(None)
+        except (MemoryError, RuntimeError) as e:
+            logger.warning(
+                "Out of memory during SSM state merge — try reducing "
+                "batch size or sequence length. (%s)", e
+            )
+            raise
 
         return merged_cache
 

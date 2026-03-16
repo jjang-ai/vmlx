@@ -6,7 +6,7 @@ import { homedir } from 'os'
 import { spawn, ChildProcess } from 'child_process'
 import { db } from '../database'
 import { detectModelConfigFromDir } from '../model-config-registry'
-import { getBundledPythonPath } from '../vllm-manager'
+import { getBundledPythonPath } from '../engine-manager'
 
 /** Generation defaults read from a model's generation_config.json */
 export interface GenerationDefaults {
@@ -183,7 +183,7 @@ function parseSizeBytes(size: string | undefined): number {
   return val * 1024 * 1024
 }
 
-async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
+async function scanModelsInPath(basePath: string, modelType?: string, skipDirs?: Set<string>): Promise<ModelInfo[]> {
   const models: ModelInfo[] = []
   // Skip common system and git directories. We keep 'snapshots' unskipped so it can descend into standard HF Hub caches if needed.
   const SKIP_DIRS = ['.locks', 'blobs', 'refs', '.git', '.cache']
@@ -197,6 +197,9 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
 
       // Diffusers models: stop recursion here (don't descend into transformer/, vae/, etc.)
       if (format === 'diffusers') {
+        // Skip image models when scanning for text models only
+        if (modelType === 'text') return
+
         const size = await getDirectorySize(currentPath)
         let id = basename(currentPath)
         if (depth > 1) {
@@ -216,6 +219,8 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
 
       // MLX text models (.safetensors + config.json)
       if (format === 'mlx') {
+        // Skip text models when scanning for image models only
+        if (modelType === 'image') return
         const size = await getDirectorySize(currentPath)
 
         // Skip empty models (less than 1MB)
@@ -280,13 +285,18 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
           if (!entry.isDirectory()) continue
           if (SKIP_DIRS.includes(entry.name)) continue
 
+          // Skip directories that belong to the other model type's scan paths
+          // (e.g., when scanning text models from ~/.mlxstudio/models, skip image/ and xcreates/ subdirs)
+          const childPath = join(currentPath, entry.name)
+          if (skipDirs?.has(childPath)) continue
+
           // Special case: ignore in-progress vmlx downloads
           try {
-            await access(join(currentPath, entry.name, '.vmlx-downloading'))
+            await access(join(childPath, '.vmlx-downloading'))
             continue
           } catch (_) { /* not downloading */ }
 
-          await scanRecursive(join(currentPath, entry.name), depth + 1, maxDepth)
+          await scanRecursive(childPath, depth + 1, maxDepth)
         }
       }
     } catch (e) {
@@ -319,9 +329,20 @@ export function registerModelHandlers(): void {
     console.log('[MODELS] Scanning directories:', dirs)
     const allModels: ModelInfo[] = []
 
+    // When explicitly filtering by type, skip the other type's directories and filter results.
+    // 'text' scan: skip image dirs (don't descend into ~/.mlxstudio/models/image or xcreates)
+    // 'image' scan: only return diffusers-format models
+    // undefined: return all models (no filtering)
+    let skipDirs: Set<string> | undefined
+    if (modelType === 'text') {
+      const imageDirs = getModelDirectories('image')
+      skipDirs = new Set(imageDirs.map(d => d.replace(/\/+$/, '')))
+    }
+    const scanFilter = modelType === 'image' ? 'image' : (modelType === 'text' ? 'text' : undefined)
+
     for (const basePath of dirs) {
       try {
-        const models = await scanModelsInPath(basePath)
+        const models = await scanModelsInPath(basePath, scanFilter, skipDirs)
         allModels.push(...models)
         console.log(`[MODELS] Found ${models.length} models in ${basePath}`)
       } catch (error) {
@@ -378,13 +399,27 @@ export function registerModelHandlers(): void {
     const userDirs = getUserDirectories(modelType)
     const builtins = modelType === 'image' ? BUILTIN_IMAGE_PATHS : BUILTIN_MODEL_PATHS
     const normalized = dirPath.replace(/\/+$/, '')
-    if (userDirs.includes(normalized) || builtins.includes(normalized)) {
-      return { success: false, error: 'Directory already in scan list' }
-    }
     try {
       await access(normalized)
     } catch {
       return { success: false, error: 'Directory does not exist or is not accessible' }
+    }
+    // Resolve symlinks for robust duplicate detection
+    let resolved: string
+    try { resolved = await realpath(normalized) } catch { resolved = normalized }
+    const allExisting = [...userDirs, ...builtins]
+    for (const existing of allExisting) {
+      try {
+        const existingResolved = await realpath(existing)
+        if (existingResolved === resolved) {
+          return { success: false, error: 'Directory already in scan list' }
+        }
+      } catch {
+        // If we can't resolve an existing entry, fall back to string comparison
+        if (existing === normalized) {
+          return { success: false, error: 'Directory already in scan list' }
+        }
+      }
     }
     userDirs.push(normalized)
     setUserDirectories(userDirs, modelType)
@@ -412,18 +447,18 @@ export function registerModelHandlers(): void {
         if (existsSync(join(p, 'model_index.json'))) return 'image'
         if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'text_encoder'))) return 'image'
         if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'vae'))) return 'image'
-        // Standard text models have config.json with model_type
+        // Standard text models have config.json with model_type or architectures
         if (existsSync(join(p, 'config.json'))) {
           try {
             const cfg = JSON.parse(readFileSync(join(p, 'config.json'), 'utf-8'))
             // Check if it has pipeline_tag for image generation
             if (cfg.pipeline_tag === 'text-to-image' || cfg.pipeline_tag === 'image-to-image') return 'image'
-            // Has model_type = text model (transformers)
-            if (cfg.model_type) return 'text'
+            // Has model_type or architectures = text model (transformers)
+            if (cfg.model_type || cfg.architectures) return 'text'
           } catch {}
         }
-        // JANG models are text models
-        if (existsSync(join(p, 'jang_config.json'))) return 'text'
+        // JANG models are text models (check all config variants)
+        if (existsSync(join(p, 'jang_config.json')) || existsSync(join(p, 'jjqf_config.json')) || existsSync(join(p, 'mxq_config.json'))) return 'text'
         // Remote sessions
         if (p.startsWith('remote://')) return 'text'
         return 'unknown'
@@ -578,13 +613,15 @@ export function registerModelHandlers(): void {
     emitToRenderer('models:downloadStarted', { jobId: job.id, repoId: job.repoId })
 
     const pythonPath = await getPythonPath()
+    // Pass HF token to snapshot_download for gated model access (reads HF_TOKEN env var)
     const script = [
-      'import sys, json',
+      'import sys, json, os',
       'from huggingface_hub import snapshot_download',
       'repo_id = sys.argv[1]',
       'local_dir = sys.argv[2]',
+      'token = os.environ.get("HF_TOKEN") or None',
       'try:',
-      '    path = snapshot_download(repo_id, local_dir=local_dir)',
+      '    path = snapshot_download(repo_id, local_dir=local_dir, token=token)',
       '    print(json.dumps({"status": "complete", "path": path}), flush=True)',
       'except KeyboardInterrupt:',
       '    print(json.dumps({"status": "cancelled"}), flush=True)',
@@ -603,8 +640,16 @@ export function registerModelHandlers(): void {
 
     console.log(`[DOWNLOADS] Starting: ${job.repoId} → ${job.modelDir}`)
 
+    // Build spawn environment — inject HF_TOKEN if user has configured one
+    const downloadEnv: Record<string, string | undefined> = { ...process.env }
+    const hfToken = db.getSetting('hf_api_key')
+    if (hfToken) {
+      downloadEnv.HF_TOKEN = hfToken
+    }
+
     const proc = spawn(pythonPath, ['-u', '-c', script, job.repoId, job.modelDir], {
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: downloadEnv
     })
     job.process = proc
 
@@ -688,7 +733,9 @@ export function registerModelHandlers(): void {
         try { await unlink(markerFile) } catch (_) { }
         job.status = 'error'
         job.error = errorMsg
-        emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: errorMsg })
+        // Detect gated/auth errors (401/403) to prompt user to add HF token
+        const isGatedError = /40[13]|gated|access.*denied|authentication|authorized/i.test(errorMsg)
+        emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: errorMsg, gated: isGatedError })
       }
 
       activeJob = null

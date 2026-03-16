@@ -57,11 +57,9 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
     loadChats()
   }, [modelPath])
 
-  // Reload only when a new chat appears that isn't in our list yet (created externally)
+  // Reload when current chat changes (new chat created, chat deleted, etc.)
   useEffect(() => {
-    if (currentChatId && !chats.find(c => c.id === currentChatId)) {
-      loadChats()
-    }
+    loadChats()
   }, [currentChatId])
 
   useEffect(() => {
@@ -73,12 +71,16 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (confirm('Delete this chat?')) {
+    try {
       await window.api.chat.delete(id)
       setChats(prev => prev.filter(c => c.id !== id))
       if (id === currentChatId) {
         onChatSelect('')
       }
+      // Force reload to sync with DB
+      await loadChats()
+    } catch (err) {
+      console.error('[ChatList] Failed to delete chat:', err)
     }
   }
 
@@ -117,10 +119,12 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
 
   const handleDeleteFolder = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (confirm('Delete this folder? Chats inside will be unfiled.')) {
+    try {
       await window.api.chat.deleteFolder(id)
       setFolders(prev => prev.filter(f => f.id !== id))
       setChats(prev => prev.map(c => c.folderId === id ? { ...c, folderId: undefined } : c))
+    } catch (err) {
+      console.error('[ChatList] Failed to delete folder:', err)
     }
   }
 

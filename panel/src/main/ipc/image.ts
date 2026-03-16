@@ -192,11 +192,14 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       const modelPath = modelName
 
       // Create a session config for image serving
+      // Pass quantize via additionalArgs since it's image-specific
+      const quantizeArgs = quantize && quantize > 0 ? `--image-quantize ${quantize}` : ''
       const config: Partial<ServerConfig> = {
         host: '0.0.0.0',
         port: 0,  // auto-assign
         timeout: 600,
         modelType: 'image',
+        additionalArgs: quantizeArgs,
       }
 
       const session = await sessionManager.createSession(modelPath, config)
@@ -241,19 +244,41 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
   ipcMain.handle('image:getRunningServer', async () => {
     try {
-      if (!activeImageSessionId) return null
-      const session = sessionManager.getSession(activeImageSessionId)
-      if (!session || session.status !== 'running') {
+      // First check the tracked active image session
+      if (activeImageSessionId) {
+        const session = sessionManager.getSession(activeImageSessionId)
+        if (session && session.status === 'running') {
+          return {
+            sessionId: session.id,
+            modelName: session.modelName || session.modelPath,
+            host: session.host,
+            port: session.port,
+            status: session.status
+          }
+        }
         activeImageSessionId = null
-        return null
       }
-      return {
-        sessionId: session.id,
-        modelName: session.modelName || session.modelPath,
-        host: session.host,
-        port: session.port,
-        status: session.status
+
+      // Also scan all running sessions for any image model (e.g., started from Server tab)
+      const allSessions = db.getSessions()
+      for (const s of allSessions) {
+        if (s.status !== 'running') continue
+        try {
+          const cfg = JSON.parse(s.config || '{}')
+          if (cfg.modelType === 'image') {
+            activeImageSessionId = s.id  // Adopt it
+            return {
+              sessionId: s.id,
+              modelName: s.modelName || s.modelPath,
+              host: s.host,
+              port: s.port,
+              status: s.status
+            }
+          }
+        } catch {}
       }
+
+      return null
     } catch (error) {
       return null
     }

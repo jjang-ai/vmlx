@@ -16,6 +16,7 @@ Architecture:
 - Graceful shutdown: flushes pending writes before exit
 """
 
+import errno
 import hashlib
 import json
 import logging
@@ -245,6 +246,13 @@ class DiskCacheManager:
         is non-blocking. Returns True if the write was enqueued (or already
         cached), False if the queue is full or the cache is not serializable.
 
+        Note on reference lifetime: queued items hold Python references to the
+        cache objects until the background writer processes them. This extends
+        the lifetime of those objects (and their underlying memory). This is
+        by design — the alternative would be deep-copying all cache tensors at
+        enqueue time, which is far more expensive than the temporary extra
+        memory from delayed garbage collection.
+
         Args:
             tokens: The prompt token IDs this cache corresponds to.
             cache: The cache object list (from BatchGenerator/prefix cache).
@@ -296,6 +304,14 @@ class DiskCacheManager:
             try:
                 token_hash, tokens, cache, metadata = item
                 self._write_cache(token_hash, tokens, cache, metadata)
+            except OSError as e:
+                if e.errno == errno.ENOSPC:
+                    logger.warning(
+                        "Disk cache: filesystem full (ENOSPC), skipping write. "
+                        "Free disk space or reduce max_size_gb."
+                    )
+                else:
+                    logger.warning(f"Background disk cache write failed: {e}")
             except Exception as e:
                 logger.warning(f"Background disk cache write failed: {e}")
 
@@ -322,6 +338,7 @@ class DiskCacheManager:
         # Generate filename
         file_name = f"cache_{token_hash[:16]}_{len(tokens)}tok.safetensors"
         file_path = self.cache_dir / file_name
+        tmp_path = file_path.with_suffix(".tmp")
 
         try:
             from mlx_lm.models.cache import save_prompt_cache
@@ -330,7 +347,11 @@ class DiskCacheManager:
             save_metadata["num_tokens"] = str(len(tokens))
             save_metadata["created_at"] = str(time.time())
 
-            save_prompt_cache(str(file_path), cache, save_metadata)
+            # Atomic write: write to temp file then rename.
+            # os.rename is atomic on macOS (same filesystem), so readers
+            # never see a partially-written cache file.
+            save_prompt_cache(str(tmp_path), cache, save_metadata)
+            os.rename(str(tmp_path), str(file_path))
 
             file_size = file_path.stat().st_size
             now = time.time()
@@ -361,10 +382,10 @@ class DiskCacheManager:
 
         except Exception as e:
             logger.warning(f"Failed to store disk cache: {e}")
-            # Clean up partial file
-            if file_path.exists():
+            # Clean up temp file and any partial final file
+            for p in (tmp_path, file_path):
                 try:
-                    file_path.unlink()
+                    p.unlink(missing_ok=True)
                 except Exception:
                     pass
 

@@ -33,14 +33,14 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
   const checkAndProceed = async () => {
     setChecking(true)
     try {
-      const result = await window.api.vllm.checkInstallation()
+      const result = await window.api.engine.checkInstallation()
       if (result.installed) {
         onReady()
         return
       }
 
       // Not installed — detect available installers
-      const available = await window.api.vllm.detectInstallers()
+      const available = await window.api.engine.detectInstallers()
       setInstallers(available)
       if (available.length > 0) {
         setSelectedMethod(available[0].method)
@@ -62,12 +62,12 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
     setInstallError(null)
     setLogs([])
 
-    const unsubLog = window.api.vllm.onInstallLog((data: any) => {
+    const unsubLog = window.api.engine.onInstallLog((data: any) => {
       if (mountedRef.current) setLogs(prev => [...prev.slice(-500), data.data])
     })
 
     try {
-      const result = await window.api.vllm.installStreaming(
+      const result = await window.api.engine.installStreaming(
         selectedMethod,
         'install',
         installer.path
@@ -94,7 +94,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
   }
 
   const handleCancel = async () => {
-    await window.api.vllm.cancelInstall()
+    await window.api.engine.cancelInstall()
     setInstalling(false)
     setLogs(prev => [...prev, '\nInstallation cancelled.'])
   }

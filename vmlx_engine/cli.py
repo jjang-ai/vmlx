@@ -328,12 +328,22 @@ def serve_command(args):
             print("Install with: pip install mflux")
             sys.exit(1)
 
+        # Resolve quantize: explicit flag > directory name detection > None
+        _image_quantize = getattr(args, 'image_quantize', None)
+        if _image_quantize is None:
+            _model_dir_name = server._model_name.lower()
+            for bits in [3, 4, 5, 6, 8]:
+                if f"-{bits}bit" in _model_dir_name or f"_{bits}bit" in _model_dir_name:
+                    _image_quantize = bits
+                    logger.info(f"Detected {bits}-bit quantization from model name")
+                    break
+
         try:
             server._image_gen = ImageGenEngine()
             server._image_gen.load(
                 model_name=server._model_name,
                 model_path=args.model,
-                quantize=None,
+                quantize=_image_quantize,
             )
         except Exception as e:
             print(f"Error: Failed to load image model: {e}")
@@ -652,6 +662,11 @@ Examples:
         "--served-model-name", type=str, default=None,
         help="Custom model name exposed via /v1/models API. Clients use this name in requests. "
              "Useful for aliasing long model paths. Default: auto-extracted from model path.",
+    )
+    serve_parser.add_argument(
+        "--image-quantize", type=int, default=None, choices=[3, 4, 5, 6, 8],
+        help="Quantization bits for image models (mflux). "
+             "Lower = less memory, faster. 4-bit recommended. (default: auto-detect from model name)",
     )
     serve_parser.add_argument(
         "--host", type=str, default="0.0.0.0",

@@ -397,6 +397,7 @@ class AnthropicStreamAdapter:
         self._tool_block_open = False
         self._input_tokens = 0
         self._output_tokens = 0
+        self._finish_reason: str | None = None
 
     def _sse(self, event_type: str, data: dict) -> str:
         return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -450,6 +451,10 @@ class AnthropicStreamAdapter:
 
         delta = choices[0].get("delta", {})
         finish_reason = choices[0].get("finish_reason")
+
+        # Store finish_reason for use in finalize() stop_reason mapping
+        if finish_reason:
+            self._finish_reason = finish_reason
 
         # Track usage from streaming chunks
         usage = chunk.get("usage")
@@ -561,9 +566,13 @@ class AnthropicStreamAdapter:
         """Generate closing events for the stream."""
         events = []
 
-        # Determine stop reason BEFORE closing blocks (otherwise flags are cleared)
-        had_tool_block = self._tool_block_open
-        stop_reason = "tool_use" if had_tool_block else "end_turn"
+        # Determine stop reason from Chat Completions finish_reason
+        if self._tool_block_open:
+            stop_reason = "tool_use"
+        elif self._finish_reason == "length":
+            stop_reason = "max_tokens"
+        else:
+            stop_reason = "end_turn"
 
         # Close any open blocks
         if self._thinking_block_open:

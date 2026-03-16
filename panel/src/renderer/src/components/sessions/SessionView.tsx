@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Menu, Settings, X } from 'lucide-react'
+import { ArrowLeft, Menu, Settings, X, ImageIcon } from 'lucide-react'
 import { ChatInterface } from '../chat/ChatInterface'
 import { ChatList } from '../chat/ChatList'
 import { ChatSettings } from '../chat/ChatSettings'
@@ -10,6 +10,7 @@ import { EmbeddingsPanel } from './EmbeddingsPanel'
 import { PerformancePanel } from './PerformancePanel'
 import { LogsPanel } from './LogsPanel'
 import { useToast } from '../Toast'
+import { useAppState } from '../../contexts/AppStateContext'
 
 interface Session {
   id: string
@@ -35,6 +36,7 @@ interface SessionViewProps {
 
 export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const { showToast } = useToast()
+  const { setMode } = useAppState()
   const [session, setSession] = useState<Session | null>(null)
   const [currentChatId, setCurrentChatId] = useState<string | null>(null)
   const [showChatList, setShowChatList] = useState(false)
@@ -57,16 +59,20 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         setSession(s)
 
         if (s) {
-          // Load chats for this model, auto-create first chat if none exist
-          const chats = await window.api.chat.getByModel(s.modelPath)
-          if (chats.length > 0) {
-            setCurrentChatId(chats[0].id)
-          } else {
-            try {
-              const title = `Chat ${new Date().toLocaleString()}`
-              const chat = await window.api.chat.create(title, 'default', undefined, s.modelPath)
-              setCurrentChatId(chat.id)
-            } catch (_) { /* will show empty state */ }
+          // Skip chat loading for image model sessions — they don't use chat
+          const cfg = s.config ? (() => { try { return JSON.parse(s.config) } catch { return {} } })() : {}
+          if (cfg.modelType !== 'image') {
+            // Load chats for this model, auto-create first chat if none exist
+            const chats = await window.api.chat.getByModel(s.modelPath)
+            if (chats.length > 0) {
+              setCurrentChatId(chats[0].id)
+            } else {
+              try {
+                const title = `Chat ${new Date().toLocaleString()}`
+                const chat = await window.api.chat.create(title, 'default', undefined, s.modelPath)
+                setCurrentChatId(chat.id)
+              } catch (_) { /* will show empty state */ }
+            }
           }
           // Detect effective reasoning parser for chat settings UI
           // Skip filesystem detection for remote sessions (remote:// paths don't exist on disk)
@@ -198,6 +204,8 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const statusColor = session.status === 'running'
     ? (isRemote ? 'bg-success' : 'bg-primary')
     : session.status === 'loading' ? 'bg-warning' : 'bg-destructive'
+  const modelType = (() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()
+  const isImage = modelType === 'image'
 
   return (
     <div className="flex flex-col h-full">
@@ -213,6 +221,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <span className="font-medium text-sm truncate" title={session.modelPath}>
             {shortName}
           </span>
+          {isImage && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium flex-shrink-0">
+              Image
+            </span>
+          )}
           {jangLabel && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium flex-shrink-0">
               {jangLabel}
@@ -229,25 +242,38 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            onClick={() => setShowChatList(!showChatList)}
-            className="text-sm hover:bg-accent px-2 py-1 rounded"
-          >
-            {showChatList ? <ArrowLeft className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-          </button>
-          <button
-            onClick={handleNewChat}
-            className="text-sm hover:bg-accent px-2 py-1 rounded"
-          >
-            + Chat
-          </button>
-          <button
-            onClick={() => { setShowSettings(!showSettings); if (!showSettings) { setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
-            className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${showSettings ? 'bg-accent' : 'hover:bg-accent'}`}
-            title="Chat inference settings"
-          >
-            <Settings className="h-3.5 w-3.5" /> Chat
-          </button>
+          {!isImage && (
+            <>
+              <button
+                onClick={() => setShowChatList(!showChatList)}
+                className="text-sm hover:bg-accent px-2 py-1 rounded"
+              >
+                {showChatList ? <ArrowLeft className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+              </button>
+              <button
+                onClick={handleNewChat}
+                className="text-sm hover:bg-accent px-2 py-1 rounded"
+              >
+                + Chat
+              </button>
+              <button
+                onClick={() => { setShowSettings(!showSettings); if (!showSettings) { setShowServerSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
+                className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${showSettings ? 'bg-accent' : 'hover:bg-accent'}`}
+                title="Chat inference settings"
+              >
+                <Settings className="h-3.5 w-3.5" /> Chat
+              </button>
+            </>
+          )}
+          {isImage && (
+            <button
+              onClick={() => setMode('image')}
+              className="text-sm hover:bg-accent px-2 py-1 rounded flex items-center gap-1"
+              title="Switch to Image tab"
+            >
+              <ImageIcon className="h-3.5 w-3.5" /> Open Image Tab
+            </button>
+          )}
           <button
             onClick={() => { setShowServerSettings(!showServerSettings); if (!showServerSettings) { setShowSettings(false); setShowCache(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
             className={`text-sm px-2 py-1 rounded flex items-center gap-1 ${showServerSettings ? 'bg-accent' : 'hover:bg-accent'}`}
@@ -255,7 +281,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           >
             <Settings className="h-3.5 w-3.5" /> {isRemote ? 'Connection' : 'Server'}
           </button>
-          {!isRemote && session.status === 'running' && (
+          {!isRemote && !isImage && session.status === 'running' && (
             <>
               <button
                 onClick={() => { setShowCache(!showCache); if (!showCache) { setShowSettings(false); setShowServerSettings(false); setShowBenchmark(false); setShowEmbeddings(false); setShowPerformance(false); setShowLogs(false) } }}
@@ -344,16 +370,35 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         </div>
       )}
 
-      {/* Chat Interface + Settings Drawer */}
+      {/* Chat Interface + Settings Drawer (or Image placeholder) */}
       <div className="flex flex-1 overflow-hidden">
         <div className="flex-1 overflow-hidden">
-          <ChatInterface
-            chatId={currentChatId}
-            onNewChat={handleNewChat}
-            sessionEndpoint={session.status === 'running' ? { host: session.host, port: session.port } : undefined}
-            sessionId={session.id}
-            overridesVersion={overridesVersion}
-          />
+          {isImage ? (
+            <div className="flex flex-col items-center justify-center h-full text-center px-8">
+              <div className="w-16 h-16 rounded-2xl bg-violet-500/10 flex items-center justify-center mb-4">
+                <ImageIcon className="h-8 w-8 text-violet-400" />
+              </div>
+              <h2 className="text-lg font-semibold mb-2">Image Model Server</h2>
+              <p className="text-sm text-muted-foreground mb-6 max-w-sm">
+                This is an image generation model. Use the Image tab to generate images, or manage the server from this view.
+              </p>
+              <button
+                onClick={() => setMode('image')}
+                className="px-4 py-2 bg-violet-600 text-white text-sm rounded-md hover:bg-violet-500 transition-colors flex items-center gap-2"
+              >
+                <ImageIcon className="h-4 w-4" />
+                Open Image Tab
+              </button>
+            </div>
+          ) : (
+            <ChatInterface
+              chatId={currentChatId}
+              onNewChat={handleNewChat}
+              sessionEndpoint={session.status === 'running' ? { host: session.host, port: session.port } : undefined}
+              sessionId={session.id}
+              overridesVersion={overridesVersion}
+            />
+          )}
         </div>
         {showSettings && currentChatId && (
           <ChatSettings
@@ -366,7 +411,8 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               status: session.status,
               pid: session.pid,
               type: session.type,
-              remoteUrl: session.remoteUrl
+              remoteUrl: session.remoteUrl,
+              modelType: (() => { try { const c = JSON.parse(session.config || '{}'); return c.modelType } catch { return undefined } })()
             }}
             reasoningParser={effectiveReasoningParser}
             onClose={() => setShowSettings(false)}
