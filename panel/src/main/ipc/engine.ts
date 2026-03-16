@@ -1,32 +1,32 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import {
-  checkVllmInstallation,
-  installVllmStreaming,
+  checkEngineInstallation,
+  installEngineStreaming,
   cancelInstall,
   detectAvailableInstallers,
   checkEngineVersion
-} from '../vllm-manager'
+} from '../engine-manager'
 
-export function registerVllmHandlers(getWindow: () => BrowserWindow | null): void {
+export function registerEngineHandlers(getWindow: () => BrowserWindow | null): void {
   // Check if vmlx-engine is installed
-  ipcMain.handle('vllm:check-installation', async () => {
-    return await checkVllmInstallation()
+  ipcMain.handle('engine:check-installation', async () => {
+    return await checkEngineInstallation()
   })
 
   // Detect available installers (uv, pip)
-  ipcMain.handle('vllm:detect-installers', async () => {
+  ipcMain.handle('engine:detect-installers', async () => {
     return await detectAvailableInstallers()
   })
 
   // Check engine version (bundled only)
-  ipcMain.handle('vllm:check-engine-version', async () => {
+  ipcMain.handle('engine:check-engine-version', async () => {
     return checkEngineVersion()
   })
 
   // Streaming install — sends log events to renderer
-  ipcMain.handle('vllm:install-streaming', async (_, method: 'uv' | 'pip' | 'bundled-update', action: 'install' | 'upgrade', installerPath?: string) => {
+  ipcMain.handle('engine:install-streaming', async (_, method: 'uv' | 'pip' | 'bundled-update', action: 'install' | 'upgrade', installerPath?: string) => {
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      installVllmStreaming(
+      installEngineStreaming(
         method,
         action,
         installerPath,
@@ -34,7 +34,7 @@ export function registerVllmHandlers(getWindow: () => BrowserWindow | null): voi
           try {
             const win = getWindow()
             if (win && !win.isDestroyed()) {
-              win.webContents.send('vllm:install-log', { data })
+              win.webContents.send('engine:install-log', { data })
             }
           } catch (_) {}
         },
@@ -42,7 +42,7 @@ export function registerVllmHandlers(getWindow: () => BrowserWindow | null): voi
           try {
             const win = getWindow()
             if (win && !win.isDestroyed()) {
-              win.webContents.send('vllm:install-complete', result)
+              win.webContents.send('engine:install-complete', result)
             }
           } catch (_) {}
           resolve(result)
@@ -52,7 +52,7 @@ export function registerVllmHandlers(getWindow: () => BrowserWindow | null): voi
   })
 
   // Cancel active install
-  ipcMain.handle('vllm:cancel-install', async () => {
+  ipcMain.handle('engine:cancel-install', async () => {
     return { success: cancelInstall() }
   })
 }

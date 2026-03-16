@@ -53,6 +53,11 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // Download directory
   const [downloadDir, setDownloadDir] = useState('')
 
+  // HuggingFace token
+  const [hfToken, setHfToken] = useState('')
+  const [showHfToken, setShowHfToken] = useState(false)
+  const [hfTokenSaving, setHfTokenSaving] = useState(false)
+
   // Track locally available models for "already downloaded" detection
   const [localModelIds, setLocalModelIds] = useState<Set<string>>(new Set())
 
@@ -60,9 +65,12 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const onDownloadCompleteRef = useRef(onDownloadComplete)
   onDownloadCompleteRef.current = onDownloadComplete
 
-  // Load recommended models and download dir on mount
+  // Load recommended models, download dir, and HF token on mount
   useEffect(() => {
     window.api.models.getDownloadDir().then(setDownloadDir)
+    window.api.settings.get('hf_api_key').then((val: string | null) => {
+      if (val) setHfToken(val)
+    })
     window.api.models.scan().then((models: any[]) => {
       // Build a set of local model identifiers for matching against HF repo IDs
       const ids = new Set<string>()
@@ -136,7 +144,12 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       })
       const errMsg = `${data.repoId.split('/').pop()}: ${data.error}`
       setDownloadError(errMsg)
-      showToast('error', 'Download failed', errMsg)
+      if (data.gated) {
+        showToast('error', 'Gated model — HuggingFace token required',
+          'This model requires authentication. Add your HF token in the download settings below.')
+      } else {
+        showToast('error', 'Download failed', errMsg)
+      }
     })
 
     return () => {
@@ -218,6 +231,23 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }
   }
 
+  const handleSaveHfToken = async (token: string) => {
+    setHfTokenSaving(true)
+    try {
+      if (token.trim()) {
+        await window.api.settings.set('hf_api_key', token.trim())
+      } else {
+        await window.api.settings.delete('hf_api_key')
+      }
+      setHfToken(token.trim())
+      showToast('success', token.trim() ? 'HuggingFace token saved' : 'HuggingFace token removed')
+    } catch (err) {
+      showToast('error', 'Failed to save token', (err as Error).message)
+    } finally {
+      setHfTokenSaving(false)
+    }
+  }
+
   const handleBrowseDownloadDir = async () => {
     const result = await window.api.models.browseDownloadDir()
     if (!result.canceled && result.path) {
@@ -247,6 +277,49 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         >
           Change
         </button>
+      </div>
+
+      {/* HuggingFace Token */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">HF Token:</span>
+          <div className="flex-1 relative">
+            <input
+              type={showHfToken ? 'text' : 'password'}
+              value={hfToken}
+              onChange={(e) => setHfToken(e.target.value)}
+              placeholder="hf_..."
+              className="w-full px-2 py-1 pr-16 bg-background border border-input rounded text-xs font-mono"
+            />
+            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              <button
+                onClick={() => setShowHfToken(!showHfToken)}
+                className="px-1 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                title={showHfToken ? 'Hide token' : 'Show token'}
+              >
+                {showHfToken ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </div>
+          <button
+            onClick={() => handleSaveHfToken(hfToken)}
+            disabled={hfTokenSaving}
+            className="px-2 py-1 text-xs border border-border rounded hover:bg-accent whitespace-nowrap disabled:opacity-40"
+          >
+            {hfTokenSaving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+        <p className="text-[10px] text-muted-foreground ml-14">
+          Required for gated models (Flux, Llama, etc).{' '}
+          <a
+            href="https://huggingface.co/settings/tokens"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline"
+          >
+            Get your token
+          </a>
+        </p>
       </div>
 
       {/* Model Type Filter + Search + Sort */}

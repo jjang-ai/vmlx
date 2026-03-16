@@ -127,22 +127,22 @@ const api = {
   },
 
   // vMLX Engine management
-  vllm: {
-    checkInstallation: () => ipcRenderer.invoke('vllm:check-installation'),
-    detectInstallers: () => ipcRenderer.invoke('vllm:detect-installers'),
-    checkEngineVersion: () => ipcRenderer.invoke('vllm:check-engine-version'),
+  engine: {
+    checkInstallation: () => ipcRenderer.invoke('engine:check-installation'),
+    detectInstallers: () => ipcRenderer.invoke('engine:detect-installers'),
+    checkEngineVersion: () => ipcRenderer.invoke('engine:check-engine-version'),
     installStreaming: (method: 'uv' | 'pip' | 'bundled-update', action: 'install' | 'upgrade', installerPath?: string) =>
-      ipcRenderer.invoke('vllm:install-streaming', method, action, installerPath),
-    cancelInstall: () => ipcRenderer.invoke('vllm:cancel-install'),
+      ipcRenderer.invoke('engine:install-streaming', method, action, installerPath),
+    cancelInstall: () => ipcRenderer.invoke('engine:cancel-install'),
     onInstallLog: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
-      ipcRenderer.on('vllm:install-log', handler)
-      return () => { ipcRenderer.removeListener('vllm:install-log', handler) }
+      ipcRenderer.on('engine:install-log', handler)
+      return () => { ipcRenderer.removeListener('engine:install-log', handler) }
     },
     onInstallComplete: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
-      ipcRenderer.on('vllm:install-complete', handler)
-      return () => { ipcRenderer.removeListener('vllm:install-complete', handler) }
+      ipcRenderer.on('engine:install-complete', handler)
+      return () => { ipcRenderer.removeListener('engine:install-complete', handler) }
     }
   },
 
@@ -262,6 +262,7 @@ const api = {
     generate: (params: any) => ipcRenderer.invoke('image:generate', params),
     startServer: (modelName: string, quantize?: number) => ipcRenderer.invoke('image:startServer', modelName, quantize),
     stopServer: () => ipcRenderer.invoke('image:stopServer'),
+    cancelGeneration: () => ipcRenderer.invoke('image:cancelGeneration'),
     getRunningServer: () => ipcRenderer.invoke('image:getRunningServer'),
     getModelStatus: (modelName: string) => ipcRenderer.invoke('image:getModelStatus', modelName),
     readFile: (imagePath: string) => ipcRenderer.invoke('image:readFile', imagePath),

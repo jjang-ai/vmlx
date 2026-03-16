@@ -5,7 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerSessionHandlers } from './ipc/sessions'
 import { registerChatHandlers } from './ipc/chat'
 import { registerModelHandlers, killActiveDownload } from './ipc/models'
-import { registerVllmHandlers } from './ipc/vllm'
+import { registerEngineHandlers } from './ipc/engine'
 import { registerAudioHandlers } from './ipc/audio'
 import { registerCacheHandlers } from './ipc/cache'
 import { registerBenchmarkHandlers } from './ipc/benchmark'
@@ -15,7 +15,7 @@ import { registerPerformanceHandlers } from './ipc/performance'
 import { registerDeveloperHandlers, killActiveOperation } from './ipc/developer'
 import { sessionManager } from './sessions'
 import { db } from './database'
-import { checkEngineVersion, installVllmStreaming } from './vllm-manager'
+import { checkEngineVersion, installEngineStreaming } from './engine-manager'
 import { checkForUpdates } from './update-checker'
 import { ProcessManager } from './process-manager'
 import { createTray, destroyTray, hasTray } from './tray'
@@ -37,9 +37,11 @@ process.on('uncaughtException', (error) => {
   try {
     dialog.showErrorBox(
       'Unexpected Error',
-      `vMLX encountered an error:\n\n${error.message}\n\nThe app will attempt to continue. If issues persist, restart the app.`
+      `vMLX encountered an error:\n\n${error.message}\n\nThe app will now exit.`
     )
   } catch (_) { /* dialog may fail if app is in bad state */ }
+  // Continuing after uncaught exception risks undefined behavior.
+  process.exit(1)
 })
 
 process.on('unhandledRejection', (reason) => {
@@ -81,7 +83,7 @@ function createWindow(): void {
     registerSessionHandlers(() => mainWindow)
     registerChatHandlers(() => mainWindow)
     registerModelHandlers()
-    registerVllmHandlers(() => mainWindow)
+    registerEngineHandlers(() => mainWindow)
     registerAudioHandlers()
     registerCacheHandlers()
     registerBenchmarkHandlers(() => mainWindow)
@@ -222,7 +224,7 @@ app.whenReady().then(async () => {
       console.log(`[STARTUP] Engine update needed: ${versionInfo.current} -> ${versionInfo.bundled}`)
       await Promise.race([
         new Promise<void>((resolve) => {
-          installVllmStreaming(
+          installEngineStreaming(
             'bundled-update',
             'install',
             undefined,

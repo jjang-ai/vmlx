@@ -1,16 +1,16 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://vmlx.net/logos/png/wordmark-dark-600x150.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://vmlx.net/logos/png/wordmark-light-600x150.png">
-    <img alt="vMLX" src="https://vmlx.net/logos/png/wordmark-transparent-600x150.png" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-wide-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-wide-light.png">
+    <img alt="vMLX" src="assets/logo-wide-light.png" width="400">
   </picture>
 </p>
 
-<h3 align="center">Local AI for Apple Silicon</h3>
+<h3 align="center">Local AI Engine for Apple Silicon</h3>
 
 <p align="center">
   Run LLMs, VLMs, and image generation models entirely on your Mac.<br>
-  No cloud. No API keys. No data leaving your machine.
+  OpenAI + Anthropic compatible API. No cloud. No API keys. No data leaving your machine.
 </p>
 
 <p align="center">
@@ -24,12 +24,14 @@
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> &bull;
-  <a href="#desktop-app">Desktop App</a> &bull;
+  <a href="#model-support">Models</a> &bull;
   <a href="#features">Features</a> &bull;
-  <a href="#jang-quantization">JANG</a> &bull;
   <a href="#image-generation">Image Gen</a> &bull;
   <a href="#api-reference">API</a> &bull;
+  <a href="#desktop-app">Desktop App</a> &bull;
+  <a href="#advanced-quantization">JANG</a> &bull;
   <a href="#cli-commands">CLI</a> &bull;
+  <a href="#configuration">Config</a> &bull;
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -37,12 +39,12 @@
 
 <table align="center">
 <tr>
-<td align="center"><img src="assets/chat-tab.png" width="500" alt="Chat with JANG model" /></td>
+<td align="center"><img src="assets/chat-tab.png" width="500" alt="Chat interface" /></td>
 <td align="center"><img src="assets/agentic-chat.png" width="500" alt="Agentic coding chat" /></td>
 </tr>
 <tr>
-<td align="center"><em>Chat with a JANG quantized model — thinking mode, tool calling, and reasoning parser auto-detected</em></td>
-<td align="center"><em>Agentic chat with full coding capabilities — tool use and structured output</em></td>
+<td align="center"><em>Chat with any MLX model -- thinking mode, streaming, and syntax highlighting</em></td>
+<td align="center"><em>Agentic chat with full coding capabilities -- tool use and structured output</em></td>
 </tr>
 </table>
 
@@ -50,12 +52,20 @@
 
 ## Quickstart
 
+### Install from PyPI
+
 ```bash
 pip install vmlx
 vmlx serve mlx-community/Qwen3-8B-4bit
 ```
 
-Your local AI server is now running at `http://0.0.0.0:8000` with an OpenAI-compatible API.
+Your local AI server is now running at `http://0.0.0.0:8000` with an OpenAI-compatible API. Works with any model from [mlx-community](https://huggingface.co/mlx-community) -- thousands of models ready to go.
+
+### Or download the desktop app
+
+Get [MLX Studio](https://github.com/jjang-ai/mlxstudio/releases/latest) -- a native macOS app with chat UI, model management, image generation, and developer tools. No terminal required.
+
+### Use with OpenAI SDK
 
 ```python
 from openai import OpenAI
@@ -70,7 +80,7 @@ for chunk in response:
     print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
-Also works with the **Anthropic SDK**:
+### Use with Anthropic SDK
 
 ```python
 import anthropic
@@ -84,57 +94,34 @@ message = client.messages.create(
 print(message.content[0].text)
 ```
 
----
-
-## Desktop App
-
-vMLX includes a native macOS desktop app (MLX Studio) with 5 modes:
-
-| Mode | Description |
-|------|-------------|
-| **Chat** | Conversation interface with chat history, thinking mode, tool calling, agentic coding |
-| **Server** | Manage model sessions — start, stop, configure, monitor |
-| **Image** | Text-to-image generation with Flux models |
-| **Tools** | Model converter (MLX + JANG), GGUF-to-MLX, inspector, diagnostics |
-| **API** | Live endpoint reference with copy-pasteable code snippets |
-
-<table align="center">
-<tr>
-<td align="center"><img src="assets/image-tab.png" width="450" alt="Image generation" /></td>
-<td align="center"><img src="assets/tools-tab.png" width="450" alt="Developer tools" /></td>
-</tr>
-<tr>
-<td align="center"><em>Image generation with Flux model selection</em></td>
-<td align="center"><em>Developer tools — model list and JANG quantization</em></td>
-</tr>
-<tr>
-<td align="center"><img src="assets/anthropic-api.png" width="450" alt="Anthropic API endpoint" /></td>
-<td align="center"><img src="assets/gguf-to-mlx.png" width="450" alt="GGUF to MLX conversion" /></td>
-</tr>
-<tr>
-<td align="center"><em>Anthropic Messages API endpoint — full compatibility</em></td>
-<td align="center"><em>GGUF to MLX conversion — bring your own models</em></td>
-</tr>
-</table>
-
-### Download
-
-Get the latest DMG from [MLX Studio Releases](https://github.com/jjang-ai/mlxstudio/releases), or build from source:
+### Use with curl
 
 ```bash
-git clone https://github.com/jjang-ai/vmlx.git
-cd vmlx/panel
-npm install && npm run build
-npx electron-builder --mac dmg
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
+  }'
 ```
 
-### Menu Bar
+---
 
-vMLX lives in your menu bar showing all running models, GPU memory usage, and quick controls.
+## Model Support
 
-<p align="center">
-  <img src="assets/menu-bar.png" width="300" alt="Menu Bar" />
-</p>
+vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
+
+| Type | Models |
+|------|--------|
+| **Text LLMs** | Qwen 2/2.5/3/3.5, Llama 3/3.1/3.2/3.3/4, Mistral/Mixtral, Gemma 3, Phi-4, DeepSeek, GLM-4, MiniMax, Nemotron, StepFun, and any mlx-lm model |
+| **Vision LLMs** | Qwen-VL, Qwen3.5-VL, Pixtral, InternVL, LLaVA, Gemma 3n |
+| **MoE Models** | Qwen 3.5 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3, MiniMax M2.5, Llama 4 |
+| **Hybrid SSM** | Nemotron-H, Jamba, GatedDeltaNet (Mamba + Attention) |
+| **Image Gen** | Flux Schnell/Dev, Z-Image Turbo, Flux Klein (via mflux) |
+| **Embeddings** | Any mlx-lm compatible embedding model |
+| **Reranking** | Cross-encoder reranking models |
+| **Audio** | Kokoro TTS, Whisper STT (via mlx-audio) |
 
 ---
 
@@ -145,10 +132,10 @@ vMLX lives in your menu bar showing all running models, GPU memory usage, and qu
 | Feature | Description |
 |---------|-------------|
 | **Continuous Batching** | Handle multiple concurrent requests efficiently |
-| **Prefix Cache** | Reuse KV states for repeated prompts — makes follow-up messages instant |
+| **Prefix Cache** | Reuse KV states for repeated prompts -- makes follow-up messages instant |
 | **Paged KV Cache** | Block-based caching with content-addressable deduplication |
 | **KV Cache Quantization** | Compress cached states to q4/q8 for 2-4x memory savings |
-| **Disk Cache (L2)** | Persist prompt caches to SSD — survives server restarts |
+| **Disk Cache (L2)** | Persist prompt caches to SSD -- survives server restarts |
 | **Block Disk Cache** | Per-block persistent cache paired with paged KV cache |
 | **Speculative Decoding** | Small draft model proposes tokens for 20-90% speedup |
 | **JIT Compilation** | `mx.compile` Metal kernel fusion (experimental) |
@@ -170,85 +157,24 @@ KV Quantization -> q4/q8 for storage
 Store back into L1 + L2
 ```
 
-### Model Support
-
-| Type | Models |
-|------|--------|
-| **Text LLMs** | Qwen 2/2.5/3/3.5, Llama 3/3.1/3.2/3.3/4, Mistral/Mixtral, Gemma 3, Phi-4, DeepSeek, GLM-4, MiniMax, Nemotron, StepFun, and any mlx-lm model |
-| **Vision LLMs** | Qwen-VL, Qwen3.5-VL, Pixtral, InternVL, LLaVA, Gemma 3n |
-| **MoE Models** | Qwen 3.5 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3, MiniMax M2.5, Llama 4 |
-| **Hybrid SSM** | Nemotron-H, Jamba, GatedDeltaNet (Mamba + Attention) |
-| **JANG Models** | Any model quantized with JANG adaptive mixed-precision |
-| **Image Gen** | Flux Schnell/Dev, Z-Image Turbo, Flux Klein (via mflux) |
-| **Embeddings** | Any mlx-lm compatible embedding model |
-| **Reranking** | Cross-encoder reranking models |
-| **Audio** | Kokoro TTS, Whisper STT (via mlx-audio) |
-
 ### Tool Calling
 
 Auto-detected parsers for every major model family:
 
-`qwen` · `llama` · `mistral` · `hermes` · `deepseek` · `glm47` · `minimax` · `nemotron` · `granite` · `functionary` · `xlam` · `kimi` · `step3p5`
+`qwen` - `llama` - `mistral` - `hermes` - `deepseek` - `glm47` - `minimax` - `nemotron` - `granite` - `functionary` - `xlam` - `kimi` - `step3p5`
 
 ### Reasoning / Thinking Mode
 
 Auto-detected reasoning parsers that extract `<think>` blocks:
 
-`qwen3` (Qwen3, QwQ, MiniMax, StepFun) · `deepseek_r1` (DeepSeek R1, Gemma 3, GLM, Phi-4) · `openai_gptoss` (GLM Flash, GPT-OSS)
+`qwen3` (Qwen3, QwQ, MiniMax, StepFun) - `deepseek_r1` (DeepSeek R1, Gemma 3, GLM, Phi-4) - `openai_gptoss` (GLM Flash, GPT-OSS)
 
----
+### Audio
 
-## JANG Quantization
-
-JANG is an adaptive mixed-precision quantization format created by [Jinho Jang](https://github.com/jjang-ai). It assigns different bit widths to different layers based on sensitivity — attention layers get more bits, MLP layers get fewer.
-
-<table align="center">
-<tr>
-<td align="center"><img src="assets/jangq-models.png" width="600" alt="JANGQ-AI models on HuggingFace" /></td>
-</tr>
-<tr>
-<td align="center"><em>Pre-quantized JANG models available at <a href="https://huggingface.co/JANGQ-AI">JANGQ-AI on HuggingFace</a></em></td>
-</tr>
-</table>
-
-### Why JANG?
-
-- **Better quality at same size** — 2-bit JANG matches 4-bit uniform on many models
-- **Proven**: 73% MMLU on Qwen3.5-122B at 2.4 bits average
-- **Native MLX inference** — weights stay quantized via `QuantizedLinear` + `quantized_matmul`
-- **Fast loading** — repacks in seconds (not minutes of dequantization)
-- **Works with all caching** — prefix cache, paged cache, KV quant, disk cache all compatible
-
-### Profiles
-
-| Profile | Attention | Embeddings | MLP | Avg Bits | Use Case |
-|---------|-----------|------------|-----|----------|----------|
-| `JANG_2M` | 8-bit | 4-bit | 2-bit | ~2.5 | Balanced compression |
-| `JANG_2L` | 8-bit | 6-bit | 2-bit | ~2.7 | Quality 2-bit |
-| `JANG_1L` | 8-bit | 8-bit | 2-bit | ~2.4 | Max quality 2-bit |
-| `JANG_3M` | 8-bit | 3-bit | 3-bit | ~3.2 | **Recommended** |
-| `JANG_4M` | 8-bit | 4-bit | 4-bit | ~4.2 | Standard quality |
-| `JANG_6M` | 8-bit | 6-bit | 6-bit | ~6.2 | Near lossless |
-
-### Convert
-
-```bash
-pip install vmlx[jang]
-
-# Preset profile
-vmlx convert my-model --jang-profile JANG_3M
-
-# Custom bit widths per tier
-vmlx convert my-model --jang-profile CUSTOM_8_4_3
-
-# Activation-aware calibration (better at 2-3 bit)
-vmlx convert my-model --jang-profile JANG_2L --calibration-method activations
-
-# Serve the converted model
-vmlx serve ./my-model-JANG_3M --continuous-batching --use-paged-cache
-```
-
-Find pre-quantized JANG models at [JANGQ-AI on HuggingFace](https://huggingface.co/JANGQ-AI).
+| Feature | Description |
+|---------|-------------|
+| **Text-to-Speech** | Kokoro TTS via mlx-audio -- multiple voices, streaming output |
+| **Speech-to-Text** | Whisper STT via mlx-audio -- transcription and translation |
 
 ---
 
@@ -263,7 +189,20 @@ vmlx serve ~/.mlxstudio/models/image/flux1-schnell-4bit
 
 ### API
 
+```bash
+# curl
+curl http://localhost:8000/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "schnell",
+    "prompt": "A cat astronaut floating in space with Earth in the background",
+    "size": "1024x1024",
+    "n": 1
+  }'
+```
+
 ```python
+# Python (OpenAI SDK)
 response = client.images.generate(
     model="schnell",
     prompt="A cat astronaut floating in space with Earth in the background",
@@ -303,23 +242,231 @@ response = client.images.generate(
 | `GET` | `/v1/cache/stats` | Cache statistics |
 | `GET` | `/health` | Server health check |
 
-### Server Options
+### curl Examples
+
+**Chat completion (streaming)**
 
 ```bash
-vmlx serve <model> \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --api-key sk-your-key \
-  --continuous-batching \
-  --enable-prefix-cache \
-  --use-paged-cache \
-  --kv-cache-quantization q8 \
-  --enable-disk-cache \
-  --enable-jit \
-  --tool-call-parser auto \
-  --reasoning-parser auto \
-  --log-level INFO
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Explain quantum computing in 3 sentences."}],
+    "stream": true,
+    "temperature": 0.7
+  }'
 ```
+
+**Chat completion with thinking mode**
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Solve: what is 23 * 47?"}],
+    "enable_thinking": true,
+    "stream": true
+  }'
+```
+
+**Tool calling**
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "What is the weather in Tokyo?"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string", "description": "City name"}
+          },
+          "required": ["location"]
+        }
+      }
+    }]
+  }'
+```
+
+**Anthropic Messages API**
+
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: not-needed" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "local",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+**Embeddings**
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "input": "The quick brown fox jumps over the lazy dog"
+  }'
+```
+
+**Text-to-speech**
+
+```bash
+curl http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "kokoro",
+    "input": "Hello, welcome to vMLX!",
+    "voice": "af_heart"
+  }' --output speech.wav
+```
+
+**Speech-to-text**
+
+```bash
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F file=@audio.wav \
+  -F model=whisper
+```
+
+**Image generation**
+
+```bash
+curl http://localhost:8000/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "schnell",
+    "prompt": "A mountain landscape at sunset",
+    "size": "1024x1024"
+  }'
+```
+
+**Reranking**
+
+```bash
+curl http://localhost:8000/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "query": "What is machine learning?",
+    "documents": [
+      "ML is a subset of AI",
+      "The weather is sunny today",
+      "Neural networks learn from data"
+    ]
+  }'
+```
+
+**Cache stats**
+
+```bash
+curl http://localhost:8000/v1/cache/stats
+```
+
+**Health check**
+
+```bash
+curl http://localhost:8000/health
+```
+
+---
+
+## Desktop App
+
+vMLX includes a native macOS desktop app (MLX Studio) with 5 modes:
+
+| Mode | Description |
+|------|-------------|
+| **Chat** | Conversation interface with chat history, thinking mode, tool calling, agentic coding |
+| **Server** | Manage model sessions -- start, stop, configure, monitor |
+| **Image** | Text-to-image generation with Flux models |
+| **Tools** | Model converter, GGUF-to-MLX, inspector, diagnostics |
+| **API** | Live endpoint reference with copy-pasteable code snippets |
+
+<table align="center">
+<tr>
+<td align="center"><img src="assets/image-tab.png" width="450" alt="Image generation" /></td>
+<td align="center"><img src="assets/tools-tab.png" width="450" alt="Developer tools" /></td>
+</tr>
+<tr>
+<td align="center"><em>Image generation with Flux model selection</em></td>
+<td align="center"><em>Developer tools -- model conversion and diagnostics</em></td>
+</tr>
+<tr>
+<td align="center"><img src="assets/anthropic-api.png" width="450" alt="Anthropic API endpoint" /></td>
+<td align="center"><img src="assets/gguf-to-mlx.png" width="450" alt="GGUF to MLX conversion" /></td>
+</tr>
+<tr>
+<td align="center"><em>Anthropic Messages API endpoint -- full compatibility</em></td>
+<td align="center"><em>GGUF to MLX conversion -- bring your own models</em></td>
+</tr>
+</table>
+
+### Download
+
+Get the latest DMG from [MLX Studio Releases](https://github.com/jjang-ai/mlxstudio/releases/latest), or build from source:
+
+```bash
+git clone https://github.com/jjang-ai/vmlx.git
+cd vmlx/panel
+npm install && npm run build
+npx electron-builder --mac dmg
+```
+
+### Menu Bar
+
+vMLX lives in your menu bar showing all running models, GPU memory usage, and quick controls.
+
+<p align="center">
+  <img src="assets/menu-bar.png" width="300" alt="Menu Bar" />
+</p>
+
+---
+
+## Advanced Quantization
+
+vMLX supports standard MLX quantization (4-bit, 8-bit uniform) out of the box. For users who want to push further, **JANG adaptive mixed-precision** assigns different bit widths to different layer types -- attention gets more bits, MLP layers get fewer -- achieving better quality at the same model size.
+
+### JANG Profiles
+
+| Profile | Attention | Embeddings | MLP | Avg Bits | Use Case |
+|---------|-----------|------------|-----|----------|----------|
+| `JANG_2M` | 8-bit | 4-bit | 2-bit | ~2.5 | Balanced compression |
+| `JANG_2L` | 8-bit | 6-bit | 2-bit | ~2.7 | Quality 2-bit |
+| `JANG_3M` | 8-bit | 3-bit | 3-bit | ~3.2 | **Recommended** |
+| `JANG_4M` | 8-bit | 4-bit | 4-bit | ~4.2 | Standard quality |
+| `JANG_6M` | 8-bit | 6-bit | 6-bit | ~6.2 | Near lossless |
+
+### Convert
+
+```bash
+pip install vmlx[jang]
+
+# Standard MLX quantization
+vmlx convert my-model --bits 4
+
+# JANG adaptive quantization
+vmlx convert my-model --jang-profile JANG_3M
+
+# Activation-aware calibration (better at 2-3 bit)
+vmlx convert my-model --jang-profile JANG_2L --calibration-method activations
+
+# Serve the converted model
+vmlx serve ./my-model-JANG_3M --continuous-batching --use-paged-cache
+```
+
+Pre-quantized JANG models are available at [JANGQ-AI on HuggingFace](https://huggingface.co/JANGQ-AI).
 
 ---
 
@@ -332,6 +479,76 @@ vmlx convert <model> -j JANG_3M # JANG adaptive quantization
 vmlx info <model>               # Model metadata and config
 vmlx doctor <model>             # Run diagnostics
 vmlx bench <model>              # Performance benchmarks
+```
+
+---
+
+## Configuration
+
+### Server Options
+
+```bash
+vmlx serve <model> \
+  --host 0.0.0.0 \              # Bind address (default: 0.0.0.0)
+  --port 8000 \                 # Port (default: 8000)
+  --api-key sk-your-key \       # Optional API key authentication
+  --continuous-batching \       # Enable concurrent request handling
+  --enable-prefix-cache \       # Reuse KV states for repeated prompts
+  --use-paged-cache \           # Block-based KV cache with dedup
+  --kv-cache-quantization q8 \  # Quantize cache: q4 or q8
+  --enable-disk-cache \         # Persist cache to SSD
+  --enable-jit \                # JIT Metal kernel compilation
+  --tool-call-parser auto \     # Auto-detect tool call format
+  --reasoning-parser auto \     # Auto-detect thinking format
+  --log-level INFO \            # Logging: DEBUG, INFO, WARNING, ERROR
+  --max-model-len 8192 \        # Max context length
+  --speculative-model <model> \ # Draft model for speculative decoding
+  --cors-origins "*"            # CORS allowed origins
+```
+
+### Quantization Options
+
+```bash
+vmlx convert <model> \
+  --bits 4 \                    # Uniform quantization bits: 2, 3, 4, 6, 8
+  --group-size 64 \             # Quantization group size (default: 64)
+  --output ./output-dir \       # Output directory
+  --jang-profile JANG_3M \      # JANG mixed-precision profile
+  --calibration-method activations  # Activation-aware calibration
+```
+
+### Image Generation Options
+
+```bash
+pip install vmlx[image]
+
+vmlx serve <flux-model> \
+  --port 8001 \                 # Run on separate port from text model
+  --host 0.0.0.0
+```
+
+### Audio Options
+
+TTS and STT require the `mlx-audio` package:
+
+```bash
+pip install mlx-audio
+
+# TTS: serve Kokoro model
+vmlx serve kokoro --port 8002
+
+# STT: serve Whisper model
+vmlx serve whisper --port 8003
+```
+
+### Optional Dependencies
+
+```bash
+pip install vmlx              # Core: text LLMs, VLMs, embeddings, reranking
+pip install vmlx[image]       # + Image generation (mflux)
+pip install vmlx[jang]        # + JANG quantization tools
+pip install vmlx[dev]         # + Development/testing tools
+pip install vmlx[image,jang]  # Multiple extras
 ```
 
 ---
@@ -354,7 +571,6 @@ vmlx bench <model>              # Performance benchmarks
 |      |            |              |          |
 |  +---+------------+--+    +-----+-----+    |
 |  | mlx-lm / mlx-vlm  |    |  mflux    |    |
-|  | + JANG Loader      |    |           |    |
 |  +--------+-----------+    +-----------+    |
 |           |                                 |
 |  +--------+----------------------------+    |
@@ -372,26 +588,48 @@ vmlx bench <model>              # Performance benchmarks
 
 ## Contributing
 
+Contributions are welcome. Here is how to set up a development environment:
+
 ```bash
 git clone https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
-# Python
+# Python engine
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,jang,image]"
 pytest tests/ -k "not Async"    # 1894+ tests
 
-# Electron
+# Electron desktop app
 cd panel && npm install
-npm run dev                      # Development mode
+npm run dev                      # Development mode with hot reload
 npx vitest run                   # 1253+ tests
 ```
+
+### Project Structure
+
+```
+vmlx/
+  vmlx_engine/          # Python inference engine (FastAPI server)
+  panel/                # Electron desktop app (React + TypeScript)
+    src/main/           # Electron main process
+    src/renderer/       # React frontend
+    src/preload/        # IPC bridge
+  tests/                # Python test suite
+  assets/               # Screenshots and logos
+```
+
+### Guidelines
+
+- Run the full test suite before submitting PRs
+- Follow existing code style and patterns
+- Include tests for new features
+- Update documentation for user-facing changes
 
 ---
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0 -- see [LICENSE](LICENSE).
 
 ---
 

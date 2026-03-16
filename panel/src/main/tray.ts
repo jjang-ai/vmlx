@@ -11,13 +11,16 @@
  */
 
 import { app, Tray, Menu, nativeImage, BrowserWindow, clipboard } from 'electron'
-import type { ProcessManager, ModelProcess } from './process-manager'
+import type { ProcessManager } from './process-manager'
 import { db } from './database'
 import { sessionManager, connectHost } from './sessions'
 
 let tray: Tray | null = null
 let boundProcessManager: ProcessManager | null = null
-const boundListeners: Array<{ event: string; fn: () => void }> = []
+const boundListeners: Array<{ event: string; fn: (...args: any[]) => void }> = []
+
+/** Track GPU memory per session (updated from session:health events) */
+const sessionMemoryMB: Map<string, number> = new Map()
 
 /**
  * Create a colored circle icon for tray.
@@ -74,16 +77,6 @@ function createTrayIcon(color: 'green' | 'yellow' | 'red' | 'gray'): Electron.Na
 }
 
 /**
- * Determine tray icon color based on process states.
- */
-function getIconColor(processes: ModelProcess[]): 'green' | 'yellow' | 'red' | 'gray' {
-  if (processes.some((p) => p.status === 'running')) return 'green'
-  if (processes.some((p) => p.status === 'starting')) return 'yellow'
-  if (processes.some((p) => p.status === 'error')) return 'red'
-  return 'gray'
-}
-
-/**
  * Build the tray context menu.
  */
 function buildMenu(
@@ -92,8 +85,13 @@ function buildMenu(
 ): Electron.Menu {
   const processes = processManager.list()
   const running = processes.filter((p) => p.status === 'running')
-  const totalMemMB = processManager.totalMemoryMB()
   const totalGB = Math.round(require('os').totalmem() / (1024 ** 3))
+
+  // Sum GPU memory from both ProcessManager and SessionManager health data
+  let totalMemMB = processManager.totalMemoryMB()
+  for (const mb of sessionMemoryMB.values()) {
+    totalMemMB += mb
+  }
 
   // Count ALL running models: ProcessManager + SessionManager (deduplicated)
   let runningSessions: any[] = []
@@ -178,9 +176,11 @@ function buildMenu(
       try { isImage = JSON.parse(s.config || '{}').modelType === 'image' } catch {}
       const icon = isImage ? '🖼' : '●'
       const modelName = s.modelName || s.modelPath?.split('/').pop() || 'Unknown'
+      const sessMem = sessionMemoryMB.get(s.id) || 0
+      const sessMemLabel = sessMem > 0 ? ` — ${(sessMem / 1024).toFixed(1)} GB` : ''
 
       items.push({
-        label: `${icon} ${modelName} (:${s.port})`,
+        label: `${icon} ${modelName} (:${s.port})${sessMemLabel}`,
         submenu: [
           {
             label: 'Copy API URL',
@@ -314,6 +314,32 @@ export function createTray(
     boundListeners.push({ event, fn: sessionRebuild })
   }
 
+  // Track session memory from health events — only rebuild tray when memory changes
+  const sessionHealthFn = (data: any) => {
+    if (data.memory?.active_mb != null) {
+      const prev = sessionMemoryMB.get(data.sessionId) || 0
+      const curr = Math.round(data.memory.active_mb)
+      if (Math.abs(curr - prev) >= 10) {  // Only rebuild if change >= 10 MB
+        sessionMemoryMB.set(data.sessionId, curr)
+        rebuildMenu(processManager, getWindow)
+      } else if (prev === 0 && curr > 0) {
+        sessionMemoryMB.set(data.sessionId, curr)
+        rebuildMenu(processManager, getWindow)
+      }
+    }
+  }
+  sessionManager.on('session:health', sessionHealthFn)
+  boundListeners.push({ event: 'session:health', fn: sessionHealthFn })
+
+  // Clean up session memory tracking when sessions stop or are deleted
+  const sessionCleanupFn = (data: any) => {
+    if (data?.sessionId) sessionMemoryMB.delete(data.sessionId)
+  }
+  sessionManager.on('session:stopped', sessionCleanupFn)
+  sessionManager.on('session:deleted', sessionCleanupFn)
+  boundListeners.push({ event: 'session:stopped', fn: sessionCleanupFn })
+  boundListeners.push({ event: 'session:deleted', fn: sessionCleanupFn })
+
   return tray
 }
 
@@ -324,11 +350,17 @@ export function destroyTray(): void {
   // Remove ProcessManager listeners to prevent leaks on recreate
   if (boundProcessManager) {
     for (const { event, fn } of boundListeners) {
-      boundProcessManager.off(event, fn)
+      // Process events go to ProcessManager, session events go to SessionManager
+      if (event.startsWith('session:')) {
+        sessionManager.off(event, fn)
+      } else {
+        boundProcessManager.off(event, fn)
+      }
     }
     boundListeners.length = 0
     boundProcessManager = null
   }
+  sessionMemoryMB.clear()
   if (tray) {
     tray.destroy()
     tray = null

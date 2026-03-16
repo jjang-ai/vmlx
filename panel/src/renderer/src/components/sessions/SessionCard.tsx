@@ -44,12 +44,16 @@ const statusLabels: Record<string, string> = {
 
 export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onDelete }: SessionCardProps) {
   const isRemote = session.type === 'remote'
+  const isImage = (() => { try { return JSON.parse(session.config || '{}').modelType === 'image' } catch { return false } })()
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const [jangLabel, setJangLabel] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     if (isRemote) return
-    // Check if model directory name contains JANG/MXQ indicators
+    // Check if model directory name contains JANG/MXQ indicators.
+    // NOTE: JANG detection happens server-side (via jang_config.json parsing in the engine).
+    // Pre-start model info would require reading jang_config.json from the frontend,
+    // which is not currently implemented. This heuristic uses directory name patterns only.
     const name = session.modelPath.toLowerCase()
     if (name.includes('-jang-') || name.includes('-mxq-') || name.includes('-mlxq-')) {
       // Rough label from directory name — will be refined if model is scanned
@@ -65,6 +69,7 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
         <div className="flex-1 min-w-0 mr-2">
           <div className="flex items-center gap-1.5">
             {isRemote && <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded flex-shrink-0">Remote</span>}
+            {isImage && <span className="text-xs bg-violet-500/15 text-violet-400 px-1.5 py-0.5 rounded flex-shrink-0">Image</span>}
             <h3 className="font-semibold text-sm truncate" title={session.modelPath}>
               {shortName}
             </h3>
