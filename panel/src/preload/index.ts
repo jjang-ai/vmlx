@@ -259,7 +259,7 @@ const api = {
 
   // Image generation
   image: {
-    createSession: (modelName: string) => ipcRenderer.invoke('image:createSession', modelName),
+    createSession: (modelName: string, sessionType?: 'generate' | 'edit') => ipcRenderer.invoke('image:createSession', modelName, sessionType),
     getSessions: () => ipcRenderer.invoke('image:getSessions'),
     getSession: (id: string) => ipcRenderer.invoke('image:getSession', id),
     deleteSession: (id: string) => ipcRenderer.invoke('image:deleteSession', id),
