@@ -265,6 +265,7 @@ const api = {
     deleteSession: (id: string) => ipcRenderer.invoke('image:deleteSession', id),
     getGenerations: (sessionId: string) => ipcRenderer.invoke('image:getGenerations', sessionId),
     generate: (params: any) => ipcRenderer.invoke('image:generate', params),
+    edit: (params: any) => ipcRenderer.invoke('image:edit', params),
     startServer: (modelName: string, quantize?: number) => ipcRenderer.invoke('image:startServer', modelName, quantize),
     stopServer: () => ipcRenderer.invoke('image:stopServer'),
     cancelGeneration: () => ipcRenderer.invoke('image:cancelGeneration'),
