@@ -10,12 +10,14 @@ interface ImageSettingsData {
   seed?: number
   count: number
   quantize: number
+  strength: number
 }
 
 interface ImageSettingsProps {
   settings: ImageSettingsData
   onChange: (settings: ImageSettingsData) => void
   model: string | null
+  mode: 'generate' | 'edit'
 }
 
 const SIZE_PRESETS = [
@@ -27,7 +29,8 @@ const SIZE_PRESETS = [
   { label: '1280x720 (16:9)', width: 1280, height: 720 },
 ]
 
-export function ImageSettings({ settings, onChange, model }: ImageSettingsProps) {
+export function ImageSettings({ settings, onChange, model, mode }: ImageSettingsProps) {
+  const isEdit = mode === 'edit'
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showServer, setShowServer] = useState(false)
   const [showNegativeHelp, setShowNegativeHelp] = useState(false)
@@ -41,7 +44,7 @@ export function ImageSettings({ settings, onChange, model }: ImageSettingsProps)
   return (
     <div className="border-b border-border bg-muted/30 px-4 py-3 max-h-[50vh] overflow-auto">
       <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-        Generation Settings
+        {isEdit ? 'Edit Settings' : 'Generation Settings'}
       </h3>
 
       {/* Standard Settings */}
@@ -105,18 +108,36 @@ export function ImageSettings({ settings, onChange, model }: ImageSettingsProps)
           />
         </div>
 
-        {/* Count */}
-        <div>
-          <label className="text-xs text-muted-foreground block mb-1">Number of Images</label>
-          <input
-            type="number"
-            value={settings.count}
-            onChange={(e) => update('count', Math.max(1, Math.min(4, parseInt(e.target.value) || 1)))}
-            className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-            min={1}
-            max={4}
-          />
-        </div>
+        {/* Strength (edit mode only) */}
+        {isEdit && (
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1" title="How much to change the source image. 0.0 = no change, 1.0 = completely redrawn. 0.7-0.85 works well for most edits.">Strength &#9432;</label>
+            <input
+              type="number"
+              value={settings.strength}
+              onChange={(e) => update('strength', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
+              className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+              min={0}
+              max={1}
+              step={0.05}
+            />
+          </div>
+        )}
+
+        {/* Count (generate mode only — edit always returns 1) */}
+        {!isEdit && (
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Number of Images</label>
+            <input
+              type="number"
+              value={settings.count}
+              onChange={(e) => update('count', Math.max(1, Math.min(4, parseInt(e.target.value) || 1)))}
+              className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+              min={1}
+              max={4}
+            />
+          </div>
+        )}
 
         {/* Quantize */}
         <div>

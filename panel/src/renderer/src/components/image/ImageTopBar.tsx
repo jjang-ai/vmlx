@@ -7,6 +7,7 @@ interface ImageTopBarProps {
   quantize: number
   status: ServerStatus
   port: number | null
+  mode: 'generate' | 'edit'
   onSettings: () => void
   onStop: () => void
   onChangeModel: () => void
@@ -19,6 +20,7 @@ export function ImageTopBar({
   quantize,
   status,
   port,
+  mode,
   onSettings,
   onStop,
   onChangeModel,
@@ -48,6 +50,9 @@ export function ImageTopBar({
         >
           {model || 'No model selected'}
         </button>
+        {model && mode === 'edit' && (
+          <span className="text-[10px] px-1.5 py-0.5 bg-violet-500/15 text-violet-400 rounded-full">Edit</span>
+        )}
         {model && (
           <span className="text-[10px] px-1.5 py-0.5 bg-muted rounded-full text-muted-foreground">
             {quantizeLabel}
