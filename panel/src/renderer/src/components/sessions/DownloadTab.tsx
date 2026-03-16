@@ -198,9 +198,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     setSortDir(newDir)
     if (searchQuery.trim()) {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
-      doSearch(searchQuery, sortBy, newDir)
+      doSearch(searchQuery, sortBy, newDir, modelType)
     }
-  }, [doSearch, searchQuery, sortBy, sortDir])
+  }, [doSearch, searchQuery, sortBy, sortDir, modelType])
 
   const handleDownload = async (repoId: string) => {
     setDownloadError(null)

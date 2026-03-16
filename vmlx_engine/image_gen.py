@@ -99,12 +99,17 @@ class ImageGenEngine:
             model_path: Optional path to local model weights
         """
         try:
+            # mflux >= 0.16: deep import path
             from mflux.models.flux.variants.txt2img.flux import Flux1
             from mflux.models.common.config.model_config import ModelConfig
         except ImportError:
-            raise ImportError(
-                "mflux not installed. Install with: pip install mflux"
-            )
+            try:
+                # mflux < 0.16 (e.g., 0.5.x): direct import
+                from mflux import Flux1, ModelConfig
+            except ImportError:
+                raise ImportError(
+                    "mflux not installed. Install with: pip install mflux"
+                )
 
         # Resolve model name alias
         resolved = SUPPORTED_MODELS.get(model_name.lower(), model_name)

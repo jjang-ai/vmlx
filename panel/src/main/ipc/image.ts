@@ -12,6 +12,7 @@ let handlersRegistered = false
 
 // Track the current image server session ID (only one at a time)
 let activeImageSessionId: string | null = null
+let activeGenerationController: AbortController | null = null
 
 export function registerImageHandlers(getWindow: () => BrowserWindow | null): void {
   if (handlersRegistered) return
@@ -121,10 +122,12 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       if (seed != null) body.seed = seed
       if (params.quantize != null) body.quantize = params.quantize
 
+      activeGenerationController = new AbortController()
       const resp = await fetch(`${baseUrl}/v1/images/generations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: activeGenerationController.signal,
       })
 
       if (!resp.ok) {
@@ -225,6 +228,15 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
     } catch (error) {
       return { success: false, error: (error as Error).message }
     }
+  })
+
+  ipcMain.handle('image:cancelGeneration', async () => {
+    if (activeGenerationController) {
+      activeGenerationController.abort()
+      activeGenerationController = null
+      return { success: true }
+    }
+    return { success: false, error: 'No active generation' }
   })
 
   ipcMain.handle('image:getRunningServer', async () => {
