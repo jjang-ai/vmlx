@@ -99,7 +99,19 @@ export function ImageTab() {
     const unsubError = window.api.sessions.onError((data: any) => {
       if (data.sessionId === serverSessionIdRef.current) {
         setServerStatus('error')
-        setError(data.error || 'Server error')
+        const errMsg = data.error || 'Server error'
+        // Detect gated/auth errors and show helpful message
+        const isGated = /40[13]|gated|access.*denied|authentication|authorized|forbidden/i.test(errMsg)
+        if (isGated) {
+          setError(
+            'Model download failed — authentication required. ' +
+            'Go to the Server tab > Download section and add your HuggingFace token, ' +
+            'then accept the model license on huggingface.co. ' +
+            'Original error: ' + errMsg.slice(0, 200)
+          )
+        } else {
+          setError(errMsg)
+        }
       }
     })
     return () => {
