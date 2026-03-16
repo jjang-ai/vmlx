@@ -54,16 +54,32 @@
 
 ### Install from PyPI
 
+Published on [PyPI as `vmlx`](https://pypi.org/project/vmlx/) -- install and run in one command:
+
 ```bash
+# Recommended: uv (fast, no venv hassle)
+brew install uv
+uv tool install vmlx
+vmlx serve mlx-community/Qwen3-8B-4bit
+
+# Or: pipx (isolates from system Python)
+brew install pipx
+pipx install vmlx
+vmlx serve mlx-community/Qwen3-8B-4bit
+
+# Or: pip in a virtual environment
+python3 -m venv ~/.vmlx-env && source ~/.vmlx-env/bin/activate
 pip install vmlx
 vmlx serve mlx-community/Qwen3-8B-4bit
 ```
 
-Your local AI server is now running at `http://0.0.0.0:8000` with an OpenAI-compatible API. Works with any model from [mlx-community](https://huggingface.co/mlx-community) -- thousands of models ready to go.
+> **Note:** On macOS 14+, bare `pip install` fails with "externally-managed-environment". Use `uv`, `pipx`, or a venv.
+
+Your local AI server is now running at `http://0.0.0.0:8000` with an OpenAI + Anthropic compatible API. Works with any model from [mlx-community](https://huggingface.co/mlx-community) -- thousands of models ready to go.
 
 ### Or download the desktop app
 
-Get [MLX Studio](https://github.com/jjang-ai/mlxstudio/releases/latest) -- a native macOS app with chat UI, model management, image generation, and developer tools. No terminal required.
+Get [MLX Studio](https://github.com/jjang-ai/mlxstudio/releases/latest) -- a native macOS app with chat UI, model management, image generation, and developer tools. No terminal required. Just download the DMG and drag to Applications.
 
 ### Use with OpenAI SDK
 
