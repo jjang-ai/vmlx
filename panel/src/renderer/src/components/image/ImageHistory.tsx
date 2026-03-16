@@ -76,14 +76,14 @@ export function ImageHistory({ sessions, currentId, onSelect, onNew, onDelete, o
                 </div>
                 <button
                   onClick={(e) => handleDelete(e, session.id)}
-                  className={`p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 ml-1 ${
+                  className={`rounded flex-shrink-0 ml-1 transition-all ${
                     confirmDeleteId === session.id
-                      ? 'text-destructive opacity-100'
-                      : 'text-muted-foreground hover:text-destructive'
+                      ? 'text-destructive opacity-100 text-[9px] px-1 py-0.5 border border-destructive/40 bg-destructive/10'
+                      : 'p-0.5 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100'
                   }`}
                   title={confirmDeleteId === session.id ? 'Click again to confirm' : 'Delete session'}
                 >
-                  <Trash2 className="h-3 w-3" />
+                  {confirmDeleteId === session.id ? 'Delete?' : <Trash2 className="h-3 w-3" />}
                 </button>
               </div>
             ))}

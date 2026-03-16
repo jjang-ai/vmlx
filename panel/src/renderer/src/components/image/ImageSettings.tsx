@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, HelpCircle } from 'lucide-react'
 
 interface ImageSettingsData {
   steps: number
@@ -30,6 +30,7 @@ const SIZE_PRESETS = [
 export function ImageSettings({ settings, onChange, model }: ImageSettingsProps) {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showServer, setShowServer] = useState(false)
+  const [showNegativeHelp, setShowNegativeHelp] = useState(false)
 
   const currentSize = SIZE_PRESETS.find(p => p.width === settings.width && p.height === settings.height)
 
@@ -134,7 +135,22 @@ export function ImageSettings({ settings, onChange, model }: ImageSettingsProps)
 
       {/* Negative Prompt */}
       <div className="mb-3">
-        <label className="text-xs text-muted-foreground block mb-1" title="Describe what you DON'T want in the image. Useful for avoiding common artifacts like 'blurry, low quality, text, watermark'.">Negative Prompt &#9432;</label>
+        <div className="flex items-center gap-1 mb-1">
+          <label className="text-xs text-muted-foreground">Negative Prompt</label>
+          <button
+            type="button"
+            onClick={() => setShowNegativeHelp(p => !p)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <HelpCircle className="h-3 w-3" />
+          </button>
+        </div>
+        {showNegativeHelp && (
+          <p className="text-[10px] text-muted-foreground bg-muted/50 rounded px-2 py-1.5 mb-1.5">
+            Describe what you <strong>don't</strong> want in the image. Useful for avoiding common artifacts.
+            Example: <em>"blurry, low quality, text, watermark, deformed hands"</em>
+          </p>
+        )}
         <input
           type="text"
           value={settings.negativePrompt}
