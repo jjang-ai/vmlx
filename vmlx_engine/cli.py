@@ -53,7 +53,15 @@ def serve_command(args):
     import json as _json
     model_dir = Path(args.model)
     _is_image = False
-    if (model_dir / "model_index.json").exists():
+
+    # Named mflux models (not filesystem paths) — detect by known names
+    MFLUX_NAMED_MODELS = {'schnell', 'dev', 'z-image', 'z-image-turbo', 'flux2-klein-4b', 'flux2-klein-9b',
+                          'flux2-klein-base-4b', 'flux2-klein-base-9b', 'krea-dev', 'dev-krea',
+                          'qwen', 'fibo', 'fibo-lite'}
+    if args.model.lower() in MFLUX_NAMED_MODELS:
+        _is_image = True
+
+    if not _is_image and (model_dir / "model_index.json").exists():
         try:
             idx = _json.loads((model_dir / "model_index.json").read_text())
             _is_image = "_diffusers_version" in idx
