@@ -180,6 +180,10 @@ class MemoryCacheConfig:
         available = _get_available_memory()
         if available > 0:
             limit = int(available * self.max_memory_percent)
+            # Cap at 32GB to prevent OOM on high-RAM systems (256GB+ Macs)
+            # Metal GPU doesn't get 100% of system RAM — macOS reserves significant memory
+            max_cache_bytes = 32 * 1024 * 1024 * 1024  # 32GB hard cap
+            limit = min(limit, max_cache_bytes)
             return max(limit, _MIN_MEMORY_BYTES)
 
         # Fallback: assume 8GB system, use configured percent
