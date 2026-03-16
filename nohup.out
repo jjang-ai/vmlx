@@ -1,0 +1,6 @@
+Returning existing local_dir `/Users/eric/.mlxstudio/models/image/flux1-schnell-4bit` as remote repo cannot be accessed in `snapshot_download` (404 Client Error. (Request ID: Root=1-69b7fc12-09cc3f4d0957dc2e0dd6d5cc;2f9acf3d-347f-4a5e-88a3-ad1b97426acb)
+
+Repository Not Found for url: https://huggingface.co/api/models/madroid/flux.1-schnell-4bit-mflux/revision/main.
+Please make sure you specified the correct `repo_id` and `repo_type`.
+If you are trying to access a private or gated repo, make sure you are authenticated. For more details, see https://huggingface.co/docs/huggingface_hub/authentication).
+/Users/eric/.mlxstudio/models/image/flux1-schnell-4bit

@@ -157,21 +157,36 @@ class ImageGenEngine:
             )
             if is_mflux_format:
                 logger.info(f"Loading ZImage from local path: {model_path}")
-                self._model = ZImage(
-                    model_config=model_config,
-                    quantize=quantize,
-                    model_path=model_path,
-                    lora_paths=[],
-                )
-                return
+                try:
+                    self._model = ZImage(
+                        model_config=model_config,
+                        quantize=quantize,
+                        model_path=model_path,
+                        lora_paths=[],
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(f"Local ZImage loading failed ({e}), falling back to HF download")
 
         # Fall back to HuggingFace download
         logger.info(f"Loading ZImage via HuggingFace: {base_name} (quantize={quantize})")
-        self._model = ZImage(
-            model_config=model_config,
-            quantize=quantize,
-            lora_paths=[],
-        )
+        try:
+            self._model = ZImage(
+                model_config=model_config,
+                quantize=quantize,
+                lora_paths=[],
+            )
+        except (ValueError, RuntimeError) as e:
+            if ("dequantize" in str(e) or "uint32" in str(e)) and quantize:
+                logger.warning(f"Quantized ZImage loading failed ({e}), falling back to unquantized")
+                self._model = ZImage(
+                    model_config=model_config,
+                    quantize=None,
+                    lora_paths=[],
+                )
+                self._quantize = None
+            else:
+                raise
 
     def _load_flux(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
         """Load a Flux model (dual text encoder, Flux1 class)."""
