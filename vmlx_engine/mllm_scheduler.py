@@ -637,10 +637,14 @@ class MLLMScheduler:
         try:
             cache = model.make_cache()
             cache_types = {type(c).__name__ for c in cache}
-            kv_only_types = {"KVCache", "RotatingKVCache", "QuantizedKVCache"}
-            if cache_types and cache_types.issubset(kv_only_types):
+            # Dynamic detection: any type ending with "KVCache" is a KV type
+            kv_types = {t for t in cache_types if t == "KVCache" or t.endswith("KVCache")}
+            non_kv = cache_types - kv_types
+            # CacheList is a wrapper, not a non-KV type
+            non_kv.discard("CacheList")
+            if not non_kv:
                 return False
-            return bool(cache_types - kv_only_types)
+            return True
         except Exception:
             return False
 
