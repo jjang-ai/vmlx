@@ -1933,6 +1933,152 @@ async def create_image(request: Request):
 
 
 # =============================================================================
+# Image Editing Endpoint
+# =============================================================================
+
+
+@app.post("/v1/images/edits", dependencies=[Depends(verify_api_key)])
+async def create_image_edit(request: Request):
+    """Edit an image using an instruction and a source image.
+
+    OpenAI-compatible format. Supports: Qwen-Image-Edit, Flux Kontext,
+    Flux Fill (inpainting), Flux2 Klein Edit.
+
+    Request body:
+        model: Edit model name (e.g., "qwen-image-edit", "flux-kontext")
+        prompt: Text instruction for the edit
+        image: Base64-encoded source image
+        mask: Base64-encoded mask image (optional, for inpainting)
+        size: Output size (e.g., "1024x1024")
+        n: Number of images to generate (default 1)
+        strength: Edit strength 0.0-1.0 (default 0.75)
+        guidance: Guidance scale (default 3.5)
+        steps: Inference steps (optional)
+        seed: Random seed (optional)
+    """
+    global _image_gen
+
+    body = await request.json()
+    model = body.get("model", "qwen-image-edit")
+    prompt = body.get("prompt", "")
+    image_b64 = body.get("image", "")
+    mask_b64 = body.get("mask")
+    size = body.get("size", "1024x1024")
+    n = min(body.get("n", 1), 4)
+    strength = body.get("strength", 0.75)
+    guidance = body.get("guidance", 3.5)
+    steps = body.get("steps")
+    seed = body.get("seed")
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    if not image_b64:
+        raise HTTPException(status_code=400, detail="image (base64) is required")
+
+    # Parse size
+    try:
+        width, height = map(int, size.lower().split("x"))
+    except (ValueError, AttributeError):
+        width, height = 1024, 1024
+
+    # Save base64 image to temp file (mflux needs file paths)
+    import tempfile
+    tmp_dir = tempfile.mkdtemp(prefix="vmlx_edit_")
+    image_path = Path(tmp_dir) / "input.png"
+    mask_path = None
+
+    try:
+        # Decode and save input image
+        image_data = base64.b64decode(image_b64)
+        image_path.write_bytes(image_data)
+
+        # Decode and save mask if provided
+        if mask_b64:
+            mask_path = Path(tmp_dir) / "mask.png"
+            mask_data = base64.b64decode(mask_b64)
+            mask_path.write_bytes(mask_data)
+
+        async with _image_gen_lock:
+            # Load edit engine if needed
+            if _image_gen is None:
+                try:
+                    from .image_gen import ImageGenEngine
+                    _image_gen = ImageGenEngine()
+                except ImportError:
+                    raise HTTPException(
+                        status_code=501,
+                        detail="mflux not installed. Install with: pip install mflux"
+                    )
+
+            from .image_gen import EDIT_MODELS
+            resolved = EDIT_MODELS.get(model.lower(), model)
+
+            # Check if we need to load a different model
+            already_loaded = _image_gen.is_loaded and (
+                resolved == _image_gen.model_name
+            )
+            if not already_loaded:
+                try:
+                    if _image_gen.is_loaded:
+                        _image_gen.unload()
+                    _image_gen.load_edit_model(model)
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to load edit model '{model}': {e}"
+                    )
+
+            # Generate edited images (inside lock)
+            images = []
+            for i in range(n):
+                img_seed = (seed + i) if seed is not None else None
+                try:
+                    result = await asyncio.to_thread(
+                        _image_gen.edit,
+                        prompt=prompt,
+                        image_path=str(image_path),
+                        width=width,
+                        height=height,
+                        steps=steps,
+                        guidance=guidance,
+                        seed=img_seed,
+                        strength=strength,
+                        negative_prompt=body.get("negative_prompt"),
+                        mask_path=str(mask_path) if mask_path else None,
+                    )
+                except Exception as e:
+                    logger.error(f"Image editing failed: {e}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Image editing failed: {e}"
+                    )
+
+                images.append({
+                    "b64_json": result.b64_json,
+                    "revised_prompt": prompt,
+                })
+
+    finally:
+        # Clean up temp files
+        import shutil
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return {
+        "created": int(time.time()),
+        "data": images,
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "images_generated": len(images),
+        },
+    }
+
+
+# =============================================================================
 # MCP Endpoints
 # =============================================================================
 
