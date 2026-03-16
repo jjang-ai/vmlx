@@ -104,6 +104,104 @@ const BUILTIN_IMAGE_PATHS = [
   join(homedir(), '.mlxstudio/models/xcreates'),
 ]
 
+// ─── Image Model HF Repo Mapping ────────────────────────────────────────────
+// Maps named mflux model IDs to HuggingFace repos for pre-downloading.
+// These repos contain the quantized mflux-format weights that mflux can load locally.
+// Without pre-download, mflux downloads silently with no progress UI.
+const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
+  'schnell': {
+    4: 'madroid/flux.1-schnell-all-in-one-T5xxl-4bit',
+    8: 'dhairyashil/FLUX.1-schnell-mflux-8bit',
+    0: 'black-forest-labs/FLUX.1-schnell',
+  },
+  'dev': {
+    4: 'dhairyashil/FLUX.1-dev-mflux-4bit',
+    8: 'dhairyashil/FLUX.1-dev-mflux-8bit',
+    0: 'black-forest-labs/FLUX.1-dev',
+  },
+  'z-image-turbo': {
+    4: 'mflux-community/Z-Image-Turbo-Alpha-v0.1-4bit',
+    8: 'carsenk/z-image-turbo-mflux-8bit',
+    0: 'mflux-community/Z-Image-Turbo-Alpha-v0.1',
+  },
+  'flux2-klein-4b': {
+    8: 'AITRADER/FLUX2-klein-4B-mlx-8bit',
+    0: 'black-forest-labs/FLUX.2-klein-4B',
+  },
+  'flux2-klein-9b': {
+    0: 'black-forest-labs/FLUX.2-klein-9B',
+  },
+}
+
+/** Resolve a named image model to its HF repo ID based on quantization level */
+function resolveImageModelRepo(modelName: string, quantize: number): string | null {
+  const repos = IMAGE_MODEL_REPOS[modelName]
+  if (!repos) return null
+  // Exact match first, then closest available
+  if (repos[quantize]) return repos[quantize]
+  // Fall back to closest quantization level
+  const available = Object.keys(repos).map(Number).sort((a, b) => Math.abs(a - quantize) - Math.abs(b - quantize))
+  return repos[available[0]] || null
+}
+
+/** Check if a named image model is available locally in HF cache */
+function checkImageModelInHFCache(repoId: string): string | null {
+  // HF hub cache: ~/.cache/huggingface/hub/models--org--name/snapshots/<hash>/
+  const cacheBase = join(homedir(), '.cache/huggingface/hub')
+  const cacheDirName = `models--${repoId.replace('/', '--')}`
+  const cacheDir = join(cacheBase, cacheDirName, 'snapshots')
+  try {
+    if (!existsSync(cacheDir)) return null
+    const { readdirSync } = require('fs')
+    const snapshots = readdirSync(cacheDir)
+    if (snapshots.length === 0) return null
+    // Return the most recent snapshot path
+    return join(cacheDir, snapshots[snapshots.length - 1])
+  } catch {
+    return null
+  }
+}
+
+/** Check if a named image model is available locally (HF cache or mlxstudio/models/image) */
+function checkImageModelLocal(modelName: string, quantize: number): { available: boolean; localPath?: string; repoId?: string } {
+  const repoId = resolveImageModelRepo(modelName, quantize)
+  if (!repoId) return { available: false }
+
+  // Check HF cache
+  const hfPath = checkImageModelInHFCache(repoId)
+  if (hfPath) return { available: true, localPath: hfPath, repoId }
+
+  // Check ~/.mlxstudio/models/image/ for locally saved mflux models
+  const imageDir = join(homedir(), '.mlxstudio/models/image')
+  try {
+    const { readdirSync } = require('fs')
+    const dirs = readdirSync(imageDir)
+    // Look for model name patterns (e.g., flux1-schnell-4bit, z-image-turbo-4bit)
+    const namePatterns = [
+      `${modelName}-${quantize}bit`,
+      `${modelName.replace(/-/g, '')}-${quantize}bit`,
+      modelName,
+    ]
+    for (const dir of dirs) {
+      const lower = dir.toLowerCase()
+      for (const pattern of namePatterns) {
+        if (lower.includes(pattern.toLowerCase())) {
+          const fullPath = join(imageDir, dir)
+          // Verify it's actually a model directory (has transformer/ or safetensors)
+          try {
+            const files = readdirSync(fullPath)
+            if (files.includes('transformer') || files.some((f: string) => f.endsWith('.safetensors'))) {
+              return { available: true, localPath: fullPath, repoId }
+            }
+          } catch { }
+        }
+      }
+    }
+  } catch { }
+
+  return { available: false, repoId }
+}
+
 /** Get the list of directories to scan: user-configured + built-in defaults */
 function getModelDirectories(modelType?: string): string[] {
   const key = modelType === 'image' ? IMAGE_SETTINGS_KEY : SETTINGS_KEY
@@ -1033,5 +1131,51 @@ export function registerModelHandlers(): void {
     }
 
     return { canceled: false, path: result.filePaths[0] }
+  })
+
+  // ─── Image Model Download Support ──────────────────────────────────────────
+  // Check if a named image model is available locally before starting server
+  ipcMain.handle('models:checkImageModel', async (_, modelName: string, quantize: number = 4) => {
+    const result = checkImageModelLocal(modelName, quantize)
+    return result
+  })
+
+  // Download a named image model (resolves to HF repo, uses existing download queue)
+  ipcMain.handle('models:downloadImageModel', async (_, modelName: string, quantize: number = 4) => {
+    const repoId = resolveImageModelRepo(modelName, quantize)
+    if (!repoId) {
+      throw new Error(`No known HuggingFace repository for image model: ${modelName} at ${quantize}-bit`)
+    }
+
+    // Check if already downloaded
+    const local = checkImageModelLocal(modelName, quantize)
+    if (local.available) {
+      return { status: 'already_downloaded', localPath: local.localPath, repoId }
+    }
+
+    // Check HF token for gated models (Flux repos require authentication)
+    const hfToken = db.getSetting('hf_api_key')
+    if (!hfToken) {
+      // Warn but don't block — some repos may be public
+      console.log(`[DOWNLOADS] No HF token set. Image model ${repoId} may require authentication.`)
+    }
+
+    // Check if already queued or downloading
+    if (activeJob?.repoId === repoId) return { jobId: activeJob.id, status: 'already_downloading', repoId }
+    const queued = downloadQueue.find(j => j.repoId === repoId)
+    if (queued) return { jobId: queued.id, status: 'already_queued', repoId }
+
+    // Queue the download using the standard system
+    const id = `dl_${++jobIdCounter}_${Date.now()}`
+    const targetDir = getDownloadDirectory()
+    const modelDir = join(targetDir, repoId)
+
+    const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
+    downloadQueue.push(job)
+    console.log(`[DOWNLOADS] Queued image model: ${repoId} (${downloadQueue.length} in queue)`)
+
+    processQueue()
+
+    return { jobId: id, status: 'queued', queuePosition: downloadQueue.length, repoId }
   })
 }

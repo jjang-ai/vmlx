@@ -285,10 +285,10 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
   })
 
   ipcMain.handle('image:getModelStatus', async (_, modelName: string) => {
-    // For named mflux models, we can't easily check HF cache
-    // Return a basic status - the server will handle downloading on start
+    // Basic status — the ImageModelPicker now uses models:checkImageModel for
+    // proper local availability checking with download-before-start flow
     return {
-      downloaded: true, // Assume available, server reports errors if not
+      downloaded: false,
       sizeEstimate: getSizeEstimate(modelName),
       modelName
     }

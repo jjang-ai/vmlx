@@ -26,6 +26,8 @@ declare global {
         onDownloadComplete: (callback: (data: any) => void) => () => void
         onDownloadError: (callback: (data: any) => void) => () => void
         startDownload: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
+        checkImageModel: (modelName: string, quantize?: number) => Promise<{ available: boolean; localPath?: string; repoId?: string }>
+        downloadImageModel: (modelName: string, quantize?: number) => Promise<{ jobId?: string; status: string; localPath?: string; repoId?: string; queuePosition?: number }>
       }
       chat: {
         createFolder: (name: string, parentId?: string) => Promise<any>

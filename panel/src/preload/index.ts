@@ -43,7 +43,12 @@ const api = {
       const handler = (_: any, data: any) => callback(data)
       ipcRenderer.on('models:downloadStarted', handler)
       return () => { ipcRenderer.removeListener('models:downloadStarted', handler) }
-    }
+    },
+    // Image model download support
+    checkImageModel: (modelName: string, quantize?: number) =>
+      ipcRenderer.invoke('models:checkImageModel', modelName, quantize ?? 4),
+    downloadImageModel: (modelName: string, quantize?: number) =>
+      ipcRenderer.invoke('models:downloadImageModel', modelName, quantize ?? 4),
   },
 
   // Chat management
