@@ -151,10 +151,13 @@ class ImageGenEngine:
         # NOT PyTorch diffusers format (diffusion_pytorch_model-*.safetensors)
         if model_path and Path(model_path).is_dir():
             transformer_dir = Path(model_path) / "transformer"
-            is_mflux_format = transformer_dir.is_dir() and any(
-                f.name.split('.')[0].isdigit() and f.suffix == '.safetensors'
-                for f in transformer_dir.iterdir()
-            )
+            try:
+                is_mflux_format = transformer_dir.is_dir() and any(
+                    f.name.split('.')[0].isdigit() and f.suffix == '.safetensors'
+                    for f in transformer_dir.iterdir()
+                )
+            except OSError:
+                is_mflux_format = False
             if is_mflux_format:
                 logger.info(f"Loading ZImage from local path: {model_path}")
                 try:
