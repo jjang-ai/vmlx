@@ -85,6 +85,29 @@ export interface BenchmarkResult {
   createdAt: number
 }
 
+export interface ImageSession {
+  id: string
+  modelName: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ImageGeneration {
+  id: string
+  sessionId: string
+  prompt: string
+  negativePrompt?: string
+  modelName: string
+  width: number
+  height: number
+  steps: number
+  guidance: number
+  seed?: number
+  elapsedSeconds?: number
+  imagePath: string
+  createdAt: number
+}
+
 export interface ChatOverrides {
   chatId: string
   temperature?: number
@@ -212,7 +235,7 @@ class DatabaseManager {
         id TEXT PRIMARY KEY,
         model_path TEXT NOT NULL UNIQUE,
         model_name TEXT,
-        host TEXT NOT NULL DEFAULT '127.0.0.1',
+        host TEXT NOT NULL DEFAULT '0.0.0.0',
         port INTEGER NOT NULL UNIQUE,
         pid INTEGER,
         status TEXT NOT NULL DEFAULT 'stopped'
@@ -235,6 +258,32 @@ class DatabaseManager {
       );
       CREATE INDEX IF NOT EXISTS idx_benchmarks_session ON benchmarks(session_id);
       CREATE INDEX IF NOT EXISTS idx_benchmarks_model ON benchmarks(model_path);
+
+      CREATE TABLE IF NOT EXISTS image_sessions (
+        id TEXT PRIMARY KEY,
+        model_name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_sessions_updated ON image_sessions(updated_at);
+
+      CREATE TABLE IF NOT EXISTS image_generations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        negative_prompt TEXT,
+        model_name TEXT NOT NULL,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        steps INTEGER NOT NULL,
+        guidance REAL NOT NULL,
+        seed INTEGER,
+        elapsed_seconds REAL,
+        image_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES image_sessions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_gens_session ON image_generations(session_id);
     `)
 
     // Run all migrations inside a transaction for atomicity — if the app crashes
@@ -412,6 +461,23 @@ class DatabaseManager {
         ins.run(t.id, t.name, t.content, t.category, now)
       }
     }
+
+    // Safe migration: add model_settings table for per-model configuration
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS model_settings (
+        model_path TEXT PRIMARY KEY,
+        alias TEXT,
+        temperature REAL,
+        top_p REAL,
+        max_tokens INTEGER,
+        ttl_minutes INTEGER,
+        pinned INTEGER DEFAULT 0,
+        port INTEGER,
+        cache_quant TEXT,
+        disk_cache_enabled INTEGER DEFAULT 0,
+        reasoning_mode TEXT DEFAULT 'auto'
+      )
+    `)
 
     }) // end runMigrations transaction
     runMigrations()
@@ -861,6 +927,59 @@ class DatabaseManager {
     stmt.run(key)
   }
 
+  // ─── Per-Model Settings ──────────────────────────────────────────────────────────
+
+  getModelSettings(modelPath: string): Record<string, any> | undefined {
+    this.ensureOpen()
+    const stmt = this.db.prepare('SELECT * FROM model_settings WHERE model_path = ?')
+    return stmt.get(modelPath) as Record<string, any> | undefined
+  }
+
+  getAllModelSettings(): Record<string, any>[] {
+    this.ensureOpen()
+    const stmt = this.db.prepare('SELECT * FROM model_settings ORDER BY model_path')
+    return stmt.all() as Record<string, any>[]
+  }
+
+  saveModelSettings(modelPath: string, settings: Record<string, any>): void {
+    this.ensureOpen()
+    const stmt = this.db.prepare(`
+      INSERT INTO model_settings
+        (model_path, alias, temperature, top_p, max_tokens, ttl_minutes, pinned, port, cache_quant, disk_cache_enabled, reasoning_mode)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(model_path) DO UPDATE SET
+        alias = excluded.alias,
+        temperature = excluded.temperature,
+        top_p = excluded.top_p,
+        max_tokens = excluded.max_tokens,
+        ttl_minutes = excluded.ttl_minutes,
+        pinned = excluded.pinned,
+        port = excluded.port,
+        cache_quant = excluded.cache_quant,
+        disk_cache_enabled = excluded.disk_cache_enabled,
+        reasoning_mode = excluded.reasoning_mode
+    `)
+    stmt.run(
+      modelPath,
+      settings.alias ?? null,
+      settings.temperature ?? null,
+      settings.top_p ?? null,
+      settings.max_tokens ?? null,
+      settings.ttl_minutes ?? null,
+      settings.pinned ? 1 : 0,
+      settings.port ?? null,
+      settings.cache_quant ?? null,
+      settings.disk_cache_enabled ? 1 : 0,
+      settings.reasoning_mode ?? 'auto',
+    )
+  }
+
+  deleteModelSettings(modelPath: string): void {
+    this.ensureOpen()
+    const stmt = this.db.prepare('DELETE FROM model_settings WHERE model_path = ?')
+    stmt.run(modelPath)
+  }
+
   // ─── Sandboxed Bookmarks ────────────────────────────────────────────────────────
 
   saveBookmark(path: string, bookmark: string): void {
@@ -938,6 +1057,71 @@ class DatabaseManager {
   deletePromptTemplate(id: string): void {
     this.ensureOpen()
     this.db.prepare('DELETE FROM prompt_templates WHERE id = ? AND is_builtin = 0').run(id)
+  }
+
+  // ─── Image Sessions & Generations ─────────────────────────────────────────
+
+  createImageSession(session: ImageSession): void {
+    this.ensureOpen()
+    this.db.prepare(
+      'INSERT INTO image_sessions (id, model_name, created_at, updated_at) VALUES (?, ?, ?, ?)'
+    ).run(session.id, session.modelName, session.createdAt, session.updatedAt)
+  }
+
+  getImageSessions(): ImageSession[] {
+    this.ensureOpen()
+    return this.db.prepare('SELECT * FROM image_sessions ORDER BY updated_at DESC').all().map((r: any) => ({
+      id: r.id, modelName: r.model_name, createdAt: r.created_at, updatedAt: r.updated_at
+    }))
+  }
+
+  getImageSession(id: string): ImageSession | undefined {
+    this.ensureOpen()
+    const r = this.db.prepare('SELECT * FROM image_sessions WHERE id = ?').get(id) as any
+    if (!r) return undefined
+    return { id: r.id, modelName: r.model_name, createdAt: r.created_at, updatedAt: r.updated_at }
+  }
+
+  updateImageSession(id: string, updates: Partial<ImageSession>): void {
+    this.ensureOpen()
+    const fields: string[] = []
+    const values: any[] = []
+    if (updates.modelName !== undefined) { fields.push('model_name = ?'); values.push(updates.modelName) }
+    if (updates.updatedAt !== undefined) { fields.push('updated_at = ?'); values.push(updates.updatedAt) }
+    if (fields.length === 0) return
+    values.push(id)
+    this.db.prepare(`UPDATE image_sessions SET ${fields.join(', ')} WHERE id = ?`).run(...values)
+  }
+
+  deleteImageSession(id: string): void {
+    this.ensureOpen()
+    this.db.prepare('DELETE FROM image_sessions WHERE id = ?').run(id)
+  }
+
+  addImageGeneration(gen: ImageGeneration): void {
+    this.ensureOpen()
+    this.db.prepare(
+      `INSERT INTO image_generations (id, session_id, prompt, negative_prompt, model_name, width, height, steps, guidance, seed, elapsed_seconds, image_path, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(gen.id, gen.sessionId, gen.prompt, gen.negativePrompt || null, gen.modelName,
+      gen.width, gen.height, gen.steps, gen.guidance, gen.seed ?? null, gen.elapsedSeconds ?? null,
+      gen.imagePath, gen.createdAt)
+    // Update session's updatedAt
+    this.updateImageSession(gen.sessionId, { updatedAt: gen.createdAt })
+  }
+
+  getImageGenerations(sessionId: string): ImageGeneration[] {
+    this.ensureOpen()
+    return this.db.prepare('SELECT * FROM image_generations WHERE session_id = ? ORDER BY created_at ASC').all(sessionId).map((r: any) => ({
+      id: r.id, sessionId: r.session_id, prompt: r.prompt, negativePrompt: r.negative_prompt,
+      modelName: r.model_name, width: r.width, height: r.height, steps: r.steps, guidance: r.guidance,
+      seed: r.seed, elapsedSeconds: r.elapsed_seconds, imagePath: r.image_path, createdAt: r.created_at
+    }))
+  }
+
+  deleteImageGeneration(id: string): void {
+    this.ensureOpen()
+    this.db.prepare('DELETE FROM image_generations WHERE id = ?').run(id)
   }
 
   close(): void {

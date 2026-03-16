@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Check, X, Square, ChevronRight, AlertTriangle, Loader2, StopCircle } from 'lucide-react'
+import { Check, X, ChevronRight, AlertTriangle, Loader2, StopCircle } from 'lucide-react'
 import { formatJson } from './chat-utils'
 
 export interface ToolStatus {

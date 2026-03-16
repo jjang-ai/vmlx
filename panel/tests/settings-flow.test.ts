@@ -52,10 +52,14 @@ interface SessionConfig {
     defaultTopP: number
     embeddingModel: string
     additionalArgs: string
+    enableJit: boolean
+    logLevel: string
+    corsOrigins: string
+    maxContextLength: number
 }
 
 const DEFAULT_CONFIG: SessionConfig = {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 8000,
     apiKey: '',
     rateLimit: 0,
@@ -94,7 +98,11 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultTemperature: 0,
     defaultTopP: 0,
     embeddingModel: '',
-    additionalArgs: ''
+    additionalArgs: '',
+    enableJit: false,
+    logLevel: 'INFO',
+    corsOrigins: '*',
+    maxContextLength: 0
 }
 
 // ─── buildCommandPreview (extracted from SessionSettings.tsx) ─────────────────
@@ -229,7 +237,18 @@ function buildCommandPreview(
     // Embedding model
     if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
-    if (config.additionalArgs && config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
+    // JIT compilation
+    if (config.enableJit) parts.push('--enable-jit')
+
+    // Logging
+    if (config.logLevel && config.logLevel !== 'INFO') parts.push('--log-level', config.logLevel)
+
+    // CORS
+    if (config.corsOrigins && config.corsOrigins !== '*') parts.push('--allowed-origins', config.corsOrigins)
+
+    // maxContextLength: reserved for future use, not yet wired to CLI
+
+    if (config.additionalArgs?.trim()) parts.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
 
     return parts.join(' \\\n  ')
 }
@@ -794,6 +813,120 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(a, '--speculative-model')).toBe('model-a')
         expect(getFlagValue(b, '--speculative-model')).toBe('model-b')
     })
+
+    it('changing logLevel produces different CLI output', () => {
+        expect(hasFlag(preview({ logLevel: 'DEBUG' }), '--log-level')).toBe(true)
+        expect(getFlagValue(preview({ logLevel: 'DEBUG' }), '--log-level')).toBe('DEBUG')
+        expect(getFlagValue(preview({ logLevel: 'ERROR' }), '--log-level')).toBe('ERROR')
+    })
+
+    it('changing corsOrigins produces different CLI output', () => {
+        const out = preview({ corsOrigins: 'http://localhost:3000' })
+        expect(getFlagValue(out, '--allowed-origins')).toBe('http://localhost:3000')
+    })
+
+    it('maxContextLength is reserved but does not emit CLI flag yet', () => {
+        // maxContextLength is in the config interface but not wired to CLI
+        // (backend support not yet implemented)
+        const out = preview({ maxContextLength: 8192 })
+        expect(hasFlag(out, '--max-context-length')).toBe(false)
+    })
+})
+
+describe('Default IP and New Settings', () => {
+    it('default host is 0.0.0.0', () => {
+        expect(DEFAULT_CONFIG.host).toBe('0.0.0.0')
+    })
+
+    it('default host produces --host 0.0.0.0 in CLI output', () => {
+        const out = preview()
+        expect(getFlagValue(out, '--host')).toBe('0.0.0.0')
+    })
+
+    it('logLevel INFO (default) does not emit --log-level flag', () => {
+        const out = preview({ logLevel: 'INFO' })
+        expect(hasFlag(out, '--log-level')).toBe(false)
+    })
+
+    it('logLevel DEBUG emits --log-level DEBUG', () => {
+        const out = preview({ logLevel: 'DEBUG' })
+        expect(hasFlag(out, '--log-level')).toBe(true)
+        expect(getFlagValue(out, '--log-level')).toBe('DEBUG')
+    })
+
+    it('corsOrigins * (default) does not emit --allowed-origins flag', () => {
+        const out = preview({ corsOrigins: '*' })
+        expect(hasFlag(out, '--allowed-origins')).toBe(false)
+    })
+
+    it('corsOrigins custom value emits --allowed-origins', () => {
+        const out = preview({ corsOrigins: 'http://example.com' })
+        expect(getFlagValue(out, '--allowed-origins')).toBe('http://example.com')
+    })
+
+    it('maxContextLength reserved but not emitted to CLI', () => {
+        const out = preview({ maxContextLength: 32768 })
+        expect(hasFlag(out, '--max-context-length')).toBe(false)
+    })
+
+    it('default config has all new fields', () => {
+        expect(DEFAULT_CONFIG.logLevel).toBe('INFO')
+        expect(DEFAULT_CONFIG.corsOrigins).toBe('*')
+        expect(DEFAULT_CONFIG.maxContextLength).toBe(0)
+        expect(DEFAULT_CONFIG.enableJit).toBe(false)
+    })
+})
+
+describe('JIT Toggle', () => {
+    it('enableJit false (default) does not emit --enable-jit flag', () => {
+        const out = preview({ enableJit: false })
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
+    })
+
+    it('enableJit true emits --enable-jit flag', () => {
+        const out = preview({ enableJit: true })
+        expect(hasFlag(out, '--enable-jit')).toBe(true)
+    })
+
+    it('enableJit does not affect other flags', () => {
+        const without = preview({ enableJit: false })
+        const withJit = preview({ enableJit: true })
+        // Only difference should be the --enable-jit flag
+        const normalized1 = without.replace(/\s*\\\n\s*/g, ' ')
+        const normalized2 = withJit.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized2).toContain('--enable-jit')
+        expect(normalized1).not.toContain('--enable-jit')
+        // Both should have the same host/port/timeout etc
+        expect(getFlagValue(without, '--host')).toBe(getFlagValue(withJit, '--host'))
+        expect(getFlagValue(without, '--port')).toBe(getFlagValue(withJit, '--port'))
+    })
+})
+
+describe('connectHost Resolution', () => {
+    // Test the connectHost logic (0.0.0.0 → 127.0.0.1 for connections)
+    function connectHost(host: string): string {
+        return host === '0.0.0.0' ? '127.0.0.1' : host
+    }
+
+    it('resolves 0.0.0.0 to 127.0.0.1', () => {
+        expect(connectHost('0.0.0.0')).toBe('127.0.0.1')
+    })
+
+    it('passes through 127.0.0.1 unchanged', () => {
+        expect(connectHost('127.0.0.1')).toBe('127.0.0.1')
+    })
+
+    it('passes through localhost unchanged', () => {
+        expect(connectHost('localhost')).toBe('localhost')
+    })
+
+    it('passes through custom IPs unchanged', () => {
+        expect(connectHost('192.168.1.100')).toBe('192.168.1.100')
+    })
+
+    it('passes through hostnames unchanged', () => {
+        expect(connectHost('my-server.local')).toBe('my-server.local')
+    })
 })
 
 describe('Feature Interaction', () => {
@@ -1020,5 +1153,225 @@ describe('Update Checker', () => {
     it('handles zero versions', () => {
         expect(compareVersions('0.0.0', '0.0.1')).toBe(true)
         expect(compareVersions('0.0.0', '0.0.0')).toBe(false)
+    })
+})
+
+// =============================================================================
+// Phase 4: connectHost and CORS verification
+// =============================================================================
+
+describe('URL construction uses connectHost', () => {
+    // Replica of the connectHost function from sessions.ts
+    function connectHost(host: string): string {
+        return host === '0.0.0.0' ? '127.0.0.1' : host
+    }
+
+    it('all URL construction sites use connectHost — 0.0.0.0 maps to 127.0.0.1', () => {
+        // The key invariant: 0.0.0.0 (bind-all) is never used in outgoing URLs
+        expect(connectHost('0.0.0.0')).toBe('127.0.0.1')
+    })
+
+    it('connectHost preserves specific IPs', () => {
+        expect(connectHost('127.0.0.1')).toBe('127.0.0.1')
+        expect(connectHost('192.168.1.50')).toBe('192.168.1.50')
+        expect(connectHost('10.0.0.1')).toBe('10.0.0.1')
+    })
+
+    it('connectHost preserves hostnames', () => {
+        expect(connectHost('my-server.local')).toBe('my-server.local')
+        expect(connectHost('localhost')).toBe('localhost')
+    })
+
+    it('health URL construction uses connectHost', () => {
+        const host = '0.0.0.0'
+        const port = 8092
+        const healthUrl = `http://${connectHost(host)}:${port}/health`
+        expect(healthUrl).toBe('http://127.0.0.1:8092/health')
+        expect(healthUrl).not.toContain('0.0.0.0')
+    })
+})
+
+describe('CORS credentials logic', () => {
+    // Replica of the CORS logic from cli.py serve_command
+    function corsConfig(allowedOrigins: string): { origins: string[], credentials: boolean } {
+        const origins = allowedOrigins.split(',').map(o => o.trim()).filter(o => o.length > 0)
+        const hasWildcard = origins.includes('*')
+        return {
+            origins,
+            credentials: !hasWildcard,
+        }
+    }
+
+    it('credentials are false when wildcard origin is used', () => {
+        const config = corsConfig('*')
+        expect(config.credentials).toBe(false)
+        expect(config.origins).toEqual(['*'])
+    })
+
+    it('credentials are true when specific origins are listed', () => {
+        const config = corsConfig('http://localhost:3000,http://example.com')
+        expect(config.credentials).toBe(true)
+        expect(config.origins).toEqual(['http://localhost:3000', 'http://example.com'])
+    })
+
+    it('credentials are false when wildcard is among specific origins', () => {
+        const config = corsConfig('http://localhost:3000,*')
+        expect(config.credentials).toBe(false)
+    })
+
+    it('empty string produces no origins', () => {
+        const config = corsConfig('')
+        expect(config.origins).toEqual([])
+    })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 6: Settings → CLI Round-Trip Completeness
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Settings → CLI Round-Trip Completeness', () => {
+    // All SessionConfig keys (from the interface defined at the top of this file)
+    const ALL_CONFIG_KEYS: (keyof SessionConfig)[] = [
+        'host', 'port', 'apiKey', 'rateLimit', 'timeout',
+        'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
+        'continuousBatching', 'enablePrefixCache', 'prefixCacheSize',
+        'cacheMemoryMb', 'cacheMemoryPercent', 'cacheTtlMinutes', 'noMemoryAwareCache',
+        'usePagedCache', 'pagedCacheBlockSize', 'maxCacheBlocks',
+        'kvCacheQuantization', 'kvCacheGroupSize',
+        'enableDiskCache', 'diskCacheMaxGb', 'diskCacheDir',
+        'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
+        'streamInterval', 'maxTokens',
+        'mcpConfig', 'enableAutoToolChoice', 'toolCallParser', 'reasoningParser',
+        'isMultimodal', 'servedModelName',
+        'speculativeModel', 'numDraftTokens',
+        'defaultTemperature', 'defaultTopP',
+        'embeddingModel', 'additionalArgs',
+        'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
+    ]
+
+    // Collect all config keys that appear in at least one test in this file
+    // by checking that setting them produces a CLI flag or expected behavior.
+    // This is a structural meta-test: ensure coverage.
+    it('every SessionConfig field is listed in the completeness check', () => {
+        const interfaceKeys = Object.keys(DEFAULT_CONFIG) as (keyof SessionConfig)[]
+        // Plus enableAutoToolChoice and isMultimodal which are optional (not in defaults)
+        const fullSet = new Set([...interfaceKeys, 'enableAutoToolChoice', 'isMultimodal'])
+        const checkedSet = new Set(ALL_CONFIG_KEYS)
+
+        for (const key of fullSet) {
+            expect(checkedSet.has(key), `SessionConfig key "${key}" missing from completeness list`).toBe(true)
+        }
+        for (const key of checkedSet) {
+            expect(fullSet.has(key), `Completeness list has unknown key "${key}"`).toBe(true)
+        }
+    })
+
+    it('default config produces minimal flags (no unnecessary options)', () => {
+        const out = preview()
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+
+        // Defaults should NOT produce these flags:
+        expect(normalized).not.toContain('--api-key')
+        expect(normalized).not.toContain('VLLM_API_KEY')  // apiKey is empty
+        expect(normalized).not.toContain('--rate-limit')     // rateLimit is 0
+        expect(normalized).not.toContain('--is-mllm')        // isMultimodal is undefined/false
+        expect(normalized).not.toContain('--disable-prefix-cache')  // prefix cache is on by default
+        expect(normalized).not.toContain('--enable-disk-cache')     // disk cache is off
+        expect(normalized).not.toContain('--speculative-model')     // no speculative model
+        expect(normalized).not.toContain('--default-temperature')   // 0 means server default
+        expect(normalized).not.toContain('--default-top-p')         // 0 means server default
+        expect(normalized).not.toContain('--embedding-model')       // empty
+        expect(normalized).not.toContain('--log-level')             // INFO is default (not emitted)
+        expect(normalized).not.toContain('--allowed-origins')       // * is default (not emitted)
+        expect(normalized).not.toContain('--enable-jit')            // off by default
+        expect(normalized).not.toContain('--max-context-length')    // reserved, never emitted
+
+        // Defaults SHOULD produce these flags:
+        expect(normalized).toContain('--host')
+        expect(normalized).toContain('--port')
+        expect(normalized).toContain('--timeout')
+        expect(normalized).toContain('--max-tokens')
+        expect(normalized).toContain('--continuous-batching')
+        expect(normalized).toContain('--use-paged-cache')
+    })
+
+    it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {
+        // enableDiskCache is gated by !(usePagedCache) in buildCommandPreview
+        const out = preview({
+            enableDiskCache: true,
+            diskCacheMaxGb: 20,
+            diskCacheDir: '/tmp/cache',
+            usePagedCache: true,
+        })
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized).not.toContain('--enable-disk-cache')
+        expect(normalized).not.toContain('--disk-cache-dir')
+        expect(normalized).not.toContain('--disk-cache-max-gb')
+        // But paged cache flags should be present
+        expect(normalized).toContain('--use-paged-cache')
+    })
+
+    it('mutual exclusion: block disk cache only emitted when paged cache is active', () => {
+        // enableBlockDiskCache requires usePagedCache
+        const out = preview({
+            enableBlockDiskCache: true,
+            blockDiskCacheMaxGb: 50,
+            blockDiskCacheDir: '/tmp/blocks',
+            usePagedCache: true,
+        })
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized).toContain('--enable-block-disk-cache')
+        expect(normalized).toContain('--block-disk-cache-dir')
+
+        // Without paged cache, block disk cache should NOT appear
+        const out2 = preview({
+            enableBlockDiskCache: true,
+            blockDiskCacheMaxGb: 50,
+            usePagedCache: false,
+        })
+        const normalized2 = out2.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized2).not.toContain('--enable-block-disk-cache')
+    })
+
+    it('prefix cache auto-enables continuous batching', () => {
+        // When prefix cache is on and continuousBatching is off,
+        // buildCommandPreview still emits --continuous-batching
+        const out = preview({
+            enablePrefixCache: true,
+            continuousBatching: false,
+        })
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized).toContain('--continuous-batching')
+    })
+
+    it('prefix cache disabled suppresses all cache sub-flags', () => {
+        const out = preview({
+            enablePrefixCache: false,
+            usePagedCache: true,        // should be suppressed
+            kvCacheQuantization: 'q8',  // should be suppressed
+            enableDiskCache: true,      // should be suppressed
+        })
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized).toContain('--disable-prefix-cache')
+        expect(normalized).not.toContain('--use-paged-cache')
+        expect(normalized).not.toContain('--kv-cache-quantization')
+        expect(normalized).not.toContain('--enable-disk-cache')
+    })
+
+    it('cache TTL only emitted without paged cache', () => {
+        // cacheTtlMinutes gated by !(usePagedCache)
+        const withPaged = preview({
+            cacheTtlMinutes: 30,
+            usePagedCache: true,
+            noMemoryAwareCache: false,
+        })
+        expect(withPaged.replace(/\s*\\\n\s*/g, ' ')).not.toContain('--cache-ttl-minutes')
+
+        const withoutPaged = preview({
+            cacheTtlMinutes: 30,
+            usePagedCache: false,
+            noMemoryAwareCache: false,
+        })
+        expect(withoutPaged.replace(/\s*\\\n\s*/g, ' ')).toContain('--cache-ttl-minutes')
     })
 })

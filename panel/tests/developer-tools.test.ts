@@ -793,10 +793,10 @@ describe('Developer Tools — Output Path Extraction', () => {
     const path = extractOutputPath([
       'Converting model...',
       'Quantizing layers...',
-      'Output path: /Users/example/models/Qwen-4bit',
+      'Output path: /home/user/models/Qwen-4bit',
       'Done.',
     ])
-    expect(path).toBe('/Users/example/models/Qwen-4bit')
+    expect(path).toBe('/home/user/models/Qwen-4bit')
   })
 
   it('returns undefined when no output path line', () => {

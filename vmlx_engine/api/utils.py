@@ -75,6 +75,12 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
+    # JANG models: always use text path (mlx-lm + JANG loader)
+    # JANG's weight repacking is incompatible with mlx-vlm's sanitizer
+    from ..utils.jang_loader import is_jang_model
+    if is_jang_model(model_name):
+        return False
+
     # Primary: check config.json for vision_config (authoritative for local models)
     config_path = os.path.join(model_name, "config.json")
     if os.path.isfile(config_path):

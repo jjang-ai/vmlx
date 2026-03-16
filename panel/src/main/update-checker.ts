@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { net } from 'electron'
 
-const LATEST_URL = 'https://raw.githubusercontent.com/vmlxllm/vmlx-releases/main/latest.json'
+const LATEST_URL = 'https://raw.githubusercontent.com/jjang-ai/mlxstudio/main/latest.json'
 const CHECK_DELAY_MS = 5000 // Wait 5s after startup before checking
 
 interface LatestRelease {
@@ -36,6 +36,17 @@ export function checkForUpdates(getWindow: () => BrowserWindow | null, currentVe
       const data: LatestRelease = await response.json()
       if (!data.version || !data.url) {
         console.log('[UPDATE] Invalid manifest: missing version or url')
+        return
+      }
+      // Only accept HTTPS GitHub URLs to prevent redirect attacks if manifest is compromised
+      try {
+        const parsed = new URL(data.url)
+        if (parsed.protocol !== 'https:' || !(parsed.hostname === 'github.com' || parsed.hostname.endsWith('.github.com'))) {
+          console.log(`[UPDATE] Rejected non-GitHub URL: ${data.url}`)
+          return
+        }
+      } catch {
+        console.log(`[UPDATE] Invalid URL in manifest: ${data.url}`)
         return
       }
       if (compareVersions(currentVersion, data.version)) {

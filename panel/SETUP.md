@@ -75,7 +75,7 @@ rsync -avz --delete \
 
 # On Mac Studio: install, build, package, deploy
 ssh macstudio 'echo "#!/bin/bash
-cd /Users/example/mlx/vmlx-engine
+cd /path/to/vmlx
 npm ci
 npm run build
 npx electron-builder --mac --dir

@@ -8,7 +8,7 @@
 ## Install with uv (Recommended)
 
 ```bash
-git clone https://github.com/vmlxllm/vmlx.git
+git clone https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
 uv pip install -e .
@@ -17,7 +17,7 @@ uv pip install -e .
 ## Install with pip
 
 ```bash
-git clone https://github.com/vmlxllm/vmlx.git
+git clone https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
 pip install -e .

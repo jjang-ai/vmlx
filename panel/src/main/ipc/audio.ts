@@ -20,6 +20,15 @@ export function registerAudioHandlers(): void {
     const baseUrl = await resolveBaseUrl(opts.endpoint)
     const authHeaders = getAuthHeaders(opts.sessionId)
 
+    if (!opts.audioBase64) {
+      throw new Error('No audio data provided')
+    }
+    // Reject oversized audio (100 MB base64 ≈ 75 MB raw)
+    const MAX_AUDIO_BASE64 = 100 * 1024 * 1024
+    if (opts.audioBase64.length > MAX_AUDIO_BASE64) {
+      throw new Error(`Audio data too large (max ~75 MB). Got ${Math.round(opts.audioBase64.length / 1024 / 1024)} MB encoded.`)
+    }
+
     // Build multipart/form-data with the audio file
     const boundary = `----AudioBoundary${Date.now()}`
     const audioBuffer = Buffer.from(opts.audioBase64, 'base64')
@@ -103,6 +112,19 @@ export function registerAudioHandlers(): void {
     if (!response.ok) {
       const errText = await response.text()
       throw new Error(`TTS failed: ${response.status} ${errText}`)
+    }
+
+    // Guard against server returning JSON error with 200 status
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      const errBody = await response.text()
+      try {
+        const json = JSON.parse(errBody)
+        throw new Error(`TTS returned error: ${json.error?.message || json.detail || errBody}`)
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('TTS returned error:')) throw e
+        throw new Error(`TTS returned unexpected JSON response: ${errBody.slice(0, 200)}`)
+      }
     }
 
     const arrayBuffer = await response.arrayBuffer()

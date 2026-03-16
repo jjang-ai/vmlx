@@ -130,6 +130,8 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
+_last_request_time: float = 0.0  # Epoch timestamp of last API request (for memory enforcer)
+_model_load_error: str | None = None  # Surfaced via /health when model fails to load
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
@@ -310,20 +312,41 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to apply custom chat template (batched): {e}")
 
-    # Initialize MCP if config provided
+    # Apply JIT compilation for BatchedEngine (which just started above).
+    # SimpleEngine JIT is applied in load_model() where it starts synchronously.
+    if _enable_jit and _engine is not None:
+        _apply_jit_compilation()
+
+    # Initialize MCP if config provided — failure should not crash server
     mcp_config = os.environ.get("VLLM_MLX_MCP_CONFIG")
     if mcp_config:
-        await init_mcp(mcp_config)
+        try:
+            await init_mcp(mcp_config)
+        except Exception as e:
+            logger.error(f"Failed to initialize MCP — continuing without tool support: {e}")
 
     yield
 
     # Shutdown: Close MCP connections, stop engine, and kill caffeinate
+    # Wrap each in timeout to prevent hanging on quit
     if _mcp_manager is not None:
-        await _mcp_manager.stop()
-        logger.info("MCP manager stopped")
+        try:
+            await asyncio.wait_for(_mcp_manager.stop(), timeout=10)
+            logger.info("MCP manager stopped")
+        except Exception as e:
+            logger.warning(f"MCP shutdown error (continuing): {e}")
     if _engine is not None:
-        await _engine.stop()
-        logger.info("Engine stopped")
+        try:
+            await asyncio.wait_for(_engine.stop(), timeout=10)
+            logger.info("Engine stopped")
+        except Exception as e:
+            logger.warning(f"Engine shutdown error (continuing): {e}")
+    if _image_gen is not None and _image_gen.is_loaded:
+        try:
+            _image_gen.unload()
+            logger.info("Image engine unloaded")
+        except Exception as e:
+            logger.warning(f"Image engine shutdown error (continuing): {e}")
     if caffeinate_process is not None:
         try:
             caffeinate_process.terminate()
@@ -341,6 +364,35 @@ app = FastAPI(
 )
 
 security = HTTPBearer(auto_error=False)
+
+
+@app.middleware("http")
+async def track_request_time(request: Request, call_next):
+    """Track last request time + gate text endpoints on image servers."""
+    global _last_request_time
+    path = request.url.path
+    if path.startswith("/v1/"):
+        _last_request_time = time.time()
+
+    # Gate: image servers only serve /health, /v1/models, /v1/images/*
+    if _model_type == "image" and path.startswith("/v1/"):
+        allowed_image_paths = ["/v1/images/", "/v1/models"]
+        if not any(path.startswith(p) for p in allowed_image_paths):
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "This is an image generation server. "
+                                   "Text endpoints are not available. "
+                                   "Use /v1/images/generations for image generation.",
+                        "type": "invalid_request_error",
+                    }
+                },
+            )
+
+    response = await call_next(request)
+    return response
 
 
 class RateLimiter:
@@ -387,6 +439,65 @@ class RateLimiter:
 # Global rate limiter (disabled by default)
 _rate_limiter = RateLimiter(requests_per_minute=60, enabled=False)
 
+# Settings configured via CLI (set in cli.py serve_command)
+_log_level: str = "INFO"
+_allowed_origins: str = "*"
+_max_context_length: int = 0
+_enable_jit: bool = False
+_jang_metadata: dict | None = None  # Cached at model load time for /health
+_model_type: str = "text"  # "text" or "image" — auto-detected from model directory
+
+
+def _apply_jit_compilation():
+    """Apply mx.compile to the model forward pass for JIT-optimized inference.
+
+    Wraps the model's __call__ with mx.compile for Metal kernel fusion.
+    Falls back gracefully if compilation fails (some models have dynamic
+    shapes or operations that mx.compile cannot handle).
+    """
+    global _engine
+    if _engine is None:
+        return
+
+    try:
+        import mlx.core as mx
+
+        # Get the inner model object — SimpleEngine and BatchedEngine both store it
+        model_obj = getattr(_engine, '_model', None)
+        if model_obj is None:
+            model_obj = getattr(_engine, 'model', None)
+        if model_obj is None:
+            logger.warning("JIT: Could not find model object on engine — skipping")
+            return
+
+        # The actual nn.Module is often nested: engine._model.model
+        inner = getattr(model_obj, 'model', model_obj)
+        if inner is None or not callable(inner):
+            logger.warning("JIT: Model object is not callable — skipping")
+            return
+
+        logger.info("JIT: Applying mx.compile to model forward pass...")
+        compiled = mx.compile(inner)
+
+        # Replace in-place on the wrapper and verify
+        replaced = False
+        if hasattr(model_obj, 'model') and model_obj.model is inner:
+            model_obj.model = compiled
+            replaced = (model_obj.model is compiled)
+        elif hasattr(_engine, '_model'):
+            _engine._model = compiled
+            replaced = (_engine._model is compiled)
+        elif hasattr(_engine, 'model'):
+            _engine.model = compiled
+            replaced = (_engine.model is compiled)
+
+        if replaced:
+            logger.info("JIT: mx.compile applied successfully — first inference call will trigger Metal compilation")
+        else:
+            logger.warning("JIT: mx.compile created but could not verify replacement — model structure may have changed")
+    except Exception as e:
+        logger.warning(f"JIT: mx.compile failed, running without JIT: {e}")
+
 
 async def check_rate_limit(request: Request):
     """Rate limiting dependency."""
@@ -405,6 +516,22 @@ async def check_rate_limit(request: Request):
             detail=f"Rate limit exceeded. Retry after {retry_after} seconds.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def require_text_model():
+    """Dependency that rejects requests on image-only servers."""
+    if _model_type == "image":
+        raise HTTPException(
+            status_code=400,
+            detail="This is an image generation server. Text endpoints are not available. "
+                   "Use /v1/images/generations for image generation."
+        )
+
+
+def require_image_model():
+    """Dependency that rejects image requests on text-only servers (unless lazy-load is available)."""
+    # Allow on both — text servers can lazy-load image models, image servers have them loaded
+    pass
 
 
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -577,7 +704,7 @@ def _normalize_model_name(model_name: str) -> str:
     """Normalize a model name: extract 'org/model' from local paths.
 
     Examples:
-        "/Users/example/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
+        "~/.mlxstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
         → "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
         "mlx-community/Llama-3.2-3B-Instruct-4bit"
@@ -620,12 +747,14 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name
+    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata
+    _model_load_error = None  # Clear any previous error
+    _jang_metadata = None  # Clear any previous JANG metadata
 
     _default_max_tokens = max_tokens
     _model_path = model_name  # Full path for config.json lookups
     # Normalize model name: extract "org/model" from full local paths
-    # e.g. "/Users/example/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
+    # e.g. "~/.mlxstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
     #    → "mlx-community/Llama-3.2-3B-Instruct-4bit"
     _model_name = _normalize_model_name(model_name)
     _served_model_name = served_model_name  # Custom name override (may be None)
@@ -674,6 +803,11 @@ def load_model(
         model_type = "MLLM" if _engine.is_mllm else "LLM"
         logger.info(f"{model_type} model loaded (simple mode): {model_name}")
 
+    # Apply JIT compilation if enabled — only for SimpleEngine (already started above).
+    # BatchedEngine starts in lifespan(), so JIT is applied there instead.
+    if _enable_jit and _engine is not None and hasattr(_engine, '_loaded') and _engine._loaded:
+        _apply_jit_compilation()
+
     # Apply chat template override from model config registry (e.g. Harmony for GPT-OSS)
     try:
         from .model_config_registry import get_model_config_registry
@@ -683,6 +817,26 @@ def load_model(
             logger.info(f"Applied custom chat template for {_mc.family_name} model")
     except Exception as e:
         logger.warning(f"Failed to apply custom chat template: {e}")
+
+    # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
+    try:
+        from .utils.jang_loader import is_jang_model, JANG_CONFIG_FILENAMES
+        if is_jang_model(model_name):
+            from pathlib import Path
+            for cfg_name in JANG_CONFIG_FILENAMES:
+                cfg_path = Path(model_name) / cfg_name
+                if cfg_path.exists():
+                    jang_meta = json.loads(cfg_path.read_text())
+                    q = jang_meta.get("quantization", {})
+                    _jang_metadata = {
+                        "type": "jang",
+                        "target_bits": q.get("target_bits"),
+                        "actual_bits": q.get("actual_bits"),
+                        "block_size": q.get("block_size", 64),
+                    }
+                    break
+    except Exception:
+        pass
 
     # Log Metal GPU memory after model load
     try:
@@ -769,7 +923,11 @@ async def health():
     engine_stats = _engine.get_stats() if _engine else {}
 
     # Differentiate status: "healthy" when model is loaded, "no_model" otherwise
-    status = "healthy" if _engine is not None else "no_model"
+    # Image models don't use _engine — they use _image_gen
+    if _model_type == "image":
+        status = "healthy" if (_image_gen is not None and _image_gen.is_loaded) else "no_model"
+    else:
+        status = "healthy" if _engine is not None else "no_model"
 
     # Include Metal GPU memory info when available
     memory_info = None
@@ -816,20 +974,40 @@ async def health():
     except ImportError:
         pass
 
-    result = {
-        "status": status,
-        "model_loaded": _engine is not None,
-        "model_name": _model_name,
-        "model_type": "mllm" if (_engine and _engine.is_mllm) else "llm",
-        "engine_type": engine_stats.get("engine_type", "unknown"),
-        "mcp": mcp_info,
-    }
+    if _model_type == "image":
+        result = {
+            "status": status,
+            "model_loaded": _image_gen is not None and _image_gen.is_loaded,
+            "model_name": _model_name,
+            "model_type": "image",
+            "engine_type": "mflux",
+            "last_request_time": _last_request_time if _last_request_time > 0 else None,
+        }
+    else:
+        result = {
+            "status": status,
+            "model_loaded": _engine is not None,
+            "model_name": _model_name,
+            "model_type": "mllm" if (_engine and _engine.is_mllm) else "llm",
+            "engine_type": engine_stats.get("engine_type", "unknown"),
+            "last_request_time": _last_request_time if _last_request_time > 0 else None,
+            "mcp": mcp_info,
+        }
+    if _model_load_error:
+        # Sanitize: strip absolute filesystem paths from error messages for security
+        import re
+        sanitized = re.sub(r'(/[^\s:]+)+', '<path>', _model_load_error)
+        result["error"] = sanitized
     if memory_info:
         result["memory"] = memory_info
     if kv_quant_info:
         result["kv_cache_quantization"] = kv_quant_info
     if spec_info:
         result["speculative_decoding"] = spec_info.get("speculative_decoding", spec_info)
+
+    # JANG format: report cached quantization metadata (populated at load time)
+    if _jang_metadata:
+        result["quantization_format"] = _jang_metadata
 
     return result
 
@@ -1197,6 +1375,179 @@ async def list_models() -> ModelsResponse:
 
 
 # =============================================================================
+# Anthropic Messages API
+# =============================================================================
+
+
+@app.post(
+    "/v1/messages",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_anthropic_message(
+    fastapi_request: Request,
+):
+    """
+    Anthropic Messages API endpoint.
+
+    Enables Claude Code and other Anthropic SDK clients to use vMLX as a
+    local inference backend. Converts Anthropic wire format to internal
+    Chat Completions pipeline.
+    """
+    from .api.anthropic_adapter import (
+        AnthropicRequest,
+        AnthropicStreamAdapter,
+        to_chat_completion,
+    )
+
+    body = await fastapi_request.json()
+    anthropic_req = AnthropicRequest(**body)
+
+    # Convert to chat completion request
+    chat_req = to_chat_completion(anthropic_req)
+
+    # Resolve model name
+    resolved_name = _resolve_model_name()
+    chat_req.model = resolved_name
+
+    engine = get_engine()
+
+    # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
+    _msg_kwargs: dict = {
+        "temperature": _resolve_temperature(chat_req.temperature),
+        "top_p": _resolve_top_p(chat_req.top_p),
+        "max_tokens": chat_req.max_tokens or _default_max_tokens,
+    }
+    if chat_req.top_k is not None:
+        _msg_kwargs["top_k"] = chat_req.top_k
+    if chat_req.min_p is not None:
+        _msg_kwargs["min_p"] = chat_req.min_p
+    if chat_req.repetition_penalty is not None:
+        _msg_kwargs["repetition_penalty"] = chat_req.repetition_penalty
+    if chat_req.stop:
+        _msg_kwargs["stop"] = chat_req.stop
+
+    messages_dump = [m.model_dump(exclude_none=True) for m in chat_req.messages]
+
+    if anthropic_req.stream:
+        # Streaming: adapt Chat Completions SSE to Anthropic SSE
+        adapter = AnthropicStreamAdapter(model=resolved_name)
+
+        async def generate():
+            async for chunk_str in stream_chat_completion(
+                engine=engine,
+                messages=messages_dump,
+                request=chat_req,
+                fastapi_request=fastapi_request,
+                **_msg_kwargs,
+            ):
+                # Pass through SSE comments (keep-alive) to prevent client timeout
+                if chunk_str.startswith(":"):
+                    yield chunk_str
+                    continue
+                for event in adapter.process_chunk(chunk_str):
+                    yield event
+            for event in adapter.finalize():
+                yield event
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+    else:
+        # Non-streaming: collect full response then convert
+        full_text = ""
+        reasoning_text = ""
+        tool_calls = []
+        prompt_tokens = 0
+        completion_tokens = 0
+        finish_reason = "stop"
+
+        async for chunk_str in stream_chat_completion(
+            engine=engine,
+            messages=messages_dump,
+            request=chat_req,
+            fastapi_request=fastapi_request,
+            **_msg_kwargs,
+        ):
+            if not chunk_str.startswith("data: "):
+                continue
+            data_str = chunk_str[6:].strip()
+            if data_str == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            choices = chunk.get("choices", [])
+            if choices:
+                delta = choices[0].get("delta", {})
+                if delta.get("content"):
+                    full_text += delta["content"]
+                reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                if reasoning:
+                    reasoning_text += reasoning
+                if delta.get("tool_calls"):
+                    for tc in delta["tool_calls"]:
+                        if tc.get("id"):
+                            tool_calls.append({"id": tc["id"], "function": tc.get("function", {})})
+                        elif tool_calls:
+                            # Append arguments to last tool call
+                            args = tc.get("function", {}).get("arguments", "")
+                            if args:
+                                last_fn = tool_calls[-1].get("function", {})
+                                last_fn["arguments"] = last_fn.get("arguments", "") + args
+                fr = choices[0].get("finish_reason")
+                if fr:
+                    finish_reason = fr
+
+            usage = chunk.get("usage")
+            if usage:
+                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                completion_tokens = usage.get("completion_tokens", completion_tokens)
+
+        # Build Anthropic response
+        content = []
+        stop_reason = "end_turn"
+
+        if finish_reason == "tool_calls":
+            stop_reason = "tool_use"
+        elif finish_reason == "length":
+            stop_reason = "max_tokens"
+
+        if reasoning_text:
+            content.append({"type": "thinking", "thinking": reasoning_text})
+        if full_text:
+            content.append({"type": "text", "text": full_text})
+        for tc in tool_calls:
+            func = tc.get("function", {})
+            try:
+                input_data = json.loads(func.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                input_data = {}
+            content.append({
+                "type": "tool_use",
+                "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:12]}"),
+                "name": func.get("name", ""),
+                "input": input_data,
+            })
+
+        if not content:
+            content = [{"type": "text", "text": ""}]
+
+        return {
+            "id": f"msg_{uuid.uuid4().hex[:12]}",
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+            "model": resolved_name,
+            "stop_reason": stop_reason,
+            "stop_sequence": None,
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+            },
+        }
+
+
+# =============================================================================
 # Embeddings Endpoint
 # =============================================================================
 
@@ -1278,6 +1629,22 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         if not texts:
             raise HTTPException(status_code=400, detail="Input must not be empty")
 
+        # Reject empty strings — they produce zero-vector embeddings that break
+        # distance metrics (cosine similarity, L2 norm). OpenAI API also rejects them.
+        empty_indices = [i for i, t in enumerate(texts) if not t or not t.strip()]
+        if empty_indices:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Input contains empty string(s) at index {empty_indices}. All texts must be non-empty.",
+            )
+
+        # Batch size limit to prevent OOM on large requests
+        if len(texts) > 2048:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many inputs ({len(texts)}). Maximum 2048 texts per request.",
+            )
+
         # Lock protects the load-and-use sequence so a concurrent request
         # cannot hot-swap _embedding_engine between load and embed calls.
         global _embedding_lock
@@ -1328,6 +1695,217 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Rerank Endpoint
+# =============================================================================
+
+_reranker = None  # Lazy-loaded reranker instance
+_reranker_lock = asyncio.Lock()  # Serialize model load/swap
+
+
+@app.post(
+    "/v1/rerank",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_rerank(request: Request):
+    """
+    Rerank documents by relevance to a query.
+
+    Compatible with Cohere/Jina rerank API format.
+    """
+    global _reranker
+
+    body = await request.json()
+    query = body.get("query", "")
+    documents = body.get("documents", [])
+    top_n = body.get("top_n")
+    return_documents = body.get("return_documents", False)
+    model = body.get("model", "")
+
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    if not documents:
+        raise HTTPException(status_code=400, detail="documents list is required and must be non-empty")
+    if len(documents) > 1000:
+        raise HTTPException(status_code=400, detail=f"Too many documents ({len(documents)}). Maximum is 1000.")
+
+    # Normalize documents to strings
+    doc_texts = []
+    for doc in documents:
+        if isinstance(doc, str):
+            doc_texts.append(doc)
+        elif isinstance(doc, dict):
+            doc_texts.append(doc.get("text", str(doc)))
+        else:
+            doc_texts.append(str(doc))
+
+    # Serialize model load/swap — prevents two concurrent requests from
+    # racing on unload+create when different models are requested
+    async with _reranker_lock:
+        # Load reranker if needed (or if model changed)
+        if _reranker is None or (model and _reranker.model_path != model):
+            if not model:
+                raise HTTPException(status_code=400, detail="model is required for first rerank request")
+            from .reranker import Reranker
+            if _reranker is not None:
+                _reranker.unload()
+            _reranker = Reranker(model)
+
+    try:
+        results = _reranker.rerank(
+            query=query,
+            documents=doc_texts,
+            top_n=top_n,
+            return_documents=return_documents,
+        )
+    except Exception as e:
+        logger.error(f"Rerank failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "id": f"rerank-{uuid.uuid4().hex[:8]}",
+        "results": [
+            {
+                "index": r.index,
+                "relevance_score": r.relevance_score,
+                **({"document": {"text": r.document}} if r.document else {}),
+            }
+            for r in results
+        ],
+        "meta": {
+            "model": model or _reranker.model_path,
+        },
+    }
+
+
+# =============================================================================
+# Image Generation Endpoint (OpenAI-compatible /v1/images/generations)
+# =============================================================================
+
+_image_gen = None  # Lazy-loaded ImageGenEngine
+_image_gen_lock = asyncio.Lock()
+
+
+@app.post(
+    "/v1/images/generations",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_image(request: Request):
+    """
+    Generate images from text prompts using Flux models.
+
+    OpenAI-compatible format. Supports: schnell, dev, z-image-turbo, flux2-klein.
+
+    ```json
+    {
+      "model": "schnell",
+      "prompt": "A cat astronaut floating in space",
+      "n": 1,
+      "size": "1024x1024",
+      "quality": "standard",
+      "response_format": "b64_json"
+    }
+    ```
+    """
+    global _image_gen
+
+    body = await request.json()
+    prompt = body.get("prompt", "")
+    model = body.get("model", "schnell")
+    n = min(body.get("n", 1), 4)  # Cap at 4 images per request
+    size = body.get("size", "1024x1024")
+    quality = body.get("quality", "standard")
+    response_format = body.get("response_format", "b64_json")
+    seed = body.get("seed")
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+    if response_format == "url":
+        raise HTTPException(status_code=400, detail="response_format 'url' is not supported. Use 'b64_json'.")
+
+    # Parse size
+    try:
+        width, height = [int(x) for x in size.split("x")]
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"Invalid size format: {size}. Use WxH (e.g., 1024x1024)")
+
+    # Enforce dimension limits (prevent OOM from absurd sizes)
+    MAX_DIM = 4096
+    if width < 64 or height < 64:
+        raise HTTPException(status_code=400, detail=f"Minimum dimension is 64. Got {width}x{height}")
+    if width > MAX_DIM or height > MAX_DIM:
+        raise HTTPException(status_code=400, detail=f"Maximum dimension is {MAX_DIM}. Got {width}x{height}")
+
+    # Map quality to steps
+    steps = body.get("steps")  # Allow explicit steps override
+    if steps is None:
+        if quality == "hd":
+            steps = 30
+        # else: use model default (handled by engine)
+
+    # Map quantize from body or use default
+    quantize = body.get("quantize")
+    negative_prompt = body.get("negative_prompt")
+    model_path = body.get("model_path")  # Custom local model path
+
+    # Guidance scale
+    guidance = body.get("guidance", 3.5)
+
+    async with _image_gen_lock:
+        # Load engine if needed (or if model changed)
+        if _image_gen is None:
+            try:
+                from .image_gen import ImageGenEngine
+                _image_gen = ImageGenEngine()
+            except ImportError:
+                raise HTTPException(
+                    status_code=501,
+                    detail="mflux not installed. Install with: pip install mflux"
+                )
+
+        # If pre-loaded (from serve command), skip re-loading unless explicitly different model
+        already_loaded = _image_gen.is_loaded and (
+            not model or model == _image_gen.model_name or
+            model == _model_name or model == _served_model_name
+        )
+        if not already_loaded:
+            try:
+                if _image_gen.is_loaded:
+                    _image_gen.unload()
+                _image_gen.load(model, quantize=quantize, model_path=model_path)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to load image model '{model}': {e}")
+
+    # Generate images
+    images = []
+    for i in range(n):
+        img_seed = (seed + i) if seed is not None else None
+        try:
+            result = await asyncio.to_thread(
+                _image_gen.generate,
+                prompt=prompt,
+                width=width,
+                height=height,
+                steps=steps,
+                guidance=guidance,
+                seed=img_seed,
+                negative_prompt=negative_prompt,
+            )
+        except Exception as e:
+            logger.error(f"Image generation failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
+
+        images.append({
+            "b64_json": result.b64_json,
+            "revised_prompt": prompt,
+        })
+
+    return {
+        "created": int(time.time()),
+        "data": images,
+    }
 
 
 # =============================================================================
@@ -2640,6 +3218,36 @@ def _dump_sse_json(obj) -> str:
     return json.dumps(obj.model_dump(exclude_none=True), ensure_ascii=True)
 
 
+# ─── SSE keep-alive helper ──────────────────────────────────────────────
+# During long prefills (VLMs, large contexts), no tokens are emitted for
+# many seconds. Clients, proxies, and load balancers may treat the silence
+# as a stalled connection and drop it. This wrapper yields None sentinels
+# when no item arrives within `interval` seconds, which the streaming
+# generators convert to SSE comments (`: keep-alive\n\n`).
+
+_SSE_KEEPALIVE_INTERVAL = 15.0  # seconds
+
+
+async def _stream_with_keepalive(async_gen, interval: float = _SSE_KEEPALIVE_INTERVAL):
+    """Yield items from async generator, inserting None sentinels on timeout."""
+    it = async_gen.__aiter__()
+    pending = asyncio.ensure_future(it.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if done:
+                try:
+                    yield pending.result()
+                except StopAsyncIteration:
+                    return
+                pending = asyncio.ensure_future(it.__anext__())
+            else:
+                yield None  # keep-alive sentinel
+    finally:
+        if not pending.done():
+            pending.cancel()
+
+
 async def stream_chat_completion(
     engine: BaseEngine,
     messages: list,
@@ -2782,8 +3390,13 @@ async def stream_chat_completion(
     last_output = None
 
     try:
-        # Stream content
-        async for output in engine.stream_chat(messages=messages, **kwargs):
+        # Stream content (with SSE keep-alive during long prefills)
+        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs)):
+            # Keep-alive sentinel — emit SSE comment to prevent connection timeout
+            if output is None:
+                yield ": keep-alive\n\n"
+                continue
+
             # Check if client disconnected
             if fastapi_request and await fastapi_request.is_disconnected():
                 logger.info(f"Client disconnected, aborting request {response_id}")
@@ -3404,7 +4017,12 @@ async def stream_responses_api(
         logger.debug("[responses] No reasoning parser active for this request")
 
     try:
-        async for output in engine.stream_chat(messages=messages, **kwargs):
+        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs)):
+            # Keep-alive sentinel — emit SSE comment to prevent connection timeout
+            if output is None:
+                yield ": keep-alive\n\n"
+                continue
+
             if fastapi_request and await fastapi_request.is_disconnected():
                 logger.info(f"Client disconnected, aborting request {response_id}")
                 if hasattr(engine, "abort_request"):

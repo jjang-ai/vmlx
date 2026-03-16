@@ -40,6 +40,10 @@ class ModelInfo:
     is_mllm: bool = False
     is_hybrid: bool = False  # Has Mamba/SSM layers (e.g., Nemotron-H)
     hybrid_pattern: Optional[str] = None
+    is_jang: bool = False  # JANG mixed-precision quantization format
+    jang_target_bits: Optional[float] = None
+    jang_actual_bits: Optional[float] = None
+    jang_block_size: Optional[int] = None
     weight_files: list[str] = field(default_factory=list)
     total_weight_size_gb: float = 0.0
     config: dict[str, Any] = field(default_factory=dict)
@@ -167,6 +171,27 @@ def inspect_model(model_path: str) -> ModelInfo:
     # Estimate parameter count
     param_count = _estimate_param_count(config)
 
+    # JANG format detection
+    is_jang = False
+    jang_target_bits = None
+    jang_actual_bits = None
+    jang_block_size = None
+    for jang_cfg_name in ("jang_config.json", "jjqf_config.json", "mxq_config.json"):
+        jang_cfg_path = path / jang_cfg_name
+        if jang_cfg_path.exists():
+            try:
+                jang_meta = json.loads(jang_cfg_path.read_text())
+                if jang_meta.get("format") in ("jang", "jjqf", "mxq"):
+                    is_jang = True
+                    q = jang_meta.get("quantization", {})
+                    jang_target_bits = q.get("target_bits")
+                    jang_actual_bits = q.get("actual_bits")
+                    jang_block_size = q.get("block_size", 64)
+                    is_quantized = True
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+
     return ModelInfo(
         model_path=str(path.resolve()),
         model_type=model_type,
@@ -189,6 +214,10 @@ def inspect_model(model_path: str) -> ModelInfo:
         is_mllm=is_mllm,
         is_hybrid=is_hybrid,
         hybrid_pattern=hybrid_pattern,
+        is_jang=is_jang,
+        jang_target_bits=jang_target_bits,
+        jang_actual_bits=jang_actual_bits,
+        jang_block_size=jang_block_size,
         weight_files=weight_files,
         total_weight_size_gb=total_size_gb,
         config=config,
@@ -530,7 +559,13 @@ def format_model_info(info: ModelInfo) -> str:
     lines.append(f"Hidden size: {info.hidden_size}")
     lines.append(f"Vocab size: {info.vocab_size:,}")
 
-    if info.is_quantized:
+    if info.is_jang:
+        bits_str = f"{info.jang_actual_bits:.1f}" if info.jang_actual_bits else f"{info.jang_target_bits}"
+        lines.append(
+            f"Quantization: JANG {bits_str}-bit mixed-precision "
+            f"(block_size={info.jang_block_size})"
+        )
+    elif info.is_quantized:
         lines.append(
             f"Quantization: {info.quant_bits}-bit "
             f"(group_size={info.quant_group_size}, mode={info.quant_mode})"

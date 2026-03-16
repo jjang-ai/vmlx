@@ -15,7 +15,10 @@ export function Modal({ title, onClose, children, className = '' }: ModalProps) 
     // Close on Escape
     useEffect(() => {
         const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose()
+            if (e.key === 'Escape') {
+                e.stopPropagation()
+                onClose()
+            }
         }
         window.addEventListener('keydown', handler)
         return () => window.removeEventListener('keydown', handler)

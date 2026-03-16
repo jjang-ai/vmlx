@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://vmlx.net">Website</a> &bull;
-  <a href="https://huggingface.co/dealignai">Models</a> &bull;
+  <a href="https://huggingface.co/JANGQ-AI">Models</a> &bull;
   <a href="#quick-start">Quick Start</a> &bull;
   <a href="#features">Features</a>
 </p>
@@ -391,7 +391,7 @@ Add custom model directories via the directory manager in the Create Session wiz
 
 ## Credits
 
-- **[vMLX Engine](https://github.com/vmlxllm/vmlx)** — Apple Silicon inference engine
+- **[vMLX Engine](https://github.com/jjang-ai/vmlx)** — Apple Silicon inference engine
 - **[MLX](https://github.com/ml-explore/mlx)** — Apple's ML framework
 - **[mlx-lm](https://github.com/ml-explore/mlx-lm)** — LLM inference
 - **[mlx-vlm](https://github.com/Blaizzy/mlx-vlm)** — Vision-language models
@@ -401,4 +401,4 @@ Add custom model directories via the directory manager in the Create Session wiz
 
 ## License
 
-Proprietary — Copyright 2026 ShieldStack LLC. All rights reserved. See [LICENSE](LICENSE).
+Apache 2.0 — Copyright 2026 JANGQ AI. See [LICENSE](LICENSE).

@@ -94,3 +94,57 @@ describe('update manifest validation', () => {
     expect(data.notes).toBe('Bug fixes')
   })
 })
+
+// Mirror of URL validation from src/main/update-checker.ts
+function isValidUpdateUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && (parsed.hostname === 'github.com' || parsed.hostname.endsWith('.github.com'))
+  } catch {
+    return false
+  }
+}
+
+describe('update URL validation', () => {
+  it('accepts valid GitHub HTTPS URL', () => {
+    expect(isValidUpdateUrl('https://github.com/jjang-ai/mlxstudio/releases/tag/v1.0.0')).toBe(true)
+  })
+
+  it('rejects githubusercontent.com (not github.com)', () => {
+    // githubusercontent.com is a CDN domain, not github.com — our validation
+    // only allows *.github.com. Release downloads go through github.com directly.
+    expect(isValidUpdateUrl('https://objects.githubusercontent.com/download/v1.0.0')).toBe(false)
+  })
+
+  it('rejects lookalike domain (evilgithub.com)', () => {
+    expect(isValidUpdateUrl('https://evilgithub.com/fake')).toBe(false)
+  })
+
+  it('rejects HTTP GitHub URL', () => {
+    expect(isValidUpdateUrl('http://github.com/jjang-ai/mlxstudio')).toBe(false)
+  })
+
+  it('rejects non-GitHub HTTPS URL', () => {
+    expect(isValidUpdateUrl('https://evil.com/fake-release')).toBe(false)
+  })
+
+  it('rejects javascript: URL', () => {
+    expect(isValidUpdateUrl('javascript:alert(1)')).toBe(false)
+  })
+
+  it('rejects file: URL', () => {
+    expect(isValidUpdateUrl('file:///etc/passwd')).toBe(false)
+  })
+
+  it('rejects data: URL', () => {
+    expect(isValidUpdateUrl('data:text/html,<h1>hi</h1>')).toBe(false)
+  })
+
+  it('rejects invalid URL string', () => {
+    expect(isValidUpdateUrl('not-a-url')).toBe(false)
+  })
+
+  it('rejects empty string', () => {
+    expect(isValidUpdateUrl('')).toBe(false)
+  })
+})

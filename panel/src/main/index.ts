@@ -17,16 +17,23 @@ import { sessionManager } from './sessions'
 import { db } from './database'
 import { checkEngineVersion, installVllmStreaming } from './vllm-manager'
 import { checkForUpdates } from './update-checker'
+import { ProcessManager } from './process-manager'
+import { createTray, destroyTray, hasTray } from './tray'
+import { startMemoryEnforcer, stopMemoryEnforcer } from './memory-enforcer'
+import { registerModelSettingsHandlers } from './db/model-settings'
+import { registerImageHandlers } from './ipc/image'
 
 let mainWindow: BrowserWindow | null = null
 let handlersRegistered = false
 let isQuitting = false
+const processManager = new ProcessManager()
 
 // Global crash handlers — prevent unhandled errors from silently crashing the app
 process.on('uncaughtException', (error) => {
   console.error('[CRASH] Uncaught exception:', error)
   // Kill all Python processes to prevent orphans
   try { sessionManager.stopAll().catch(() => { }) } catch (_) { }
+  try { processManager.killAll().catch(() => { }) } catch (_) { }
   try {
     dialog.showErrorBox(
       'Unexpected Error',
@@ -82,6 +89,8 @@ function createWindow(): void {
     registerExportHandlers()
     registerPerformanceHandlers()
     registerDeveloperHandlers(() => mainWindow)
+    registerModelSettingsHandlers()
+    registerImageHandlers(() => mainWindow)
 
     // Folder picker for built-in tools working directory
     ipcMain.handle('dialog:openDirectory', async () => {
@@ -166,6 +175,16 @@ function createWindow(): void {
         ]
       }
     })
+  })
+
+  // Close-to-tray: hide window instead of destroying when tray is active
+  mainWindow.on('close', (e) => {
+    if (isQuitting) return  // Let quit proceed
+    const closeToTray = db.getSetting('tray_close_to_tray')
+    if (hasTray() && closeToTray === '1') {
+      e.preventDefault()
+      mainWindow?.hide()
+    }
   })
 
   mainWindow.on('ready-to-show', () => {
@@ -284,9 +303,23 @@ app.whenReady().then(async () => {
   // Start global health monitor for all sessions
   sessionManager.startGlobalMonitor()
 
+  // Initialize tray if enabled in settings
+  const trayEnabled = db.getSetting('tray_enabled')
+  if (trayEnabled !== '0') {
+    createTray(processManager, () => mainWindow)
+  }
+
+  // Start memory enforcer
+  startMemoryEnforcer(processManager)
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+      // Restore minimized or hidden window when dock icon is clicked
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
     }
   })
 })
@@ -297,12 +330,14 @@ app.on('before-quit', async (e) => {
   isQuitting = true
   e.preventDefault()
   try {
+    stopMemoryEnforcer()
+    destroyTray()
     sessionManager.stopGlobalMonitor()
     killActiveDownload()  // Kill any active download subprocess
     killActiveOperation()  // Kill any active developer tool subprocess
     // B15: Timeout stopAll to prevent app from hanging on quit
     await Promise.race([
-      sessionManager.stopAll(),
+      Promise.all([sessionManager.stopAll(), processManager.killAll()]),
       new Promise(resolve => setTimeout(resolve, 15000))
     ])
     console.log('[QUIT] All vmlx-engine processes stopped')
@@ -318,9 +353,25 @@ app.on('before-quit', async (e) => {
   app.exit(0)
 })
 
-// Quit when all windows are closed, except on macOS
+// Handle SIGTERM/SIGINT (e.g., macOS force-quit, killall) — trigger clean shutdown
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    console.log(`[QUIT] Received ${signal} — triggering clean shutdown`)
+    if (!isQuitting) app.quit()
+  })
+}
+
+// Quit when all windows are closed, except on macOS or when tray is active
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
+  // On macOS, keep app alive (standard behavior)
+  if (process.platform === 'darwin') return
+
+  // If tray is active and close-to-tray is enabled, keep alive
+  const closeToTray = db.getSetting('tray_close_to_tray')
+  if (hasTray() && closeToTray !== '0') {
+    console.log('[APP] Window closed, keeping alive in tray')
+    return
   }
+
+  app.quit()
 })

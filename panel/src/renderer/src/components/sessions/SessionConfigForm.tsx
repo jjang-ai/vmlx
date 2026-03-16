@@ -41,10 +41,14 @@ export interface SessionConfig {
   defaultTopP: number
   embeddingModel: string
   additionalArgs: string
+  enableJit: boolean
+  logLevel: string
+  corsOrigins: string
+  maxContextLength: number
 }
 
 export const DEFAULT_CONFIG: SessionConfig = {
-  host: '127.0.0.1',
+  host: '0.0.0.0',
   port: 8000,
   apiKey: '',
   rateLimit: 0,
@@ -84,7 +88,11 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultTemperature: 0,
   defaultTopP: 0,
   embeddingModel: '',
-  additionalArgs: ''
+  additionalArgs: '',
+  enableJit: false,
+  logLevel: 'INFO',
+  corsOrigins: '*',
+  maxContextLength: 0
 }
 
 interface SessionConfigFormProps {
@@ -125,7 +133,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     <div className="space-y-0">
       {/* Server Settings */}
       <Section title="Server Settings" expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
-        <Field label="Host" tooltip="The network interface to bind to. Use 127.0.0.1 (localhost) to only accept local connections, or 0.0.0.0 to accept connections from other machines on your network. For most local use, 127.0.0.1 is recommended.">
+        <Field label="Host" tooltip="The network interface to bind to. Default 0.0.0.0 accepts connections from any machine on your network. Change to 127.0.0.1 (localhost) to restrict to local-only access. If you don't need remote access, consider changing this to 127.0.0.1 for security.">
           <input type="text" value={config.host} onChange={e => onChange('host', e.target.value)} className="cfg-input" />
         </Field>
         <SliderField
@@ -170,6 +178,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="No limit"
         />
+        <Field label="Log Level" tooltip="Controls how much detail the server logs. DEBUG shows everything (very verbose). INFO is the default. WARNING and ERROR reduce noise to only important messages.">
+          <select value={config.logLevel || 'INFO'} onChange={e => onChange('logLevel', e.target.value)} className="cfg-input">
+            <option value="DEBUG">DEBUG (verbose)</option>
+            <option value="INFO">INFO (default)</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR (minimal)</option>
+          </select>
+        </Field>
+        <Field label="CORS Origins" tooltip="Allowed origins for cross-origin API requests (from web browsers). Use * to allow all origins, or a comma-separated list of specific origins (e.g. http://localhost:3000,https://myapp.com). Only matters when external web apps call your API.">
+          <input type="text" value={config.corsOrigins || '*'} onChange={e => onChange('corsOrigins', e.target.value)} placeholder="* (allow all)" className="cfg-input" />
+        </Field>
       </Section>
 
       {/* Concurrent Processing */}
@@ -282,6 +301,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   max={100}
                   step={1}
                   defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
+                  maxInput={100}
                 />
                 {config.usePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
                 <SliderField
@@ -495,6 +515,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Performance */}
       <Section title="Performance & Generation" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')}>
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
+        <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!config.enableJit}
+              onChange={e => onChange('enableJit', e.target.checked)}
+              className="rounded border-input"
+            />
+            <span className="text-xs text-muted-foreground">
+              Fuse Metal operations for faster inference (experimental)
+            </span>
+          </label>
+        </Field>
         <SliderField
           label="Stream Interval"
           tooltip="Controls how often streaming tokens are sent to the client. A value of 1 sends each token immediately (smoothest streaming). Higher values batch multiple tokens together, which improves throughput but makes streaming feel chunkier. Set to 1 for chat use, higher for batch processing."
@@ -514,6 +547,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           max={detectedMaxContext || 262144}
           step={1024}
           defaultValue={Math.min(DEFAULT_CONFIG.maxTokens, detectedMaxContext || DEFAULT_CONFIG.maxTokens)}
+          maxInput={1000000}
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="No limit"
@@ -527,6 +561,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           max={200}
           step={5}
           defaultValue={70}
+          maxInput={200}
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Server default"
@@ -543,6 +578,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           max={100}
           step={1}
           defaultValue={90}
+          maxInput={100}
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Server default"
@@ -977,12 +1013,14 @@ interface SliderFieldProps {
   unlimitedValue?: number
   unlimitedLabel?: string
   disabled?: boolean
+  /** Hard upper limit for number input (prevents server crash from out-of-range values) */
+  maxInput?: number
 }
 
 export function SliderField({
   label, tooltip, value, onChange, min, max, step, defaultValue,
   allowUnlimited = false, unlimitedValue = 0, unlimitedLabel = 'Unlimited',
-  disabled = false
+  disabled = false, maxInput
 }: SliderFieldProps) {
   const isUnlimited = allowUnlimited && value === unlimitedValue
   // Local string state for the number input so typing isn't clamped mid-keystroke.
@@ -1014,8 +1052,9 @@ export function SliderField({
     if (isNaN(num)) {
       onChange(defaultValue)
     } else {
-      // Allow values beyond slider max via direct input (no upper clamp)
-      onChange(Math.max(min, num))
+      // Clamp to valid range — maxInput enforces hard server-side limits
+      const clamped = maxInput != null ? Math.min(maxInput, Math.max(min, num)) : Math.max(min, num)
+      onChange(clamped)
     }
   }
 

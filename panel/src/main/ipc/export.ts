@@ -97,7 +97,7 @@ export function registerExportHandlers(): void {
     if (result.bookmarks && result.bookmarks.length > 0) {
       try {
         const { app } = await import('electron')
-        stopAccess = app.startAccessingSecurityScopedResource(result.bookmarks[0])
+        stopAccess = app.startAccessingSecurityScopedResource(result.bookmarks[0]) as unknown as () => void
       } catch (_) { }
     }
 
@@ -160,6 +160,14 @@ export function registerExportHandlers(): void {
 
     if (messages.length === 0) {
       throw new Error('No messages found in file')
+    }
+
+    // Validate message roles
+    const validRoles = new Set(['system', 'user', 'assistant', 'tool'])
+    for (const msg of messages) {
+      if (!validRoles.has(msg.role)) {
+        msg.role = 'user' // Normalize unknown roles
+      }
     }
 
     // Create chat and add messages

@@ -23,9 +23,15 @@ interface SessionDashboardProps {
   onOpenSession: (sessionId: string) => void
   onConfigureSession: (sessionId: string) => void
   onCreateSession: () => void
+  /** Custom title for the dashboard (default: "Model Sessions") */
+  title?: string
+  /** Custom subtitle */
+  subtitle?: string
+  /** Filter session list by type */
+  filterType?: 'text' | 'image'
 }
 
-export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSession }: SessionDashboardProps) {
+export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSession, title, subtitle, filterType }: SessionDashboardProps) {
   const { showToast } = useToast()
   const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
@@ -36,7 +42,23 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
 
   const loadSessions = async () => {
     try {
-      const list = await window.api.sessions.list()
+      let list = await window.api.sessions.list()
+      // Filter by model type using file-based detection (not name matching)
+      // Image models: have model_index.json (diffusers format) — detected via IPC
+      // Text models: have config.json with model_type (transformers format)
+      if (filterType === 'image' || filterType === 'text') {
+        try {
+          const modelTypes = await window.api.models.detectTypes(list.map((s: any) => s.modelPath))
+          list = list.filter((s: any, i: number) => {
+            const type = modelTypes[i] // 'image' | 'text' | 'unknown'
+            if (filterType === 'image') return type === 'image'
+            if (filterType === 'text') return type !== 'image'
+            return true
+          })
+        } catch {
+          // If detection fails, show all sessions
+        }
+      }
       setSessions(list)
     } catch (err) {
       console.error('Failed to load sessions:', err)
@@ -166,7 +188,10 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
     <div className="p-6 overflow-auto h-full">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Sessions</h1>
+        <div>
+          <h1 className="text-2xl font-bold">{title || 'Sessions'}</h1>
+          {subtitle && <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>}
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => { setShowDirManager(!showDirManager); if (!showDirManager) loadDirectories() }}

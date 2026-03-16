@@ -32,6 +32,11 @@ function normalizePath(p: string): string {
   return p.replace(/\/+$/, '')
 }
 
+/** Resolve bind address to connectable address (0.0.0.0 → 127.0.0.1) */
+export function connectHost(host: string): string {
+  return host === '0.0.0.0' ? '127.0.0.1' : host
+}
+
 /** Estimate model memory usage from safetensors file sizes. Returns bytes or 0 if unknown. */
 function estimateModelMemory(modelPath: string): number {
   try {
@@ -289,7 +294,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const id = uuidv4()
-    const host = config.host || '127.0.0.1'
+    const host = config.host || '0.0.0.0'
     const port = config.port || await this.findAvailablePort()
     const now = Date.now()
 
@@ -408,14 +413,18 @@ export class SessionManager extends EventEmitter {
           'Please download an MLX-format version (safetensors) from HuggingFace Hub.'
         )
       }
-      if (!hasConfig) {
+      // Diffusers image models have model_index.json instead of config.json — that's valid
+      const hasModelIndex = files.includes('model_index.json')
+      const hasTransformerDir = files.includes('transformer')
+      if (!hasConfig && !hasModelIndex && !hasTransformerDir) {
         throw new Error(
-          'Model directory is missing config.json. This may not be a valid MLX model. ' +
-          'vmlx-engine requires MLX-format models with config.json and .safetensors files.'
+          'Model directory is missing config.json (text) or model_index.json (image). ' +
+          'vmlx-engine requires MLX-format models with config.json and .safetensors files, ' +
+          'or diffusers-format image models with model_index.json.'
         )
       }
     } catch (e) {
-      if ((e as Error).message.includes('GGUF format') || (e as Error).message.includes('config.json')) throw e
+      if ((e as Error).message.includes('GGUF format') || (e as Error).message.includes('missing config.json') || (e as Error).message.includes('model_index.json')) throw e
       // Ignore filesystem errors — let the server handle them
     }
 
@@ -710,6 +719,8 @@ export class SessionManager extends EventEmitter {
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs',
     'enableAutoToolChoice',
+    'logLevel', 'corsOrigins',
+    'enableJit',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -790,7 +801,7 @@ export class SessionManager extends EventEmitter {
         const detected = detectModelConfigFromDir(proc.modelPath)
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
-          host: '127.0.0.1',
+          host: '0.0.0.0',
           port: proc.port,
           timeout: 300,
           maxNumSeqs: 256,
@@ -801,7 +812,7 @@ export class SessionManager extends EventEmitter {
           enablePrefixCache: true,
           prefixCacheSize: 100,
           cacheMemoryMb: 0,
-          cacheMemoryPercent: 20,
+          cacheMemoryPercent: 30,
           noMemoryAwareCache: false,
           usePagedCache: detected.usePagedCache ?? true,
           pagedCacheBlockSize: 64,
@@ -816,7 +827,7 @@ export class SessionManager extends EventEmitter {
           id,
           modelPath: proc.modelPath,
           modelName: proc.modelName || proc.modelPath.split('/').pop() || proc.modelPath,
-          host: '127.0.0.1',
+          host: '0.0.0.0',
           port: proc.port,
           pid: proc.pid,
           status: 'running',
@@ -933,7 +944,7 @@ export class SessionManager extends EventEmitter {
 
         try {
           const res = await fetch(
-            `http://${session.host}:${session.port}/health`,
+            `http://${connectHost(session.host)}:${session.port}/health`,
             { signal: AbortSignal.timeout(10000) }
           )
           if (res.ok) {
@@ -1145,13 +1156,27 @@ export class SessionManager extends EventEmitter {
 
   buildArgs(config: ServerConfig): string[] {
     const args = ['serve', config.modelPath]
+    const isImage = config.modelType === 'image'
 
-    // Server settings — always pass explicitly
+    // Server settings — always pass explicitly (both text and image)
     args.push('--host', config.host)
     args.push('--port', config.port.toString())
     args.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
 
     if (config.rateLimit && config.rateLimit > 0) args.push('--rate-limit', config.rateLimit.toString())
+    if (config.apiKey) args.push('--api-key', config.apiKey)
+
+    // Image models: skip all text-specific flags (parsers, batching, cache, etc.)
+    // The Python server auto-detects image vs text from the model directory
+    if (isImage) {
+      // Logging + CORS still apply to image servers
+      if (config.logLevel && config.logLevel !== 'INFO') args.push('--log-level', config.logLevel)
+      if (config.corsOrigins && config.corsOrigins !== '*') args.push('--allowed-origins', config.corsOrigins)
+      if (config.additionalArgs?.trim()) args.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
+      return args
+    }
+
+    // === Text model flags below ===
 
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
@@ -1316,10 +1341,12 @@ export class SessionManager extends EventEmitter {
     }
 
     // Generation defaults (slider value is integer ×100, convert to float)
-    if (config.defaultTemperature && config.defaultTemperature > 0) {
+    // Slider uses 0 as "Server default" sentinel (unlimitedValue=0), so > 0 is correct.
+    // The minimum real value on the slider is step=5 (temp=0.05).
+    if (config.defaultTemperature != null && config.defaultTemperature > 0) {
       args.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
     }
-    if (config.defaultTopP && config.defaultTopP > 0) {
+    if (config.defaultTopP != null && config.defaultTopP > 0) {
       args.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
     }
 
@@ -1328,9 +1355,22 @@ export class SessionManager extends EventEmitter {
       args.push('--embedding-model', config.embeddingModel)
     }
 
+    // JIT compilation
+    if (config.enableJit) args.push('--enable-jit')
+
+    // Logging
+    if (config.logLevel && config.logLevel !== 'INFO') {
+      args.push('--log-level', config.logLevel)
+    }
+
+    // CORS
+    if (config.corsOrigins && config.corsOrigins !== '*') {
+      args.push('--allowed-origins', config.corsOrigins)
+    }
+
     // Additional arguments
-    if (config.additionalArgs) {
-      args.push(...config.additionalArgs.trim().split(/\s+/))
+    if (config.additionalArgs?.trim()) {
+      args.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
     }
 
     return args
@@ -1395,6 +1435,24 @@ export class SessionManager extends EventEmitter {
       const result = execSync('which vmlx-engine', { encoding: 'utf-8', timeout: 3000 }).trim()
       if (result && existsSync(result)) return { type: 'system', binaryPath: result }
     } catch (_) { }
+
+    // Development fallback: project .venv relative to source directory
+    try {
+      const sourceDir = join(__dirname, '..', '..', '..')
+      const venvPython = join(sourceDir, '.venv', 'bin', 'python3')
+      if (existsSync(venvPython)) {
+        try {
+          execFileSync(venvPython, ['-s', '-c', 'import vmlx_engine'], {
+            encoding: 'utf-8',
+            timeout: 10000,
+            env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+          })
+          console.log(`[SESSIONS] Using project venv: ${venvPython}`)
+          return { type: 'bundled', pythonPath: venvPython }
+        } catch (_) { }
+      }
+    } catch (_) { }
+
     return null
   }
 
@@ -1505,7 +1563,7 @@ export class SessionManager extends EventEmitter {
 
   private async waitForReady(host: string, port: number, maxWait = 120000, sessionId?: string): Promise<void> {
     const startTime = Date.now()
-    const healthUrl = `http://${host}:${port}/health`
+    const healthUrl = `http://${connectHost(host)}:${port}/health`
 
     while (Date.now() - startTime < maxWait) {
       // Abort early if the process exited while we were waiting

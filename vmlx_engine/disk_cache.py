@@ -214,10 +214,11 @@ class DiskCacheManager:
 
                 with self._stats_lock:
                     self.hits += 1
-                logger.info(
-                    f"Disk cache hit: {len(tokens)} tokens, "
-                    f"file={file_name} ({file_path.stat().st_size / 1024 / 1024:.1f}MB)"
-                )
+                try:
+                    size_mb = file_path.stat().st_size / 1024 / 1024
+                    logger.info(f"Disk cache hit: {len(tokens)} tokens, file={file_name} ({size_mb:.1f}MB)")
+                except OSError:
+                    logger.info(f"Disk cache hit: {len(tokens)} tokens, file={file_name}")
                 return cache
 
             except Exception as e:

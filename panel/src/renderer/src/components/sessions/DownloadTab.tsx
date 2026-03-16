@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useToast } from '../Toast'
 
 interface HFModel {
   id: string
@@ -34,7 +35,9 @@ function timeAgo(dateStr: string | null | undefined): string {
 }
 
 export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
+  const { showToast } = useToast()
   const [searchQuery, setSearchQuery] = useState('')
+  const [modelType, setModelType] = useState<'text' | 'image'>('text')
   const [sortBy, setSortBy] = useState<string>('downloads')
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [searchResults, setSearchResults] = useState<HFModel[]>([])
@@ -73,7 +76,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         }
       }
       setLocalModelIds(ids)
-    }).catch(() => {})
+    }).catch((err) => console.error('Failed to scan models:', err))
     window.api.models.getRecommendedModels()
       .then(setRecommended)
       .catch(err => console.error('Failed to load recommended models:', err))
@@ -85,7 +88,12 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       if (status.active) repos.add(status.active.repoId)
       for (const q of status.queue || []) repos.add(q.repoId)
       setDownloadingRepos(repos)
-    }).catch(() => { })
+    }).catch((err) => console.error('Failed to get download status:', err))
+
+    // Cleanup search debounce timer on unmount
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    }
   }, [])
 
   // Listen for download events
@@ -101,6 +109,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         return next
       })
       if (data.status === 'complete') {
+        showToast('success', `Download complete: ${data.repoId}`)
         onDownloadCompleteRef.current()
         // Refresh local model list so the "Downloaded" badge appears immediately
         window.api.models.scan().then((models: any[]) => {
@@ -115,7 +124,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
             }
           }
           setLocalModelIds(ids)
-        }).catch(() => {})
+        }).catch((err) => console.error('Failed to refresh models after download:', err))
       }
     })
 
@@ -125,7 +134,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         next.delete(data.repoId)
         return next
       })
-      setDownloadError(`${data.repoId.split('/').pop()}: ${data.error}`)
+      const errMsg = `${data.repoId.split('/').pop()}: ${data.error}`
+      setDownloadError(errMsg)
+      showToast('error', 'Download failed', errMsg)
     })
 
     return () => {
@@ -136,7 +147,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   }, [])
 
   // Debounced search
-  const doSearch = useCallback(async (query: string, sort: string, dir: 'desc' | 'asc') => {
+  const doSearch = useCallback(async (query: string, sort: string, dir: 'desc' | 'asc', type: 'text' | 'image' = 'text') => {
     if (!query.trim()) {
       setSearchResults([])
       setError(null)
@@ -145,7 +156,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     setLoading(true)
     setError(null)
     try {
-      const results = await window.api.models.searchHF(query.trim(), sort, dir)
+      const results = await window.api.models.searchHF(query.trim(), sort, dir, type === 'image' ? 'image' : undefined)
       setSearchResults(results)
     } catch (err) {
       setError((err as Error).message)
@@ -163,16 +174,24 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       setError(null)
       return
     }
-    searchTimerRef.current = setTimeout(() => doSearch(query, sortBy, sortDir), 400)
-  }, [doSearch, sortBy, sortDir])
+    searchTimerRef.current = setTimeout(() => doSearch(query, sortBy, sortDir, modelType), 400)
+  }, [doSearch, sortBy, sortDir, modelType])
 
   const handleSortChange = useCallback((newSort: string) => {
     setSortBy(newSort)
     if (searchQuery.trim()) {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
-      doSearch(searchQuery, newSort, sortDir)
+      doSearch(searchQuery, newSort, sortDir, modelType)
     }
-  }, [doSearch, searchQuery, sortDir])
+  }, [doSearch, searchQuery, sortDir, modelType])
+
+  const handleModelTypeChange = useCallback((type: 'text' | 'image') => {
+    setModelType(type)
+    if (searchQuery.trim()) {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+      doSearch(searchQuery, sortBy, sortDir, type)
+    }
+  }, [doSearch, searchQuery, sortBy, sortDir])
 
   const handleDirToggle = useCallback(() => {
     const newDir = sortDir === 'desc' ? 'asc' : 'desc'
@@ -208,7 +227,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   }
 
   const displayModels = searchQuery.trim() ? searchResults : recommended
-  const showSection = searchQuery.trim() ? 'Search Results' : 'Recommended (ShieldStack LLC)'
+  const showSection = searchQuery.trim() ? 'Search Results' : 'Recommended (JANGQ AI)'
 
   return (
     <div className="space-y-4">
@@ -230,11 +249,25 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         </button>
       </div>
 
-      {/* Search + Sort */}
+      {/* Model Type Filter + Search + Sort */}
       <div className="flex items-center gap-2">
+        <div className="flex rounded border border-border overflow-hidden flex-shrink-0">
+          <button
+            onClick={() => handleModelTypeChange('text')}
+            className={`px-2.5 py-2 text-xs transition-colors ${modelType === 'text' ? 'bg-primary/15 text-primary font-medium' : 'text-muted-foreground hover:bg-accent'}`}
+          >
+            Text
+          </button>
+          <button
+            onClick={() => handleModelTypeChange('image')}
+            className={`px-2.5 py-2 text-xs transition-colors ${modelType === 'image' ? 'bg-violet-500/15 text-violet-400 font-medium' : 'text-muted-foreground hover:bg-accent'}`}
+          >
+            Image
+          </button>
+        </div>
         <input
           type="text"
-          placeholder="Search MLX models..."
+          placeholder={modelType === 'image' ? 'Search image models (flux, sdxl, z-image...)' : 'Search MLX models...'}
           value={searchQuery}
           onChange={(e) => handleSearch(e.target.value)}
           className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm"

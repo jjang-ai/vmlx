@@ -1,5 +1,6 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import { readdir, stat, access, readFile, mkdir, writeFile, unlink, rm } from 'fs/promises'
+import { readdir, stat, access, readFile, mkdir, writeFile, unlink, rm, realpath } from 'fs/promises'
+import { existsSync, readFileSync } from 'fs'
 import { join, basename } from 'path'
 import { homedir } from 'os'
 import { spawn, ChildProcess } from 'child_process'
@@ -47,15 +48,41 @@ interface ModelInfo {
   quantization?: string
 }
 
-/** Check if a model directory contains MLX-format files (safetensors + config.json) */
-async function detectModelFormat(modelPath: string): Promise<'mlx' | 'gguf' | 'unknown'> {
+/** Check if a model directory contains MLX-format files or diffusers format.
+ *  Strict: config.json must have model_type or architectures to be a real model,
+ *  not just any directory with a stray config.json. */
+async function detectModelFormat(modelPath: string): Promise<'mlx' | 'diffusers' | 'gguf' | 'unknown'> {
   try {
     const files = await readdir(modelPath)
+
+    // Diffusers / mflux image models:
+    // - model_index.json at root (standard diffusers)
+    // - transformer/ + text_encoder/ subdirs (mflux quantized models)
+    // - transformer/config.json without root config.json model_type (custom diffusion arch)
+    if (files.includes('model_index.json')) return 'diffusers'
+    if (files.includes('transformer') && files.includes('text_encoder')) return 'diffusers'
+    if (files.includes('transformer') && files.includes('vae')) return 'diffusers'
+
     const hasGGUF = files.some(f => f.endsWith('.gguf') || f.endsWith('.gguf.part'))
     const hasSafetensors = files.some(f => f.endsWith('.safetensors'))
     const hasConfig = files.includes('config.json')
 
-    if (hasSafetensors && hasConfig) return 'mlx'
+    // Strict MLX model check: config.json must contain model_type or architectures
+    // This prevents parent directories with stray config.json from being detected as models
+    if (hasSafetensors && hasConfig) {
+      try {
+        const cfg = JSON.parse(readFileSync(join(modelPath, 'config.json'), 'utf-8'))
+        if (cfg.model_type || cfg.architectures || cfg.quantization) return 'mlx'
+        // Also accept JANG models
+        if (files.some(f => f === 'jang_config.json' || f === 'jjqf_config.json' || f === 'mxq_config.json')) return 'mlx'
+        // config.json without model_type/architectures is not a model (could be scheduler config, etc.)
+        return 'unknown'
+      } catch {
+        return 'unknown'
+      }
+    }
+    // JANG-only model (has jang_config.json + safetensors but config.json may lack model_type)
+    if (hasSafetensors && files.some(f => f === 'jang_config.json' || f === 'jjqf_config.json' || f === 'mxq_config.json')) return 'mlx'
     if (hasGGUF) return 'gguf'
     return 'unknown'
   } catch {
@@ -64,35 +91,43 @@ async function detectModelFormat(modelPath: string): Promise<'mlx' | 'gguf' | 'u
 }
 
 const BUILTIN_MODEL_PATHS = [
-  join(homedir(), '.lmstudio/models'),
+  join(homedir(), '.mlxstudio/models'),
   join(homedir(), '.cache/huggingface/hub'),
   join(homedir(), '.exo/models'),
 ]
 
 const SETTINGS_KEY = 'model_scan_directories'
+const IMAGE_SETTINGS_KEY = 'image_model_scan_directories'
+
+const BUILTIN_IMAGE_PATHS = [
+  join(homedir(), '.mlxstudio/models/image'),
+  join(homedir(), '.mlxstudio/models/xcreates'),
+]
 
 /** Get the list of directories to scan: user-configured + built-in defaults */
-function getModelDirectories(): string[] {
-  const saved = db.getSetting(SETTINGS_KEY)
+function getModelDirectories(modelType?: string): string[] {
+  const key = modelType === 'image' ? IMAGE_SETTINGS_KEY : SETTINGS_KEY
+  const builtins = modelType === 'image' ? BUILTIN_IMAGE_PATHS : BUILTIN_MODEL_PATHS
+  const saved = db.getSetting(key)
   if (saved) {
     try {
       const userDirs: string[] = JSON.parse(saved)
-      // Merge: user dirs first, then built-in defaults (deduplicated)
       const all = [...userDirs]
-      for (const d of BUILTIN_MODEL_PATHS) {
+      for (const d of builtins) {
         if (!all.includes(d)) all.push(d)
       }
       return all
     } catch {
-      return BUILTIN_MODEL_PATHS
+      return builtins
     }
   }
-  return BUILTIN_MODEL_PATHS
+  return builtins
 }
 
 /** Get only user-configured directories (not the built-in defaults) */
-function getUserDirectories(): string[] {
-  const saved = db.getSetting(SETTINGS_KEY)
+function getUserDirectories(modelType?: string): string[] {
+  const key = modelType === 'image' ? IMAGE_SETTINGS_KEY : SETTINGS_KEY
+  const saved = db.getSetting(key)
   if (saved) {
     try {
       return JSON.parse(saved)
@@ -103,8 +138,9 @@ function getUserDirectories(): string[] {
   return []
 }
 
-function setUserDirectories(dirs: string[]): void {
-  db.setSetting(SETTINGS_KEY, JSON.stringify(dirs))
+function setUserDirectories(dirs: string[], modelType?: string): void {
+  const key = modelType === 'image' ? IMAGE_SETTINGS_KEY : SETTINGS_KEY
+  db.setSetting(key, JSON.stringify(dirs))
 }
 
 async function getDirectorySize(dirPath: string): Promise<number> {
@@ -156,10 +192,29 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
     if (depth > maxDepth) return
 
     try {
-      // Check if current directory is a valid MLX model
+      // Check if current directory is a valid model (MLX text or diffusers image)
       const format = await detectModelFormat(currentPath)
 
-      // We only support MLX format (.safetensors + config.json). GGUF and unknown formats are ignored.
+      // Diffusers models: stop recursion here (don't descend into transformer/, vae/, etc.)
+      if (format === 'diffusers') {
+        const size = await getDirectorySize(currentPath)
+        let id = basename(currentPath)
+        if (depth > 1) {
+          const parent = basename(join(currentPath, '..'))
+          if (parent !== basename(basePath)) id = `${parent}/${id}`
+        }
+        models.push({
+          id,
+          name: id,
+          path: currentPath,
+          size: formatSize(size),
+          format: 'mlx',  // Treat as compatible for UI purposes
+          quantization: 'Image Model',
+        })
+        return  // Don't recurse into subdirectories of diffusers models
+      }
+
+      // MLX text models (.safetensors + config.json)
       if (format === 'mlx') {
         const size = await getDirectorySize(currentPath)
 
@@ -183,6 +238,21 @@ async function scanModelsInPath(basePath: string): Promise<ModelInfo[]> {
               quantization = configJson.quantization
             }
           } catch { /* no config or parse error */ }
+          // JANG format: read jang_config.json (or legacy mxq_config.json) for actual bit width
+          if (!quantization) {
+            for (const cfgName of ['jang_config.json', 'jjqf_config.json', 'mxq_config.json']) {
+              try {
+                const jangRaw = await readFile(join(currentPath, cfgName), 'utf-8')
+                const jangConfig = JSON.parse(jangRaw)
+                if (jangConfig.format === 'jang' || jangConfig.format === 'jjqf' || jangConfig.format === 'mxq') {
+                  const profile = jangConfig.quantization?.profile
+                  const bits = jangConfig.quantization?.actual_bits || jangConfig.quantization?.target_bits
+                  quantization = profile ? `${profile} (${bits}b)` : (bits ? `JANG ${bits}-bit` : 'JANG')
+                  break
+                }
+              } catch { /* not this config */ }
+            }
+          }
           if (!quantization) {
             const nameMatch = id.toLowerCase().match(/\b(4bit|8bit|3bit|6bit|fp16|bf16|fp32)\b/)
             if (nameMatch) quantization = nameMatch[1]
@@ -244,8 +314,8 @@ export function killActiveDownload(): void {
 
 export function registerModelHandlers(): void {
   // Scan for available models in all configured directories
-  ipcMain.handle('models:scan', async () => {
-    const dirs = getModelDirectories()
+  ipcMain.handle('models:scan', async (_, modelType?: string) => {
+    const dirs = getModelDirectories(modelType)
     console.log('[MODELS] Scanning directories:', dirs)
     const allModels: ModelInfo[] = []
 
@@ -259,8 +329,21 @@ export function registerModelHandlers(): void {
       }
     }
 
-    console.log(`[MODELS] Total models found: ${allModels.length}`)
-    return allModels
+    // Deduplicate by resolved absolute path — prevents duplicates when scan paths overlap
+    // (e.g., ~/.mlxstudio/models and ~/.mlxstudio/models/image both scan the same model)
+    // Resolve symlinks for dedup, but keep original paths for display
+    const resolvedPaths = await Promise.all(allModels.map(async m => {
+      try { return await realpath(m.path) } catch { return m.path }
+    }))
+    const seen = new Set<string>()
+    const deduped = allModels.filter((m, i) => {
+      const resolved = resolvedPaths[i].replace(/\/+$/, '')
+      if (seen.has(resolved)) return false
+      seen.add(resolved)
+      return true
+    })
+    console.log(`[MODELS] Total models found: ${deduped.length} (${allModels.length - deduped.length} duplicates removed)`)
+    return deduped
   })
 
   // Get model info by path
@@ -280,39 +363,39 @@ export function registerModelHandlers(): void {
     }
   })
 
-  // Get all scan directories (user + built-in)
-  ipcMain.handle('models:getDirectories', async () => {
+  // Get all scan directories (user + built-in) — optional modelType for separate image dirs
+  ipcMain.handle('models:getDirectories', async (_, modelType?: string) => {
+    const builtins = modelType === 'image' ? BUILTIN_IMAGE_PATHS : BUILTIN_MODEL_PATHS
     return {
-      directories: getModelDirectories(),
-      userDirectories: getUserDirectories(),
-      builtinDirectories: BUILTIN_MODEL_PATHS
+      directories: getModelDirectories(modelType),
+      userDirectories: getUserDirectories(modelType),
+      builtinDirectories: builtins
     }
   })
 
-  // Add a directory to the scan list
-  ipcMain.handle('models:addDirectory', async (_, dirPath: string) => {
-    const userDirs = getUserDirectories()
-    // Normalize and deduplicate
+  // Add a directory to the scan list — optional modelType for separate image dirs
+  ipcMain.handle('models:addDirectory', async (_, dirPath: string, modelType?: string) => {
+    const userDirs = getUserDirectories(modelType)
+    const builtins = modelType === 'image' ? BUILTIN_IMAGE_PATHS : BUILTIN_MODEL_PATHS
     const normalized = dirPath.replace(/\/+$/, '')
-    if (userDirs.includes(normalized) || BUILTIN_MODEL_PATHS.includes(normalized)) {
+    if (userDirs.includes(normalized) || builtins.includes(normalized)) {
       return { success: false, error: 'Directory already in scan list' }
     }
-    // Verify the directory exists
     try {
       await access(normalized)
     } catch {
       return { success: false, error: 'Directory does not exist or is not accessible' }
     }
     userDirs.push(normalized)
-    setUserDirectories(userDirs)
+    setUserDirectories(userDirs, modelType)
     return { success: true }
   })
 
-  // Remove a user directory from the scan list
-  ipcMain.handle('models:removeDirectory', async (_, dirPath: string) => {
-    const userDirs = getUserDirectories()
+  // Remove a user directory from the scan list — optional modelType
+  ipcMain.handle('models:removeDirectory', async (_, dirPath: string, modelType?: string) => {
+    const userDirs = getUserDirectories(modelType)
     const filtered = userDirs.filter(d => d !== dirPath)
-    setUserDirectories(filtered)
+    setUserDirectories(filtered, modelType)
     return { success: true }
   })
 
@@ -321,10 +404,39 @@ export function registerModelHandlers(): void {
     return detectModelConfigFromDir(modelPath)
   })
 
+  // Detect model types (image vs text) by checking file structure, not names
+  ipcMain.handle('models:detectTypes', async (_, modelPaths: string[]) => {
+    return modelPaths.map(p => {
+      try {
+        // Diffusers / mflux image models
+        if (existsSync(join(p, 'model_index.json'))) return 'image'
+        if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'text_encoder'))) return 'image'
+        if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'vae'))) return 'image'
+        // Standard text models have config.json with model_type
+        if (existsSync(join(p, 'config.json'))) {
+          try {
+            const cfg = JSON.parse(readFileSync(join(p, 'config.json'), 'utf-8'))
+            // Check if it has pipeline_tag for image generation
+            if (cfg.pipeline_tag === 'text-to-image' || cfg.pipeline_tag === 'image-to-image') return 'image'
+            // Has model_type = text model (transformers)
+            if (cfg.model_type) return 'text'
+          } catch {}
+        }
+        // JANG models are text models
+        if (existsSync(join(p, 'jang_config.json'))) return 'text'
+        // Remote sessions
+        if (p.startsWith('remote://')) return 'text'
+        return 'unknown'
+      } catch {
+        return 'unknown'
+      }
+    })
+  })
+
   // Open a native directory picker dialog
   ipcMain.handle('models:browseDirectory', async () => {
     // Default to LM Studio models folder if it exists, otherwise home
-    const lmStudioPath = join(homedir(), '.lmstudio', 'models')
+    const lmStudioPath = join(homedir(), '.mlxstudio', 'models')
     let defaultPath: string | undefined
     try {
       await access(lmStudioPath)
@@ -668,12 +780,17 @@ export function registerModelHandlers(): void {
     return undefined
   }
 
-  ipcMain.handle('models:searchHF', async (_, query: string, sortBy?: string, sortDir?: string) => {
+  ipcMain.handle('models:searchHF', async (_, query: string, sortBy?: string, sortDir?: string, modelType?: string) => {
     const params = new URLSearchParams({
       search: query,
-      filter: 'mlx',
       limit: '30'
     })
+    // Filter by model type: 'image' searches text-to-image models, default searches MLX text models
+    if (modelType === 'image') {
+      params.set('filter', 'text-to-image')
+    } else {
+      params.set('filter', 'mlx')
+    }
     // HF API only supports direction=-1 (descending). For ascending, we fetch
     // descending and reverse client-side.
     const wantAsc = sortDir === 'asc'
@@ -710,16 +827,33 @@ export function registerModelHandlers(): void {
     return results
   })
 
-  // Get recommended models from shieldstackllc
+  // Get recommended models from JANGQ-AI
   ipcMain.handle('models:getRecommendedModels', async () => {
-    const url = `https://huggingface.co/api/models?author=shieldstackllc&sort=downloads&direction=-1`
-    console.log('[MODELS] Fetching shieldstackllc recommended models')
-
-    const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
-    if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
-    const models = await response.json()
-
-    return models.map((m: any) => mapHFModel(m))
+    console.log('[MODELS] Fetching JANGQ-AI recommended models')
+    const urls = [
+      `https://huggingface.co/api/models?author=JANGQ-AI&sort=downloads&direction=-1`,
+    ]
+    const allModels: any[] = []
+    for (const url of urls) {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+        if (response.ok) {
+          const models = await response.json()
+          allModels.push(...models)
+        }
+      } catch (err) {
+        console.warn(`[MODELS] Failed to fetch from ${url}:`, err)
+      }
+    }
+    // Deduplicate by ID, sort by downloads
+    const seen = new Set<string>()
+    const unique = allModels.filter(m => {
+      if (seen.has(m.id || m.modelId)) return false
+      seen.add(m.id || m.modelId)
+      return true
+    })
+    unique.sort((a, b) => (b.downloads || 0) - (a.downloads || 0))
+    return unique.map((m: any) => mapHFModel(m))
   })
 
   // Start a download (non-blocking — returns jobId immediately)

@@ -3,7 +3,7 @@
   "version": "1.2.2",
   "description": "The most complete MLX inference engine for Mac — voice, vision, Mamba, 5-layer caching, 20+ agentic tools",
   "main": "dist/main/index.mjs",
-  "author": "ShieldStack LLC",
+  "author": "JANGQ AI",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://vmlx.net",
   "scripts": {
@@ -77,7 +77,7 @@
   "build": {
     "appId": "net.vmlx.app",
     "productName": "vMLX",
-    "copyright": "Copyright 2026 ShieldStack LLC. All rights reserved.",
+    "copyright": "Copyright 2026 JANGQ AI. All rights reserved.",
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/icon.png",

@@ -191,6 +191,48 @@ class ChatCompletionRequest(BaseModel):
     # enable_thinking here is used as fallback when top-level enable_thinking is None
     chat_template_kwargs: dict | None = None
 
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, v):
+        if v is not None and (v < 0 or v > 2):
+            raise ValueError("temperature must be between 0 and 2")
+        return v
+
+    @field_validator("top_p")
+    @classmethod
+    def validate_top_p(cls, v):
+        if v is not None and (v <= 0 or v > 1):
+            raise ValueError("top_p must be between 0 (exclusive) and 1")
+        return v
+
+    @field_validator("max_tokens")
+    @classmethod
+    def validate_max_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("max_tokens must be at least 1")
+        return v
+
+    @field_validator("top_k")
+    @classmethod
+    def validate_top_k(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("top_k must be >= 0")
+        return v
+
+    @field_validator("min_p")
+    @classmethod
+    def validate_min_p(cls, v):
+        if v is not None and (v < 0 or v > 1):
+            raise ValueError("min_p must be between 0 and 1")
+        return v
+
+    @field_validator("repetition_penalty")
+    @classmethod
+    def validate_repetition_penalty(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("repetition_penalty must be > 0")
+        return v
+
     @field_validator("stop")
     @classmethod
     def normalize_stop(cls, v):
@@ -279,6 +321,55 @@ class CompletionRequest(BaseModel):
     repetition_penalty: float | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, v):
+        if v is not None and (v < 0 or v > 2):
+            raise ValueError("temperature must be between 0 and 2")
+        return v
+
+    @field_validator("top_p")
+    @classmethod
+    def validate_top_p(cls, v):
+        if v is not None and (v <= 0 or v > 1):
+            raise ValueError("top_p must be between 0 (exclusive) and 1")
+        return v
+
+    @field_validator("max_tokens")
+    @classmethod
+    def validate_max_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("max_tokens must be at least 1")
+        return v
+
+    @field_validator("top_k")
+    @classmethod
+    def validate_top_k(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("top_k must be >= 0")
+        return v
+
+    @field_validator("min_p")
+    @classmethod
+    def validate_min_p(cls, v):
+        if v is not None and (v < 0 or v > 1):
+            raise ValueError("min_p must be between 0 and 1")
+        return v
+
+    @field_validator("repetition_penalty")
+    @classmethod
+    def validate_repetition_penalty(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("repetition_penalty must be > 0")
+        return v
+
+    @field_validator("stop")
+    @classmethod
+    def normalize_stop(cls, v):
+        if isinstance(v, str):
+            return [v]
+        return v
 
 
 class CompletionChoice(BaseModel):
@@ -387,6 +478,13 @@ class AudioSpeechRequest(BaseModel):
     voice: str = "af_heart"
     speed: float = 1.0
     response_format: str = "wav"
+
+    @field_validator("speed")
+    @classmethod
+    def validate_speed(cls, v):
+        if v <= 0 or v > 4.0:
+            raise ValueError("speed must be between 0 (exclusive) and 4.0")
+        return v
 
 
 # =============================================================================
@@ -536,6 +634,48 @@ class ResponsesRequest(BaseModel):
     # Video processing controls (MLLM models)
     video_fps: float | None = None
     video_max_frames: int | None = None
+
+    @field_validator("temperature")
+    @classmethod
+    def validate_temperature(cls, v):
+        if v is not None and (v < 0 or v > 2):
+            raise ValueError("temperature must be between 0 and 2")
+        return v
+
+    @field_validator("top_p")
+    @classmethod
+    def validate_top_p(cls, v):
+        if v is not None and (v <= 0 or v > 1):
+            raise ValueError("top_p must be between 0 (exclusive) and 1")
+        return v
+
+    @field_validator("max_output_tokens")
+    @classmethod
+    def validate_max_output_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("max_output_tokens must be at least 1")
+        return v
+
+    @field_validator("top_k")
+    @classmethod
+    def validate_top_k(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("top_k must be >= 0")
+        return v
+
+    @field_validator("min_p")
+    @classmethod
+    def validate_min_p(cls, v):
+        if v is not None and (v < 0 or v > 1):
+            raise ValueError("min_p must be between 0 and 1")
+        return v
+
+    @field_validator("repetition_penalty")
+    @classmethod
+    def validate_repetition_penalty(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("repetition_penalty must be > 0")
+        return v
 
     @field_validator("stop")
     @classmethod

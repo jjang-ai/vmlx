@@ -3,12 +3,31 @@ import { ArrowLeft, CheckCircle2, XCircle, Play, Settings2, FolderOpen } from 'l
 import { useStreamingOperation } from './useStreamingOperation'
 import { LogViewer } from './LogViewer'
 
-type Preset = 'balanced' | 'quality' | 'compact' | 'custom'
+type QuantMode = 'mlx' | 'jang'
+type Preset = 'balanced' | 'quality' | 'compact' | 'custom' | string
 
-const PRESETS: Record<Exclude<Preset, 'custom'>, { bits: number; groupSize: number; label: string; desc: string }> = {
+const MLX_PRESETS: Record<string, { bits: number; groupSize: number; label: string; desc: string }> = {
   balanced: { bits: 4, groupSize: 64, label: 'Balanced (4-bit)', desc: 'Good quality/size tradeoff — recommended' },
   quality: { bits: 8, groupSize: 64, label: 'Quality (8-bit)', desc: 'Larger but better quality' },
   compact: { bits: 3, groupSize: 64, label: 'Compact (3-bit)', desc: 'Smallest, some quality loss' },
+}
+
+const JANG_PRESETS: Record<string, { profile: string; method: string; label: string; desc: string; avgBits: string }> = {
+  // 2-bit tier — ultra compact (attention MUST be protected at 2-bit)
+  jang_2s: { profile: 'JANG_2S', method: 'mse', label: '2S — Tight', desc: '6-bit attn, 4-bit embed, 2-bit MLP', avgBits: '~2.3' },
+  jang_2m: { profile: 'JANG_2M', method: 'mse', label: '2M — Balanced', desc: '8-bit attn, 4-bit embed, 2-bit MLP', avgBits: '~2.5' },
+  jang_2l: { profile: 'JANG_2L', method: 'mse', label: '2L — Quality', desc: '8-bit attn, 6-bit embed, 2-bit MLP (proven 73% MMLU on 122B)', avgBits: '~2.7' },
+  jang_1l: { profile: 'JANG_1L', method: 'mse', label: '1L — Max Quality 2-bit', desc: '8-bit attn+embed, 2-bit MLP (proven 6/6 free-form)', avgBits: '~2.4' },
+  // 3-bit tier — only attention needs protection at 3-bit+
+  jang_3s: { profile: 'JANG_3S', method: 'mse', label: '3S — Compact', desc: '6-bit attn, 3-bit everything else', avgBits: '~3.1' },
+  jang_3m: { profile: 'JANG_3M', method: 'mse', label: '3M — Recommended', desc: '8-bit attn, 3-bit everything else', avgBits: '~3.2' },
+  jang_3l: { profile: 'JANG_3L', method: 'mse', label: '3L — Protected', desc: '8-bit attn, 4-bit embed, 3-bit MLP', avgBits: '~3.4' },
+  // 4-bit tier — standard quality, ~2% overhead on MoE for 8-bit attention
+  jang_4s: { profile: 'JANG_4S', method: 'mse', label: '4S — Light', desc: '6-bit attn, 4-bit everything else', avgBits: '~4.1' },
+  jang_4m: { profile: 'JANG_4M', method: 'mse', label: '4M — Standard', desc: '8-bit attn, 4-bit everything else (~2% overhead on MoE)', avgBits: '~4.2' },
+  jang_4l: { profile: 'JANG_4L', method: 'mse', label: '4L — Premium', desc: '8-bit attn, 6-bit embed, 4-bit MLP', avgBits: '~4.5' },
+  // 6-bit tier — near lossless
+  jang_6m: { profile: 'JANG_6M', method: 'mse', label: '6M — Near Lossless', desc: '8-bit attn, 6-bit everything else', avgBits: '~6.2' },
 }
 
 interface ModelConverterProps {
@@ -20,11 +39,17 @@ interface ModelConverterProps {
 
 export function ModelConverter({ initialModelPath, onBack, onServe, models = [] }: ModelConverterProps) {
   const [modelPath, setModelPath] = useState(initialModelPath || '')
-  const [preset, setPreset] = useState<Preset>('balanced')
+  const [quantMode, setQuantMode] = useState<QuantMode>('jang')
+  const [preset, setPreset] = useState<Preset>('jang_3m')
   const [bits, setBits] = useState(4)
   const [groupSize, setGroupSize] = useState(64)
   const [mode, setMode] = useState('default')
   const [dtype, setDtype] = useState('')
+  const [jangMethod, setJangMethod] = useState('mse')
+  // Custom JANG mixed-precision settings
+  const [customCritical, setCustomCritical] = useState(8)
+  const [customImportant, setCustomImportant] = useState(4)
+  const [customCompress, setCustomCompress] = useState(3)
   const [outputDir, setOutputDir] = useState('')
   const [force, setForce] = useState(false)
   const [skipVerify, setSkipVerify] = useState(false)
@@ -40,10 +65,12 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
   }, [initialModelPath])
 
   useEffect(() => {
-    if (preset !== 'custom') {
-      const p = PRESETS[preset]
+    if (preset in MLX_PRESETS) {
+      const p = MLX_PRESETS[preset]
       setBits(p.bits)
       setGroupSize(p.groupSize)
+    } else if (preset in JANG_PRESETS) {
+      setJangMethod(JANG_PRESETS[preset].method)
     }
   }, [preset])
 
@@ -52,6 +79,11 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
     setSuccess(null)
     setOutputPath(undefined)
 
+    const isJang = preset in JANG_PRESETS || preset === 'jang_custom'
+    // For custom mix, create a dynamic profile name that jang-tools will interpret
+    const jangProfile = preset === 'jang_custom'
+      ? `CUSTOM_${customCritical}_${customImportant}_${customCompress}`
+      : (isJang ? JANG_PRESETS[preset].profile : undefined)
     const { ipcResult, allLines } = await start(() =>
       window.api.developer.convert({
         model: modelPath.trim(),
@@ -63,6 +95,8 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
         force,
         skipVerify,
         trustRemoteCode,
+        jangProfile,
+        jangMethod: isJang ? jangMethod : undefined,
       })
     )
 
@@ -98,8 +132,39 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
 
         <h2 className="text-2xl font-bold">Model Converter</h2>
         <p className="text-sm text-muted-foreground">
-          Convert HuggingFace models to quantized MLX format for Apple Silicon
+          Convert HuggingFace models to quantized format for Apple Silicon
         </p>
+
+        {/* Quantization Mode Toggle */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Format</label>
+          <div className="flex gap-2">
+            <button
+              onClick={() => { setQuantMode('jang'); setPreset('jang_3m') }}
+              disabled={running}
+              className={`flex-1 px-4 py-2.5 text-sm rounded-lg border transition-colors ${
+                quantMode === 'jang'
+                  ? 'border-violet-500 bg-violet-500/10 text-violet-400'
+                  : 'border-border hover:bg-accent text-muted-foreground'
+              }`}
+            >
+              <span className="font-medium">JANG</span>
+              <span className="text-xs block mt-0.5 opacity-75">Mixed-precision adaptive — best quality/size</span>
+            </button>
+            <button
+              onClick={() => { setQuantMode('mlx'); setPreset('balanced') }}
+              disabled={running}
+              className={`flex-1 px-4 py-2.5 text-sm rounded-lg border transition-colors ${
+                quantMode === 'mlx'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-border hover:bg-accent text-muted-foreground'
+              }`}
+            >
+              <span className="font-medium">MLX Uniform</span>
+              <span className="text-xs block mt-0.5 opacity-75">Standard uniform bit-width quantization</span>
+            </button>
+          </div>
+        </div>
 
         {/* Model input */}
         <div className="space-y-2">
@@ -126,43 +191,140 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
 
         {/* Presets */}
         <div className="space-y-3">
-          <label className="text-sm font-medium">Quantization</label>
+          <label className="text-sm font-medium">Profile</label>
           <div className="grid grid-cols-2 gap-2">
-            {(Object.entries(PRESETS) as [Exclude<Preset, 'custom'>, typeof PRESETS[keyof typeof PRESETS]][]).map(([key, p]) => (
-              <button
-                key={key}
-                onClick={() => setPreset(key)}
-                disabled={running}
-                className={`p-3 text-left border rounded-lg transition-colors ${
-                  preset === key
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:bg-accent'
-                }`}
-              >
-                <p className="text-sm font-medium">{p.label}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{p.desc}</p>
-              </button>
-            ))}
-            <button
-              onClick={() => setPreset('custom')}
-              disabled={running}
-              className={`p-3 text-left border rounded-lg transition-colors ${
-                preset === 'custom'
-                  ? 'border-primary bg-primary/5'
-                  : 'border-border hover:bg-accent'
-              }`}
-            >
-              <div className="flex items-center gap-1.5">
-                <Settings2 className="h-3.5 w-3.5" />
-                <p className="text-sm font-medium">Custom</p>
-              </div>
-              <p className="text-xs text-muted-foreground mt-0.5">Full control over all settings</p>
-            </button>
+            {quantMode === 'jang' ? (
+              <>
+                {['2-bit', '3-bit', '4-bit', '6-bit'].map(tier => {
+                  const tierKeys = Object.entries(JANG_PRESETS).filter(([, p]) => {
+                    if (tier === '2-bit') return p.profile.startsWith('JANG_2') || p.profile === 'JANG_1L'
+                    if (tier === '3-bit') return p.profile.startsWith('JANG_3')
+                    if (tier === '4-bit') return p.profile.startsWith('JANG_4')
+                    if (tier === '6-bit') return p.profile.startsWith('JANG_6')
+                    return false
+                  })
+                  if (tierKeys.length === 0) return null
+                  return (
+                    <div key={tier} className="col-span-2">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{tier} tier</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        {tierKeys.map(([key, p]) => (
+                          <button
+                            key={key}
+                            onClick={() => setPreset(key)}
+                            disabled={running}
+                            className={`p-2 text-left border rounded transition-colors ${
+                              preset === key
+                                ? 'border-violet-500 bg-violet-500/5'
+                                : 'border-border hover:bg-accent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1">
+                              <p className="text-xs font-medium">{p.label}</p>
+                              <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-400">{p.avgBits}</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{p.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+                {/* Custom mix option */}
+                <div className="col-span-2">
+                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Custom Mix</p>
+                  <button
+                    onClick={() => setPreset('jang_custom')}
+                    disabled={running}
+                    className={`w-full p-2 text-left border rounded transition-colors ${
+                      preset === 'jang_custom'
+                        ? 'border-violet-500 bg-violet-500/5'
+                        : 'border-border hover:bg-accent'
+                    }`}
+                  >
+                    <p className="text-xs font-medium">Custom — Choose your own bit widths</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">Set Critical (attention), Important (embeddings), Compress (MLP) bits independently</p>
+                  </button>
+                  {preset === 'jang_custom' && (
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      <div>
+                        <label className="text-[10px] text-muted-foreground">Critical (attention)</label>
+                        <select value={customCritical} onChange={e => setCustomCritical(Number(e.target.value))} disabled={running} className="w-full px-2 py-1 bg-background border border-input rounded text-xs">
+                          {[2,3,4,5,6,8].map(b => <option key={b} value={b}>{b}-bit</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-muted-foreground">Important (embeddings)</label>
+                        <select value={customImportant} onChange={e => setCustomImportant(Number(e.target.value))} disabled={running} className="w-full px-2 py-1 bg-background border border-input rounded text-xs">
+                          {[2,3,4,5,6,8].map(b => <option key={b} value={b}>{b}-bit</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-muted-foreground">Compress (MLP/FFN)</label>
+                        <select value={customCompress} onChange={e => setCustomCompress(Number(e.target.value))} disabled={running} className="w-full px-2 py-1 bg-background border border-input rounded text-xs">
+                          {[2,3,4,5,6,8].map(b => <option key={b} value={b}>{b}-bit</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                {Object.entries(MLX_PRESETS).map(([key, p]) => (
+                  <button
+                    key={key}
+                    onClick={() => setPreset(key as Preset)}
+                    disabled={running}
+                    className={`p-3 text-left border rounded-lg transition-colors ${
+                      preset === key
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:bg-accent'
+                    }`}
+                  >
+                    <p className="text-sm font-medium">{p.label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{p.desc}</p>
+                  </button>
+                ))}
+                <button
+                  onClick={() => setPreset('custom')}
+                  disabled={running}
+                  className={`p-3 text-left border rounded-lg transition-colors ${
+                    preset === 'custom'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:bg-accent'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Settings2 className="h-3.5 w-3.5" />
+                    <p className="text-sm font-medium">Custom</p>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">Full control over all settings</p>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Advanced options (custom preset) */}
-        {preset === 'custom' && (
+        {/* JANG method selector */}
+        {quantMode === 'jang' && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Quantization Method</label>
+            <select
+              value={jangMethod}
+              onChange={e => setJangMethod(e.target.value)}
+              disabled={running}
+              className="w-full px-3 py-2 bg-background border border-input rounded text-sm"
+            >
+              <option value="mse">MSE-optimal (recommended — best quality)</option>
+              <option value="rtn">RTN (fast — lower quality)</option>
+              <option value="mse-all">MSE everywhere (slow — maximum quality)</option>
+            </select>
+          </div>
+        )}
+
+        {/* Advanced options (MLX custom preset only) */}
+        {quantMode === 'mlx' && preset === 'custom' && (
           <div className="space-y-4 p-4 border border-border rounded-lg">
             <h3 className="text-sm font-medium">Advanced Settings</h3>
 
@@ -223,22 +385,26 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
               </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={force} onChange={e => setForce(e.target.checked)} disabled={running} className="rounded border-input" />
-                <span className="text-muted-foreground">Force overwrite if output exists</span>
-              </label>
-              <label className="flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={skipVerify} onChange={e => setSkipVerify(e.target.checked)} disabled={running} className="rounded border-input" />
-                <span className="text-muted-foreground">Skip post-conversion verification</span>
-              </label>
-              <label className="flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={trustRemoteCode} onChange={e => setTrustRemoteCode(e.target.checked)} disabled={running} className="rounded border-input" />
-                <span className="text-muted-foreground">Trust remote code from HuggingFace</span>
-              </label>
-            </div>
           </div>
         )}
+
+        {/* Options (shared between MLX and JANG) */}
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={force} onChange={e => setForce(e.target.checked)} disabled={running} className="rounded border-input" />
+            <span className="text-muted-foreground">Force overwrite if output exists</span>
+          </label>
+          {quantMode === 'mlx' && (
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={skipVerify} onChange={e => setSkipVerify(e.target.checked)} disabled={running} className="rounded border-input" />
+              <span className="text-muted-foreground">Skip post-conversion verification</span>
+            </label>
+          )}
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={trustRemoteCode} onChange={e => setTrustRemoteCode(e.target.checked)} disabled={running} className="rounded border-input" />
+            <span className="text-muted-foreground">Trust remote code from HuggingFace</span>
+          </label>
+        </div>
 
         {/* Output directory */}
         <div className="space-y-2">
@@ -249,7 +415,7 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
               type="text"
               value={outputDir}
               onChange={e => setOutputDir(e.target.value)}
-              placeholder="Auto-generated (e.g., Model-Name-vmlx-4bit)"
+              placeholder={quantMode === 'jang' ? 'Auto-generated (e.g., Model-Name-JANG_3M)' : 'Auto-generated (e.g., Model-Name-vmlx-4bit)'}
               className="flex-1 px-3 py-2 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
               disabled={running}
             />
@@ -280,7 +446,7 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
               className="px-6 py-2.5 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
             >
               <Play className="h-4 w-4" />
-              Start Conversion
+              {quantMode === 'jang' ? 'Convert to JANG' : 'Convert to MLX'}
             </button>
           )}
         </div>

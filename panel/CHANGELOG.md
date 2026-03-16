@@ -76,8 +76,8 @@
 ## v1.0.0 — 2026-03-05 — Production Release
 
 ### Production Readiness
-- **App identity**: Bundle ID `net.vmlx.app`, copyright ShieldStack LLC, proprietary license
-- **Code signing**: Developer ID Application: ShieldStack LLC (55KGF2S5AY), hardened runtime
+- **App identity**: Bundle ID `net.vmlx.app`, copyright JANGQ AI, proprietary license
+- **Code signing**: Developer ID Application: JANGQ AI (55KGF2S5AY), hardened runtime
 - **Branded DMG**: Custom Midnight Steel background with vMLX logo and drag-to-install arrow
 - **CSP header**: Content Security Policy on renderer window (blocks XSS, restricts connect/font/img sources)
 - **Version 1.0.0**: Updated across package.json, Info.plist, and all metadata
