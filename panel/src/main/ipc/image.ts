@@ -188,8 +188,39 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
         activeImageSessionId = null
       }
 
-      // For named mflux models, use the name directly (mflux resolves them internally)
-      const modelPath = modelName
+      // Check if model exists locally — use local path so server doesn't re-download
+      let modelPath = modelName
+      try {
+        const imageDir = join(homedir(), '.mlxstudio', 'models', 'image')
+        if (existsSync(imageDir)) {
+          const dirs = readdirSync(imageDir)
+          const q = quantize || 4
+          const patterns = [
+            `${modelName}-${q}bit`,
+            `${modelName.replace(/-/g, '')}-${q}bit`,
+            modelName,
+          ]
+          for (const dir of dirs) {
+            const lower = dir.toLowerCase()
+            for (const pattern of patterns) {
+              if (lower.includes(pattern.toLowerCase())) {
+                const fullPath = join(imageDir, dir)
+                try {
+                  const files = readdirSync(fullPath)
+                  if (files.includes('transformer') || files.some((f: string) => f.endsWith('.safetensors'))) {
+                    modelPath = fullPath
+                    console.log(`[IMAGE] Using local model path: ${fullPath}`)
+                  }
+                } catch { }
+                if (modelPath !== modelName) break
+              }
+            }
+            if (modelPath !== modelName) break
+          }
+        }
+      } catch {
+        // Fall through to use model name directly (mflux will resolve/download)
+      }
 
       // Create a session config for image serving
       // Pass quantize via additionalArgs since it's image-specific
