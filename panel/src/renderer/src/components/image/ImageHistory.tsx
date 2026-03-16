@@ -69,7 +69,12 @@ export function ImageHistory({ sessions, currentId, onSelect, onNew, onDelete, o
                 }`}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium truncate">{session.modelName}</p>
+                  <div className="flex items-center gap-1">
+                    {session.sessionType === 'edit' && (
+                      <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">Edit</span>
+                    )}
+                    <p className="text-xs font-medium truncate">{session.modelName}</p>
+                  </div>
                   <p className="text-[10px] text-muted-foreground mt-0.5">
                     {formatDate(session.updatedAt)}
                   </p>

@@ -9,6 +9,7 @@ import { ImageSettings } from './ImageSettings'
 export interface ImageSessionInfo {
   id: string
   modelName: string
+  sessionType?: 'generate' | 'edit'
   createdAt: number
   updatedAt: number
 }
@@ -24,10 +25,14 @@ export interface ImageGenerationInfo {
   steps: number
   guidance: number
   seed?: number
+  strength?: number
   elapsedSeconds?: number
   imagePath: string
+  sourceImagePath?: string
   createdAt: number
 }
+
+const EDIT_MODEL_IDS = new Set(['qwen-image-edit', 'flux-kontext', 'flux-fill', 'flux2-klein-edit'])
 
 type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
 
@@ -49,6 +54,10 @@ export function ImageTab() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Edit mode state
+  const [sessionMode, setSessionMode] = useState<'generate' | 'edit'>('generate')
+  const [sourceImage, setSourceImage] = useState<{ dataUrl: string; name: string } | null>(null)
+
   // Image generation settings (quick settings + full settings)
   const [settings, setSettings] = useState({
     steps: 4,
@@ -58,7 +67,8 @@ export function ImageTab() {
     negativePrompt: '',
     seed: undefined as number | undefined,
     count: 1,
-    quantize: 4
+    quantize: 4,
+    strength: 0.8
   })
 
   // Load image sessions on mount
@@ -167,6 +177,11 @@ export function ImageTab() {
     const q = modelQuantize ?? 4
     setQuantize(q)
 
+    // Derive mode from model type
+    const mode = EDIT_MODEL_IDS.has(modelId) ? 'edit' : 'generate'
+    setSessionMode(mode)
+    setSourceImage(null)
+
     // Update default steps based on model
     const defaultSteps = getDefaultSteps(modelId)
     setSettings(prev => ({ ...prev, steps: defaultSteps, quantize: q }))
@@ -189,8 +204,14 @@ export function ImageTab() {
     }
   }, [])
 
-  const handleGenerate = useCallback(async (prompt: string) => {
+  const handleSubmit = useCallback(async (prompt: string) => {
     if (!serverPort || serverStatus !== 'running' || !selectedModel) return
+
+    // Edit mode requires a source image
+    if (sessionMode === 'edit' && !sourceImage) {
+      setError('Upload a source image before editing.')
+      return
+    }
 
     setGenerating(true)
     setError(null)
@@ -199,7 +220,7 @@ export function ImageTab() {
       // Create image session if we don't have one
       let sessionId = currentSessionId
       if (!sessionId) {
-        const result = await window.api.image.createSession(selectedModel)
+        const result = await window.api.image.createSession(selectedModel, sessionMode)
         if (result.success && result.session) {
           sessionId = result.session.id
           setCurrentSessionId(sessionId)
@@ -209,33 +230,51 @@ export function ImageTab() {
         }
       }
 
-      const result = await window.api.image.generate({
-        sessionId: sessionId!,
-        prompt,
-        negativePrompt: settings.negativePrompt || undefined,
-        model: selectedModel,
-        width: settings.width,
-        height: settings.height,
-        steps: settings.steps,
-        guidance: settings.guidance,
-        seed: settings.seed,
-        count: settings.count,
-        quantize: settings.quantize,
-        serverPort
-      })
+      let result: any
+      if (sessionMode === 'edit') {
+        result = await window.api.image.edit({
+          sessionId: sessionId!,
+          prompt,
+          negativePrompt: settings.negativePrompt || undefined,
+          model: selectedModel,
+          imageBase64: sourceImage!.dataUrl,
+          width: settings.width,
+          height: settings.height,
+          steps: settings.steps,
+          guidance: settings.guidance,
+          strength: settings.strength,
+          seed: settings.seed,
+          serverPort
+        })
+      } else {
+        result = await window.api.image.generate({
+          sessionId: sessionId!,
+          prompt,
+          negativePrompt: settings.negativePrompt || undefined,
+          model: selectedModel,
+          width: settings.width,
+          height: settings.height,
+          steps: settings.steps,
+          guidance: settings.guidance,
+          seed: settings.seed,
+          count: settings.count,
+          quantize: settings.quantize,
+          serverPort
+        })
+      }
 
       if (result.success && result.generations) {
         setGenerations(prev => [...prev, ...result.generations])
         await loadSessions() // Refresh session list (updatedAt changed)
       } else {
-        setError(result.error || 'Generation failed')
+        setError(result.error || (sessionMode === 'edit' ? 'Edit failed' : 'Generation failed'))
       }
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setGenerating(false)
     }
-  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, loadSessions])
+  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, sessionMode, sourceImage, loadSessions])
 
   const handleStop = useCallback(async () => {
     try {
@@ -309,6 +348,7 @@ export function ImageTab() {
           quantize={quantize}
           status={serverStatus}
           port={serverPort}
+          mode={sessionMode}
           onSettings={() => setShowSettings(!showSettings)}
           onStop={handleStop}
           onChangeModel={handleChangeModel}
@@ -321,6 +361,7 @@ export function ImageTab() {
             settings={settings}
             onChange={handleSettingsChange}
             model={selectedModel}
+            mode={sessionMode}
           />
         )}
 
@@ -339,12 +380,15 @@ export function ImageTab() {
         </div>
 
         <ImagePromptBar
-          onGenerate={handleGenerate}
+          onGenerate={handleSubmit}
           disabled={serverStatus !== 'running'}
           generating={generating}
           settings={settings}
           onSettingsChange={handleSettingsChange}
           model={selectedModel}
+          mode={sessionMode}
+          sourceImage={sourceImage}
+          onSourceImageChange={setSourceImage}
         />
       </div>
     </div>
@@ -357,7 +401,11 @@ function getDefaultSteps(modelId: string): number {
     'dev': 20,
     'z-image-turbo': 4,
     'flux2-klein-4b': 20,
-    'flux2-klein-9b': 20
+    'flux2-klein-9b': 20,
+    'qwen-image-edit': 28,
+    'flux-kontext': 24,
+    'flux-fill': 20,
+    'flux2-klein-edit': 20,
   }
   return defaults[modelId] || 4
 }
