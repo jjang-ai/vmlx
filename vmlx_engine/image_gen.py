@@ -99,17 +99,9 @@ class ImageGenEngine:
             model_path: Optional path to local model weights
         """
         try:
-            # mflux >= 0.16: deep import path
-            from mflux.models.flux.variants.txt2img.flux import Flux1
             from mflux.models.common.config.model_config import ModelConfig
         except ImportError:
-            try:
-                # mflux < 0.16 (e.g., 0.5.x): direct import
-                from mflux import Flux1, ModelConfig
-            except ImportError:
-                raise ImportError(
-                    "mflux not installed. Install with: pip install mflux"
-                )
+            raise ImportError("mflux not installed. Install with: pip install mflux")
 
         # Resolve model name alias
         resolved = SUPPORTED_MODELS.get(model_name.lower(), model_name)
@@ -133,37 +125,91 @@ class ImageGenEngine:
             except Exception:
                 pass
 
-        # Use from_name — mflux handles downloading, caching, and architecture-specific loading.
-        # Try quantized first, fall back to unquantized if dequantize fails (MLX version mismatch).
-        logger.info(f"Loading via mflux: {base_name} (quantize={quantize})")
-        try:
-            self._model = Flux1.from_name(
-                model_name=base_name,
-                quantize=quantize,
-            )
-        except (ValueError, RuntimeError) as e:
-            if "dequantize" in str(e) or "uint32" in str(e):
-                if quantize:
-                    logger.warning(
-                        f"Quantized loading failed ({e}). "
-                        f"Falling back to unquantized (needs more RAM). "
-                        f"This is a known mflux/MLX version compatibility issue."
-                    )
-                    self._model = Flux1.from_name(
-                        model_name=base_name,
-                        quantize=None,
-                    )
-                    quantize = None
-                else:
-                    raise
-            else:
-                raise
+        # Z-Image models use ZImage class (single text encoder, different architecture)
+        # Flux models (schnell, dev, klein) use Flux1 class (dual text encoder)
+        is_zimage = base_name in ("z-image", "z-image-turbo")
+
+        if is_zimage:
+            self._load_zimage(base_name, quantize, model_path, ModelConfig)
+        else:
+            self._load_flux(base_name, quantize, model_path, ModelConfig)
 
         elapsed = time.perf_counter() - start
-        self._model_name = resolved
+        self._model_name = base_name  # Use canonical mflux name for DEFAULT_STEPS lookup
         self._quantize = quantize
         self._loaded = True
-        logger.info(f"Image model loaded in {elapsed:.1f}s: {resolved}")
+        logger.info(f"Image model loaded in {elapsed:.1f}s: {base_name}")
+
+    def _load_zimage(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
+        """Load a Z-Image model (single text encoder, ZImage class)."""
+        from mflux.models.z_image.variants.z_image import ZImage
+
+        model_config = ModelConfig.from_name(base_name)
+
+        # ZImage supports model_path directly — no text_encoder_2 required
+        # Only load locally if files are in mflux-save format (numbered: 0.safetensors, 1.safetensors)
+        # NOT PyTorch diffusers format (diffusion_pytorch_model-*.safetensors)
+        if model_path and Path(model_path).is_dir():
+            transformer_dir = Path(model_path) / "transformer"
+            is_mflux_format = transformer_dir.is_dir() and any(
+                f.name.split('.')[0].isdigit() and f.suffix == '.safetensors'
+                for f in transformer_dir.iterdir()
+            )
+            if is_mflux_format:
+                logger.info(f"Loading ZImage from local path: {model_path}")
+                self._model = ZImage(
+                    model_config=model_config,
+                    quantize=quantize,
+                    model_path=model_path,
+                    lora_paths=[],
+                )
+                return
+
+        # Fall back to HuggingFace download
+        logger.info(f"Loading ZImage via HuggingFace: {base_name} (quantize={quantize})")
+        self._model = ZImage(
+            model_config=model_config,
+            quantize=quantize,
+            lora_paths=[],
+        )
+
+    def _load_flux(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
+        """Load a Flux model (dual text encoder, Flux1 class)."""
+        from mflux.models.flux.variants.txt2img.flux import Flux1
+
+        model_config = ModelConfig.from_name(base_name)
+
+        # Try local path first (needs text_encoder + text_encoder_2)
+        if model_path and Path(model_path).is_dir():
+            transformer_dir = Path(model_path) / "transformer"
+            te2_dir = Path(model_path) / "text_encoder_2"
+            has_safetensors = transformer_dir.is_dir() and any(
+                f.suffix == '.safetensors' for f in transformer_dir.iterdir()
+            )
+            if has_safetensors and te2_dir.is_dir():
+                logger.info(f"Loading Flux from local path: {model_path}")
+                try:
+                    self._model = Flux1(
+                        model_config=model_config,
+                        quantize=quantize,
+                        model_path=model_path,
+                        lora_paths=[],
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(f"Local Flux loading failed ({e}), falling back to from_name()")
+
+        # Fall back to from_name (HuggingFace resolution)
+        logger.info(f"Loading Flux via from_name: {base_name} (quantize={quantize})")
+        try:
+            self._model = Flux1.from_name(model_name=base_name, quantize=quantize)
+        except (ValueError, RuntimeError) as e:
+            if ("dequantize" in str(e) or "uint32" in str(e)) and quantize:
+                logger.warning(f"Quantized loading failed ({e}), falling back to unquantized")
+                self._model = Flux1.from_name(model_name=base_name, quantize=None)
+                self._quantize = None
+            else:
+                raise
 
     def unload(self) -> None:
         """Unload the current model to free memory."""
@@ -202,16 +248,17 @@ class ImageGenEngine:
             except Exception:
                 pass
 
-        # Check directory name against known model names
+        # Check directory name against known model names (longest first to avoid
+        # partial matches, e.g., "z-image" matching before "z-image-turbo")
         dir_lower = model_dir.name.lower()
-        for known in SUPPORTED_MODELS:
+        for known in sorted(SUPPORTED_MODELS, key=len, reverse=True):
             if known.replace("-", "") in dir_lower.replace("-", ""):
                 return SUPPORTED_MODELS[known]
 
         # Check if any parent directory matches
         for part in model_dir.parts:
             part_lower = part.lower()
-            for known in SUPPORTED_MODELS:
+            for known in sorted(SUPPORTED_MODELS, key=len, reverse=True):
                 if known.replace("-", "") in part_lower.replace("-", ""):
                     return SUPPORTED_MODELS[known]
 

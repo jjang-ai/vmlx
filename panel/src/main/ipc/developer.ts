@@ -9,17 +9,17 @@ const CLI_ENV: Record<string, string | undefined> = { ...process.env, PYTHONNOUS
 
 /** Resolve the CLI spawn command + args using the same path as sessions.ts */
 function resolveCliSpawn(subcommandArgs: string[]): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
-  const vllmResult = sessionManager.findVllmMlx()
-  if (vllmResult?.type === 'bundled') {
+  const engineResult = sessionManager.findEnginePath()
+  if (engineResult?.type === 'bundled') {
     return {
-      cmd: vllmResult.pythonPath,
+      cmd: engineResult.pythonPath,
       args: ['-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
       env: CLI_ENV,
     }
   }
-  if (vllmResult?.type === 'system') {
+  if (engineResult?.type === 'system') {
     return {
-      cmd: vllmResult.binaryPath,
+      cmd: engineResult.binaryPath,
       args: subcommandArgs,
       env: { ...process.env },
     }

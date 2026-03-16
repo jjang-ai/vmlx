@@ -29,7 +29,7 @@ function App() {
 
   // Check if engine is already installed (skip setup screen if so)
   useEffect(() => {
-    window.api.vllm.checkInstallation()
+    window.api.engine.checkInstallation()
       .then((result: any) => {
         if (result.installed) setSetupDone(true)
       })
@@ -396,14 +396,20 @@ function AppVersion() {
 
 function ApiKeysSection() {
   const [braveKey, setBraveKey] = useState('')
+  const [hfToken, setHfToken] = useState('')
   const [saved, setSaved] = useState(false)
+  const [hfSaved, setHfSaved] = useState(false)
   const [showKey, setShowKey] = useState(false)
+  const [showHfKey, setShowHfKey] = useState(false)
   const mountedRef = useRef(true)
 
   useEffect(() => {
     mountedRef.current = true
     window.api.settings.get('braveApiKey').then((val) => {
       if (mountedRef.current && val) setBraveKey(val)
+    })
+    window.api.settings.get('hf_api_key').then((val) => {
+      if (mountedRef.current && val) setHfToken(val)
     })
     return () => { mountedRef.current = false }
   }, [])
@@ -417,6 +423,17 @@ function ApiKeysSection() {
     }
     setSaved(true)
     setTimeout(() => { if (mountedRef.current) setSaved(false) }, 2000)
+  }
+
+  const handleHfSave = async () => {
+    const trimmed = hfToken.trim()
+    if (trimmed) {
+      await window.api.settings.set('hf_api_key', trimmed)
+    } else {
+      await window.api.settings.delete('hf_api_key')
+    }
+    setHfSaved(true)
+    setTimeout(() => { if (mountedRef.current) setHfSaved(false) }, 2000)
   }
 
   return (
@@ -458,6 +475,44 @@ function ApiKeysSection() {
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
             >
               {saved ? 'Saved' : 'Save'}
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 pt-4 border-t border-border">
+          <label className="text-sm font-medium">HuggingFace Token</label>
+          <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+            Required for downloading gated models (Flux, Llama, etc.).{' '}
+            <a
+              href="https://huggingface.co/settings/tokens"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              Get your token
+            </a>
+          </p>
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <input
+                type={showHfKey ? 'text' : 'password'}
+                value={hfToken}
+                onChange={e => { setHfToken(e.target.value); setHfSaved(false) }}
+                placeholder="hf_..."
+                className="w-full px-3 py-2 bg-background border border-input rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring pr-10"
+              />
+              <button
+                onClick={() => setShowHfKey(!showHfKey)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+                title={showHfKey ? 'Hide' : 'Show'}
+              >
+                {showHfKey ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            <button
+              onClick={handleHfSave}
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
+            >
+              {hfSaved ? 'Saved' : 'Save'}
             </button>
           </div>
         </div>

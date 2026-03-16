@@ -382,7 +382,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} />
 
         {/* Command Preview */}
         <div className="mt-4">

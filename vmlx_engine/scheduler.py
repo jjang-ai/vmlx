@@ -214,6 +214,11 @@ class Scheduler:
             self.config.use_paged_cache = True
             self.config.use_memory_aware_cache = False
 
+        # Active generation KV cache has no explicit memory cap — relies on
+        # MLX/Metal's own memory management and macOS memory pressure signals.
+        # The prefix cache (L1) has a 32GB hard cap but active KV does not.
+        # For large MoE models with many experts, monitor system memory usage.
+
         # Apply KV cache quantization if requested AND prefix cache is enabled.
         # Quantization only affects prefix cache storage/retrieval — without prefix
         # cache there are no stored KV states to quantize.
@@ -232,6 +237,9 @@ class Scheduler:
                 )
 
         if self.config.enable_prefix_cache:
+            logger.info(
+                "Prefix cache requires continuous batching — enabled automatically"
+            )
             if self.config.use_paged_cache:
                 # Create optional block-level disk store (L2)
                 block_disk_store = None
@@ -314,7 +322,10 @@ class Scheduler:
                     f"Prefix cache enabled with max_entries={self.config.prefix_cache_size}"
                 )
 
-        # Disk cache (L2) for persistent prompt cache across restarts
+        # Disk cache (L2) for persistent prompt cache across restarts.
+        # Disk cache entries are loaded lazily on cache miss — no L2-to-L1
+        # warmup at startup. This avoids loading GBs of cache into RAM but
+        # means first request pays full prefill cost.
         self.disk_cache: Optional[DiskCacheManager] = None
         if self.config.enable_disk_cache and self.config.enable_prefix_cache:
             import hashlib
@@ -384,12 +395,15 @@ class Scheduler:
         try:
             cache = model.make_cache()
             cache_types = {type(c).__name__ for c in cache}
-            # Standard KV-only models don't need special handling
-            kv_only_types = {"KVCache", "RotatingKVCache", "QuantizedKVCache"}
-            if cache_types and cache_types.issubset(kv_only_types):
+            # Standard KV-only models don't need special handling.
+            # Match any class name ending with "KVCache" (e.g., KVCache,
+            # RotatingKVCache, QuantizedKVCache, ChunkedKVCache) so future
+            # KV cache variants are handled automatically without hardcoding.
+            kv_types = {t for t in cache_types if t == "KVCache" or t.endswith("KVCache")}
+            if cache_types and cache_types == kv_types:
                 return False
             # Any non-KV cache type (MambaCache, ArraysCache, etc.) needs paged cache
-            return bool(cache_types - kv_only_types)
+            return bool(cache_types - kv_types)
         except Exception as e:
             logger.warning(f"make_cache() failed during hybrid detection: {e}")
             return False
@@ -580,6 +594,11 @@ class Scheduler:
         Dequantizes stored quantized keys/values back to full precision.
         BatchGenerator requires KVCache (not QuantizedKVCache) for its batch
         operations (merge, extract, filter).
+
+        Note: Both quantized (in cache) and dequantized (returned) versions
+        coexist briefly. For 4K context / 32 layers this can be ~200MB extra.
+        This transient spike is inherent to the design — the quantized source
+        cannot be freed until dequantization completes for all layers.
 
         Returns None if dequantization fails (caller should treat as cache miss).
         """

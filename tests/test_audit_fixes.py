@@ -551,11 +551,19 @@ class TestJANGLoader:
         assert _infer_weight_shape("layers.0.mlp.w1", config, 14336 * 4096) == (14336, 4096)
         assert _infer_weight_shape("layers.0.mlp.w2", config, 4096 * 14336) == (4096, 14336)
 
-    def test_infer_shape_fallback(self):
+    def test_infer_shape_fallback_known_dim(self):
+        """Fallback works when inferred dim matches a known config dimension."""
+        from vmlx_engine.utils.jang_loader import _infer_weight_shape
+        config = {"hidden_size": 4096, "intermediate_size": 8192}
+        shape = _infer_weight_shape("some.unknown.weight", config, 8192 * 4096)
+        assert shape == (8192, 4096)
+
+    def test_infer_shape_fallback_unknown_dim_returns_none(self):
+        """Fallback returns None when inferred dim doesn't match any known config dimension."""
         from vmlx_engine.utils.jang_loader import _infer_weight_shape
         config = {"hidden_size": 4096}
         shape = _infer_weight_shape("some.unknown.weight", config, 8192 * 4096)
-        assert shape == (8192, 4096)
+        assert shape is None
 
     def test_infer_shape_no_match(self):
         from vmlx_engine.utils.jang_loader import _infer_weight_shape

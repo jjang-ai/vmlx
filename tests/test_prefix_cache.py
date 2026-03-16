@@ -211,19 +211,16 @@ class TestPrefixCacheManager:
         # Stats should also be reset
         assert cache_manager.stats.hits == 0
 
-    def test_cache_deep_copy(self, cache_manager):
-        """Test that fetched cache is a deep copy."""
+    def test_cache_shared_reference(self, cache_manager):
+        """Test that fetched cache returns a shared reference (MLX arrays are immutable)."""
         original = [[1, 2, 3]]
         cache_manager.store_cache([1, 2], original)
 
         cache, _ = cache_manager.fetch_cache([1, 2])
 
-        # Modify returned cache
-        cache[0].append(4)
-
-        # Original should be unchanged
-        cache2, _ = cache_manager.fetch_cache([1, 2])
-        assert cache2[0] == [1, 2, 3]
+        # Returned cache is the same object (shared reference, not deep copy)
+        # In production, caches are MLX arrays which are immutable, so sharing is safe
+        assert cache is original
 
     def test_multiple_prefixes(self, cache_manager):
         """Test multiple different prefixes."""

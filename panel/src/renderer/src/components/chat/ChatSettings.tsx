@@ -38,6 +38,7 @@ interface SessionInfo {
   pid?: number
   type?: 'local' | 'remote'
   remoteUrl?: string
+  modelType?: 'text' | 'image'
 }
 
 interface ChatSettingsProps {
@@ -118,6 +119,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   }
 
   const shortModel = session.modelName || session.modelPath.split('/').pop() || session.modelPath
+  const isImageModel = session.modelType === 'image'
 
   return (
     <div className="w-80 h-full border-l border-border bg-card flex flex-col overflow-hidden">
@@ -144,7 +146,8 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             const baseUrl = isRemote && session.remoteUrl
               ? session.remoteUrl.replace(/\/+$/, '')
               : `http://${session.host}:${session.port}`
-            const apiUrl = `${baseUrl}/v1/chat/completions`
+            const isImage = session.modelType === 'image'
+            const apiUrl = isImage ? `${baseUrl}/v1/images/generations` : `${baseUrl}/v1/chat/completions`
             return (
               <div className="space-y-1.5 text-sm">
                 <div className="flex justify-between">
@@ -192,6 +195,16 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
 
         <div className="border-t border-border" />
 
+        {isImageModel && (
+          <div>
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Image Server</h3>
+            <p className="text-xs text-muted-foreground">
+              This is an image generation server. Use the Image tab to generate images, or send POST requests to the API endpoint above.
+            </p>
+          </div>
+        )}
+
+        {!isImageModel && <>
         {/* Inference Settings */}
         <div>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Inference</h3>
@@ -528,6 +541,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             </div>
           </div>
         </div>
+        </>}
       </div>
 
       {/* Footer Actions */}

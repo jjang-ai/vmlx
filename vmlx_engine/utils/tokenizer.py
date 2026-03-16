@@ -128,13 +128,6 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
 
     tokenizer_config = tokenizer_config or {}
 
-    # Check if model needs fallback (e.g., Nemotron)
-    if _needs_tokenizer_fallback(model_name):
-        logger.info(
-            f"Model {model_name} requires tokenizer fallback, loading directly..."
-        )
-        return _load_with_tokenizer_fallback(model_name)
-
     # Check if local path exists before loading
     model_path = Path(model_name)
     if model_path.is_absolute() and not model_path.exists():
@@ -143,12 +136,21 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             f"Check that the model directory is available."
         )
 
-    # JANG format: mixed-precision quantized models — dequantize to float16 at load
+    # JANG format MUST be checked FIRST — JANG models use their own loader that
+    # repacks weights into QuantizedLinear and handles tokenizer internally.
+    # Checking tokenizer fallback first would bypass the JANG loader for Nemotron-H.
     from .jang_loader import is_jang_model
     if is_jang_model(model_name):
         from .jang_loader import load_jang_model
         logger.info(f"Detected JANG model: {model_name}")
         return load_jang_model(model_name)
+
+    # Check if model needs tokenizer fallback (e.g., Nemotron)
+    if _needs_tokenizer_fallback(model_name):
+        logger.info(
+            f"Model {model_name} requires tokenizer fallback, loading directly..."
+        )
+        return _load_with_tokenizer_fallback(model_name)
 
     try:
         return load(model_name, tokenizer_config=tokenizer_config)

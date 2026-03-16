@@ -4,7 +4,7 @@ import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download } from 'l
 const NAMED_MODELS = [
   { id: 'schnell', name: 'Flux Schnell', desc: 'Fast generation (4 steps)', size: '~12 GB', steps: 4, icon: Zap },
   { id: 'dev', name: 'Flux Dev', desc: 'High quality (20 steps)', size: '~24 GB', steps: 20, icon: Sparkles },
-  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'xcreates turbo (4 steps)', size: '~12 GB', steps: 4, icon: Gauge },
+  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'Fast turbo generation (4 steps)', size: '~12 GB', steps: 4, icon: Gauge },
   { id: 'flux2-klein-4b', name: 'Flux Klein 4B', desc: 'Compact model (20 steps)', size: '~8 GB', steps: 20, icon: Box },
   { id: 'flux2-klein-9b', name: 'Flux Klein 9B', desc: 'Mid-size model (20 steps)', size: '~16 GB', steps: 20, icon: Layers },
 ]

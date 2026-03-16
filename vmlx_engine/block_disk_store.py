@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import sqlite3
 import tempfile
 import threading
@@ -94,9 +95,7 @@ class BlockDiskStore:
         # Background writer thread
         # Queue items: (block_hash, numpy_tensors_dict, dtype_str, num_layers, token_count)
         # or special commands: ("__access__", ...) or ("__cleanup__", ...)
-        self._write_queue: list = []
-        self._write_queue_max = 500  # Bound memory usage: drop oldest if exceeded
-        self._write_lock = threading.Lock()
+        self._write_queue: queue.Queue = queue.Queue(maxsize=1000)
         self._stop_event = threading.Event()
         self._writer_thread = threading.Thread(
             target=self._background_writer, daemon=True, name="block-disk-writer"
@@ -222,13 +221,17 @@ class BlockDiskStore:
 
     def _queue_access_update(self, hash_hex: str) -> None:
         """Queue an access time update for the background writer."""
-        with self._write_lock:
-            self._write_queue.append(("__access__", hash_hex, time.time()))
+        try:
+            self._write_queue.put_nowait(("__access__", hash_hex, time.time()))
+        except queue.Full:
+            pass  # Non-critical metadata update — safe to drop
 
     def _queue_index_cleanup(self, hash_hex: str) -> None:
         """Queue a stale index entry cleanup for the background writer."""
-        with self._write_lock:
-            self._write_queue.append(("__cleanup__", hash_hex, 0))
+        try:
+            self._write_queue.put_nowait(("__cleanup__", hash_hex, 0))
+        except queue.Full:
+            pass  # Will be cleaned up on next access attempt
 
     # =========================================================================
     # Write (async)
@@ -284,19 +287,12 @@ class BlockDiskStore:
             logger.debug(f"Pre-serialize failed for block {block_hash.hex()[:12]}: {e}")
             return
 
-        with self._write_lock:
-            # Drop oldest non-command items if queue is too large (prevent OOM)
-            if len(self._write_queue) >= self._write_queue_max:
-                logger.warning(
-                    f"BlockDiskStore write queue full ({self._write_queue_max}), "
-                    "dropping oldest block write"
-                )
-                # Find and drop first block write (not __access__/__cleanup__)
-                for i, item in enumerate(self._write_queue):
-                    if isinstance(item[0], bytes):
-                        self._write_queue.pop(i)
-                        break
-            self._write_queue.append((block_hash, np_tensors, dtype, num_layers, token_count))
+        try:
+            self._write_queue.put_nowait(
+                (block_hash, np_tensors, dtype, num_layers, token_count)
+            )
+        except queue.Full:
+            logger.warning("BlockDiskStore write queue full (1000), dropping block write")
 
     def _background_writer(self) -> None:
         """Background thread: drain write queue and persist blocks.
@@ -310,13 +306,21 @@ class BlockDiskStore:
 
         try:
             while not self._stop_event.is_set():
-                self._stop_event.wait(timeout=0.2)  # 200ms poll
+                # Collect a batch: block on the first item (with timeout so we
+                # can check the stop event), then drain any remaining items.
+                batch = []
+                try:
+                    item = self._write_queue.get(timeout=0.2)
+                    batch.append(item)
+                except queue.Empty:
+                    continue
 
-                with self._write_lock:
-                    if not self._write_queue:
-                        continue
-                    batch = self._write_queue[:]
-                    self._write_queue.clear()
+                # Drain remaining items without blocking
+                while True:
+                    try:
+                        batch.append(self._write_queue.get_nowait())
+                    except queue.Empty:
+                        break
 
                 for item in batch:
                     try:
@@ -505,9 +509,13 @@ class BlockDiskStore:
     def clear(self) -> None:
         """Clear all cached blocks from disk."""
         import shutil
-        # Pause writer by draining its queue first
-        with self._write_lock:
-            self._write_queue.clear()
+        # Drain the write queue so the background writer doesn't write
+        # blocks we're about to delete
+        while not self._write_queue.empty():
+            try:
+                self._write_queue.get_nowait()
+            except queue.Empty:
+                break
         if self.blocks_dir.exists():
             shutil.rmtree(self.blocks_dir)
             self.blocks_dir.mkdir(parents=True)
@@ -527,9 +535,12 @@ class BlockDiskStore:
             logger.warning("BlockDiskStore writer thread did not stop in time, skipping flush")
             return
         # Flush remaining (safe because writer thread has stopped)
-        with self._write_lock:
-            remaining = self._write_queue[:]
-            self._write_queue.clear()
+        remaining = []
+        while not self._write_queue.empty():
+            try:
+                remaining.append(self._write_queue.get_nowait())
+            except queue.Empty:
+                break
         if remaining:
             flush_conn = sqlite3.connect(str(self._db_path), timeout=5.0)
             flush_conn.execute("PRAGMA journal_mode=WAL")

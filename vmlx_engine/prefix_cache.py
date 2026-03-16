@@ -188,8 +188,9 @@ class PrefixCacheManager:
                 self.stats.hits += 1
                 self.stats.tokens_saved += len(tokens)
                 self._touch_lru(tokens_tuple)
-                # Deep copy to prevent mutation
-                return copy.deepcopy(cache_entry.prompt_cache), []
+                # Return reference directly — MLX arrays are immutable,
+                # so sharing the cache is safe (no mutation possible).
+                return cache_entry.prompt_cache, []
 
         if shorter:
             # Shorter prefix cached - return cache and remaining tokens
@@ -199,7 +200,9 @@ class PrefixCacheManager:
                 self.stats.tokens_saved += len(shorter)
                 self._touch_lru(tuple(shorter))
                 remaining = tokens[len(shorter) :]
-                return copy.deepcopy(cache_entry.prompt_cache), remaining
+                # Return reference directly — MLX arrays are immutable,
+                # so sharing the cache is safe (no mutation possible).
+                return cache_entry.prompt_cache, remaining
 
         if longer:
             # Longer prefix cached - trim to match and return
@@ -209,6 +212,10 @@ class PrefixCacheManager:
                 prompt_cache = cache_entry.prompt_cache
                 if self._can_trim_cache(prompt_cache):
                     trim_amount = len(longer) - len(tokens)
+                    # Deep copy IS needed here: _trim_cache mutates the cache
+                    # objects' offset/keys/values refs via .trim(), which would
+                    # corrupt the stored entry. (Unlike the read-only fetch paths
+                    # above where sharing is safe.)
                     trimmed_cache = self._trim_cache(
                         copy.deepcopy(prompt_cache), trim_amount
                     )

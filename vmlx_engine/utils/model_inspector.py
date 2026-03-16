@@ -176,7 +176,7 @@ def inspect_model(model_path: str) -> ModelInfo:
     jang_target_bits = None
     jang_actual_bits = None
     jang_block_size = None
-    for jang_cfg_name in ("jang_config.json", "jjqf_config.json", "mxq_config.json"):
+    for jang_cfg_name in ("jang_config.json", "jjqf_config.json", "jang_cfg.json", "mxq_config.json"):
         jang_cfg_path = path / jang_cfg_name
         if jang_cfg_path.exists():
             try:
@@ -374,7 +374,8 @@ def estimate_memory_gb(info: ModelInfo, bits: int = 16) -> float:
     """
     Estimate memory needed to load a model at the given quantization level.
 
-    Includes a 20% overhead factor for activations, KV cache, and framework overhead.
+    Includes a model-type-aware overhead factor for activations, KV cache,
+    and framework overhead.
 
     Args:
         info: ModelInfo from inspect_model()
@@ -386,8 +387,23 @@ def estimate_memory_gb(info: ModelInfo, bits: int = 16) -> float:
     # Base: params * bits / 8 bytes
     base_gb = info.param_count_billions * bits / 8
 
-    # 20% overhead for activations, KV cache bootstrap, framework
-    return base_gb * 1.2
+    # Overhead factor varies by model type:
+    # - MoE (10%): KV cache is small relative to the large number of expert
+    #   weights that dominate memory; fewer active parameters per token means
+    #   smaller activation footprint.
+    # - VLM (25%): Vision encoder allocates additional buffers for image
+    #   patch embeddings and cross-attention KV cache on top of the language
+    #   model's own KV cache.
+    # - Dense (20%): Standard overhead for activations, KV cache bootstrap,
+    #   and framework bookkeeping.
+    if info.is_moe:
+        overhead = 1.10
+    elif info.is_mllm:
+        overhead = 1.25
+    else:
+        overhead = 1.20
+
+    return base_gb * overhead
 
 
 def estimate_conversion_memory_gb(info: ModelInfo, target_bits: int) -> float:

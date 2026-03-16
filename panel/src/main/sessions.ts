@@ -11,10 +11,10 @@ import { db, Session } from './database'
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
 import { detectModelConfigFromDir } from './model-config-registry'
-import { getBundledPythonPath } from './vllm-manager'
+import { getBundledPythonPath } from './engine-manager'
 
-/** Result of findVllmMlx: either bundled Python or a system binary */
-type VllmMlxPath =
+/** Result of findEnginePath: either bundled Python or a system binary */
+type EnginePath =
   | { type: 'bundled'; pythonPath: string }
   | { type: 'system'; binaryPath: string }
 
@@ -396,8 +396,8 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
 
-    const vllmResult = this.findVllmMlx()
-    if (!vllmResult) throw new Error('vmlx-engine not found. Please install it first.')
+    const engineResult = this.findEnginePath()
+    if (!engineResult) throw new Error('vmlx-engine not found. Please install it first.')
 
     // Image models may use mflux named models (e.g., "schnell") that are NOT filesystem paths
     // — skip path/format validation for image sessions, let the Python server handle it
@@ -478,9 +478,14 @@ export class SessionManager extends EventEmitter {
     if (config.apiKey) {
       spawnEnv.VLLM_API_KEY = config.apiKey
     }
+    // Pass HuggingFace token for gated model access (used by mflux, transformers, etc.)
+    const hfToken = db.getSetting('hf_api_key')
+    if (hfToken) {
+      spawnEnv.HF_TOKEN = hfToken
+    }
 
     let proc: ChildProcess
-    if (vllmResult.type === 'bundled') {
+    if (engineResult.type === 'bundled') {
       // Bundled Python: spawn python3 -s -m vmlx_engine.cli serve <model> --host ... --port ...
       // -s: suppress user site-packages (~/.local/lib/python3.12/site-packages)
       // This avoids shebang path issues with relocatable Python and ensures
@@ -490,20 +495,20 @@ export class SessionManager extends EventEmitter {
         PYTHONNOUSERSITE: '1',  // Extra safety: disable user site-packages
         PYTHONPATH: undefined,  // Clear any inherited PYTHONPATH
       }
-      const fullCmd = `${vllmResult.pythonPath} -s -m vmlx_engine.cli ${args.join(' ')}`
+      const fullCmd = `${engineResult.pythonPath} -s -m vmlx_engine.cli ${args.join(' ')}`
       this.pushLog(sessionId, `$ ${fullCmd}`)
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
-      proc = spawn(vllmResult.pythonPath, ['-s', '-m', 'vmlx_engine.cli', ...args], {
+      proc = spawn(engineResult.pythonPath, ['-s', '-m', 'vmlx_engine.cli', ...args], {
         env: bundledEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,  // Separate process group so we can kill entire group
       })
     } else {
       // System binary: spawn vmlx-engine directly
-      const fullCmd = `${vllmResult.binaryPath} ${args.join(' ')}`
+      const fullCmd = `${engineResult.binaryPath} ${args.join(' ')}`
       this.pushLog(sessionId, `$ ${fullCmd}`)
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
-      proc = spawn(vllmResult.binaryPath, args, {
+      proc = spawn(engineResult.binaryPath, args, {
         env: spawnEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
@@ -970,7 +975,8 @@ export class SessionManager extends EventEmitter {
               sessionId: session.id,
               running: true,
               modelName: data.model_name,
-              port: session.port
+              port: session.port,
+              memory: data.memory  // { active_mb, peak_mb, cache_mb } from /health
             })
           } else {
             this.incrementFailAndCheck(session.id)
@@ -1383,7 +1389,7 @@ export class SessionManager extends EventEmitter {
     return args
   }
 
-  findVllmMlx(): VllmMlxPath | null {
+  findEnginePath(): EnginePath | null {
     // Bundled Python: use python3 -m vmlx_engine.cli instead of vmlx-engine binary
     // This avoids shebang path issues in relocatable Python builds
     const bundledPython = getBundledPythonPath()
