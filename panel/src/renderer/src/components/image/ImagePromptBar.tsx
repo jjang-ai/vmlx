@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, KeyboardEvent } from 'react'
-import { Send, Loader2 } from 'lucide-react'
+import { useState, useRef, useCallback, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
+import { Send, Loader2, ImagePlus, X, Pencil } from 'lucide-react'
 
 interface ImagePromptBarSettings {
   steps: number
@@ -10,6 +10,7 @@ interface ImagePromptBarSettings {
   seed?: number
   count: number
   quantize: number
+  strength: number
 }
 
 const SIZE_PRESETS = [
@@ -28,18 +29,23 @@ interface ImagePromptBarProps {
   settings: ImagePromptBarSettings
   onSettingsChange: (settings: ImagePromptBarSettings) => void
   model: string | null
+  mode: 'generate' | 'edit'
+  sourceImage: { dataUrl: string; name: string } | null
+  onSourceImageChange: (img: { dataUrl: string; name: string } | null) => void
 }
 
-export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, model }: ImagePromptBarProps) {
+export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, model, mode, sourceImage, onSourceImageChange }: ImagePromptBarProps) {
   const [prompt, setPrompt] = useState('')
+  const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  const isEdit = mode === 'edit'
+  const canSubmit = !disabled && !generating && prompt.trim() && (!isEdit || !!sourceImage)
+
   const handleSubmit = useCallback(() => {
-    const trimmed = prompt.trim()
-    if (!trimmed || disabled || generating) return
-    onGenerate(trimmed)
-    // Don't clear prompt -- user might want to iterate
-  }, [prompt, disabled, generating, onGenerate])
+    if (!canSubmit) return
+    onGenerate(prompt.trim())
+  }, [prompt, canSubmit, onGenerate])
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -48,11 +54,84 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
     }
   }, [handleSubmit])
 
+  const handlePickImage = async () => {
+    try {
+      const picked = await window.api.chat.pickImages()
+      if (picked?.[0]) onSourceImageChange(picked[0])
+    } catch {}
+  }
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const file = e.dataTransfer.files[0]
+    if (!file || !file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = () => onSourceImageChange({ dataUrl: reader.result as string, name: file.name })
+    reader.readAsDataURL(file)
+  }
+
+  const handlePaste = (e: ClipboardEvent) => {
+    if (!isEdit) return
+    const items = e.clipboardData.items
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (!file) continue
+        const reader = new FileReader()
+        reader.onload = () => onSourceImageChange({ dataUrl: reader.result as string, name: 'pasted-image.png' })
+        reader.readAsDataURL(file)
+        break
+      }
+    }
+  }
+
   const currentSize = SIZE_PRESETS.find(p => p.width === settings.width && p.height === settings.height)
   const sizeLabel = currentSize?.label || `${settings.width}x${settings.height}`
 
   return (
     <div className="border-t border-border bg-background px-4 py-3">
+      {/* Source image upload zone (edit mode only) */}
+      {isEdit && (
+        <div className="mb-2">
+          {sourceImage ? (
+            <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
+              <img
+                src={sourceImage.dataUrl}
+                alt="Source"
+                className="h-12 w-12 rounded object-cover flex-shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{sourceImage.name}</p>
+                <p className="text-[10px] text-muted-foreground">Source image for editing</p>
+              </div>
+              <button
+                onClick={() => onSourceImageChange(null)}
+                className="p-1 text-muted-foreground hover:text-destructive rounded"
+                title="Remove source image"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={handlePickImage}
+              className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
+                dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40 hover:bg-accent/30'
+              }`}
+            >
+              <ImagePlus className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">
+                Click to upload, drag & drop, or paste an image
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Quick settings row */}
       <div className="flex items-center gap-4 mb-2 text-xs">
         <div className="flex items-center gap-1.5">
@@ -96,37 +175,62 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           />
         </div>
 
-        {settings.count > 1 && (
+        {isEdit && (
+          <div className="flex items-center gap-1.5">
+            <label className="text-muted-foreground">Strength</label>
+            <input
+              type="number"
+              value={settings.strength}
+              onChange={(e) => onSettingsChange({ ...settings, strength: Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)) })}
+              className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
+              min={0}
+              max={1}
+              step={0.05}
+            />
+          </div>
+        )}
+
+        {!isEdit && settings.count > 1 && (
           <span className="text-muted-foreground">x{settings.count} images</span>
         )}
       </div>
 
-      {/* Prompt input + generate button */}
+      {/* Prompt input + submit button */}
       <div className="flex gap-2">
         <textarea
           ref={textareaRef}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'Waiting for server to start...' : 'Describe the image you want to generate...'}
+          onPaste={handlePaste}
+          placeholder={
+            disabled ? 'Waiting for server to start...'
+              : isEdit && !sourceImage ? 'Upload a source image above, then describe your edit...'
+              : isEdit ? 'Describe the edit to apply...'
+              : 'Describe the image you want to generate...'
+          }
           disabled={disabled || generating}
           rows={2}
           className="flex-1 px-3 py-2 bg-muted border border-input rounded-md text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 placeholder:text-muted-foreground/60"
         />
         <button
           onClick={handleSubmit}
-          disabled={disabled || generating || !prompt.trim()}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end"
+          disabled={!canSubmit}
+          className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end ${
+            isEdit
+              ? 'bg-violet-600 text-white hover:bg-violet-700'
+              : 'bg-primary text-primary-foreground hover:bg-primary/90'
+          }`}
         >
           {generating ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Generating</span>
+              <span className="text-sm">{isEdit ? 'Editing' : 'Generating'}</span>
             </>
           ) : (
             <>
-              <Send className="h-4 w-4" />
-              <span className="text-sm">Generate</span>
+              {isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+              <span className="text-sm">{isEdit ? 'Edit' : 'Generate'}</span>
             </>
           )}
         </button>
