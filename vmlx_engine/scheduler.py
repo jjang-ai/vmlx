@@ -402,8 +402,12 @@ class Scheduler:
             kv_types = {t for t in cache_types if t == "KVCache" or t.endswith("KVCache")}
             if cache_types and cache_types == kv_types:
                 return False
-            # Any non-KV cache type (MambaCache, ArraysCache, etc.) needs paged cache
-            return bool(cache_types - kv_types)
+            # Any non-KV cache type (MambaCache, ArraysCache, etc.) needs paged cache.
+            # Discard CacheList — it's a wrapper (used by MoE models) that contains
+            # KVCache layers, not a hybrid SSM cache type.
+            non_kv = cache_types - kv_types
+            non_kv.discard("CacheList")
+            return bool(non_kv)
         except Exception as e:
             logger.warning(f"make_cache() failed during hybrid detection: {e}")
             return False
