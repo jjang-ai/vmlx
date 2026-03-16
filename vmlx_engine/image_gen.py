@@ -38,6 +38,20 @@ SUPPORTED_MODELS = {
     "flux1-dev": "dev",
 }
 
+# Image editing model names (separate from generation models)
+EDIT_MODELS = {
+    "qwen-image-edit": "qwen-image-edit",
+    "flux-kontext": "kontext-dev",
+    "kontext": "kontext-dev",
+    "kontext-dev": "kontext-dev",
+    "flux-fill": "fill-dev",
+    "fill": "fill-dev",
+    "fill-dev": "fill-dev",
+    "flux2-klein-edit": "flux2-klein-edit-4b",
+    "flux2-klein-edit-4b": "flux2-klein-edit-4b",
+    "z-image-img2img": "z-image-turbo",
+}
+
 # Default inference steps per model (schnell is fast, dev needs more)
 DEFAULT_STEPS = {
     "schnell": 4,
@@ -48,6 +62,11 @@ DEFAULT_STEPS = {
     "flux2-klein-9b": 20,
     "flux2-klein-base-4b": 20,
     "flux2-klein-base-9b": 20,
+    # Edit models
+    "qwen-image-edit": 28,
+    "kontext-dev": 24,
+    "fill-dev": 20,
+    "flux2-klein-edit-4b": 20,
 }
 
 
@@ -348,6 +367,194 @@ class ImageGenEngine:
 
         logger.info(
             f"Image generated in {elapsed:.1f}s: {width}x{height}, "
+            f"{len(image_bytes) / 1024:.0f} KB"
+        )
+
+        return ImageGenResult(
+            image_bytes=image_bytes,
+            width=width,
+            height=height,
+            model=self._model_name or "unknown",
+            seed=seed,
+            steps=steps,
+            elapsed_seconds=elapsed,
+        )
+
+    def load_edit_model(
+        self,
+        model_name: str,
+        quantize: int | None = None,
+        model_path: str | None = None,
+    ) -> None:
+        """Load an image editing model.
+
+        Args:
+            model_name: Edit model identifier (e.g., "qwen-image-edit", "flux-kontext")
+            quantize: Quantization bits (4, 8, or None for full precision)
+            model_path: Optional path to local model weights
+        """
+        try:
+            from mflux.models.common.config.model_config import ModelConfig
+        except ImportError:
+            raise ImportError("mflux not installed. Install with: pip install mflux")
+
+        resolved = EDIT_MODELS.get(model_name.lower(), model_name)
+        logger.info(f"Loading edit model: {resolved} (quantize={quantize})")
+        start = time.perf_counter()
+
+        model_config = ModelConfig.from_name(resolved)
+
+        if resolved == "qwen-image-edit":
+            from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit
+            self._model = QwenImageEdit(
+                model_config=model_config,
+                quantize=quantize,
+                model_path=model_path,
+                lora_paths=[],
+            )
+        elif resolved == "kontext-dev":
+            from mflux.models.flux.variants.kontext.flux_kontext import Flux1Kontext
+            self._model = Flux1Kontext(
+                model_config=model_config,
+                quantize=quantize,
+                model_path=model_path,
+                lora_paths=[],
+            )
+        elif resolved == "fill-dev":
+            from mflux.models.flux.variants.fill.flux_fill import Flux1Fill
+            self._model = Flux1Fill(
+                model_config=model_config,
+                quantize=quantize,
+                model_path=model_path,
+                lora_paths=[],
+            )
+        elif resolved == "flux2-klein-edit-4b":
+            from mflux.models.flux2.variants.edit.flux2_klein_edit import Flux2KleinEdit
+            self._model = Flux2KleinEdit(
+                model_config=model_config,
+                quantize=quantize,
+                model_path=model_path,
+                lora_paths=[],
+            )
+        else:
+            raise ValueError(f"Unknown edit model: {model_name}. Available: {list(EDIT_MODELS.keys())}")
+
+        elapsed = time.perf_counter() - start
+        self._model_name = resolved
+        self._quantize = quantize
+        self._loaded = True
+        logger.info(f"Edit model loaded in {elapsed:.1f}s: {resolved}")
+
+    def edit(
+        self,
+        prompt: str,
+        image_path: str,
+        width: int = 1024,
+        height: int = 1024,
+        steps: int | None = None,
+        guidance: float = 3.5,
+        seed: int | None = None,
+        strength: float = 0.75,
+        negative_prompt: str | None = None,
+        mask_path: str | None = None,
+    ) -> ImageGenResult:
+        """Edit an image using a loaded editing model.
+
+        Args:
+            prompt: Text instruction for the edit
+            image_path: Path to the source image
+            width: Output width
+            height: Output height
+            steps: Denoising steps (None = model default)
+            guidance: Guidance scale
+            seed: Random seed
+            strength: How much to change the image (0.0 = no change, 1.0 = full regen)
+            negative_prompt: What to avoid
+            mask_path: Path to mask image (for inpainting with Flux Fill)
+
+        Returns:
+            ImageGenResult with edited PNG image data
+        """
+        if not self.is_loaded:
+            raise RuntimeError("No edit model loaded. Call load_edit_model() first.")
+
+        if steps is None:
+            steps = DEFAULT_STEPS.get(self._model_name, 20)
+        if seed is None:
+            import random
+            seed = random.randint(0, 2**32 - 1)
+
+        width = (width // 16) * 16
+        height = (height // 16) * 16
+
+        logger.info(
+            f"Editing image: model={self._model_name}, {width}x{height}, "
+            f"{steps} steps, guidance={guidance}, strength={strength}, seed={seed}"
+        )
+        start = time.perf_counter()
+
+        model_name = self._model_name or ""
+
+        if model_name == "qwen-image-edit":
+            generated_image = self._model.generate_image(
+                seed=seed,
+                prompt=prompt,
+                image_path=image_path,
+                image_paths=[image_path],
+                num_inference_steps=steps,
+                height=height,
+                width=width,
+                guidance=guidance,
+                negative_prompt=negative_prompt,
+            )
+        elif model_name == "kontext-dev":
+            generated_image = self._model.generate_image(
+                seed=seed,
+                prompt=prompt,
+                image_path=image_path,
+                image_strength=strength,
+                num_inference_steps=steps,
+                height=height,
+                width=width,
+                guidance=guidance,
+            )
+        elif model_name == "fill-dev":
+            if not mask_path:
+                raise ValueError("Flux Fill requires a mask_path for inpainting")
+            generated_image = self._model.generate_image(
+                seed=seed,
+                prompt=prompt,
+                image_path=image_path,
+                masked_image_path=mask_path,
+                image_strength=strength,
+                num_inference_steps=steps,
+                height=height,
+                width=width,
+                guidance=guidance,
+            )
+        elif model_name == "flux2-klein-edit-4b":
+            generated_image = self._model.generate_image(
+                seed=seed,
+                prompt=prompt,
+                image_paths=[image_path],
+                image_strength=strength,
+                num_inference_steps=steps,
+                height=height,
+                width=width,
+                guidance=guidance,
+            )
+        else:
+            raise RuntimeError(f"Model {model_name} does not support editing")
+
+        elapsed = time.perf_counter() - start
+
+        pil_image = generated_image.image
+        buffer = io.BytesIO()
+        pil_image.save(buffer, format="PNG")
+        image_bytes = buffer.getvalue()
+
+        logger.info(
+            f"Image edited in {elapsed:.1f}s: {width}x{height}, "
             f"{len(image_bytes) / 1024:.0f} KB"
         )
 
