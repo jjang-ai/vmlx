@@ -128,6 +128,12 @@ declare global {
           width: number; height: number; steps: number; guidance: number;
           seed?: number; count: number; quantize?: number; serverPort: number
         }) => Promise<{ success: boolean; generations?: any[]; error?: string }>
+        edit: (params: {
+          sessionId: string; prompt: string; negativePrompt?: string; model: string;
+          imageBase64: string; maskBase64?: string;
+          width: number; height: number; steps: number; guidance: number; strength: number;
+          seed?: number; serverPort: number
+        }) => Promise<{ success: boolean; generations?: any[]; error?: string }>
         startServer: (modelName: string, quantize?: number) => Promise<{ success: boolean; sessionId?: string; port?: number; error?: string }>
         stopServer: () => Promise<{ success: boolean; error?: string }>
         getRunningServer: () => Promise<{ sessionId: string; modelName: string; host: string; port: number; status: string } | null>

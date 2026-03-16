@@ -174,6 +174,100 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
     }
   })
 
+  // ─── Image Editing ──────────────────────────────────────────────────
+
+  ipcMain.handle('image:edit', async (_, params: {
+    sessionId: string
+    prompt: string
+    negativePrompt?: string
+    model: string
+    imageBase64: string       // Base64-encoded source image
+    maskBase64?: string       // Base64-encoded mask (for inpainting)
+    width: number
+    height: number
+    steps: number
+    guidance: number
+    strength: number
+    seed?: number
+    serverPort: number
+  }) => {
+    try {
+      const { sessionId, prompt, model, imageBase64, maskBase64, width, height, steps, guidance, strength, seed, serverPort } = params
+      const baseUrl = `http://127.0.0.1:${serverPort}`
+
+      // Ensure output directory exists
+      const outputDir = join(homedir(), '.mlxstudio', 'generated', sessionId)
+      mkdirSync(outputDir, { recursive: true })
+
+      const startTime = Date.now()
+
+      // Call the image editing endpoint
+      const body: Record<string, any> = {
+        prompt,
+        model,
+        image: imageBase64,
+        size: `${width}x${height}`,
+        steps,
+        guidance,
+        strength,
+        n: 1,
+        response_format: 'b64_json'
+      }
+      if (params.negativePrompt) body.negative_prompt = params.negativePrompt
+      if (seed != null) body.seed = seed
+      if (maskBase64) body.mask = maskBase64
+
+      activeGenerationController = new AbortController()
+      const resp = await fetch(`${baseUrl}/v1/images/edits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: activeGenerationController.signal,
+      })
+
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => resp.statusText)
+        return { success: false, error: `Server returned ${resp.status}: ${errText}` }
+      }
+
+      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string }> }
+      const elapsed = (Date.now() - startTime) / 1000
+
+      // Save edited image to disk and database
+      const generations: ImageGeneration[] = []
+      for (const item of result.data) {
+        const genId = uuidv4()
+        const imagePath = join(outputDir, `${genId}.png`)
+
+        const buffer = Buffer.from(item.b64_json, 'base64')
+        writeFileSync(imagePath, buffer)
+
+        const gen: ImageGeneration = {
+          id: genId,
+          sessionId,
+          prompt,
+          negativePrompt: params.negativePrompt || undefined,
+          modelName: model,
+          width,
+          height,
+          steps,
+          guidance,
+          seed: seed,
+          elapsedSeconds: elapsed,
+          imagePath,
+          createdAt: Date.now()
+        }
+        db.addImageGeneration(gen)
+        generations.push(gen)
+      }
+
+      return { success: true, generations }
+    } catch (error) {
+      console.error('[IMAGE] Edit failed:', error)
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
   // ─── Server Lifecycle ────────────────────────────────────────────────
 
   ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number) => {
