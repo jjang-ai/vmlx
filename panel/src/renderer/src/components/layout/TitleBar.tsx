@@ -1,4 +1,4 @@
-import { MessageSquare, Server, Wrench, PanelLeftClose, PanelLeft, Info } from 'lucide-react'
+import { MessageSquare, Server, Wrench, Code2, ImageIcon, PanelLeftClose, PanelLeft, Info } from 'lucide-react'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { useAppState } from '../../contexts/AppStateContext'
 
@@ -56,6 +56,18 @@ export function TitleBar() {
             onClick={() => setMode('tools')}
             icon={<Wrench className="h-3 w-3" />}
             label="Tools"
+          />
+          <ModeButton
+            active={state.mode === 'image'}
+            onClick={() => setMode('image')}
+            icon={<ImageIcon className="h-3 w-3" />}
+            label="Image"
+          />
+          <ModeButton
+            active={state.mode === 'api'}
+            onClick={() => setMode('api')}
+            icon={<Code2 className="h-3 w-3" />}
+            label="API"
           />
         </div>
       </div>

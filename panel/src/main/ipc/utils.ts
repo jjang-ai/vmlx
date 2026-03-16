@@ -1,15 +1,15 @@
-import { sessionManager, resolveUrl } from '../sessions'
+import { sessionManager, resolveUrl, connectHost } from '../sessions'
 import { db } from '../database'
 
 /** Resolve the base URL for a session endpoint, with fallback to detection. */
 export async function resolveBaseUrl(endpoint?: { host: string; port: number }): Promise<string> {
   if (endpoint) {
-    return await resolveUrl(`http://${endpoint.host}:${endpoint.port}`)
+    return await resolveUrl(`http://${connectHost(endpoint.host)}:${endpoint.port}`)
   }
   const processes = await sessionManager.detect()
   const healthy = processes.find(p => p.healthy)
   if (healthy) return `http://127.0.0.1:${healthy.port}`
-  return 'http://127.0.0.1:8093'
+  return 'http://127.0.0.1:8000'
 }
 
 /** Build auth headers from session config (apiKey or remote credentials). */

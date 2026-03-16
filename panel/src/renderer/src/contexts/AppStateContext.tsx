@@ -8,6 +8,9 @@ const initialState: AppState = {
   serverPanel: 'dashboard',
   serverSessionId: null,
   serverInitialModelPath: null,
+  imagePanel: 'dashboard',
+  imageSessionId: null,
+  imageInitialModelPath: null,
   toolsPanel: 'dashboard',
   toolsModelPath: null,
   sidebarCollapsed: false,
@@ -23,6 +26,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, activeChatId: null, activeSessionId: null }
     case 'SET_SERVER_PANEL':
       return { ...state, serverPanel: action.panel, serverSessionId: action.sessionId ?? state.serverSessionId, serverInitialModelPath: action.modelPath !== undefined ? (action.modelPath || null) : state.serverInitialModelPath }
+    case 'SET_IMAGE_PANEL':
+      return { ...state, imagePanel: action.panel, imageSessionId: action.sessionId ?? state.imageSessionId, imageInitialModelPath: action.modelPath !== undefined ? (action.modelPath || null) : state.imageInitialModelPath }
     case 'SET_TOOLS_PANEL':
       return { ...state, toolsPanel: action.panel, toolsModelPath: action.modelPath !== undefined ? action.modelPath : state.toolsModelPath }
     case 'TOGGLE_SIDEBAR':
@@ -77,17 +82,18 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // Persist state changes — skip until restore completes to avoid overwriting saved values
   useEffect(() => {
     if (!restoredRef.current) return
-    window.api.settings.set('appMode', state.mode).catch(() => {})
-    window.api.settings.set('sidebarCollapsed', String(state.sidebarCollapsed)).catch(() => {})
+    const logSettingsErr = (key: string) => (err: unknown) => console.error(`Failed to persist setting "${key}":`, err)
+    window.api.settings.set('appMode', state.mode).catch(logSettingsErr('appMode'))
+    window.api.settings.set('sidebarCollapsed', String(state.sidebarCollapsed)).catch(logSettingsErr('sidebarCollapsed'))
     if (state.activeChatId) {
-      window.api.settings.set('lastActiveChatId', state.activeChatId).catch(() => {})
+      window.api.settings.set('lastActiveChatId', state.activeChatId).catch(logSettingsErr('lastActiveChatId'))
     } else {
-      window.api.settings.delete('lastActiveChatId').catch(() => {})
+      window.api.settings.delete('lastActiveChatId').catch(logSettingsErr('lastActiveChatId'))
     }
     if (state.activeSessionId) {
-      window.api.settings.set('lastActiveSessionId', state.activeSessionId).catch(() => {})
+      window.api.settings.set('lastActiveSessionId', state.activeSessionId).catch(logSettingsErr('lastActiveSessionId'))
     } else {
-      window.api.settings.delete('lastActiveSessionId').catch(() => {})
+      window.api.settings.delete('lastActiveSessionId').catch(logSettingsErr('lastActiveSessionId'))
     }
   }, [state.mode, state.sidebarCollapsed, state.activeChatId, state.activeSessionId])
 

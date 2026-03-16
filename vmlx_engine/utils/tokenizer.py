@@ -143,6 +143,13 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             f"Check that the model directory is available."
         )
 
+    # JANG format: mixed-precision quantized models — dequantize to float16 at load
+    from .jang_loader import is_jang_model
+    if is_jang_model(model_name):
+        from .jang_loader import load_jang_model
+        logger.info(f"Detected JANG model: {model_name}")
+        return load_jang_model(model_name)
+
     try:
         return load(model_name, tokenizer_config=tokenizer_config)
     except ValueError as e:

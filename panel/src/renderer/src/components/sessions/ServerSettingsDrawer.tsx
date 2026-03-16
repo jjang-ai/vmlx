@@ -48,7 +48,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           if (det?.cacheType) setDetectedCacheType(det.cacheType)
           if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
         })
-        .catch(() => { })
+        .catch((err) => console.error('Failed to detect model config:', err))
     }
   }, [session.id, session.config, session.host, session.port])
 

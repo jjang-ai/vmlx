@@ -60,6 +60,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       mql.addEventListener('change', handler)
       return () => mql.removeEventListener('change', handler)
     }
+    return undefined
   }, [theme])
 
   return (

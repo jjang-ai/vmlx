@@ -153,11 +153,31 @@ export function registerDeveloperHandlers(getWin: () => BrowserWindow | null) {
     force?: boolean
     skipVerify?: boolean
     trustRemoteCode?: boolean
+    jangProfile?: string
+    jangMethod?: string
+    calibrationMethod?: string
+    imatrixPath?: string
+    useAwq?: boolean
   }) => {
-    const cliArgs = ['convert', args.model, '--bits', args.bits.toString(), '--group-size', args.groupSize.toString()]
+    const cliArgs = ['convert', args.model]
+
+    if (args.jangProfile) {
+      // JANG adaptive quantization
+      cliArgs.push('--jang-profile', args.jangProfile)
+      if (args.jangMethod) cliArgs.push('--jang-method', args.jangMethod)
+      if (args.calibrationMethod && args.calibrationMethod !== 'weights') {
+        cliArgs.push('--calibration-method', args.calibrationMethod)
+      }
+      if (args.imatrixPath) cliArgs.push('--imatrix-path', args.imatrixPath)
+      if (args.useAwq) cliArgs.push('--use-awq')
+    } else {
+      // MLX uniform quantization
+      cliArgs.push('--bits', args.bits.toString(), '--group-size', args.groupSize.toString())
+      if (args.mode && args.mode !== 'default') cliArgs.push('--mode', args.mode)
+      if (args.dtype) cliArgs.push('--dtype', args.dtype)
+    }
+
     if (args.output) cliArgs.push('--output', args.output)
-    if (args.mode && args.mode !== 'default') cliArgs.push('--mode', args.mode)
-    if (args.dtype) cliArgs.push('--dtype', args.dtype)
     if (args.force) cliArgs.push('--force')
     if (args.skipVerify) cliArgs.push('--skip-verify')
     if (args.trustRemoteCode) cliArgs.push('--trust-remote-code')

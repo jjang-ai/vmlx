@@ -5,16 +5,17 @@ import { electronAPI } from '@electron-toolkit/preload'
 const api = {
   // Model management
   models: {
-    scan: () => ipcRenderer.invoke('models:scan'),
+    scan: (modelType?: string) => ipcRenderer.invoke('models:scan', modelType),
     info: (modelPath: string) => ipcRenderer.invoke('models:info', modelPath),
-    getDirectories: () => ipcRenderer.invoke('models:getDirectories'),
-    addDirectory: (dirPath: string) => ipcRenderer.invoke('models:addDirectory', dirPath),
-    removeDirectory: (dirPath: string) => ipcRenderer.invoke('models:removeDirectory', dirPath),
+    getDirectories: (modelType?: string) => ipcRenderer.invoke('models:getDirectories', modelType),
+    addDirectory: (dirPath: string, modelType?: string) => ipcRenderer.invoke('models:addDirectory', dirPath, modelType),
+    removeDirectory: (dirPath: string, modelType?: string) => ipcRenderer.invoke('models:removeDirectory', dirPath, modelType),
     browseDirectory: () => ipcRenderer.invoke('models:browseDirectory'),
     detectConfig: (modelPath: string) => ipcRenderer.invoke('models:detect-config', modelPath),
+    detectTypes: (modelPaths: string[]) => ipcRenderer.invoke('models:detectTypes', modelPaths),
     getGenerationDefaults: (modelPath: string) => ipcRenderer.invoke('models:getGenerationDefaults', modelPath),
     // HuggingFace search & download
-    searchHF: (query: string, sortBy?: string, sortDir?: string) => ipcRenderer.invoke('models:searchHF', query, sortBy, sortDir),
+    searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => ipcRenderer.invoke('models:searchHF', query, sortBy, sortDir, modelType),
     getRecommendedModels: () => ipcRenderer.invoke('models:getRecommendedModels'),
     downloadModel: (repoId: string) => ipcRenderer.invoke('models:downloadModel', repoId),
     startDownload: (repoId: string) => ipcRenderer.invoke('models:startDownload', repoId),
@@ -209,7 +210,8 @@ const api = {
       ipcRenderer.invoke('developer:doctor', modelPath, options || {}),
     convert: (args: {
       model: string; output?: string; bits: number; groupSize: number;
-      mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean
+      mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean;
+      jangProfile?: string; jangMethod?: string
     }) => ipcRenderer.invoke('developer:convert', args),
     cancelOp: () => ipcRenderer.invoke('developer:cancelOp'),
     browseOutputDir: () => ipcRenderer.invoke('developer:browseOutputDir') as Promise<string | null>,
@@ -240,6 +242,35 @@ const api = {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
     delete: (key: string) => ipcRenderer.invoke('settings:delete', key)
+  },
+
+  // Per-model settings
+  modelSettings: {
+    get: (modelPath: string) => ipcRenderer.invoke('model-settings:get', modelPath),
+    getAll: () => ipcRenderer.invoke('model-settings:getAll'),
+    save: (modelPath: string, settings: any) => ipcRenderer.invoke('model-settings:save', modelPath, settings),
+    delete: (modelPath: string) => ipcRenderer.invoke('model-settings:delete', modelPath),
+  },
+
+  // Image generation
+  image: {
+    createSession: (modelName: string) => ipcRenderer.invoke('image:createSession', modelName),
+    getSessions: () => ipcRenderer.invoke('image:getSessions'),
+    getSession: (id: string) => ipcRenderer.invoke('image:getSession', id),
+    deleteSession: (id: string) => ipcRenderer.invoke('image:deleteSession', id),
+    getGenerations: (sessionId: string) => ipcRenderer.invoke('image:getGenerations', sessionId),
+    generate: (params: any) => ipcRenderer.invoke('image:generate', params),
+    startServer: (modelName: string, quantize?: number) => ipcRenderer.invoke('image:startServer', modelName, quantize),
+    stopServer: () => ipcRenderer.invoke('image:stopServer'),
+    getRunningServer: () => ipcRenderer.invoke('image:getRunningServer'),
+    getModelStatus: (modelName: string) => ipcRenderer.invoke('image:getModelStatus', modelName),
+    readFile: (imagePath: string) => ipcRenderer.invoke('image:readFile', imagePath),
+    saveFile: (imagePath: string) => ipcRenderer.invoke('image:saveFile', imagePath),
+    onServerStarting: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('image:serverStarting', handler)
+      return () => { ipcRenderer.removeListener('image:serverStarting', handler) }
+    }
   },
 
   // Session management

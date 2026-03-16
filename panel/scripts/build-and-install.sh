@@ -38,7 +38,8 @@ fi
 echo ""
 echo "  Python server syntax..."
 PYTHON_ERRORS=0
-for f in $(find "/Users/example/mlx/vllm-mlx/vmlx_engine" -name "*.py" 2>/dev/null); do
+REPO_DIR="$(dirname "$PANEL_DIR")"
+for f in $(find "$REPO_DIR/vmlx_engine" -name "*.py" 2>/dev/null); do
   if ! python3 -c "import py_compile; py_compile.compile('$f', doraise=True)" 2>/dev/null; then
     echo "  [FAIL] Syntax error: $f"
     PYTHON_ERRORS=1
@@ -55,7 +56,7 @@ fi
 echo ""
 echo "  Model registry sync..."
 TS_FAMILIES=$(grep -c "family:" "$PANEL_DIR/src/main/model-config-registry.ts" 2>/dev/null || echo "0")
-PY_FAMILIES=$(grep -c "family_name=" "/Users/example/mlx/vllm-mlx/vmlx_engine/model_configs.py" 2>/dev/null || echo "0")
+PY_FAMILIES=$(grep -c "family_name=" "$REPO_DIR/vmlx_engine/model_configs.py" 2>/dev/null || echo "0")
 echo "  TypeScript families: $TS_FAMILIES | Python families: $PY_FAMILIES"
 if [ "$TS_FAMILIES" -gt 0 ] && [ "$PY_FAMILIES" -gt 0 ]; then
   echo "  [PASS] Both registries have model families"
@@ -81,7 +82,7 @@ fi
 # Check critical API field parity
 echo ""
 echo "  API field parity..."
-RESP_FIELDS=$(grep -c "stream_options\|enable_thinking" "/Users/example/mlx/vllm-mlx/vmlx_engine/api/models.py" 2>/dev/null || echo "0")
+RESP_FIELDS=$(grep -c "stream_options\|enable_thinking" "$REPO_DIR/vmlx_engine/api/models.py" 2>/dev/null || echo "0")
 if [ "$RESP_FIELDS" -ge 3 ]; then
   echo "  [PASS] ResponsesRequest has stream_options + enable_thinking"
 else

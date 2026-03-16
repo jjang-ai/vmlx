@@ -3,9 +3,10 @@ import { useState, useEffect, useRef } from 'react'
 interface CachePanelProps {
   endpoint: { host: string; port: number }
   sessionStatus: string
+  sessionId?: string
 }
 
-export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
+export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelProps) {
   const [stats, setStats] = useState<any>(null)
   const [entries, setEntries] = useState<any>(null)
   const [loading, setLoading] = useState(false)
@@ -20,7 +21,7 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
   const fetchStats = async () => {
     if (sessionStatus !== 'running') return
     try {
-      const s = await window.api.cache.stats(endpoint)
+      const s = await window.api.cache.stats(endpoint, sessionId)
       setStats(s)
       setError(null)
     } catch (err: any) {
@@ -42,7 +43,7 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
   const handleFetchEntries = async () => {
     setLoading(true)
     try {
-      const e = await window.api.cache.entries(endpoint)
+      const e = await window.api.cache.entries(endpoint, sessionId)
       setEntries(e)
       setShowEntries(true)
     } catch (err: any) {
@@ -59,7 +60,7 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
     }
     setWarming(true)
     try {
-      await window.api.cache.warm([warmInput.trim()], endpoint)
+      await window.api.cache.warm([warmInput.trim()], endpoint, sessionId)
       await fetchStats()
       setWarmInput('')
       setShowWarmInput(false)
@@ -73,7 +74,7 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
   const handleClear = async (type: string) => {
     setClearing(true)
     try {
-      await window.api.cache.clear(type, endpoint)
+      await window.api.cache.clear(type, endpoint, sessionId)
       await fetchStats()
       setEntries(null)
     } catch (err: any) {
@@ -157,7 +158,7 @@ export function CachePanel({ endpoint, sessionStatus }: CachePanelProps) {
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Disk Cache (L2)</h4>
           <div className="grid grid-cols-2 gap-2 text-sm">
             {diskCache.entries != null && <StatCard label="Entries" value={String(diskCache.entries)} />}
-            {diskCache.size_mb != null && <StatCard label="Size" value={`${diskCache.size_mb.toFixed(1)} MB`} />}
+            {(diskCache.total_size_mb ?? diskCache.size_mb) != null && <StatCard label="Size" value={`${(diskCache.total_size_mb ?? diskCache.size_mb ?? 0).toFixed(1)} MB`} />}
             {diskCache.hit_rate != null && <StatCard label="Hit Rate" value={`${(diskCache.hit_rate * 100).toFixed(1)}%`} />}
           </div>
         </div>

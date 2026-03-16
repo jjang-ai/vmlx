@@ -23,7 +23,6 @@ interface DateGroup {
 }
 
 function groupByDate(chats: ChatSummary[]): DateGroup[] {
-  const now = Date.now()
   const today = new Date(); today.setHours(0, 0, 0, 0)
   const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1)
   const weekAgo = new Date(today); weekAgo.setDate(weekAgo.getDate() - 7)
@@ -163,14 +162,14 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
                     onChange={e => setRenameValue(e.target.value)}
                     onKeyDown={e => {
                       if (e.key === 'Enter') handleRename(chat.id)
-                      if (e.key === 'Escape') setRenamingId(null)
+                      if (e.key === 'Escape') { setRenamingId(null); setRenameValue('') }
                     }}
                     className="flex-1 bg-background border border-input rounded px-1.5 py-0.5 text-xs"
                   />
                   <button onClick={() => handleRename(chat.id)} className="text-primary">
                     <Check className="h-3 w-3" />
                   </button>
-                  <button onClick={() => setRenamingId(null)} className="text-muted-foreground">
+                  <button onClick={() => { setRenamingId(null); setRenameValue('') }} className="text-muted-foreground">
                     <X className="h-3 w-3" />
                   </button>
                 </div>

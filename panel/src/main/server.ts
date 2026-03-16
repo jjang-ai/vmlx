@@ -6,6 +6,9 @@
 export interface ServerConfig {
   modelPath: string
 
+  // Model type — auto-detected from directory structure
+  modelType?: 'text' | 'image'
+
   // Server settings
   host: string
   port: number
@@ -80,9 +83,17 @@ export interface ServerConfig {
   // Additional
   additionalArgs?: string
 
-  // Legacy — stored in DB but NOT wired to any CLI arg.
-  // Kept for backward compatibility with existing session configs.
+  // JIT compilation (mx.compile)
+  enableJit?: boolean
+
+  // Logging
   logLevel?: 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR'
+
+  // CORS — comma-separated allowed origins (default '*' = all)
+  corsOrigins?: string
+
+  // Max context length override (0 = use model default)
+  maxContextLength?: number
 }
 
 export interface DetectedProcess {

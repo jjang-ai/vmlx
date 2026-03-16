@@ -18,15 +18,23 @@ logger = logging.getLogger("vmlx_engine")
 
 def convert_command(args: argparse.Namespace) -> None:
     """
-    Convert a HuggingFace model to quantized MLX format.
+    Convert a HuggingFace model to quantized MLX or JANG format.
 
     Flow:
     1. Inspect model metadata (config.json)
     2. Pre-flight memory check
     3. Apply LatentMoE patch if needed
-    4. Run mlx_lm.convert.convert()
+    4. Run mlx_lm.convert.convert() or jang-tools convert
     5. Post-conversion smoke test (unless --skip-verify)
     """
+    # Route to JANG conversion if --jang-profile is specified
+    if args.jang_profile:
+        return _jang_convert_command(args)
+
+    if not args.bits:
+        print("Error: Either --bits (MLX uniform) or --jang-profile (JANG adaptive) is required.")
+        sys.exit(1)
+
     from ..utils.model_inspector import (
         available_memory_gb,
         estimate_conversion_memory_gb,
@@ -283,3 +291,220 @@ def _smoke_test(model_path: str) -> tuple[bool, str]:
 
     except Exception as e:
         return False, f"Smoke test failed: {e}"
+
+
+def _jang_smoke_test(model_path: str) -> tuple[bool, str]:
+    """Load a JANG model and generate a few tokens to verify it works."""
+    try:
+        from ..utils.jang_loader import load_jang_model
+        model, tokenizer = load_jang_model(model_path)
+
+        import mlx.core as mx
+        from mlx_lm.sample_utils import make_sampler
+        from mlx_lm.generate import generate_step
+
+        prompt_text = "The capital of France is"
+        prompt_tokens = tokenizer.encode(prompt_text)
+        prompt = mx.array(prompt_tokens)
+
+        sampler = make_sampler(temp=0.0)
+        generated = []
+        for step in generate_step(prompt=prompt, model=model, max_tokens=5, sampler=sampler):
+            token = step[0] if isinstance(step, tuple) else step
+            generated.append(int(token))
+
+        if not generated:
+            return False, "Model loaded but generated no tokens"
+
+        output_text = tokenizer.decode(generated)
+        if len(output_text.strip()) == 0:
+            return False, "Model generated empty output"
+
+        return True, f"Generated: '{prompt_text}{output_text.rstrip()}'"
+    except Exception as e:
+        return False, f"JANG smoke test failed: {e}"
+
+
+def _jang_convert_command(args: argparse.Namespace) -> None:
+    """Convert a HuggingFace model to JANG adaptive mixed-precision format."""
+    from ..utils.model_inspector import resolve_model_path
+
+    model_input = args.model
+
+    try:
+        from jang_tools.allocate import JANG_PROFILES, profile_for_bits
+    except ImportError:
+        print("\nError: jang-tools not installed. Install with: pip install jang-tools")
+        sys.exit(1)
+
+    # Accept profile name, bit number, or custom CUSTOM_C_I_P format
+    raw_profile = args.jang_profile
+    custom_bits = None
+    if raw_profile.upper().startswith('CUSTOM_'):
+        # Custom mix: CUSTOM_8_4_3 → critical=8, important=4, compress=3
+        parts = raw_profile.split('_')[1:]
+        if len(parts) == 3:
+            try:
+                custom_bits = tuple(int(x) for x in parts)
+                # Register as a temporary profile
+                profile = f"CUSTOM_{custom_bits[0]}_{custom_bits[1]}_{custom_bits[2]}"
+                JANG_PROFILES[profile] = custom_bits
+                print(f"Custom mix: CRITICAL={custom_bits[0]}b IMPORTANT={custom_bits[1]}b COMPRESS={custom_bits[2]}b")
+            except ValueError:
+                print(f"Error: Invalid custom profile format: {raw_profile}")
+                sys.exit(1)
+        else:
+            print(f"Error: Custom profile must be CUSTOM_C_I_P (e.g., CUSTOM_8_4_3)")
+            sys.exit(1)
+    elif raw_profile.isdigit():
+        # User passed a number like "2" or "4"
+        profile = profile_for_bits(int(raw_profile))
+        print(f"Bit target {raw_profile} → using profile {profile}")
+    else:
+        profile = raw_profile.upper()
+
+    # Resolve model path
+    print(f"Resolving model: {model_input}")
+    try:
+        model_path = resolve_model_path(model_input)
+    except FileNotFoundError as e:
+        print(f"\nError: {e}")
+        sys.exit(1)
+
+    if profile not in JANG_PROFILES:
+        print(f"\nError: Unknown JANG profile '{profile}'.")
+        print(f"Available: {', '.join(sorted(JANG_PROFILES.keys()))}")
+        print(f"Or use a number 1-8 for automatic profile selection.")
+        sys.exit(1)
+
+    # Output path
+    output_path = args.output
+    if not output_path:
+        name = model_input.rstrip("/").split("/")[-1]
+        for suffix in ["-BF16", "-bf16", "-FP16", "-fp16", "-FP32", "-fp32"]:
+            if name.endswith(suffix):
+                name = name[:-len(suffix)]
+                break
+        output_path = f"{name}-{profile}"
+
+    output_dir = Path(output_path)
+    if output_dir.exists():
+        if not args.force:
+            print(f"Error: Output directory already exists: {output_path}")
+            print("Use --force to overwrite.")
+            sys.exit(1)
+        else:
+            import shutil
+            shutil.rmtree(output_dir)
+
+    # Show pre-conversion estimate
+    crit, imp, comp = JANG_PROFILES[profile]
+
+    # Estimate size and check memory
+    est_str = ""
+    try:
+        from ..utils.model_inspector import inspect_model, available_memory_gb, total_memory_gb
+        info = inspect_model(model_path)
+        param_b = info.param_count_billions or 0
+        if param_b > 0:
+            from jang_tools.allocate import estimate_size_gb
+            est = estimate_size_gb(int(param_b * 1e9), profile)
+            est_str = f"  Estimated output: ~{est['total_gb']} GB ({est['avg_bits_approx']}b avg)"
+    except Exception:
+        info = None
+
+    # Memory warning (conversion needs source weights + quantized output in RAM)
+    try:
+        available = available_memory_gb()
+        total = total_memory_gb()
+        source_gb = sum(f.stat().st_size for f in Path(model_path).glob("*.safetensors")) / (1024**3)
+        needed = source_gb * 2.5  # source + quantized + overhead
+        print(f"Memory estimate:")
+        print(f"  Conversion needs: ~{needed:.1f} GB")
+        print(f"  Available: {available:.1f} GB / {total:.0f} GB total")
+        if needed > total:
+            print(f"\n  WARNING: This model may be too large for your system.")
+        elif needed > available:
+            print(f"\n  WARNING: Conversion needs more than currently available memory.")
+            print(f"  Close other applications or expect heavy swap usage.")
+        else:
+            print(f"  Status: OK")
+    except Exception:
+        pass
+
+    # Resolve advanced options (must be before the summary printout)
+    calibration_method = getattr(args, 'calibration_method', 'weights')
+    imatrix_path = getattr(args, 'imatrix_path', None)
+    use_awq = getattr(args, 'use_awq', False)
+
+    print()
+    print("=" * 60)
+    print(f"  JANG Convert — {profile}")
+    print(f"  CRITICAL={crit}b  IMPORTANT={imp}b  COMPRESS={comp}b")
+    print(f"  Source: {model_path}")
+    print(f"  Output: {output_path}")
+    print(f"  Method: {args.jang_method}")
+    if calibration_method != 'weights':
+        print(f"  Calibration: {calibration_method}")
+    if imatrix_path:
+        print(f"  Importance matrix: {imatrix_path}")
+    if use_awq:
+        print(f"  AWQ scaling: enabled")
+    if est_str:
+        print(est_str)
+    print("=" * 60)
+    print()
+
+    start_time = time.time()
+
+    try:
+        from jang_tools.convert import convert_model
+        result = convert_model(
+            model_path=str(model_path),
+            output_path=str(output_dir),
+            target_bits=comp,  # target is the COMPRESS tier bits
+            profile=profile,
+            quantization_method=args.jang_method,
+            calibration_method=calibration_method,
+            imatrix_path=imatrix_path,
+            use_awq=use_awq,
+        )
+    except Exception as e:
+        elapsed = time.time() - start_time
+        print(f"\nError: JANG conversion failed after {elapsed:.1f}s: {e}")
+        if logger.isEnabledFor(logging.DEBUG):
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+    elapsed = time.time() - start_time
+    print(f"\nJANG conversion completed in {elapsed:.1f}s")
+    print(f"  Profile: {profile}")
+    print(f"  Actual bits: {result['actual_bits']}")
+    print(f"  Weight size: {result['total_weight_gb']} GB")
+    print(f"  Output: {output_dir.resolve()}")
+
+    # Show output size
+    output_files = list(output_dir.glob("*.safetensors"))
+    output_size = sum(f.stat().st_size for f in output_files) / (1024**3)
+    print(f"  Disk size: {output_size:.1f} GB ({len(output_files)} files)")
+
+    # Post-conversion smoke test (verify the model loads and generates)
+    if not args.skip_verify:
+        print()
+        print("Running JANG verification smoke test...")
+        success, message = _jang_smoke_test(str(output_dir))
+        if success:
+            print(f"  PASS: {message}")
+        else:
+            print(f"  WARN: {message}")
+            print("  The model converted but may need verification.")
+            print(f"  Run 'vmlx-engine doctor {output_dir}' for diagnostics.")
+    else:
+        print()
+        print(f"Verification skipped. To verify later:")
+        print(f"  vmlx-engine doctor {output_dir}")
+
+    print()
+    print(f"Load with:")
+    print(f"  vmlx-engine serve {output_dir}")

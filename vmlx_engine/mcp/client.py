@@ -94,18 +94,22 @@ class MCPClient:
             self._error = None
 
             try:
-                if self.config.transport == MCPTransport.STDIO:
-                    await self._connect_stdio()
-                elif self.config.transport == MCPTransport.SSE:
-                    await self._connect_sse()
-                else:
-                    raise ValueError(f"Unknown transport: {self.config.transport}")
+                # 30s timeout prevents indefinite hang if MCP server never responds
+                async def _do_connect():
+                    if self.config.transport == MCPTransport.STDIO:
+                        await self._connect_stdio()
+                    elif self.config.transport == MCPTransport.SSE:
+                        await self._connect_sse()
+                    else:
+                        raise ValueError(f"Unknown transport: {self.config.transport}")
 
-                # Initialize session
-                await self._initialize_session()
+                    # Initialize session
+                    await self._initialize_session()
 
-                # Discover tools
-                await self._discover_tools()
+                    # Discover tools
+                    await self._discover_tools()
+
+                await asyncio.wait_for(_do_connect(), timeout=30)
 
                 self._state = MCPServerState.CONNECTED
                 self._last_connected = time.time()
@@ -329,20 +333,29 @@ class MCPClient:
                 error_message=str(e),
             )
 
+    # Max total content size from MCP tool responses (10 MB)
+    _MAX_CONTENT_SIZE = 10 * 1024 * 1024
+
     def _extract_content(self, result) -> Any:
         """Extract content from MCP tool result."""
         if not hasattr(result, "content") or not result.content:
             return None
 
-        # Handle list of content items
+        # Handle list of content items (with size limit to prevent OOM)
         contents = []
+        total_size = 0
         for item in result.content:
             if hasattr(item, "text"):
-                contents.append(item.text)
+                text = item.text
             elif hasattr(item, "data"):
-                contents.append(item.data)
+                text = item.data
             else:
-                contents.append(str(item))
+                text = str(item)
+            total_size += len(text) if isinstance(text, (str, bytes)) else 0
+            if total_size > self._MAX_CONTENT_SIZE:
+                contents.append("[Content truncated — MCP tool response exceeded 10 MB]")
+                break
+            contents.append(text)
 
         # Return single item or list
         if len(contents) == 1:

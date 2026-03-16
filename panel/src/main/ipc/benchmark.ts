@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
 import { db } from '../database'
-import { resolveUrl } from '../sessions'
+import { resolveUrl, connectHost } from '../sessions'
 import { getAuthHeaders } from './utils'
 
 /**
@@ -147,7 +147,7 @@ async function runSingleBenchmark(
 
 export function registerBenchmarkHandlers(getWindow: () => Electron.BrowserWindow | null): void {
   ipcMain.handle('benchmark:run', async (_, sessionId: string, endpoint: { host: string; port: number }, modelPath: string, modelName?: string, options?: { flushCache?: boolean }) => {
-    const baseUrl = await resolveUrl(`http://${endpoint.host}:${endpoint.port}`)
+    const baseUrl = await resolveUrl(`http://${connectHost(endpoint.host)}:${endpoint.port}`)
     const authHeaders = getAuthHeaders(sessionId)
     const results: PromptResult[] = []
     const win = getWindow()

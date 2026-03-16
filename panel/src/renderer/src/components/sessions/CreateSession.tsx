@@ -15,9 +15,11 @@ interface CreateSessionProps {
   initialModelPath?: string | null
   onBack: () => void
   onCreated: (sessionId: string) => void
+  /** Filter to show only image or text models */
+  filterType?: 'text' | 'image'
 }
 
-export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSessionProps) {
+export function CreateSession({ initialModelPath, onBack, onCreated, filterType }: CreateSessionProps) {
   const [sessionType, setSessionType] = useState<'local' | 'remote' | 'download'>('local')
   const [step, setStep] = useState<1 | 2>(initialModelPath ? 2 : 1)
   const [models, setModels] = useState<ModelInfo[]>([])
@@ -57,7 +59,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
   const scanModels = async () => {
     setScanLoading(true)
     try {
-      const scanned = await window.api.models.scan()
+      const scanned = await window.api.models.scan(filterType)
       setModels(scanned)
     } catch (err) {
       console.error('Failed to scan models:', err)
@@ -68,7 +70,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
 
   const loadDirectories = async () => {
     try {
-      const result = await window.api.models.getDirectories()
+      const result = await window.api.models.getDirectories(filterType)
       setUserDirs(result.userDirectories)
       setBuiltinDirs(result.builtinDirectories)
     } catch (err) {
@@ -190,7 +192,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
     setLogs(['Creating session...'])
 
     try {
-      const createResult = await window.api.sessions.create(selectedModel, config)
+      // Set model type so buildArgs skips text-specific flags for image models
+      const launchConfig = filterType === 'image' ? { ...config, modelType: 'image' as const } : config
+      const createResult = await window.api.sessions.create(selectedModel, launchConfig)
       if (!mountedRef.current) return
       if (!createResult.success) {
         throw new Error(createResult.error || 'Failed to create session')
@@ -263,7 +267,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
   }
 
   const addDirectory = async (dirPath: string) => {
-    const result = await window.api.models.addDirectory(dirPath)
+    const result = await window.api.models.addDirectory(dirPath, filterType)
     if (result.success) {
       await loadDirectories()
       // Rescan with the new directory
@@ -274,7 +278,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
   }
 
   const handleRemoveDirectory = async (dirPath: string) => {
-    await window.api.models.removeDirectory(dirPath)
+    await window.api.models.removeDirectory(dirPath, filterType)
     await loadDirectories()
     await scanModels()
   }
@@ -448,7 +452,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
                   <p className="text-muted-foreground mb-2">No models found</p>
                   <p className="text-xs text-muted-foreground mb-4">
                     Click "Directories" above to add your model folders,
-                    or place models in ~/.lmstudio/models/ or ~/.cache/huggingface/hub/
+                    or place models in ~/.mlxstudio/models/ or ~/.cache/huggingface/hub/
                   </p>
                   <div className="mb-4 p-3 bg-card border border-border rounded-lg text-left">
                     <p className="text-xs text-muted-foreground mb-2">To download a model, run in Terminal:</p>
@@ -618,8 +622,41 @@ export function CreateSession({ initialModelPath, onBack, onCreated }: CreateSes
           <p className="font-medium text-sm truncate">{selectedModel}</p>
         </div>
 
-        {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} />
+        {/* Config Form — image models get simplified settings */}
+        {filterType === 'image' ? (
+          <div className="space-y-4 border border-border rounded p-4">
+            <h3 className="text-sm font-medium">Image Server Settings</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Host</label>
+                <input type="text" value={config.host} onChange={e => handleChange('host', e.target.value)} className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Port</label>
+                <input type="number" value={config.port} onChange={e => handleChange('port', parseInt(e.target.value) || 8000)} className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">API Key (optional)</label>
+                <input type="password" value={config.apiKey} onChange={e => handleChange('apiKey', e.target.value)} placeholder="Leave empty for no auth" className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Log Level</label>
+                <select value={config.logLevel || 'INFO'} onChange={e => handleChange('logLevel', e.target.value)} className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm">
+                  <option value="DEBUG">DEBUG</option>
+                  <option value="INFO">INFO</option>
+                  <option value="WARNING">WARNING</option>
+                  <option value="ERROR">ERROR</option>
+                </select>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The image server exposes a <code>/v1/images/generations</code> endpoint (OpenAI-compatible).
+              Use the Image tab or any API client to generate images once the server is running.
+            </p>
+          </div>
+        ) : (
+          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} />
+        )}
 
         {/* Launch */}
         <div className="flex gap-3 mt-6 pb-6">

@@ -6,7 +6,7 @@ We welcome contributions to vmlx-engine!
 
 ```bash
 # Clone the repository
-git clone https://github.com/vmlxllm/vmlx.git
+git clone https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
 # Install with dev dependencies
@@ -116,4 +116,4 @@ vmlx-engine-bench --model mlx-community/Qwen3-0.6B-8bit --output results_m4.json
 
 ## Questions?
 
-Open an issue at [GitHub Issues](https://github.com/vmlxllm/vmlx/issues).
+Open an issue at [GitHub Issues](https://github.com/jjang-ai/vmlx/issues).

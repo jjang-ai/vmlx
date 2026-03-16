@@ -8,6 +8,8 @@ These are pure Pydantic models with no MLX dependency.
 
 import time
 
+import pytest
+
 from vmlx_engine.api.models import (
     AssistantMessage,
     AudioSpeechRequest,
@@ -37,6 +39,7 @@ from vmlx_engine.api.models import (
     ModelsResponse,
     ResponseFormat,
     ResponseFormatJsonSchema,
+    ResponsesRequest,
     StreamOptions,
     ToolCall,
     ToolDefinition,
@@ -626,3 +629,170 @@ class TestModelSerialization:
         )
         data = schema.model_dump(by_alias=True)
         assert "schema" in data
+
+
+class TestParameterValidation:
+    """Tests for parameter bounds validation on request models."""
+
+    # --- ChatCompletionRequest ---
+
+    def test_chat_temperature_valid_range(self):
+        for temp in [0, 0.5, 1.0, 2.0]:
+            req = ChatCompletionRequest(
+                model="test", messages=[Message(role="user", content="hi")], temperature=temp
+            )
+            assert req.temperature == temp
+
+    def test_chat_temperature_none_allowed(self):
+        req = ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")])
+        assert req.temperature is None
+
+    def test_chat_temperature_negative_rejected(self):
+        with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], temperature=-0.1)
+
+    def test_chat_temperature_above_max_rejected(self):
+        with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], temperature=2.1)
+
+    def test_chat_top_p_valid_range(self):
+        for p in [0.01, 0.5, 1.0]:
+            req = ChatCompletionRequest(
+                model="test", messages=[Message(role="user", content="hi")], top_p=p
+            )
+            assert req.top_p == p
+
+    def test_chat_top_p_zero_rejected(self):
+        with pytest.raises(ValueError, match="top_p must be between 0"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], top_p=0)
+
+    def test_chat_top_p_above_one_rejected(self):
+        with pytest.raises(ValueError, match="top_p must be between 0"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], top_p=1.1)
+
+    def test_chat_max_tokens_valid(self):
+        req = ChatCompletionRequest(
+            model="test", messages=[Message(role="user", content="hi")], max_tokens=1
+        )
+        assert req.max_tokens == 1
+
+    def test_chat_max_tokens_zero_rejected(self):
+        with pytest.raises(ValueError, match="max_tokens must be at least 1"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], max_tokens=0)
+
+    def test_chat_max_tokens_negative_rejected(self):
+        with pytest.raises(ValueError, match="max_tokens must be at least 1"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], max_tokens=-1)
+
+    def test_chat_top_k_valid(self):
+        for k in [0, 1, 50]:
+            req = ChatCompletionRequest(
+                model="test", messages=[Message(role="user", content="hi")], top_k=k
+            )
+            assert req.top_k == k
+
+    def test_chat_top_k_negative_rejected(self):
+        with pytest.raises(ValueError, match="top_k must be >= 0"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], top_k=-1)
+
+    def test_chat_min_p_valid(self):
+        for p in [0, 0.05, 1.0]:
+            req = ChatCompletionRequest(
+                model="test", messages=[Message(role="user", content="hi")], min_p=p
+            )
+            assert req.min_p == p
+
+    def test_chat_min_p_out_of_range(self):
+        with pytest.raises(ValueError, match="min_p must be between 0 and 1"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], min_p=1.1)
+
+    def test_chat_repetition_penalty_valid(self):
+        req = ChatCompletionRequest(
+            model="test", messages=[Message(role="user", content="hi")], repetition_penalty=1.0
+        )
+        assert req.repetition_penalty == 1.0
+
+    def test_chat_repetition_penalty_zero_rejected(self):
+        with pytest.raises(ValueError, match="repetition_penalty must be > 0"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], repetition_penalty=0)
+
+    def test_chat_repetition_penalty_negative_rejected(self):
+        with pytest.raises(ValueError, match="repetition_penalty must be > 0"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], repetition_penalty=-1)
+
+    # --- CompletionRequest ---
+
+    def test_completion_temperature_rejected(self):
+        with pytest.raises(ValueError, match="temperature"):
+            CompletionRequest(model="test", prompt="hi", temperature=-1)
+
+    def test_completion_top_p_rejected(self):
+        with pytest.raises(ValueError, match="top_p"):
+            CompletionRequest(model="test", prompt="hi", top_p=0)
+
+    def test_completion_max_tokens_rejected(self):
+        with pytest.raises(ValueError, match="max_tokens"):
+            CompletionRequest(model="test", prompt="hi", max_tokens=0)
+
+    def test_completion_stop_normalized(self):
+        req = CompletionRequest(model="test", prompt="hi", stop="<|end|>")
+        assert req.stop == ["<|end|>"]
+
+    # --- ResponsesRequest ---
+
+    def test_responses_temperature_rejected(self):
+        with pytest.raises(ValueError, match="temperature"):
+            ResponsesRequest(model="test", input="hi", temperature=3.0)
+
+    def test_responses_top_p_rejected(self):
+        with pytest.raises(ValueError, match="top_p"):
+            ResponsesRequest(model="test", input="hi", top_p=0)
+
+    def test_responses_max_output_tokens_rejected(self):
+        with pytest.raises(ValueError, match="max_output_tokens must be at least 1"):
+            ResponsesRequest(model="test", input="hi", max_output_tokens=0)
+
+    def test_responses_valid_params(self):
+        req = ResponsesRequest(
+            model="test", input="hi", temperature=0.7, top_p=0.9,
+            max_output_tokens=100, top_k=40, min_p=0.05, repetition_penalty=1.1,
+        )
+        assert req.temperature == 0.7
+        assert req.max_output_tokens == 100
+
+    def test_responses_stop_normalized(self):
+        req = ResponsesRequest(model="test", input="hi", stop="<|end|>")
+        assert req.stop == ["<|end|>"]
+
+    # --- AudioSpeechRequest ---
+
+    def test_audio_speed_valid(self):
+        req = AudioSpeechRequest(input="hello", speed=2.0)
+        assert req.speed == 2.0
+
+    def test_audio_speed_zero_rejected(self):
+        with pytest.raises(ValueError, match="speed must be between"):
+            AudioSpeechRequest(input="hello", speed=0)
+
+    def test_audio_speed_too_high_rejected(self):
+        with pytest.raises(ValueError, match="speed must be between"):
+            AudioSpeechRequest(input="hello", speed=5.0)
+
+    # --- Edge cases: None values should pass through ---
+
+    def test_all_none_params_accepted(self):
+        req = ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")])
+        assert req.temperature is None
+        assert req.top_p is None
+        assert req.max_tokens is None
+        assert req.top_k is None
+        assert req.min_p is None
+        assert req.repetition_penalty is None
+
+    def test_n_only_one_supported(self):
+        with pytest.raises(ValueError, match="Only n=1"):
+            ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], n=2)
+
+    def test_n_one_accepted(self):
+        req = ChatCompletionRequest(model="test", messages=[Message(role="user", content="hi")], n=1)
+        assert req.n == 1

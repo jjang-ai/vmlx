@@ -18,6 +18,8 @@ import { ToolsDashboard } from './components/tools/ToolsDashboard'
 import { ModelInspector } from './components/tools/ModelInspector'
 import { ModelDoctor } from './components/tools/ModelDoctor'
 import { ModelConverter } from './components/tools/ModelConverter'
+import { ApiDashboard } from './components/api/ApiDashboard'
+import { ImageTab } from './components/image/ImageTab'
 
 function App() {
   const [setupDone, setSetupDone] = useState(false)
@@ -31,13 +33,13 @@ function App() {
       .then((result: any) => {
         if (result.installed) setSetupDone(true)
       })
-      .catch(() => {})
+      .catch((err) => console.error('Installation check failed:', err))
       .finally(() => setCheckingSetup(false))
   }, [])
 
   // Clear stale chat locks on mount
   useEffect(() => {
-    window.api.chat.clearAllLocks().catch(() => {})
+    window.api.chat.clearAllLocks().catch((err) => console.error('Failed to clear chat locks:', err))
   }, [])
 
   // Listen for navigation events from child components (e.g. toolbar "Add a model")
@@ -128,7 +130,7 @@ function App() {
       await window.api.chat.update(state.activeChatId, {
         modelId: newSession.modelPath,
         modelPath: newSession.modelPath
-      } as any).catch(() => {})
+      } as any).catch((err) => console.error('Failed to update chat model:', err))
     }
     dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId, sessionId })
   }, [dispatch, state.activeChatId, sessions])
@@ -181,6 +183,12 @@ function App() {
 
             {state.mode === 'tools' && (
               <ToolsModeContent />
+            )}
+            {state.mode === 'image' && (
+              <ImageTab />
+            )}
+            {state.mode === 'api' && (
+              <ApiDashboard />
             )}
           </main>
         </div>
@@ -300,7 +308,7 @@ function ServerModeContent() {
             <AppVersion />
             <div className="flex gap-4 text-xs">
               <a href="https://vmlx.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
-              <a href="https://github.com/vmlxllm/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
+              <a href="https://github.com/jjang-ai/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
             </div>
             <ApiKeysSection />
           </div>
@@ -319,7 +327,7 @@ function ToolsModeContent() {
 
   // Single model scan shared by all sub-panels
   useEffect(() => {
-    window.api.models.scan().then(setScannedModels).catch(() => {})
+    window.api.models.scan().then(setScannedModels).catch((err) => console.error('Failed to scan models:', err))
   }, [])
 
   const navigateTo = (panel: 'dashboard' | 'inspector' | 'doctor' | 'converter', modelPath?: string) => {

@@ -21,6 +21,12 @@ interface HealthData {
     bits?: number
     group_size?: number
   }
+  quantization_format?: {
+    type: string
+    target_bits?: number
+    actual_bits?: number
+    block_size?: number
+  }
 }
 
 export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelProps) {
@@ -82,6 +88,12 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             <InfoCard label="Status" value={health.status} />
             <InfoCard label="Engine" value={health.engine_type || 'unknown'} />
             <InfoCard label="Model Type" value={health.model_type || '-'} />
+            {health.quantization_format && (
+              <InfoCard
+                label="Weight Quant"
+                value={`JANG ${health.quantization_format.actual_bits ?? health.quantization_format.target_bits}-bit`}
+              />
+            )}
             {health.kv_cache_quantization?.enabled && (
               <InfoCard label="KV Quant" value={`${health.kv_cache_quantization.bits}-bit`} />
             )}

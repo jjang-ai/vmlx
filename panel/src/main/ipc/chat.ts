@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
 import { db, Chat, Message, Folder } from '../database'
-import { sessionManager, resolveUrl } from '../sessions'
+import { sessionManager, resolveUrl, connectHost } from '../sessions'
 import { BUILTIN_TOOLS, isBuiltinTool, AGENTIC_SYSTEM_PROMPT } from '../tools/registry'
 import { executeBuiltinTool } from '../tools/executor'
 import { readGenerationDefaults } from './models'
@@ -11,8 +11,8 @@ import { detectModelConfigFromDir } from '../model-config-registry'
 import { getAuthHeaders } from './utils'
 
 // Default connection config (fallback values)
-const DEFAULT_HOST = '127.0.0.1'
-const DEFAULT_PORT = 8093
+const DEFAULT_HOST = '0.0.0.0'
+const DEFAULT_PORT = 8000
 
 /**
  * SSE-streaming fetch using Node.js http/https directly.
@@ -242,10 +242,11 @@ async function resolveServerEndpoint(modelPath?: string): Promise<ResolvedEndpoi
   const processes = await sessionManager.detect()
   const healthy = processes.find(p => p.healthy)
   if (healthy) {
+    // Use 127.0.0.1 for connection (0.0.0.0 is a bind address, not connectable)
     return { host: '127.0.0.1', port: healthy.port }
   }
 
-  return { host: DEFAULT_HOST, port: DEFAULT_PORT }
+  return { host: '127.0.0.1', port: DEFAULT_PORT }
 }
 
 export function registerChatHandlers(getWindow: () => BrowserWindow | null): void {
@@ -419,6 +420,14 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // Resolve actual server endpoint: explicit endpoint > session by modelPath > detect > default
     // CRITICAL: When endpoint is passed from the renderer, attach the chatSession
     // so remote sessions get proper remoteUrl, auth headers, and health check path.
+    // SECURITY: Validate renderer-provided endpoint is localhost or matches a known session
+    if (endpoint) {
+      const isLocalhost = endpoint.host === '127.0.0.1' || endpoint.host === 'localhost' || endpoint.host === '::1' || endpoint.host === '0.0.0.0'
+      const isKnownSession = chatSession && chatSession.host === endpoint.host && chatSession.port === endpoint.port
+      if (!isLocalhost && !isKnownSession) {
+        throw new Error(`Endpoint ${endpoint.host}:${endpoint.port} not allowed — must be localhost or match a configured session`)
+      }
+    }
     const resolved = endpoint
       ? { host: endpoint.host, port: endpoint.port, session: chatSession } as ResolvedEndpoint
       : await resolveServerEndpoint(chat.modelPath)
@@ -428,7 +437,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     const isRemote = resolvedSession?.type === 'remote'
     const rawBaseUrl = isRemote && resolvedSession?.remoteUrl
       ? resolvedSession.remoteUrl.replace(/\/+$/, '')
-      : `http://${resolved.host}:${resolved.port}`
+      : `http://${connectHost(resolved.host)}:${resolved.port}`
     // Resolve .local mDNS hostnames to IPv4 — Node.js fetch resolves them to
     // unreachable IPv6 link-local addresses (fe80::...) causing "fetch failed"
     const baseUrl = await resolveUrl(rawBaseUrl)
@@ -455,8 +464,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       : false
 
     // Remote sessions: 1 quick attempt then proceed (the request itself has a timeout).
-    // Local sessions: 5 retries with 2s delays (server may still be loading).
-    const maxHealthRetries = isRemote ? 1 : 5
+    // Local sessions: 15 retries with 2s delays (30s total — JANG models need longer to dequantize).
+    const maxHealthRetries = isRemote ? 1 : 15
     const healthRetryDelay = isRemote ? 500 : 2000
     let healthOk = recentlyHealthy
     if (recentlyHealthy) {
@@ -493,7 +502,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     if (!healthOk) {
       activeRequests.delete(chatId)
       clearTimeout(fetchTimeout)
-      throw new Error(`Cannot reach server on port ${resolved.port} after ${maxHealthRetries} attempts. Make sure the session is started and the model is loaded.`)
+      throw new Error(`Cannot reach server on port ${resolved.port} after ${maxHealthRetries} attempts (${maxHealthRetries * healthRetryDelay / 1000}s). The model may still be loading — wait for the status indicator to turn green, then try again.`)
     }
 
     // Add user message AFTER health check passes — this prevents orphaned
@@ -617,8 +626,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     let cumulativeTokenOffset = 0
     // Collect tool statuses for DB persistence (mirrors what's emitted to renderer)
     const collectedToolStatuses: Array<{ phase: string; toolName: string; detail?: string; iteration?: number; contentOffset?: number }> = []
-    // Declared outside try so catch block can access it for reasoningDone on error
+    // Declared outside try so catch block can access them for error recovery
     let isReasoning = false
+    let lastFinishReason: string | undefined
     // Periodic DB save interval — saves content every 5s so it survives navigation/crashes
     let periodicSaveInterval: ReturnType<typeof setInterval> | null = null
 
@@ -802,7 +812,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // Track tool calls received during streaming for MCP auto-execution
       let receivedToolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = []
       // Track finish_reason from server to detect truncation (length), content filter, etc.
-      let lastFinishReason: string | undefined
+      // (declared outside try block so catch can access it for abort recovery)
       // Track tool iteration count (declared here so processLine closure can access it)
       const MAX_TOOL_ITERATIONS = overrides?.maxToolIterations ?? 10
       let toolIteration = 0
@@ -1856,7 +1866,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           const cancelPath = entry.responseId.startsWith('resp_')
             ? `/v1/responses/${entry.responseId}/cancel`
             : `/v1/chat/completions/${entry.responseId}/cancel`
-          const cancelBase = entry.baseUrl || `http://${entry.endpoint!.host}:${entry.endpoint!.port}`
+          const cancelBase = entry.baseUrl || `http://${connectHost(entry.endpoint!.host)}:${entry.endpoint!.port}`
           const cancelRes = await fetch(
             `${cancelBase}${cancelPath}`,
             { method: 'POST', headers: entry.authHeaders || {}, signal: AbortSignal.timeout(2000) }
@@ -1895,7 +1905,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           const cancelPath = entry.responseId.startsWith('resp_')
             ? `/v1/responses/${entry.responseId}/cancel`
             : `/v1/chat/completions/${entry.responseId}/cancel`
-          const cancelBase = entry.baseUrl || `http://${entry.endpoint!.host}:${entry.endpoint!.port}`
+          const cancelBase = entry.baseUrl || `http://${connectHost(entry.endpoint!.host)}:${entry.endpoint!.port}`
           fetch(`${cancelBase}${cancelPath}`, {
             method: 'POST', headers: entry.authHeaders || {}, signal: AbortSignal.timeout(2000)
           }).catch(() => {}) // Fire-and-forget, don't block window close

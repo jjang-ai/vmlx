@@ -643,7 +643,7 @@ describe('Already-downloaded model detection', () => {
   })
 
   it('matches by path segments', () => {
-    const ids = buildLocalModelIds([{ path: '/Users/example/models/mlx-community/Llama-3-8B-4bit' }])
+    const ids = buildLocalModelIds([{ path: '/home/user/models/mlx-community/Llama-3-8B-4bit' }])
     expect(ids.has('mlx-community/Llama-3-8B-4bit')).toBe(true)
   })
 
@@ -983,7 +983,7 @@ describe('Phase 4: Server API', () => {
         }
 
         it('extracts org/model from full path', () => {
-            expect(normalizeModelName('/Users/example/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit'))
+            expect(normalizeModelName('/home/user/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit'))
                 .toBe('mlx-community/Llama-3.2-3B-Instruct-4bit')
         })
 
@@ -1991,7 +1991,7 @@ describe('Phase 5: Security Audit', () => {
         }
 
         it('allows https URLs', () => {
-            expect(shouldOpenExternal('https://github.com/vmlxllm/vmlx')).toBe(true)
+            expect(shouldOpenExternal('https://github.com/jjang-ai/vmlx')).toBe(true)
         })
 
         it('allows http URLs', () => {
@@ -3005,6 +3005,178 @@ describe('Issue #6: clearAllLocks must send server cancel for all active request
     // Must send server cancel
     expect(funcBody).toContain('/cancel')
     expect(funcBody).toContain("method: 'POST'")
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 6: Cache API Data Flow
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('Phase 6: Cache API Data Flow', () => {
+  describe('CachePanel interface contract', () => {
+    // Pure logic replica of CachePanelProps from CachePanel.tsx
+    interface CachePanelProps {
+      endpoint: { host: string; port: number }
+      sessionStatus: string
+      sessionId?: string
+    }
+
+    it('CachePanel props include sessionId', () => {
+      // Verify the interface shape — sessionId must be passable
+      const props: CachePanelProps = {
+        endpoint: { host: '127.0.0.1', port: 8000 },
+        sessionStatus: 'running',
+        sessionId: 'session-abc-123',
+      }
+      expect(props.sessionId).toBe('session-abc-123')
+    })
+
+    it('sessionId is optional (remote sessions may not have it)', () => {
+      const props: CachePanelProps = {
+        endpoint: { host: '127.0.0.1', port: 8000 },
+        sessionStatus: 'running',
+      }
+      expect(props.sessionId).toBeUndefined()
+    })
+
+    it('endpoint requires both host and port', () => {
+      const props: CachePanelProps = {
+        endpoint: { host: '0.0.0.0', port: 9000 },
+        sessionStatus: 'stopped',
+      }
+      expect(props.endpoint.host).toBe('0.0.0.0')
+      expect(props.endpoint.port).toBe(9000)
+    })
+  })
+
+  describe('Disk cache stats field names', () => {
+    // The Python server returns disk_cache stats with these field names.
+    // CachePanel.tsx renders them as: diskCache.total_size_mb ?? diskCache.size_mb
+    // This documents the expected Python-to-JS field mapping.
+
+    interface DiskCacheStats {
+      total_size_mb?: number
+      size_mb?: number        // Legacy fallback field
+      num_entries?: number
+      max_size_gb?: number
+      cache_dir?: string
+    }
+
+    function displayDiskSize(stats: DiskCacheStats): string {
+      const sizeMb = stats.total_size_mb ?? stats.size_mb ?? 0
+      return `${sizeMb.toFixed(1)} MB`
+    }
+
+    it('uses total_size_mb as primary field', () => {
+      expect(displayDiskSize({ total_size_mb: 512.3 })).toBe('512.3 MB')
+    })
+
+    it('falls back to size_mb when total_size_mb is absent', () => {
+      expect(displayDiskSize({ size_mb: 256.7 })).toBe('256.7 MB')
+    })
+
+    it('defaults to 0 when neither field is present', () => {
+      expect(displayDiskSize({})).toBe('0.0 MB')
+    })
+
+    it('total_size_mb takes priority over size_mb when both present', () => {
+      expect(displayDiskSize({ total_size_mb: 100, size_mb: 200 })).toBe('100.0 MB')
+    })
+
+    it('handles zero total_size_mb (not falsy fallthrough)', () => {
+      // 0 is a valid value — should NOT fallback to size_mb
+      // Note: ?? only falls through on null/undefined, not 0
+      expect(displayDiskSize({ total_size_mb: 0, size_mb: 999 })).toBe('0.0 MB')
+    })
+  })
+
+  describe('Cache operations require running session', () => {
+    // CachePanel.tsx: fetchStats() early-returns if sessionStatus !== 'running'
+    // This is the guard logic.
+
+    function shouldFetchStats(sessionStatus: string): boolean {
+      return sessionStatus === 'running'
+    }
+
+    function shouldAllowCacheOp(sessionStatus: string): boolean {
+      // Cache warm/clear operations also require running session
+      return sessionStatus === 'running'
+    }
+
+    it('allows fetch when session is running', () => {
+      expect(shouldFetchStats('running')).toBe(true)
+    })
+
+    it('blocks fetch when session is stopped', () => {
+      expect(shouldFetchStats('stopped')).toBe(false)
+    })
+
+    it('blocks fetch when session is loading', () => {
+      expect(shouldFetchStats('loading')).toBe(false)
+    })
+
+    it('blocks fetch when session is in error', () => {
+      expect(shouldFetchStats('error')).toBe(false)
+    })
+
+    it('blocks fetch with empty string status', () => {
+      expect(shouldFetchStats('')).toBe(false)
+    })
+
+    it('allows cache operations only when running', () => {
+      expect(shouldAllowCacheOp('running')).toBe(true)
+      expect(shouldAllowCacheOp('stopped')).toBe(false)
+      expect(shouldAllowCacheOp('loading')).toBe(false)
+    })
+  })
+
+  describe('CachePanel source verification', () => {
+    it('CachePanel.tsx passes sessionId to all cache API calls', () => {
+      const fs = require('fs')
+      const source = fs.readFileSync(
+        'src/renderer/src/components/sessions/CachePanel.tsx', 'utf-8'
+      )
+
+      // All four cache API calls should pass sessionId
+      const statsCall = source.includes('cache.stats(endpoint, sessionId)')
+      const entriesCall = source.includes('cache.entries(endpoint, sessionId)')
+      const warmCall = source.includes('cache.warm(')
+      const clearCall = source.includes('cache.clear(')
+
+      expect(statsCall).toBe(true)
+      expect(entriesCall).toBe(true)
+      expect(warmCall).toBe(true)
+      expect(clearCall).toBe(true)
+
+      // Verify sessionId appears in warm and clear calls too
+      // (they have additional arguments before endpoint, sessionId)
+      const warmLine = source.split('\n').find((l: string) => l.includes('cache.warm('))
+      expect(warmLine).toContain('sessionId')
+
+      const clearLine = source.split('\n').find((l: string) => l.includes('cache.clear('))
+      expect(clearLine).toContain('sessionId')
+    })
+
+    it('CachePanel uses total_size_mb with size_mb fallback', () => {
+      const fs = require('fs')
+      const source = fs.readFileSync(
+        'src/renderer/src/components/sessions/CachePanel.tsx', 'utf-8'
+      )
+
+      // The display logic: (diskCache.total_size_mb ?? diskCache.size_mb)
+      expect(source).toContain('total_size_mb')
+      expect(source).toContain('size_mb')
+    })
+
+    it('CachePanel guards stats fetch with session status check', () => {
+      const fs = require('fs')
+      const source = fs.readFileSync(
+        'src/renderer/src/components/sessions/CachePanel.tsx', 'utf-8'
+      )
+
+      // fetchStats() has: if (sessionStatus !== 'running') return
+      expect(source).toContain("sessionStatus !== 'running'")
+    })
   })
 })
 

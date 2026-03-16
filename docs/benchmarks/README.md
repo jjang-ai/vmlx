@@ -37,4 +37,4 @@ If you have a different Apple Silicon chip, please share your results:
 vmlx-engine-bench --model mlx-community/Qwen3-0.6B-8bit --output results.json
 ```
 
-Open an issue with your results at [GitHub Issues](https://github.com/vmlxllm/vmlx/issues).
+Open an issue with your results at [GitHub Issues](https://github.com/jjang-ai/vmlx/issues).

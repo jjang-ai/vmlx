@@ -495,13 +495,17 @@ async function runCommand(command: string, workingDir: string): Promise<ToolResu
       if (!killReason && stderr.length > 10 * 1024 * 1024) { killReason = 'Stderr exceeded 10MB limit'; proc.kill() }
     })
     const timer = setTimeout(() => { if (!killReason) { killReason = 'Command timed out after 60 seconds'; proc.kill() } }, 60000)
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       clearTimeout(timer)
       if (killReason) {
         const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
         resolve({ content: `$ ${command}\n\n${killReason}\n\n${combined}`, is_error: true })
-      } else if (code === 0 || code === null) {
+      } else if (code === 0) {
         resolve({ content: `$ ${command}\n\n${stdout}`, is_error: false })
+      } else if (code === null && signal) {
+        // Killed by external signal (e.g., OOM killer sends SIGKILL)
+        const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
+        resolve({ content: `$ ${command}\n\nProcess killed by signal ${signal}\n\n${combined}`, is_error: true })
       } else {
         const combined = [stdout, stderr ? `STDERR:\n${stderr}` : ''].filter(Boolean).join('\n\n')
         resolve({ content: `$ ${command}\n\nExit code: ${code}\n\n${combined}`, is_error: true })
@@ -776,9 +780,12 @@ async function webSearch(query: string, count?: number): Promise<ToolResult> {
 async function fetchUrl(url: string, maxLength?: number): Promise<ToolResult> {
   if (!url) return { content: 'Missing required parameter: url', is_error: true }
 
-  // Basic URL validation
+  // URL validation: only allow http/https schemes
   try {
-    new URL(url)
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { content: `Unsupported URL scheme: ${parsed.protocol} — only http and https are allowed`, is_error: true }
+    }
   } catch {
     return { content: `Invalid URL: ${url}`, is_error: true }
   }

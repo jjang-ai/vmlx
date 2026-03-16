@@ -1465,7 +1465,7 @@ class TestV4DiskCacheDequantizeGuard:
 
     def test_mllm_disk_cache_dequantize(self):
         """mllm_batch_generator.py: disk cache fetch must dequantize."""
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         # Find the actual disk_cache.fetch() call (with parens), not docstring mention
         fetch_idx = source.find("self.disk_cache.fetch(")
         assert fetch_idx != -1, "self.disk_cache.fetch() not found in mllm_batch_generator.py"
@@ -1479,7 +1479,7 @@ class TestV4DequantizeFreshKVCacheFallback:
     """_dequantize_cache must return fresh KVCache for QuantizedKVCache with keys=None."""
 
     def test_quantized_with_none_keys_gets_fresh_kvcache(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         func_start = source.find("def _dequantize_cache(")
         assert func_start != -1
         # Find the next function definition to bound our search
@@ -1499,7 +1499,7 @@ class TestV4FixHybridCacheDequantize:
     """_fix_hybrid_cache call in prefill must be preceded by _dequantize_cache."""
 
     def test_dequantize_before_fix_hybrid(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         # Find the prefill section where _fix_hybrid_cache is called on req.prompt_cache
         idx = source.find("req_cache = _fix_hybrid_cache(")
         assert idx != -1
@@ -1675,7 +1675,7 @@ class TestV4bSchedulerDequantKeysNone:
         import inspect
         from vmlx_engine.scheduler import Scheduler
         scheduler_src = inspect.getsource(Scheduler._dequantize_cache_for_use)
-        mllm_src = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        mllm_src = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         func_start = mllm_src.find("def _dequantize_cache(")
         func_end = mllm_src.find("\ndef ", func_start + 10)
         mllm_func = mllm_src[func_start:func_end]
@@ -1700,7 +1700,7 @@ class TestV4bImageHashCollisionSafe:
     """Paged cache image hashing must use content-based hash, not sum-based."""
 
     def test_no_sum_based_hash(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/paged_cache.py").read_text()
+        source = Path("./vmlx_engine/paged_cache.py").read_text()
         hash_section = source[source.find("def _hash_extra"):source.find("_hash_extra(extra_keys)")]
         assert "mx.sum" not in hash_section, (
             "Must not use mx.sum for image hashing — collision-prone"
@@ -1759,14 +1759,14 @@ class TestL1PortRaceCondition:
 
     def test_creation_lock_exists(self):
         """SessionManager must have a global creation lock field."""
-        source = Path("/Users/example/mlx/vllm-mlx/panel/src/main/sessions.ts").read_text()
+        source = Path("./panel/src/main/sessions.ts").read_text()
         assert "creationLock" in source, (
             "SessionManager must have a creationLock to serialize createSession"
         )
 
     def test_create_session_uses_lock(self):
         """createSession must acquire creationLock before port assignment."""
-        source = Path("/Users/example/mlx/vllm-mlx/panel/src/main/sessions.ts").read_text()
+        source = Path("./panel/src/main/sessions.ts").read_text()
         # createSession should delegate to _createSessionInner
         assert "_createSessionInner" in source, (
             "createSession must delegate to _createSessionInner under lock"
@@ -1774,7 +1774,7 @@ class TestL1PortRaceCondition:
 
     def test_port_unique_constraint(self):
         """sessions table must have UNIQUE constraint on port column."""
-        source = Path("/Users/example/mlx/vllm-mlx/panel/src/main/database.ts").read_text()
+        source = Path("./panel/src/main/database.ts").read_text()
         assert "port INTEGER NOT NULL UNIQUE" in source, (
             "sessions.port must have UNIQUE constraint as safety net"
         )
@@ -1971,7 +1971,7 @@ class TestV6CancelledErrorCallsFailActive:
     """CancelledError in engine loop must call _fail_active_requests."""
 
     def test_cancelled_error_handler_exists(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/engine_core.py").read_text()
+        source = Path("./vmlx_engine/engine_core.py").read_text()
         # Find CancelledError handler inside engine loop (the one that calls _fail_active_requests)
         # There are two: one in stop() and one in the engine loop. We need the engine loop one.
         idx = source.find("except asyncio.CancelledError:")
@@ -2000,7 +2000,7 @@ class TestV6AbortUsesDeleteBlockTable:
         )
 
     def test_mllm_scheduler_abort_uses_delete(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
         # Find the abort_request method
         start = source.find("def abort_request(self, request_id")
         assert start != -1
@@ -2013,7 +2013,7 @@ class TestV6AbortUsesDeleteBlockTable:
 
     def test_mllm_scheduler_error_recovery_uses_delete(self):
         """Error-recovery path must also use delete_block_table."""
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
         # Find the error-recovery block (paged_cache_manager.delete_block_table in error path)
         # This is in the step() method's except block
         idx = source.find("# Clean up paged cache block tables for all running")
@@ -2025,7 +2025,7 @@ class TestV6AbortUsesDeleteBlockTable:
 
     def test_completion_path_uses_detach(self):
         """Normal completion path should use detach_request (preserves blocks for LRU)."""
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
         # The completion path is in _finish_completed_requests or similar
         # It stores blocks for prefix cache, so it uses detach_request
         completion_idx = source.find("detach_request")
@@ -2038,7 +2038,7 @@ class TestV6VLMDiskCacheKeyConsistency:
     """VLM disk cache store key must match fetch key (full token_list, not truncated)."""
 
     def test_store_uses_token_list_not_truncated(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_scheduler.py").read_text()
+        source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
         # Find the VLM cache store path with the comment about matching fetch path
         idx = source.find("# Key uses full token_list (matching fetch path)")
         assert idx != -1, "Must have comment documenting key consistency"
@@ -2053,7 +2053,7 @@ class TestV6DequantizeNoneGuards:
     """All callers of _dequantize_cache must guard against None return."""
 
     def test_dequantize_returns_none_on_failure(self):
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         func_start = source.find("def _dequantize_cache(")
         func_end = source.find("\ndef ", func_start + 10)
         func_body = source[func_start:func_end]
@@ -2063,7 +2063,7 @@ class TestV6DequantizeNoneGuards:
 
     def test_memory_aware_caller_guards_none(self):
         """Memory-aware cache path must guard _dequantize_cache returning None."""
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         # Find the memory-aware cache path with dequantize call
         # There are multiple dequantize call sites; find the one with "continue" after None check
         idx = source.find("_dequantize_cache(cache)")
@@ -2075,7 +2075,7 @@ class TestV6DequantizeNoneGuards:
 
     def test_hybrid_cache_caller_guards_none(self):
         """Hybrid cache path must guard _dequantize_cache returning None before _fix_hybrid_cache."""
-        source = Path("/Users/example/mlx/vllm-mlx/vmlx_engine/mllm_batch_generator.py").read_text()
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         # The hybrid cache path should check cache_for_fix is None
         idx = source.find("_dequantize_cache(cache_for_fix)")
         assert idx != -1

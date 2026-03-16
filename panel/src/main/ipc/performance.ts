@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { resolveUrl } from '../sessions'
+import { resolveUrl, connectHost } from '../sessions'
 
 /**
  * Performance IPC handlers.
@@ -9,7 +9,7 @@ import { resolveUrl } from '../sessions'
 export function registerPerformanceHandlers(): void {
   ipcMain.handle('performance:health', async (_, endpoint: { host: string; port: number }) => {
     try {
-      const baseUrl = await resolveUrl(`http://${endpoint.host}:${endpoint.port}`)
+      const baseUrl = await resolveUrl(`http://${connectHost(endpoint.host)}:${endpoint.port}`)
       const res = await fetch(`${baseUrl}/health`, {
         signal: AbortSignal.timeout(30000)
       })

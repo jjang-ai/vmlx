@@ -26,7 +26,7 @@ interface SessionDetail {
 }
 
 export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange, onOverridesChanged }: ChatModeToolbarProps) {
-  const { sessions, refreshSessions } = useSessionsContext()
+  const { sessions } = useSessionsContext()
   const [showChatSettings, setShowChatSettings] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
@@ -58,11 +58,11 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
           } else if (!s.modelPath.startsWith('remote://')) {
             window.api.models.detectConfig(s.modelPath).then((detected: any) => {
               setEffectiveReasoningParser(detected?.reasoningParser || undefined)
-            }).catch(() => {})
+            }).catch((err) => console.error('Failed to load session info:', err))
           }
         } catch { /* ignore */ }
       }
-    }).catch(() => {})
+    }).catch((err) => console.error('Failed to load session info:', err))
   }, [activeSessionId])
 
   // Close model picker on outside click

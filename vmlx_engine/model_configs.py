@@ -580,6 +580,15 @@ def register_all(registry=None):
     ))
 
     _register(ModelConfig(
+        family_name="got_ocr",
+        model_types=["got_ocr2"],
+        cache_type="kv",
+        is_mllm=True,
+        priority=15,
+        description="GOT-OCR2 (General OCR Theory) — document/scene OCR",
+    ))
+
+    _register(ModelConfig(
         family_name="molmo",
         model_types=["molmo"],
         cache_type="kv",

@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vmlx-engine"
-version = "0.2.18"
-description = "vLLM-like inference for Apple Silicon - GPU-accelerated Text, Image, Video & Audio on Mac"
+name = "vmlx"
+version = "1.0.0"
+description = "Local AI inference for Apple Silicon — Text, Image, Video & Audio generation on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [
-    {name = "vmlx-engine contributors"}
+    {name = "Jinho Jang", email = "eric@jangq.ai"}
 ]
 keywords = ["llm", "mlx", "apple-silicon", "vllm", "inference", "transformers"]
 classifiers = [
@@ -52,8 +52,7 @@ dependencies = [
     # JSON Schema validation for structured output
     "jsonschema>=4.0.0",
     # Note: mlx-audio moved to optional [audio] deps due to mlx-lm version conflict
-    # See: https://github.com/waybarrios/vmlx-engine/issues/19
-    "mlx-embeddings>=0.0.5"
+    "mlx-embeddings>=0.0.5",
 ]
 
 [project.optional-dependencies]
@@ -95,16 +94,28 @@ audio = [
     "unidic-lite>=1.0.0",    # Japanese dictionary for fugashi
     "jieba>=0.42.0",         # Chinese word segmentation
 ]
+# JANG conversion (inference loader is built-in, only conversion needs this)
+jang = [
+    "jang>=1.0.0",
+]
+# Image generation dependencies (Flux, Z-Image-Turbo via mflux)
+image = [
+    "mflux>=0.16.0",
+]
 
 [project.urls]
-Homepage = "https://github.com/vmlxllm/vmlx"
-Documentation = "https://github.com/vmlxllm/vmlx#readme"
-Repository = "https://github.com/vmlxllm/vmlx"
+Homepage = "https://github.com/jjang-ai/vmlx"
+Documentation = "https://github.com/jjang-ai/vmlx#readme"
+Repository = "https://github.com/jjang-ai/vmlx"
+Downloads = "https://github.com/jjang-ai/mlxstudio/releases"
+Issues = "https://github.com/jjang-ai/vmlx/issues"
 
 [project.entry-points."vllm.platform_plugins"]
 mlx = "vmlx_engine.plugin:mlx_platform_plugin"
 
 [project.scripts]
+vmlx = "vmlx_engine.cli:main"
+vmlx-serve = "vmlx_engine.cli:main"
 vmlx-engine = "vmlx_engine.cli:main"
 vmlx-engine-chat = "vmlx_engine.gradio_app:main"
 vmlx-engine-bench = "vmlx_engine.benchmark:main"

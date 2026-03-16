@@ -9,6 +9,7 @@ Commands:
 
 Usage:
     vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000
+    vmlx-engine serve /path/to/model-JANG-2.5bit                            # JANG format
     vmlx-engine bench mlx-community/Llama-3.2-1B-Instruct-4bit --num-prompts 10
 """
 
@@ -38,11 +39,32 @@ def serve_command(args):
     # If it's "none" or omitted, tool calling is disabled.
 
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
+    if args.timeout <= 0:
+        print(f"Error: --timeout must be positive, got {args.timeout}")
+        sys.exit(1)
     server._default_timeout = args.timeout
     if args.rate_limit > 0:
         server._rate_limiter = RateLimiter(
             requests_per_minute=args.rate_limit, enabled=True
         )
+
+    # Early detection: image vs text model
+    from pathlib import Path
+    import json as _json
+    model_dir = Path(args.model)
+    _is_image = False
+    if (model_dir / "model_index.json").exists():
+        try:
+            idx = _json.loads((model_dir / "model_index.json").read_text())
+            _is_image = "_diffusers_version" in idx
+        except Exception:
+            _is_image = True
+    elif (model_dir / "transformer").is_dir() and (model_dir / "text_encoder").is_dir():
+        # mflux-quantized models: transformer/ + text_encoder/ without model_index.json
+        _is_image = True
+    elif (model_dir / "transformer").is_dir() and (model_dir / "vae").is_dir():
+        # Diffusion model with transformer + vae subdirs
+        _is_image = True
 
     # Configure tool calling
     if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser != "none":
@@ -53,10 +75,16 @@ def serve_command(args):
         server._enable_auto_tool_choice = False
         server._tool_call_parser = None
 
-    # Configure generation defaults
+    # Configure generation defaults (validate ranges)
     if getattr(args, 'default_temperature', None) is not None:
+        if not (0 <= args.default_temperature <= 2):
+            print(f"Error: --default-temperature must be between 0 and 2, got {args.default_temperature}")
+            sys.exit(1)
         server._default_temperature = args.default_temperature
     if getattr(args, 'default_top_p', None) is not None:
+        if not (0 < args.default_top_p <= 1):
+            print(f"Error: --default-top-p must be between 0 (exclusive) and 1, got {args.default_top_p}")
+            sys.exit(1)
         server._default_top_p = args.default_top_p
 
     # Configure reasoning parser (strictly explicit)
@@ -259,20 +287,92 @@ def serve_command(args):
             print(
                 "     The draft model will be ignored for VLM requests (mlx-vlm has no spec decoding).")
 
-    # Load model with unified server
-    load_model(
-        args.model,
-        use_batching=args.continuous_batching,
-        scheduler_config=scheduler_config,
-        stream_interval=args.stream_interval if args.continuous_batching else 1,
-        max_tokens=args.max_tokens,
-        served_model_name=getattr(args, 'served_model_name', None),
-        force_mllm=getattr(args, 'is_mllm', False),
+    # Configure log level
+    log_level = getattr(args, 'log_level', 'INFO').upper()
+    logging.basicConfig(level=getattr(logging, log_level, logging.INFO), force=True)
+    server._log_level = log_level
+
+    # Configure CORS
+    allowed_origins = getattr(args, 'allowed_origins', '*')
+    server._allowed_origins = allowed_origins
+
+    # Configure JIT compilation
+    server._enable_jit = getattr(args, 'enable_jit', False)
+
+    # Validate port range BEFORE loading model (loading can take 30s+)
+    if args.port < 0 or args.port > 65535:
+        print(f"Error: --port must be between 0 and 65535, got {args.port}")
+        sys.exit(1)
+
+    if _is_image:
+        # Image model path — load via mflux, serve /v1/images/generations only
+        logger.info(f"Detected image model: {args.model}")
+        server._model_type = "image"
+        server._model_name = args.model.rstrip("/").split("/")[-1]
+        server._model_path = args.model
+        server._served_model_name = getattr(args, 'served_model_name', None)
+
+        # Load image model at startup (not lazy)
+        try:
+            from .image_gen import ImageGenEngine
+        except ImportError:
+            print("Error: mflux not installed. Image generation requires mflux.")
+            print("Install with: pip install mflux")
+            sys.exit(1)
+
+        try:
+            server._image_gen = ImageGenEngine()
+            server._image_gen.load(
+                model_name=server._model_name,
+                model_path=args.model,
+                quantize=None,
+            )
+        except Exception as e:
+            print(f"Error: Failed to load image model: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    else:
+        # Text model path — existing flow
+        server._model_type = "text"
+        load_model(
+            args.model,
+            use_batching=args.continuous_batching,
+            scheduler_config=scheduler_config,
+            stream_interval=args.stream_interval if args.continuous_batching else 1,
+            max_tokens=args.max_tokens,
+            served_model_name=getattr(args, 'served_model_name', None),
+            force_mllm=getattr(args, 'is_mllm', False),
+        )
+
+    # Configure CORS middleware
+    from fastapi.middleware.cors import CORSMiddleware
+    origins = [o.strip() for o in allowed_origins.split(',') if o.strip()]
+    # CORS spec: allow_credentials=True is invalid with origins=["*"]
+    # Only enable credentials when specific origins are listed
+    has_wildcard = '*' in origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=not has_wildcard,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
+
+    # Security warning: 0.0.0.0 exposes server to the network
+    if args.host == '0.0.0.0' and not server._api_key:
+        print()
+        print("=" * 60)
+        print("  WARNING: Server binding to 0.0.0.0 (all interfaces)")
+        print("  with no API key set. Any device on your network can")
+        print("  access this server. Set --api-key or change --host")
+        print("  to 127.0.0.1 for local-only access.")
+        print("=" * 60)
+        print()
 
     # Start server
     print(f"Starting server at http://{args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level=log_level.lower())
 
 
 def bench_command(args):
@@ -291,7 +391,8 @@ def bench_command(args):
 
     async def run_benchmark():
         print(f"Loading model: {args.model}")
-        model, tokenizer = load(args.model)
+        from .utils.tokenizer import load_model_with_fallback
+        model, tokenizer = load_model_with_fallback(args.model)
 
         scheduler_config = SchedulerConfig(
             max_num_seqs=args.max_num_seqs,
@@ -418,7 +519,8 @@ def bench_detok_command(args):
     print()
 
     print(f"Loading model: {args.model}")
-    model, tokenizer = load(args.model)
+    from .utils.tokenizer import load_model_with_fallback
+    model, tokenizer = load_model_with_fallback(args.model)
 
     # Generate tokens for benchmark
     prompt = "Write a detailed explanation of how machine learning works and its applications in modern technology."
@@ -863,6 +965,16 @@ Examples:
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
     )
+    # JIT compilation
+    serve_parser.add_argument(
+        "--enable-jit",
+        action="store_true",
+        default=False,
+        help="Enable JIT compilation (mx.compile) on the model forward pass. "
+             "This fuses Metal operations for faster inference after a one-time warmup. "
+             "May not work with all models. Falls back gracefully if compilation fails.",
+    )
+
     # Speculative decoding options
     serve_parser.add_argument(
         "--speculative-model",
@@ -880,6 +992,22 @@ Examples:
         help="Number of tokens the draft model proposes per speculative decoding step. "
              "Higher values = more potential speedup but lower acceptance rate. "
              "Typical sweet spot is 2-5. (default: 3)",
+    )
+    # Logging
+    serve_parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Server log verbosity. DEBUG shows all details, ERROR shows only errors. (default: INFO)",
+    )
+    # CORS
+    serve_parser.add_argument(
+        "--allowed-origins",
+        type=str,
+        default="*",
+        help="Comma-separated list of allowed CORS origins for browser-based API consumers. "
+             "Use * to allow all origins. Example: http://localhost:3000,https://myapp.com (default: *)",
     )
     # Bench command
     bench_parser = subparsers.add_parser("bench", help="Run benchmark")
@@ -1025,7 +1153,7 @@ Examples:
 
     # Convert command
     convert_parser = subparsers.add_parser(
-        "convert", help="Convert HuggingFace model to quantized MLX format"
+        "convert", help="Convert HuggingFace model to quantized MLX or JANG format"
     )
     convert_parser.add_argument(
         "model", type=str,
@@ -1035,19 +1163,53 @@ Examples:
         "--output", "-o", type=str, default=None,
         help="Output directory (default: auto-generated from model name)",
     )
+
+    # MLX uniform quantization options
     convert_parser.add_argument(
-        "--bits", "-b", type=int, required=True, choices=[2, 3, 4, 6, 8],
-        help="Quantization bit-width",
+        "--bits", "-b", type=int, default=None, choices=[2, 3, 4, 6, 8],
+        help="MLX uniform quantization bit-width (mutually exclusive with --jang-profile)",
     )
     convert_parser.add_argument(
-        "--group-size", type=int, required=True,
-        help="Quantization group size",
+        "--group-size", type=int, default=64,
+        help="Quantization group size (default: 64)",
     )
     convert_parser.add_argument(
         "--mode", type=str, default="default",
         choices=["default", "NF4"],
         help="Quantization mode (default: default)",
     )
+
+    # JANG adaptive quantization options
+    convert_parser.add_argument(
+        "--jang-profile", "-j", type=str, default=None,
+        help="JANG adaptive profile (e.g. JANG_2S, JANG_3M, JANG_4L). "
+             "Automatically assigns different bit widths to attention vs MLP tensors.",
+    )
+    convert_parser.add_argument(
+        "--jang-method", type=str, default="mse",
+        choices=["mse", "rtn", "mse-all"],
+        help="JANG quantization method: mse (MSE for attention, RTN for MLP), "
+             "rtn (fast), mse-all (MSE everywhere, slow). Default: mse",
+    )
+    # Advanced JANG options (beginners can ignore these)
+    convert_parser.add_argument(
+        "--calibration-method", type=str, default="weights",
+        choices=["weights", "activations"],
+        help="How to score tensor importance. 'weights' is fast (default). "
+             "'activations' gives better quality at 2-3 bit but requires more time. "
+             "Most users should leave this at the default.",
+    )
+    convert_parser.add_argument(
+        "--imatrix-path", type=str, default=None,
+        help="Path to a pre-computed importance matrix (.safetensors). "
+             "Skips calibration step. Advanced: use if you've pre-calibrated with custom data.",
+    )
+    convert_parser.add_argument(
+        "--use-awq", action="store_true", default=False,
+        help="Enable AWQ (Activation-Aware Weighting) scaling for better quality. "
+             "Experimental. Adds activation norm collection step before quantization.",
+    )
+
     convert_parser.add_argument(
         "--dtype", type=str, default=None,
         help="Non-quantized layer dtype (e.g. float16, bfloat16)",

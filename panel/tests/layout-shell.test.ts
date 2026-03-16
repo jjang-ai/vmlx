@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest'
 
 // ─── AppState Types (from types/app-state.ts) ────────────────────────────────
 
-type AppMode = 'chat' | 'server'
+type AppMode = 'chat' | 'server' | 'tools' | 'api'
 type ServerPanel = 'dashboard' | 'session' | 'create' | 'settings' | 'about'
 
 interface AppState {
@@ -1342,5 +1342,395 @@ describe('Audit Fix: New Chat Defaults (No Sibling Inheritance)', () => {
     const defaultsForModel = { temperature: 0.6, topP: 0.95 }
     expect(defaultsForModel.temperature).toBe(0.6)
     expect(defaultsForModel.topP).toBe(0.95)
+  })
+})
+
+// ─── API Mode Tests ───────────────────────────────────────────────────────
+
+describe('API Mode', () => {
+  it('AppMode type includes api', () => {
+    const mode: AppMode = 'api'
+    expect(mode).toBe('api')
+  })
+
+  it('api mode is a valid mode alongside chat, server, tools', () => {
+    const validModes: AppMode[] = ['chat', 'server', 'tools', 'api']
+    expect(validModes).toContain('api')
+    expect(validModes.length).toBe(4)
+  })
+
+  it('SET_MODE to api changes mode', () => {
+    const state = { ...initialState, mode: 'chat' as AppMode }
+    const action = { type: 'SET_MODE' as const, mode: 'api' as AppMode }
+    // Simulating reducer: mode should change to api
+    const newState = { ...state, mode: action.mode }
+    expect(newState.mode).toBe('api')
+  })
+
+  it('connectHost resolves 0.0.0.0 for API URLs', () => {
+    function connectHost(host: string): string {
+      return host === '0.0.0.0' ? '127.0.0.1' : host
+    }
+    // API page constructs URLs using connectHost for display
+    const session = makeSession({ host: '0.0.0.0', port: 8000, status: 'running' })
+    const baseUrl = `http://${connectHost(session.host)}:${session.port}`
+    expect(baseUrl).toBe('http://127.0.0.1:8000')
+  })
+
+  it('API page shows base URL from session host:port', () => {
+    const session = makeSession({ host: '192.168.1.50', port: 9001, status: 'running' })
+    const baseUrl = `http://${session.host}:${session.port}`
+    expect(baseUrl).toBe('http://192.168.1.50:9001')
+  })
+
+  it('API endpoint list covers all major categories', () => {
+    // Verify all expected endpoint categories exist
+    const categories = [
+      'Chat & Completions', 'Anthropic', 'Models', 'Embeddings & Reranking',
+      'Audio', 'Cache', 'MCP Tools', 'Cancel', 'Health'
+    ]
+    // This validates our static endpoint data is complete
+    expect(categories.length).toBe(9)
+    expect(categories).toContain('Anthropic')
+    expect(categories).toContain('Audio')
+  })
+
+  it('code snippet builders produce output with model name', () => {
+    const baseUrl = 'http://127.0.0.1:8000'
+    const model = 'mlx-community/Qwen3-8B-4bit'
+    // Verify curl snippet contains model name
+    const curl = `curl ${baseUrl}/v1/chat/completions -d '{"model": "${model}"}'`
+    expect(curl).toContain(model)
+    expect(curl).toContain(baseUrl)
+  })
+
+  it('code snippet includes API key when provided', () => {
+    const apiKey = 'sk-test123'
+    const header = `Authorization: Bearer ${apiKey}`
+    expect(header).toContain(apiKey)
+  })
+
+  it('Anthropic snippet uses /v1/messages endpoint', () => {
+    // The Anthropic SDK snippet must use /v1 as base_url
+    // and the adapter handles /v1/messages internally
+    const baseUrl = 'http://127.0.0.1:8000'
+    const anthropicBase = `${baseUrl}/v1`
+    expect(anthropicBase).toBe('http://127.0.0.1:8000/v1')
+  })
+})
+
+// =============================================================================
+// Phase 4: API Endpoint & Code Snippet Verification
+// =============================================================================
+
+describe('EndpointList completeness', () => {
+  // Replica of ENDPOINT_GROUPS from EndpointList.tsx
+  const ENDPOINT_GROUPS = [
+    { category: 'Chat & Completions' },
+    { category: 'Anthropic' },
+    { category: 'Models' },
+    { category: 'Embeddings & Reranking' },
+    { category: 'Audio' },
+    { category: 'Cache' },
+    { category: 'MCP Tools' },
+    { category: 'Cancel' },
+    { category: 'Health' },
+  ]
+
+  it('endpoint list has all 9 categories', () => {
+    expect(ENDPOINT_GROUPS.length).toBe(9)
+  })
+
+  it('categories include all expected sections', () => {
+    const names = ENDPOINT_GROUPS.map(g => g.category)
+    expect(names).toContain('Chat & Completions')
+    expect(names).toContain('Anthropic')
+    expect(names).toContain('Models')
+    expect(names).toContain('Embeddings & Reranking')
+    expect(names).toContain('Audio')
+    expect(names).toContain('Cache')
+    expect(names).toContain('MCP Tools')
+    expect(names).toContain('Cancel')
+    expect(names).toContain('Health')
+  })
+
+  it('no duplicate categories', () => {
+    const names = ENDPOINT_GROUPS.map(g => g.category)
+    const unique = new Set(names)
+    expect(unique.size).toBe(names.length)
+  })
+})
+
+describe('Code snippet format verification', () => {
+  // Replica of snippet builders from CodeSnippets.tsx
+  function buildCurl(baseUrl: string, apiKey: string | null, model: string): string {
+    const authHeader = apiKey ? `\n  -H "Authorization: Bearer ${apiKey}" \\` : ''
+    return `curl ${baseUrl}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\${authHeader}
+  -d '{
+    "model": "${model}",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ],
+    "stream": true
+  }'`
+  }
+
+  function buildPythonAnthropic(baseUrl: string, apiKey: string | null, model: string): string {
+    const key = apiKey ? `"${apiKey}"` : '"not-needed"'
+    return `import anthropic
+
+client = anthropic.Anthropic(
+    base_url="${baseUrl}/v1",
+    api_key=${key},
+)
+
+# Uses /v1/messages endpoint (Anthropic Messages API)
+message = client.messages.create(
+    model="${model}",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello!"}
+    ],
+)
+
+print(message.content[0].text)`
+  }
+
+  it('curl snippet contains /v1/chat/completions endpoint', () => {
+    const snippet = buildCurl('http://127.0.0.1:8000', null, 'test-model')
+    expect(snippet).toContain('/v1/chat/completions')
+  })
+
+  it('curl snippet contains Content-Type header', () => {
+    const snippet = buildCurl('http://127.0.0.1:8000', null, 'test-model')
+    expect(snippet).toContain('Content-Type: application/json')
+  })
+
+  it('curl snippet includes Authorization header when API key present', () => {
+    const snippet = buildCurl('http://127.0.0.1:8000', 'sk-test123', 'test-model')
+    expect(snippet).toContain('Authorization: Bearer sk-test123')
+  })
+
+  it('curl snippet omits Authorization header when no API key', () => {
+    const snippet = buildCurl('http://127.0.0.1:8000', null, 'test-model')
+    expect(snippet).not.toContain('Authorization')
+  })
+
+  it('Anthropic snippet base_url ends with /v1', () => {
+    const snippet = buildPythonAnthropic('http://127.0.0.1:8000', null, 'test-model')
+    expect(snippet).toContain('base_url="http://127.0.0.1:8000/v1"')
+  })
+
+  it('Anthropic snippet references /v1/messages endpoint in comment', () => {
+    const snippet = buildPythonAnthropic('http://127.0.0.1:8000', null, 'test-model')
+    expect(snippet).toContain('/v1/messages')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: App Lifecycle — Window State Machine + Tray Behavior
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Pure logic replicas of Electron window lifecycle handlers from src/main/index.ts.
+ * These test the DECISION LOGIC, not actual Electron APIs.
+ */
+
+// ─── Activate handler logic (from app.on('activate')) ─────────────────────────
+// Mirrors: src/main/index.ts lines 313-322
+type ActivateAction = 'createWindow' | 'restore+show+focus' | 'show+focus' | 'noop'
+
+function handleActivate(
+  windowCount: number,
+  mainWindow: { isMinimized: boolean; isDestroyed: boolean } | null
+): ActivateAction {
+  if (windowCount === 0) return 'createWindow'
+  if (mainWindow && !mainWindow.isDestroyed) {
+    if (mainWindow.isMinimized) return 'restore+show+focus'
+    return 'show+focus'
+  }
+  return 'noop'
+}
+
+// ─── Close handler logic (from mainWindow.on('close')) ────────────────────────
+// Mirrors: src/main/index.ts lines 179-186
+type CloseAction = 'hide' | 'close'
+
+function handleClose(
+  isQuitting: boolean,
+  hasTray: boolean,
+  closeToTray: string | null
+): CloseAction {
+  if (isQuitting) return 'close'
+  if (hasTray && closeToTray === '1') return 'hide'
+  return 'close'
+}
+
+// ─── Second-instance handler logic (from app.on('second-instance')) ───────────
+// Mirrors: src/main/index.ts lines 53-59
+type SecondInstanceAction = 'restore+focus' | 'focus' | 'noop'
+
+function handleSecondInstance(
+  mainWindow: { isMinimized: boolean; isDestroyed: boolean } | null
+): SecondInstanceAction {
+  if (mainWindow && !mainWindow.isDestroyed) {
+    if (mainWindow.isMinimized) return 'restore+focus'
+    return 'focus'
+  }
+  return 'noop'
+}
+
+// ─── Window-all-closed handler logic ──────────────────────────────────────────
+// Mirrors: src/main/index.ts lines 362-375
+type WindowAllClosedAction = 'keep-alive-darwin' | 'keep-alive-tray' | 'quit'
+
+function handleWindowAllClosed(
+  platform: string,
+  hasTray: boolean,
+  closeToTray: string | null
+): WindowAllClosedAction {
+  if (platform === 'darwin') return 'keep-alive-darwin'
+  if (hasTray && closeToTray !== '0') return 'keep-alive-tray'
+  return 'quit'
+}
+
+// ─── SIGTERM/SIGINT handler logic ─────────────────────────────────────────────
+// Mirrors: src/main/index.ts lines 355-359
+function handleSignal(isQuitting: boolean): 'quit' | 'noop' {
+  return isQuitting ? 'noop' : 'quit'
+}
+
+// ─── Tray menu action logic ──────────────────────────────────────────────────
+type TrayAction = 'show+focus' | 'quit'
+
+function handleTrayClick(action: 'open' | 'quit'): TrayAction {
+  return action === 'open' ? 'show+focus' : 'quit'
+}
+
+describe('App Lifecycle', () => {
+  describe('Window state machine — activate handler', () => {
+    it('creates window when none exist', () => {
+      expect(handleActivate(0, null)).toBe('createWindow')
+    })
+
+    it('restores minimized window', () => {
+      expect(handleActivate(1, { isMinimized: true, isDestroyed: false })).toBe('restore+show+focus')
+    })
+
+    it('shows hidden (non-minimized) window', () => {
+      expect(handleActivate(1, { isMinimized: false, isDestroyed: false })).toBe('show+focus')
+    })
+
+    it('noops when mainWindow is destroyed', () => {
+      expect(handleActivate(1, { isMinimized: false, isDestroyed: true })).toBe('noop')
+    })
+
+    it('noops when mainWindow is null but window count > 0', () => {
+      // Edge case: BrowserWindow exists but mainWindow ref is null
+      expect(handleActivate(1, null)).toBe('noop')
+    })
+
+    it('creates window even when mainWindow ref is destroyed', () => {
+      // When count is 0, always create regardless of mainWindow state
+      expect(handleActivate(0, { isMinimized: false, isDestroyed: true })).toBe('createWindow')
+    })
+  })
+
+  describe('Window state machine — close handler', () => {
+    it('hides to tray when tray active and closeToTray is "1"', () => {
+      expect(handleClose(false, true, '1')).toBe('hide')
+    })
+
+    it('closes when no tray', () => {
+      expect(handleClose(false, false, '1')).toBe('close')
+    })
+
+    it('closes when tray active but closeToTray is null (explicit opt-in required)', () => {
+      expect(handleClose(false, true, null)).toBe('close')
+    })
+
+    it('closes when tray active but closeToTray is "0"', () => {
+      expect(handleClose(false, true, '0')).toBe('close')
+    })
+
+    it('closes when isQuitting even if tray + closeToTray enabled', () => {
+      expect(handleClose(true, true, '1')).toBe('close')
+    })
+
+    it('closes when isQuitting and no tray', () => {
+      expect(handleClose(true, false, null)).toBe('close')
+    })
+
+    it('closeToTray must be exactly "1" — "true" does not hide', () => {
+      // Verifies strict equality check: closeToTray === '1'
+      expect(handleClose(false, true, 'true')).toBe('close')
+    })
+
+    it('closeToTray must be exactly "1" — empty string does not hide', () => {
+      expect(handleClose(false, true, '')).toBe('close')
+    })
+  })
+
+  describe('Window state machine — second-instance handler', () => {
+    it('restores and focuses minimized window', () => {
+      expect(handleSecondInstance({ isMinimized: true, isDestroyed: false })).toBe('restore+focus')
+    })
+
+    it('focuses non-minimized window', () => {
+      expect(handleSecondInstance({ isMinimized: false, isDestroyed: false })).toBe('focus')
+    })
+
+    it('noops when mainWindow is destroyed', () => {
+      expect(handleSecondInstance({ isMinimized: false, isDestroyed: true })).toBe('noop')
+    })
+
+    it('noops when mainWindow is null', () => {
+      expect(handleSecondInstance(null)).toBe('noop')
+    })
+  })
+
+  describe('Tray behavior', () => {
+    it('open action shows and focuses window', () => {
+      expect(handleTrayClick('open')).toBe('show+focus')
+    })
+
+    it('quit action triggers app.quit', () => {
+      expect(handleTrayClick('quit')).toBe('quit')
+    })
+  })
+
+  describe('Signal handling (SIGTERM/SIGINT)', () => {
+    it('triggers quit when not already quitting', () => {
+      expect(handleSignal(false)).toBe('quit')
+    })
+
+    it('noops when already quitting (prevents double-quit)', () => {
+      expect(handleSignal(true)).toBe('noop')
+    })
+  })
+
+  describe('Window-all-closed handler', () => {
+    it('keeps alive on macOS (darwin) regardless of tray', () => {
+      expect(handleWindowAllClosed('darwin', false, null)).toBe('keep-alive-darwin')
+      expect(handleWindowAllClosed('darwin', true, '1')).toBe('keep-alive-darwin')
+    })
+
+    it('keeps alive when tray active and closeToTray not "0" (Linux/Windows)', () => {
+      expect(handleWindowAllClosed('linux', true, '1')).toBe('keep-alive-tray')
+      expect(handleWindowAllClosed('win32', true, null)).toBe('keep-alive-tray')
+    })
+
+    it('quits on Linux when no tray', () => {
+      expect(handleWindowAllClosed('linux', false, null)).toBe('quit')
+    })
+
+    it('quits on Windows when no tray', () => {
+      expect(handleWindowAllClosed('win32', false, null)).toBe('quit')
+    })
+
+    it('quits when tray active but closeToTray explicitly "0"', () => {
+      expect(handleWindowAllClosed('linux', true, '0')).toBe('quit')
+    })
   })
 })

@@ -47,6 +47,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const [showLogs, setShowLogs] = useState(false)
   const [overridesVersion, setOverridesVersion] = useState(0)
   const [effectiveReasoningParser, setEffectiveReasoningParser] = useState<string | undefined>(undefined)
+  const [jangLabel, setJangLabel] = useState<string | undefined>(undefined)
 
   // Load session and its chats
   useEffect(() => {
@@ -78,6 +79,17 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               setEffectiveReasoningParser(detected?.reasoningParser || undefined)
             }
           } catch (_) { /* ignore detection errors */ }
+
+          // Detect JANG format: scan model list for matching path
+          if (!s.modelPath.startsWith('remote://')) {
+            try {
+              const models = await window.api.models.scan()
+              const match = models.find((m: any) => m.path === s.modelPath)
+              if (match?.quantization && match.quantization.startsWith('JANG')) {
+                setJangLabel(match.quantization)
+              }
+            } catch (_) { /* ignore scan errors */ }
+          }
         }
       } catch (err) {
         console.error('Failed to load session:', err)
@@ -201,6 +213,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           <span className="font-medium text-sm truncate" title={session.modelPath}>
             {shortName}
           </span>
+          {jangLabel && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium flex-shrink-0">
+              {jangLabel}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground flex-shrink-0">
             {isRemote ? (session.remoteUrl || session.host) : `${session.host}:${session.port}`}
           </span>
@@ -374,7 +391,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               <button onClick={() => setShowCache(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
             </div>
             <div className="p-3">
-              <CachePanel endpoint={{ host: session.host, port: session.port }} sessionStatus={session.status} />
+              <CachePanel endpoint={{ host: session.host, port: session.port }} sessionStatus={session.status} sessionId={session.id} />
             </div>
           </div>
         )}

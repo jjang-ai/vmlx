@@ -35,7 +35,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
     window.api.models.getDownloadStatus().then((status: any) => {
       if (status.active) setActive(status.active)
       if (status.queue) setQueue(status.queue)
-    }).catch(() => { })
+    }).catch((err) => console.error('Failed to get download status:', err))
   }, [])
 
   // Listen for progress updates
@@ -60,7 +60,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
         if (status.active) setActive(status.active)
         else setActive(null)
         setQueue(status.queue || [])
-      }).catch(() => { })
+      }).catch((err) => console.error('Failed to refresh download status:', err))
     })
 
     const unsubError = window.api.models.onDownloadError((data: any) => {
@@ -69,7 +69,7 @@ export function DownloadStatusBar({ onComplete }: { onComplete?: () => void }) {
         if (status.active) setActive(status.active)
         else setActive(null)
         setQueue(status.queue || [])
-      }).catch(() => { })
+      }).catch((err) => console.error('Failed to refresh download status:', err))
     })
 
     return () => {

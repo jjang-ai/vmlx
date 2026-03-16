@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { Settings } from 'lucide-react'
 
 interface Session {
@@ -44,6 +45,18 @@ const statusLabels: Record<string, string> = {
 export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onDelete }: SessionCardProps) {
   const isRemote = session.type === 'remote'
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
+  const [jangLabel, setJangLabel] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    if (isRemote) return
+    // Check if model directory name contains JANG/MXQ indicators
+    const name = session.modelPath.toLowerCase()
+    if (name.includes('-jang-') || name.includes('-mxq-') || name.includes('-mlxq-')) {
+      // Rough label from directory name — will be refined if model is scanned
+      const match = name.match(/(?:jang|mxq|mlxq)[_-]?(\d+\.?\d*)\s*-?\s*bit/i)
+      setJangLabel(match ? `JANG ${match[1]}-bit` : 'JANG')
+    }
+  }, [session.modelPath, isRemote])
 
   return (
     <div className="bg-card border border-border rounded-lg p-4 hover:border-primary/50 transition-colors">
@@ -55,6 +68,11 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
             <h3 className="font-semibold text-sm truncate" title={session.modelPath}>
               {shortName}
             </h3>
+            {jangLabel && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium flex-shrink-0">
+                {jangLabel}
+              </span>
+            )}
           </div>
           <p className="text-xs text-muted-foreground truncate mt-0.5" title={isRemote ? session.remoteUrl : session.modelPath}>
             {isRemote ? session.remoteUrl : session.modelPath}

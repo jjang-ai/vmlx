@@ -12,7 +12,7 @@ declare global {
         removeDirectory: (dirPath: string) => Promise<{ success: boolean }>
         browseDirectory: () => Promise<{ canceled: boolean; path?: string }>
         detectConfig: (modelPath: string) => Promise<{ family: string; toolParser?: string; reasoningParser?: string; cacheType: string; usePagedCache: boolean; enableAutoToolChoice: boolean; isMultimodal: boolean; description: string }>
-        getGenerationDefaults: (modelPath: string) => Promise<{ temperature?: number; topP?: number; topK?: number; repeatPenalty?: number } | null>
+        getGenerationDefaults: (modelPath: string) => Promise<{ temperature?: number; topP?: number; topK?: number; minP?: number; repeatPenalty?: number } | null>
         searchHF: (query: string, sortBy?: string, sortDir?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string }>>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
@@ -61,10 +61,10 @@ declare global {
         import: (modelPath?: string) => Promise<{ success: boolean; chatId?: string; title?: string; messageCount?: number }>
       }
       cache: {
-        stats: (endpoint?: { host: string; port: number }) => Promise<any>
-        entries: (endpoint?: { host: string; port: number }) => Promise<any>
-        warm: (prompts: string[], endpoint?: { host: string; port: number }) => Promise<any>
-        clear: (cacheType: string, endpoint?: { host: string; port: number }) => Promise<any>
+        stats: (endpoint?: { host: string; port: number }, sessionId?: string) => Promise<any>
+        entries: (endpoint?: { host: string; port: number }, sessionId?: string) => Promise<any>
+        warm: (prompts: string[], endpoint?: { host: string; port: number }, sessionId?: string) => Promise<any>
+        clear: (cacheType: string, endpoint?: { host: string; port: number }, sessionId?: string) => Promise<any>
       }
       audio: {
         transcribe: (opts: { audioBase64: string; model?: string; language?: string; endpoint?: { host: string; port: number }; sessionId?: string }) => Promise<{ text: string; language?: string; duration?: number }>
@@ -109,11 +109,30 @@ declare global {
       developer: {
         info: (modelPath: string) => Promise<{ success: boolean; output: string; error?: string }>
         doctor: (modelPath: string, options?: { noInference?: boolean }) => Promise<{ success: boolean; error?: string }>
-        convert: (args: { model: string; output?: string; bits: number; groupSize: number; mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean }) => Promise<{ success: boolean; error?: string }>
+        convert: (args: { model: string; output?: string; bits: number; groupSize: number; mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean; jangProfile?: string; jangMethod?: string }) => Promise<{ success: boolean; error?: string }>
         cancelOp: () => Promise<{ success: boolean; error?: string }>
         browseOutputDir: () => Promise<string | null>
         onLog: (callback: (data: { data: string }) => void) => () => void
         onComplete: (callback: (data: { success: boolean; cancelled?: boolean; error?: string }) => void) => () => void
+      }
+      image: {
+        createSession: (modelName: string) => Promise<{ success: boolean; session?: any; error?: string }>
+        getSessions: () => Promise<any[]>
+        getSession: (id: string) => Promise<any>
+        deleteSession: (id: string) => Promise<{ success: boolean; error?: string }>
+        getGenerations: (sessionId: string) => Promise<any[]>
+        generate: (params: {
+          sessionId: string; prompt: string; negativePrompt?: string; model: string;
+          width: number; height: number; steps: number; guidance: number;
+          seed?: number; count: number; quantize?: number; serverPort: number
+        }) => Promise<{ success: boolean; generations?: any[]; error?: string }>
+        startServer: (modelName: string, quantize?: number) => Promise<{ success: boolean; sessionId?: string; port?: number; error?: string }>
+        stopServer: () => Promise<{ success: boolean; error?: string }>
+        getRunningServer: () => Promise<{ sessionId: string; modelName: string; host: string; port: number; status: string } | null>
+        getModelStatus: (modelName: string) => Promise<{ downloaded: boolean; sizeEstimate: string; modelName: string }>
+        readFile: (imagePath: string) => Promise<string | null>
+        saveFile: (imagePath: string) => Promise<{ success: boolean; path?: string; error?: string }>
+        onServerStarting: (callback: (data: any) => void) => () => void
       }
       sessions: {
         list: () => Promise<any[]>

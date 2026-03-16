@@ -699,7 +699,7 @@ function PromptTemplateSelector({ value, onChange }: { value: string; onChange: 
   const [showSave, setShowSave] = useState(false)
 
   useEffect(() => {
-    window.api.templates.list().then(setTemplates).catch(() => {})
+    window.api.templates.list().then(setTemplates).catch((err) => console.error('Failed to load templates:', err))
   }, [])
 
   const builtins = templates.filter(t => t.isBuiltin)

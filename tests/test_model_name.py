@@ -37,7 +37,7 @@ class TestNormalizeModelName:
         from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name(
-            "/Users/example/.lmstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
+            "/home/user/.mlxstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
         )
         assert result == "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
@@ -60,7 +60,7 @@ class TestNormalizeModelName:
         from vmlx_engine.server import _normalize_model_name
 
         result = _normalize_model_name(
-            "/Users/example/models/mlx-community/Qwen3-8B/"
+            "/home/user/models/mlx-community/Qwen3-8B/"
         )
         assert result == "mlx-community/Qwen3-8B"
 
