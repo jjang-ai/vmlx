@@ -1864,6 +1864,8 @@ async def create_image(request: Request):
     # Guidance scale
     guidance = body.get("guidance", 3.5)
 
+    # Hold the lock for both load AND generate to prevent model-swap races.
+    # On a single-GPU Mac, image generation must be serialized anyway.
     async with _image_gen_lock:
         # Load engine if needed (or if model changed)
         if _image_gen is None:
@@ -1894,24 +1896,24 @@ async def create_image(request: Request):
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Failed to load image model '{model}': {e}")
 
-    # Generate images
-    images = []
-    for i in range(n):
-        img_seed = (seed + i) if seed is not None else None
-        try:
-            result = await asyncio.to_thread(
-                _image_gen.generate,
-                prompt=prompt,
-                width=width,
-                height=height,
-                steps=steps,
-                guidance=guidance,
-                seed=img_seed,
-                negative_prompt=negative_prompt,
-            )
-        except Exception as e:
-            logger.error(f"Image generation failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
+        # Generate images (inside lock to prevent concurrent model swap)
+        images = []
+        for i in range(n):
+            img_seed = (seed + i) if seed is not None else None
+            try:
+                result = await asyncio.to_thread(
+                    _image_gen.generate,
+                    prompt=prompt,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    guidance=guidance,
+                    seed=img_seed,
+                    negative_prompt=negative_prompt,
+                )
+            except Exception as e:
+                logger.error(f"Image generation failed: {e}")
+                raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
         images.append({
             "b64_json": result.b64_json,
