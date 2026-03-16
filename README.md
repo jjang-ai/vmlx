@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-wide-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo-wide-light.png">
-    <img alt="vMLX" src="assets/logo-wide-light.png" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/logo-wide-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/logo-wide-light.png">
+    <img alt="vMLX" src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/logo-wide-light.png" width="400">
   </picture>
 </p>
 
@@ -39,8 +39,8 @@
 
 <table align="center">
 <tr>
-<td align="center"><img src="assets/chat-tab.png" width="500" alt="Chat interface" /></td>
-<td align="center"><img src="assets/agentic-chat.png" width="500" alt="Agentic coding chat" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/chat-tab.png" width="500" alt="Chat interface" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/agentic-chat.png" width="500" alt="Agentic coding chat" /></td>
 </tr>
 <tr>
 <td align="center"><em>Chat with any MLX model -- thinking mode, streaming, and syntax highlighting</em></td>
@@ -412,16 +412,16 @@ vMLX includes a native macOS desktop app (MLX Studio) with 5 modes:
 
 <table align="center">
 <tr>
-<td align="center"><img src="assets/image-tab.png" width="450" alt="Image generation" /></td>
-<td align="center"><img src="assets/tools-tab.png" width="450" alt="Developer tools" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/image-tab.png" width="450" alt="Image generation" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/tools-tab.png" width="450" alt="Developer tools" /></td>
 </tr>
 <tr>
 <td align="center"><em>Image generation with Flux model selection</em></td>
 <td align="center"><em>Developer tools -- model conversion and diagnostics</em></td>
 </tr>
 <tr>
-<td align="center"><img src="assets/anthropic-api.png" width="450" alt="Anthropic API endpoint" /></td>
-<td align="center"><img src="assets/gguf-to-mlx.png" width="450" alt="GGUF to MLX conversion" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/anthropic-api.png" width="450" alt="Anthropic API endpoint" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/gguf-to-mlx.png" width="450" alt="GGUF to MLX conversion" /></td>
 </tr>
 <tr>
 <td align="center"><em>Anthropic Messages API endpoint -- full compatibility</em></td>
@@ -445,7 +445,7 @@ npx electron-builder --mac dmg
 vMLX lives in your menu bar showing all running models, GPU memory usage, and quick controls.
 
 <p align="center">
-  <img src="assets/menu-bar.png" width="300" alt="Menu Bar" />
+  <img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/menu-bar.png" width="300" alt="Menu Bar" />
 </p>
 
 ---
