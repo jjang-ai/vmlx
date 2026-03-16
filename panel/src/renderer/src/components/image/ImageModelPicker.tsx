@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react'
-import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2 } from 'lucide-react'
+import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil, Maximize, Scissors, Wand2 } from 'lucide-react'
 
 const NAMED_MODELS = [
-  { id: 'schnell', name: 'Flux Schnell', desc: 'Fast generation (4 steps)', size: '~12 GB', steps: 4, icon: Zap },
-  { id: 'dev', name: 'Flux Dev', desc: 'High quality (20 steps)', size: '~24 GB', steps: 20, icon: Sparkles },
-  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'Fast turbo generation (4 steps)', size: '~12 GB', steps: 4, icon: Gauge },
-  { id: 'flux2-klein-4b', name: 'Flux Klein 4B', desc: 'Compact model (20 steps)', size: '~8 GB', steps: 20, icon: Box },
-  { id: 'flux2-klein-9b', name: 'Flux Klein 9B', desc: 'Mid-size model (20 steps)', size: '~16 GB', steps: 20, icon: Layers },
+  { id: 'schnell', name: 'Flux Schnell', desc: 'Fast generation (4 steps)', size: '~12 GB', steps: 4, icon: Zap, category: 'generate' as const },
+  { id: 'dev', name: 'Flux Dev', desc: 'High quality (20 steps)', size: '~24 GB', steps: 20, icon: Sparkles, category: 'generate' as const },
+  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'Fast turbo generation (4 steps)', size: '~12 GB', steps: 4, icon: Gauge, category: 'generate' as const },
+  { id: 'flux2-klein-4b', name: 'Flux Klein 4B', desc: 'Compact model (20 steps)', size: '~8 GB', steps: 20, icon: Box, category: 'generate' as const },
+  { id: 'flux2-klein-9b', name: 'Flux Klein 9B', desc: 'Mid-size model (20 steps)', size: '~16 GB', steps: 20, icon: Layers, category: 'generate' as const },
+  // Image editing models
+  { id: 'qwen-image-edit', name: 'Qwen Image Edit', desc: 'Instruction-based editing (28 steps)', size: '~37 GB', steps: 28, icon: Pencil, category: 'edit' as const },
+  { id: 'flux-kontext', name: 'Flux Kontext', desc: 'Subject-consistent editing (24 steps)', size: '~12 GB', steps: 24, icon: Wand2, category: 'edit' as const },
+  { id: 'flux-fill', name: 'Flux Fill', desc: 'Inpainting with mask (20 steps)', size: '~24 GB', steps: 20, icon: Scissors, category: 'edit' as const },
+  { id: 'flux2-klein-edit', name: 'Flux Klein Edit', desc: 'Lightweight editing (20 steps)', size: '~8 GB', steps: 20, icon: Pencil, category: 'edit' as const },
 ]
 
 const QUANTIZE_OPTIONS = [
@@ -34,11 +39,18 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [modelAvailability, setModelAvailability] = useState<Record<string, boolean>>({})
   const [hasHfToken, setHasHfToken] = useState(false)
 
-  // Check HF token on mount
+  // Check HF token and in-progress downloads on mount
   useEffect(() => {
     window.api.settings.get('hf_api_key').then((val: string | null) => {
       setHasHfToken(!!val)
     })
+    // Recover state if a download is already in progress (e.g., user navigated away and back)
+    window.api.models.getDownloadStatus().then((status: any) => {
+      if (status.active) {
+        setDownloadState('downloading')
+        if (status.active.progress) setDownloadProgress(status.active.progress)
+      }
+    }).catch(() => {})
   }, [])
 
   // Check model availability when selection or quantize changes
@@ -159,9 +171,11 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
           </p>
         </div>
 
-        {/* Preset Models */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {NAMED_MODELS.map((model) => {
+        {/* Generation Models */}
+        <div>
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Image Generation</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {NAMED_MODELS.filter(m => m.category === 'generate').map((model) => {
             const Icon = model.icon
             const isSelected = selectedModel === model.id && !showCustom
             const key = `${model.id}-${selectedQuantize}`
@@ -201,6 +215,55 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
               </button>
             )
           })}
+          </div>
+        </div>
+
+        {/* Image Editing Models */}
+        <div>
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Image Editing</h3>
+          <p className="text-[11px] text-muted-foreground mb-2">Submit a photo + text prompt to edit, inpaint, or transform images.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {NAMED_MODELS.filter(m => m.category === 'edit').map((model) => {
+            const Icon = model.icon
+            const isSelected = selectedModel === model.id && !showCustom
+            const key = `${model.id}-${selectedQuantize}`
+            const available = modelAvailability[key]
+            return (
+              <button
+                key={model.id}
+                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null) }}
+                className={`text-left p-4 border rounded-lg transition-all ${
+                  isSelected
+                    ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
+                    : 'border-border hover:border-violet-500/40 hover:bg-accent/30'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    isSelected ? 'bg-violet-500/20' : 'bg-muted'
+                  }`}>
+                    <Icon className={`h-4 w-4 ${isSelected ? 'text-violet-400' : 'text-muted-foreground'}`} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="font-semibold text-sm">{model.name}</h3>
+                      {available === true && (
+                        <CheckCircle className="h-3.5 w-3.5 text-green-500 flex-shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{model.desc}</p>
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
+                      <span>{model.steps} steps</span>
+                      <span>·</span>
+                      <span>{model.size}</span>
+                      {available === true && <span className="text-green-500">· Downloaded</span>}
+                    </div>
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+          </div>
         </div>
 
         {/* Custom Model */}

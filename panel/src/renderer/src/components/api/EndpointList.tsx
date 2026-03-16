@@ -38,9 +38,10 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
   },
   {
     category: 'Image Generation',
-    description: 'Text-to-image with Flux models (requires mflux). Supports: schnell, dev, z-image-turbo, flux2-klein-4b/9b.',
+    description: 'Text-to-image and image editing with Flux models (requires mflux).',
     endpoints: [
       { method: 'POST', path: '/v1/images/generations', description: 'Generate images from text prompts (OpenAI format)', auth: true },
+      { method: 'POST', path: '/v1/images/edits', description: 'Edit images with text instructions (Qwen-Image-Edit, Flux Kontext, Flux Fill, Klein Edit)', auth: true },
     ],
   },
   {

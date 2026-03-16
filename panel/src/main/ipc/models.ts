@@ -109,6 +109,7 @@ const BUILTIN_IMAGE_PATHS = [
 // These repos contain the quantized mflux-format weights that mflux can load locally.
 // Without pre-download, mflux downloads silently with no progress UI.
 const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
+  // Generation models
   'schnell': {
     4: 'madroid/flux.1-schnell-all-in-one-T5xxl-4bit',
     8: 'dhairyashil/FLUX.1-schnell-mflux-8bit',
@@ -130,6 +131,26 @@ const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
   },
   'flux2-klein-9b': {
     0: 'black-forest-labs/FLUX.2-klein-9B',
+  },
+  // Editing models
+  'qwen-image-edit': {
+    4: 'mflux-community/Qwen-Image-Edit-4bit',
+    8: 'mflux-community/Qwen-Image-Edit-8bit',
+    0: 'Qwen/Qwen-Image-Edit',
+  },
+  'flux-kontext': {
+    4: 'akx/FLUX.1-Kontext-dev-mflux-4bit',
+    8: 'mflux-community/FLUX.1-Kontext-dev-mflux-8bit',
+    0: 'black-forest-labs/FLUX.1-Kontext-dev',
+  },
+  'flux-fill': {
+    4: 'mflux-community/FLUX.1-Fill-dev-mflux-4bit',
+    8: 'mflux-community/FLUX.1-Fill-dev-mflux-8bit',
+    0: 'black-forest-labs/FLUX.1-Fill-dev',
+  },
+  'flux2-klein-edit': {
+    8: 'mflux-community/FLUX.2-klein-edit-4B-mflux-8bit',
+    0: 'black-forest-labs/FLUX.2-klein-edit-4B',
   },
 }
 
@@ -177,11 +198,14 @@ function checkImageModelLocal(modelName: string, quantize: number): { available:
     const { readdirSync } = require('fs')
     const dirs = readdirSync(imageDir)
     // Look for model name patterns (e.g., flux1-schnell-4bit, z-image-turbo-4bit)
+    // Also match against the HF repo name for models downloaded via our queue
+    const repoName = repoId.split('/').pop() || ''
     const namePatterns = [
       `${modelName}-${quantize}bit`,
       `${modelName.replace(/-/g, '')}-${quantize}bit`,
       modelName,
-    ]
+      repoName,
+    ].filter(Boolean)
     for (const dir of dirs) {
       const lower = dir.toLowerCase()
       for (const pattern of namePatterns) {
@@ -1165,14 +1189,17 @@ export function registerModelHandlers(): void {
     const queued = downloadQueue.find(j => j.repoId === repoId)
     if (queued) return { jobId: queued.id, status: 'already_queued', repoId }
 
-    // Queue the download using the standard system
+    // Download image models to ~/.mlxstudio/models/image/ so they are found by
+    // both checkImageModelLocal and image:startServer's local path check.
+    // Use the repo name as the directory name (e.g., "flux.1-schnell-all-in-one-T5xxl-4bit")
     const id = `dl_${++jobIdCounter}_${Date.now()}`
-    const targetDir = getDownloadDirectory()
-    const modelDir = join(targetDir, repoId)
+    const imageModelsDir = join(homedir(), '.mlxstudio', 'models', 'image')
+    const repoName = repoId.split('/').pop() || repoId
+    const modelDir = join(imageModelsDir, repoName)
 
     const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
     downloadQueue.push(job)
-    console.log(`[DOWNLOADS] Queued image model: ${repoId} (${downloadQueue.length} in queue)`)
+    console.log(`[DOWNLOADS] Queued image model: ${repoId} → ${modelDir} (${downloadQueue.length} in queue)`)
 
     processQueue()
 
