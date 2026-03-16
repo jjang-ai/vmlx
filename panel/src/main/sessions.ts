@@ -1164,7 +1164,7 @@ export class SessionManager extends EventEmitter {
     args.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
 
     if (config.rateLimit && config.rateLimit > 0) args.push('--rate-limit', config.rateLimit.toString())
-    if (config.apiKey) args.push('--api-key', config.apiKey)
+    // API key passed via VLLM_API_KEY env var in spawn (not CLI arg) to avoid exposure in ps aux
 
     // Image models: skip all text-specific flags (parsers, batching, cache, etc.)
     // The Python server auto-detects image vs text from the model directory
