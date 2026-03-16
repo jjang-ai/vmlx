@@ -133,3 +133,4 @@ mise.toml
 panel/.env.signing
 .agent/
 .github/
+nohup.out
