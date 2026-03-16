@@ -1876,11 +1876,13 @@ async def create_image(request: Request):
                     detail="mflux not installed. Install with: pip install mflux"
                 )
 
+        # Resolve aliases before comparison (e.g., "flux-schnell" → "schnell")
+        from .image_gen import SUPPORTED_MODELS as _IMG_MODELS
+        resolved_model = _IMG_MODELS.get(model.lower(), model) if model else model
+
         # If pre-loaded (from serve command), skip re-loading unless explicitly different model.
-        # Check against all name variants: resolved model name, directory basename,
-        # full model path, and served model name (custom alias).
         already_loaded = _image_gen.is_loaded and (
-            not model or model == _image_gen.model_name or
+            not model or resolved_model == _image_gen.model_name or
             model == _model_name or model == _served_model_name or
             model == _model_path
         )
