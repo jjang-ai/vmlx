@@ -55,9 +55,11 @@ def serve_command(args):
     _is_image = False
 
     # Named mflux models (not filesystem paths) — detect by known names
-    MFLUX_NAMED_MODELS = {'schnell', 'dev', 'z-image', 'z-image-turbo', 'flux2-klein-4b', 'flux2-klein-9b',
-                          'flux2-klein-base-4b', 'flux2-klein-base-9b', 'krea-dev', 'dev-krea',
-                          'qwen', 'fibo', 'fibo-lite'}
+    # Keep in sync with SUPPORTED_MODELS in image_gen.py + additional mflux models
+    from .image_gen import SUPPORTED_MODELS as _IMG_SUPPORTED
+    MFLUX_NAMED_MODELS = set(_IMG_SUPPORTED.keys()) | {
+        'krea-dev', 'dev-krea', 'qwen', 'fibo', 'fibo-lite',  # Additional mflux models
+    }
     if args.model.lower() in MFLUX_NAMED_MODELS:
         _is_image = True
 
