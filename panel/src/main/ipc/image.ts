@@ -20,12 +20,13 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
   // ─── Image Session CRUD ──────────────────────────────────────────────
 
-  ipcMain.handle('image:createSession', async (_, modelName: string) => {
+  ipcMain.handle('image:createSession', async (_, modelName: string, sessionType?: 'generate' | 'edit') => {
     try {
       const now = Date.now()
       const session: ImageSession = {
         id: uuidv4(),
         modelName,
+        sessionType: sessionType || 'generate',
         createdAt: now,
         updatedAt: now
       }
@@ -202,10 +203,12 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       const startTime = Date.now()
 
       // Call the image editing endpoint
+      // Strip data URL prefix if present (FileReader adds it)
+      const cleanImageB64 = imageBase64.replace(/^data:image\/\w+;base64,/, '')
       const body: Record<string, any> = {
         prompt,
         model,
-        image: imageBase64,
+        image: cleanImageB64,
         size: `${width}x${height}`,
         steps,
         guidance,
@@ -233,6 +236,13 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string }> }
       const elapsed = (Date.now() - startTime) / 1000
 
+      // Save source image to disk for gallery display
+      const srcGenId = uuidv4()
+      const sourceImagePath = join(outputDir, `src_${srcGenId}.png`)
+      const rawB64 = imageBase64.replace(/^data:image\/\w+;base64,/, '')
+      const srcBuffer = Buffer.from(rawB64, 'base64')
+      writeFileSync(sourceImagePath, srcBuffer)
+
       // Save edited image to disk and database
       const generations: ImageGeneration[] = []
       for (const item of result.data) {
@@ -253,8 +263,10 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
           steps,
           guidance,
           seed: seed,
+          strength,
           elapsedSeconds: elapsed,
           imagePath,
+          sourceImagePath,
           createdAt: Date.now()
         }
         db.addImageGeneration(gen)

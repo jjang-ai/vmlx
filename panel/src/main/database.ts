@@ -88,6 +88,7 @@ export interface BenchmarkResult {
 export interface ImageSession {
   id: string
   modelName: string
+  sessionType?: 'generate' | 'edit'
   createdAt: number
   updatedAt: number
 }
@@ -103,8 +104,10 @@ export interface ImageGeneration {
   steps: number
   guidance: number
   seed?: number
+  strength?: number
   elapsedSeconds?: number
   imagePath: string
+  sourceImagePath?: string
   createdAt: number
 }
 
@@ -262,6 +265,7 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS image_sessions (
         id TEXT PRIMARY KEY,
         model_name TEXT NOT NULL,
+        session_type TEXT DEFAULT 'generate',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -278,8 +282,10 @@ class DatabaseManager {
         steps INTEGER NOT NULL,
         guidance REAL NOT NULL,
         seed INTEGER,
+        strength REAL,
         elapsed_seconds REAL,
         image_path TEXT NOT NULL,
+        source_image_path TEXT,
         created_at INTEGER NOT NULL,
         FOREIGN KEY (session_id) REFERENCES image_sessions(id) ON DELETE CASCADE
       );
@@ -478,6 +484,19 @@ class DatabaseManager {
         reasoning_mode TEXT DEFAULT 'auto'
       )
     `)
+
+    // Image editing schema migrations
+    const imgGenCols = this.db.pragma('table_info(image_generations)') as { name: string }[]
+    if (!imgGenCols.find(c => c.name === 'source_image_path')) {
+      this.db.exec('ALTER TABLE image_generations ADD COLUMN source_image_path TEXT')
+    }
+    if (!imgGenCols.find(c => c.name === 'strength')) {
+      this.db.exec('ALTER TABLE image_generations ADD COLUMN strength REAL')
+    }
+    const imgSessCols = this.db.pragma('table_info(image_sessions)') as { name: string }[]
+    if (!imgSessCols.find(c => c.name === 'session_type')) {
+      this.db.exec("ALTER TABLE image_sessions ADD COLUMN session_type TEXT DEFAULT 'generate'")
+    }
 
     }) // end runMigrations transaction
     runMigrations()
@@ -1064,14 +1083,14 @@ class DatabaseManager {
   createImageSession(session: ImageSession): void {
     this.ensureOpen()
     this.db.prepare(
-      'INSERT INTO image_sessions (id, model_name, created_at, updated_at) VALUES (?, ?, ?, ?)'
-    ).run(session.id, session.modelName, session.createdAt, session.updatedAt)
+      'INSERT INTO image_sessions (id, model_name, session_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(session.id, session.modelName, session.sessionType || 'generate', session.createdAt, session.updatedAt)
   }
 
   getImageSessions(): ImageSession[] {
     this.ensureOpen()
     return this.db.prepare('SELECT * FROM image_sessions ORDER BY updated_at DESC').all().map((r: any) => ({
-      id: r.id, modelName: r.model_name, createdAt: r.created_at, updatedAt: r.updated_at
+      id: r.id, modelName: r.model_name, sessionType: r.session_type || 'generate', createdAt: r.created_at, updatedAt: r.updated_at
     }))
   }
 
@@ -1079,7 +1098,7 @@ class DatabaseManager {
     this.ensureOpen()
     const r = this.db.prepare('SELECT * FROM image_sessions WHERE id = ?').get(id) as any
     if (!r) return undefined
-    return { id: r.id, modelName: r.model_name, createdAt: r.created_at, updatedAt: r.updated_at }
+    return { id: r.id, modelName: r.model_name, sessionType: r.session_type || 'generate', createdAt: r.created_at, updatedAt: r.updated_at }
   }
 
   updateImageSession(id: string, updates: Partial<ImageSession>): void {
@@ -1101,11 +1120,11 @@ class DatabaseManager {
   addImageGeneration(gen: ImageGeneration): void {
     this.ensureOpen()
     this.db.prepare(
-      `INSERT INTO image_generations (id, session_id, prompt, negative_prompt, model_name, width, height, steps, guidance, seed, elapsed_seconds, image_path, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO image_generations (id, session_id, prompt, negative_prompt, model_name, width, height, steps, guidance, seed, strength, elapsed_seconds, image_path, source_image_path, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(gen.id, gen.sessionId, gen.prompt, gen.negativePrompt || null, gen.modelName,
-      gen.width, gen.height, gen.steps, gen.guidance, gen.seed ?? null, gen.elapsedSeconds ?? null,
-      gen.imagePath, gen.createdAt)
+      gen.width, gen.height, gen.steps, gen.guidance, gen.seed ?? null, gen.strength ?? null,
+      gen.elapsedSeconds ?? null, gen.imagePath, gen.sourceImagePath || null, gen.createdAt)
     // Update session's updatedAt
     this.updateImageSession(gen.sessionId, { updatedAt: gen.createdAt })
   }
@@ -1115,7 +1134,8 @@ class DatabaseManager {
     return this.db.prepare('SELECT * FROM image_generations WHERE session_id = ? ORDER BY created_at ASC').all(sessionId).map((r: any) => ({
       id: r.id, sessionId: r.session_id, prompt: r.prompt, negativePrompt: r.negative_prompt,
       modelName: r.model_name, width: r.width, height: r.height, steps: r.steps, guidance: r.guidance,
-      seed: r.seed, elapsedSeconds: r.elapsed_seconds, imagePath: r.image_path, createdAt: r.created_at
+      seed: r.seed, strength: r.strength, elapsedSeconds: r.elapsed_seconds,
+      imagePath: r.image_path, sourceImagePath: r.source_image_path, createdAt: r.created_at
     }))
   }
 
