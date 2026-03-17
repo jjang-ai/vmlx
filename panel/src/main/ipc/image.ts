@@ -157,22 +157,36 @@ export function registerImageHandlers(): void {
       }
 
       activeGenerationController = new AbortController()
-      // 30-minute timeout for image generation
+      // 30-minute timeout — use Node.js http.request instead of Electron fetch
+      // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
       const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
-      const resp = await fetch(`${baseUrl}/v1/images/generations`, {
-        method: 'POST',
-        headers: getImageFetchHeaders(),
-        body: JSON.stringify(body),
-        signal: activeGenerationController.signal,
+      const resp = await new Promise<any>((resolve, reject) => {
+        const http = require('http')
+        const bodyStr = JSON.stringify(body)
+        const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
+        const req = http.request(`${baseUrl}/v1/images/generations`, {
+          method: 'POST',
+          headers,
+          timeout: 30 * 60 * 1000,
+        }, (res: any) => {
+          let data = ''
+          res.on('data', (chunk: any) => { data += chunk })
+          res.on('end', () => {
+            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, statusText: res.statusMessage, data })
+          })
+        })
+        req.on('error', reject)
+        activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
+        req.write(bodyStr)
+        req.end()
       })
       clearTimeout(timeoutId)
 
       if (!resp.ok) {
-        const errText = await resp.text().catch(() => resp.statusText)
-        return { success: false, error: `Server returned ${resp.status}: ${errText}` }
+        return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }
 
-      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
+      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
       const elapsed = (Date.now() - startTime) / 1000
 
       // If img2img, save source image to disk for gallery display
@@ -270,24 +284,38 @@ export function registerImageHandlers(): void {
       if (maskBase64) body.mask = maskBase64
 
       activeGenerationController = new AbortController()
-      // 30-minute timeout for image edits (Qwen full precision can take 7+ minutes)
+      // 30-minute timeout for image edits (Qwen full precision can take 10+ minutes)
+      // Use Node.js http.request instead of Electron fetch — Chromium's net stack
+      // has its own socket timeout (~5 min) that ignores keepalive, causing
+      // "fetch failed" errors on long image edits.
       const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
-      const resp = await fetch(`${baseUrl}/v1/images/edits`, {
-        method: 'POST',
-        headers: getImageFetchHeaders(),
-        body: JSON.stringify(body),
-        signal: activeGenerationController.signal,
-        // @ts-ignore — Node.js fetch keepalive prevents socket timeout
-        keepalive: true,
+      const resp = await new Promise<any>((resolve, reject) => {
+        const http = require('http')
+        const bodyStr = JSON.stringify(body)
+        const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
+        const req = http.request(`${baseUrl}/v1/images/edits`, {
+          method: 'POST',
+          headers,
+          timeout: 30 * 60 * 1000,
+        }, (res: any) => {
+          let data = ''
+          res.on('data', (chunk: any) => { data += chunk })
+          res.on('end', () => {
+            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, statusText: res.statusMessage, data })
+          })
+        })
+        req.on('error', reject)
+        activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
+        req.write(bodyStr)
+        req.end()
       })
       clearTimeout(timeoutId)
 
       if (!resp.ok) {
-        const errText = await resp.text().catch(() => resp.statusText)
-        return { success: false, error: `Server returned ${resp.status}: ${errText}` }
+        return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
       }
 
-      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
+      const result = JSON.parse(resp.data) as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
       const elapsed = (Date.now() - startTime) / 1000
 
       // Save source image to disk for gallery display

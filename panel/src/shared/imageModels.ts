@@ -1,11 +1,14 @@
 /**
  * Single source of truth for all image model definitions.
  *
- * Replaces duplicated model lists in:
- *   - ImageModelPicker.tsx  (NAMED_MODELS)
- *   - ImageTopBar.tsx       (AVAILABLE_MODELS)
- *   - ImageTab.tsx          (getDefaultSteps)
- *   - models.ts             (IMAGE_MODEL_REPOS)
+ * Every model has explicit mfluxClass + mfluxName fields — NO regex or
+ * directory name matching. The engine uses these directly to pick the
+ * correct Python class and mflux ModelConfig.
+ *
+ * To add a new model:
+ * 1. Add an entry here with the correct mfluxClass and mfluxName
+ * 2. Add the class import in image_gen.py's MODEL_CLASS_MAP
+ * 3. That's it — all UI/download/startup code reads from this registry
  */
 
 export interface ImageModelDef {
@@ -27,8 +30,20 @@ export interface ImageModelDef {
   repoMap: Record<number, string>
   /** RAM tier hint for the UI */
   tier?: 'small' | 'medium' | 'large'
-  /** Whether the model uses a single or dual text encoder (for validation) */
-  encoderType: 'single' | 'dual'
+  /**
+   * Explicit mflux Python class name — used by image_gen.py to import the correct class.
+   * NO regex. NO directory name matching. This is the single source of truth.
+   * Examples: 'Flux1', 'Flux2Klein', 'ZImage', 'Flux1Kontext', 'QwenImageEdit'
+   */
+  mfluxClass: string
+  /**
+   * Canonical mflux model name — passed to ModelConfig.from_name().
+   * Must match one of the names in mflux's AVAILABLE_MODELS registry.
+   * Examples: 'schnell', 'dev', 'z-image-turbo', 'flux2-klein-4b', 'dev-kontext'
+   */
+  mfluxName: string
+  /** Whether this model supports img2img (source image + strength) */
+  supportsImg2Img: boolean
 }
 
 /**
@@ -39,7 +54,8 @@ export interface ImageModelDef {
  */
 export const IMAGE_MODELS: ImageModelDef[] = [
   // ── Image Generation ──────────────────────────────────────────────────
-  // Small (16GB RAM friendly)
+
+  // Flux Schnell — fastest, 4 steps, dual encoder
   {
     id: 'schnell',
     name: 'Flux Schnell',
@@ -54,11 +70,12 @@ export const IMAGE_MODELS: ImageModelDef[] = [
       0: 'black-forest-labs/FLUX.1-schnell',
     },
     tier: 'small',
-    encoderType: 'dual',
+    mfluxClass: 'Flux1',
+    mfluxName: 'schnell',
+    supportsImg2Img: true,
   },
-  // Klein 4B removed: mflux's Flux1() constructor requires text_encoder_2 which Klein
-  // doesn't have. Local loading fails. from_name() downloads full model from HF silently.
-  // Re-add when mflux adds single-encoder local loading support.
+
+  // Z-Image Turbo — fast, 4 steps, single encoder
   {
     id: 'z-image-turbo',
     name: 'Z-Image Turbo',
@@ -73,10 +90,12 @@ export const IMAGE_MODELS: ImageModelDef[] = [
       0: 'Tongyi-MAI/Z-Image-Turbo',
     },
     tier: 'small',
-    encoderType: 'single',
+    mfluxClass: 'ZImage',
+    mfluxName: 'z-image-turbo',
+    supportsImg2Img: true,
   },
-  // Medium
-  // Klein 9B removed: same issue as Klein 4B — mflux can't load single-encoder locally.
+
+  // Flux Dev — highest quality, 20 steps, dual encoder
   {
     id: 'dev',
     name: 'Flux Dev',
@@ -91,9 +110,70 @@ export const IMAGE_MODELS: ImageModelDef[] = [
       0: 'black-forest-labs/FLUX.1-dev',
     },
     tier: 'medium',
-    encoderType: 'dual',
+    mfluxClass: 'Flux1',
+    mfluxName: 'dev',
+    supportsImg2Img: true,
   },
-  // ── Image Editing (full precision only) ────────────────────────────────
+
+  // FLUX.2 Klein 4B — fast small model, single encoder, uses Flux2Klein class
+  {
+    id: 'klein-4b',
+    name: 'FLUX.2 Klein 4B',
+    desc: 'Fast & small (20 steps)',
+    category: 'generate',
+    steps: 20,
+    size: '~4-8 GB',
+    quantizeOptions: [4, 0],
+    repoMap: {
+      4: 'RunPod/FLUX.2-klein-4B-mflux-4bit',
+      0: 'black-forest-labs/FLUX.2-klein-4B',
+    },
+    tier: 'small',
+    mfluxClass: 'Flux2Klein',
+    mfluxName: 'flux2-klein-4b',
+    supportsImg2Img: true,
+  },
+
+  // FLUX.2 Klein 9B — medium quality, single encoder
+  {
+    id: 'klein-9b',
+    name: 'FLUX.2 Klein 9B',
+    desc: 'Medium quality (20 steps)',
+    category: 'generate',
+    steps: 20,
+    size: '~8-18 GB',
+    quantizeOptions: [0],
+    repoMap: {
+      0: 'black-forest-labs/FLUX.2-klein-9B',
+    },
+    tier: 'medium',
+    mfluxClass: 'Flux2Klein',
+    mfluxName: 'flux2-klein-9b',
+    supportsImg2Img: true,
+  },
+
+  // Qwen Image (generation) — large model, good prompt understanding
+  {
+    id: 'qwen-image',
+    name: 'Qwen Image',
+    desc: 'Strong prompt understanding (20 steps)',
+    category: 'generate',
+    steps: 20,
+    size: '~20-40 GB',
+    quantizeOptions: [4, 0],
+    repoMap: {
+      4: 'carsenk/qwen-image-mflux-4bit',
+      0: 'Qwen/Qwen-Image',
+    },
+    tier: 'large',
+    mfluxClass: 'QwenImage',
+    mfluxName: 'qwen-image',
+    supportsImg2Img: true,
+  },
+
+  // ── Image Editing ────────────────────────────────────────────────────
+
+  // Qwen Image Edit — instruction-based editing
   {
     id: 'qwen-image-edit',
     name: 'Qwen Image Edit',
@@ -106,7 +186,46 @@ export const IMAGE_MODELS: ImageModelDef[] = [
       0: 'Qwen/Qwen-Image-Edit',
     },
     tier: 'large',
-    encoderType: 'single',
+    mfluxClass: 'QwenImageEdit',
+    mfluxName: 'qwen-image-edit',
+    supportsImg2Img: false,
+  },
+
+  // Flux Kontext — subject-consistent editing via img2img
+  {
+    id: 'kontext',
+    name: 'Flux Kontext',
+    desc: 'Subject-consistent editing (24 steps)',
+    category: 'edit',
+    steps: 24,
+    size: '~6-24 GB',
+    quantizeOptions: [4, 0],
+    repoMap: {
+      4: 'akx/FLUX.1-Kontext-dev-mflux-4bit',
+      0: 'black-forest-labs/FLUX.1-Kontext-dev',
+    },
+    tier: 'medium',
+    mfluxClass: 'Flux1Kontext',
+    mfluxName: 'dev-kontext',
+    supportsImg2Img: true,
+  },
+
+  // Flux Fill — inpainting with mask
+  {
+    id: 'fill',
+    name: 'Flux Fill',
+    desc: 'Inpainting with mask (20 steps)',
+    category: 'edit',
+    steps: 20,
+    size: '~24 GB',
+    quantizeOptions: [0],
+    repoMap: {
+      0: 'black-forest-labs/FLUX.1-Fill-dev',
+    },
+    tier: 'large',
+    mfluxClass: 'Flux1Fill',
+    mfluxName: 'dev-fill',
+    supportsImg2Img: true,
   },
 ]
 
