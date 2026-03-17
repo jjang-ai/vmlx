@@ -483,6 +483,13 @@ export class SessionManager extends EventEmitter {
     if (hfToken) {
       spawnEnv.HF_TOKEN = hfToken
     }
+    // For image models: block mflux from downloading at runtime — models must be pre-downloaded.
+    // Without this, mflux silently starts multi-GB downloads when model components are
+    // missing, causing the server to hang at "Starting..." with no progress indication.
+    // Only for image models — text models (mlx-lm) may need HF access for tokenizer downloads.
+    if (isImageSession) {
+      spawnEnv.HF_HUB_OFFLINE = '1'
+    }
 
     let proc: ChildProcess
     if (engineResult.type === 'bundled') {
@@ -1182,10 +1189,28 @@ export class SessionManager extends EventEmitter {
     // Image models: skip all text-specific flags (parsers, batching, cache, etc.)
     // The Python server auto-detects image vs text from the model directory
     if (isImage) {
+      // Image-specific settings (explicit flags, not via additionalArgs)
+      if (config.imageMode === 'edit') args.push('--image-mode', 'edit')
+      if (config.imageQuantize && config.imageQuantize > 0) args.push('--image-quantize', config.imageQuantize.toString())
+      if (config.servedModelName) args.push('--served-model-name', config.servedModelName)
       // Logging + CORS still apply to image servers
       if (config.logLevel && config.logLevel !== 'INFO') args.push('--log-level', config.logLevel)
       if (config.corsOrigins && config.corsOrigins !== '*') args.push('--allowed-origins', config.corsOrigins)
-      if (config.additionalArgs?.trim()) args.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
+      // Strip image-specific flags from additionalArgs to prevent duplication
+      // (stale additionalArgs may survive config merge from a previous session)
+      if (config.additionalArgs?.trim()) {
+        const imageFlags = new Set(['--image-mode', '--image-quantize', '--served-model-name'])
+        const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
+        const filtered: string[] = []
+        for (let i = 0; i < extra.length; i++) {
+          if (imageFlags.has(extra[i])) {
+            i++ // skip the flag's value argument too
+          } else {
+            filtered.push(extra[i])
+          }
+        }
+        if (filtered.length) args.push(...filtered)
+      }
       return args
     }
 
@@ -1471,6 +1496,7 @@ export class SessionManager extends EventEmitter {
 
   private async findAvailablePort(): Promise<number> {
     const sessions = db.getSessions()
+    // Check ALL session ports (DB has UNIQUE constraint on port column)
     const usedPorts = new Set(sessions.map(s => s.port))
     let port = 8000
     while (usedPorts.has(port) || !(await this.isPortFree(port))) {

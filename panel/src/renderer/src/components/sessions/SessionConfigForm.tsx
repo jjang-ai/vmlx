@@ -45,6 +45,8 @@ export interface SessionConfig {
   logLevel: string
   corsOrigins: string
   maxContextLength: number
+  imageMode?: string
+  imageQuantize?: number
 }
 
 export const DEFAULT_CONFIG: SessionConfig = {
@@ -92,7 +94,9 @@ export const DEFAULT_CONFIG: SessionConfig = {
   enableJit: false,
   logLevel: 'INFO',
   corsOrigins: '*',
-  maxContextLength: 0
+  maxContextLength: 0,
+  imageMode: undefined,
+  imageQuantize: undefined
 }
 
 interface SessionConfigFormProps {
@@ -105,10 +109,13 @@ interface SessionConfigFormProps {
   detectedMaxContext?: number
   /** Model type — image models show minimal settings */
   modelType?: 'text' | 'image'
+  /** Image mode — 'edit' or 'generate' (only relevant when modelType is 'image') */
+  imageMode?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode }: SessionConfigFormProps) {
   const isImage = modelType === 'image'
+  const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
   const [expandedSections, setExpandedSections] = useState({
     server: true,
     concurrent: false,
@@ -197,8 +204,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Concurrent Processing */}
       {isImage && (
         <div className="px-4 py-3 text-xs text-muted-foreground border-b border-border">
-          This is an image generation server. Only server settings (host, port, timeout) apply.
-          Use the Image tab to generate images or call <code className="bg-muted px-1 rounded">/v1/images/generations</code>.
+          {isImageEdit
+            ? <>This is an image editing server. Only server settings (host, port, timeout) apply. Use the Image tab to edit images or call <code className="bg-muted px-1 rounded">/v1/images/edits</code>.</>
+            : <>This is an image generation server. Only server settings (host, port, timeout) apply. Use the Image tab to generate images or call <code className="bg-muted px-1 rounded">/v1/images/generations</code>.</>
+          }
         </div>
       )}
 

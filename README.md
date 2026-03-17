@@ -135,6 +135,7 @@ vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
 | **MoE Models** | Qwen 3.5 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3, MiniMax M2.5, Llama 4 |
 | **Hybrid SSM** | Nemotron-H, Jamba, GatedDeltaNet (Mamba + Attention) |
 | **Image Gen** | Flux Schnell/Dev, Z-Image Turbo, Flux Klein (via mflux) |
+| **Image Edit** | Flux Kontext, Flux Fill, Qwen Image Edit (via mflux) |
 | **Embeddings** | Any mlx-lm compatible embedding model |
 | **Reranking** | Cross-encoder reranking models |
 | **Audio** | Kokoro TTS, Whisper STT (via mlx-audio) |
@@ -194,19 +195,26 @@ Auto-detected reasoning parsers that extract `<think>` blocks:
 
 ---
 
-## Image Generation
+## Image Generation & Editing
 
-Generate images locally with Flux models via [mflux](https://github.com/filipstrand/mflux).
+Generate and edit images locally with Flux models via [mflux](https://github.com/filipstrand/mflux).
 
 ```bash
 pip install vmlx[image]
+
+# Image generation
+vmlx serve schnell                    # or dev, z-image-turbo, flux2-klein-4b
 vmlx serve ~/.mlxstudio/models/image/flux1-schnell-4bit
+
+# Image editing
+vmlx serve flux-kontext               # subject-consistent editing
+vmlx serve qwen-image-edit            # instruction-based editing
+vmlx serve flux-fill                  # inpainting with mask
 ```
 
-### API
+### Generation API
 
 ```bash
-# curl
 curl http://localhost:8000/v1/images/generations \
   -H "Content-Type: application/json" \
   -d '{
@@ -221,21 +229,61 @@ curl http://localhost:8000/v1/images/generations \
 # Python (OpenAI SDK)
 response = client.images.generate(
     model="schnell",
-    prompt="A cat astronaut floating in space with Earth in the background",
+    prompt="A cat astronaut floating in space",
     size="1024x1024",
     n=1,
 )
 ```
 
-### Supported Models
+### Editing API
 
-| Model | Steps | Speed | Quality |
-|-------|-------|-------|---------|
-| **Flux Schnell** | 4 | Fastest | Good |
-| **Flux Dev** | 20 | Slow | Best |
-| **Z-Image Turbo** | 4 | Fast | Sharp |
-| **Flux Klein 4B** | 20 | Medium | Compact |
-| **Flux Klein 9B** | 20 | Medium | Balanced |
+```bash
+# Edit an image with a text prompt (Flux Kontext / Qwen Image Edit)
+curl http://localhost:8000/v1/images/edits \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "flux-kontext",
+    "prompt": "Change the background to a sunset",
+    "image": "<base64-encoded-image>",
+    "size": "1024x1024",
+    "strength": 0.8
+  }'
+```
+
+```python
+# Python
+import base64
+with open("source.png", "rb") as f:
+    image_b64 = base64.b64encode(f.read()).decode()
+
+response = requests.post("http://localhost:8000/v1/images/edits", json={
+    "model": "flux-kontext",
+    "prompt": "Make the sky purple",
+    "image": image_b64,
+    "size": "1024x1024",
+    "strength": 0.8,
+})
+```
+
+### Supported Image Models
+
+**Generation Models:**
+
+| Model | Steps | Speed | Memory |
+|-------|-------|-------|--------|
+| **Flux Schnell** | 4 | Fastest | ~6-24 GB |
+| **Flux Dev** | 20 | Slow | ~6-24 GB |
+| **Z-Image Turbo** | 4 | Fast | ~6-24 GB |
+| **Flux Klein 4B** | 20 | Medium | ~4-8 GB |
+| **Flux Klein 9B** | 20 | Medium | ~16 GB |
+
+**Editing Models:**
+
+| Model | Steps | Type | Memory |
+|-------|-------|------|--------|
+| **Flux Kontext** | 24 | Subject-consistent editing | ~6-12 GB |
+| **Qwen Image Edit** | 28 | Instruction-based editing | ~37 GB |
+| **Flux Fill** | 20 | Inpainting with mask | ~24 GB |
 
 ---
 
@@ -406,17 +454,17 @@ vMLX includes a native macOS desktop app (MLX Studio) with 5 modes:
 |------|-------------|
 | **Chat** | Conversation interface with chat history, thinking mode, tool calling, agentic coding |
 | **Server** | Manage model sessions -- start, stop, configure, monitor |
-| **Image** | Text-to-image generation with Flux models |
+| **Image** | Text-to-image generation and image editing with Flux, Kontext, Qwen, and Fill models |
 | **Tools** | Model converter, GGUF-to-MLX, inspector, diagnostics |
 | **API** | Live endpoint reference with copy-pasteable code snippets |
 
 <table align="center">
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/image-tab.png" width="450" alt="Image generation" /></td>
+<td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/image-edit-tab.png" width="450" alt="Image generation and editing" /></td>
 <td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/tools-tab.png" width="450" alt="Developer tools" /></td>
 </tr>
 <tr>
-<td align="center"><em>Image generation with Flux model selection</em></td>
+<td align="center"><em>Image generation and editing with Flux models</em></td>
 <td align="center"><em>Developer tools -- model conversion and diagnostics</em></td>
 </tr>
 <tr>
@@ -533,14 +581,23 @@ vmlx convert <model> \
   --calibration-method activations  # Activation-aware calibration
 ```
 
-### Image Generation Options
+### Image Generation & Editing Options
 
 ```bash
 pip install vmlx[image]
 
-vmlx serve <flux-model> \
-  --port 8001 \                 # Run on separate port from text model
-  --host 0.0.0.0
+# Generation models
+vmlx serve schnell \            # or dev, z-image-turbo, flux2-klein-4b
+  --image-quantize 4 \          # Quantization: 3, 4, 5, 6, 8 (omit for full precision)
+  --port 8001
+
+# Editing models
+vmlx serve flux-kontext \       # or qwen-image-edit, flux-fill
+  --image-quantize 4 \          # Quantization (if available)
+  --port 8001
+
+# Local model directory
+vmlx serve ~/.mlxstudio/models/image/flux-kontext-dev-4bit
 ```
 
 ### Audio Options
@@ -652,4 +709,97 @@ Apache License 2.0 -- see [LICENSE](LICENSE).
 <p align="center">
   Built by <a href="https://github.com/jjang-ai">Jinho Jang</a> (eric@jangq.ai)<br>
   <a href="https://jangq.ai">JANGQ AI</a> &bull; <a href="https://pypi.org/project/vmlx/">PyPI</a> &bull; <a href="https://github.com/jjang-ai/vmlx">GitHub</a> &bull; <a href="https://github.com/jjang-ai/mlxstudio/releases">Downloads</a>
+</p>
+
+---
+
+## 한국어 (Korean)
+
+### vMLX — Apple Silicon을 위한 로컬 AI 엔진
+
+Mac에서 LLM, VLM, 이미지 생성 및 편집 모델을 완전히 로컬로 실행하세요.
+OpenAI + Anthropic 호환 API. 클라우드 없음. API 키 불필요. 데이터가 기기를 떠나지 않습니다.
+
+### 빠른 시작
+
+```bash
+pip install vmlx
+vmlx serve mlx-community/Llama-3.2-3B-Instruct-4bit
+```
+
+### 주요 기능
+
+| 기능 | 설명 |
+|------|------|
+| **텍스트 생성** | MLX 및 JANG 형식의 LLM 추론 |
+| **비전-언어 모델** | 이미지 + 텍스트 멀티모달 추론 |
+| **이미지 생성** | Flux Schnell/Dev, Z-Image Turbo, FLUX.2 Klein (mflux 기반) |
+| **이미지 편집** | Qwen Image Edit (텍스트 지시 기반 이미지 편집) |
+| **5단계 캐싱** | 프리픽스, 페이지드, KV 양자화, 디스크, 메모리 인식 캐시 |
+| **연속 배칭** | 다중 동시 요청 처리 |
+| **에이전트 도구** | 30개 내장 도구 (파일, 웹 검색, Git, 터미널) |
+| **OpenAI API** | /v1/chat/completions, /v1/images/generations, /v1/images/edits |
+| **Anthropic API** | /v1/messages (스트리밍, 도구 호출, 시스템 프롬프트) |
+
+### 이미지 생성
+
+```bash
+pip install vmlx[image]
+vmlx serve schnell          # 빠른 생성 (4 단계)
+vmlx serve dev              # 고품질 생성 (20 단계)
+```
+
+### 이미지 편집
+
+```bash
+vmlx serve qwen-image-edit  # 텍스트 지시 기반 이미지 편집
+```
+
+```bash
+# 이미지 편집 API
+curl http://localhost:8000/v1/images/edits \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen-image-edit",
+    "prompt": "배경을 해질녘으로 변경",
+    "image": "<base64 인코딩된 이미지>",
+    "size": "1024x1024",
+    "strength": 0.8
+  }'
+```
+
+### 데스크톱 앱 (MLX Studio)
+
+macOS 네이티브 데스크톱 앱으로 5가지 모드를 제공합니다:
+
+| 모드 | 설명 |
+|------|------|
+| **채팅** | 대화 인터페이스, 채팅 기록, 도구 호출, 에이전트 코딩 |
+| **서버** | 모델 세션 관리 — 시작, 정지, 설정, 모니터링 |
+| **이미지** | 텍스트-이미지 생성 및 이미지 편집 (Flux, Qwen 모델) |
+| **도구** | 모델 변환기, GGUF-MLX 변환, 진단 |
+| **API** | 실시간 엔드포인트 참조 및 코드 스니펫 |
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/image-edit-tab.png" width="450" alt="이미지 생성 및 편집" />
+</p>
+
+### 설치
+
+```bash
+pip install vmlx              # 기본: 텍스트 LLM, VLM, 임베딩
+pip install vmlx[image]       # + 이미지 생성/편집 (mflux)
+pip install vmlx[jang]        # + JANG 양자화 도구
+pip install vmlx[audio]       # + TTS/STT (mlx-audio)
+```
+
+### 라이선스
+
+Apache License 2.0 — [LICENSE](LICENSE) 참조.
+
+---
+
+<p align="center">
+  개발자: <a href="https://github.com/jjang-ai">장진호</a> (eric@jangq.ai)<br>
+  <a href="https://jangq.ai">JANGQ AI</a>
 </p>

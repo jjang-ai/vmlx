@@ -3,7 +3,7 @@
   "version": "1.2.2",
   "description": "The most complete MLX inference engine for Mac — voice, vision, Mamba, 5-layer caching, 20+ agentic tools",
   "main": "dist/main/index.mjs",
-  "author": "JANGQ AI",
+  "author": "Jinho Jang <eric@jangq.ai>",
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://vmlx.net",
   "scripts": {
@@ -125,7 +125,7 @@
         ]
       },
       {
-        "from": "../../../mlx/vllm-mlx/vmlx_engine",
+        "from": "../vmlx_engine",
         "to": "vmlx-engine-source/vmlx_engine",
         "filter": [
           "**/*",
@@ -134,7 +134,7 @@
         ]
       },
       {
-        "from": "../../../mlx/vllm-mlx/pyproject.toml",
+        "from": "../pyproject.toml",
         "to": "vmlx-engine-source/pyproject.toml"
       }
     ],

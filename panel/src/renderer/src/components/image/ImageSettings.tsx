@@ -139,18 +139,12 @@ export function ImageSettings({ settings, onChange, model, mode }: ImageSettings
           </div>
         )}
 
-        {/* Quantize */}
+        {/* Quantize (read-only — set at server start) */}
         <div>
-          <label className="text-xs text-muted-foreground block mb-1" title="Model precision. 4-bit uses ~6GB RAM (fastest), 8-bit ~12GB (better quality), Full ~24GB (best quality). Must match what you selected when starting the server.">Quantize &#9432;</label>
-          <select
-            value={settings.quantize}
-            onChange={(e) => update('quantize', parseInt(e.target.value))}
-            className="w-full px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value={4}>4-bit</option>
-            <option value={8}>8-bit</option>
-            <option value={0}>Full Precision</option>
-          </select>
+          <label className="text-xs text-muted-foreground block mb-1" title="Model precision. Set when starting the server and cannot be changed while running.">Quantize &#9432;</label>
+          <div className="w-full px-2 py-1 bg-muted/50 border border-input rounded text-xs text-muted-foreground">
+            {settings.quantize === 0 ? 'Full Precision' : `${settings.quantize}-bit`}
+          </div>
         </div>
       </div>
 

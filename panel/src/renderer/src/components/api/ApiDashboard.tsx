@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Server, Copy, Check, ExternalLink } from 'lucide-react'
+import { Server, Copy, Check } from 'lucide-react'
 import { useSessionsContext } from '../../contexts/SessionsContext'
 import { EndpointList } from './EndpointList'
 import { CodeSnippets } from './CodeSnippets'
@@ -13,6 +13,7 @@ interface SessionSummary {
   status: 'running' | 'stopped' | 'error' | 'loading'
   type?: 'local' | 'remote'
   config?: string
+  remoteUrl?: string
 }
 
 function connectHost(host: string): string {
@@ -37,8 +38,20 @@ export function ApiDashboard() {
   }, [runningSessions, selectedId])
 
   const selected = runningSessions.find(s => s.id === selectedId) ?? null
-  const baseUrl = selected ? `http://${connectHost(selected.host)}:${selected.port}` : null
-  const modelName = selected?.modelName || selected?.modelPath?.split('/').pop() || null
+  const baseUrl = selected
+    ? (selected.type === 'remote' && selected.remoteUrl
+      ? selected.remoteUrl.replace(/\/+$/, '')
+      : `http://${connectHost(selected.host)}:${selected.port}`)
+    : null
+  // Prefer servedModelName (user override) over health-derived modelName
+  const modelName = useMemo(() => {
+    if (!selected) return null
+    try {
+      const cfg = JSON.parse(selected.config as string)
+      if (cfg.servedModelName) return cfg.servedModelName
+    } catch {}
+    return selected.modelName || selected.modelPath?.split('/').pop() || null
+  }, [selected])
 
   // Detect if selected session is an image server
   const isImageServer = useMemo(() => {
@@ -48,6 +61,15 @@ export function ApiDashboard() {
       return cfg.modelType === 'image'
     } catch { return false }
   }, [selected])
+
+  // Read imageMode directly from session config — no regex
+  const isEditServer = useMemo(() => {
+    if (!isImageServer || !selected?.config) return false
+    try {
+      const cfg = JSON.parse(selected.config as string)
+      return cfg.imageMode === 'edit'
+    } catch { return false }
+  }, [isImageServer, selected])
 
   // Extract API key from config JSON
   const apiKey = useMemo(() => {
@@ -120,12 +142,12 @@ export function ApiDashboard() {
 
         {/* Code snippets */}
         {baseUrl && (
-          <CodeSnippets baseUrl={baseUrl} apiKey={apiKey} modelId={modelName} isImage={isImageServer} />
+          <CodeSnippets baseUrl={baseUrl} apiKey={apiKey} modelId={modelName} isImage={isImageServer} isEdit={isEditServer} />
         )}
 
         {/* Endpoint reference */}
         {baseUrl && (
-          <EndpointList baseUrl={baseUrl} isImage={isImageServer} />
+          <EndpointList isImage={isImageServer} isEdit={isEditServer} />
         )}
       </div>
     </div>

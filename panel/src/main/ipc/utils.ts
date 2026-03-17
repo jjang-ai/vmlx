@@ -9,6 +9,12 @@ export async function resolveBaseUrl(endpoint?: { host: string; port: number }):
   const processes = await sessionManager.detect()
   const healthy = processes.find(p => p.healthy)
   if (healthy) return `http://127.0.0.1:${healthy.port}`
+  // Fallback: try the most recent running session from DB
+  try {
+    const sessions = db.getSessions()
+    const running = sessions.find((s: any) => s.status === 'running')
+    if (running) return `http://127.0.0.1:${running.port}`
+  } catch {}
   return 'http://127.0.0.1:8000'
 }
 

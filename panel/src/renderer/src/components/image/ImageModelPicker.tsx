@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react'
-import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil, Maximize, Scissors, Wand2 } from 'lucide-react'
+import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
 
 const NAMED_MODELS = [
-  { id: 'schnell', name: 'Flux Schnell', desc: 'Fast generation (4 steps)', size: '~12 GB', steps: 4, icon: Zap, category: 'generate' as const },
-  { id: 'dev', name: 'Flux Dev', desc: 'High quality (20 steps)', size: '~24 GB', steps: 20, icon: Sparkles, category: 'generate' as const },
-  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'Fast turbo generation (4 steps)', size: '~12 GB', steps: 4, icon: Gauge, category: 'generate' as const },
-  { id: 'flux2-klein-4b', name: 'Flux Klein 4B', desc: 'Compact model (20 steps)', size: '~8 GB', steps: 20, icon: Box, category: 'generate' as const },
-  { id: 'flux2-klein-9b', name: 'Flux Klein 9B', desc: 'Mid-size model (20 steps)', size: '~16 GB', steps: 20, icon: Layers, category: 'generate' as const },
-  // Image editing models
-  { id: 'qwen-image-edit', name: 'Qwen Image Edit', desc: 'Instruction-based editing (28 steps)', size: '~37 GB', steps: 28, icon: Pencil, category: 'edit' as const },
-  { id: 'flux-kontext', name: 'Flux Kontext', desc: 'Subject-consistent editing (24 steps)', size: '~12 GB', steps: 24, icon: Wand2, category: 'edit' as const },
-  { id: 'flux-fill', name: 'Flux Fill', desc: 'Inpainting with mask (20 steps)', size: '~24 GB', steps: 20, icon: Scissors, category: 'edit' as const },
-  { id: 'flux2-klein-edit', name: 'Flux Klein Edit', desc: 'Lightweight editing (20 steps)', size: '~8 GB', steps: 20, icon: Pencil, category: 'edit' as const },
+  // ── Image Generation ──
+  // Small (16GB RAM friendly)
+  { id: 'schnell', name: 'Flux Schnell', desc: 'Fastest generation (4 steps)', size: '~6-24 GB', steps: 4, icon: Zap, category: 'generate' as const, quantizeOptions: [4, 8, 0], tier: 'small' as const },
+  { id: 'flux2-klein-4b', name: 'FLUX.2 Klein 4B', desc: 'Compact next-gen model (20 steps)', size: '~4-8 GB', steps: 20, icon: Box, category: 'generate' as const, quantizeOptions: [8, 0], tier: 'small' as const },
+  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'Fast turbo generation (4 steps)', size: '~6-24 GB', steps: 4, icon: Gauge, category: 'generate' as const, quantizeOptions: [4, 8, 0], tier: 'small' as const },
+  // Medium
+  { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B', desc: 'Next-gen mid-size model (20 steps)', size: '~16 GB', steps: 20, icon: Layers, category: 'generate' as const, quantizeOptions: [0], tier: 'medium' as const },
+  { id: 'dev', name: 'Flux Dev', desc: 'High quality generation (20 steps)', size: '~6-24 GB', steps: 20, icon: Sparkles, category: 'generate' as const, quantizeOptions: [4, 8, 0], tier: 'medium' as const },
+  // ── Image Editing (full precision only — quantization degrades edit quality) ──
+  { id: 'qwen-image-edit', name: 'Qwen Image Edit', desc: 'Instruction-based editing (28 steps)', size: '~54 GB', steps: 28, icon: Pencil, category: 'edit' as const, quantizeOptions: [0], tier: 'large' as const },
 ]
 
 const QUANTIZE_OPTIONS = [
@@ -21,7 +21,7 @@ const QUANTIZE_OPTIONS = [
 ]
 
 interface ImageModelPickerProps {
-  onSelect: (modelId: string, quantize?: number) => void
+  onSelect: (modelId: string, quantize?: number, category?: 'generate' | 'edit') => void
 }
 
 type DownloadState = 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
@@ -30,6 +30,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [selectedQuantize, setSelectedQuantize] = useState<number>(4)
   const [customPath, setCustomPath] = useState('')
+  const [customCategory, setCustomCategory] = useState<'generate' | 'edit'>('generate')
   const [showCustom, setShowCustom] = useState(false)
 
   // Download state
@@ -37,6 +38,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [downloadProgress, setDownloadProgress] = useState<any>(null)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [modelAvailability, setModelAvailability] = useState<Record<string, boolean>>({})
+  const [modelMissing, setModelMissing] = useState<Record<string, string[]>>({})
   const [hasHfToken, setHasHfToken] = useState(false)
 
   // Check HF token and in-progress downloads on mount
@@ -63,6 +65,9 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
     window.api.models.checkImageModel(selectedModel, selectedQuantize)
       .then((result: any) => {
         setModelAvailability(prev => ({ ...prev, [key]: result.available }))
+        if (result.missing && result.missing.length > 0) {
+          setModelMissing(prev => ({ ...prev, [key]: result.missing }))
+        }
         setDownloadState(result.available ? 'ready' : 'idle')
       })
       .catch(() => {
@@ -135,9 +140,10 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
 
   const handleStart = () => {
     if (showCustom && customPath.trim()) {
-      onSelect(customPath.trim(), selectedQuantize)
+      onSelect(customPath.trim(), selectedQuantize, customCategory)
     } else if (selectedModel) {
-      onSelect(selectedModel, selectedQuantize)
+      const modelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
+      onSelect(selectedModel, selectedQuantize, modelInfo?.category || 'generate')
     }
   }
 
@@ -148,9 +154,18 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
     } catch {}
   }
 
+  // Get allowed quantize options for the selected model
+  const selectedModelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
+  const allowedQuantize = selectedModelInfo?.quantizeOptions || [4, 8, 0]
+  const filteredQuantizeOptions = QUANTIZE_OPTIONS.filter(opt => allowedQuantize.includes(opt.value))
+
   const isModelAvailable = selectedModel
     ? modelAvailability[`${selectedModel}-${selectedQuantize}`]
     : false
+
+  const missingComponents = selectedModel
+    ? modelMissing[`${selectedModel}-${selectedQuantize}`]
+    : undefined
 
   return (
     <div className="h-full flex items-center justify-center p-8 overflow-auto">
@@ -165,9 +180,11 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
             )}
           </p>
           <p className="text-xs text-muted-foreground mt-2">
-            <strong>Schnell</strong> is fastest (4 steps). <strong>Dev</strong> has highest quality (20 steps).
-            <strong> 4-bit</strong> uses least memory (~6GB). <strong>Full</strong> precision needs ~24GB.
-            For Macs with 16GB RAM, use Schnell or Klein 4B at 4-bit.
+            <strong>Generation:</strong> Schnell is fastest (4 steps), Dev is highest quality. 4-bit uses ~6GB, Full ~24GB.
+            For 16GB RAM, use Schnell or Klein 4B at 4-bit.
+            <br />
+            <strong>Editing:</strong> Full precision only — quantized edit models produce unusable results.
+            Requires 24-54 GB depending on model.
           </p>
         </div>
 
@@ -183,7 +200,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
             return (
               <button
                 key={model.id}
-                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null) }}
+                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null); if (!model.quantizeOptions.includes(selectedQuantize)) setSelectedQuantize(model.quantizeOptions[0]) }}
                 className={`text-left p-4 border rounded-lg transition-all ${
                   isSelected
                     ? 'border-primary bg-primary/5 ring-1 ring-primary/30'
@@ -221,7 +238,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
         {/* Image Editing Models */}
         <div>
           <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Image Editing</h3>
-          <p className="text-[11px] text-muted-foreground mb-2">Submit a photo + text prompt to edit, inpaint, or transform images.</p>
+          <p className="text-[11px] text-muted-foreground mb-2">Submit a photo + text prompt to edit, inpaint, or transform images. Full precision only for best quality. More editing models coming soon.</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {NAMED_MODELS.filter(m => m.category === 'edit').map((model) => {
             const Icon = model.icon
@@ -231,7 +248,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
             return (
               <button
                 key={model.id}
-                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null) }}
+                onClick={() => { setSelectedModel(model.id); setShowCustom(false); setDownloadState('idle'); setDownloadError(null); if (!model.quantizeOptions.includes(selectedQuantize)) setSelectedQuantize(model.quantizeOptions[0]) }}
                 className={`text-left p-4 border rounded-lg transition-all ${
                   isSelected
                     ? 'border-violet-500 bg-violet-500/5 ring-1 ring-violet-500/30'
@@ -278,21 +295,34 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
             Use custom model (HuggingFace ID or local path)
           </button>
           {showCustom && (
-            <div className="mt-3 flex gap-2">
-              <input
-                type="text"
-                value={customPath}
-                onChange={e => setCustomPath(e.target.value)}
-                placeholder="e.g., black-forest-labs/FLUX.1-schnell or /path/to/model"
-                className="flex-1 px-3 py-2 text-sm bg-background border border-input rounded"
-              />
-              <button
-                onClick={handleBrowse}
-                className="px-3 py-2 text-sm border border-input rounded hover:bg-accent"
-                title="Browse folders"
-              >
-                <FolderOpen className="h-4 w-4" />
-              </button>
+            <div className="mt-3 space-y-2">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={customPath}
+                  onChange={e => setCustomPath(e.target.value)}
+                  placeholder="e.g., black-forest-labs/FLUX.1-schnell or /path/to/model"
+                  className="flex-1 px-3 py-2 text-sm bg-background border border-input rounded"
+                />
+                <button
+                  onClick={handleBrowse}
+                  className="px-3 py-2 text-sm border border-input rounded hover:bg-accent"
+                  title="Browse folders"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-muted-foreground">Mode:</label>
+                <select
+                  value={customCategory}
+                  onChange={e => setCustomCategory(e.target.value as 'generate' | 'edit')}
+                  className="px-2 py-1 text-xs bg-background border border-input rounded"
+                >
+                  <option value="generate">Image Generation</option>
+                  <option value="edit">Image Editing</option>
+                </select>
+              </div>
             </div>
           )}
         </div>
@@ -359,13 +389,29 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
           </div>
         )}
 
+        {/* Incomplete model warning — model has some weights but is missing required components */}
+        {!isModelAvailable && missingComponents && missingComponents.length > 0 && downloadState !== 'downloading' && (
+          <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+            <div className="flex items-start gap-2 text-sm text-yellow-600 dark:text-yellow-400">
+              <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Incomplete download</p>
+                <p className="text-xs mt-1">
+                  This model has weights but is missing required components: <strong>{missingComponents.join(', ')}</strong>.
+                  Re-download the model to get all files, or the server will hang trying to fetch them.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Quantize + Action Buttons */}
         {(selectedModel || (showCustom && customPath.trim())) && (
           <div className="flex items-center gap-4 p-4 bg-card border border-border rounded-lg">
             <div className="flex-1">
               <label className="text-xs text-muted-foreground block mb-1.5">Quantization</label>
               <div className="flex gap-1.5">
-                {QUANTIZE_OPTIONS.map(opt => (
+                {filteredQuantizeOptions.map(opt => (
                   <button
                     key={opt.value}
                     onClick={() => { setSelectedQuantize(opt.value); setDownloadState('idle'); setDownloadError(null) }}

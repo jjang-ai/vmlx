@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
-import { Send, Loader2, ImagePlus, X, Pencil } from 'lucide-react'
+import { Send, ImagePlus, X, Pencil } from 'lucide-react'
 
 interface ImagePromptBarSettings {
   steps: number
@@ -28,13 +28,12 @@ interface ImagePromptBarProps {
   generating: boolean
   settings: ImagePromptBarSettings
   onSettingsChange: (settings: ImagePromptBarSettings) => void
-  model: string | null
   mode: 'generate' | 'edit'
   sourceImage: { dataUrl: string; name: string } | null
   onSourceImageChange: (img: { dataUrl: string; name: string } | null) => void
 }
 
-export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, model, mode, sourceImage, onSourceImageChange }: ImagePromptBarProps) {
+export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange }: ImagePromptBarProps) {
   const [prompt, setPrompt] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -213,27 +212,28 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           rows={2}
           className="flex-1 px-3 py-2 bg-muted border border-input rounded-md text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 placeholder:text-muted-foreground/60"
         />
-        <button
-          onClick={handleSubmit}
-          disabled={!canSubmit}
-          className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end ${
-            isEdit
-              ? 'bg-violet-600 text-white hover:bg-violet-700'
-              : 'bg-primary text-primary-foreground hover:bg-primary/90'
-          }`}
-        >
-          {generating ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">{isEdit ? 'Editing' : 'Generating'}</span>
-            </>
-          ) : (
-            <>
-              {isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-              <span className="text-sm">{isEdit ? 'Edit' : 'Generate'}</span>
-            </>
-          )}
-        </button>
+        {generating ? (
+          <button
+            onClick={() => window.api.image.cancelGeneration()}
+            className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center gap-2 self-end"
+          >
+            <X className="h-4 w-4" />
+            <span className="text-sm">Cancel</span>
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end ${
+              isEdit
+                ? 'bg-violet-600 text-white hover:bg-violet-700'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90'
+            }`}
+          >
+            {isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            <span className="text-sm">{isEdit ? 'Edit' : 'Generate'}</span>
+          </button>
+        )}
       </div>
     </div>
   )

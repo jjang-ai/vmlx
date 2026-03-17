@@ -1,8 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Settings, Server, Play, Square, ChevronDown, Loader2, Plus, Globe, X, RotateCw } from 'lucide-react'
 import { ChatSettings } from '../chat/ChatSettings'
 import { ServerSettingsDrawer } from '../sessions/ServerSettingsDrawer'
 import { useSessionsContext, type SessionSummary } from '../../contexts/SessionsContext'
+
+/** Returns true if the session is an image model (Flux, etc.) — should be excluded from chat model picker */
+function isImageSession(s: SessionSummary): boolean {
+  if (!s.config) return false
+  try { return JSON.parse(s.config).modelType === 'image' } catch { return false }
+}
 
 interface ChatModeToolbarProps {
   activeChatId: string | null
@@ -26,7 +32,11 @@ interface SessionDetail {
 }
 
 export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange, onOverridesChanged }: ChatModeToolbarProps) {
-  const { sessions } = useSessionsContext()
+  const { sessions: allSessions } = useSessionsContext()
+
+  // Filter out image sessions — they belong in the Image tab, not chat
+  const sessions = useMemo(() => allSessions.filter(s => !isImageSession(s)), [allSessions])
+
   const [showChatSettings, setShowChatSettings] = useState(false)
   const [showServerSettings, setShowServerSettings] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
