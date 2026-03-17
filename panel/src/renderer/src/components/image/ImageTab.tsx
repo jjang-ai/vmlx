@@ -6,6 +6,7 @@ import { ImageHistory } from './ImageHistory'
 import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
+import { getDefaultSteps } from '../../../../shared/imageModels'
 
 export interface ImageSessionInfo {
   id: string
@@ -469,14 +470,4 @@ export function ImageTab() {
   )
 }
 
-function getDefaultSteps(modelId: string): number {
-  const defaults: Record<string, number> = {
-    'schnell': 4,
-    'dev': 20,
-    'z-image-turbo': 4,
-    'flux2-klein-4b': 20,
-    'flux2-klein-9b': 20,
-    'qwen-image-edit': 28,
-  }
-  return defaults[modelId] || 4
-}
+// getDefaultSteps is now imported from shared/imageModels.ts

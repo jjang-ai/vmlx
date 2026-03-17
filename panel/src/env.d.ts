@@ -142,6 +142,7 @@ declare global {
         readFile: (imagePath: string) => Promise<string | null>
         saveFile: (imagePath: string) => Promise<{ success: boolean; path?: string; error?: string }>
         cancelGeneration: () => Promise<{ success: boolean; error?: string }>
+        getModelPaths: () => Promise<Array<{ modelId: string; quantize: number; localPath: string; repoId?: string; downloadedAt: number }>>
       }
       modelSettings: {
         get: (modelPath: string) => Promise<any>

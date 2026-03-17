@@ -111,6 +111,14 @@ export interface ImageGeneration {
   createdAt: number
 }
 
+export interface ImageModelPath {
+  modelId: string
+  quantize: number
+  localPath: string
+  repoId?: string
+  downloadedAt: number
+}
+
 export interface ChatOverrides {
   chatId: string
   temperature?: number
@@ -497,6 +505,18 @@ class DatabaseManager {
     if (!imgSessCols.find(c => c.name === 'session_type')) {
       this.db.exec("ALTER TABLE image_sessions ADD COLUMN session_type TEXT DEFAULT 'generate'")
     }
+
+    // Image model paths table — tracks where downloaded image models live on disk
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS image_model_paths (
+        model_id TEXT NOT NULL,
+        quantize INTEGER NOT NULL,
+        local_path TEXT NOT NULL,
+        repo_id TEXT,
+        downloaded_at INTEGER NOT NULL,
+        PRIMARY KEY (model_id, quantize)
+      )
+    `)
 
     }) // end runMigrations transaction
     runMigrations()
@@ -1142,6 +1162,49 @@ class DatabaseManager {
   deleteImageGeneration(id: string): void {
     this.ensureOpen()
     this.db.prepare('DELETE FROM image_generations WHERE id = ?').run(id)
+  }
+
+  // ─── Image Model Paths ──────────────────────────────────────────────────────
+
+  getImageModelPath(modelId: string, quantize: number): ImageModelPath | undefined {
+    this.ensureOpen()
+    const row = this.db.prepare(
+      'SELECT * FROM image_model_paths WHERE model_id = ? AND quantize = ?'
+    ).get(modelId, quantize) as any
+    if (!row) return undefined
+    return {
+      modelId: row.model_id,
+      quantize: row.quantize,
+      localPath: row.local_path,
+      repoId: row.repo_id || undefined,
+      downloadedAt: row.downloaded_at,
+    }
+  }
+
+  setImageModelPath(modelId: string, quantize: number, localPath: string, repoId?: string): void {
+    this.ensureOpen()
+    this.db.prepare(
+      `INSERT OR REPLACE INTO image_model_paths (model_id, quantize, local_path, repo_id, downloaded_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(modelId, quantize, localPath, repoId || null, Date.now())
+  }
+
+  deleteImageModelPath(modelId: string, quantize: number): void {
+    this.ensureOpen()
+    this.db.prepare(
+      'DELETE FROM image_model_paths WHERE model_id = ? AND quantize = ?'
+    ).run(modelId, quantize)
+  }
+
+  getAllImageModelPaths(): ImageModelPath[] {
+    this.ensureOpen()
+    return this.db.prepare('SELECT * FROM image_model_paths ORDER BY model_id, quantize').all().map((row: any) => ({
+      modelId: row.model_id,
+      quantize: row.quantize,
+      localPath: row.local_path,
+      repoId: row.repo_id || undefined,
+      downloadedAt: row.downloaded_at,
+    }))
   }
 
   close(): void {
