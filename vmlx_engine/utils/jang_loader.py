@@ -2,15 +2,11 @@
 JANG Model Loader — Load JANG quantized models into MLX for inference.
 Created by Jinho Jang (eric@jangq.ai)
 
-Repacks JANG weights into MLX native quantized format (QuantizedLinear /
-QuantizedSwitchLinear). Models stay quantized in GPU memory — no float16
-expansion. Dequantization happens on-the-fly in Metal kernels via
-quantized_matmul and gather_qmm, like GGUF stays quantized in llama.cpp.
+v2 models: MLX-native safetensors — load via mx.load() mmap in seconds.
+v1 models: Legacy format — repacks JANG uint8 to MLX uint32 (slow, 5-10 min).
 
-Memory-efficient: repacked tensors are flushed to temporary safetensors
-shards on disk (~5 GB each) instead of accumulating in RAM. The caller
-loads them via mx.load() which uses mmap, so peak memory stays close to
-1x model size even for 100+ GB models.
+v2 is the default format for new conversions. v1 backward compat is preserved
+so existing models on HuggingFace continue to work.
 """
 
 import gc
@@ -31,9 +27,7 @@ logger = logging.getLogger(__name__)
 JANG_CONFIG_FILENAMES = ["jang_config.json", "jjqf_config.json", "jang_cfg.json", "mxq_config.json"]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 
-# Shard flush threshold in bytes (~2 GB).
-# Smaller shards reduce peak memory during mx.save_safetensors (which
-# must materialize all arrays in the shard before writing to disk).
+# Shard flush threshold for v1 streaming repack (~2 GB)
 _SHARD_FLUSH_BYTES = 2_000_000_000
 
 
@@ -50,6 +44,33 @@ def is_jang_model(model_path: str | Path) -> bool:
     return _find_config_path(Path(model_path)) is not None
 
 
+def _is_v2_model(model_path: Path) -> bool:
+    """Check if a JANG model uses v2 format (MLX-native safetensors).
+
+    MUST only be called on confirmed JANG models (has jang_config.json).
+    v2 = has standard safetensors (not .jang.safetensors) + jang_config.json.
+    """
+    # Must have jang_config.json — without it, this is a standard MLX model
+    config_path = _find_config_path(model_path)
+    if not config_path:
+        return False
+
+    # Check format_version in config first (most reliable)
+    cfg = json.loads(config_path.read_text())
+    version = cfg.get("format_version", "1.0")
+    if version.startswith("2"):
+        return True
+
+    # Check for v2 index file (standard safetensors index alongside jang_config)
+    if (model_path / "model.safetensors.index.json").exists():
+        # Only v2 if no .jang.safetensors exist (v1 has .jang.safetensors)
+        has_jang = any(model_path.glob("*.jang.safetensors"))
+        if not has_jang:
+            return True
+
+    return False
+
+
 def _is_vlm_config(model_path: Path) -> bool:
     """Check if a model has vision_config in its config.json (i.e., is a VL model)."""
     config_path = model_path / "config.json"
@@ -59,18 +80,72 @@ def _is_vlm_config(model_path: Path) -> bool:
     return "vision_config" in config
 
 
-def load_jang_vlm_model(model_path: str | Path):
-    """
-    Load a JANG Vision-Language model into mlx-vlm for multimodal inference.
+# ─── v2 loader (instant) ────────────────────────────────────────────
 
-    Vision tensors are stored as float16 in JANG format (unquantized).
-    Language model tensors are repacked from JANG into MLX QuantizedLinear format.
-    The mlx-vlm model skeleton provides the correct architecture with
-    vision_tower + language_model submodules.
 
-    Returns:
-        Tuple of (model, processor) compatible with mlx-vlm.generate()
+def _load_jang_v2(path: Path, jang_cfg: dict):
     """
+    Load a JANG v2 model — instant via mx.load() mmap.
+
+    v2 models store weights in MLX-native format (uint32 packed weights,
+    float16 scales/biases) in standard safetensors. No repacking needed.
+    """
+    from mlx_lm.utils import load_config, load_model as _load_model_skeleton, load_tokenizer
+
+    start = time.perf_counter()
+    config = load_config(path)
+
+    # config.json already has quantization key (written by v2 converter)
+    # but ensure it exists for older v2 models
+    if "quantization" not in config:
+        block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
+        bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
+        config["quantization"] = {"group_size": block_size, "bits": min(bit_widths)}
+
+    model, config = _load_model_skeleton(
+        path, lazy=True, strict=False, model_config=config
+    )
+    _upgrade_switch_to_quantized(
+        model,
+        config["quantization"]["bits"],
+        config["quantization"]["group_size"],
+    )
+
+    # Load weights via mmap — this is instant
+    weight_files = _get_v2_weight_files(path)
+    logger.info(f"  Loading {len(weight_files)} safetensors shards via mmap")
+
+    for sf in weight_files:
+        weights = mx.load(str(sf))
+        if hasattr(model, "sanitize"):
+            weights = model.sanitize(weights)
+        model.load_weights(list(weights.items()), strict=False)
+        del weights
+        gc.collect()
+
+    _fix_quantized_bits(model, {})
+
+    if not hasattr(model, "config"):
+        model.config = config
+
+    mx.eval(model.parameters())
+    elapsed = time.perf_counter() - start
+
+    actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
+    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+    logger.info(
+        f"JANG v2 loaded in {elapsed:.1f}s: {source_model} "
+        f"({actual_bits:.1f}-bit avg)"
+    )
+
+    tokenizer = load_tokenizer(
+        path, eos_token_ids=config.get("eos_token_id", None)
+    )
+    return model, tokenizer
+
+
+def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
+    """Load a JANG v2 Vision-Language model via mmap — instant."""
     import mlx.nn as nn
     from mlx_vlm.utils import (
         get_model_and_args, load_config as vlm_load_config,
@@ -78,30 +153,12 @@ def load_jang_vlm_model(model_path: str | Path):
         load_processor, skip_multimodal_module,
     )
 
-    path = Path(model_path)
     start = time.perf_counter()
 
-    config_path = _find_config_path(path)
-    if not config_path:
-        raise FileNotFoundError(f"No JANG config found in {path}")
-
-    jang_cfg = json.loads(config_path.read_text())
-    fmt = jang_cfg.get("format")
-    if not fmt or fmt not in JANG_FORMAT_VALUES:
-        raise ValueError(f"Not a JANG model: format='{fmt}'")
-
     block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
-    actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 4)
-    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
-    bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [2, 4, 6, 8])
+    bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
     default_bits = min(bit_widths)
 
-    logger.info(
-        f"Loading JANG VLM: {source_model} "
-        f"({actual_bits:.1f}-bit avg, block_size={block_size})"
-    )
-
-    # --- Build mlx-vlm model skeleton ---
     config = vlm_load_config(path)
     model_class, _ = get_model_and_args(config=config)
 
@@ -112,86 +169,57 @@ def load_jang_vlm_model(model_path: str | Path):
     model_config = model_class.ModelConfig.from_dict(config)
     modules = ["text", "vision", "perceiver", "projector", "audio"]
     model_config = update_module_configs(model_config, model_class, config, modules)
-
     model = model_class.Model(model_config)
 
-    # --- Repack JANG weights ---
-    shard_files, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
+    # Collect all weight keys to determine which layers to quantize
+    weight_files = _get_v2_weight_files(path)
+    all_weight_keys = set()
+    for sf in weight_files:
+        data = mx.load(str(sf))
+        all_weight_keys.update(data.keys())
+        del data
+        gc.collect()
 
-    try:
-        # Collect all repacked weight keys to determine which layers need quantization
-        all_weight_keys = set()
-        for sf in shard_files:
-            data = mx.load(sf)
-            all_weight_keys.update(data.keys())
-            del data
-            gc.collect()
+    quantization = {"group_size": block_size, "bits": default_bits}
 
-        # Quantize ONLY language model layers (vision stays float16)
-        # Use nn.quantize with a predicate that checks for .scales in our weights
-        quantization = {"group_size": block_size, "bits": default_bits}
+    def get_class_predicate(p, m):
+        if skip_multimodal_module(p):
+            return False
+        if not hasattr(m, "to_quantized"):
+            return False
+        return f"{p}.scales" in all_weight_keys
 
-        def get_class_predicate(p, m):
-            # Skip vision/audio modules entirely
-            if skip_multimodal_module(p):
-                return False
-            if not hasattr(m, "to_quantized"):
-                return False
-            # Only quantize if we have scales for this layer
-            return f"{p}.scales" in all_weight_keys
+    nn.quantize(model, group_size=block_size, bits=default_bits,
+                class_predicate=get_class_predicate)
 
-        nn.quantize(
-            model,
-            group_size=quantization["group_size"],
-            bits=quantization["bits"],
-            class_predicate=get_class_predicate,
-        )
+    # Load weights via mmap
+    from mlx_vlm.utils import sanitize_weights
+    for sf in weight_files:
+        shard_weights = mx.load(str(sf))
+        if hasattr(model, "sanitize"):
+            shard_weights = model.sanitize(shard_weights)
+        shard_weights = sanitize_weights(
+            model_class.VisionModel, shard_weights, model_config.vision_config)
+        shard_weights = sanitize_weights(
+            model_class.LanguageModel, shard_weights, model_config.text_config)
+        model.load_weights(list(shard_weights.items()), strict=False)
+        del shard_weights
+        gc.collect()
 
-        # Load repacked weights shard by shard
-        logger.info(f"  Loading {len(shard_files)} repacked shards via mmap")
-        from mlx_vlm.utils import sanitize_weights
-        for sf in shard_files:
-            shard_weights = mx.load(sf)
-
-            # Apply model-specific sanitization chain (same as mlx-vlm load_model):
-            # 1. Top-level model.sanitize: renames keys, handles conv1d, norm +1 offsets
-            # 2. VisionModel.sanitize: transposes patch_embed conv weight to MLX format
-            # 3. LanguageModel.sanitize: any language-model-specific transforms
-            if hasattr(model, "sanitize"):
-                shard_weights = model.sanitize(shard_weights)
-
-            shard_weights = sanitize_weights(
-                model_class.VisionModel, shard_weights, model_config.vision_config
-            )
-            shard_weights = sanitize_weights(
-                model_class.LanguageModel, shard_weights, model_config.text_config
-            )
-
-            model.load_weights(list(shard_weights.items()), strict=False)
-            del shard_weights
-            gc.collect()
-
-        _fix_quantized_bits(model, {})
-    finally:
-        if tmp_dir:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+    _fix_quantized_bits(model, {})
 
     if not hasattr(model, "config"):
         model.config = model_config
 
     mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
-    logger.info(f"JANG VLM loaded in {elapsed:.1f}s")
+    logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s")
 
-    # --- Load processor (tokenizer + image processor) ---
     image_processor = load_image_processor(path)
     eos_token_id = getattr(model.config, "eos_token_id", None)
     try:
         processor = load_processor(path, True, eos_token_ids=eos_token_id)
     except (ImportError, ValueError):
-        # Qwen3 VL processor requires torchvision for its video processor
-        # component even for image-only inference. Construct it manually
-        # with a stub video processor to avoid the PyTorch dependency.
         processor = _build_vlm_processor(path, eos_token_id)
     if image_processor is not None:
         processor.image_processor = image_processor
@@ -199,121 +227,64 @@ def load_jang_vlm_model(model_path: str | Path):
     return model, processor
 
 
-def _build_vlm_processor(model_path: Path, eos_token_id=None):
+def _get_v2_weight_files(path: Path) -> list[Path]:
+    """Get safetensors weight files for a v2 model."""
+    index_path = path / "model.safetensors.index.json"
+    if index_path.exists():
+        index = json.loads(index_path.read_text())
+        return [path / sf for sf in sorted(set(index["weight_map"].values()))]
+
+    # Fallback: glob for standard safetensors
+    files = sorted(path.glob("model-*.safetensors"))
+    if not files:
+        files = sorted(path.glob("*.safetensors"))
+    return files
+
+
+# ─── Public API ──────────────────────────────────────────────────────
+
+
+def load_jang_vlm_model(model_path: str | Path):
     """
-    Build a VLM processor without requiring PyTorch/torchvision.
+    Load a JANG Vision-Language model into mlx-vlm for multimodal inference.
 
-    Some VL processors (e.g., Qwen3VLProcessor) require torchvision for their
-    video processor component, even when doing image-only inference. This
-    constructs the processor manually with a stub video processor and adds
-    the detokenizer/stopping criteria that mlx-vlm expects.
+    Automatically detects v2 (instant) or v1 (repack) format.
+
+    Returns:
+        Tuple of (model, processor) compatible with mlx-vlm.generate()
     """
-    from transformers import AutoTokenizer, AutoImageProcessor
-    from transformers.processing_utils import ProcessorMixin
-    from mlx_vlm.tokenizer_utils import load_tokenizer as vlm_load_tokenizer
-    from mlx_vlm.utils import StoppingCriteria
+    path = Path(model_path)
+    config_path = _find_config_path(path)
+    if not config_path:
+        raise FileNotFoundError(f"No JANG config found in {path}")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
-    image_processor = AutoImageProcessor.from_pretrained(model_path)
+    jang_cfg = json.loads(config_path.read_text())
+    fmt = jang_cfg.get("format")
+    if not fmt or fmt not in JANG_FORMAT_VALUES:
+        raise ValueError(f"Not a JANG model: format='{fmt}'")
 
-    # Get the expected processor class from model config
-    config = json.loads((model_path / "config.json").read_text())
-    model_type = config.get("model_type", "")
+    # v2: instant load
+    if _is_v2_model(path):
+        logger.info(f"JANG v2 VLM detected — loading via mmap (instant)")
+        return _load_jang_v2_vlm(path, jang_cfg)
 
-    # Load chat template from tokenizer config
-    tok_config_path = model_path / "tokenizer_config.json"
-    chat_template = None
-    if tok_config_path.exists():
-        chat_template = json.loads(tok_config_path.read_text()).get("chat_template")
-
-    # Try to construct the correct processor class with a stub video processor.
-    # The stub avoids importing torchvision while satisfying the isinstance check.
-    processor = None
-    try:
-        from transformers.video_processing_utils import BaseVideoProcessor
-        video_stub = BaseVideoProcessor()
-
-        # Map model_type to processor class
-        processor_classes = {}
-        try:
-            from transformers import Qwen3VLProcessor
-            processor_classes["qwen3_5"] = Qwen3VLProcessor
-            processor_classes["qwen3_5_moe"] = Qwen3VLProcessor
-            processor_classes["qwen3_vl"] = Qwen3VLProcessor
-        except ImportError:
-            pass
-        try:
-            from transformers import Qwen2VLProcessor
-            processor_classes["qwen2_vl"] = Qwen2VLProcessor
-            processor_classes["qwen2_5_vl"] = Qwen2VLProcessor
-        except ImportError:
-            pass
-
-        proc_class = processor_classes.get(model_type)
-        if proc_class is not None:
-            # Patch the class check to accept our stub video processor.
-            # transformers resolves BaseVideoProcessor to a dummy class when
-            # torchvision is missing, causing isinstance to fail.
-            _orig = ProcessorMixin.check_argument_for_proper_class
-            def _permissive(self, name, arg):
-                if name == "video_processor":
-                    return type(arg)
-                return _orig(self, name, arg)
-
-            ProcessorMixin.check_argument_for_proper_class = _permissive
-            try:
-                processor = proc_class(
-                    image_processor=image_processor,
-                    tokenizer=tokenizer,
-                    video_processor=video_stub,
-                    chat_template=chat_template,
-                )
-            finally:
-                ProcessorMixin.check_argument_for_proper_class = _orig
-    except Exception as exc:
-        logger.warning(f"Could not construct VL processor: {exc}")
-
-    if processor is None:
-        # Last resort: use a simple wrapper
-        class _SimpleVLMProcessor:
-            def __init__(self, tok, ip):
-                self.tokenizer = tok
-                self.image_processor = ip
-            def __call__(self, *a, **kw):
-                return self.tokenizer(*a, **kw)
-        processor = _SimpleVLMProcessor(tokenizer, image_processor)
-
-    # Add detokenizer + stopping criteria (required by mlx-vlm generate)
-    detokenizer_class = vlm_load_tokenizer(model_path, return_tokenizer=False)
-    tokenizer_obj = processor.tokenizer if hasattr(processor, "tokenizer") else processor
-    processor.detokenizer = detokenizer_class(tokenizer_obj)
-
-    final_eos = eos_token_id if eos_token_id is not None else getattr(tokenizer_obj, "eos_token_ids", None)
-    criteria = StoppingCriteria(final_eos, tokenizer_obj)
-    if hasattr(processor, "tokenizer"):
-        processor.tokenizer.stopping_criteria = criteria
-    else:
-        processor.stopping_criteria = criteria
-
-    return processor
+    # v1: repack path (legacy)
+    logger.info(f"JANG v1 VLM detected — repacking (this takes a few minutes)")
+    return _load_jang_v1_vlm(path, jang_cfg, config_path)
 
 
 def load_jang_model(model_path: str | Path):
     """
-    Load a JANG model by repacking weights into MLX quantized format.
+    Load a JANG model for inference.
 
-    Uses disk-backed temporary shards so that even 100+ GB models can
-    load on machines with limited unified memory (e.g. 256 GB Mac Studio
-    running a 397B model).
+    Automatically detects v2 (instant) or v1 (repack) format.
+    v2 loads in seconds via mx.load() mmap.
+    v1 repacks JANG uint8 → MLX uint32 (takes 5-10 minutes for large models).
 
     Returns:
         Tuple of (model, tokenizer) compatible with mlx-lm
     """
-    from mlx_lm.utils import load_config, load_model as _load_model_skeleton, load_tokenizer
-
     path = Path(model_path)
-    start = time.perf_counter()
-
     config_path = _find_config_path(path)
     if not config_path:
         raise FileNotFoundError(f"No JANG config found in {path}")
@@ -330,10 +301,29 @@ def load_jang_model(model_path: str | Path):
 
     version = jang_cfg.get("format_version", "1.0")
     major = int(version.split(".")[0])
-    if major > 1:
+    if major > 2:
         raise ValueError(
-            f"Unsupported JANG format version: {version} (this loader supports 1.x)"
+            f"Unsupported JANG format version: {version} (this loader supports 1.x and 2.x)"
         )
+
+    # v2: instant load via mmap
+    if _is_v2_model(path):
+        logger.info(f"JANG v2 detected — loading via mmap (instant)")
+        return _load_jang_v2(path, jang_cfg)
+
+    # v1: repack path (legacy)
+    logger.info(f"JANG v1 detected — repacking to MLX format (this may take a few minutes)")
+    return _load_jang_v1(path, jang_cfg, config_path)
+
+
+# ─── v1 loader (legacy, repack) ─────────────────────────────────────
+
+
+def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
+    """Load a JANG v1 model by repacking weights from uint8 to uint32."""
+    from mlx_lm.utils import load_config, load_model as _load_model_skeleton, load_tokenizer
+
+    start = time.perf_counter()
 
     block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
     target_bits = jang_cfg.get("quantization", {}).get("target_bits", 4)
@@ -341,61 +331,22 @@ def load_jang_model(model_path: str | Path):
     source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
 
     logger.info(
-        f"Loading JANG model: {source_model} "
+        f"Loading JANG v1 model: {source_model} "
         f"({actual_bits:.1f}-bit avg, block_size={block_size})"
     )
 
     config = load_config(path)
-
-    # Set up quantization config so mlx_lm creates QuantizedLinear layers.
-    # Use the COMPRESS tier bits as default — covers 94-99% of layers.
     bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [2, 4, 6, 8])
-    default_bits = min(bit_widths)  # COMPRESS tier bits (most common)
+    default_bits = min(bit_widths)
     config.pop("quantization", None)
     config.pop("quantization_config", None)
-    config["quantization"] = {
-        "group_size": block_size,
-        "bits": default_bits,
-    }
+    config["quantization"] = {"group_size": block_size, "bits": default_bits}
 
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
     )
-
-    # Replace SwitchLinear with QuantizedSwitchLinear BEFORE loading weights
     _upgrade_switch_to_quantized(model, default_bits, block_size)
 
-    # ── v2 fast path: if MLX-native safetensors exist, load directly via mmap ──
-    # After first repack, we save MLX-format .safetensors alongside .jang.safetensors.
-    # Subsequent loads detect these and skip the repack entirely — same speed as native MLX.
-    mlx_index = path / "model.mlx.index.json"
-    if mlx_index.exists():
-        try:
-            idx = json.loads(mlx_index.read_text())
-            mlx_shards = sorted(set(idx["weight_map"].values()))
-            logger.info(f"  v2 fast load: {len(mlx_shards)} MLX-native shards (mmap)")
-            for sf_name in mlx_shards:
-                shard_weights = mx.load(str(path / sf_name))
-                if hasattr(model, "sanitize"):
-                    shard_weights = model.sanitize(shard_weights)
-                model.load_weights(list(shard_weights.items()), strict=False)
-                del shard_weights
-            _fix_quantized_bits(model, {})
-        except Exception as e:
-            logger.warning(f"  v2 load failed ({e}), falling back to v1 repack")
-        else:
-            # v2 loaded successfully — skip repack
-            if not hasattr(model, "config"):
-                model.config = config
-            mx.eval(model.parameters())  # noqa: S307
-            elapsed = time.perf_counter() - start
-            from mlx.utils import tree_flatten
-            n_params = sum(p.size for _, p in tree_flatten(model.parameters()))
-            logger.info(f"JANG model loaded in {elapsed:.1f}s: {n_params / 1e9:.1f}B params, {actual_bits:.1f}-bit avg")
-            tokenizer = load_tokenizer(path, eos_token_ids=config.get("eos_token_id", None))
-            return model, tokenizer
-
-    # ── v1 path: repack JANG uint8 → MLX uint32 (slow, one-time) ──
     result, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
 
     try:
@@ -417,8 +368,6 @@ def load_jang_model(model_path: str | Path):
             gc.collect()
 
         _fix_quantized_bits(model, {})
-        # v1 models load via repack (slow). Use `vmlx convert --jang-upgrade` or
-        # re-convert with jang-tools v2 for instant loading.
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -433,15 +382,104 @@ def load_jang_model(model_path: str | Path):
         p.size for _, p in tree_flatten(model.parameters())
     )
     logger.info(
-        f"JANG model loaded in {elapsed:.1f}s: "
+        f"JANG v1 model loaded in {elapsed:.1f}s: "
         f"{n_params / 1e9:.1f}B params, {actual_bits:.1f}-bit avg"
     )
 
     tokenizer = load_tokenizer(
         path, eos_token_ids=config.get("eos_token_id", None)
     )
-
     return model, tokenizer
+
+
+def _load_jang_v1_vlm(path: Path, jang_cfg: dict, config_path: Path):
+    """Load a JANG v1 VLM model by repacking (legacy)."""
+    import mlx.nn as nn
+    from mlx_vlm.utils import (
+        get_model_and_args, load_config as vlm_load_config,
+        update_module_configs, load_image_processor,
+        load_processor, skip_multimodal_module,
+    )
+
+    start = time.perf_counter()
+
+    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
+    bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [2, 4, 6, 8])
+    default_bits = min(bit_widths)
+    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+
+    logger.info(f"Loading JANG v1 VLM: {source_model}")
+
+    config = vlm_load_config(path)
+    model_class, _ = get_model_and_args(config=config)
+
+    config.setdefault("text_config", {})
+    config.setdefault("vision_config", {})
+    config.setdefault("audio_config", {})
+
+    model_config = model_class.ModelConfig.from_dict(config)
+    modules = ["text", "vision", "perceiver", "projector", "audio"]
+    model_config = update_module_configs(model_config, model_class, config, modules)
+    model = model_class.Model(model_config)
+
+    shard_files, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
+
+    try:
+        all_weight_keys = set()
+        for sf in shard_files:
+            data = mx.load(sf)
+            all_weight_keys.update(data.keys())
+            del data
+            gc.collect()
+
+        def get_class_predicate(p, m):
+            if skip_multimodal_module(p):
+                return False
+            if not hasattr(m, "to_quantized"):
+                return False
+            return f"{p}.scales" in all_weight_keys
+
+        nn.quantize(model, group_size=block_size, bits=default_bits,
+                    class_predicate=get_class_predicate)
+
+        from mlx_vlm.utils import sanitize_weights
+        for sf in shard_files:
+            shard_weights = mx.load(sf)
+            if hasattr(model, "sanitize"):
+                shard_weights = model.sanitize(shard_weights)
+            shard_weights = sanitize_weights(
+                model_class.VisionModel, shard_weights, model_config.vision_config)
+            shard_weights = sanitize_weights(
+                model_class.LanguageModel, shard_weights, model_config.text_config)
+            model.load_weights(list(shard_weights.items()), strict=False)
+            del shard_weights
+            gc.collect()
+
+        _fix_quantized_bits(model, {})
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if not hasattr(model, "config"):
+        model.config = model_config
+
+    mx.eval(model.parameters())
+    elapsed = time.perf_counter() - start
+    logger.info(f"JANG v1 VLM loaded in {elapsed:.1f}s")
+
+    image_processor = load_image_processor(path)
+    eos_token_id = getattr(model.config, "eos_token_id", None)
+    try:
+        processor = load_processor(path, True, eos_token_ids=eos_token_id)
+    except (ImportError, ValueError):
+        processor = _build_vlm_processor(path, eos_token_id)
+    if image_processor is not None:
+        processor.image_processor = image_processor
+
+    return model, processor
+
+
+# ─── v1 repack engine (unchanged from original) ─────────────────────
 
 
 def _repack_jang_to_mlx(
@@ -450,12 +488,8 @@ def _repack_jang_to_mlx(
     config: dict,
 ) -> tuple[list[str], str]:
     """
-    Load JANG shards and repack quantized tensors into MLX format,
-    flushing to temporary safetensors shards on disk every ~5 GB.
-
-    Returns:
-        (shard_file_paths, tmp_dir_path) — caller loads via mx.load (mmap)
-        and must clean up tmp_dir when done.
+    Load JANG v1 shards and repack quantized tensors into MLX format.
+    Returns (shard_file_paths, tmp_dir_path) or (weights_dict, None).
     """
     from safetensors import safe_open
 
@@ -478,10 +512,9 @@ def _repack_jang_to_mlx(
         for pattern in SHARD_GLOBS:
             shard_files.extend(sorted(model_path.glob(pattern)))
 
-    # Open all shards but don't read tensors yet (lazy access)
-    shard_handles: dict[str, safe_open] = {}
-    tensor_to_shard: dict[str, str] = {}
-    all_tensor_names: list[str] = []
+    shard_handles = {}
+    tensor_to_shard = {}
+    all_tensor_names = []
 
     for sf in shard_files:
         sf_str = str(sf)
@@ -493,7 +526,6 @@ def _repack_jang_to_mlx(
             all_tensor_names.append(key)
 
     class LazyTensors:
-        """Dict-like access that reads from safetensors on demand."""
         def __getitem__(self, key):
             sf_str = tensor_to_shard[key]
             return shard_handles[sf_str].get_tensor(key)
@@ -511,9 +543,8 @@ def _repack_jang_to_mlx(
     if not raw_tensors:
         raise FileNotFoundError(f"No JANG weight files found in {model_path}")
 
-    # Classify tensors as quantized or non-quantized
-    quantized_bases: set[str] = set()
-    non_quantized_names: list[str] = []
+    quantized_bases = set()
+    non_quantized_names = []
 
     for name in raw_tensors:
         matched = False
@@ -530,35 +561,28 @@ def _repack_jang_to_mlx(
         f"{len(non_quantized_names)} non-quantized tensors"
     )
 
-    # Decide: in-memory (fast) vs streaming shards (slow, for huge models).
-    # Repack creates ~2x model size peak (numpy input + MLX output).
-    # If model < 50% of system RAM → in-memory (fast, peak fits).
-    # Otherwise → flush to disk shards to avoid OOM.
     import os
     try:
         total_ram = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
     except (ValueError, AttributeError):
-        # macOS fallback
         import subprocess
         total_ram = int(subprocess.check_output(['sysctl', '-n', 'hw.memsize']).strip())
 
-    # Estimate model size from shard file sizes on disk
     model_disk_bytes = sum(sf.stat().st_size for sf in shard_files if sf.exists())
-    ram_threshold = int(total_ram * 0.50)  # 50% — repack needs ~2x model size peak
+    ram_threshold = int(total_ram * 0.50)
     use_streaming = model_disk_bytes > ram_threshold
 
     if use_streaming:
-        logger.info(f"  Streaming mode: model {model_disk_bytes/1e9:.0f} GB > 90% of {total_ram/1e9:.0f} GB RAM")
+        logger.info(f"  Streaming mode: model {model_disk_bytes/1e9:.0f} GB > 50% of {total_ram/1e9:.0f} GB RAM")
     else:
         logger.info(f"  In-memory mode: model {model_disk_bytes/1e9:.0f} GB fits in {total_ram/1e9:.0f} GB RAM")
 
-    # Setup for streaming mode (tmp dir + shard flushing)
     tmp_dir = None
-    output_shards: list[str] = []
-    current_shard: dict[str, mx.array] = {}
-    current_bytes: int = 0
-    shard_idx: int = 0
-    bit_counts: dict[int, int] = {}
+    output_shards = []
+    current_shard = {}
+    current_bytes = 0
+    shard_idx = 0
+    bit_counts = {}
 
     if use_streaming:
         for candidate_dir in [str(model_path.parent), str(model_path), None]:
@@ -575,20 +599,18 @@ def _repack_jang_to_mlx(
         if tmp_dir is None:
             tmp_dir = tempfile.mkdtemp(prefix="jang_repack_")
 
-    # Buffer for per-expert 2D tensors that need stacking (MiniMax/Mixtral style)
     import re
     _per_expert_2d_pattern = re.compile(
         r".+\.experts\.(\d+)\.(w[123]|gate_proj|up_proj|down_proj)\."
     )
-    expert_buffer: dict[str, mx.array] = {}
+    expert_buffer = {}
 
     def _flush_shard():
-        """Write current_shard to a temp safetensors file and clear it."""
         nonlocal current_shard, current_bytes, shard_idx
         if not current_shard:
             return
         if not use_streaming:
-            return  # In-memory mode: don't flush, keep accumulating
+            return
         shard_path = f"{tmp_dir}/shard_{shard_idx:04d}.safetensors"
         mx.eval(*current_shard.values())
         mx.save_safetensors(shard_path, current_shard)
@@ -599,20 +621,16 @@ def _repack_jang_to_mlx(
         current_bytes = 0
         gc.collect()
 
-    def _add_to_shard(key: str, arr: mx.array):
-        """Add a tensor to the current shard, flushing if threshold exceeded."""
+    def _add_to_shard(key, arr):
         nonlocal current_bytes
         current_shard[key] = arr
         current_bytes += arr.nbytes
         if current_bytes >= _SHARD_FLUSH_BYTES:
             _flush_shard()
 
-    # --- Process quantized tensors ---
     for base in sorted(quantized_bases):
         qweight_raw = raw_tensors[f"{base}.qweight"]
         jang_scales = raw_tensors[f"{base}.scales"].astype(np.float32)
-        # v1.2+: biases stored directly (no precision loss)
-        # v1.0-1.1: zeros stored, need conversion: bias = -scale * zero
         biases_key = f"{base}.biases"
         zeros_key = f"{base}.zeros"
         if biases_key in raw_tensors:
@@ -625,7 +643,6 @@ def _repack_jang_to_mlx(
 
         n_blocks = len(jang_scales)
 
-        # Get bit width
         bits_key = f"{base}.bits"
         if bits_key in raw_tensors:
             bits = int(raw_tensors[bits_key][0])
@@ -637,7 +654,6 @@ def _repack_jang_to_mlx(
 
         bit_counts[bits] = bit_counts.get(bits, 0) + n_blocks
 
-        # Restore original shape to determine out_dim x in_dim
         shape_key = f"{base}.shape"
         if shape_key in raw_tensors:
             shape = tuple(int(x) for x in raw_tensors[shape_key])
@@ -645,7 +661,6 @@ def _repack_jang_to_mlx(
             total_weights = n_blocks * block_size
             shape = _infer_weight_shape(base, config, total_weights)
 
-        # Determine dimensions
         is_3d = shape is not None and len(shape) >= 3
         if is_3d:
             num_experts = shape[0]
@@ -662,14 +677,12 @@ def _repack_jang_to_mlx(
             out_dim = n_blocks
             in_dim = block_size
 
-        # Repack JANG uint8 -> MLX uint32
         packed_bytes = qweight_raw.tobytes()
         pad_needed = (4 - len(packed_bytes) % 4) % 4
         if pad_needed:
             packed_bytes += b'\x00' * pad_needed
         mlx_qweight = np.frombuffer(packed_bytes, dtype=np.uint32)
 
-        # Reshape packed uint32 weights
         packed_per_row = (in_dim * bits + 31) // 32
         expected_len = out_dim * packed_per_row
         if len(mlx_qweight) < expected_len:
@@ -681,7 +694,6 @@ def _repack_jang_to_mlx(
         else:
             mlx_qweight = mlx_qweight.reshape(out_dim, packed_per_row)
 
-        # Scales and biases
         n_groups_per_row = (in_dim + block_size - 1) // block_size
         expected_groups = out_dim * n_groups_per_row
         jang_biases = jang_biases_raw
@@ -698,14 +710,11 @@ def _repack_jang_to_mlx(
             mlx_scales = jang_scales[:expected_groups].reshape(out_dim, n_groups_per_row)
             mlx_biases = jang_biases[:expected_groups].reshape(out_dim, n_groups_per_row)
 
-        # Determine weight key name
         if shape is not None and len(shape) >= 3:
             weight_key = base
         else:
             weight_key = f"{base}.weight"
 
-        # For Qwen3.5 MoE: pre-split gate_up_proj into gate_proj + up_proj
-        # so sanitize doesn't try to split quantized uint32 data as float
         if is_3d and "gate_up_proj" in base:
             mid = expert_out // 2
             gate_w = mlx_qweight[:, :mid, :]
@@ -745,8 +754,6 @@ def _repack_jang_to_mlx(
             _add_to_shard(f"{up_base}.scales", mx.array(up_s))
             _add_to_shard(f"{up_base}.biases", mx.array(up_b))
         else:
-            # Check if this is a per-expert 2D tensor (e.g., experts.5.gate_proj)
-            # that needs to be buffered for stacking later.
             if _per_expert_2d_pattern.search(weight_key):
                 scale_key = weight_key.replace('.weight', '') if '.weight' in weight_key else weight_key
                 expert_buffer[weight_key] = mx.array(mlx_qweight)
@@ -758,22 +765,16 @@ def _repack_jang_to_mlx(
                 _add_to_shard(f"{scale_key}.scales", mx.array(mlx_scales))
                 _add_to_shard(f"{scale_key}.biases", mx.array(mlx_biases))
 
-        # Free numpy intermediates for this tensor
         del qweight_raw, jang_scales, jang_biases_raw, jang_biases, packed_bytes
         del mlx_qweight, mlx_scales, mlx_biases
 
-    # --- Stack per-expert 2D weights (MiniMax/Mixtral style) ---
-    # Expert buffer holds all per-expert 2D tensors; stack them into 3D
-    # then add to the shard system.
     if expert_buffer:
         _stack_per_expert_weights(expert_buffer, config)
-        # Add stacked results (and any unstacked leftovers) to shard
         for k, v in expert_buffer.items():
             _add_to_shard(k, v)
         expert_buffer.clear()
         gc.collect()
 
-    # --- Non-quantized tensors (norms, biases, etc.) ---
     for name in non_quantized_names:
         arr = raw_tensors[name]
         if arr.dtype == np.float32:
@@ -783,26 +784,18 @@ def _repack_jang_to_mlx(
         else:
             _add_to_shard(name, mx.array(arr.astype(np.float16)))
 
-    # Close shard handles — done reading
     for handle in shard_handles.values():
         del handle
     shard_handles.clear()
     gc.collect()
 
-    # --- Rename for mlx-vlm compatibility ---
-    # Apply renames to whatever is still in the current (unflushed) shard
     rename_keys = []
     rename_keys += [(k, "vision_tower" + k[len("model.visual"):]) for k in list(current_shard.keys()) if k.startswith("model.visual")]
     rename_keys += [(k, "language_model.model" + k[len("model.language_model"):]) for k in list(current_shard.keys()) if k.startswith("model.language_model")]
     for old_k, new_k in rename_keys:
         current_shard[new_k] = current_shard.pop(old_k)
 
-    # Flush remaining tensors
     _flush_shard()
-
-    # For already-flushed shards, apply renames by rewriting if needed.
-    # VLM renames only affect a small number of keys, so check if any
-    # flushed shards contain keys that need renaming.
     _rename_keys_in_flushed_shards(output_shards, tmp_dir)
 
     total_blocks = sum(bit_counts.values())
@@ -817,16 +810,14 @@ def _repack_jang_to_mlx(
         logger.info(f"  Repacked into {len(output_shards)} temp shards in {tmp_dir}")
         return output_shards, tmp_dir
     else:
-        # In-memory mode: return weights dict directly (no disk I/O)
         logger.info(f"  Repacked {len(current_shard)} tensors in memory")
         return current_shard, None
 
 
-def _rename_keys_in_flushed_shards(shard_paths: list[str], tmp_dir: str):
-    """
-    Check already-flushed shards for keys that need VLM renaming.
-    Rewrites the shard in-place if any keys match.
-    """
+# ─── Shared helpers ──────────────────────────────────────────────────
+
+
+def _rename_keys_in_flushed_shards(shard_paths, tmp_dir):
     for shard_path in shard_paths:
         data = mx.load(shard_path)
         needs_rewrite = False
@@ -849,23 +840,11 @@ def _rename_keys_in_flushed_shards(shard_paths: list[str], tmp_dir: str):
 
 
 def _stack_per_expert_weights(weights, config):
-    """
-    Stack per-expert 2D quantized weights into 3D for QuantizedSwitchLinear.
-
-    MiniMax/Mixtral store experts as: experts.0.w1.weight, experts.1.w1.weight, ...
-    MLX's SwitchLinear expects: switch_mlp.gate_proj.weight [num_experts, out, packed]
-
-    Mapping: w1 -> gate_proj, w2 -> down_proj, w3 -> up_proj
-    """
     import re
-
-    # Detect per-expert pattern
     expert_pattern = re.compile(
         r"(.+)\.experts\.(\d+)\.(w[123]|gate_proj|up_proj|down_proj)\.weight$"
     )
-
-    # Group by layer prefix and weight type
-    expert_groups = {}  # (prefix, wtype) -> {expert_id: weight_key}
+    expert_groups = {}
     for key in list(weights.keys()):
         m = expert_pattern.match(key)
         if m:
@@ -878,22 +857,18 @@ def _stack_per_expert_weights(weights, config):
     if not expert_groups:
         return
 
-    # Mapping for MiniMax/Mixtral naming
     name_map = {"w1": "gate_proj", "w2": "down_proj", "w3": "up_proj"}
 
     for (prefix, wtype), experts in expert_groups.items():
         if len(experts) < 2:
             continue
-
         num_experts = max(experts.keys()) + 1
         new_name = name_map.get(wtype, wtype)
         sw_key = f"{prefix}.switch_mlp.{new_name}"
 
-        # Stack weights
         to_stack = [weights.pop(experts[e]) for e in range(num_experts)]
         weights[f"{sw_key}.weight"] = mx.stack(to_stack)
 
-        # Try to find and stack scales/biases
         for suffix in [".scales", ".biases"]:
             parts = []
             found = True
@@ -912,7 +887,6 @@ def _stack_per_expert_weights(weights, config):
 
 
 def _upgrade_switch_to_quantized(model, bits, group_size):
-    """Replace SwitchLinear layers with QuantizedSwitchLinear before weight loading."""
     try:
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear, SwitchLinear
     except ImportError:
@@ -921,14 +895,11 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
     for name, module in model.named_modules():
         if not isinstance(module, SwitchLinear):
             continue
-
         ql = QuantizedSwitchLinear(
             module.input_dims, module.output_dims, module.num_experts,
             bias=hasattr(module, 'bias'),
             group_size=group_size, bits=bits,
         )
-
-        # Replace in parent (handle list indices like layers.39)
         parts = name.rsplit('.', 1)
         if len(parts) == 2:
             parent = model
@@ -941,16 +912,7 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
 
 
 def _fix_quantized_bits(model, weights):
-    """
-    Fix the `bits` attribute on each QuantizedLinear layer to match
-    the actual bit width of its JANG-repacked weight.
-
-    MLX QuantizedLinear uses `self.bits` in quantized_matmul. After nn.quantize()
-    creates all layers at the default bits, we need to update layers whose JANG
-    weights use a different bit width.
-    """
     import mlx.nn as nn
-
     try:
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear
         quant_types = (nn.QuantizedLinear, nn.QuantizedEmbedding, QuantizedSwitchLinear)
@@ -971,22 +933,93 @@ def _fix_quantized_bits(model, weights):
             pass
 
 
-def _infer_weight_shape(
-    base_name: str, config: dict, n_elements: int
-) -> Optional[tuple[int, ...]]:
-    """Infer original weight shape from config.json and tensor name.
+def _build_vlm_processor(model_path: Path, eos_token_id=None):
+    from transformers import AutoTokenizer, AutoImageProcessor
+    from transformers.processing_utils import ProcessorMixin
+    from mlx_vlm.tokenizer_utils import load_tokenizer as vlm_load_tokenizer
+    from mlx_vlm.utils import StoppingCriteria
 
-    Handles standard, MoE, and VLM architectures. For MoE/VLM models
-    that nest dimensions under text_config, falls back to nested lookup.
-    """
-    # Support nested configs (MoE/VLM models nest dims in text_config)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    image_processor = AutoImageProcessor.from_pretrained(model_path)
+
+    config = json.loads((model_path / "config.json").read_text())
+    model_type = config.get("model_type", "")
+
+    tok_config_path = model_path / "tokenizer_config.json"
+    chat_template = None
+    if tok_config_path.exists():
+        chat_template = json.loads(tok_config_path.read_text()).get("chat_template")
+
+    processor = None
+    try:
+        from transformers.video_processing_utils import BaseVideoProcessor
+        video_stub = BaseVideoProcessor()
+
+        processor_classes = {}
+        try:
+            from transformers import Qwen3VLProcessor
+            processor_classes["qwen3_5"] = Qwen3VLProcessor
+            processor_classes["qwen3_5_moe"] = Qwen3VLProcessor
+            processor_classes["qwen3_vl"] = Qwen3VLProcessor
+        except ImportError:
+            pass
+        try:
+            from transformers import Qwen2VLProcessor
+            processor_classes["qwen2_vl"] = Qwen2VLProcessor
+            processor_classes["qwen2_5_vl"] = Qwen2VLProcessor
+        except ImportError:
+            pass
+
+        proc_class = processor_classes.get(model_type)
+        if proc_class is not None:
+            _orig = ProcessorMixin.check_argument_for_proper_class
+            def _permissive(self, name, arg):
+                if name == "video_processor":
+                    return type(arg)
+                return _orig(self, name, arg)
+            ProcessorMixin.check_argument_for_proper_class = _permissive
+            try:
+                processor = proc_class(
+                    image_processor=image_processor,
+                    tokenizer=tokenizer,
+                    video_processor=video_stub,
+                    chat_template=chat_template,
+                )
+            finally:
+                ProcessorMixin.check_argument_for_proper_class = _orig
+    except Exception as exc:
+        logger.warning(f"Could not construct VL processor: {exc}")
+
+    if processor is None:
+        class _SimpleVLMProcessor:
+            def __init__(self, tok, ip):
+                self.tokenizer = tok
+                self.image_processor = ip
+            def __call__(self, *a, **kw):
+                return self.tokenizer(*a, **kw)
+        processor = _SimpleVLMProcessor(tokenizer, image_processor)
+
+    detokenizer_class = vlm_load_tokenizer(model_path, return_tokenizer=False)
+    tokenizer_obj = processor.tokenizer if hasattr(processor, "tokenizer") else processor
+    processor.detokenizer = detokenizer_class(tokenizer_obj)
+
+    final_eos = eos_token_id if eos_token_id is not None else getattr(tokenizer_obj, "eos_token_ids", None)
+    criteria = StoppingCriteria(final_eos, tokenizer_obj)
+    if hasattr(processor, "tokenizer"):
+        processor.tokenizer.stopping_criteria = criteria
+    else:
+        processor.stopping_criteria = criteria
+
+    return processor
+
+
+def _infer_weight_shape(base_name, config, n_elements):
     tc = config.get("text_config", {})
-    def _get(key: str, default=0):
+    def _get(key, default=0):
         return config.get(key, tc.get(key, default))
 
     hidden = _get("hidden_size", 0)
     intermediate = _get("intermediate_size", 0)
-    # MoE models may use moe_intermediate_size for expert MLPs
     moe_intermediate = _get("moe_intermediate_size", intermediate)
     shared_expert_intermediate = _get("shared_expert_intermediate_size", moe_intermediate)
     num_heads = _get("num_attention_heads", 0)
@@ -996,9 +1029,7 @@ def _infer_weight_shape(
 
     name = base_name.lower()
 
-    # Attention projections
     if "qkv_proj" in name:
-        # Fused QKV: (num_heads + 2*num_kv_heads) * head_dim x hidden
         out = (num_heads + 2 * num_kv_heads) * head_dim
         return (out, hidden)
     elif "q_proj" in name:
@@ -1009,34 +1040,179 @@ def _infer_weight_shape(
         return (num_kv_heads * head_dim, hidden)
     elif "o_proj" in name:
         return (hidden, num_heads * head_dim)
-
-    # MoE expert weights — MUST check before general MLP (experts also have gate_proj)
     elif ".experts." in name or ".shared_expert." in name:
         ei = shared_expert_intermediate if ".shared_expert." in name else (moe_intermediate if moe_intermediate else intermediate)
         if "gate_proj" in name or "up_proj" in name or "w1" in name or "w3" in name:
             return (ei, hidden)
         elif "down_proj" in name or "w2" in name:
             return (hidden, ei)
-
-    # MLP projections (standard and Llama-style naming)
     elif "gate_up_proj" in name:
         return (2 * intermediate, hidden)
     elif "gate_proj" in name or "up_proj" in name or "w1" in name or "w3" in name:
         return (intermediate, hidden)
     elif "down_proj" in name or "w2" in name:
         return (hidden, intermediate)
-
-    # Embeddings
     elif "embed_tokens" in name:
         return (vocab_size, hidden)
     elif "lm_head" in name:
         return (vocab_size, hidden)
 
-    # Fallback: try to infer from element count
     if n_elements > 0 and hidden > 0 and n_elements % hidden == 0:
         return (n_elements // hidden, hidden)
 
-    logger.warning(
-        f"  Could not infer shape for {base_name} ({n_elements} elements)"
-    )
+    logger.warning(f"  Could not infer shape for {base_name} ({n_elements} elements)")
     return None
+
+
+# ─── Upgrade v1 → v2 ────────────────────────────────────────────────
+
+
+def upgrade_v1_to_v2(model_path: str | Path) -> None:
+    """
+    Upgrade a JANG v1 model to v2 format in-place.
+
+    Repacks uint8 qweight → uint32 MLX-native, then replaces
+    the .jang.safetensors files with standard .safetensors files.
+    After upgrade, the model loads instantly via mx.load() mmap.
+
+    Args:
+        model_path: path to JANG v1 model directory
+    """
+    path = Path(model_path)
+    config_path = _find_config_path(path)
+    if not config_path:
+        raise FileNotFoundError(f"No JANG config found in {path}")
+
+    if _is_v2_model(path):
+        print(f"  Already v2 format: {path}")
+        return
+
+    jang_cfg = json.loads(config_path.read_text())
+    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
+
+    # Load model config
+    model_config = json.loads((path / "config.json").read_text())
+    config = dict(model_config)
+    tc = config.get("text_config", {})
+    for key in ["hidden_size", "intermediate_size", "num_attention_heads",
+                 "num_key_value_heads", "head_dim", "vocab_size",
+                 "moe_intermediate_size", "shared_expert_intermediate_size"]:
+        if key in tc and key not in config:
+            config[key] = tc[key]
+
+    print(f"  Upgrading JANG v1 → v2: {path}")
+    print(f"  This repacks {sum(1 for _ in path.glob('*.jang.safetensors'))} JANG shards to MLX-native format...")
+
+    # Run the v1 repack to get MLX-format tensors
+    result, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
+
+    try:
+        # Collect all repacked tensors
+        all_tensors = {}
+        if tmp_dir is not None:
+            for sf in result:
+                data = mx.load(sf)
+                for k, v in data.items():
+                    all_tensors[k] = np.array(v)
+                del data
+                gc.collect()
+        else:
+            for k, v in result.items():
+                all_tensors[k] = np.array(v)
+            del result
+            gc.collect()
+
+        print(f"  Repacked {len(all_tensors)} tensors to MLX-native format")
+
+        # Write v2 safetensors
+        from safetensors.numpy import save_file
+
+        # Shard into ~5 GB files
+        max_shard = 5 * 1024 ** 3
+        shards = []
+        current_shard = {}
+        current_size = 0
+        weight_map = {}
+        total_size = 0
+        shard_idx = 0
+
+        for name in sorted(all_tensors.keys()):
+            arr = all_tensors[name]
+            arr_bytes = arr.nbytes
+            if current_size + arr_bytes > max_shard and current_shard:
+                n_shards_est = max(1, sum(a.nbytes for a in all_tensors.values()) // max_shard + 1)
+                shard_name = f"model-{shard_idx + 1:05d}-of-{n_shards_est:05d}.safetensors"
+                shards.append((shard_name, current_shard))
+                shard_idx += 1
+                current_shard = {}
+                current_size = 0
+            current_shard[name] = arr
+            current_size += arr_bytes
+            total_size += arr_bytes
+
+        if current_shard:
+            shard_idx += 1
+            shards.append((f"placeholder", current_shard))
+
+        # Fix shard names with correct total count
+        n_shards = len(shards)
+        final_shards = []
+        for i, (_, shard_data) in enumerate(shards):
+            shard_name = f"model-{i + 1:05d}-of-{n_shards:05d}.safetensors"
+            final_shards.append((shard_name, shard_data))
+            for tensor_name in shard_data:
+                weight_map[tensor_name] = shard_name
+
+        # Write new safetensors files
+        for shard_name, shard_data in final_shards:
+            save_file(shard_data, str(path / shard_name))
+            print(f"  Wrote {shard_name} ({sum(a.nbytes for a in shard_data.values()) / 1e9:.1f} GB)")
+
+        # Write v2 index
+        index = {
+            "metadata": {
+                "format": "jang",
+                "format_version": "2.0",
+                "total_size": total_size,
+            },
+            "weight_map": weight_map,
+        }
+        (path / "model.safetensors.index.json").write_text(
+            json.dumps(index, indent=2) + "\n"
+        )
+
+        # Update config.json with quantization key
+        bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
+        model_config["quantization"] = {
+            "group_size": block_size,
+            "bits": min(bit_widths),
+        }
+        (path / "config.json").write_text(
+            json.dumps(model_config, indent=2, ensure_ascii=False) + "\n"
+        )
+
+        # Update jang_config.json version
+        jang_cfg["format_version"] = "2.0"
+        config_path.write_text(
+            json.dumps(jang_cfg, indent=2, ensure_ascii=False) + "\n"
+        )
+
+        # Remove old v1 files
+        old_files = list(path.glob("*.jang.safetensors"))
+        old_files += list(path.glob("*.jjqf.safetensors"))
+        old_files += list(path.glob("*.mxq.safetensors"))
+        for old_idx_name in ["model.jang.index.json", "model.jjqf.index.json", "model.mxq.index.json"]:
+            old_idx = path / old_idx_name
+            if old_idx.exists():
+                old_files.append(old_idx)
+
+        for f in old_files:
+            f.unlink()
+            print(f"  Removed {f.name}")
+
+        print(f"\n  Upgrade complete! Model now loads instantly via mx.load() mmap.")
+        print(f"  v2 shards: {n_shards}, total: {total_size / 1e9:.1f} GB")
+
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
