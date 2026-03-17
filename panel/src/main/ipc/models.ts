@@ -735,21 +735,25 @@ export function registerModelHandlers(): void {
       'token = os.environ.get("HF_TOKEN") or None',
       'try:',
       '    api = HfApi()',
-      '    info = api.repo_info(repo_id, token=token)',
+      '    info = api.repo_info(repo_id, token=token, files_metadata=True)',
       '    files = [s for s in info.siblings if s.rfilename and not s.rfilename.startswith(".")]',
       '    total_bytes = sum(s.size or 0 for s in files)',
       '    downloaded_bytes = 0',
       '    total_files = len(files)',
       '    print(json.dumps({"type":"init","total_bytes":total_bytes,"total_files":total_files}), flush=True)',
       '    for i, f in enumerate(files):',
-      '        file_size = f.size or 0',
+      '        est_size = f.size or 0',
       '        print(json.dumps({"type":"file_start","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes}), flush=True)',
       '        t0 = time.time()',
-      '        hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
-      '        downloaded_bytes += file_size',
+      '        dl_path = hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
+      '        actual_size = os.path.getsize(dl_path) if os.path.exists(dl_path) else est_size',
+      '        if est_size == 0 and total_bytes == 0:',
+      '            total_bytes += actual_size',
+      '        downloaded_bytes += actual_size if est_size == 0 else est_size',
       '        elapsed = time.time() - t0',
-      '        speed = file_size / elapsed if elapsed > 0 else 0',
-      '        print(json.dumps({"type":"file_done","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes,"speed":speed}), flush=True)',
+      '        speed = actual_size / elapsed if elapsed > 0 else 0',
+      '        pct = int(downloaded_bytes * 100 / total_bytes) if total_bytes > 0 else int((i+1) * 100 / total_files)',
+      '        print(json.dumps({"type":"file_done","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes,"speed":speed,"percent":pct}), flush=True)',
       '    print(json.dumps({"status":"complete","path":local_dir}), flush=True)',
       'except KeyboardInterrupt:',
       '    print(json.dumps({"status":"cancelled"}), flush=True)',
@@ -811,32 +815,42 @@ export function registerModelHandlers(): void {
               raw: trimmed,
             }
           } else if (msg.type === 'file_start') {
-            const pct = msg.total_bytes > 0 ? Math.round((msg.downloaded_bytes / msg.total_bytes) * 100) : 0
+            // Use file count as progress fallback when byte totals are 0
+            const pct = msg.total_bytes > 0
+              ? Math.round((msg.downloaded_bytes / msg.total_bytes) * 100)
+              : Math.round(((msg.file_num - 1) / msg.total_files) * 100)
             lastProgress = {
               ...lastProgress,
               percent: pct,
-              downloaded: formatBytes(msg.downloaded_bytes),
+              downloaded: msg.downloaded_bytes > 0 ? formatBytes(msg.downloaded_bytes) : `${msg.file_num - 1} files`,
+              total: msg.total_bytes > 0 ? formatBytes(msg.total_bytes) : `${msg.total_files} files`,
               currentFile: msg.file,
-              filesProgress: `${msg.file_num - 1}/${msg.total_files}`,
+              filesProgress: `${msg.file_num}/${msg.total_files}`,
+              eta: 'downloading...',
               raw: trimmed,
             }
           } else if (msg.type === 'file_done') {
-            const pct = msg.total_bytes > 0 ? Math.round((msg.downloaded_bytes / msg.total_bytes) * 100) : 0
+            // Use percent from Python script (handles both byte and file-count modes)
+            const pct = msg.percent ?? (msg.total_bytes > 0
+              ? Math.round((msg.downloaded_bytes / msg.total_bytes) * 100)
+              : Math.round((msg.file_num / msg.total_files) * 100))
             lastProgress = {
               ...lastProgress,
               percent: pct,
-              downloaded: formatBytes(msg.downloaded_bytes),
-              total: formatBytes(msg.total_bytes),
+              downloaded: msg.downloaded_bytes > 0 ? formatBytes(msg.downloaded_bytes) : `${msg.file_num} files`,
+              total: msg.total_bytes > 0 ? formatBytes(msg.total_bytes) : `${msg.total_files} files`,
               currentFile: msg.file,
               filesProgress: `${msg.file_num}/${msg.total_files}`,
               speed: msg.speed ? formatBytes(msg.speed) + '/s' : '',
               raw: trimmed,
             }
-            // Estimate ETA from average speed
+            // Estimate ETA from speed
             const remaining = msg.total_bytes - msg.downloaded_bytes
             if (msg.speed > 0 && remaining > 0) {
               const secs = Math.round(remaining / msg.speed)
               lastProgress.eta = secs > 60 ? `${Math.round(secs / 60)}m ${secs % 60}s` : `${secs}s`
+            } else if (msg.file_num < msg.total_files) {
+              lastProgress.eta = `${msg.total_files - msg.file_num} files left`
             } else {
               lastProgress.eta = ''
             }
