@@ -56,9 +56,13 @@ def _is_v2_model(model_path: Path) -> bool:
         return False
 
     # Check format_version in config first (most reliable)
-    cfg = json.loads(config_path.read_text())
+    try:
+        cfg = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to parse JANG config {config_path}: {e}")
+        return False
     version = cfg.get("format_version", "1.0")
-    if version.startswith("2"):
+    if str(version).startswith("2"):
         return True
 
     # Check for v2 index file (standard safetensors index alongside jang_config)
@@ -299,8 +303,11 @@ def load_jang_model(model_path: str | Path):
     if fmt not in JANG_FORMAT_VALUES:
         raise ValueError(f"Not a JANG model: format='{fmt}' (expected {', '.join(JANG_FORMAT_VALUES)})")
 
-    version = jang_cfg.get("format_version", "1.0")
-    major = int(version.split(".")[0])
+    version = str(jang_cfg.get("format_version", "1.0"))
+    try:
+        major = int(version.split(".")[0])
+    except ValueError:
+        raise ValueError(f"Invalid JANG format_version: '{version}' (expected numeric like '1.0' or '2.0')")
     if major > 2:
         raise ValueError(
             f"Unsupported JANG format version: {version} (this loader supports 1.x and 2.x)"

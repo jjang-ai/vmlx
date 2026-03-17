@@ -1,4 +1,4 @@
-export type AppMode = 'chat' | 'server' | 'tools' | 'api' | 'image'
+export type AppMode = 'code' | 'chat' | 'server' | 'tools' | 'api' | 'image'
 
 export type ServerPanel = 'dashboard' | 'session' | 'create' | 'settings' | 'about'
 

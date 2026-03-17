@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { MessageSquare, ArrowLeft } from 'lucide-react'
+import { MessageSquare, ArrowLeft, Terminal } from 'lucide-react'
 import { TitleBar } from './components/layout/TitleBar'
 import { Sidebar } from './components/layout/Sidebar'
 import { SessionDashboard } from './components/sessions/SessionDashboard'
@@ -171,6 +171,21 @@ function App() {
 
           {/* Main content area */}
           <main className="flex-1 overflow-hidden">
+            {state.mode === 'code' && (
+              <div className="flex flex-col items-center justify-center h-full text-center px-8">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 flex items-center justify-center mb-4">
+                  <Terminal className="h-8 w-8 text-emerald-500" />
+                </div>
+                <h2 className="text-lg font-semibold mb-2">Code</h2>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  IDE-like coding environment with AI agent, file browser, and integrated terminal.
+                </p>
+                <span className="mt-4 px-3 py-1 text-xs font-medium bg-emerald-500/10 text-emerald-500 rounded-full">
+                  Coming Soon
+                </span>
+              </div>
+            )}
+
             {state.mode === 'chat' && (
               <ChatModeContent
                 activeChatId={state.activeChatId}
