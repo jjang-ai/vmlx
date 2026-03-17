@@ -15,6 +15,7 @@ declare global {
         detectTypes: (modelPaths: string[]) => Promise<Record<string, 'text' | 'image' | 'unknown'>>
         getGenerationDefaults: (modelPath: string) => Promise<{ temperature?: number; topP?: number; topK?: number; minP?: number; repeatPenalty?: number } | null>
         searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string }>>
+        fetchReadme: (repoId: string) => Promise<string | null>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
         cancelDownload: (jobId?: string) => Promise<{ success: boolean; error?: string }>
