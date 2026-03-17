@@ -427,58 +427,94 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
   isDownloaded: boolean
   onDownload: () => void
 }) {
+  const [showReadme, setShowReadme] = useState(false)
+  const [readme, setReadme] = useState<string | null>(null)
+  const [loadingReadme, setLoadingReadme] = useState(false)
   const shortName = model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id
 
+  const handleToggleReadme = async () => {
+    if (showReadme) { setShowReadme(false); return }
+    setShowReadme(true)
+    if (readme !== null) return // already loaded
+    setLoadingReadme(true)
+    try {
+      const text = await window.api.models.fetchReadme(model.id)
+      setReadme(text || 'No README available.')
+    } catch {
+      setReadme('Failed to load README.')
+    } finally {
+      setLoadingReadme(false)
+    }
+  }
+
   return (
-    <div className="p-3 rounded border border-border hover:border-primary/30 transition-colors">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm truncate" title={model.id}>
-            {shortName}
-          </div>
-          <div className="text-xs text-muted-foreground">{model.author}</div>
-          <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-            <span title="Downloads">{formatNumber(model.downloads)} downloads</span>
-            <span title="Likes">{model.likes} likes</span>
-            {model.size && <span title="Model size">{model.size}</span>}
-            {timeAgo(model.lastModified) && <span>{timeAgo(model.lastModified)}</span>}
-          </div>
-          {model.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {model.tags.slice(0, 5).map(tag => (
-                <span key={tag} className="px-1.5 py-0.5 bg-muted rounded text-[10px] text-muted-foreground">
-                  {tag}
-                </span>
-              ))}
-              {model.tags.length > 5 && (
-                <span className="text-[10px] text-muted-foreground">+{model.tags.length - 5}</span>
-              )}
+    <div className="rounded border border-border hover:border-primary/30 transition-colors">
+      <div className="p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-sm truncate" title={model.id}>
+              {shortName}
             </div>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <button
-            onClick={(e) => { e.stopPropagation(); window.open(`https://huggingface.co/${model.id}`, '_blank') }}
-            className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded"
-            title="View on HuggingFace"
-          >
-            ↗
-          </button>
-          {isDownloaded && !isDownloading ? (
-            <span className="px-3 py-1.5 text-xs text-primary border border-primary/30 rounded whitespace-nowrap">
-              Downloaded
-            </span>
-          ) : (
+            <div className="text-xs text-muted-foreground">{model.author}</div>
+            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+              <span title="Downloads">{formatNumber(model.downloads)} downloads</span>
+              <span title="Likes">{model.likes} likes</span>
+              {model.size && <span title="Model size" className="font-medium text-foreground">{model.size}</span>}
+              {timeAgo(model.lastModified) && <span>{timeAgo(model.lastModified)}</span>}
+            </div>
+            {model.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {model.tags.slice(0, 5).map(tag => (
+                  <span key={tag} className="px-1.5 py-0.5 bg-muted rounded text-[10px] text-muted-foreground">
+                    {tag}
+                  </span>
+                ))}
+                {model.tags.length > 5 && (
+                  <span className="text-[10px] text-muted-foreground">+{model.tags.length - 5}</span>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             <button
-              onClick={onDownload}
-              disabled={isDownloading}
-              className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap"
+              onClick={handleToggleReadme}
+              className={`px-1.5 py-1.5 text-xs border rounded transition-colors ${showReadme ? 'bg-primary/10 text-primary border-primary/30' : 'text-muted-foreground hover:text-foreground border-border'}`}
+              title="Show README"
             >
-              {isDownloading ? 'Downloading...' : 'Download'}
+              📄
             </button>
-          )}
+            <button
+              onClick={(e) => { e.stopPropagation(); window.open(`https://huggingface.co/${model.id}`, '_blank') }}
+              className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded"
+              title="View on HuggingFace"
+            >
+              ↗
+            </button>
+            {isDownloaded && !isDownloading ? (
+              <span className="px-3 py-1.5 text-xs text-primary border border-primary/30 rounded whitespace-nowrap">
+                Downloaded
+              </span>
+            ) : (
+              <button
+                onClick={onDownload}
+                disabled={isDownloading}
+                className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap"
+              >
+                {isDownloading ? 'Downloading...' : 'Download'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
+      {showReadme && (
+        <div className="border-t border-border px-3 py-2 max-h-48 overflow-auto bg-muted/30">
+          {loadingReadme ? (
+            <p className="text-xs text-muted-foreground">Loading README...</p>
+          ) : (
+            <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-sans leading-relaxed">{readme}</pre>
+          )}
+        </div>
+      )}
     </div>
   )
 }
