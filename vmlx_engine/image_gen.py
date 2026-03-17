@@ -350,8 +350,10 @@ class ImageGenEngine:
         guidance: float = 3.5,
         seed: int | None = None,
         negative_prompt: str | None = None,
+        image_path: str | None = None,
+        image_strength: float | None = None,
     ) -> ImageGenResult:
-        """Generate an image from a text prompt.
+        """Generate an image from a text prompt, optionally using a source image (img2img).
 
         Args:
             prompt: Text description of the desired image
@@ -361,6 +363,8 @@ class ImageGenEngine:
             guidance: Classifier-free guidance scale (higher = more prompt adherence)
             seed: Random seed for reproducibility (None = random)
             negative_prompt: What to avoid in the image
+            image_path: Path to source image for img2img (None = txt2img from scratch)
+            image_strength: How much to change the source (0.0=keep, 1.0=full regen). Only used with image_path.
 
         Returns:
             ImageGenResult with PNG image data
@@ -379,14 +383,16 @@ class ImageGenEngine:
         width = (width // 16) * 16
         height = (height // 16) * 16
 
+        is_img2img = image_path is not None and image_strength is not None
         logger.info(
-            f"Generating image: {width}x{height}, {steps} steps, "
+            f"{'img2img' if is_img2img else 'txt2img'}: {width}x{height}, {steps} steps, "
             f"guidance={guidance}, seed={seed}"
+            + (f", strength={image_strength}" if is_img2img else "")
         )
         start = time.perf_counter()
 
-        # Generate using mflux
-        generated_image = self._model.generate_image(
+        # Generate using mflux (img2img when image_path provided, txt2img otherwise)
+        kwargs: dict = dict(
             seed=seed,
             prompt=prompt,
             num_inference_steps=steps,
@@ -395,6 +401,11 @@ class ImageGenEngine:
             guidance=guidance,
             negative_prompt=negative_prompt,
         )
+        if is_img2img:
+            kwargs["image_path"] = image_path
+            kwargs["image_strength"] = image_strength
+
+        generated_image = self._model.generate_image(**kwargs)
 
         elapsed = time.perf_counter() - start
 

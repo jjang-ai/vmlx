@@ -85,6 +85,29 @@ export function ImageTab() {
     strength: 0.8
   })
 
+  // Load saved image settings on mount
+  useEffect(() => {
+    window.api.settings.get('image_settings').then((saved: string | null) => {
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved)
+          setSettings(prev => ({ ...prev, ...parsed, seed: undefined })) // Never restore seed
+        } catch {}
+      }
+    })
+  }, [])
+
+  // Save settings when they change (debounced via the settings object reference)
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const { seed, quantize, ...toSave } = settingsRef.current // Don't persist seed or quantize
+      window.api.settings.set('image_settings', JSON.stringify(toSave)).catch(() => {})
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [settings.steps, settings.width, settings.height, settings.guidance, settings.negativePrompt, settings.count, settings.strength])
+
   // Load image sessions on mount
   useEffect(() => {
     loadSessions()
@@ -263,7 +286,7 @@ export function ImageTab() {
     // Merge override settings (used by reiteration to bypass React batching)
     const s = overrideSettings ? { ...settings, ...overrideSettings } : settings
 
-    // Edit mode requires a source image
+    // Edit mode requires a source image (gen mode allows optional source for img2img)
     if (sessionMode === 'edit' && !sourceImage) {
       setError('Upload a source image before editing.')
       return
@@ -303,7 +326,7 @@ export function ImageTab() {
           serverPort
         })
       } else {
-        result = await window.api.image.generate({
+        const genParams: any = {
           sessionId: sessionId!,
           prompt,
           negativePrompt: s.negativePrompt || undefined,
@@ -316,7 +339,13 @@ export function ImageTab() {
           count: s.count,
           quantize: s.quantize,
           serverPort
-        })
+        }
+        // img2img: pass source image + strength when user uploaded an image in gen mode
+        if (sourceImage) {
+          genParams.imageBase64 = sourceImage.dataUrl
+          genParams.strength = s.strength
+        }
+        result = await window.api.image.generate(genParams)
       }
 
       if (result.success && result.generations) {
@@ -366,6 +395,8 @@ export function ImageTab() {
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     setCurrentSessionId(sessionId)
+    setSourceImage(null) // Clear source image when switching sessions
+    setError(null)
     // Restore sessionMode from the selected session's type
     const session = sessions.find(s => s.id === sessionId)
     if (session?.sessionType) {
@@ -378,6 +409,8 @@ export function ImageTab() {
     if (currentSessionId === sessionId) {
       setCurrentSessionId(null)
       setGenerations([])
+      setSourceImage(null)
+      setError(null)
     }
     await loadSessions()
   }, [currentSessionId, loadSessions])
@@ -466,21 +499,28 @@ export function ImageTab() {
             generations={generations}
             generating={generating}
             mode={sessionMode}
-            onRegenerate={(gen) => {
-              // Reiterate: restore settings from generation and re-submit with new random seed
-              const redoSettings = {
-                steps: gen.steps,
-                width: gen.width,
-                height: gen.height,
-                guidance: gen.guidance,
-                strength: gen.strength ?? settings.strength,
-                negativePrompt: gen.negativePrompt || '',
-                seed: undefined, // new random seed for variation
+            onRegenerate={async (gen) => {
+              // Iterate: set the output image as source for img2img
+              // Read the generated image and set as source
+              try {
+                const dataUrl = await window.api.image.readFile(gen.imagePath)
+                if (dataUrl) {
+                  setSourceImage({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
+                  // Restore settings from this generation
+                  setSettings(prev => ({
+                    ...prev,
+                    steps: gen.steps,
+                    width: gen.width,
+                    height: gen.height,
+                    guidance: gen.guidance,
+                    strength: gen.strength ?? 0.7,
+                    negativePrompt: gen.negativePrompt || '',
+                    seed: undefined,
+                  }))
+                }
+              } catch (err) {
+                console.error('Failed to load image for iteration:', err)
               }
-              // Update UI settings to show restored values
-              setSettings(prev => ({ ...prev, ...redoSettings }))
-              // Pass settings directly to avoid React batching delay
-              handleSubmit(gen.prompt, redoSettings)
             }}
           />
         </div>

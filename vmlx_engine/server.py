@@ -1876,6 +1876,10 @@ async def create_image(request: Request):
     # Guidance scale
     guidance = body.get("guidance", 3.5)
 
+    # img2img: optional source image + strength for iterative generation
+    source_image_b64 = body.get("image")
+    image_strength = body.get("strength")
+
     # Hold the lock for both load AND generate to prevent model-swap races.
     # On a single-GPU Mac, image generation must be serialized anyway.
     async with _image_gen_lock:
@@ -1908,30 +1912,52 @@ async def create_image(request: Request):
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Failed to load image model '{model}': {e}")
 
+        # If source image provided (img2img), save to temp file for mflux
+        source_image_path = None
+        if source_image_b64 and image_strength is not None:
+            import tempfile
+            from pathlib import Path
+            raw_b64 = source_image_b64.replace("data:image/png;base64,", "").replace("data:image/jpeg;base64,", "")
+            img_bytes = base64.b64decode(raw_b64)
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            tmp.write(img_bytes)
+            tmp.close()
+            source_image_path = tmp.name
+
         # Generate images (inside lock to prevent concurrent model swap)
         images = []
-        for i in range(n):
-            img_seed = (seed + i) if seed is not None else None
-            try:
-                result = await asyncio.to_thread(
-                    _image_gen.generate,
-                    prompt=prompt,
-                    width=width,
-                    height=height,
-                    steps=steps,
-                    guidance=guidance,
-                    seed=img_seed,
-                    negative_prompt=negative_prompt,
-                )
-            except Exception as e:
-                logger.error(f"Image generation failed: {e}")
-                raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
+        try:
+            for i in range(n):
+                img_seed = (seed + i) if seed is not None else None
+                try:
+                    result = await asyncio.to_thread(
+                        _image_gen.generate,
+                        prompt=prompt,
+                        width=width,
+                        height=height,
+                        steps=steps,
+                        guidance=guidance,
+                        seed=img_seed,
+                        negative_prompt=negative_prompt,
+                        image_path=source_image_path,
+                        image_strength=image_strength if source_image_path else None,
+                    )
+                except Exception as e:
+                    logger.error(f"Image generation failed: {e}")
+                    raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
-            images.append({
-                "b64_json": result.b64_json,
-                "revised_prompt": prompt,
-                "seed": result.seed,
-            })
+                images.append({
+                    "b64_json": result.b64_json,
+                    "revised_prompt": prompt,
+                    "seed": result.seed,
+                })
+        finally:
+            # Clean up temp source image
+            if source_image_path:
+                try:
+                    os.unlink(source_image_path)
+                except OSError:
+                    pass
 
     return {
         "created": int(time.time()),

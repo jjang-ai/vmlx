@@ -212,10 +212,10 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
                     ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25'
                     : 'bg-primary/10 text-primary hover:bg-primary/20'
                 }`}
-                title={isEdit ? 'Re-edit with same settings (new seed)' : 'Regenerate with same settings (new seed)'}
+                title="Use this image as starting point for next generation"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Redo
+                Iterate
               </button>
             )}
             <button
