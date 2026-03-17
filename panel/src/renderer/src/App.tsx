@@ -20,14 +20,15 @@ import { ModelDoctor } from './components/tools/ModelDoctor'
 import { ModelConverter } from './components/tools/ModelConverter'
 import { ApiDashboard } from './components/api/ApiDashboard'
 import { ImageTab } from './components/image/ImageTab'
-
-/** Returns true if the session is an image model — should be excluded from chat mode */
-function isImageSession(s: { config?: string }): boolean {
-  if (!s.config) return false
-  try { return JSON.parse(s.config).modelType === 'image' } catch { return false }
-}
+import { isImageSession } from '../../shared/sessionUtils'
+import { DownloadsView } from './components/DownloadsView'
 
 function App() {
+  // If loaded in the download window (hash #/downloads), show only the downloads view
+  if (window.location.hash === '#/downloads') {
+    return <DownloadsView />
+  }
+
   const [setupDone, setSetupDone] = useState(false)
   const [checkingSetup, setCheckingSetup] = useState(true)
   const { state, dispatch, setMode, openChat } = useAppState()

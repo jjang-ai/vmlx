@@ -6,6 +6,7 @@ bundled-python/
 *.tar.gz
 .DS_Store
 .env
+.env.*
 .claude/
 test-*.js
 theme-preview.html

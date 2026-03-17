@@ -24,6 +24,7 @@ import { registerModelSettingsHandlers } from './db/model-settings'
 import { registerImageHandlers } from './ipc/image'
 
 let mainWindow: BrowserWindow | null = null
+let downloadWindow: BrowserWindow | null = null
 let handlersRegistered = false
 let isQuitting = false
 const processManager = new ProcessManager()
@@ -93,6 +94,35 @@ function createWindow(): void {
     registerDeveloperHandlers(() => mainWindow)
     registerModelSettingsHandlers()
     registerImageHandlers()
+
+    // Download window — a real separate window for showing download progress
+    ipcMain.handle('downloads:openWindow', () => {
+      if (downloadWindow && !downloadWindow.isDestroyed()) {
+        downloadWindow.focus()
+        return
+      }
+      downloadWindow = new BrowserWindow({
+        width: 500,
+        height: 400,
+        title: 'Downloads',
+        parent: mainWindow || undefined,
+        minimizable: true,
+        maximizable: false,
+        resizable: true,
+        webPreferences: {
+          preload: join(__dirname, '../preload/index.mjs'),
+          sandbox: false,
+          contextIsolation: true,
+        },
+      })
+      // Load the same renderer but with a hash route to show downloads view
+      if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+        downloadWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + '#/downloads')
+      } else {
+        downloadWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/downloads' })
+      }
+      downloadWindow.on('closed', () => { downloadWindow = null })
+    })
 
     // Folder picker for built-in tools working directory
     ipcMain.handle('dialog:openDirectory', async () => {

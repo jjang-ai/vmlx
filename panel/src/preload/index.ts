@@ -49,6 +49,7 @@ const api = {
       ipcRenderer.invoke('models:checkImageModel', modelName, quantize ?? 4),
     downloadImageModel: (modelName: string, quantize?: number) =>
       ipcRenderer.invoke('models:downloadImageModel', modelName, quantize ?? 4),
+    openDownloadWindow: () => ipcRenderer.invoke('downloads:openWindow'),
   },
 
   // Chat management
@@ -266,7 +267,7 @@ const api = {
     getGenerations: (sessionId: string) => ipcRenderer.invoke('image:getGenerations', sessionId),
     generate: (params: any) => ipcRenderer.invoke('image:generate', params),
     edit: (params: any) => ipcRenderer.invoke('image:edit', params),
-    startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit') => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode),
+    startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: any) => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode, serverSettings),
     stopServer: () => ipcRenderer.invoke('image:stopServer'),
     cancelGeneration: () => ipcRenderer.invoke('image:cancelGeneration'),
     getRunningServer: () => ipcRenderer.invoke('image:getRunningServer'),

@@ -3,12 +3,7 @@ import { Settings, Server, Play, Square, ChevronDown, Loader2, Plus, Globe, X, R
 import { ChatSettings } from '../chat/ChatSettings'
 import { ServerSettingsDrawer } from '../sessions/ServerSettingsDrawer'
 import { useSessionsContext, type SessionSummary } from '../../contexts/SessionsContext'
-
-/** Returns true if the session is an image model (Flux, etc.) — should be excluded from chat model picker */
-function isImageSession(s: SessionSummary): boolean {
-  if (!s.config) return false
-  try { return JSON.parse(s.config).modelType === 'image' } catch { return false }
-}
+import { isImageSession } from '../../../../shared/sessionUtils'
 
 interface ChatModeToolbarProps {
   activeChatId: string | null
