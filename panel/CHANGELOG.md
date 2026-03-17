@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.2.4 — 2026-03-18 — Image System, Downloads, JANG Fixes
+
+### Fixed
+- **JANG model loading crash**: Wrong `tree_flatten` import broke all JANG loads
+- **Scheduler memory leak**: `self.requests` dict never cleaned
+- **SQLite thread safety**: `check_same_thread=False` for disk cache
+- **Memory cache race**: `remove()` now acquires lock
+- **MCP `mcpServers` key**: Standard config format now accepted
+- **PYTHONPATH/PATH unblocked**: Python MCP servers can set import paths
+- **Image reiteration race**: Redo bypasses React state batching
+- **New session mode mismatch**: + button resets mode to match running model
+- **Download paused state lost**: Paused downloads show correctly on reopen
+- **Download queue count drift**: Decrements on download start
+- **Misleading Start button**: Removed for undownloaded models
+- **Streaming timeout scope**: `_default_timeout` fixes variable scope
+- **Anthropic base_url**: Removed double `/v1` in code snippets
+- **Session health false positives**: Checks `data.status === 'healthy'`
+- **Image fetch timeout**: 30-min explicit timeout for gen/edit
+- **Z-Image Turbo full precision**: No longer rejected as diffusers format
+
+### Removed
+- Klein models (mflux single-encoder limitation)
+- Silent HF downloads from image loading
+
+### Improved
+- Redo buttons always visible below each image card
+- HuggingFace README viewer in download search
+- Concurrent downloads (max 3) with pause/resume
+- Per-file JSON download progress with GB/speed/ETA
+
+### Tests
+- 2000+ engine tests, 1545+ panel tests (3545+ total)
+
 ## v1.2.1 — 2026-03-09 — Tool Calling Fix, MCP Safety
 
 ### Fixed
