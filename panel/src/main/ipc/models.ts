@@ -653,12 +653,13 @@ export function registerModelHandlers(): void {
   interface DownloadJob {
     id: string
     repoId: string
-    status: 'queued' | 'downloading' | 'complete' | 'cancelled' | 'error'
+    status: 'queued' | 'downloading' | 'paused' | 'complete' | 'cancelled' | 'error'
     progress?: DownloadProgress
     error?: string
     process?: ChildProcess
     modelDir: string
     wasCancelled?: boolean
+    wasPaused?: boolean
     /** For image model downloads: the canonical model ID (e.g. 'schnell') */
     imageModelName?: string
     /** For image model downloads: the quantization level (e.g. 4, 8, 0) */
@@ -667,7 +668,8 @@ export function registerModelHandlers(): void {
 
   let jobIdCounter = 0
   const downloadQueue: DownloadJob[] = []
-  let activeJob: DownloadJob | null = null
+  const activeJobs: Map<string, DownloadJob> = new Map()  // Multiple concurrent downloads
+  const MAX_CONCURRENT = 3
   const completedJobs: DownloadJob[] = []
   const MAX_COMPLETED_JOBS = 100
   const trackCompleted = (job: DownloadJob) => {
@@ -677,9 +679,11 @@ export function registerModelHandlers(): void {
 
   // Expose kill function for app quit cleanup
   _killActiveDownload = () => {
-    if (activeJob?.process) {
-      console.log(`[DOWNLOADS] Killing active download on quit: ${activeJob.repoId}`)
-      try { activeJob.process.kill('SIGKILL') } catch (_) { }
+    for (const [, job] of activeJobs) {
+      if (job.process) {
+        console.log(`[DOWNLOADS] Killing active download on quit: ${job.repoId}`)
+        try { job.process.kill('SIGKILL') } catch (_) { }
+      }
     }
   }
 
@@ -693,10 +697,12 @@ export function registerModelHandlers(): void {
   // parseTqdmProgress removed — download manager now uses structured JSON stdout
 
   function emitToRenderer(channel: string, data: any) {
+    // Send to ALL windows (main + download popup) so both stay in sync
     try {
-      const win = BrowserWindow.getAllWindows()[0]
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(channel, data)
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send(channel, data)
+        }
       }
     } catch (_) { }
   }
@@ -713,11 +719,17 @@ export function registerModelHandlers(): void {
   }
 
   async function processQueue() {
-    if (activeJob || downloadQueue.length === 0) return
+    // Start downloads up to MAX_CONCURRENT
+    while (activeJobs.size < MAX_CONCURRENT && downloadQueue.length > 0) {
+      const job = downloadQueue.shift()!
+      if (job.wasPaused) continue  // Skip paused jobs
+      startDownloadJob(job)
+    }
+  }
 
-    const job = downloadQueue.shift()!
+  async function startDownloadJob(job: DownloadJob) {
     job.status = 'downloading'
-    activeJob = job
+    activeJobs.set(job.id, job)
 
     emitToRenderer('models:downloadStarted', { jobId: job.id, repoId: job.repoId })
 
@@ -902,7 +914,7 @@ export function registerModelHandlers(): void {
               try { await unlink(markerFile) } catch (_) { }
               job.status = 'cancelled'
               emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'cancelled' })
-              activeJob = null
+              activeJobs.delete(job.id)
               job.process = undefined
               trackCompleted(job)
               processQueue()
@@ -920,7 +932,7 @@ export function registerModelHandlers(): void {
         emitToRenderer('models:downloadError', { jobId: job.id, repoId: job.repoId, error: errorMsg, gated: isGatedError })
       }
 
-      activeJob = null
+      activeJobs.delete(job.id)
       job.process = undefined
       trackCompleted(job)
       // Process next in queue
@@ -930,7 +942,7 @@ export function registerModelHandlers(): void {
     proc.on('error', async (err: Error) => {
       job.status = 'error'
       job.error = `Failed to start download: ${err.message}`
-      activeJob = null
+      activeJobs.delete(job.id)
       job.process = undefined
       trackCompleted(job)
       try { await unlink(markerFile) } catch (_) { }
@@ -1153,8 +1165,10 @@ export function registerModelHandlers(): void {
 
   // Start a download (non-blocking — returns jobId immediately)
   ipcMain.handle('models:startDownload', async (_, repoId: string) => {
-    // Check if already queued or downloading
-    if (activeJob?.repoId === repoId) return { jobId: activeJob.id, status: 'already_downloading' }
+    // Check if already active or queued
+    for (const [, aj] of activeJobs) {
+      if (aj.repoId === repoId) return { jobId: aj.id, status: 'already_downloading' }
+    }
     const queued = downloadQueue.find(j => j.repoId === repoId)
     if (queued) return { jobId: queued.id, status: 'already_queued' }
 
@@ -1169,12 +1183,15 @@ export function registerModelHandlers(): void {
 
     const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
     downloadQueue.push(job)
-    console.log(`[DOWNLOADS] Queued: ${repoId} (${downloadQueue.length} in queue)`)
+    console.log(`[DOWNLOADS] Queued: ${repoId} (${downloadQueue.length} in queue, ${activeJobs.size} active)`)
 
-    // Kick off processing (no-op if already running)
+    // Notify UI about new queue entry immediately
+    emitToRenderer('models:downloadQueued', { jobId: id, repoId })
+
+    // Start if slots available
     processQueue()
 
-    return { jobId: id, status: 'queued', queuePosition: downloadQueue.length }
+    return { jobId: id, status: activeJobs.has(id) ? 'downloading' : 'queued', queuePosition: downloadQueue.length }
   })
 
   // Cancel a download by jobId (or cancel active if no jobId)
@@ -1190,11 +1207,20 @@ export function registerModelHandlers(): void {
       return { success: true }
     }
 
-    // Cancel active
-    if (activeJob && (!jobId || activeJob.id === jobId)) {
-      console.log(`[DOWNLOADS] Cancelling active: ${activeJob.repoId}`)
-      activeJob.wasCancelled = true
-      activeJob.process?.kill('SIGTERM')
+    // Cancel active job by ID
+    if (jobId && activeJobs.has(jobId)) {
+      const aj = activeJobs.get(jobId)!
+      console.log(`[DOWNLOADS] Cancelling active: ${aj.repoId}`)
+      aj.wasCancelled = true
+      aj.process?.kill('SIGTERM')
+      return { success: true }
+    }
+    // Cancel first active if no jobId specified
+    if (!jobId && activeJobs.size > 0) {
+      const aj = activeJobs.values().next().value!
+      console.log(`[DOWNLOADS] Cancelling active: ${aj.repoId}`)
+      aj.wasCancelled = true
+      aj.process?.kill('SIGTERM')
       return { success: true }
     }
 
@@ -1203,8 +1229,12 @@ export function registerModelHandlers(): void {
 
   // Get current download status (all jobs)
   ipcMain.handle('models:getDownloadStatus', async () => {
+    const active = Array.from(activeJobs.values()).map(j => ({
+      jobId: j.id, repoId: j.repoId, progress: j.progress
+    }))
     return {
-      active: activeJob ? { jobId: activeJob.id, repoId: activeJob.repoId, progress: activeJob.progress } : null,
+      active: active[0] || null,  // Backward compat: first active as primary
+      activeAll: active,           // All active downloads
       queue: downloadQueue.map(j => ({ jobId: j.id, repoId: j.repoId })),
       completed: completedJobs.slice(-10).map(j => ({ jobId: j.id, repoId: j.repoId, status: j.status, error: j.error }))
     }
@@ -1218,7 +1248,8 @@ export function registerModelHandlers(): void {
     }
 
     // Check if already queued or downloading
-    if (activeJob?.repoId === repoId || downloadQueue.find(j => j.repoId === repoId)) {
+    const alreadyActive = Array.from(activeJobs.values()).some(j => j.repoId === repoId)
+    if (alreadyActive || downloadQueue.find(j => j.repoId === repoId)) {
       throw new Error(`Already downloading ${repoId}`)
     }
 
@@ -1310,8 +1341,10 @@ export function registerModelHandlers(): void {
       console.log(`[DOWNLOADS] No HF token set. Image model ${repoId} may require authentication.`)
     }
 
-    // Check if already queued or downloading
-    if (activeJob?.repoId === repoId) return { jobId: activeJob.id, status: 'already_downloading', repoId }
+    // Check if already active or queued
+    for (const [, aj] of activeJobs) {
+      if (aj.repoId === repoId) return { jobId: aj.id, status: 'already_downloading', repoId }
+    }
     const queued = downloadQueue.find(j => j.repoId === repoId)
     if (queued) return { jobId: queued.id, status: 'already_queued', repoId }
 
@@ -1325,11 +1358,14 @@ export function registerModelHandlers(): void {
 
     const job: DownloadJob = { id, repoId, status: 'queued', modelDir, imageModelName: modelName, imageQuantize: quantize }
     downloadQueue.push(job)
-    console.log(`[DOWNLOADS] Queued image model: ${repoId} → ${modelDir} (${downloadQueue.length} in queue)`)
+    console.log(`[DOWNLOADS] Queued image model: ${repoId} → ${modelDir} (${downloadQueue.length} in queue, ${activeJobs.size} active)`)
+
+    // Notify UI about new queue entry immediately
+    emitToRenderer('models:downloadQueued', { jobId: id, repoId })
 
     processQueue()
 
-    return { jobId: id, status: 'queued', queuePosition: downloadQueue.length, repoId }
+    return { jobId: id, status: activeJobs.has(id) ? 'downloading' : 'queued', queuePosition: downloadQueue.length, repoId }
   })
 
   // ─── Image Model Paths IPC ──────────────────────────────────────────────────
