@@ -1412,8 +1412,18 @@ async def create_anthropic_message(
         to_chat_completion,
     )
 
-    body = await fastapi_request.json()
-    anthropic_req = AnthropicRequest(**body)
+    try:
+        body = await fastapi_request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={
+            "type": "error", "error": {"type": "invalid_request_error", "message": "Invalid JSON in request body"}
+        })
+    try:
+        anthropic_req = AnthropicRequest(**body)
+    except Exception as e:
+        return JSONResponse(status_code=400, content={
+            "type": "error", "error": {"type": "invalid_request_error", "message": str(e)}
+        })
 
     # Convert to chat completion request
     chat_req = to_chat_completion(anthropic_req)
