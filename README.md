@@ -39,6 +39,8 @@
 
 ---
 
+> **JANG 2-bit beats MLX 4-bit, 3-bit, and 2-bit** — Adaptive mixed-precision quantization (JANG\_2S, JANG\_2.6) outperforms standard MLX quantization on MiniMax M2.5, Qwen3, and more. Scores at [jangq.ai](https://jangq.ai). Models at [JANGQ-AI](https://huggingface.co/JANGQ-AI).
+
 <table align="center">
 <tr>
 <td align="center"><img src="https://raw.githubusercontent.com/jjang-ai/vmlx/main/assets/chat-tab.png" width="500" alt="Chat interface" /></td>
