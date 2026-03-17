@@ -277,9 +277,13 @@ class ImageGenEngine:
             has_safetensors = transformer_dir.is_dir() and any(
                 f.suffix == '.safetensors' for f in transformer_dir.iterdir()
             )
-            # Klein models are single-encoder — don't require text_encoder_2
+            # Klein models are single-encoder — skip local path loading.
+            # mflux's Flux1() constructor always checks for text_encoder_2 even for Klein.
+            # Klein loads correctly via from_name() which handles single-encoder internally.
             is_klein = 'klein' in base_name.lower()
-            te2_ok = te2_dir.is_dir() or is_klein
+            if is_klein:
+                has_safetensors = False  # Force fallback to from_name()
+            te2_ok = te2_dir.is_dir()
             if has_safetensors and te2_ok:
                 logger.info(f"Loading Flux from local path: {model_path}")
                 try:
