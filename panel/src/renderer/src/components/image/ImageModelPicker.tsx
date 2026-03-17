@@ -1,18 +1,22 @@
 import { useState, useEffect } from 'react'
 import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
+import { IMAGE_MODELS } from '../../../../shared/imageModels'
 
-const NAMED_MODELS = [
-  // ── Image Generation ──
-  // Small (16GB RAM friendly)
-  { id: 'schnell', name: 'Flux Schnell', desc: 'Fastest generation (4 steps)', size: '~6-24 GB', steps: 4, icon: Zap, category: 'generate' as const, quantizeOptions: [4, 8, 0], tier: 'small' as const },
-  { id: 'flux2-klein-4b', name: 'FLUX.2 Klein 4B', desc: 'Compact next-gen model (20 steps)', size: '~4-8 GB', steps: 20, icon: Box, category: 'generate' as const, quantizeOptions: [8, 0], tier: 'small' as const },
-  { id: 'z-image-turbo', name: 'Z-Image Turbo', desc: 'Fast turbo generation (4 steps)', size: '~6-24 GB', steps: 4, icon: Gauge, category: 'generate' as const, quantizeOptions: [4, 8, 0], tier: 'small' as const },
-  // Medium
-  { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B', desc: 'Next-gen mid-size model (20 steps)', size: '~16 GB', steps: 20, icon: Layers, category: 'generate' as const, quantizeOptions: [0], tier: 'medium' as const },
-  { id: 'dev', name: 'Flux Dev', desc: 'High quality generation (20 steps)', size: '~6-24 GB', steps: 20, icon: Sparkles, category: 'generate' as const, quantizeOptions: [4, 8, 0], tier: 'medium' as const },
-  // ── Image Editing (full precision only — quantization degrades edit quality) ──
-  { id: 'qwen-image-edit', name: 'Qwen Image Edit', desc: 'Instruction-based editing (28 steps)', size: '~54 GB', steps: 28, icon: Pencil, category: 'edit' as const, quantizeOptions: [0], tier: 'large' as const },
-]
+// Map model IDs to icons (icons are React components, can't live in the shared registry)
+const MODEL_ICONS: Record<string, typeof Zap> = {
+  'schnell': Zap,
+  'flux2-klein-4b': Box,
+  'z-image-turbo': Gauge,
+  'flux2-klein-9b': Layers,
+  'dev': Sparkles,
+  'qwen-image-edit': Pencil,
+}
+
+// Build NAMED_MODELS from the shared registry + icons
+const NAMED_MODELS = IMAGE_MODELS.map(m => ({
+  ...m,
+  icon: MODEL_ICONS[m.id] || Zap,
+}))
 
 const QUANTIZE_OPTIONS = [
   { value: 4, label: '4-bit', desc: 'Fastest, lowest memory' },
@@ -483,7 +487,15 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
           </div>
         )}
 
-        {/* Info */}
+        {/* View Downloads + Info */}
+        <div className="flex justify-center mb-2">
+          <button
+            onClick={() => window.dispatchEvent(new Event('open-download-popup'))}
+            className="text-[11px] px-2 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+          >
+            View Downloads
+          </button>
+        </div>
         <p className="text-[11px] text-muted-foreground text-center">
           Models are downloaded from HuggingFace (~6-24 GB depending on model and quantization).
           {!hasHfToken && (

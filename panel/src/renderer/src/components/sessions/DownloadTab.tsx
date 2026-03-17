@@ -261,9 +261,17 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Search and download MLX models from HuggingFace. Downloads run in the background.
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          Search and download MLX models from HuggingFace. Downloads run in the background.
+        </p>
+        <button
+          onClick={() => window.dispatchEvent(new Event('open-download-popup'))}
+          className="text-xs px-2 py-1 border border-border rounded hover:bg-accent text-muted-foreground hover:text-foreground flex-shrink-0"
+        >
+          View Downloads
+        </button>
+      </div>
 
       {/* Download Directory */}
       <div className="flex items-center gap-2">

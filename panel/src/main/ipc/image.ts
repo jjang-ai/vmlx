@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import { db } from '../database'
-import { validateImageModelCompleteness } from './models'
+// validateImageModelCompleteness removed — startServer now uses DB-backed path lookup
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
 
@@ -328,58 +328,15 @@ export function registerImageHandlers(): void {
             activeImageSessionId = null
           }
 
-          // Check if model exists locally — use local path so server doesn't re-download.
-          // Validates ALL required components exist (transformer, text_encoder, etc.)
-          // to prevent the server from hanging while trying to download missing parts.
+          // Look up model path from DB — no directory scanning needed.
           let modelPath = modelName
-          try {
-            const imageDir = join(homedir(), '.mlxstudio', 'models', 'image')
-            if (existsSync(imageDir)) {
-              const dirs = readdirSync(imageDir)
-              const q = quantize || 4
-              const patterns = [
-                `${modelName}-${q}bit`,
-                `${modelName.replace(/-/g, '')}-${q}bit`,
-                modelName,
-              ]
-              for (const dir of dirs) {
-                const lower = dir.toLowerCase()
-                for (const pattern of patterns) {
-                  const p = pattern.toLowerCase()
-                  // Match as a complete segment: exact match, starts with pattern (followed by
-                  // delimiter), ends with pattern (preceded by delimiter), or contains pattern
-                  // between delimiters. Avoids false positives like "dev" matching "flux-kontext-dev-full".
-                  const segmentMatch = lower === p ||
-                    lower.startsWith(p + '-') || lower.startsWith(p + '_') ||
-                    lower.endsWith('-' + p) || lower.endsWith('_' + p) ||
-                    lower.includes('-' + p + '-') || lower.includes('_' + p + '_') ||
-                    lower.includes('-' + p + '_') || lower.includes('_' + p + '-')
-                  if (segmentMatch) {
-                    const fullPath = join(imageDir, dir)
-                    const validation = validateImageModelCompleteness(fullPath)
-                    if (validation.complete) {
-                      modelPath = fullPath
-                      console.log(`[IMAGE] Using local model path: ${fullPath}`)
-                    } else if (validation.missing.length > 0) {
-                      // Model directory exists but is incomplete — log but don't use it.
-                      // The server would hang trying to download missing components.
-                      console.warn(`[IMAGE] Model at ${fullPath} is incomplete, missing: ${validation.missing.join(', ')}. Not using local path — server will attempt full download.`)
-                    }
-                    if (modelPath !== modelName) break
-                  }
-                }
-                if (modelPath !== modelName) break
-              }
-            }
-          } catch {
-            // Local search failed
-          }
-
-          // If no local model found, don't let mflux silently download multi-GB files.
-          // Tell the user to download first via the model picker.
-          if (modelPath === modelName) {
+          const storedPath = db.getImageModelPath(modelName, quantize || 0)
+          if (storedPath && existsSync(storedPath.localPath)) {
+            modelPath = storedPath.localPath
+            console.log(`[IMAGE] Using stored model path: ${modelPath}`)
+          } else {
             console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
-            return { success: false, error: `Model "${modelName}" not found locally. Use the Download button to download it first, then try again.` }
+            return { success: false, error: `Model "${modelName}" not downloaded. Use the Download button first.` }
           }
 
           // Create a session config for image serving
