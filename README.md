@@ -26,13 +26,14 @@
   <a href="#quickstart">Quickstart</a> &bull;
   <a href="#model-support">Models</a> &bull;
   <a href="#features">Features</a> &bull;
-  <a href="#image-generation">Image Gen</a> &bull;
+  <a href="#image-generation--editing">Image Gen</a> &bull;
   <a href="#api-reference">API</a> &bull;
   <a href="#desktop-app">Desktop App</a> &bull;
   <a href="#advanced-quantization">JANG</a> &bull;
   <a href="#cli-commands">CLI</a> &bull;
   <a href="#configuration">Config</a> &bull;
-  <a href="#contributing">Contributing</a>
+  <a href="#contributing">Contributing</a> &bull;
+  <a href="#한국어-korean">한국어</a>
 </p>
 
 ---
@@ -282,7 +283,7 @@ response = requests.post("http://localhost:8000/v1/images/edits", json={
 | Model | Steps | Type | Memory |
 |-------|-------|------|--------|
 | **Flux Kontext** | 24 | Subject-consistent editing | ~6-12 GB |
-| **Qwen Image Edit** | 28 | Instruction-based editing | ~37 GB |
+| **Qwen Image Edit** | 28 | Instruction-based editing | ~54 GB |
 | **Flux Fill** | 20 | Inpainting with mask | ~24 GB |
 
 ---

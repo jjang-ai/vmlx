@@ -12,7 +12,7 @@ declare global {
         removeDirectory: (dirPath: string, modelType?: string) => Promise<{ success: boolean }>
         browseDirectory: () => Promise<{ canceled: boolean; path?: string }>
         detectConfig: (modelPath: string) => Promise<{ family: string; toolParser?: string; reasoningParser?: string; cacheType: string; usePagedCache: boolean; enableAutoToolChoice: boolean; isMultimodal: boolean; description: string; maxContextLength?: number }>
-        detectTypes: (modelPaths: string[]) => Promise<Array<'text' | 'image' | 'unknown'>>
+        detectTypes: (modelPaths: string[]) => Promise<Record<string, 'text' | 'image' | 'unknown'>>
         getGenerationDefaults: (modelPath: string) => Promise<{ temperature?: number; topP?: number; topK?: number; minP?: number; repeatPenalty?: number } | null>
         searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string }>>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
