@@ -140,7 +140,7 @@ export function ImageTopBar({
                   downloaded={isDownloaded(m.id)}
                   checking={checkingAvail}
                   running={isActive(m.id) && status === 'running'}
-                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, m.quantizeOptions[0], m.category) }}
+                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, undefined, m.category) }}
                 />
               ))}
 
@@ -158,7 +158,7 @@ export function ImageTopBar({
                   downloaded={isDownloaded(m.id)}
                   checking={checkingAvail}
                   running={isActive(m.id) && status === 'running'}
-                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, m.quantizeOptions[0], m.category) }}
+                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, undefined, m.category) }}
                 />
               ))}
 
