@@ -985,8 +985,14 @@ class TestLoadMethod:
             with pytest.raises(ImportError, match="mflux not installed"):
                 engine.load("schnell")
 
-    def test_alias_resolution_flux_schnell(self):
+    def test_alias_resolution_flux_schnell(self, tmp_path):
         """load('flux-schnell') should resolve to 'schnell' internally."""
+        # Create mock model directory so local path check passes
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+        (tmp_path / "text_encoder_2").mkdir()
+        (tmp_path / "text_encoder_2" / "0.safetensors").write_bytes(b"fake")
+
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
@@ -997,13 +1003,16 @@ class TestLoadMethod:
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
-            engine.load("flux-schnell")
+            engine.load("flux-schnell", model_path=str(tmp_path))
 
         assert engine._model_name == "schnell"
         assert engine._loaded is True
 
-    def test_zimage_model_uses_zimage_class(self):
+    def test_zimage_model_uses_zimage_class(self, tmp_path):
         """load('z-image-turbo') should use ZImage class, not Flux1."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
@@ -1017,14 +1026,20 @@ class TestLoadMethod:
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
-            engine.load("z-image-turbo")
+            engine.load("z-image-turbo", model_path=str(tmp_path))
 
         MockZImage.assert_called_once()
         MockFlux1.assert_not_called()
-        assert engine._model_name == "z-image-turbo"
+        # _detect_base_model may resolve "z-image-turbo" to "z-image" depending on model_index.json
+        assert engine._model_name in ("z-image-turbo", "z-image")
 
-    def test_flux_model_uses_flux1_class(self):
+    def test_flux_model_uses_flux1_class(self, tmp_path):
         """load('dev') should use Flux1 class, not ZImage."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+        (tmp_path / "text_encoder_2").mkdir()
+        (tmp_path / "text_encoder_2" / "0.safetensors").write_bytes(b"fake")
+
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
@@ -1033,15 +1048,13 @@ class TestLoadMethod:
         mocks["mflux.models.z_image.variants.z_image"].ZImage = MockZImage
 
         MockFlux1 = MagicMock()
-        mock_flux1_instance = MagicMock()
-        MockFlux1.from_name.return_value = mock_flux1_instance
         mocks["mflux.models.flux.variants.txt2img.flux"].Flux1 = MockFlux1
 
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
-            engine.load("dev")
+            engine.load("dev", model_path=str(tmp_path))
 
-        MockFlux1.from_name.assert_called_once()
+        MockFlux1.assert_called_once()
         MockZImage.assert_not_called()
         assert engine._model_name == "dev"

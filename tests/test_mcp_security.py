@@ -157,23 +157,17 @@ class TestEnvironmentValidation:
 
         assert "not allowed for security reasons" in str(exc_info.value)
 
-    def test_path_modification_blocked(self):
-        """Test that PATH modification is blocked."""
+    def test_path_allowed(self):
+        """Test that PATH is now allowed (needed for local MCP servers)."""
         validator = MCPCommandValidator()
+        # Should NOT raise — PATH was unblocked for MCP server compatibility
+        validator.validate_env({"PATH": "/tmp/fake:/usr/bin"}, "test-server")
 
-        with pytest.raises(MCPSecurityError) as exc_info:
-            validator.validate_env({"PATH": "/tmp/fake:/usr/bin"}, "test-server")
-
-        assert "not allowed for security reasons" in str(exc_info.value)
-
-    def test_pythonpath_blocked(self):
-        """Test that PYTHONPATH is blocked."""
+    def test_pythonpath_allowed(self):
+        """Test that PYTHONPATH is now allowed (needed for Python MCP servers)."""
         validator = MCPCommandValidator()
-
-        with pytest.raises(MCPSecurityError) as exc_info:
-            validator.validate_env({"PYTHONPATH": "/tmp/malicious"}, "test-server")
-
-        assert "not allowed for security reasons" in str(exc_info.value)
+        # Should NOT raise — PYTHONPATH was unblocked for Python MCP server compatibility
+        validator.validate_env({"PYTHONPATH": "/tmp/custom"}, "test-server")
 
     def test_injection_in_env_value_blocked(self):
         """Test that injection in env values is blocked."""
