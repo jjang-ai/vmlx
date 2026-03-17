@@ -117,8 +117,9 @@ def validate_config(data: Dict[str, Any]) -> MCPConfig:
     if not isinstance(data, dict):
         raise ValueError("MCP config must be a dictionary")
 
-    # Validate servers section
-    servers_data = data.get("servers", {})
+    # Validate servers section — accept both "servers" (vMLX native) and "mcpServers"
+    # (Claude Desktop / Claude Code / Cursor / Gemini CLI standard format)
+    servers_data = data.get("servers", data.get("mcpServers", {}))
     if not isinstance(servers_data, dict):
         raise ValueError("'servers' must be a dictionary")
 
