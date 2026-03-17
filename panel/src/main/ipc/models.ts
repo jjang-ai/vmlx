@@ -565,31 +565,34 @@ export function registerModelHandlers(): void {
 
   // Detect model types (image vs text) by checking file structure, not names
   ipcMain.handle('models:detectTypes', async (_, modelPaths: string[]) => {
-    return modelPaths.map(p => {
+    // Return a Record<path, type> so callers can look up by path (not by index).
+    // Previously returned an array, but CreateSession.tsx uses types?.[modelPath]
+    // which requires a keyed object.
+    const result: Record<string, 'text' | 'image' | 'unknown'> = {}
+    for (const p of modelPaths) {
       try {
         // Diffusers / mflux image models
-        if (existsSync(join(p, 'model_index.json'))) return 'image'
-        if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'text_encoder'))) return 'image'
-        if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'vae'))) return 'image'
+        if (existsSync(join(p, 'model_index.json'))) { result[p] = 'image'; continue }
+        if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'text_encoder'))) { result[p] = 'image'; continue }
+        if (existsSync(join(p, 'transformer')) && existsSync(join(p, 'vae'))) { result[p] = 'image'; continue }
         // Standard text models have config.json with model_type or architectures
         if (existsSync(join(p, 'config.json'))) {
           try {
             const cfg = JSON.parse(readFileSync(join(p, 'config.json'), 'utf-8'))
-            // Check if it has pipeline_tag for image generation
-            if (cfg.pipeline_tag === 'text-to-image' || cfg.pipeline_tag === 'image-to-image') return 'image'
-            // Has model_type or architectures = text model (transformers)
-            if (cfg.model_type || cfg.architectures) return 'text'
+            if (cfg.pipeline_tag === 'text-to-image' || cfg.pipeline_tag === 'image-to-image') { result[p] = 'image'; continue }
+            if (cfg.model_type || cfg.architectures) { result[p] = 'text'; continue }
           } catch {}
         }
         // JANG models are text models (check all config variants)
-        if (existsSync(join(p, 'jang_config.json')) || existsSync(join(p, 'jang_cfg.json')) || existsSync(join(p, 'jjqf_config.json')) || existsSync(join(p, 'mxq_config.json'))) return 'text'
+        if (existsSync(join(p, 'jang_config.json')) || existsSync(join(p, 'jang_cfg.json')) || existsSync(join(p, 'jjqf_config.json')) || existsSync(join(p, 'mxq_config.json'))) { result[p] = 'text'; continue }
         // Remote sessions
-        if (p.startsWith('remote://')) return 'text'
-        return 'unknown'
+        if (p.startsWith('remote://')) { result[p] = 'text'; continue }
+        result[p] = 'unknown'
       } catch {
-        return 'unknown'
+        result[p] = 'unknown'
       }
-    })
+    }
+    return result
   })
 
   // Open a native directory picker dialog
