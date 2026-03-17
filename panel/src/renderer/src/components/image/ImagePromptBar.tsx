@@ -125,7 +125,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           >
             <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-[11px] text-muted-foreground">
-              {isEdit ? 'Upload source image (required)' : 'Upload image for img2img (optional)'}
+              {isEdit ? 'Upload source image (required)' : 'Drop image to iterate or restyle (uses strength — not instruction-based editing)'}
             </span>
           </div>
         )}
