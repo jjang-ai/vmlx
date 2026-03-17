@@ -407,6 +407,7 @@ export function ImageTab() {
           status={serverStatus}
           port={serverPort}
           mode={sessionMode}
+          generating={generating}
           onSettings={() => setShowSettings(!showSettings)}
           onLogs={() => setShowLogs(!showLogs)}
           onStop={handleStop}

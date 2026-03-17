@@ -25,6 +25,7 @@ interface ImageTopBarProps {
   quantize: number
   status: ServerStatus
   port: number | null
+  generating?: boolean
   mode: 'generate' | 'edit'
   onSettings: () => void
   onLogs: () => void
@@ -41,6 +42,7 @@ export function ImageTopBar({
   status,
   port,
   mode,
+  generating,
   onSettings,
   onLogs,
   onStop,
@@ -115,12 +117,13 @@ export function ImageTopBar({
         {/* Model selector dropdown */}
         <div className="relative" ref={pickerRef}>
           <button
-            onClick={() => setShowPicker(!showPicker)}
-            className="flex items-center gap-1 text-sm font-medium hover:text-primary transition-colors"
-            title="Switch model"
+            onClick={() => !generating && setShowPicker(!showPicker)}
+            disabled={generating}
+            className={`flex items-center gap-1 text-sm font-medium transition-colors ${generating ? 'opacity-50 cursor-not-allowed' : 'hover:text-primary'}`}
+            title={generating ? 'Cannot switch while generating' : 'Switch model'}
           >
-            {displayName}
-            <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${showPicker ? 'rotate-180' : ''}`} />
+            <span className="truncate max-w-[200px]">{displayName}</span>
+            <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform flex-shrink-0 ${showPicker ? 'rotate-180' : ''}`} />
           </button>
 
           {showPicker && (
