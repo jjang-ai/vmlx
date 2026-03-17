@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import { db } from '../database'
-// startServer uses DB-backed path lookup via db.getImageModelPath()
+import { getImageModel } from '../../shared/imageModels'
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
 
@@ -403,6 +403,12 @@ export function registerImageHandlers(): void {
           // imageMode, imageQuantize, and servedModelName are stored in config fields
           // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
           const mode = imageMode || 'generate'
+
+          // Look up model definition for explicit mflux class + name (NO regex detection)
+          const modelDef = getImageModel(modelName)
+          const mfluxName = modelDef?.mfluxName || modelName
+          const mfluxClass = modelDef?.mfluxClass || ''
+
           const config: Partial<ServerConfig> = {
             host: serverSettings?.host || '0.0.0.0',
             port: serverSettings?.port || 0,  // 0 = auto-assign
@@ -412,8 +418,12 @@ export function registerImageHandlers(): void {
             modelType: 'image',
             imageMode: mode,
             imageQuantize: quantize || 0,
-            // Pass original model ID so engine uses it for loading (not directory name)
-            servedModelName: modelPath !== modelName ? modelName : undefined,
+            // Pass mflux canonical name so engine uses the correct class (not directory name)
+            servedModelName: mfluxName,
+            // Store mflux class in additionalArgs for the engine to pick up
+            // (buildArgs passes --served-model-name which the server uses for mflux_name;
+            //  mflux_class is passed as a separate flag)
+            additionalArgs: mfluxClass ? `--mflux-class ${mfluxClass}` : undefined,
           }
 
           const session = await sessionManager.createSession(modelPath, config)

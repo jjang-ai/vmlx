@@ -353,25 +353,15 @@ def serve_command(args):
 
         try:
             server._image_gen = ImageGenEngine()
-            # Use explicit --image-mode flag (set by UI or user CLI)
-            # Fallback: check if model name is in EDIT_MODELS dict
-            _explicit_mode = getattr(args, 'image_mode', None)
-            _is_edit_model = (_explicit_mode == 'edit') or (
-                _explicit_mode is None and server._model_name.lower() in _EDIT_SUPPORTED
+            _mflux_class = getattr(args, 'mflux_class', None)
+            # Unified load — handles both gen and edit models via mflux_class dispatch
+            server._image_gen.load(
+                model_name=server._model_name,
+                model_path=args.model,
+                quantize=_image_quantize,
+                mflux_class=_mflux_class,
+                mflux_name=server._model_name,
             )
-            if _is_edit_model:
-                logger.info(f"Loading image EDIT model: {server._model_name}")
-                server._image_gen.load_edit_model(
-                    model_name=server._model_name,
-                    model_path=args.model,
-                    quantize=_image_quantize,
-                )
-            else:
-                server._image_gen.load(
-                    model_name=server._model_name,
-                    model_path=args.model,
-                    quantize=_image_quantize,
-                )
         except Exception as e:
             print(f"Error: Failed to load image model: {e}")
             import traceback
@@ -699,6 +689,12 @@ Examples:
         "--image-mode", type=str, default=None, choices=["generate", "edit"],
         help="Image model mode. 'generate' for text-to-image, 'edit' for image editing "
              "(Kontext, Fill, Qwen-Image-Edit). (default: auto-detect from model name)",
+    )
+    serve_parser.add_argument(
+        "--mflux-class", type=str, default=None,
+        help="Explicit mflux model class name (e.g., Flux1, Flux2Klein, ZImage, QwenImageEdit). "
+             "Used by the image loader to pick the correct Python class. "
+             "If not set, falls back to name-based lookup.",
     )
     serve_parser.add_argument(
         "--host", type=str, default="0.0.0.0",
