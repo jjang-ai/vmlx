@@ -466,11 +466,8 @@ export function registerImageHandlers(): void {
     try {
       const buildResult = (s: any) => {
         const cfg = (() => { try { return JSON.parse(s.config || '{}') } catch { return {} } })()
-        // Read imageMode from config, fallback to edit model name detection
-        const EDIT_MODEL_NAMES = ['qwen-image-edit', 'flux-kontext', 'kontext', 'flux-fill']
-        const resolvedName = (cfg.servedModelName || s.modelName || s.modelPath || '').toLowerCase()
-        const isEditByName = EDIT_MODEL_NAMES.some(n => resolvedName.includes(n))
-        const imageMode: 'generate' | 'edit' = cfg.imageMode || (isEditByName ? 'edit' : 'generate')
+        // Read imageMode from config — always set explicitly by startServer, no name guessing
+        const imageMode: 'generate' | 'edit' = cfg.imageMode || 'generate'
         // Read quantize from config
         const quantize = cfg.imageQuantize ?? 0
         // Model name: prefer servedModelName (canonical ID like "schnell"),
