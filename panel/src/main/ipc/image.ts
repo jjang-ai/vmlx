@@ -405,9 +405,12 @@ export function registerImageHandlers(): void {
         const imageMode: 'generate' | 'edit' = cfg.imageMode || 'generate'
         // Read quantize from config
         const quantize = cfg.imageQuantize ?? 0
-        // Model name: use session modelName or extract last path component
-        const rawName = s.modelName || s.modelPath || ''
-        const modelName = rawName.includes('/') ? rawName.split('/').pop()! : rawName
+        // Model name: prefer servedModelName (canonical ID like "schnell"),
+        // then session modelName, then last path component as fallback
+        const modelName = cfg.servedModelName
+          || (s.modelName?.includes('/') ? s.modelName.split('/').pop()! : s.modelName)
+          || (s.modelPath?.includes('/') ? s.modelPath.split('/').pop()! : s.modelPath)
+          || ''
         return {
           sessionId: s.id,
           modelName,
