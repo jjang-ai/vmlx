@@ -3679,7 +3679,7 @@ async def stream_chat_completion(
 
     try:
         # Stream content (with SSE keep-alive during long prefills)
-        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=timeout):
+        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=_default_timeout):
             # Keep-alive sentinel — emit SSE comment to prevent connection timeout
             if output is None:
                 yield ": keep-alive\n\n"
@@ -4305,7 +4305,7 @@ async def stream_responses_api(
         logger.debug("[responses] No reasoning parser active for this request")
 
     try:
-        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=timeout):
+        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=_default_timeout):
             # Keep-alive sentinel — emit SSE comment to prevent connection timeout
             if output is None:
                 yield ": keep-alive\n\n"
