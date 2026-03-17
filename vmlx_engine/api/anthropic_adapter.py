@@ -195,7 +195,8 @@ def _convert_assistant_message(msg: dict) -> Message:
             if block_type == "text":
                 text_parts.append(block.get("text", ""))
             elif block_type == "thinking":
-                # Thinking blocks from previous turns — include as text
+                # Thinking blocks from previous turns are dropped — local models
+                # don't need prior reasoning context (matches Anthropic guidance)
                 pass
             elif block_type == "tool_use":
                 tool_calls.append({
