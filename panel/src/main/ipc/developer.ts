@@ -1,34 +1,43 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { spawn, ChildProcess } from 'child_process'
 import { sessionManager } from '../sessions'
+import { db } from '../database'
 
 let activeProcess: ChildProcess | null = null
 let cancelled = false
 
-const CLI_ENV: Record<string, string | undefined> = { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: undefined }
+function buildCliEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: undefined }
+  try {
+    const hfToken = db.getSetting('hf_api_key')
+    if (hfToken) env.HF_TOKEN = hfToken
+  } catch { /* DB not ready yet — skip token injection */ }
+  return env
+}
 
 /** Resolve the CLI spawn command + args using the same path as sessions.ts */
 function resolveCliSpawn(subcommandArgs: string[]): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
   const engineResult = sessionManager.findEnginePath()
+  const env = buildCliEnv()
   if (engineResult?.type === 'bundled') {
     return {
       cmd: engineResult.pythonPath,
       args: ['-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
-      env: CLI_ENV,
+      env,
     }
   }
   if (engineResult?.type === 'system') {
     return {
       cmd: engineResult.binaryPath,
       args: subcommandArgs,
-      env: { ...process.env },
+      env,
     }
   }
   // Last resort: bare python3 (may not have vmlx_engine installed)
   return {
     cmd: 'python3',
     args: ['-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
-    env: CLI_ENV,
+    env,
   }
 }
 

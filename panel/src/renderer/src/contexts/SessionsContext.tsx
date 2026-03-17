@@ -9,6 +9,7 @@ export interface SessionSummary {
   status: 'running' | 'stopped' | 'error' | 'loading'
   type?: 'local' | 'remote'
   remoteUrl?: string
+  config?: string // JSON blob — includes modelType, imageMode, etc.
 }
 
 interface SessionsContextValue {

@@ -266,18 +266,13 @@ const api = {
     getGenerations: (sessionId: string) => ipcRenderer.invoke('image:getGenerations', sessionId),
     generate: (params: any) => ipcRenderer.invoke('image:generate', params),
     edit: (params: any) => ipcRenderer.invoke('image:edit', params),
-    startServer: (modelName: string, quantize?: number) => ipcRenderer.invoke('image:startServer', modelName, quantize),
+    startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit') => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode),
     stopServer: () => ipcRenderer.invoke('image:stopServer'),
     cancelGeneration: () => ipcRenderer.invoke('image:cancelGeneration'),
     getRunningServer: () => ipcRenderer.invoke('image:getRunningServer'),
-    getModelStatus: (modelName: string) => ipcRenderer.invoke('image:getModelStatus', modelName),
+    getRunningServers: () => ipcRenderer.invoke('image:getRunningServers'),
     readFile: (imagePath: string) => ipcRenderer.invoke('image:readFile', imagePath),
     saveFile: (imagePath: string) => ipcRenderer.invoke('image:saveFile', imagePath),
-    onServerStarting: (callback: (data: any) => void) => {
-      const handler = (_: any, data: any) => callback(data)
-      ipcRenderer.on('image:serverStarting', handler)
-      return () => { ipcRenderer.removeListener('image:serverStarting', handler) }
-    }
   },
 
   // Session management

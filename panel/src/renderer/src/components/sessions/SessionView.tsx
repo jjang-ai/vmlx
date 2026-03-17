@@ -203,9 +203,14 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const statusColor = session.status === 'running'
     ? (isRemote ? 'bg-success' : 'bg-primary')
-    : session.status === 'loading' ? 'bg-warning' : 'bg-destructive'
-  const modelType = (() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()
+    : session.status === 'loading' ? 'bg-warning'
+    : session.status === 'error' ? 'bg-destructive'
+    : 'bg-muted-foreground'
+  const sessionConfig = (() => { try { return JSON.parse(session.config || '{}') } catch { return {} } })()
+  const modelType = sessionConfig.modelType
   const isImage = modelType === 'image'
+  // Read imageMode directly from config — no regex guessing
+  const isImageEdit = isImage && sessionConfig.imageMode === 'edit'
 
   return (
     <div className="flex flex-col h-full">
@@ -222,8 +227,10 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             {shortName}
           </span>
           {isImage && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium flex-shrink-0">
-              Image
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+              isImageEdit ? 'bg-violet-500/15 text-violet-400' : 'bg-blue-500/15 text-blue-400'
+            }`}>
+              {isImageEdit ? 'Image Edit' : 'Image Gen'}
             </span>
           )}
           {jangLabel && (
@@ -269,9 +276,9 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             <button
               onClick={() => setMode('image')}
               className="text-sm hover:bg-accent px-2 py-1 rounded flex items-center gap-1"
-              title="Switch to Image tab"
+              title={isImageEdit ? 'Switch to Image Editor' : 'Switch to Image Generator'}
             >
-              <ImageIcon className="h-3.5 w-3.5" /> Open Image Tab
+              <ImageIcon className="h-3.5 w-3.5" /> {isImageEdit ? 'Image Editor' : 'Image Gen'}
             </button>
           )}
           <button
@@ -349,9 +356,17 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             </>
           )}
           {session.status === 'loading' && (
-            <span className="text-xs text-muted-foreground px-2 py-1 animate-pulse">
-              {isRemote ? 'Connecting...' : 'Starting...'}
-            </span>
+            <>
+              <span className="text-xs text-muted-foreground px-2 py-1 animate-pulse">
+                {isRemote ? 'Connecting...' : 'Starting...'}
+              </span>
+              <button
+                onClick={handleStop}
+                className="text-xs px-2 py-1 border border-destructive/40 text-destructive rounded hover:bg-destructive/10"
+              >
+                Cancel
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -375,19 +390,28 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         <div className="flex-1 overflow-hidden">
           {isImage ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-8">
-              <div className="w-16 h-16 rounded-2xl bg-violet-500/10 flex items-center justify-center mb-4">
-                <ImageIcon className="h-8 w-8 text-violet-400" />
+              <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${
+                isImageEdit ? 'bg-violet-500/10' : 'bg-blue-500/10'
+              }`}>
+                <ImageIcon className={`h-8 w-8 ${isImageEdit ? 'text-violet-400' : 'text-blue-400'}`} />
               </div>
-              <h2 className="text-lg font-semibold mb-2">Image Model Server</h2>
+              <h2 className="text-lg font-semibold mb-2">
+                {isImageEdit ? 'Image Edit Server' : 'Image Generation Server'}
+              </h2>
               <p className="text-sm text-muted-foreground mb-6 max-w-sm">
-                This is an image generation model. Use the Image tab to generate images, or manage the server from this view.
+                {isImageEdit
+                  ? 'This is an image editing model. Use the Image tab to upload images and edit them with prompts.'
+                  : 'This is an image generation model. Use the Image tab to generate images from text prompts.'
+                }
               </p>
               <button
                 onClick={() => setMode('image')}
-                className="px-4 py-2 bg-violet-600 text-white text-sm rounded-md hover:bg-violet-500 transition-colors flex items-center gap-2"
+                className={`px-4 py-2 text-white text-sm rounded-md transition-colors flex items-center gap-2 ${
+                  isImageEdit ? 'bg-violet-600 hover:bg-violet-500' : 'bg-blue-600 hover:bg-blue-500'
+                }`}
               >
                 <ImageIcon className="h-4 w-4" />
-                Open Image Tab
+                {isImageEdit ? 'Open Image Editor' : 'Open Image Generator'}
               </button>
             </div>
           ) : (

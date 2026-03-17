@@ -54,6 +54,22 @@ def convert_command(args: argparse.Namespace) -> None:
         print(f"\nError: {e}")
         sys.exit(1)
 
+    # --- 1b. Check for GGUF format (not supported) ---
+    model_dir = Path(model_path)
+    if model_dir.is_dir():
+        gguf_files = list(model_dir.glob("*.gguf")) + list(model_dir.glob("*.gguf.part"))
+        safetensors_files = list(model_dir.glob("*.safetensors"))
+        if gguf_files and not safetensors_files:
+            print(f"\nError: This model is in GGUF format, which cannot be converted by vmlx-engine.")
+            print(f"  Found: {', '.join(f.name for f in gguf_files[:3])}")
+            print(f"\nGGUF models must first be converted to HuggingFace safetensors format")
+            print(f"before they can be quantized with vmlx. Use a tool like")
+            print(f"'convert-gguf-to-hf' or download the original HuggingFace model instead.")
+            sys.exit(1)
+    elif str(model_path).lower().endswith('.gguf'):
+        print(f"\nError: Single GGUF files cannot be converted. Provide a HuggingFace model directory instead.")
+        sys.exit(1)
+
     # --- 2. Inspect model ---
     try:
         info = inspect_model(model_path)

@@ -92,7 +92,7 @@ function createWindow(): void {
     registerPerformanceHandlers()
     registerDeveloperHandlers(() => mainWindow)
     registerModelSettingsHandlers()
-    registerImageHandlers(() => mainWindow)
+    registerImageHandlers()
 
     // Folder picker for built-in tools working directory
     ipcMain.handle('dialog:openDirectory', async () => {
@@ -115,16 +115,20 @@ function createWindow(): void {
         properties: ['openFile', 'multiSelections'],
         title: 'Attach Images',
         filters: [
-          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }
+          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif'] }
         ]
       })
       if (result.canceled || result.filePaths.length === 0) return []
       return result.filePaths.map(fp => {
         const ext = fp.split('.').pop()?.toLowerCase() || 'png'
-        const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
-          : ext === 'gif' ? 'image/gif'
-            : ext === 'webp' ? 'image/webp'
-              : 'image/png'
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg',
+          gif: 'image/gif', webp: 'image/webp',
+          bmp: 'image/bmp', tiff: 'image/tiff', tif: 'image/tiff',
+          heic: 'image/heic', heif: 'image/heif',
+          avif: 'image/avif',
+        }
+        const mime = mimeMap[ext] || 'image/png'
         const data = readFileSync(fp).toString('base64')
         const name = fp.split('/').pop() || 'image'
         return { dataUrl: `data:${mime};base64,${data}`, name }

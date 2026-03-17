@@ -650,6 +650,21 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             <h3 className="text-sm font-medium">Image Server Settings</h3>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
+                <label className="text-xs text-muted-foreground block mb-1">Image Mode</label>
+                <select value={config.imageMode || 'generate'} onChange={e => handleChange('imageMode', e.target.value)} className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm">
+                  <option value="generate">Image Generation</option>
+                  <option value="edit">Image Editing</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Quantization</label>
+                <select value={config.imageQuantize ?? 0} onChange={e => handleChange('imageQuantize', parseInt(e.target.value))} className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm">
+                  <option value={0}>Full Precision</option>
+                  <option value={4}>4-bit</option>
+                  <option value={8}>8-bit</option>
+                </select>
+              </div>
+              <div>
                 <label className="text-xs text-muted-foreground block mb-1">Host</label>
                 <input type="text" value={config.host} onChange={e => handleChange('host', e.target.value)} className="w-full px-2 py-1.5 bg-background border border-input rounded text-sm" />
               </div>
@@ -672,8 +687,10 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              The image server exposes a <code>/v1/images/generations</code> endpoint (OpenAI-compatible).
-              Use the Image tab or any API client to generate images once the server is running.
+              {(config.imageMode === 'edit')
+                ? <>The image server exposes a <code>/v1/images/edits</code> endpoint for editing images with prompts. Use the Image tab or any API client.</>
+                : <>The image server exposes a <code>/v1/images/generations</code> endpoint (OpenAI-compatible). Use the Image tab or any API client to generate images.</>
+              }
             </p>
           </div>
         ) : (

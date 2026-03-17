@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MessageSquare, ArrowLeft } from 'lucide-react'
 import { TitleBar } from './components/layout/TitleBar'
 import { Sidebar } from './components/layout/Sidebar'
@@ -21,11 +21,20 @@ import { ModelConverter } from './components/tools/ModelConverter'
 import { ApiDashboard } from './components/api/ApiDashboard'
 import { ImageTab } from './components/image/ImageTab'
 
+/** Returns true if the session is an image model — should be excluded from chat mode */
+function isImageSession(s: { config?: string }): boolean {
+  if (!s.config) return false
+  try { return JSON.parse(s.config).modelType === 'image' } catch { return false }
+}
+
 function App() {
   const [setupDone, setSetupDone] = useState(false)
   const [checkingSetup, setCheckingSetup] = useState(true)
   const { state, dispatch, setMode, openChat } = useAppState()
-  const { sessions } = useSessionsContext()
+  const { sessions: allSessions } = useSessionsContext()
+
+  // For chat mode, exclude image sessions — they belong in the Image tab
+  const sessions = useMemo(() => allSessions.filter(s => !isImageSession(s)), [allSessions])
 
   // Check if engine is already installed (skip setup screen if so)
   useEffect(() => {

@@ -5,15 +5,16 @@ declare global {
     electron: ElectronAPI
     api: {
       models: {
-        scan: () => Promise<any[]>
+        scan: (modelType?: string) => Promise<any[]>
         info: (modelPath: string) => Promise<any>
-        getDirectories: () => Promise<{ directories: string[]; userDirectories: string[]; builtinDirectories: string[] }>
-        addDirectory: (dirPath: string) => Promise<{ success: boolean; error?: string }>
-        removeDirectory: (dirPath: string) => Promise<{ success: boolean }>
+        getDirectories: (modelType?: string) => Promise<{ directories: string[]; userDirectories: string[]; builtinDirectories: string[] }>
+        addDirectory: (dirPath: string, modelType?: string) => Promise<{ success: boolean; error?: string }>
+        removeDirectory: (dirPath: string, modelType?: string) => Promise<{ success: boolean }>
         browseDirectory: () => Promise<{ canceled: boolean; path?: string }>
-        detectConfig: (modelPath: string) => Promise<{ family: string; toolParser?: string; reasoningParser?: string; cacheType: string; usePagedCache: boolean; enableAutoToolChoice: boolean; isMultimodal: boolean; description: string }>
+        detectConfig: (modelPath: string) => Promise<{ family: string; toolParser?: string; reasoningParser?: string; cacheType: string; usePagedCache: boolean; enableAutoToolChoice: boolean; isMultimodal: boolean; description: string; maxContextLength?: number }>
+        detectTypes: (modelPaths: string[]) => Promise<Array<'text' | 'image' | 'unknown'>>
         getGenerationDefaults: (modelPath: string) => Promise<{ temperature?: number; topP?: number; topK?: number; minP?: number; repeatPenalty?: number } | null>
-        searchHF: (query: string, sortBy?: string, sortDir?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string }>>
+        searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string }>>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
         cancelDownload: (jobId?: string) => Promise<{ success: boolean; error?: string }>
@@ -26,7 +27,7 @@ declare global {
         onDownloadComplete: (callback: (data: any) => void) => () => void
         onDownloadError: (callback: (data: any) => void) => () => void
         startDownload: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
-        checkImageModel: (modelName: string, quantize?: number) => Promise<{ available: boolean; localPath?: string; repoId?: string }>
+        checkImageModel: (modelName: string, quantize?: number) => Promise<{ available: boolean; localPath?: string; repoId?: string; missing?: string[] }>
         downloadImageModel: (modelName: string, quantize?: number) => Promise<{ jobId?: string; status: string; localPath?: string; repoId?: string; queuePosition?: number }>
       }
       chat: {
@@ -118,7 +119,7 @@ declare global {
         onComplete: (callback: (data: { success: boolean; cancelled?: boolean; error?: string }) => void) => () => void
       }
       image: {
-        createSession: (modelName: string) => Promise<{ success: boolean; session?: any; error?: string }>
+        createSession: (modelName: string, sessionType?: 'generate' | 'edit') => Promise<{ success: boolean; session?: any; error?: string }>
         getSessions: () => Promise<any[]>
         getSession: (id: string) => Promise<any>
         deleteSession: (id: string) => Promise<{ success: boolean; error?: string }>
@@ -134,13 +135,19 @@ declare global {
           width: number; height: number; steps: number; guidance: number; strength: number;
           seed?: number; serverPort: number
         }) => Promise<{ success: boolean; generations?: any[]; error?: string }>
-        startServer: (modelName: string, quantize?: number) => Promise<{ success: boolean; sessionId?: string; port?: number; error?: string }>
+        startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit') => Promise<{ success: boolean; sessionId?: string; port?: number; error?: string }>
         stopServer: () => Promise<{ success: boolean; error?: string }>
-        getRunningServer: () => Promise<{ sessionId: string; modelName: string; host: string; port: number; status: string } | null>
-        getModelStatus: (modelName: string) => Promise<{ downloaded: boolean; sizeEstimate: string; modelName: string }>
+        getRunningServer: () => Promise<{ sessionId: string; modelName: string; modelPath?: string; host: string; port: number; status: string; quantize: number; imageMode: 'generate' | 'edit' } | null>
+        getRunningServers: () => Promise<Array<{ sessionId: string; modelName: string; modelPath?: string; host: string; port: number; status: string; quantize: number; imageMode: 'generate' | 'edit' }>>
         readFile: (imagePath: string) => Promise<string | null>
         saveFile: (imagePath: string) => Promise<{ success: boolean; path?: string; error?: string }>
-        onServerStarting: (callback: (data: any) => void) => () => void
+        cancelGeneration: () => Promise<{ success: boolean; error?: string }>
+      }
+      modelSettings: {
+        get: (modelPath: string) => Promise<any>
+        getAll: () => Promise<any[]>
+        save: (modelPath: string, settings: any) => Promise<{ success: boolean }>
+        delete: (modelPath: string) => Promise<{ success: boolean }>
       }
       sessions: {
         list: () => Promise<any[]>
