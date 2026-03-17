@@ -483,13 +483,11 @@ export class SessionManager extends EventEmitter {
     if (hfToken) {
       spawnEnv.HF_TOKEN = hfToken
     }
-    // For image models: block mflux from downloading at runtime — models must be pre-downloaded.
-    // Without this, mflux silently starts multi-GB downloads when model components are
-    // missing, causing the server to hang at "Starting..." with no progress indication.
-    // Only for image models — text models (mlx-lm) may need HF access for tokenizer downloads.
-    if (isImageSession) {
-      spawnEnv.HF_HUB_OFFLINE = '1'
-    }
+    // NOTE: We previously set HF_HUB_OFFLINE=1 for image models to prevent mflux from
+    // silently downloading multi-GB models. This was removed because it also blocks mflux
+    // from reading already-cached files in ~/.cache/huggingface/hub/. Instead, we rely on
+    // validateImageModelCompleteness() to warn users about incomplete downloads before start,
+    // and the logs panel shows startup progress if mflux does need to fetch missing components.
 
     let proc: ChildProcess
     if (engineResult.type === 'bundled') {
