@@ -521,7 +521,7 @@ def _repack_jang_to_mlx_inmemory(
             in_dim = n_blocks * block_size
             out_dim = (qweight_raw.size * 8) // (n_blocks * bits) if n_blocks > 0 else 0
 
-        n_groups_per_row = in_dim // block_size
+        n_groups_per_row = (in_dim + block_size - 1) // block_size  # ceiling division
         if n_groups_per_row <= 0:
             n_groups_per_row = 1
 
@@ -534,8 +534,19 @@ def _repack_jang_to_mlx_inmemory(
             if packed_per_row > 0 and out_dim > 0:
                 mlx_qweight = mlx_qweight.reshape(out_dim, packed_per_row)
 
-        mlx_scales = mx.array(jang_scales.reshape(-1, n_groups_per_row).astype(np.float16))
-        mlx_biases = mx.array(jang_biases_raw.reshape(-1, n_groups_per_row).astype(np.float16))
+        # Reshape scales/biases — must match the disk path exactly
+        expected_groups = out_dim * n_groups_per_row
+        if original_shape and len(original_shape) == 3:
+            expected_groups = n_experts * out_dim * n_groups_per_row
+            jang_scales_clipped = jang_scales[:expected_groups]
+            jang_biases_clipped = jang_biases_raw[:expected_groups]
+            mlx_scales = mx.array(jang_scales_clipped.reshape(n_experts * out_dim, n_groups_per_row).astype(np.float16))
+            mlx_biases = mx.array(jang_biases_clipped.reshape(n_experts * out_dim, n_groups_per_row).astype(np.float16))
+        else:
+            jang_scales_clipped = jang_scales[:expected_groups]
+            jang_biases_clipped = jang_biases_raw[:expected_groups]
+            mlx_scales = mx.array(jang_scales_clipped.reshape(out_dim, n_groups_per_row).astype(np.float16))
+            mlx_biases = mx.array(jang_biases_clipped.reshape(out_dim, n_groups_per_row).astype(np.float16))
 
         weight_key = f"{base}.weight"
         is_expert = _per_expert_2d_pattern.match(weight_key)
