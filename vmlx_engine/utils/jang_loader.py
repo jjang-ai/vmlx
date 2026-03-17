@@ -417,27 +417,8 @@ def load_jang_model(model_path: str | Path):
             gc.collect()
 
         _fix_quantized_bits(model, {})
-
-        # ── Save v2: move repacked shards from temp to model dir for instant next load ──
-        if tmp_dir is not None and result:
-            try:
-                weight_map = {}
-                for i, sf in enumerate(result):
-                    dest_name = f"model-mlx-{i:04d}.safetensors"
-                    dest = path / dest_name
-                    shutil.move(sf, str(dest))
-                    # Build weight map from shard contents
-                    keys = list(mx.load(str(dest)).keys())
-                    for k in keys:
-                        weight_map[k] = dest_name
-                mlx_index.write_text(json.dumps({"weight_map": weight_map}, indent=2))
-                logger.info(f"  v2 upgrade: moved {len(result)} shards — next load instant")
-            except Exception as e:
-                logger.warning(f"  v2 save failed: {e}")
-                for f in path.glob("model-mlx-*.safetensors"):
-                    f.unlink(missing_ok=True)
-                if mlx_index.exists():
-                    mlx_index.unlink()
+        # v1 models load via repack (slow). Use `vmlx convert --jang-upgrade` or
+        # re-convert with jang-tools v2 for instant loading.
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
