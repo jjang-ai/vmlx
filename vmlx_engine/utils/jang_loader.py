@@ -374,7 +374,10 @@ def load_jang_model(model_path: str | Path):
         system_ram = psutil.virtual_memory().total
     except ImportError:
         system_ram = 128 * 1024 * 1024 * 1024  # assume 128 GB
-    use_fast_path = model_bytes > 0 and model_bytes < system_ram * 0.9
+    # Fast path disabled — the 3D expert tensor reshaping has edge cases that
+    # cause crashes on MoE models. The disk path is reliable and loads 35B in ~11s.
+    # TODO: fix fast path 3D gate_up_proj reshape for Qwen3.5 MoE models
+    use_fast_path = False
 
     if use_fast_path:
         # Fast in-memory path: repack all weights into a single dict, load at once
