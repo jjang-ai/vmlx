@@ -20,6 +20,7 @@
   <img src="https://img.shields.io/badge/Apple_Silicon-M1%2FM2%2FM3%2FM4-black?logo=apple" alt="Apple Silicon" />
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/Electron-28-47848F?logo=electron&logoColor=white" alt="Electron" />
+  <a href="https://ko-fi.com/jangml"><img src="https://img.shields.io/badge/Support-Ko--fi-FF5E5B?logo=ko-fi&logoColor=white" alt="Ko-fi" /></a>
 </p>
 
 <p align="center">
@@ -803,5 +804,6 @@ Apache License 2.0 — [LICENSE](LICENSE) 참조.
 
 <p align="center">
   개발자: <a href="https://github.com/jjang-ai">장진호</a> (eric@jangq.ai)<br>
-  <a href="https://jangq.ai">JANGQ AI</a>
+  <a href="https://jangq.ai">JANGQ AI</a> &bull;
+  <a href="https://ko-fi.com/jangml">Ko-fi로 후원하기</a>
 </p>
