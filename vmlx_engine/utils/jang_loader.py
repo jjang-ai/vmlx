@@ -39,8 +39,8 @@ def is_jang_model(model_path: str | Path) -> bool:
 
 def load_jang_model(model_path: str | Path):
     """
-    Load a JANG model by dequantizing weights to float16 and building
-    a standard mlx-lm model.
+    Load a JANG model by repacking weights into MLX QuantizedLinear format.
+    Weights stay quantized in GPU memory — no float16 expansion.
 
     Returns:
         Tuple of (model, tokenizer) compatible with mlx-lm
@@ -118,7 +118,7 @@ def load_jang_model(model_path: str | Path):
     mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
     n_params = sum(
-        p.size for p in model.parameters().values() if isinstance(p, mx.array)
+        p.size for _, p in mx.utils.tree_flatten(model.parameters())
     )
     logger.info(
         f"JANG model loaded in {elapsed:.1f}s: "
@@ -137,7 +137,7 @@ def _repack_jang_to_mlx(
     block_size: int,
     config: dict,
 ) -> dict[str, mx.array]:
-    """Load JANG shards and dequantize quantized tensors to float16."""
+    """Load JANG shards and repack quantized tensors into MLX QuantizedLinear format."""
     from safetensors.numpy import load_file
 
     INDEX_NAMES = ["model.jang.index.json", "model.jjqf.index.json", "model.mxq.index.json"]
@@ -425,11 +425,8 @@ def _stack_per_expert_weights(weights, config):
         to_stack = [weights.pop(experts[e]) for e in range(num_experts)]
         weights[f"{sw_key}.weight"] = mx.stack(to_stack)
 
-        # Stack scales if present
-        base_scale_key = list(experts.values())[0].replace(".weight", "")
-        has_scales = f"{base_scale_key}.scales" in weights or f"{base_scale_key.rsplit('.', 1)[0]}.scales" in weights
-
         # Try to find and stack scales/biases
+        base_scale_key = list(experts.values())[0].replace(".weight", "")
         for suffix in [".scales", ".biases"]:
             parts = []
             found = True
