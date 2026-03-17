@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Download, Copy, Loader2, ImageIcon, Pencil } from 'lucide-react'
+import { Download, Copy, Loader2, ImageIcon, Pencil, RefreshCw } from 'lucide-react'
 import type { ImageGenerationInfo } from './ImageTab'
 
 interface ImageGalleryProps {
   generations: ImageGenerationInfo[]
   generating: boolean
   mode?: 'generate' | 'edit'
+  onRegenerate?: (gen: ImageGenerationInfo) => void
 }
 
-export function ImageGallery({ generations, generating, mode }: ImageGalleryProps) {
+export function ImageGallery({ generations, generating, mode, onRegenerate }: ImageGalleryProps) {
   if (generations.length === 0 && !generating) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-8">
@@ -41,7 +42,7 @@ export function ImageGallery({ generations, generating, mode }: ImageGalleryProp
           : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
       }`} style={{ minWidth: 0 }}>
         {generations.map((gen) => (
-          <ImageCard key={gen.id} generation={gen} />
+          <ImageCard key={gen.id} generation={gen} onRegenerate={onRegenerate} />
         ))}
 
         {/* Loading skeleton while generating */}
@@ -61,7 +62,7 @@ export function ImageGallery({ generations, generating, mode }: ImageGalleryProp
   )
 }
 
-function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
+function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationInfo; onRegenerate?: (gen: ImageGenerationInfo) => void }) {
   const [imageData, setImageData] = useState<string | null>(null)
   const [sourceData, setSourceData] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -141,9 +142,19 @@ function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
             )}
           </div>
 
-          {/* Persistent save button (always visible, not hover-only) */}
+          {/* Persistent action buttons (always visible, not hover-only) */}
           {!loading && imageData && (
             <div className="absolute top-1.5 left-1.5 flex gap-1">
+              {onRegenerate && (
+                <button
+                  onClick={() => onRegenerate(generation)}
+                  className="px-2 py-1 bg-black/60 text-white rounded text-xs flex items-center gap-1 hover:bg-black/80 transition-colors backdrop-blur-sm"
+                  title="Re-edit with same settings"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Redo
+                </button>
+              )}
               <button
                 onClick={handleSave}
                 className="px-2 py-1 bg-black/60 text-white rounded text-xs flex items-center gap-1 hover:bg-black/80 transition-colors backdrop-blur-sm"
@@ -177,6 +188,16 @@ function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
           {/* Hover overlay */}
           {hovered && !loading && imageData && (
             <div className="absolute inset-0 bg-black/40 flex items-end justify-end p-2 gap-1.5">
+              {onRegenerate && (
+                <button
+                  onClick={() => onRegenerate(generation)}
+                  className="px-2 py-1 bg-white/90 text-black rounded text-xs flex items-center gap-1 hover:bg-white transition-colors"
+                  title="Regenerate with same settings"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Redo
+                </button>
+              )}
               <button
                 onClick={handleSave}
                 className="px-2 py-1 bg-white/90 text-black rounded text-xs flex items-center gap-1 hover:bg-white transition-colors"
