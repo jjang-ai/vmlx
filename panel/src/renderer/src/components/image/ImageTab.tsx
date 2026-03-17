@@ -456,6 +456,20 @@ export function ImageTab() {
             generations={generations}
             generating={generating}
             mode={sessionMode}
+            onRegenerate={(gen) => {
+              // Reiterate: restore settings from generation and re-submit
+              setSettings(prev => ({
+                ...prev,
+                steps: gen.steps,
+                width: gen.width,
+                height: gen.height,
+                guidance: gen.guidance,
+                strength: gen.strength ?? prev.strength,
+                negativePrompt: gen.negativePrompt || '',
+              }))
+              // Re-submit with the same prompt (new random seed for variation)
+              handleSubmit(gen.prompt)
+            }}
           />
         </div>
 

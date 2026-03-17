@@ -3511,12 +3511,17 @@ def _dump_sse_json(obj) -> str:
 _SSE_KEEPALIVE_INTERVAL = 15.0  # seconds
 
 
-async def _stream_with_keepalive(async_gen, interval: float = _SSE_KEEPALIVE_INTERVAL):
-    """Yield items from async generator, inserting None sentinels on timeout."""
+async def _stream_with_keepalive(async_gen, interval: float = _SSE_KEEPALIVE_INTERVAL, total_timeout: float | None = None):
+    """Yield items from async generator, inserting None sentinels on timeout.
+    If total_timeout is set, raises TimeoutError after that many seconds of total streaming.
+    """
     it = async_gen.__aiter__()
     pending = asyncio.ensure_future(it.__anext__())
+    start = asyncio.get_event_loop().time()
     try:
         while True:
+            if total_timeout and (asyncio.get_event_loop().time() - start) > total_timeout:
+                raise TimeoutError(f"Streaming exceeded {total_timeout}s timeout")
             done, _ = await asyncio.wait({pending}, timeout=interval)
             if done:
                 try:
@@ -3674,7 +3679,7 @@ async def stream_chat_completion(
 
     try:
         # Stream content (with SSE keep-alive during long prefills)
-        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs)):
+        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=timeout):
             # Keep-alive sentinel — emit SSE comment to prevent connection timeout
             if output is None:
                 yield ": keep-alive\n\n"
@@ -4300,7 +4305,7 @@ async def stream_responses_api(
         logger.debug("[responses] No reasoning parser active for this request")
 
     try:
-        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs)):
+        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=timeout):
             # Keep-alive sentinel — emit SSE comment to prevent connection timeout
             if output is None:
                 yield ": keep-alive\n\n"
