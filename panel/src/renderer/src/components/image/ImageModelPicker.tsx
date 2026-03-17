@@ -1,13 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Zap, Sparkles, Gauge, Box, Layers, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
+import { Zap, Sparkles, Gauge, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
 import { IMAGE_MODELS } from '../../../../shared/imageModels'
 
 // Map model IDs to icons (icons are React components, can't live in the shared registry)
 const MODEL_ICONS: Record<string, typeof Zap> = {
   'schnell': Zap,
-  'flux2-klein-4b': Box,
   'z-image-turbo': Gauge,
-  'flux2-klein-9b': Layers,
   'dev': Sparkles,
   'qwen-image-edit': Pencil,
 }
