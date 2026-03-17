@@ -55,7 +55,7 @@ class _ConnectionPool:
         try:
             return self._pool.get_nowait()
         except queue.Empty:
-            conn = sqlite3.connect(self._db_path, timeout=5.0)
+            conn = sqlite3.connect(self._db_path, timeout=5.0, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             return conn
 
