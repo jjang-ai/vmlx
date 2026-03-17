@@ -719,19 +719,21 @@ export function registerModelHandlers(): void {
   }
 
   async function processQueue() {
-    // Start downloads up to MAX_CONCURRENT
+    // Start downloads up to MAX_CONCURRENT — skip paused jobs (don't block queue)
     while (activeJobs.size < MAX_CONCURRENT && downloadQueue.length > 0) {
-      const job = downloadQueue[0]
-      if (job.status === 'paused') break  // Don't start paused jobs, stop processing
-      downloadQueue.shift()
+      // Find the first non-paused job
+      const idx = downloadQueue.findIndex(j => j.status !== 'paused')
+      if (idx === -1) break  // All remaining jobs are paused
+      const job = downloadQueue.splice(idx, 1)[0]
+      // Register in activeJobs BEFORE async work to prevent over-dispatch
+      activeJobs.set(job.id, job)
+      job.status = 'downloading'
       startDownloadJob(job)
     }
   }
 
   async function startDownloadJob(job: DownloadJob) {
-    job.status = 'downloading'
-    activeJobs.set(job.id, job)
-
+    // job.status and activeJobs.set already done by processQueue (synchronous, before await)
     emitToRenderer('models:downloadStarted', { jobId: job.id, repoId: job.repoId })
 
     const pythonPath = await getPythonPath()
@@ -1199,13 +1201,17 @@ export function registerModelHandlers(): void {
 
   // Cancel a download by jobId (or cancel active if no jobId)
   ipcMain.handle('models:cancelDownload', async (_, jobId?: string) => {
-    // Cancel from queue first
+    // Cancel from queue first (includes paused jobs)
     const qIdx = downloadQueue.findIndex(j => jobId ? j.id === jobId : true)
     if (qIdx >= 0) {
       const removed = downloadQueue.splice(qIdx, 1)[0]
       removed.status = 'cancelled'
       trackCompleted(removed)
-      console.log(`[DOWNLOADS] Cancelled queued: ${removed.repoId}`)
+      console.log(`[DOWNLOADS] Cancelled queued/paused: ${removed.repoId}`)
+      // Clean up partial files for paused jobs (active jobs clean up in close handler)
+      if (removed.wasPaused && removed.modelDir) {
+        try { await rm(removed.modelDir, { recursive: true, force: true }) } catch (_) { }
+      }
       emitToRenderer('models:downloadComplete', { jobId: removed.id, repoId: removed.repoId, status: 'cancelled' })
       return { success: true }
     }
@@ -1259,8 +1265,10 @@ export function registerModelHandlers(): void {
       job.status = 'queued'
       job.progress = undefined
       console.log(`[DOWNLOADS] Resuming: ${job.repoId}`)
-      // hf_hub_download resumes automatically (checks existing files)
+      // hf_hub_download skips already-downloaded files (per-file resume, not byte-level)
       if (activeJobs.size < MAX_CONCURRENT) {
+        job.status = 'downloading'
+        activeJobs.set(job.id, job)
         startDownloadJob(job)
       } else {
         downloadQueue.unshift(job)
