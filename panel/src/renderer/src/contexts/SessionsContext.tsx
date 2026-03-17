@@ -73,9 +73,13 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
         })
       }),
       window.api.sessions.onHealth((data: any) => {
-        setSessions(prev => prev.map(s =>
-          s.id === data.sessionId ? { ...s, status: 'running' as const, ...(data.modelName ? { modelName: data.modelName } : {}) } : s
-        ))
+        // Only set 'running' when the model is actually loaded (data.running === true)
+        // The health monitor sends running=false when server is up but model still loading
+        if (data.running) {
+          setSessions(prev => prev.map(s =>
+            s.id === data.sessionId ? { ...s, status: 'running' as const, ...(data.modelName ? { modelName: data.modelName } : {}) } : s
+          ))
+        }
       }),
     ]
 
