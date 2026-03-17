@@ -374,22 +374,29 @@ def load_jang_model(model_path: str | Path):
         system_ram = psutil.virtual_memory().total
     except ImportError:
         system_ram = 128 * 1024 * 1024 * 1024  # assume 128 GB
-    # Fast path disabled — the 3D expert tensor reshaping has edge cases that
-    # cause crashes on MoE models. The disk path is reliable and loads 35B in ~11s.
-    # TODO: fix fast path 3D gate_up_proj reshape for Qwen3.5 MoE models
-    use_fast_path = False
+    use_fast_path = model_bytes > 0 and model_bytes < system_ram * 0.9
 
     if use_fast_path:
         # Fast in-memory path: repack all weights into a single dict, load at once
         logger.info(f"  Fast path: model {model_bytes / 1e9:.1f} GB fits in RAM ({system_ram / 1e9:.0f} GB)")
-        all_weights = _repack_jang_to_mlx_inmemory(path, block_size, config)
-        if hasattr(model, "sanitize"):
-            all_weights = model.sanitize(all_weights)
-        model.load_weights(list(all_weights.items()), strict=False)
-        del all_weights
-        gc.collect()
-        _fix_quantized_bits(model, {})
-    else:
+        try:
+            all_weights = _repack_jang_to_mlx_inmemory(path, block_size, config)
+            if hasattr(model, "sanitize"):
+                all_weights = model.sanitize(all_weights)
+            model.load_weights(list(all_weights.items()), strict=False)
+            del all_weights
+            gc.collect()
+            _fix_quantized_bits(model, {})
+            use_fast_path = True  # Success
+        except Exception as e:
+            logger.warning(f"  Fast path failed ({e}), falling back to disk streaming")
+            use_fast_path = False
+            # Re-create model skeleton since fast path may have partially loaded
+            model, config_reloaded = _load_model_skeleton(
+                path, lazy=True, strict=False, model_config=config
+            )
+            _upgrade_switch_to_quantized(model, default_bits, block_size)
+    if not use_fast_path:
         # Disk streaming path for very large models
         logger.info(f"  Streaming path: model {model_bytes / 1e9:.1f} GB exceeds 90% of RAM ({system_ram / 1e9:.0f} GB)")
         shard_files, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
