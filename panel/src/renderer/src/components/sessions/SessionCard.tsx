@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings } from 'lucide-react'
+import { Settings, ScrollText } from 'lucide-react'
 
 interface Session {
   id: string
@@ -29,10 +29,10 @@ interface SessionCardProps {
 }
 
 const statusColors: Record<string, string> = {
-  running: 'bg-primary',
+  running: 'bg-green-500',
   stopped: 'bg-muted-foreground',
   error: 'bg-destructive',
-  loading: 'bg-warning'
+  loading: 'bg-yellow-500 animate-pulse'
 }
 
 const statusLabels: Record<string, string> = {
@@ -107,6 +107,18 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
           >
             Open
           </button>
+        )}
+
+        {session.status === 'loading' && (
+          <>
+            <button
+              onClick={() => onOpen(session.id)}
+              className="flex-1 px-3 py-1.5 bg-warning/20 text-warning text-sm rounded hover:bg-warning/30 flex items-center justify-center gap-1.5"
+            >
+              <ScrollText className="h-3.5 w-3.5" />
+              Logs
+            </button>
+          </>
         )}
 
         {session.status === 'stopped' || session.status === 'error' ? (

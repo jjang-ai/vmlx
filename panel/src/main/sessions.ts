@@ -966,19 +966,30 @@ export class SessionManager extends EventEmitter {
           )
           if (res.ok) {
             const data = await res.json()
-            // Reset fail counter on success
-            this.failCounts.delete(session.id)
-            this.lastHealthyAt.set(session.id, Date.now())
-            if (data.model_name && data.model_name !== session.modelName) {
-              db.updateSession(session.id, { modelName: data.model_name })
-            }
-            if (session.status === 'loading') {
-              db.updateSession(session.id, { status: 'running' })
-              this.emit('session:ready', { sessionId: session.id, port: session.port })
+            // Only count as truly healthy if the model is loaded (status: "healthy")
+            // The server returns "no_model" while still loading in lifespan()
+            const modelReady = data.status === 'healthy'
+            if (modelReady) {
+              // Reset fail counter on success
+              this.failCounts.delete(session.id)
+              this.lastHealthyAt.set(session.id, Date.now())
+              if (data.model_name && data.model_name !== session.modelName) {
+                db.updateSession(session.id, { modelName: data.model_name })
+              }
+              if (session.status === 'loading') {
+                db.updateSession(session.id, { status: 'running' })
+                this.emit('session:ready', { sessionId: session.id, port: session.port })
+              }
+            } else {
+              // Server is up but model not loaded yet — keep as loading
+              if (session.status !== 'loading') {
+                // Don't increment fail count — server is alive, just loading
+              }
             }
             this.emit('session:health', {
               sessionId: session.id,
               running: true,
+              status: 'ok',
               modelName: data.model_name,
               port: session.port,
               memory: data.memory  // { active_mb, peak_mb, cache_mb } from /health
