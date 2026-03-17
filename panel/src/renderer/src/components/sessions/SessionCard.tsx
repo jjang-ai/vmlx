@@ -55,9 +55,9 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
     // Pre-start model info would require reading jang_config.json from the frontend,
     // which is not currently implemented. This heuristic uses directory name patterns only.
     const name = session.modelPath.toLowerCase()
-    if (name.includes('-jang-') || name.includes('-mxq-') || name.includes('-mlxq-')) {
-      // Rough label from directory name — will be refined if model is scanned
-      const match = name.match(/(?:jang|mxq|mlxq)[_-]?(\d+\.?\d*)\s*-?\s*bit/i)
+    if (name.includes('jang') || name.includes('mxq') || name.includes('mlxq')) {
+      // Extract bits from patterns: JANG_4K, JANG_2S, JANG_2L, JANG-3.99-bit
+      const match = name.match(/jang[_-](\d+\.?\d*)/i)
       setJangLabel(match ? `JANG ${match[1]}-bit` : 'JANG')
     }
   }, [session.modelPath, isRemote])
