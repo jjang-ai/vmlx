@@ -87,9 +87,9 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   const isGenerating = lastStatus.phase === 'generating'
   const summaryParts: string[] = []
   if (isGenerating) {
-    summaryParts.push('Generating tool call\u2026')
+    summaryParts.push('Generating tool call...')
   } else if (isActive) {
-    summaryParts.push(`Using ${toolCount} tool${toolCount !== 1 ? 's' : ''}\u2026`)
+    summaryParts.push(`Using ${toolCount} tool${toolCount !== 1 ? 's' : ''}...`)
   } else if (hasInterrupted) {
     summaryParts.push(`${toolCount} tool${toolCount !== 1 ? 's' : ''} interrupted`)
   } else {
@@ -146,7 +146,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                   {isActive && lastStatus.phase === 'generating' ? (
                     <>
                       <Loader2 className="h-3 w-3 text-primary animate-spin" />
-                      <span>Generating tool call\u2026</span>
+                      <span>Generating tool call...</span>
                     </>
                   ) : (
                     <>
@@ -164,7 +164,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                   {isActive && lastStatus.phase === 'processing' ? (
                     <>
                       <Loader2 className="h-3 w-3 text-warning animate-spin" />
-                      <span>Processing tool results\u2026</span>
+                      <span>Processing tool results...</span>
                     </>
                   ) : (
                     <>
@@ -206,7 +206,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
                   <span className="text-muted-foreground">
                     {!isDone && !isActive ? 'interrupted' :
                       lastPhase.phase === 'calling' ? 'detected' :
-                      lastPhase.phase === 'executing' ? 'running\u2026' :
+                      lastPhase.phase === 'executing' ? 'running...' :
                       lastPhase.phase === 'result' ? 'done' :
                       lastPhase.phase === 'error' ? 'failed' : ''}
                   </span>
