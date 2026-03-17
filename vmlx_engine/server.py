@@ -2136,7 +2136,7 @@ async def create_image_edit(request: Request):
                 try:
                     if _image_gen.is_loaded:
                         _image_gen.unload()
-                    _image_gen.load_edit_model(model, model_path=_model_path, quantize=_image_quantize)
+                    _image_gen.load(model, model_path=_model_path, quantize=_image_quantize)
                 except HTTPException:
                     raise
                 except Exception as e:
