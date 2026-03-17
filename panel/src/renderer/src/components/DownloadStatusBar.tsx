@@ -26,7 +26,7 @@ interface DownloadStatusBarProps {
 export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
   const [active, setActive] = useState<ActiveDownload | null>(null)
   const [queue, setQueue] = useState<Array<{ jobId: string; repoId: string }>>([])
-  const [_expanded, _setExpanded] = useState(false) // kept for event compat
+  // Download window opens separately — no local expand state needed
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
