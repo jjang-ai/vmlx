@@ -365,13 +365,41 @@ def load_jang_model(model_path: str | Path):
     # Replace SwitchLinear with QuantizedSwitchLinear BEFORE loading weights
     _upgrade_switch_to_quantized(model, default_bits, block_size)
 
-    # Repack JANG weights — returns either (shard_files, tmp_dir) for streaming
-    # or (weights_dict, None) for in-memory mode
+    # ── v2 fast path: if MLX-native safetensors exist, load directly via mmap ──
+    # After first repack, we save MLX-format .safetensors alongside .jang.safetensors.
+    # Subsequent loads detect these and skip the repack entirely — same speed as native MLX.
+    mlx_index = path / "model.mlx.index.json"
+    if mlx_index.exists():
+        try:
+            idx = json.loads(mlx_index.read_text())
+            mlx_shards = sorted(set(idx["weight_map"].values()))
+            logger.info(f"  v2 fast load: {len(mlx_shards)} MLX-native shards (mmap)")
+            for sf_name in mlx_shards:
+                shard_weights = mx.load(str(path / sf_name))
+                if hasattr(model, "sanitize"):
+                    shard_weights = model.sanitize(shard_weights)
+                model.load_weights(list(shard_weights.items()), strict=False)
+                del shard_weights
+            _fix_quantized_bits(model, {})
+        except Exception as e:
+            logger.warning(f"  v2 load failed ({e}), falling back to v1 repack")
+        else:
+            # v2 loaded successfully — skip repack
+            if not hasattr(model, "config"):
+                model.config = config
+            mx.eval(model.parameters())  # noqa: S307
+            elapsed = time.perf_counter() - start
+            from mlx.utils import tree_flatten
+            n_params = sum(p.size for _, p in tree_flatten(model.parameters()))
+            logger.info(f"JANG model loaded in {elapsed:.1f}s: {n_params / 1e9:.1f}B params, {actual_bits:.1f}-bit avg")
+            tokenizer = load_tokenizer(path, eos_token_ids=config.get("eos_token_id", None))
+            return model, tokenizer
+
+    # ── v1 path: repack JANG uint8 → MLX uint32 (slow, one-time) ──
     result, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
 
     try:
         if tmp_dir is not None:
-            # Streaming mode: load from disk shards via mmap
             logger.info(f"  Loading {len(result)} repacked shards via mmap")
             for sf in result:
                 shard_weights = mx.load(sf)
@@ -381,7 +409,6 @@ def load_jang_model(model_path: str | Path):
                 del shard_weights
                 gc.collect()
         else:
-            # In-memory mode: weights dict returned directly (fast)
             weights = result
             if hasattr(model, "sanitize"):
                 weights = model.sanitize(weights)
@@ -390,6 +417,41 @@ def load_jang_model(model_path: str | Path):
             gc.collect()
 
         _fix_quantized_bits(model, {})
+
+        # ── Save as v2: write MLX-native safetensors for instant loading next time ──
+        try:
+            from mlx.utils import tree_flatten as _tf
+            all_w = dict(_tf(model.parameters()))
+            weight_map = {}
+            shard = {}
+            shard_bytes = 0
+            shard_i = 0
+            for k, v in all_w.items():
+                shard[k] = v
+                shard_bytes += v.nbytes
+                weight_map[k] = f"model-mlx-{shard_i:04d}.safetensors"
+                if shard_bytes >= 2_000_000_000:
+                    mx.eval(*shard.values())
+                    mx.save_safetensors(str(path / f"model-mlx-{shard_i:04d}.safetensors"), shard)
+                    logger.info(f"  Saved MLX shard {shard_i} ({shard_bytes / 1e9:.1f} GB)")
+                    shard_i += 1
+                    shard = {}
+                    shard_bytes = 0
+            if shard:
+                mx.eval(*shard.values())
+                mx.save_safetensors(str(path / f"model-mlx-{shard_i:04d}.safetensors"), shard)
+                for k in shard:
+                    weight_map[k] = f"model-mlx-{shard_i:04d}.safetensors"
+                logger.info(f"  Saved MLX shard {shard_i} ({shard_bytes / 1e9:.1f} GB)")
+            mlx_index.write_text(json.dumps({"weight_map": weight_map}, indent=2))
+            logger.info(f"  v2 upgrade complete — next load will be instant")
+        except Exception as e:
+            logger.warning(f"  Failed to save v2 format: {e}")
+            # Clean up partial v2 files
+            for f in path.glob("model-mlx-*.safetensors"):
+                f.unlink(missing_ok=True)
+            if mlx_index.exists():
+                mlx_index.unlink()
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
