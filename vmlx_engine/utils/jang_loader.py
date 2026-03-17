@@ -548,16 +548,52 @@ def _repack_jang_to_mlx_inmemory(
             mlx_scales = mx.array(jang_scales_clipped.reshape(out_dim, n_groups_per_row).astype(np.float16))
             mlx_biases = mx.array(jang_biases_clipped.reshape(out_dim, n_groups_per_row).astype(np.float16))
 
-        weight_key = f"{base}.weight"
-        is_expert = _per_expert_2d_pattern.match(weight_key)
-        if is_expert:
-            expert_buffer[weight_key] = mlx_qweight
-            expert_buffer[f"{base}.scales"] = mlx_scales
-            expert_buffer[f"{base}.biases"] = mlx_biases
+        is_3d = original_shape is not None and len(original_shape) == 3
+
+        # Handle 3D fused expert tensors (Qwen3.5 MoE style)
+        if is_3d and "gate_up_proj" in base:
+            # Split fused gate_up_proj into gate_proj + up_proj for switch_mlp
+            mlx_qweight_3d = mlx_qweight.reshape(n_experts, out_dim, -1)
+            mlx_scales_3d = mx.array(jang_scales[:n_experts * out_dim * n_groups_per_row].reshape(n_experts, out_dim, n_groups_per_row).astype(np.float16))
+            mlx_biases_3d = mx.array(jang_biases_raw[:n_experts * out_dim * n_groups_per_row].reshape(n_experts, out_dim, n_groups_per_row).astype(np.float16))
+            mid = out_dim // 2
+            sw_prefix = base.replace("experts.gate_up_proj", "switch_mlp")
+            result[f"{sw_prefix}.gate_proj.weight"] = mlx_qweight_3d[:, :mid, :]
+            result[f"{sw_prefix}.gate_proj.scales"] = mlx_scales_3d[:, :mid, :]
+            result[f"{sw_prefix}.gate_proj.biases"] = mlx_biases_3d[:, :mid, :]
+            result[f"{sw_prefix}.up_proj.weight"] = mlx_qweight_3d[:, mid:, :]
+            result[f"{sw_prefix}.up_proj.scales"] = mlx_scales_3d[:, mid:, :]
+            result[f"{sw_prefix}.up_proj.biases"] = mlx_biases_3d[:, mid:, :]
+        elif is_3d and "down_proj" in base:
+            sw_prefix = base.replace("experts.down_proj", "switch_mlp")
+            mlx_qweight_3d = mlx_qweight.reshape(n_experts, out_dim, -1)
+            mlx_scales_3d = mx.array(jang_scales[:n_experts * out_dim * n_groups_per_row].reshape(n_experts, out_dim, n_groups_per_row).astype(np.float16))
+            mlx_biases_3d = mx.array(jang_biases_raw[:n_experts * out_dim * n_groups_per_row].reshape(n_experts, out_dim, n_groups_per_row).astype(np.float16))
+            result[f"{sw_prefix}.down_proj.weight"] = mlx_qweight_3d
+            result[f"{sw_prefix}.down_proj.scales"] = mlx_scales_3d
+            result[f"{sw_prefix}.down_proj.biases"] = mlx_biases_3d
+        elif not is_3d and "gate_up_proj" in base:
+            # 2D fused gate_up_proj: split into gate + up
+            mid = out_dim // 2
+            sw_base = base.replace("gate_up_proj", "switch_mlp") if "experts" in base else base
+            result[f"{sw_base}.gate_proj.weight" if "switch_mlp" in sw_base else f"{base.replace('gate_up_proj', 'gate_proj')}.weight"] = mlx_qweight[:mid, :]
+            result[f"{sw_base}.gate_proj.scales" if "switch_mlp" in sw_base else f"{base.replace('gate_up_proj', 'gate_proj')}.scales"] = mlx_scales[:mid, :]
+            result[f"{sw_base}.gate_proj.biases" if "switch_mlp" in sw_base else f"{base.replace('gate_up_proj', 'gate_proj')}.biases"] = mlx_biases[:mid, :]
+            result[f"{sw_base}.up_proj.weight" if "switch_mlp" in sw_base else f"{base.replace('gate_up_proj', 'up_proj')}.weight"] = mlx_qweight[mid:, :]
+            result[f"{sw_base}.up_proj.scales" if "switch_mlp" in sw_base else f"{base.replace('gate_up_proj', 'up_proj')}.scales"] = mlx_scales[mid:, :]
+            result[f"{sw_base}.up_proj.biases" if "switch_mlp" in sw_base else f"{base.replace('gate_up_proj', 'up_proj')}.biases"] = mlx_biases[mid:, :]
         else:
-            result[weight_key] = mlx_qweight
-            result[f"{base}.scales"] = mlx_scales
-            result[f"{base}.biases"] = mlx_biases
+            # Standard tensor or per-expert 2D tensor
+            weight_key = f"{base}.weight"
+            is_expert = _per_expert_2d_pattern.match(weight_key)
+            if is_expert:
+                expert_buffer[weight_key] = mlx_qweight
+                expert_buffer[f"{base}.scales"] = mlx_scales
+                expert_buffer[f"{base}.biases"] = mlx_biases
+            else:
+                result[weight_key] = mlx_qweight
+                result[f"{base}.scales"] = mlx_scales
+                result[f"{base}.biases"] = mlx_biases
 
     # Process non-quantized tensors
     for name in non_quantized_names:
