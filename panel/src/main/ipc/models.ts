@@ -214,9 +214,19 @@ export function validateImageModelCompleteness(modelDir: string, encoderType?: '
 function checkImageModelLocal(modelName: string, quantize: number): { available: boolean; localPath?: string; repoId?: string; missing?: string[] } {
   const stored = db.getImageModelPath(modelName, quantize)
   if (stored) {
-    // Verify the path still exists on disk
     try {
       if (existsSync(stored.localPath)) {
+        // Validate completeness — check for essential subdirectories
+        const missing: string[] = []
+        const modelDir = stored.localPath
+        if (!existsSync(join(modelDir, 'transformer'))) missing.push('transformer')
+        if (!existsSync(join(modelDir, 'text_encoder'))) missing.push('text_encoder')
+        // Check for .vmlx-downloading marker (download in progress)
+        if (existsSync(join(modelDir, '.vmlx-downloading'))) missing.push('download incomplete')
+
+        if (missing.length > 0) {
+          return { available: false, localPath: stored.localPath, repoId: stored.repoId, missing }
+        }
         return { available: true, localPath: stored.localPath, repoId: stored.repoId }
       } else {
         // Path was deleted — remove stale entry from DB
