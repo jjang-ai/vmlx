@@ -418,40 +418,26 @@ def load_jang_model(model_path: str | Path):
 
         _fix_quantized_bits(model, {})
 
-        # ── Save as v2: write MLX-native safetensors for instant loading next time ──
-        try:
-            from mlx.utils import tree_flatten as _tf
-            all_w = dict(_tf(model.parameters()))
-            weight_map = {}
-            shard = {}
-            shard_bytes = 0
-            shard_i = 0
-            for k, v in all_w.items():
-                shard[k] = v
-                shard_bytes += v.nbytes
-                weight_map[k] = f"model-mlx-{shard_i:04d}.safetensors"
-                if shard_bytes >= 2_000_000_000:
-                    mx.eval(*shard.values())
-                    mx.save_safetensors(str(path / f"model-mlx-{shard_i:04d}.safetensors"), shard)
-                    logger.info(f"  Saved MLX shard {shard_i} ({shard_bytes / 1e9:.1f} GB)")
-                    shard_i += 1
-                    shard = {}
-                    shard_bytes = 0
-            if shard:
-                mx.eval(*shard.values())
-                mx.save_safetensors(str(path / f"model-mlx-{shard_i:04d}.safetensors"), shard)
-                for k in shard:
-                    weight_map[k] = f"model-mlx-{shard_i:04d}.safetensors"
-                logger.info(f"  Saved MLX shard {shard_i} ({shard_bytes / 1e9:.1f} GB)")
-            mlx_index.write_text(json.dumps({"weight_map": weight_map}, indent=2))
-            logger.info(f"  v2 upgrade complete — next load will be instant")
-        except Exception as e:
-            logger.warning(f"  Failed to save v2 format: {e}")
-            # Clean up partial v2 files
-            for f in path.glob("model-mlx-*.safetensors"):
-                f.unlink(missing_ok=True)
-            if mlx_index.exists():
-                mlx_index.unlink()
+        # ── Save v2: move repacked shards from temp to model dir for instant next load ──
+        if tmp_dir is not None and result:
+            try:
+                weight_map = {}
+                for i, sf in enumerate(result):
+                    dest_name = f"model-mlx-{i:04d}.safetensors"
+                    dest = path / dest_name
+                    shutil.move(sf, str(dest))
+                    # Build weight map from shard contents
+                    keys = list(mx.load(str(dest)).keys())
+                    for k in keys:
+                        weight_map[k] = dest_name
+                mlx_index.write_text(json.dumps({"weight_map": weight_map}, indent=2))
+                logger.info(f"  v2 upgrade: moved {len(result)} shards — next load instant")
+            except Exception as e:
+                logger.warning(f"  v2 save failed: {e}")
+                for f in path.glob("model-mlx-*.safetensors"):
+                    f.unlink(missing_ok=True)
+                if mlx_index.exists():
+                    mlx_index.unlink()
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
