@@ -59,11 +59,11 @@ function buildPythonAnthropic(baseUrl: string, apiKey: string | null, model: str
   return `import anthropic
 
 client = anthropic.Anthropic(
-    base_url="${baseUrl}/v1",
+    base_url="${baseUrl}",
     api_key=${key},
 )
 
-# Uses /v1/messages endpoint (Anthropic Messages API)
+# The Anthropic SDK appends /v1/messages automatically
 message = client.messages.create(
     model="${model}",
     max_tokens=1024,
