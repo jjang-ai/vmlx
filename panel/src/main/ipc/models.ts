@@ -1149,6 +1149,23 @@ export function registerModelHandlers(): void {
     return results
   })
 
+  // Fetch model README from HuggingFace
+  ipcMain.handle('models:fetchReadme', async (_, repoId: string) => {
+    try {
+      const res = await fetch(`https://huggingface.co/${repoId}/raw/main/README.md`, {
+        signal: AbortSignal.timeout(10000),
+      })
+      if (!res.ok) return null
+      const text = await res.text()
+      // Strip YAML frontmatter
+      const stripped = text.replace(/^---[\s\S]*?---\s*/, '')
+      // Truncate to ~3000 chars for display
+      return stripped.length > 3000 ? stripped.slice(0, 3000) + '\n\n...(truncated)' : stripped
+    } catch {
+      return null
+    }
+  })
+
   // Get recommended models from JANGQ-AI
   ipcMain.handle('models:getRecommendedModels', async () => {
     console.log('[MODELS] Fetching JANGQ-AI recommended models')
