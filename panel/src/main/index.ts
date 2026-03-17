@@ -110,16 +110,16 @@ function createWindow(): void {
         maximizable: false,
         resizable: true,
         webPreferences: {
-          preload: join(__dirname, '../preload/index.mjs'),
+          preload: join(__dirname, '../preload/index.js'),
           sandbox: false,
           contextIsolation: true,
         },
       })
-      // Load the same renderer but with a hash route to show downloads view
+      // Load the same renderer with query param to show downloads view
       if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-        downloadWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + '#/downloads')
+        downloadWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + '?view=downloads')
       } else {
-        downloadWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/downloads' })
+        downloadWindow.loadFile(join(__dirname, '../../out/renderer/index.html'), { query: { view: 'downloads' } })
       }
       downloadWindow.on('closed', () => { downloadWindow = null })
     })

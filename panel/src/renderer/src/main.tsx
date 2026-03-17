@@ -8,7 +8,7 @@ import { DownloadsView } from './components/DownloadsView'
 import './index.css'
 
 // Download window: skip all providers, render only the downloads view
-const isDownloadWindow = window.location.hash === '#/downloads'
+const isDownloadWindow = new URLSearchParams(window.location.search).get('view') === 'downloads'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
