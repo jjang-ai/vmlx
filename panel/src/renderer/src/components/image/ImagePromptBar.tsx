@@ -71,7 +71,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
   }
 
   const handlePaste = (e: ClipboardEvent) => {
-    if (!isEdit) return
+    // Allow paste for both edit and gen (img2img) modes
     const items = e.clipboardData.items
     for (const item of Array.from(items)) {
       if (item.type.startsWith('image/')) {
@@ -90,46 +90,46 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
 
   return (
     <div className="border-t border-border bg-background px-4 py-3">
-      {/* Source image upload zone (edit mode only) */}
-      {isEdit && (
-        <div className="mb-2">
-          {sourceImage ? (
-            <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
-              <img
-                src={sourceImage.dataUrl}
-                alt="Source"
-                className="h-12 w-12 rounded object-cover flex-shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium truncate">{sourceImage.name}</p>
-                <p className="text-[10px] text-muted-foreground">Source image for editing</p>
-              </div>
-              <button
-                onClick={() => onSourceImageChange(null)}
-                className="p-1 text-muted-foreground hover:text-destructive rounded"
-                title="Remove source image"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+      {/* Source image zone — required for edit, optional for gen (img2img) */}
+      <div className="mb-2">
+        {sourceImage ? (
+          <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
+            <img
+              src={sourceImage.dataUrl}
+              alt="Source"
+              className="h-12 w-12 rounded object-cover flex-shrink-0"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium truncate">{sourceImage.name}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {isEdit ? 'Source image for editing' : 'Source image for img2img (optional)'}
+              </p>
             </div>
-          ) : (
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={handlePickImage}
-              className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
-                dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40 hover:bg-accent/30'
-              }`}
+            <button
+              onClick={() => onSourceImageChange(null)}
+              className="p-1 text-muted-foreground hover:text-destructive rounded"
+              title="Remove source image"
             >
-              <ImagePlus className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">
-                Click to upload, drag & drop, or paste an image
-              </span>
-            </div>
-          )}
-        </div>
-      )}
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            onClick={handlePickImage}
+            className={`flex items-center justify-center gap-2 p-2 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
+              dragOver ? 'border-primary bg-primary/5' : 'border-border/50 hover:border-primary/40 hover:bg-accent/30'
+            }`}
+          >
+            <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-[11px] text-muted-foreground">
+              {isEdit ? 'Upload source image (required)' : 'Upload image for img2img (optional)'}
+            </span>
+          </div>
+        )}
+      </div>
 
       {/* Quick settings row */}
       <div className="flex items-center gap-4 mb-2 text-xs">
@@ -174,7 +174,8 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           />
         </div>
 
-        {isEdit && (
+        {/* Strength: always show for edit mode, show for gen mode when source image is uploaded */}
+        {(isEdit || sourceImage) && (
           <div className="flex items-center gap-1.5">
             <label className="text-muted-foreground">Strength</label>
             <input

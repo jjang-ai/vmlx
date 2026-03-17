@@ -123,6 +123,8 @@ export function registerImageHandlers(): void {
     count: number
     quantize?: number
     serverPort: number
+    imageBase64?: string    // Source image for img2img (optional)
+    strength?: number       // img2img strength (0-1, optional)
   }) => {
     try {
       const { sessionId, prompt, negativePrompt, model, width, height, steps, guidance, seed, count, serverPort } = params
@@ -147,6 +149,12 @@ export function registerImageHandlers(): void {
       if (negativePrompt) body.negative_prompt = negativePrompt
       if (seed != null) body.seed = seed
       if (params.quantize != null) body.quantize = params.quantize
+      // img2img: pass source image + strength to generation endpoint
+      if (params.imageBase64 && params.strength != null) {
+        const cleanB64 = params.imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
+        body.image = cleanB64
+        body.strength = params.strength
+      }
 
       activeGenerationController = new AbortController()
       // 30-minute timeout for image generation
@@ -166,6 +174,15 @@ export function registerImageHandlers(): void {
 
       const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
       const elapsed = (Date.now() - startTime) / 1000
+
+      // If img2img, save source image to disk for gallery display
+      let sourceImagePath: string | undefined
+      if (params.imageBase64 && params.strength != null) {
+        const srcId = uuidv4()
+        sourceImagePath = join(outputDir, `src_${srcId}.png`)
+        const rawB64 = params.imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
+        writeFileSync(sourceImagePath, Buffer.from(rawB64, 'base64'))
+      }
 
       // Save each image to disk and database
       const generations: ImageGeneration[] = []
@@ -190,8 +207,10 @@ export function registerImageHandlers(): void {
           steps,
           guidance,
           seed: item.seed ?? seed,
+          strength: params.strength,
           elapsedSeconds: elapsed,
           imagePath,
+          sourceImagePath,
           createdAt: Date.now()
         }
         db.addImageGeneration(gen)
