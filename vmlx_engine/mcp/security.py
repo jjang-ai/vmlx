@@ -228,9 +228,7 @@ class MCPCommandValidator:
             "LD_LIBRARY_PATH",
             "DYLD_INSERT_LIBRARIES",
             "DYLD_LIBRARY_PATH",
-            "PATH",  # Modifying PATH could redirect commands
-            "PYTHONPATH",
-            "NODE_PATH",
+            # PATH, PYTHONPATH, NODE_PATH allowed — users need these for local MCP servers
             "NODE_OPTIONS",  # Can inject --require to load arbitrary code
             "ELECTRON_RUN_AS_NODE",  # Turns Electron apps into plain Node.js
         }
