@@ -169,7 +169,7 @@ def _repack_jang_to_mlx(
     config: dict,
 ) -> dict[str, mx.array]:
     """Load JANG shards and repack quantized tensors into MLX QuantizedLinear format."""
-    from safetensors.numpy import load_file
+    from safetensors import safe_open
 
     INDEX_NAMES = ["model.jang.index.json", "model.jjqf.index.json", "model.mxq.index.json"]
     SHARD_GLOBS = ["*.jang.safetensors", "*.jjqf.safetensors", "*.mxq.safetensors"]
@@ -182,21 +182,44 @@ def _repack_jang_to_mlx(
             index_path = p
             break
 
-    raw_tensors: dict[str, np.ndarray] = {}
-
+    # Use lazy access — don't load all 60GB into RAM at once
+    shard_files = []
     if index_path:
         index = json.loads(index_path.read_text())
-        for sf in sorted(set(index["weight_map"].values())):
-            logger.info(f"  Loading shard: {sf}")
-            raw_tensors.update(load_file(str(model_path / sf)))
+        shard_files = [model_path / sf for sf in sorted(set(index["weight_map"].values()))]
     else:
         for pattern in SHARD_GLOBS:
-            for sf in sorted(model_path.glob(pattern)):
-                logger.info(f"  Loading shard: {sf.name}")
-                raw_tensors.update(load_file(str(sf)))
+            shard_files.extend(sorted(model_path.glob(pattern)))
 
-    if not raw_tensors:
+    shard_handles = {}
+    tensor_to_shard = {}
+    all_keys = []
+    for sf in shard_files:
+        logger.info(f"  Indexing shard: {sf.name}")
+        h = safe_open(str(sf), framework="numpy")
+        shard_handles[str(sf)] = h
+        for k in h.keys():
+            tensor_to_shard[k] = str(sf)
+            all_keys.append(k)
+
+    if not all_keys:
         raise FileNotFoundError(f"No JANG weight files found in {model_path}")
+
+    # Lazy tensor access — reads from disk on demand, one tensor at a time
+    class _LazyTensors:
+        def __getitem__(self, key):
+            return shard_handles[tensor_to_shard[key]].get_tensor(key)
+        def __contains__(self, key):
+            return key in tensor_to_shard
+        def __iter__(self):
+            return iter(all_keys)
+        def __len__(self):
+            return len(all_keys)
+        def pop(self, key, default=None):
+            # No-op for lazy access (tensors aren't held in memory)
+            return default
+
+    raw_tensors = _LazyTensors()
 
     quantized_bases: set[str] = set()
     non_quantized: dict[str, np.ndarray] = {}
