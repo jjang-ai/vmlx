@@ -29,6 +29,7 @@ interface CompletedDownload {
 export function DownloadsView() {
   const [activeDownloads, setActiveDownloads] = useState<ActiveDownload[]>([])
   const [queue, setQueue] = useState<Array<{ jobId: string; repoId: string }>>([])
+  const [paused, setPaused] = useState<Array<{ jobId: string; repoId: string }>>([])
   const [completed, setCompleted] = useState<CompletedDownload[]>([])
 
   const refreshStatus = () => {
@@ -83,6 +84,13 @@ export function DownloadsView() {
         return [...prev, { jobId: data.jobId, repoId: data.repoId }]
       })
     })
+    const unsubPaused = window.api.models.onDownloadPaused?.((data: any) => {
+      setActiveDownloads(prev => prev.filter(d => d.jobId !== data.jobId))
+      setPaused(prev => {
+        if (prev.some(p => p.jobId === data.jobId)) return prev
+        return [...prev, { jobId: data.jobId, repoId: data.repoId }]
+      })
+    })
 
     return () => {
       unsubProgress()
@@ -90,6 +98,7 @@ export function DownloadsView() {
       unsubError()
       unsubStart?.()
       unsubQueued?.()
+      unsubPaused?.()
     }
   }, [])
 
@@ -123,12 +132,21 @@ export function DownloadsView() {
                   <span className="text-sm font-medium truncate">{dl.repoId}</span>
                 </div>
                 {!dl.error && (
-                  <button
-                    onClick={() => window.api.models.cancelDownload(dl.jobId)}
-                    className="text-xs text-destructive hover:text-destructive/80 px-2 py-1 border border-destructive/30 rounded flex-shrink-0 ml-2"
-                  >
-                    Cancel
-                  </button>
+                  <div className="flex gap-1 flex-shrink-0 ml-2">
+                    <button
+                      onClick={() => window.api.models.pauseDownload(dl.jobId)}
+                      className="text-xs text-yellow-600 hover:text-yellow-500 px-2 py-1 border border-yellow-500/30 rounded"
+                      title="Pause download"
+                    >
+                      <Pause className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={() => window.api.models.cancelDownload(dl.jobId)}
+                      className="text-xs text-destructive hover:text-destructive/80 px-2 py-1 border border-destructive/30 rounded"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 )}
               </div>
               {dl.error && <p className="text-xs text-destructive mb-2">{dl.error}</p>}
@@ -162,6 +180,41 @@ export function DownloadsView() {
             </div>
           )
         })}
+
+        {/* Paused */}
+        {paused.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Paused ({paused.length})</h3>
+            {paused.map((item) => (
+              <div key={item.jobId} className="flex items-center justify-between py-2 px-3 border border-yellow-500/30 bg-yellow-500/5 rounded mb-1">
+                <div className="flex items-center gap-2">
+                  <Pause className="h-3.5 w-3.5 text-yellow-500" />
+                  <span className="text-sm truncate">{item.repoId}</span>
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => {
+                      window.api.models.resumeDownload(item.jobId)
+                      setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
+                    }}
+                    className="text-xs text-green-600 hover:text-green-500 px-2 py-1 border border-green-500/30 rounded flex items-center gap-1"
+                  >
+                    <Play className="h-3 w-3" /> Resume
+                  </button>
+                  <button
+                    onClick={() => {
+                      window.api.models.cancelDownload(item.jobId)
+                      setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
+                    }}
+                    className="p-1 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Queued */}
         {queue.length > 0 && (

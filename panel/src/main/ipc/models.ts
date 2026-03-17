@@ -721,8 +721,9 @@ export function registerModelHandlers(): void {
   async function processQueue() {
     // Start downloads up to MAX_CONCURRENT
     while (activeJobs.size < MAX_CONCURRENT && downloadQueue.length > 0) {
-      const job = downloadQueue.shift()!
-      if (job.wasPaused) continue  // Skip paused jobs
+      const job = downloadQueue[0]
+      if (job.status === 'paused') break  // Don't start paused jobs, stop processing
+      downloadQueue.shift()
       startDownloadJob(job)
     }
   }
@@ -747,21 +748,19 @@ export function registerModelHandlers(): void {
       'token = os.environ.get("HF_TOKEN") or None',
       'try:',
       '    api = HfApi()',
-      '    info = api.repo_info(repo_id, token=token, files_metadata=True)',
-      '    files = [s for s in info.siblings if s.rfilename and not s.rfilename.startswith(".")]',
-      '    total_bytes = sum(s.size or 0 for s in files)',
+      '    tree = list(api.list_repo_tree(repo_id, token=token, recursive=True))',
+      '    files = [f for f in tree if hasattr(f, "rfilename") and not f.rfilename.startswith(".")]',
+      '    total_bytes = sum(getattr(f, "size", 0) or 0 for f in files)',
       '    downloaded_bytes = 0',
       '    total_files = len(files)',
       '    print(json.dumps({"type":"init","total_bytes":total_bytes,"total_files":total_files}), flush=True)',
       '    for i, f in enumerate(files):',
-      '        est_size = f.size or 0',
+      '        est_size = getattr(f, "size", 0) or 0',
       '        print(json.dumps({"type":"file_start","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes}), flush=True)',
       '        t0 = time.time()',
       '        dl_path = hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
       '        actual_size = os.path.getsize(dl_path) if os.path.exists(dl_path) else est_size',
-      '        if est_size == 0 and total_bytes == 0:',
-      '            total_bytes += actual_size',
-      '        downloaded_bytes += actual_size if est_size == 0 else est_size',
+      '        downloaded_bytes += actual_size',
       '        elapsed = time.time() - t0',
       '        speed = actual_size / elapsed if elapsed > 0 else 0',
       '        pct = int(downloaded_bytes * 100 / total_bytes) if total_bytes > 0 else int((i+1) * 100 / total_files)',
@@ -889,7 +888,11 @@ export function registerModelHandlers(): void {
     proc.on('close', async (code: number | null) => {
       console.log(`[DOWNLOADS] Process exited: ${job.repoId} code=${code} cancelled=${job.wasCancelled}`)
 
-      if (job.wasCancelled) {
+      if (job.wasPaused) {
+        // Paused — keep files for resume, don't emit completion
+        console.log(`[DOWNLOADS] Paused (files preserved): ${job.repoId}`)
+        return  // Don't clean up — job is already back in queue
+      } else if (job.wasCancelled) {
         try { await unlink(markerFile) } catch (_) { }
         // Remove partial model directory to prevent incomplete models from appearing in scan
         try { await rm(job.modelDir, { recursive: true, force: true }) } catch (_) { }
@@ -1225,6 +1228,47 @@ export function registerModelHandlers(): void {
     }
 
     return { success: false, error: 'No matching download found' }
+  })
+
+  // Pause a download — kills the process but keeps job for resume
+  ipcMain.handle('models:pauseDownload', async (_, jobId: string) => {
+    if (activeJobs.has(jobId)) {
+      const job = activeJobs.get(jobId)!
+      console.log(`[DOWNLOADS] Pausing: ${job.repoId}`)
+      job.wasPaused = true
+      job.wasCancelled = true  // Signals the close handler to not delete files
+      job.process?.kill('SIGTERM')
+      // Move back to queue front so it can be resumed
+      job.status = 'paused'
+      activeJobs.delete(jobId)
+      downloadQueue.unshift(job)
+      emitToRenderer('models:downloadPaused', { jobId: job.id, repoId: job.repoId })
+      processQueue()  // Start next queued job if any
+      return { success: true }
+    }
+    return { success: false, error: 'Download not active' }
+  })
+
+  // Resume a paused download
+  ipcMain.handle('models:resumeDownload', async (_, jobId: string) => {
+    const idx = downloadQueue.findIndex(j => j.id === jobId && j.status === 'paused')
+    if (idx >= 0) {
+      const job = downloadQueue.splice(idx, 1)[0]
+      job.wasPaused = false
+      job.wasCancelled = false
+      job.status = 'queued'
+      job.progress = undefined
+      console.log(`[DOWNLOADS] Resuming: ${job.repoId}`)
+      // hf_hub_download resumes automatically (checks existing files)
+      if (activeJobs.size < MAX_CONCURRENT) {
+        startDownloadJob(job)
+      } else {
+        downloadQueue.unshift(job)
+        emitToRenderer('models:downloadQueued', { jobId: job.id, repoId: job.repoId })
+      }
+      return { success: true }
+    }
+    return { success: false, error: 'Download not found or not paused' }
   })
 
   // Get current download status (all jobs)

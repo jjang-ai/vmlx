@@ -54,6 +54,13 @@ const api = {
       ipcRenderer.invoke('models:checkImageModel', modelName, quantize ?? 4),
     downloadImageModel: (modelName: string, quantize?: number) =>
       ipcRenderer.invoke('models:downloadImageModel', modelName, quantize ?? 4),
+    pauseDownload: (jobId: string) => ipcRenderer.invoke('models:pauseDownload', jobId),
+    resumeDownload: (jobId: string) => ipcRenderer.invoke('models:resumeDownload', jobId),
+    onDownloadPaused: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('models:downloadPaused', handler)
+      return () => { ipcRenderer.removeListener('models:downloadPaused', handler) }
+    },
     openDownloadWindow: () => ipcRenderer.invoke('downloads:openWindow'),
   },
 

@@ -25,6 +25,9 @@ declare global {
         getDownloadStatus: () => Promise<any>
         onDownloadStarted: (callback: (data: any) => void) => () => void
         onDownloadQueued: (callback: (data: any) => void) => () => void
+        onDownloadPaused: (callback: (data: any) => void) => () => void
+        pauseDownload: (jobId: string) => Promise<{ success: boolean; error?: string }>
+        resumeDownload: (jobId: string) => Promise<{ success: boolean; error?: string }>
         onDownloadComplete: (callback: (data: any) => void) => () => void
         onDownloadError: (callback: (data: any) => void) => () => void
         startDownload: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
