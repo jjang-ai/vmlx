@@ -134,3 +134,6 @@ panel/.env.signing
 .agent/
 .github/
 nohup.out
+
+# Internal audit docs
+docs/audit-*

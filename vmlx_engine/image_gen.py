@@ -15,9 +15,8 @@ import base64
 import io
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +46,6 @@ EDIT_MODELS = {
     "flux-fill": "fill-dev",
     "fill": "fill-dev",
     "fill-dev": "fill-dev",
-    "flux2-klein-edit": "flux2-klein-edit-4b",
-    "flux2-klein-edit-4b": "flux2-klein-edit-4b",
-    "z-image-img2img": "z-image-turbo",
 }
 
 # Default inference steps per model (schnell is fast, dev needs more)
@@ -66,7 +62,6 @@ DEFAULT_STEPS = {
     "qwen-image-edit": 28,
     "kontext-dev": 24,
     "fill-dev": 20,
-    "flux2-klein-edit-4b": 20,
 }
 
 
@@ -85,6 +80,59 @@ class ImageGenResult:
     def __post_init__(self):
         if not self.b64_json and self.image_bytes:
             self.b64_json = base64.b64encode(self.image_bytes).decode('utf-8')
+
+
+def _fix_quantized_layers(model) -> int:
+    """Fix QuantizedEmbedding/QuantizedLinear layers with non-uint32 weights.
+
+    mflux creates quantized layers for ALL modules when quantize=N,
+    but some saved weights (e.g., T5 shared.weight, CLIP embeddings,
+    transformer.x_embedder) are stored as bfloat16 — not uint32.
+    mx.dequantize/quantized_matmul fails on these.
+    This replaces them with standard Embedding/Linear layers.
+    """
+    import mlx.nn as nn
+    import mlx.core as mx
+
+    fixed = 0
+    replacements = []
+    for name, module in model.named_modules():
+        is_qemb = isinstance(module, nn.QuantizedEmbedding)
+        is_qlin = isinstance(module, nn.QuantizedLinear)
+        if (is_qemb or is_qlin) and hasattr(module, 'weight') and module.weight.dtype != mx.uint32:
+            replacements.append((name, module, 'embedding' if is_qemb else 'linear'))
+
+    for name, module, layer_type in replacements:
+        parts = name.split('.')
+        parent = model
+        for p in parts[:-1]:
+            if hasattr(parent, p):
+                parent = getattr(parent, p)
+            elif isinstance(parent, dict) and p in parent:
+                parent = parent[p]
+            else:
+                parent = parent[int(p)] if p.isdigit() else getattr(parent, p)
+
+        if layer_type == 'embedding':
+            replacement = nn.Embedding(module.weight.shape[0], module.weight.shape[1])
+            replacement.weight = module.weight
+        else:
+            has_bias = hasattr(module, 'bias') and module.bias is not None
+            replacement = nn.Linear(module.weight.shape[1], module.weight.shape[0], bias=has_bias)
+            replacement.weight = module.weight
+            if has_bias:
+                replacement.bias = module.bias
+
+        attr = parts[-1]
+        if isinstance(parent, dict):
+            parent[attr] = replacement
+        elif attr.isdigit():
+            parent[int(attr)] = replacement
+        else:
+            setattr(parent, attr, replacement)
+        fixed += 1
+
+    return fixed
 
 
 class ImageGenEngine:
@@ -153,6 +201,12 @@ class ImageGenEngine:
         else:
             self._load_flux(base_name, quantize, model_path, ModelConfig)
 
+        # Fix quantized embeddings that have non-uint32 weights (mflux bug)
+        if quantize and self._model is not None:
+            fixed = _fix_quantized_layers(self._model)
+            if fixed:
+                logger.info(f"Fixed {fixed} non-quantized embedding layers")
+
         elapsed = time.perf_counter() - start
         self._model_name = base_name  # Use canonical mflux name for DEFAULT_STEPS lookup
         self._quantize = quantize
@@ -216,14 +270,17 @@ class ImageGenEngine:
 
         model_config = ModelConfig.from_name(base_name)
 
-        # Try local path first (needs text_encoder + text_encoder_2)
+        # Try local path first (needs text_encoder + text_encoder_2, except Klein)
         if model_path and Path(model_path).is_dir():
             transformer_dir = Path(model_path) / "transformer"
             te2_dir = Path(model_path) / "text_encoder_2"
             has_safetensors = transformer_dir.is_dir() and any(
                 f.suffix == '.safetensors' for f in transformer_dir.iterdir()
             )
-            if has_safetensors and te2_dir.is_dir():
+            # Klein models are single-encoder — don't require text_encoder_2
+            is_klein = 'klein' in base_name.lower()
+            te2_ok = te2_dir.is_dir() or is_klein
+            if has_safetensors and te2_ok:
                 logger.info(f"Loading Flux from local path: {model_path}")
                 try:
                     self._model = Flux1(
@@ -281,7 +338,18 @@ class ImageGenEngine:
                 idx = json.loads(index_path.read_text())
                 class_name = idx.get("_class_name", "").lower()
                 if "zimage" in class_name or "z-image" in class_name:
-                    return "z-image-turbo"  # Z-Image uses turbo config
+                    # Distinguish z-image-turbo from z-image by checking directory
+                    # name or scheduler config hints
+                    dir_lower = model_dir.name.lower()
+                    if "turbo" in dir_lower:
+                        return "z-image-turbo"
+                    # Default: check scheduler — turbo uses fewer default steps
+                    scheduler_cfg = idx.get("scheduler", [None, {}])
+                    if isinstance(scheduler_cfg, list) and len(scheduler_cfg) > 1:
+                        sched_class = str(scheduler_cfg[0]).lower()
+                        if "euler" in sched_class:
+                            return "z-image"  # Non-turbo uses Euler scheduler
+                    return "z-image-turbo"  # Default to turbo for ZImage class
             except Exception:
                 pass
 
@@ -291,13 +359,6 @@ class ImageGenEngine:
         for known in sorted(SUPPORTED_MODELS, key=len, reverse=True):
             if known.replace("-", "") in dir_lower.replace("-", ""):
                 return SUPPORTED_MODELS[known]
-
-        # Check if any parent directory matches
-        for part in model_dir.parts:
-            part_lower = part.lower()
-            for known in sorted(SUPPORTED_MODELS, key=len, reverse=True):
-                if known.replace("-", "") in part_lower.replace("-", ""):
-                    return SUPPORTED_MODELS[known]
 
         # Fallback to the provided name (may work if it's a valid mflux name)
         return fallback_name
@@ -399,6 +460,20 @@ class ImageGenEngine:
             raise ImportError("mflux not installed. Install with: pip install mflux")
 
         resolved = EDIT_MODELS.get(model_name.lower(), model_name)
+
+        # Detect quantization level from local model config if not explicitly set
+        if model_path and quantize is None:
+            try:
+                import json
+                cfg_path = Path(model_path) / "config.json"
+                if cfg_path.exists():
+                    cfg = json.loads(cfg_path.read_text())
+                    if "quantization_config" in cfg:
+                        quantize = cfg["quantization_config"].get("bits")
+                        logger.info(f"Detected quantization from config: {quantize}-bit")
+            except Exception:
+                pass
+
         logger.info(f"Loading edit model: {resolved} (quantize={quantize})")
         start = time.perf_counter()
 
@@ -428,16 +503,14 @@ class ImageGenEngine:
                 model_path=model_path,
                 lora_paths=[],
             )
-        elif resolved == "flux2-klein-edit-4b":
-            from mflux.models.flux2.variants.edit.flux2_klein_edit import Flux2KleinEdit
-            self._model = Flux2KleinEdit(
-                model_config=model_config,
-                quantize=quantize,
-                model_path=model_path,
-                lora_paths=[],
-            )
         else:
             raise ValueError(f"Unknown edit model: {model_name}. Available: {list(EDIT_MODELS.keys())}")
+
+        # Fix quantized embeddings that have non-uint32 weights (mflux bug)
+        if quantize and self._model is not None:
+            fixed = _fix_quantized_layers(self._model)
+            if fixed:
+                logger.info(f"Fixed {fixed} non-quantized embedding layers")
 
         elapsed = time.perf_counter() - start
         self._model_name = resolved
@@ -526,17 +599,6 @@ class ImageGenEngine:
                 prompt=prompt,
                 image_path=image_path,
                 masked_image_path=mask_path,
-                image_strength=strength,
-                num_inference_steps=steps,
-                height=height,
-                width=width,
-                guidance=guidance,
-            )
-        elif model_name == "flux2-klein-edit-4b":
-            generated_image = self._model.generate_image(
-                seed=seed,
-                prompt=prompt,
-                image_paths=[image_path],
                 image_strength=strength,
                 num_inference_steps=steps,
                 height=height,

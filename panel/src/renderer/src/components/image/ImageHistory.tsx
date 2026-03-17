@@ -70,8 +70,10 @@ export function ImageHistory({ sessions, currentId, onSelect, onNew, onDelete, o
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1">
-                    {session.sessionType === 'edit' && (
+                    {session.sessionType === 'edit' ? (
                       <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">Edit</span>
+                    ) : (
+                      <span className="text-[9px] px-1 py-0 rounded bg-blue-500/15 text-blue-400 flex-shrink-0">Gen</span>
                     )}
                     <p className="text-xs font-medium truncate">{session.modelName}</p>
                   </div>

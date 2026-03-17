@@ -1,10 +1,11 @@
 """
-JANG Model Loader — Load JANG mixed-precision quantized models for inference.
+JANG Model Loader — Load JANG quantized models into MLX for inference.
+Created by Jinho Jang (eric@jangq.ai)
 
-JANG models store weights at variable bit widths (2-8 bits per block) based on
-importance scoring. This loader repacks them into MLX QuantizedLinear layers at
-load time, so weights stay quantized in GPU memory and use quantized_matmul for
-inference. This gives near-native quantized speed with minimal memory overhead.
+Repacks JANG weights into MLX native quantized format (QuantizedLinear /
+QuantizedSwitchLinear). Models stay quantized in GPU memory — no float16
+expansion. Dequantization happens on-the-fly in Metal kernels via
+quantized_matmul and gather_qmm, like GGUF stays quantized in llama.cpp.
 """
 
 import json
@@ -36,24 +37,10 @@ def is_jang_model(model_path: str | Path) -> bool:
     return _find_config_path(Path(model_path)) is not None
 
 
-def load_jang_config(model_path: str | Path) -> dict | None:
-    """Load and return the JANG config dict, or None if not a JANG model."""
-    config_path = _find_config_path(Path(model_path))
-    if config_path is None:
-        return None
-    try:
-        return json.loads(config_path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-# Alias for compatibility
-JANG_CONFIG_NAMES = JANG_CONFIG_FILENAMES
-
-
 def load_jang_model(model_path: str | Path):
     """
-    Load a JANG model by repacking weights into MLX QuantizedLinear layers.
+    Load a JANG model by dequantizing weights to float16 and building
+    a standard mlx-lm model.
 
     Returns:
         Tuple of (model, tokenizer) compatible with mlx-lm
@@ -67,10 +54,7 @@ def load_jang_model(model_path: str | Path):
     if not config_path:
         raise FileNotFoundError(f"No JANG config found in {path}")
 
-    try:
-        jang_cfg = json.loads(config_path.read_text())
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JANG config {config_path.name} is not valid JSON: {e}") from e
+    jang_cfg = json.loads(config_path.read_text())
     fmt = jang_cfg.get("format")
     if not fmt:
         raise ValueError(
@@ -131,22 +115,10 @@ def load_jang_model(model_path: str | Path):
     if not hasattr(model, "config"):
         model.config = config
 
-    # Materialize all lazy arrays in GPU memory — this is where OOM would hit
-    try:
-        mx.metal.clear_cache() if hasattr(mx, 'metal') else None
-        mx.eval(model.parameters())  # noqa: S307 — mx.eval materializes MLX arrays, not Python eval
-    except (MemoryError, RuntimeError) as e:
-        err_str = str(e).lower()
-        if "memory" in err_str or "alloc" in err_str or "metal" in err_str:
-            raise RuntimeError(
-                f"Out of memory during JANG model loading ({actual_bits:.1f}-bit avg). "
-                f"Try a more aggressively quantized model, close other applications, "
-                f"or reduce cache memory settings."
-            ) from e
-        raise
+    mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
     n_params = sum(
-        p.size for _, p in mx.utils.tree_flatten(model.parameters()) if isinstance(p, mx.array)
+        p.size for p in model.parameters().values() if isinstance(p, mx.array)
     )
     logger.info(
         f"JANG model loaded in {elapsed:.1f}s: "
@@ -165,7 +137,7 @@ def _repack_jang_to_mlx(
     block_size: int,
     config: dict,
 ) -> dict[str, mx.array]:
-    """Load JANG shards and repack quantized tensors into MLX QuantizedLinear format."""
+    """Load JANG shards and dequantize quantized tensors to float16."""
     from safetensors.numpy import load_file
 
     INDEX_NAMES = ["model.jang.index.json", "model.jjqf.index.json", "model.mxq.index.json"]
@@ -393,7 +365,19 @@ def _repack_jang_to_mlx(
         )
         logger.info(f"  Bit distribution: {dist_str}")
 
-    return weights
+    # Rename for mlx-vlm compatibility:
+    # model.visual.* → vision_tower.* (VL models)
+    # model.language_model.* → language_model.model.* (VL models)
+    renamed = {}
+    for k, v in weights.items():
+        new_k = k
+        if new_k.startswith("model.visual"):
+            new_k = "vision_tower" + new_k[len("model.visual"):]
+        elif new_k.startswith("model.language_model"):
+            new_k = "language_model.model" + new_k[len("model.language_model"):]
+        renamed[new_k] = v
+
+    return renamed
 
 
 def _stack_per_expert_weights(weights, config):
@@ -440,6 +424,10 @@ def _stack_per_expert_weights(weights, config):
         # Stack weights
         to_stack = [weights.pop(experts[e]) for e in range(num_experts)]
         weights[f"{sw_key}.weight"] = mx.stack(to_stack)
+
+        # Stack scales if present
+        base_scale_key = list(experts.values())[0].replace(".weight", "")
+        has_scales = f"{base_scale_key}.scales" in weights or f"{base_scale_key.rsplit('.', 1)[0]}.scales" in weights
 
         # Try to find and stack scales/biases
         for suffix in [".scales", ".biases"]:
@@ -515,8 +503,8 @@ def _fix_quantized_bits(model, weights):
             actual_bits = (module.weight.shape[-1] * 32) // in_dim
             if actual_bits != module.bits and actual_bits in (2, 3, 4, 5, 6, 8):
                 module.bits = actual_bits
-        except Exception as e:
-            logger.warning(f"Could not fix bits for {name}: {e}")
+        except Exception:
+            pass
 
 
 def _infer_weight_shape(
@@ -582,27 +570,7 @@ def _infer_weight_shape(
 
     # Fallback: try to infer from element count
     if n_elements > 0 and hidden > 0 and n_elements % hidden == 0:
-        inferred_dim = n_elements // hidden
-        # Validate: the inferred dimension must match a known config dimension
-        # to avoid silent shape corruption from coincidental divisibility
-        known_dims = {
-            d for d in (
-                hidden, intermediate, moe_intermediate,
-                shared_expert_intermediate,
-                num_heads * head_dim, num_kv_heads * head_dim,
-                vocab_size, 2 * intermediate,
-                (num_heads + 2 * num_kv_heads) * head_dim,
-            ) if d > 0
-        }
-        if inferred_dim in known_dims:
-            return (inferred_dim, hidden)
-        else:
-            logger.warning(
-                f"  Inferred shape ({inferred_dim}, {hidden}) for {base_name} "
-                f"has unknown dimension {inferred_dim} — not matching any config "
-                f"dimension {sorted(known_dims)}. Returning None to avoid shape corruption."
-            )
-            return None
+        return (n_elements // hidden, hidden)
 
     logger.warning(
         f"  Could not infer shape for {base_name} ({n_elements} elements)"

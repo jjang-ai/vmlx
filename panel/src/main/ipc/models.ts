@@ -74,7 +74,7 @@ async function detectModelFormat(modelPath: string): Promise<'mlx' | 'diffusers'
         const cfg = JSON.parse(readFileSync(join(modelPath, 'config.json'), 'utf-8'))
         if (cfg.model_type || cfg.architectures || cfg.quantization) return 'mlx'
         // Also accept JANG models
-        if (files.some(f => f === 'jang_config.json' || f === 'jjqf_config.json' || f === 'mxq_config.json')) return 'mlx'
+        if (files.some(f => f === 'jang_config.json' || f === 'jang_cfg.json' || f === 'jjqf_config.json' || f === 'mxq_config.json')) return 'mlx'
         // config.json without model_type/architectures is not a model (could be scheduler config, etc.)
         return 'unknown'
       } catch {
@@ -82,7 +82,7 @@ async function detectModelFormat(modelPath: string): Promise<'mlx' | 'diffusers'
       }
     }
     // JANG-only model (has jang_config.json + safetensors but config.json may lack model_type)
-    if (hasSafetensors && files.some(f => f === 'jang_config.json' || f === 'jjqf_config.json' || f === 'mxq_config.json')) return 'mlx'
+    if (hasSafetensors && files.some(f => f === 'jang_config.json' || f === 'jang_cfg.json' || f === 'jjqf_config.json' || f === 'mxq_config.json')) return 'mlx'
     if (hasGGUF) return 'gguf'
     return 'unknown'
   } catch {
@@ -108,10 +108,13 @@ const BUILTIN_IMAGE_PATHS = [
 // Maps named mflux model IDs to HuggingFace repos for pre-downloading.
 // These repos contain the quantized mflux-format weights that mflux can load locally.
 // Without pre-download, mflux downloads silently with no progress UI.
+// Verified HF repo IDs — only repos confirmed to exist are listed.
+// Full-precision (0) repos are raw diffusers format; mflux quantizes on-the-fly.
+// Quantized repos are pre-quantized in mflux-native format for fast startup.
 const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
   // Generation models
   'schnell': {
-    4: 'madroid/flux.1-schnell-all-in-one-T5xxl-4bit',
+    4: 'dhairyashil/FLUX.1-schnell-mflux-4bit',
     8: 'dhairyashil/FLUX.1-schnell-mflux-8bit',
     0: 'black-forest-labs/FLUX.1-schnell',
   },
@@ -121,9 +124,9 @@ const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
     0: 'black-forest-labs/FLUX.1-dev',
   },
   'z-image-turbo': {
-    4: 'mflux-community/Z-Image-Turbo-Alpha-v0.1-4bit',
+    4: 'filipstrand/Z-Image-Turbo-mflux-4bit',
     8: 'carsenk/z-image-turbo-mflux-8bit',
-    0: 'mflux-community/Z-Image-Turbo-Alpha-v0.1',
+    0: 'Tongyi-MAI/Z-Image-Turbo',
   },
   'flux2-klein-4b': {
     8: 'AITRADER/FLUX2-klein-4B-mlx-8bit',
@@ -132,25 +135,10 @@ const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
   'flux2-klein-9b': {
     0: 'black-forest-labs/FLUX.2-klein-9B',
   },
-  // Editing models
+  // Editing models — full precision only (quantization produces unusable edits with current mflux)
+  // Only Qwen Image Edit is confirmed working. Flux Kontext/Fill/Klein Edit coming when mflux supports them.
   'qwen-image-edit': {
-    4: 'mflux-community/Qwen-Image-Edit-4bit',
-    8: 'mflux-community/Qwen-Image-Edit-8bit',
     0: 'Qwen/Qwen-Image-Edit',
-  },
-  'flux-kontext': {
-    4: 'akx/FLUX.1-Kontext-dev-mflux-4bit',
-    8: 'mflux-community/FLUX.1-Kontext-dev-mflux-8bit',
-    0: 'black-forest-labs/FLUX.1-Kontext-dev',
-  },
-  'flux-fill': {
-    4: 'mflux-community/FLUX.1-Fill-dev-mflux-4bit',
-    8: 'mflux-community/FLUX.1-Fill-dev-mflux-8bit',
-    0: 'black-forest-labs/FLUX.1-Fill-dev',
-  },
-  'flux2-klein-edit': {
-    8: 'mflux-community/FLUX.2-klein-edit-4B-mflux-8bit',
-    0: 'black-forest-labs/FLUX.2-klein-edit-4B',
   },
 }
 
@@ -165,7 +153,99 @@ function resolveImageModelRepo(modelName: string, quantize: number): string | nu
   return repos[available[0]] || null
 }
 
-/** Check if a named image model is available locally in HF cache */
+/**
+ * Validate that an image model directory has ALL required components.
+ *
+ * mflux models need more than just transformer/ weights — they also need
+ * text encoders, tokenizers, and VAE. Without these, the model appears
+ * "downloaded" but the server hangs trying to fetch missing components.
+ *
+ * Two formats exist:
+ *   mflux-quantized (pre-quantized all-in-one): transformer/ + text_encoder/ both with .safetensors
+ *   diffusers (full precision): model_index.json lists all components; verify each exists
+ *
+ * Returns { complete, missing[] } — missing lists which components are absent.
+ */
+export function validateImageModelCompleteness(modelDir: string): { complete: boolean; missing: string[] } {
+  const { readdirSync } = require('fs')
+  const missing: string[] = []
+
+  let files: string[]
+  try {
+    files = readdirSync(modelDir)
+  } catch {
+    return { complete: false, missing: ['directory unreadable'] }
+  }
+
+  // Check if transformer/ has weight files (required for ALL image models)
+  let hasTransformerWeights = false
+  if (files.includes('transformer')) {
+    try {
+      const tFiles: string[] = readdirSync(join(modelDir, 'transformer'))
+      hasTransformerWeights = tFiles.some((f: string) => f.endsWith('.safetensors'))
+    } catch { }
+  }
+  if (!hasTransformerWeights) {
+    // Some mflux models have root-level .safetensors (rare, but allow it)
+    const hasRootWeights = files.some((f: string) => f.endsWith('.safetensors'))
+    if (!hasRootWeights) {
+      missing.push('transformer/ weights')
+    }
+  }
+
+  // If model_index.json exists, use it to verify all listed components
+  if (files.includes('model_index.json')) {
+    try {
+      const indexRaw = readFileSync(join(modelDir, 'model_index.json'), 'utf-8')
+      const index = JSON.parse(indexRaw)
+      // model_index.json lists component dirs as keys with [class, subclass] values
+      // Standard keys to check: text_encoder, text_encoder_2, transformer, vae, tokenizer, etc.
+      // Only verify directories that are declared in model_index.json
+      for (const [key, value] of Object.entries(index)) {
+        if (key.startsWith('_')) continue  // skip _class_name, _diffusers_version, etc.
+        if (!Array.isArray(value)) continue  // skip non-component entries
+        const [className] = value as string[]
+        if (!className || className === 'None' || className === null) continue
+        // Check that the component directory exists
+        if (!files.includes(key)) {
+          missing.push(`${key}/`)
+        }
+      }
+    } catch {
+      // model_index.json parse failed — fall through to heuristic check
+    }
+  } else {
+    // No model_index.json → mflux-quantized format. Must have text_encoder/ with weights.
+    if (files.includes('text_encoder')) {
+      try {
+        const teFiles: string[] = readdirSync(join(modelDir, 'text_encoder'))
+        const hasTeWeights = teFiles.some((f: string) => f.endsWith('.safetensors'))
+        if (!hasTeWeights) missing.push('text_encoder/ weights')
+      } catch {
+        missing.push('text_encoder/ (unreadable)')
+      }
+    } else {
+      missing.push('text_encoder/')
+    }
+
+    // Flux dual-encoder models also need text_encoder_2/
+    // Some models use a single text encoder and don't need text_encoder_2/:
+    // - Z-Image models (ZImage class, single encoder)
+    // - Klein models (single T5 encoder, no CLIP)
+    // Only flag text_encoder_2 as missing for dual-encoder Flux models (Schnell, Dev, Kontext, Fill)
+    const dirLower = modelDir.toLowerCase()
+    const isSingleEncoder = dirLower.includes('z-image') || dirLower.includes('zimage') || dirLower.includes('klein')
+    if (!isSingleEncoder && !files.includes('text_encoder_2')) {
+      missing.push('text_encoder_2/')
+    }
+  }
+
+  return { complete: missing.length === 0, missing }
+}
+
+/** Check if a named image model is available locally in HF cache.
+ *  Validates that the snapshot contains ALL required components,
+ *  not just metadata or partial weights from an interrupted download. */
 function checkImageModelInHFCache(repoId: string): string | null {
   // HF hub cache: ~/.cache/huggingface/hub/models--org--name/snapshots/<hash>/
   const cacheBase = join(homedir(), '.cache/huggingface/hub')
@@ -176,15 +256,26 @@ function checkImageModelInHFCache(repoId: string): string | null {
     const { readdirSync } = require('fs')
     const snapshots = readdirSync(cacheDir)
     if (snapshots.length === 0) return null
-    // Return the most recent snapshot path
-    return join(cacheDir, snapshots[snapshots.length - 1])
+    // Check snapshots from most recent to oldest, return first that is complete
+    for (let i = snapshots.length - 1; i >= 0; i--) {
+      const snapshotPath = join(cacheDir, snapshots[i])
+      const validation = validateImageModelCompleteness(snapshotPath)
+      if (validation.complete) {
+        return snapshotPath
+      } else {
+        console.log(`[IMAGE] HF cache snapshot incomplete (${snapshotPath}): missing ${validation.missing.join(', ')}`)
+      }
+    }
+    // No snapshot contains all required components — incomplete download
+    return null
   } catch {
     return null
   }
 }
 
-/** Check if a named image model is available locally (HF cache or mlxstudio/models/image) */
-function checkImageModelLocal(modelName: string, quantize: number): { available: boolean; localPath?: string; repoId?: string } {
+/** Check if a named image model is available locally (HF cache or mlxstudio/models/image).
+ *  Validates ALL required components exist — not just transformer weights. */
+function checkImageModelLocal(modelName: string, quantize: number): { available: boolean; localPath?: string; repoId?: string; missing?: string[] } {
   const repoId = resolveImageModelRepo(modelName, quantize)
   if (!repoId) return { available: false }
 
@@ -206,20 +297,46 @@ function checkImageModelLocal(modelName: string, quantize: number): { available:
       modelName,
       repoName,
     ].filter(Boolean)
+    // Track the best partial match (has weights but missing components) for error reporting
+    let bestPartialPath: string | undefined
+    let bestPartialMissing: string[] | undefined
     for (const dir of dirs) {
       const lower = dir.toLowerCase()
       for (const pattern of namePatterns) {
-        if (lower.includes(pattern.toLowerCase())) {
+        const p = pattern.toLowerCase()
+        // Match as a complete segment: exact match, starts with pattern (followed by
+        // delimiter), ends with pattern (preceded by delimiter), or contains pattern
+        // between delimiters. Avoids false positives like "dev" matching "flux-kontext-dev-full".
+        const segmentMatch = lower === p ||
+          lower.startsWith(p + '-') || lower.startsWith(p + '_') ||
+          lower.endsWith('-' + p) || lower.endsWith('_' + p) ||
+          lower.includes('-' + p + '-') || lower.includes('_' + p + '_') ||
+          lower.includes('-' + p + '_') || lower.includes('_' + p + '-')
+        if (segmentMatch) {
           const fullPath = join(imageDir, dir)
-          // Verify it's actually a model directory (has transformer/ or safetensors)
-          try {
-            const files = readdirSync(fullPath)
-            if (files.includes('transformer') || files.some((f: string) => f.endsWith('.safetensors'))) {
-              return { available: true, localPath: fullPath, repoId }
-            }
-          } catch { }
+          const validation = validateImageModelCompleteness(fullPath)
+          if (validation.complete) {
+            return { available: true, localPath: fullPath, repoId }
+          } else if (!bestPartialPath && validation.missing.length > 0) {
+            // Remember this partial match for error reporting — only if it has
+            // SOME weights (not an empty dir)
+            try {
+              const files = readdirSync(fullPath)
+              const hasAnyWeights = files.some((f: string) => f.endsWith('.safetensors')) ||
+                (files.includes('transformer') && readdirSync(join(fullPath, 'transformer')).some((f: string) => f.endsWith('.safetensors')))
+              if (hasAnyWeights) {
+                bestPartialPath = fullPath
+                bestPartialMissing = validation.missing
+                console.log(`[IMAGE] Model ${modelName} at ${fullPath} is incomplete: missing ${validation.missing.join(', ')}`)
+              }
+            } catch { }
+          }
         }
       }
+    }
+    // If we found a partial match, report it as unavailable with details
+    if (bestPartialPath) {
+      return { available: false, repoId, missing: bestPartialMissing }
     }
   } catch { }
 
@@ -367,7 +484,7 @@ async function scanModelsInPath(basePath: string, modelType?: string, skipDirs?:
           } catch { /* no config or parse error */ }
           // JANG format: read jang_config.json (or legacy mxq_config.json) for actual bit width
           if (!quantization) {
-            for (const cfgName of ['jang_config.json', 'jjqf_config.json', 'mxq_config.json']) {
+            for (const cfgName of ['jang_config.json', 'jang_cfg.json', 'jjqf_config.json', 'mxq_config.json']) {
               try {
                 const jangRaw = await readFile(join(currentPath, cfgName), 'utf-8')
                 const jangConfig = JSON.parse(jangRaw)
@@ -580,7 +697,7 @@ export function registerModelHandlers(): void {
           } catch {}
         }
         // JANG models are text models (check all config variants)
-        if (existsSync(join(p, 'jang_config.json')) || existsSync(join(p, 'jjqf_config.json')) || existsSync(join(p, 'mxq_config.json'))) return 'text'
+        if (existsSync(join(p, 'jang_config.json')) || existsSync(join(p, 'jang_cfg.json')) || existsSync(join(p, 'jjqf_config.json')) || existsSync(join(p, 'mxq_config.json'))) return 'text'
         // Remote sessions
         if (p.startsWith('remote://')) return 'text'
         return 'unknown'
@@ -743,7 +860,7 @@ export function registerModelHandlers(): void {
       'local_dir = sys.argv[2]',
       'token = os.environ.get("HF_TOKEN") or None',
       'try:',
-      '    path = snapshot_download(repo_id, local_dir=local_dir, token=token)',
+      '    path = snapshot_download(repo_id, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
       '    print(json.dumps({"status": "complete", "path": path}), flush=True)',
       'except KeyboardInterrupt:',
       '    print(json.dumps({"status": "cancelled"}), flush=True)',
@@ -954,14 +1071,8 @@ export function registerModelHandlers(): void {
       search: query,
       limit: '30'
     })
-    // Filter by model type: 'image' searches text-to-image models, default searches MLX text models
-    if (modelType === 'image') {
-      params.set('filter', 'text-to-image')
-    } else {
-      params.set('filter', 'mlx')
-    }
-    // HF API only supports direction=-1 (descending). For ascending, we fetch
-    // descending and reverse client-side.
+    // Filter by model type: 'image' searches both text-to-image AND image-to-image (for edit models),
+    // default searches MLX text models
     const wantAsc = sortDir === 'asc'
     // HF API sort options: downloads, likes, lastModified, trending
     // "relevance" = omit sort (HF default), "size" = client-side sort
@@ -972,12 +1083,39 @@ export function registerModelHandlers(): void {
       params.set('sort', 'downloads')
       params.set('direction', '-1')
     }
-    const url = `https://huggingface.co/api/models?${params}`
-    console.log(`[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
-    if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
-    const models = await response.json()
+    let models: any[]
+    if (modelType === 'image') {
+      // Search both text-to-image and image-to-image pipelines in parallel
+      const p1 = new URLSearchParams(params)
+      p1.set('filter', 'text-to-image')
+      const p2 = new URLSearchParams(params)
+      p2.set('filter', 'image-to-image')
+      console.log(`[MODELS] Searching HuggingFace image models: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
+      const [r1, r2] = await Promise.all([
+        fetch(`https://huggingface.co/api/models?${p1}`, { signal: AbortSignal.timeout(15000) }),
+        fetch(`https://huggingface.co/api/models?${p2}`, { signal: AbortSignal.timeout(15000) })
+      ])
+      if (!r1.ok) throw new Error(`HuggingFace API error: ${r1.status}`)
+      const m1 = await r1.json()
+      const m2 = r2.ok ? await r2.json() : []
+      // Deduplicate by model ID
+      const seen = new Set<string>()
+      models = []
+      for (const m of [...m1, ...m2]) {
+        if (!seen.has(m.modelId || m.id)) {
+          seen.add(m.modelId || m.id)
+          models.push(m)
+        }
+      }
+    } else {
+      params.set('filter', 'mlx')
+      const url = `https://huggingface.co/api/models?${params}`
+      console.log(`[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
+      const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+      if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
+      models = await response.json()
+    }
 
     let results = models.map((m: any) => mapHFModel(m))
 

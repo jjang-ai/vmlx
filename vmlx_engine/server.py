@@ -39,6 +39,7 @@ The server provides:
 
 import argparse
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -383,9 +384,9 @@ async def track_request_time(request: Request, call_next):
                 status_code=400,
                 content={
                     "error": {
-                        "message": "This is an image generation server. "
+                        "message": "This is an image server. "
                                    "Text endpoints are not available. "
-                                   "Use /v1/images/generations for image generation.",
+                                   "Use /v1/images/generations or /v1/images/edits.",
                         "type": "invalid_request_error",
                     }
                 },
@@ -446,6 +447,7 @@ _max_context_length: int = 0
 _enable_jit: bool = False
 _jang_metadata: dict | None = None  # Cached at model load time for /health
 _model_type: str = "text"  # "text" or "image" — auto-detected from model directory
+_image_quantize: int | None = None  # Image model quantization bits (set by cli.py)
 
 
 def _apply_jit_compilation():
@@ -1915,10 +1917,11 @@ async def create_image(request: Request):
                 logger.error(f"Image generation failed: {e}")
                 raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
-        images.append({
-            "b64_json": result.b64_json,
-            "revised_prompt": prompt,
-        })
+            images.append({
+                "b64_json": result.b64_json,
+                "revised_prompt": prompt,
+                "seed": result.seed,
+            })
 
     return {
         "created": int(time.time()),
@@ -1937,15 +1940,14 @@ async def create_image(request: Request):
 # =============================================================================
 
 
-@app.post("/v1/images/edits", dependencies=[Depends(verify_api_key)])
+@app.post("/v1/images/edits", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 async def create_image_edit(request: Request):
     """Edit an image using an instruction and a source image.
 
-    OpenAI-compatible format. Supports: Qwen-Image-Edit, Flux Kontext,
-    Flux Fill (inpainting), Flux2 Klein Edit.
+    OpenAI-compatible format. Supports: Qwen-Image-Edit.
 
     Request body:
-        model: Edit model name (e.g., "qwen-image-edit", "flux-kontext")
+        model: Edit model name (e.g., "qwen-image-edit")
         prompt: Text instruction for the edit
         image: Base64-encoded source image
         mask: Base64-encoded mask image (optional, for inpainting)
@@ -1958,7 +1960,14 @@ async def create_image_edit(request: Request):
     """
     global _image_gen
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+
+    from pathlib import Path
+    import shutil
+
     model = body.get("model", "qwen-image-edit")
     prompt = body.get("prompt", "")
     image_b64 = body.get("image", "")
@@ -1980,23 +1989,93 @@ async def create_image_edit(request: Request):
         width, height = map(int, size.lower().split("x"))
     except (ValueError, AttributeError):
         width, height = 1024, 1024
+    # Validate dimensions (same limits as image generation)
+    if width < 64 or width > 4096:
+        raise HTTPException(status_code=400, detail=f"Width must be between 64 and 4096, got {width}")
+    if height < 64 or height > 4096:
+        raise HTTPException(status_code=400, detail=f"Height must be between 64 and 4096, got {height}")
 
     # Save base64 image to temp file (mflux needs file paths)
-    import tempfile
     tmp_dir = tempfile.mkdtemp(prefix="vmlx_edit_")
     image_path = Path(tmp_dir) / "input.png"
     mask_path = None
+    images = []
 
     try:
-        # Decode and save input image
+        # Decode and save input image — convert to proper RGB PNG via PIL
+        # Handles: JPEG, PNG (with alpha), MPO (iPhone Portrait), WebP, GIF,
+        # BMP, TIFF, AVIF, CMYK, 16-bit, EXIF-rotated images.
+        # HEIC requires pillow-heif plugin (not bundled).
         image_data = base64.b64decode(image_b64)
-        image_path.write_bytes(image_data)
+        try:
+            from PIL import Image as _PILImage, ImageOps as _ImageOps
+            import io as _io
+            src_img = _PILImage.open(_io.BytesIO(image_data))
+            src_format = src_img.format
+            src_original_mode = src_img.mode
 
-        # Decode and save mask if provided
+            # For animated images (GIF, APNG, WebP), use only the first frame
+            if getattr(src_img, 'is_animated', False):
+                src_img.seek(0)
+                logger.info(f"Edit: animated {src_format} detected, using first frame only")
+
+            # Apply EXIF orientation (iPhone/DSLR photos may be rotated)
+            try:
+                src_img = _ImageOps.exif_transpose(src_img)
+            except Exception:
+                pass  # No EXIF data or unsupported — continue without rotation
+
+            # Convert to 8-bit RGB (handles RGBA, CMYK, P, L, I, I;16, F, LA, PA modes)
+            if src_img.mode in ('RGBA', 'LA', 'PA'):
+                # Composite alpha onto white background before converting
+                background = _PILImage.new('RGB', src_img.size, (255, 255, 255))
+                background.paste(src_img, mask=src_img.split()[-1])
+                src_img = background
+            elif src_img.mode != 'RGB':
+                src_img = src_img.convert('RGB')
+
+            src_img.save(str(image_path), format='PNG')
+            logger.info(f"Edit: received image {len(image_b64)} b64 chars -> {len(image_data)} bytes "
+                        f"(format={src_format}, mode={src_original_mode}, size={src_img.size}), "
+                        f"converted to RGB PNG at {image_path}")
+        except Exception as conv_err:
+            # Provide actionable error instead of silently saving raw bytes
+            err_msg = str(conv_err)
+            if 'HEIF' in err_msg.upper() or 'HEIC' in err_msg.upper() or 'cannot identify' in err_msg.lower():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported image format: {conv_err}. "
+                           f"HEIC/HEIF images require the pillow-heif package. "
+                           f"Please convert to JPEG or PNG before uploading."
+                )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to process input image: {conv_err}"
+            )
+
+        # Decode and save mask if provided — also convert via PIL
         if mask_b64:
             mask_path = Path(tmp_dir) / "mask.png"
             mask_data = base64.b64decode(mask_b64)
-            mask_path.write_bytes(mask_data)
+            try:
+                from PIL import Image as _PILImage, ImageOps as _ImageOps
+                import io as _io
+                mask_img = _PILImage.open(_io.BytesIO(mask_data))
+                # Apply EXIF orientation to match source image
+                try:
+                    mask_img = _ImageOps.exif_transpose(mask_img)
+                except Exception:
+                    pass
+                # Masks should be grayscale (L mode) — convert if needed
+                if mask_img.mode != 'L':
+                    mask_img = mask_img.convert('L')
+                mask_img.save(str(mask_path), format='PNG')
+                logger.info(f"Edit: mask converted to grayscale PNG at {mask_path}")
+            except Exception as mask_err:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to process mask image: {mask_err}"
+                )
 
         async with _image_gen_lock:
             # Load edit engine if needed
@@ -2021,7 +2100,9 @@ async def create_image_edit(request: Request):
                 try:
                     if _image_gen.is_loaded:
                         _image_gen.unload()
-                    _image_gen.load_edit_model(model)
+                    _image_gen.load_edit_model(model, model_path=_model_path, quantize=_image_quantize)
+                except HTTPException:
+                    raise
                 except Exception as e:
                     raise HTTPException(
                         status_code=500,
@@ -2029,7 +2110,19 @@ async def create_image_edit(request: Request):
                     )
 
             # Generate edited images (inside lock)
-            images = []
+            # Verify the input image can be opened
+            try:
+                from PIL import Image as _PILImage
+                _src = _PILImage.open(str(image_path))
+                logger.info(f"Edit: source image verified: {_src.size} mode={_src.mode} format={_src.format}")
+            except Exception as _e:
+                logger.error(f"Edit: source image INVALID: {_e}")
+                raise HTTPException(status_code=400, detail=f"Invalid source image: {_e}")
+
+            logger.info(f"Edit: model={model} resolved={resolved} prompt={prompt[:50]!r} "
+                        f"size={width}x{height} steps={steps} guidance={guidance} "
+                        f"strength={strength} seed={seed}")
+
             for i in range(n):
                 img_seed = (seed + i) if seed is not None else None
                 try:
@@ -2046,6 +2139,8 @@ async def create_image_edit(request: Request):
                         negative_prompt=body.get("negative_prompt"),
                         mask_path=str(mask_path) if mask_path else None,
                     )
+                except HTTPException:
+                    raise
                 except Exception as e:
                     logger.error(f"Image editing failed: {e}")
                     raise HTTPException(
@@ -2056,11 +2151,19 @@ async def create_image_edit(request: Request):
                 images.append({
                     "b64_json": result.b64_json,
                     "revised_prompt": prompt,
+                    "seed": result.seed,
                 })
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Image edit endpoint error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Image editing failed: {e}"
+        )
     finally:
         # Clean up temp files
-        import shutil
         try:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception:

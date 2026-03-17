@@ -9,6 +9,10 @@ export interface ServerConfig {
   // Model type — auto-detected from directory structure
   modelType?: 'text' | 'image'
 
+  // Image-specific settings (stored in config, passed as CLI flags)
+  imageMode?: 'generate' | 'edit'
+  imageQuantize?: number
+
   // Server settings
   host: string
   port: number

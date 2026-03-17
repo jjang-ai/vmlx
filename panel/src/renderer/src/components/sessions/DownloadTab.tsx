@@ -394,7 +394,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
             <p className="text-sm text-muted-foreground py-4 text-center">Loading recommendations...</p>
           ) : displayModels.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
-              {searchQuery.trim() ? 'No MLX models found' : 'No recommended models available'}
+              {searchQuery.trim() ? (modelType === 'image' ? 'No image models found' : 'No MLX models found') : 'No recommended models available'}
             </p>
           ) : (
             displayModels.map(model => (

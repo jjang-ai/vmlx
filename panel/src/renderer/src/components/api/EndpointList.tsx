@@ -38,10 +38,10 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
   },
   {
     category: 'Image Generation',
-    description: 'Text-to-image and image editing with Flux models (requires mflux).',
+    description: 'Text-to-image generation and image editing (requires mflux).',
     endpoints: [
       { method: 'POST', path: '/v1/images/generations', description: 'Generate images from text prompts (OpenAI format)', auth: true },
-      { method: 'POST', path: '/v1/images/edits', description: 'Edit images with text instructions (Qwen-Image-Edit, Flux Kontext, Flux Fill, Klein Edit)', auth: true },
+      { method: 'POST', path: '/v1/images/edits', description: 'Edit images with text instructions (Qwen-Image-Edit)', auth: true },
     ],
   },
   {
@@ -105,15 +105,23 @@ const METHOD_COLORS: Record<string, string> = {
 }
 
 interface EndpointListProps {
-  baseUrl: string
   isImage?: boolean
+  isEdit?: boolean
 }
 
 const IMAGE_CATEGORIES = ['Image Generation', 'Models', 'Health']
 
-export function EndpointList({ baseUrl, isImage }: EndpointListProps) {
+export function EndpointList({ isImage, isEdit }: EndpointListProps) {
   const groups = isImage
-    ? ENDPOINT_GROUPS.filter(g => IMAGE_CATEGORIES.includes(g.category))
+    ? ENDPOINT_GROUPS.filter(g => IMAGE_CATEGORIES.includes(g.category)).map(g => {
+        if (g.category !== 'Image Generation') return g
+        return {
+          ...g,
+          endpoints: g.endpoints.filter(ep =>
+            isEdit ? ep.path === '/v1/images/edits' : ep.path === '/v1/images/generations'
+          ),
+        }
+      })
     : ENDPOINT_GROUPS
 
   return (

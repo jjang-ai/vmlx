@@ -1,10 +1,11 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { homedir } from 'os'
-import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync } from 'fs'
-import { sessionManager, connectHost } from '../sessions'
+import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
+import { sessionManager } from '../sessions'
 import { db } from '../database'
+import { validateImageModelCompleteness } from './models'
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
 
@@ -14,7 +15,31 @@ let handlersRegistered = false
 let activeImageSessionId: string | null = null
 let activeGenerationController: AbortController | null = null
 
-export function registerImageHandlers(getWindow: () => BrowserWindow | null): void {
+// Serialize startServer calls to prevent race conditions when the user
+// rapidly switches models (e.g., clicks model A then immediately model B).
+// Without this lock, both calls can read the same activeImageSessionId,
+// double-stop the same session, and both create new servers — leaving an
+// orphaned server process that nobody tracks.
+let startServerChain: Promise<any> = Promise.resolve()
+
+/** Build fetch headers for image server requests, including auth if API key is configured. */
+function getImageFetchHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (activeImageSessionId) {
+    try {
+      const session = db.getSession(activeImageSessionId)
+      if (session?.config) {
+        const cfg = JSON.parse(session.config)
+        if (cfg.apiKey) {
+          headers['Authorization'] = `Bearer ${cfg.apiKey}`
+        }
+      }
+    } catch { /* ignore parse errors */ }
+  }
+  return headers
+}
+
+export function registerImageHandlers(): void {
   if (handlersRegistered) return
   handlersRegistered = true
 
@@ -126,7 +151,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       activeGenerationController = new AbortController()
       const resp = await fetch(`${baseUrl}/v1/images/generations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getImageFetchHeaders(),
         body: JSON.stringify(body),
         signal: activeGenerationController.signal,
       })
@@ -136,7 +161,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
         return { success: false, error: `Server returned ${resp.status}: ${errText}` }
       }
 
-      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string }> }
+      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
       const elapsed = (Date.now() - startTime) / 1000
 
       // Save each image to disk and database
@@ -149,6 +174,8 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
         const buffer = Buffer.from(item.b64_json, 'base64')
         writeFileSync(imagePath, buffer)
 
+        // Use the actual seed from the server response (engine resolves random seeds)
+        // so the user can reproduce the same image by entering the seed later
         const gen: ImageGeneration = {
           id: genId,
           sessionId,
@@ -159,7 +186,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
           height,
           steps,
           guidance,
-          seed: seed,
+          seed: item.seed ?? seed,
           elapsedSeconds: elapsed,
           imagePath,
           createdAt: Date.now()
@@ -204,7 +231,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
       // Call the image editing endpoint
       // Strip data URL prefix if present (FileReader adds it)
-      const cleanImageB64 = imageBase64.replace(/^data:image\/\w+;base64,/, '')
+      const cleanImageB64 = imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
       const body: Record<string, any> = {
         prompt,
         model,
@@ -223,7 +250,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       activeGenerationController = new AbortController()
       const resp = await fetch(`${baseUrl}/v1/images/edits`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getImageFetchHeaders(),
         body: JSON.stringify(body),
         signal: activeGenerationController.signal,
       })
@@ -233,13 +260,13 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
         return { success: false, error: `Server returned ${resp.status}: ${errText}` }
       }
 
-      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string }> }
+      const result = await resp.json() as { data: Array<{ b64_json: string; revised_prompt?: string; seed?: number }> }
       const elapsed = (Date.now() - startTime) / 1000
 
       // Save source image to disk for gallery display
       const srcGenId = uuidv4()
       const sourceImagePath = join(outputDir, `src_${srcGenId}.png`)
-      const rawB64 = imageBase64.replace(/^data:image\/\w+;base64,/, '')
+      const rawB64 = imageBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
       const srcBuffer = Buffer.from(rawB64, 'base64')
       writeFileSync(sourceImagePath, srcBuffer)
 
@@ -252,6 +279,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
         const buffer = Buffer.from(item.b64_json, 'base64')
         writeFileSync(imagePath, buffer)
 
+        // Use the actual seed from the server response (engine resolves random seeds)
         const gen: ImageGeneration = {
           id: genId,
           sessionId,
@@ -262,7 +290,7 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
           height,
           steps,
           guidance,
-          seed: seed,
+          seed: item.seed ?? seed,
           strength,
           elapsedSeconds: elapsed,
           imagePath,
@@ -282,80 +310,99 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
   // ─── Server Lifecycle ────────────────────────────────────────────────
 
-  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number) => {
-    try {
-      // Stop any existing image server first
-      if (activeImageSessionId) {
+  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit') => {
+    // Serialize concurrent startServer calls to prevent race conditions.
+    // Each call chains onto the previous one so only one stop+create+start
+    // sequence runs at a time.
+    const result = startServerChain = startServerChain
+      .catch(() => {})  // Don't let a previous failure block the next call
+      .then(async () => {
         try {
-          await sessionManager.stopSession(activeImageSessionId)
-        } catch (e) {
-          console.error('[IMAGE] Failed to stop previous image server:', e)
-        }
-        activeImageSessionId = null
-      }
+          // Stop any existing image server first
+          if (activeImageSessionId) {
+            try {
+              await sessionManager.stopSession(activeImageSessionId)
+            } catch (e) {
+              console.error('[IMAGE] Failed to stop previous image server:', e)
+            }
+            activeImageSessionId = null
+          }
 
-      // Check if model exists locally — use local path so server doesn't re-download
-      let modelPath = modelName
-      try {
-        const imageDir = join(homedir(), '.mlxstudio', 'models', 'image')
-        if (existsSync(imageDir)) {
-          const dirs = readdirSync(imageDir)
-          const q = quantize || 4
-          const patterns = [
-            `${modelName}-${q}bit`,
-            `${modelName.replace(/-/g, '')}-${q}bit`,
-            modelName,
-          ]
-          for (const dir of dirs) {
-            const lower = dir.toLowerCase()
-            for (const pattern of patterns) {
-              if (lower.includes(pattern.toLowerCase())) {
-                const fullPath = join(imageDir, dir)
-                try {
-                  const files = readdirSync(fullPath)
-                  if (files.includes('transformer') || files.some((f: string) => f.endsWith('.safetensors'))) {
-                    modelPath = fullPath
-                    console.log(`[IMAGE] Using local model path: ${fullPath}`)
+          // Check if model exists locally — use local path so server doesn't re-download.
+          // Validates ALL required components exist (transformer, text_encoder, etc.)
+          // to prevent the server from hanging while trying to download missing parts.
+          let modelPath = modelName
+          try {
+            const imageDir = join(homedir(), '.mlxstudio', 'models', 'image')
+            if (existsSync(imageDir)) {
+              const dirs = readdirSync(imageDir)
+              const q = quantize || 4
+              const patterns = [
+                `${modelName}-${q}bit`,
+                `${modelName.replace(/-/g, '')}-${q}bit`,
+                modelName,
+              ]
+              for (const dir of dirs) {
+                const lower = dir.toLowerCase()
+                for (const pattern of patterns) {
+                  const p = pattern.toLowerCase()
+                  // Match as a complete segment: exact match, starts with pattern (followed by
+                  // delimiter), ends with pattern (preceded by delimiter), or contains pattern
+                  // between delimiters. Avoids false positives like "dev" matching "flux-kontext-dev-full".
+                  const segmentMatch = lower === p ||
+                    lower.startsWith(p + '-') || lower.startsWith(p + '_') ||
+                    lower.endsWith('-' + p) || lower.endsWith('_' + p) ||
+                    lower.includes('-' + p + '-') || lower.includes('_' + p + '_') ||
+                    lower.includes('-' + p + '_') || lower.includes('_' + p + '-')
+                  if (segmentMatch) {
+                    const fullPath = join(imageDir, dir)
+                    const validation = validateImageModelCompleteness(fullPath)
+                    if (validation.complete) {
+                      modelPath = fullPath
+                      console.log(`[IMAGE] Using local model path: ${fullPath}`)
+                    } else if (validation.missing.length > 0) {
+                      // Model directory exists but is incomplete — log but don't use it.
+                      // The server would hang trying to download missing components.
+                      console.warn(`[IMAGE] Model at ${fullPath} is incomplete, missing: ${validation.missing.join(', ')}. Not using local path — server will attempt full download.`)
+                    }
+                    if (modelPath !== modelName) break
                   }
-                } catch { }
+                }
                 if (modelPath !== modelName) break
               }
             }
-            if (modelPath !== modelName) break
+          } catch {
+            // Fall through to use model name directly (mflux will resolve/download)
           }
+
+          // Create a session config for image serving
+          // imageMode, imageQuantize, and servedModelName are stored in config fields
+          // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
+          const mode = imageMode || 'generate'
+          const config: Partial<ServerConfig> = {
+            host: '0.0.0.0',
+            port: 0,  // auto-assign
+            timeout: 600,
+            modelType: 'image',
+            imageMode: mode,
+            imageQuantize: quantize || 0,
+            // Pass original model ID so engine uses it for loading (not directory name)
+            servedModelName: modelPath !== modelName ? modelName : undefined,
+          }
+
+          const session = await sessionManager.createSession(modelPath, config)
+
+          // Start the session
+          await sessionManager.startSession(session.id)
+          activeImageSessionId = session.id
+
+          return { success: true, sessionId: session.id, port: session.port }
+        } catch (error) {
+          console.error('[IMAGE] Failed to start server:', error)
+          return { success: false, error: (error as Error).message }
         }
-      } catch {
-        // Fall through to use model name directly (mflux will resolve/download)
-      }
-
-      // Create a session config for image serving
-      // Pass quantize via additionalArgs since it's image-specific
-      const quantizeArgs = quantize && quantize > 0 ? `--image-quantize ${quantize}` : ''
-      const config: Partial<ServerConfig> = {
-        host: '0.0.0.0',
-        port: 0,  // auto-assign
-        timeout: 600,
-        modelType: 'image',
-        additionalArgs: quantizeArgs,
-      }
-
-      const session = await sessionManager.createSession(modelPath, config)
-
-      // Start the session
-      await sessionManager.startSession(session.id)
-      activeImageSessionId = session.id
-
-      // Notify renderer
-      const win = getWindow()
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('image:serverStarting', { sessionId: session.id, modelName })
-      }
-
-      return { success: true, sessionId: session.id, port: session.port }
-    } catch (error) {
-      console.error('[IMAGE] Failed to start server:', error)
-      return { success: false, error: (error as Error).message }
-    }
+      })
+    return result
   })
 
   ipcMain.handle('image:stopServer', async () => {
@@ -381,36 +428,45 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
   ipcMain.handle('image:getRunningServer', async () => {
     try {
+      const buildResult = (s: any) => {
+        const cfg = (() => { try { return JSON.parse(s.config || '{}') } catch { return {} } })()
+        // Read imageMode directly from config — no regex guessing
+        const imageMode: 'generate' | 'edit' = cfg.imageMode || 'generate'
+        // Read quantize from config
+        const quantize = cfg.imageQuantize ?? 0
+        // Model name: use session modelName or extract last path component
+        const rawName = s.modelName || s.modelPath || ''
+        const modelName = rawName.includes('/') ? rawName.split('/').pop()! : rawName
+        return {
+          sessionId: s.id,
+          modelName,
+          modelPath: s.modelPath,
+          host: s.host,
+          port: s.port,
+          status: s.status,
+          quantize,
+          imageMode,
+        }
+      }
+
       // First check the tracked active image session
       if (activeImageSessionId) {
         const session = sessionManager.getSession(activeImageSessionId)
-        if (session && session.status === 'running') {
-          return {
-            sessionId: session.id,
-            modelName: session.modelName || session.modelPath,
-            host: session.host,
-            port: session.port,
-            status: session.status
-          }
+        if (session && (session.status === 'running' || session.status === 'loading')) {
+          return buildResult(session)
         }
         activeImageSessionId = null
       }
 
-      // Also scan all running sessions for any image model (e.g., started from Server tab)
+      // Also scan all sessions for any image model (e.g., started from Server tab)
       const allSessions = db.getSessions()
       for (const s of allSessions) {
-        if (s.status !== 'running') continue
+        if (s.status !== 'running' && s.status !== 'loading') continue
         try {
           const cfg = JSON.parse(s.config || '{}')
           if (cfg.modelType === 'image') {
             activeImageSessionId = s.id  // Adopt it
-            return {
-              sessionId: s.id,
-              modelName: s.modelName || s.modelPath,
-              host: s.host,
-              port: s.port,
-              status: s.status
-            }
+            return buildResult(s)
           }
         } catch {}
       }
@@ -421,13 +477,34 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
     }
   })
 
-  ipcMain.handle('image:getModelStatus', async (_, modelName: string) => {
-    // Basic status — the ImageModelPicker now uses models:checkImageModel for
-    // proper local availability checking with download-before-start flow
-    return {
-      downloaded: false,
-      sizeEstimate: getSizeEstimate(modelName),
-      modelName
+  // List ALL running image sessions (gen + edit) so the Image tab can show a selector
+  ipcMain.handle('image:getRunningServers', async () => {
+    try {
+      const results: any[] = []
+      const allSessions = db.getSessions()
+      for (const s of allSessions) {
+        if (s.status !== 'running' && s.status !== 'loading') continue
+        try {
+          const cfg = JSON.parse(s.config || '{}')
+          if (cfg.modelType === 'image') {
+            const rawName = s.modelName || s.modelPath || ''
+            const modelName = rawName.includes('/') ? rawName.split('/').pop()! : rawName
+            results.push({
+              sessionId: s.id,
+              modelName,
+              modelPath: s.modelPath,
+              host: s.host,
+              port: s.port,
+              status: s.status,
+              quantize: cfg.imageQuantize ?? 0,
+              imageMode: cfg.imageMode || 'generate',
+            })
+          }
+        } catch {}
+      }
+      return results
+    } catch {
+      return []
     }
   })
 
@@ -435,9 +512,15 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
   ipcMain.handle('image:readFile', async (_, imagePath: string) => {
     try {
-      if (!existsSync(imagePath)) return null
-      const { readFileSync } = require('fs')
-      const data = readFileSync(imagePath)
+      // Restrict to ~/.mlxstudio/ for security (prevent arbitrary file reads)
+      const allowedDir = resolve(homedir(), '.mlxstudio')
+      const resolved = resolve(imagePath)
+      if (!resolved.startsWith(allowedDir)) {
+        console.warn('[IMAGE] Blocked readFile outside ~/.mlxstudio/:', resolved)
+        return null
+      }
+      if (!existsSync(resolved)) return null
+      const data = readFileSync(resolved)
       return `data:image/png;base64,${data.toString('base64')}`
     } catch (error) {
       console.error('[IMAGE] Failed to read image file:', error)
@@ -449,15 +532,22 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
 
   ipcMain.handle('image:saveFile', async (_, imagePath: string) => {
     try {
+      // Restrict source to ~/.mlxstudio/ for security (prevent arbitrary file reads)
+      const allowedDir = resolve(homedir(), '.mlxstudio')
+      const resolved = resolve(imagePath)
+      if (!resolved.startsWith(allowedDir)) {
+        console.warn('[IMAGE] Blocked saveFile outside ~/.mlxstudio/:', resolved)
+        return { success: false, error: 'Source path not allowed' }
+      }
       const { dialog } = require('electron')
       const { copyFileSync } = require('fs')
-      const fileName = imagePath.split('/').pop() || 'image.png'
+      const fileName = resolved.split('/').pop() || 'image.png'
       const result = await dialog.showSaveDialog({
         defaultPath: fileName,
         filters: [{ name: 'PNG Image', extensions: ['png'] }]
       })
       if (!result.canceled && result.filePath) {
-        copyFileSync(imagePath, result.filePath)
+        copyFileSync(resolved, result.filePath)
         return { success: true, path: result.filePath }
       }
       return { success: false }
@@ -465,15 +555,4 @@ export function registerImageHandlers(getWindow: () => BrowserWindow | null): vo
       return { success: false, error: (error as Error).message }
     }
   })
-}
-
-function getSizeEstimate(modelName: string): string {
-  const sizes: Record<string, string> = {
-    'schnell': '~12 GB',
-    'dev': '~24 GB',
-    'z-image-turbo': '~12 GB',
-    'flux2-klein-4b': '~8 GB',
-    'flux2-klein-9b': '~16 GB'
-  }
-  return sizes[modelName] || '~12 GB'
 }

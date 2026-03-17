@@ -215,7 +215,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} />
         )}
       </div>
 

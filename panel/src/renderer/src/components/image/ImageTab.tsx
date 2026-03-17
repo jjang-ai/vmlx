@@ -5,6 +5,7 @@ import { ImageGallery } from './ImageGallery'
 import { ImageHistory } from './ImageHistory'
 import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
+import { LogsPanel } from '../sessions/LogsPanel'
 
 export interface ImageSessionInfo {
   id: string
@@ -32,9 +33,19 @@ export interface ImageGenerationInfo {
   createdAt: number
 }
 
-const EDIT_MODEL_IDS = new Set(['qwen-image-edit', 'flux-kontext', 'flux-fill', 'flux2-klein-edit'])
-
 type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
+
+interface ImageSettings {
+  steps: number
+  width: number
+  height: number
+  guidance: number
+  negativePrompt: string
+  seed?: number
+  count: number
+  quantize: number
+  strength: number
+}
 
 export function ImageTab() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
@@ -46,6 +57,7 @@ export function ImageTab() {
   const serverSessionIdRef = useRef<string | null>(null)
   const setServerSessionId = (id: string | null) => { serverSessionIdRef.current = id; _setServerSessionId(id) }
   const [showSettings, setShowSettings] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [generations, setGenerations] = useState<ImageGenerationInfo[]>([])
@@ -59,13 +71,13 @@ export function ImageTab() {
   const [sourceImage, setSourceImage] = useState<{ dataUrl: string; name: string } | null>(null)
 
   // Image generation settings (quick settings + full settings)
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<ImageSettings>({
     steps: 4,
     width: 1024,
     height: 1024,
     guidance: 3.5,
     negativePrompt: '',
-    seed: undefined as number | undefined,
+    seed: undefined,
     count: 1,
     quantize: 4,
     strength: 0.8
@@ -80,11 +92,24 @@ export function ImageTab() {
   useEffect(() => {
     window.api.image.getRunningServer().then((server: any) => {
       if (server) {
-        setSelectedModel(server.modelName)
-        setServerStatus('running')
+        const name = server.modelName
+        setSelectedModel(name)
+        setServerStatus(server.status === 'loading' ? 'starting' : 'running')
         setServerPort(server.port)
         setServerSessionId(server.sessionId)
         setShowModelPicker(false)
+
+        // Read imageMode from session config — no guessing from name
+        const mode = server.imageMode || 'generate'
+        setSessionMode(mode)
+
+        // Restore quantize from server config
+        const q = server.quantize ?? 0
+        setQuantize(q)
+
+        // Restore proper default steps for this model
+        const defaultSteps = getDefaultSteps(name)
+        setSettings(prev => ({ ...prev, steps: defaultSteps, quantize: q }))
       }
     }).catch(() => {})
   }, [])
@@ -133,21 +158,20 @@ export function ImageTab() {
 
   // Poll for server health when starting
   useEffect(() => {
-    if (serverStatus === 'starting' && serverPort) {
-      pollRef.current = setInterval(async () => {
-        try {
-          const resp = await fetch(`http://127.0.0.1:${serverPort}/health`)
-          if (resp.ok) {
-            setServerStatus('running')
-            if (pollRef.current) clearInterval(pollRef.current)
-          }
-        } catch (_) {
-          // Still starting
+    if (serverStatus !== 'starting' || !serverPort) return
+    pollRef.current = setInterval(async () => {
+      try {
+        const resp = await fetch(`http://127.0.0.1:${serverPort}/health`)
+        if (resp.ok) {
+          setServerStatus('running')
+          if (pollRef.current) clearInterval(pollRef.current)
         }
-      }, 1000)
-      return () => {
-        if (pollRef.current) clearInterval(pollRef.current)
+      } catch (_) {
+        // Still starting
       }
+    }, 1000)
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [serverStatus, serverPort])
 
@@ -170,29 +194,54 @@ export function ImageTab() {
     setGenerations(result || [])
   }, [])
 
-  const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number) => {
+  const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number, category?: 'generate' | 'edit') => {
+    const mode = category || 'generate'
+
+    // Stop any currently running/starting server before switching models
+    if (serverStatus === 'running' || serverStatus === 'starting') {
+      try {
+        await window.api.image.stopServer()
+        setServerPort(null)
+        setServerSessionId(null)
+      } catch (err) {
+        console.error('Failed to stop previous image server:', err)
+      }
+    }
+
     setSelectedModel(modelId)
     setShowModelPicker(false)
     setError(null)
     const q = modelQuantize ?? 4
     setQuantize(q)
 
-    // Derive mode from model type
-    const mode = EDIT_MODEL_IDS.has(modelId) ? 'edit' : 'generate'
+    // Use the explicit category from model picker — no guessing
     setSessionMode(mode)
     setSourceImage(null)
 
-    // Update default steps based on model
+    // Reset ALL settings to defaults for the new model (not just steps/quantize).
+    // Without this, guidance, strength, width, height, count, seed, negativePrompt
+    // from the previous model would persist and confuse users.
     const defaultSteps = getDefaultSteps(modelId)
-    setSettings(prev => ({ ...prev, steps: defaultSteps, quantize: q }))
+    setSettings({
+      steps: defaultSteps,
+      width: 1024,
+      height: 1024,
+      guidance: 3.5,
+      negativePrompt: '',
+      seed: undefined,
+      count: 1,
+      quantize: q,
+      strength: 0.8
+    })
 
-    // Auto-start server
+    // Auto-start server, passing imageMode so it's stored in session config
     setServerStatus('starting')
     try {
-      const result = await window.api.image.startServer(modelId, q)
+      const result = await window.api.image.startServer(modelId, q, mode)
       if (result.success) {
-        setServerSessionId(result.sessionId)
-        setServerPort(result.port)
+        setServerSessionId(result.sessionId ?? null)
+        setServerPort(result.port ?? null)
+        setShowLogs(true) // Auto-show logs during startup so user can see loading progress
         // Status will transition to 'running' via polling or session events
       } else {
         setServerStatus('error')
@@ -202,7 +251,7 @@ export function ImageTab() {
       setServerStatus('error')
       setError((err as Error).message)
     }
-  }, [])
+  }, [serverStatus])
 
   const handleSubmit = useCallback(async (prompt: string) => {
     if (!serverPort || serverStatus !== 'running' || !selectedModel) return
@@ -288,8 +337,8 @@ export function ImageTab() {
   }, [])
 
   const handleChangeModel = useCallback(async () => {
-    // Stop the running server before switching models
-    if (serverStatus === 'running' || serverStatus === 'starting') {
+    // Stop the running server before switching models (including error state cleanup)
+    if (serverStatus === 'running' || serverStatus === 'starting' || serverStatus === 'error') {
       await handleStop()
     }
     setSelectedModel(null)
@@ -303,7 +352,12 @@ export function ImageTab() {
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     setCurrentSessionId(sessionId)
-  }, [])
+    // Restore sessionMode from the selected session's type
+    const session = sessions.find(s => s.id === sessionId)
+    if (session?.sessionType) {
+      setSessionMode(session.sessionType)
+    }
+  }, [sessions])
 
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     await window.api.image.deleteSession(sessionId)
@@ -314,7 +368,7 @@ export function ImageTab() {
     await loadSessions()
   }, [currentSessionId, loadSessions])
 
-  const handleSettingsChange = useCallback((newSettings: typeof settings) => {
+  const handleSettingsChange = useCallback((newSettings: ImageSettings) => {
     setSettings(newSettings)
   }, [])
 
@@ -350,8 +404,13 @@ export function ImageTab() {
           port={serverPort}
           mode={sessionMode}
           onSettings={() => setShowSettings(!showSettings)}
+          onLogs={() => setShowLogs(!showLogs)}
           onStop={handleStop}
           onChangeModel={handleChangeModel}
+          onSelectModel={(modelId, category) => {
+            // Quick switch: stop current, start new model
+            handleModelSelect(modelId, undefined, category)
+          }}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
@@ -365,6 +424,21 @@ export function ImageTab() {
           />
         )}
 
+        {showLogs && (
+          <div className="h-48 border-b border-border flex-shrink-0">
+            {serverSessionId ? (
+              <LogsPanel
+                sessionId={serverSessionId}
+                sessionStatus={serverStatus}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+                Start an image model to view server logs
+              </div>
+            )}
+          </div>
+        )}
+
         {error && (
           <div className="mx-4 mt-2 px-3 py-2 bg-destructive/10 border border-destructive/20 rounded-md text-sm text-destructive">
             {error}
@@ -376,6 +450,7 @@ export function ImageTab() {
           <ImageGallery
             generations={generations}
             generating={generating}
+            mode={sessionMode}
           />
         </div>
 
@@ -385,7 +460,6 @@ export function ImageTab() {
           generating={generating}
           settings={settings}
           onSettingsChange={handleSettingsChange}
-          model={selectedModel}
           mode={sessionMode}
           sourceImage={sourceImage}
           onSourceImageChange={setSourceImage}
@@ -403,9 +477,6 @@ function getDefaultSteps(modelId: string): number {
     'flux2-klein-4b': 20,
     'flux2-klein-9b': 20,
     'qwen-image-edit': 28,
-    'flux-kontext': 24,
-    'flux-fill': 20,
-    'flux2-klein-edit': 20,
   }
   return defaults[modelId] || 4
 }

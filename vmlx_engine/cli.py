@@ -21,8 +21,6 @@ import sys
 def serve_command(args):
     """Start the OpenAI-compatible server."""
     import logging
-    import os
-    import sys
 
     import uvicorn
 
@@ -55,9 +53,9 @@ def serve_command(args):
     _is_image = False
 
     # Named mflux models (not filesystem paths) — detect by known names
-    # Keep in sync with SUPPORTED_MODELS in image_gen.py + additional mflux models
-    from .image_gen import SUPPORTED_MODELS as _IMG_SUPPORTED
-    MFLUX_NAMED_MODELS = set(_IMG_SUPPORTED.keys()) | {
+    # Keep in sync with SUPPORTED_MODELS + EDIT_MODELS in image_gen.py
+    from .image_gen import SUPPORTED_MODELS as _IMG_SUPPORTED, EDIT_MODELS as _EDIT_SUPPORTED
+    MFLUX_NAMED_MODELS = set(_IMG_SUPPORTED.keys()) | set(_EDIT_SUPPORTED.keys()) | {
         'krea-dev', 'dev-krea', 'qwen', 'fibo', 'fibo-lite',  # Additional mflux models
     }
     if args.model.lower() in MFLUX_NAMED_MODELS:
@@ -318,9 +316,12 @@ def serve_command(args):
         # Image model path — load via mflux, serve /v1/images/generations only
         logger.info(f"Detected image model: {args.model}")
         server._model_type = "image"
-        server._model_name = args.model.rstrip("/").split("/")[-1]
+        # Use served_model_name (original model ID like "flux-kontext") if provided,
+        # otherwise extract from path (gives directory name like "flux-kontext-dev-4bit")
+        _served = getattr(args, 'served_model_name', None)
+        server._model_name = _served or args.model.rstrip("/").split("/")[-1]
         server._model_path = args.model
-        server._served_model_name = getattr(args, 'served_model_name', None)
+        server._served_model_name = _served
 
         # Load image model at startup (not lazy)
         try:
@@ -333,20 +334,44 @@ def serve_command(args):
         # Resolve quantize: explicit flag > directory name detection > None
         _image_quantize = getattr(args, 'image_quantize', None)
         if _image_quantize is None:
-            _model_dir_name = server._model_name.lower()
-            for bits in [3, 4, 5, 6, 8]:
-                if f"-{bits}bit" in _model_dir_name or f"_{bits}bit" in _model_dir_name:
-                    _image_quantize = bits
-                    logger.info(f"Detected {bits}-bit quantization from model name")
+            # Check both model_name and actual model path directory name
+            # (--served-model-name may be a short alias like "flux-kontext" without "-4bit")
+            _names_to_check = [server._model_name.lower()]
+            _path_dir_name = args.model.rstrip("/").split("/")[-1].lower()
+            if _path_dir_name != _names_to_check[0]:
+                _names_to_check.append(_path_dir_name)
+            for _check_name in _names_to_check:
+                for bits in [3, 4, 5, 6, 8]:
+                    if f"-{bits}bit" in _check_name or f"_{bits}bit" in _check_name:
+                        _image_quantize = bits
+                        logger.info(f"Detected {bits}-bit quantization from model name")
+                        break
+                if _image_quantize is not None:
                     break
+        # Store globally so /v1/images/edits can use it for lazy model loading
+        server._image_quantize = _image_quantize
 
         try:
             server._image_gen = ImageGenEngine()
-            server._image_gen.load(
-                model_name=server._model_name,
-                model_path=args.model,
-                quantize=_image_quantize,
+            # Use explicit --image-mode flag (set by UI or user CLI)
+            # Fallback: check if model name is in EDIT_MODELS dict
+            _explicit_mode = getattr(args, 'image_mode', None)
+            _is_edit_model = (_explicit_mode == 'edit') or (
+                _explicit_mode is None and server._model_name.lower() in _EDIT_SUPPORTED
             )
+            if _is_edit_model:
+                logger.info(f"Loading image EDIT model: {server._model_name}")
+                server._image_gen.load_edit_model(
+                    model_name=server._model_name,
+                    model_path=args.model,
+                    quantize=_image_quantize,
+                )
+            else:
+                server._image_gen.load(
+                    model_name=server._model_name,
+                    model_path=args.model,
+                    quantize=_image_quantize,
+                )
         except Exception as e:
             print(f"Error: Failed to load image model: {e}")
             import traceback
@@ -669,6 +694,11 @@ Examples:
         "--image-quantize", type=int, default=None, choices=[3, 4, 5, 6, 8],
         help="Quantization bits for image models (mflux). "
              "Lower = less memory, faster. 4-bit recommended. (default: auto-detect from model name)",
+    )
+    serve_parser.add_argument(
+        "--image-mode", type=str, default=None, choices=["generate", "edit"],
+        help="Image model mode. 'generate' for text-to-image, 'edit' for image editing "
+             "(Kontext, Fill, Qwen-Image-Edit). (default: auto-detect from model name)",
     )
     serve_parser.add_argument(
         "--host", type=str, default="0.0.0.0",
