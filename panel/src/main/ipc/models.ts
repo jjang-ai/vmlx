@@ -7,6 +7,7 @@ import { spawn, ChildProcess } from 'child_process'
 import { db } from '../database'
 import { detectModelConfigFromDir } from '../model-config-registry'
 import { getBundledPythonPath } from '../engine-manager'
+import { IMAGE_MODELS, resolveImageModelRepo as _resolveImageModelRepo, getImageModel } from '../../shared/imageModels'
 
 /** Generation defaults read from a model's generation_config.json */
 export interface GenerationDefaults {
@@ -105,53 +106,9 @@ const BUILTIN_IMAGE_PATHS = [
 ]
 
 // ─── Image Model HF Repo Mapping ────────────────────────────────────────────
-// Maps named mflux model IDs to HuggingFace repos for pre-downloading.
-// These repos contain the quantized mflux-format weights that mflux can load locally.
-// Without pre-download, mflux downloads silently with no progress UI.
-// Verified HF repo IDs — only repos confirmed to exist are listed.
-// Full-precision (0) repos are raw diffusers format; mflux quantizes on-the-fly.
-// Quantized repos are pre-quantized in mflux-native format for fast startup.
-const IMAGE_MODEL_REPOS: Record<string, Record<number, string>> = {
-  // Generation models
-  'schnell': {
-    4: 'dhairyashil/FLUX.1-schnell-mflux-4bit',
-    8: 'dhairyashil/FLUX.1-schnell-mflux-8bit',
-    0: 'black-forest-labs/FLUX.1-schnell',
-  },
-  'dev': {
-    4: 'dhairyashil/FLUX.1-dev-mflux-4bit',
-    8: 'dhairyashil/FLUX.1-dev-mflux-8bit',
-    0: 'black-forest-labs/FLUX.1-dev',
-  },
-  'z-image-turbo': {
-    4: 'filipstrand/Z-Image-Turbo-mflux-4bit',
-    8: 'carsenk/z-image-turbo-mflux-8bit',
-    0: 'Tongyi-MAI/Z-Image-Turbo',
-  },
-  'flux2-klein-4b': {
-    8: 'AITRADER/FLUX2-klein-4B-mlx-8bit',
-    0: 'black-forest-labs/FLUX.2-klein-4B',
-  },
-  'flux2-klein-9b': {
-    0: 'black-forest-labs/FLUX.2-klein-9B',
-  },
-  // Editing models — full precision only (quantization produces unusable edits with current mflux)
-  // Only Qwen Image Edit is confirmed working. Flux Kontext/Fill/Klein Edit coming when mflux supports them.
-  'qwen-image-edit': {
-    0: 'Qwen/Qwen-Image-Edit',
-  },
-}
-
-/** Resolve a named image model to its HF repo ID based on quantization level */
-function resolveImageModelRepo(modelName: string, quantize: number): string | null {
-  const repos = IMAGE_MODEL_REPOS[modelName]
-  if (!repos) return null
-  // Exact match first, then closest available
-  if (repos[quantize]) return repos[quantize]
-  // Fall back to closest quantization level
-  const available = Object.keys(repos).map(Number).sort((a, b) => Math.abs(a - quantize) - Math.abs(b - quantize))
-  return repos[available[0]] || null
-}
+// Now derived from the shared registry in shared/imageModels.ts.
+// Use resolveImageModelRepo() to resolve a model ID + quantize to an HF repo.
+const resolveImageModelRepo = _resolveImageModelRepo
 
 /**
  * Validate that an image model directory has ALL required components.
@@ -166,7 +123,7 @@ function resolveImageModelRepo(modelName: string, quantize: number): string | nu
  *
  * Returns { complete, missing[] } — missing lists which components are absent.
  */
-export function validateImageModelCompleteness(modelDir: string): { complete: boolean; missing: string[] } {
+export function validateImageModelCompleteness(modelDir: string, encoderType?: 'single' | 'dual'): { complete: boolean; missing: string[] } {
   const { readdirSync } = require('fs')
   const missing: string[] = []
 
@@ -215,7 +172,7 @@ export function validateImageModelCompleteness(modelDir: string): { complete: bo
       // model_index.json parse failed — fall through to heuristic check
     }
   } else {
-    // No model_index.json → mflux-quantized format. Must have text_encoder/ with weights.
+    // No model_index.json -> mflux-quantized format. Must have text_encoder/ with weights.
     if (files.includes('text_encoder')) {
       try {
         const teFiles: string[] = readdirSync(join(modelDir, 'text_encoder'))
@@ -228,13 +185,22 @@ export function validateImageModelCompleteness(modelDir: string): { complete: bo
       missing.push('text_encoder/')
     }
 
-    // Flux dual-encoder models also need text_encoder_2/
-    // Some models use a single text encoder and don't need text_encoder_2/:
-    // - Z-Image models (ZImage class, single encoder)
-    // - Klein models (single T5 encoder, no CLIP)
-    // Only flag text_encoder_2 as missing for dual-encoder Flux models (Schnell, Dev, Kontext, Fill)
-    const dirLower = modelDir.toLowerCase()
-    const isSingleEncoder = dirLower.includes('z-image') || dirLower.includes('zimage') || dirLower.includes('klein')
+    // Determine encoder type: prefer the explicit parameter, then look up from the
+    // shared registry, and finally fall back to directory-name heuristic.
+    let isSingleEncoder: boolean
+    if (encoderType) {
+      isSingleEncoder = encoderType === 'single'
+    } else {
+      // Try to match the directory name against the shared image model registry
+      const dirLower = modelDir.toLowerCase()
+      const modelDef = IMAGE_MODELS.find(m => dirLower.includes(m.id))
+      if (modelDef) {
+        isSingleEncoder = modelDef.encoderType === 'single'
+      } else {
+        // Legacy fallback: string-based heuristic
+        isSingleEncoder = dirLower.includes('z-image') || dirLower.includes('zimage') || dirLower.includes('klein')
+      }
+    }
     if (!isSingleEncoder && !files.includes('text_encoder_2')) {
       missing.push('text_encoder_2/')
     }
@@ -243,104 +209,23 @@ export function validateImageModelCompleteness(modelDir: string): { complete: bo
   return { complete: missing.length === 0, missing }
 }
 
-/** Check if a named image model is available locally in HF cache.
- *  Validates that the snapshot contains ALL required components,
- *  not just metadata or partial weights from an interrupted download. */
-function checkImageModelInHFCache(repoId: string): string | null {
-  // HF hub cache: ~/.cache/huggingface/hub/models--org--name/snapshots/<hash>/
-  const cacheBase = join(homedir(), '.cache/huggingface/hub')
-  const cacheDirName = `models--${repoId.replace('/', '--')}`
-  const cacheDir = join(cacheBase, cacheDirName, 'snapshots')
-  try {
-    if (!existsSync(cacheDir)) return null
-    const { readdirSync } = require('fs')
-    const snapshots = readdirSync(cacheDir)
-    if (snapshots.length === 0) return null
-    // Check snapshots from most recent to oldest, return first that is complete
-    for (let i = snapshots.length - 1; i >= 0; i--) {
-      const snapshotPath = join(cacheDir, snapshots[i])
-      const validation = validateImageModelCompleteness(snapshotPath)
-      if (validation.complete) {
-        return snapshotPath
-      } else {
-        console.log(`[IMAGE] HF cache snapshot incomplete (${snapshotPath}): missing ${validation.missing.join(', ')}`)
-      }
-    }
-    // No snapshot contains all required components — incomplete download
-    return null
-  } catch {
-    return null
-  }
-}
-
-/** Check if a named image model is available locally (HF cache or mlxstudio/models/image).
- *  Validates ALL required components exist — not just transformer weights. */
+/** Check if a named image model is available locally using the DB-backed path store.
+ *  Verifies the stored path still exists on disk; removes stale entries. */
 function checkImageModelLocal(modelName: string, quantize: number): { available: boolean; localPath?: string; repoId?: string; missing?: string[] } {
-  const repoId = resolveImageModelRepo(modelName, quantize)
-  if (!repoId) return { available: false }
-
-  // Check HF cache
-  const hfPath = checkImageModelInHFCache(repoId)
-  if (hfPath) return { available: true, localPath: hfPath, repoId }
-
-  // Check ~/.mlxstudio/models/image/ for locally saved mflux models
-  const imageDir = join(homedir(), '.mlxstudio/models/image')
-  try {
-    const { readdirSync } = require('fs')
-    const dirs = readdirSync(imageDir)
-    // Look for model name patterns (e.g., flux1-schnell-4bit, z-image-turbo-4bit)
-    // Also match against the HF repo name for models downloaded via our queue
-    const repoName = repoId.split('/').pop() || ''
-    const namePatterns = [
-      `${modelName}-${quantize}bit`,
-      `${modelName.replace(/-/g, '')}-${quantize}bit`,
-      modelName,
-      repoName,
-    ].filter(Boolean)
-    // Track the best partial match (has weights but missing components) for error reporting
-    let bestPartialPath: string | undefined
-    let bestPartialMissing: string[] | undefined
-    for (const dir of dirs) {
-      const lower = dir.toLowerCase()
-      for (const pattern of namePatterns) {
-        const p = pattern.toLowerCase()
-        // Match as a complete segment: exact match, starts with pattern (followed by
-        // delimiter), ends with pattern (preceded by delimiter), or contains pattern
-        // between delimiters. Avoids false positives like "dev" matching "flux-kontext-dev-full".
-        const segmentMatch = lower === p ||
-          lower.startsWith(p + '-') || lower.startsWith(p + '_') ||
-          lower.endsWith('-' + p) || lower.endsWith('_' + p) ||
-          lower.includes('-' + p + '-') || lower.includes('_' + p + '_') ||
-          lower.includes('-' + p + '_') || lower.includes('_' + p + '-')
-        if (segmentMatch) {
-          const fullPath = join(imageDir, dir)
-          const validation = validateImageModelCompleteness(fullPath)
-          if (validation.complete) {
-            return { available: true, localPath: fullPath, repoId }
-          } else if (!bestPartialPath && validation.missing.length > 0) {
-            // Remember this partial match for error reporting — only if it has
-            // SOME weights (not an empty dir)
-            try {
-              const files = readdirSync(fullPath)
-              const hasAnyWeights = files.some((f: string) => f.endsWith('.safetensors')) ||
-                (files.includes('transformer') && readdirSync(join(fullPath, 'transformer')).some((f: string) => f.endsWith('.safetensors')))
-              if (hasAnyWeights) {
-                bestPartialPath = fullPath
-                bestPartialMissing = validation.missing
-                console.log(`[IMAGE] Model ${modelName} at ${fullPath} is incomplete: missing ${validation.missing.join(', ')}`)
-              }
-            } catch { }
-          }
-        }
+  const stored = db.getImageModelPath(modelName, quantize)
+  if (stored) {
+    // Verify the path still exists on disk
+    try {
+      if (existsSync(stored.localPath)) {
+        return { available: true, localPath: stored.localPath, repoId: stored.repoId }
+      } else {
+        // Path was deleted — remove stale entry from DB
+        db.deleteImageModelPath(modelName, quantize)
       }
-    }
-    // If we found a partial match, report it as unavailable with details
-    if (bestPartialPath) {
-      return { available: false, repoId, missing: bestPartialMissing }
-    }
-  } catch { }
-
-  return { available: false, repoId }
+    } catch { /* fs error — treat as unavailable */ }
+  }
+  const repoId = resolveImageModelRepo(modelName, quantize)
+  return { available: false, repoId: repoId || undefined }
 }
 
 /** Get the list of directories to scan: user-configured + built-in defaults */
@@ -771,6 +656,10 @@ export function registerModelHandlers(): void {
     process?: ChildProcess
     modelDir: string
     wasCancelled?: boolean
+    /** For image model downloads: the canonical model ID (e.g. 'schnell') */
+    imageModelName?: string
+    /** For image model downloads: the quantization level (e.g. 4, 8, 0) */
+    imageQuantize?: number
   }
 
   let jobIdCounter = 0
@@ -946,6 +835,11 @@ export function registerModelHandlers(): void {
       } else if (code === 0) {
         try { await unlink(markerFile) } catch (_) { }
         job.status = 'complete'
+        // Store downloaded image model path in DB for fast lookup
+        if (job.imageModelName != null && job.imageQuantize != null) {
+          db.setImageModelPath(job.imageModelName, job.imageQuantize, job.modelDir, job.repoId)
+          console.log(`[DOWNLOADS] Stored image model path: ${job.imageModelName} q=${job.imageQuantize} → ${job.modelDir}`)
+        }
         emitToRenderer('models:downloadComplete', { jobId: job.id, repoId: job.repoId, status: 'complete', path: job.modelDir })
       } else {
         let errorMsg = `Download failed (exit ${code})`
@@ -1027,6 +921,51 @@ export function registerModelHandlers(): void {
     }
   }
   cleanStaleMarkers().catch(() => { })
+
+  // ─── One-time migration: scan existing image models into DB ──────────────────
+  // On first launch after this update, scan ~/.mlxstudio/models/image/ for
+  // already-downloaded models that aren't yet tracked in the DB. Match directory
+  // names against the shared registry's repoMap to identify model IDs.
+  async function migrateExistingImageModels() {
+    const imageDir = join(homedir(), '.mlxstudio', 'models', 'image')
+    try {
+      if (!existsSync(imageDir)) return
+      const dirs = await readdir(imageDir)
+      let migrated = 0
+      for (const dir of dirs) {
+        const fullPath = join(imageDir, dir)
+        const dirStat = await stat(fullPath).catch(() => null)
+        if (!dirStat?.isDirectory()) continue
+        // Check if this directory matches any known model repo
+        const dirLower = dir.toLowerCase()
+        for (const model of IMAGE_MODELS) {
+          for (const [qStr, repoId] of Object.entries(model.repoMap)) {
+            const quantize = Number(qStr)
+            // Already in DB? Skip.
+            const existing = db.getImageModelPath(model.id, quantize)
+            if (existing) continue
+            // Match: the directory name matches the repo name
+            const repoName = repoId.split('/').pop()?.toLowerCase() || ''
+            if (dirLower === repoName) {
+              // Validate completeness before registering
+              const validation = validateImageModelCompleteness(fullPath, model.encoderType)
+              if (validation.complete) {
+                db.setImageModelPath(model.id, quantize, fullPath, repoId)
+                migrated++
+                console.log(`[IMAGE] Migrated existing model: ${model.id} q=${quantize} → ${fullPath}`)
+              }
+            }
+          }
+        }
+      }
+      if (migrated > 0) {
+        console.log(`[IMAGE] Migration complete: registered ${migrated} existing image model(s) in DB`)
+      }
+    } catch (err) {
+      console.error('[IMAGE] Migration scan failed:', err)
+    }
+  }
+  migrateExistingImageModels().catch(() => {})
 
   // Search HuggingFace for MLX models
 
@@ -1335,12 +1274,18 @@ export function registerModelHandlers(): void {
     const repoName = repoId.split('/').pop() || repoId
     const modelDir = join(imageModelsDir, repoName)
 
-    const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
+    const job: DownloadJob = { id, repoId, status: 'queued', modelDir, imageModelName: modelName, imageQuantize: quantize }
     downloadQueue.push(job)
     console.log(`[DOWNLOADS] Queued image model: ${repoId} → ${modelDir} (${downloadQueue.length} in queue)`)
 
     processQueue()
 
     return { jobId: id, status: 'queued', queuePosition: downloadQueue.length, repoId }
+  })
+
+  // ─── Image Model Paths IPC ──────────────────────────────────────────────────
+  // Return all stored image model paths so the UI can check availability
+  ipcMain.handle('image:getModelPaths', async () => {
+    return db.getAllImageModelPaths()
   })
 }

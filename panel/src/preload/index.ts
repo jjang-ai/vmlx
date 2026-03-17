@@ -273,6 +273,7 @@ const api = {
     getRunningServers: () => ipcRenderer.invoke('image:getRunningServers'),
     readFile: (imagePath: string) => ipcRenderer.invoke('image:readFile', imagePath),
     saveFile: (imagePath: string) => ipcRenderer.invoke('image:saveFile', imagePath),
+    getModelPaths: () => ipcRenderer.invoke('image:getModelPaths'),
   },
 
   // Session management

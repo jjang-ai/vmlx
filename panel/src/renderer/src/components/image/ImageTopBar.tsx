@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { Settings, Square, RefreshCw, PanelLeftOpen, ChevronDown, Download, Loader2, ScrollText } from 'lucide-react'
 
+import { IMAGE_MODELS } from '../../../../shared/imageModels'
+
 type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
 
 interface ImageModel {
@@ -10,16 +12,13 @@ interface ImageModel {
   quantizeOptions: number[]
 }
 
-const AVAILABLE_MODELS: ImageModel[] = [
-  // Generation (supports quantization)
-  { id: 'schnell', name: 'Flux Schnell', category: 'generate', quantizeOptions: [4, 8, 0] },
-  { id: 'flux2-klein-4b', name: 'FLUX.2 Klein 4B', category: 'generate', quantizeOptions: [8, 0] },
-  { id: 'z-image-turbo', name: 'Z-Image Turbo', category: 'generate', quantizeOptions: [4, 8, 0] },
-  { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B', category: 'generate', quantizeOptions: [0] },
-  { id: 'dev', name: 'Flux Dev', category: 'generate', quantizeOptions: [4, 8, 0] },
-  // Editing (full precision only)
-  { id: 'qwen-image-edit', name: 'Qwen Image Edit', category: 'edit', quantizeOptions: [0] },
-]
+// Derive AVAILABLE_MODELS from the shared registry
+const AVAILABLE_MODELS: ImageModel[] = IMAGE_MODELS.map(m => ({
+  id: m.id,
+  name: m.name,
+  category: m.category,
+  quantizeOptions: m.quantizeOptions,
+}))
 
 interface ImageTopBarProps {
   model: string | null

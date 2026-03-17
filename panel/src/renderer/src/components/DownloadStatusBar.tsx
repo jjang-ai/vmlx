@@ -30,6 +30,13 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
+  // Allow other components to open the download popup via custom event
+  useEffect(() => {
+    const handler = () => setExpanded(true)
+    window.addEventListener('open-download-popup', handler)
+    return () => window.removeEventListener('open-download-popup', handler)
+  }, [])
+
   useEffect(() => {
     // Poll initial status
     window.api.models.getDownloadStatus().then((status: any) => {
