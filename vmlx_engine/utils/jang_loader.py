@@ -98,24 +98,54 @@ def load_jang_model(model_path: str | Path):
         path, lazy=True, strict=False, model_config=config
     )
 
-    weights = _repack_jang_to_mlx(path, block_size, config)
-
-    if hasattr(model, "sanitize"):
-        weights = model.sanitize(weights)
-
     # Replace SwitchLinear with QuantizedSwitchLinear BEFORE loading weights
-    # so scales/biases can be loaded into the correct layer type
     _upgrade_switch_to_quantized(model, default_bits, block_size)
 
-    model.load_weights(list(weights.items()), strict=False)
+    # Check if model fits in 75% of system RAM for in-memory loading
+    model_bytes = jang_cfg.get("runtime", {}).get("total_weight_bytes", 0)
+    try:
+        import psutil
+        system_ram = psutil.virtual_memory().total
+    except ImportError:
+        system_ram = 128 * 1024 * 1024 * 1024
+    fits_in_ram = model_bytes == 0 or model_bytes < system_ram * 0.75
 
-    # Fix bits on QuantizedLinear/QuantizedEmbedding per actual weight shapes
-    _fix_quantized_bits(model, weights)
+    if fits_in_ram:
+        # Standard path: repack all into one dict, load at once
+        weights = _repack_jang_to_mlx(path, block_size, config)
+        if hasattr(model, "sanitize"):
+            weights = model.sanitize(weights)
+        model.load_weights(list(weights.items()), strict=False)
+        _fix_quantized_bits(model, weights)
+    else:
+        # Large model path: repack into dict, then load in chunks to reduce peak RAM
+        # Uses the SAME proven repack code, just feeds to model in batches
+        logger.info(f"  Large model ({model_bytes / 1e9:.1f} GB) — chunked loading to reduce peak RAM")
+        weights = _repack_jang_to_mlx(path, block_size, config)
+        if hasattr(model, "sanitize"):
+            weights = model.sanitize(weights)
+
+        # Load in chunks of ~2GB worth of keys
+        import gc as _gc
+        keys = list(weights.keys())
+        chunk_size = 500  # keys per chunk
+        for i in range(0, len(keys), chunk_size):
+            chunk_keys = keys[i:i + chunk_size]
+            chunk = {k: weights[k] for k in chunk_keys}
+            model.load_weights(list(chunk.items()), strict=False)
+            # Delete from main dict to free RAM
+            for k in chunk_keys:
+                del weights[k]
+            del chunk
+            _gc.collect()
+            logger.info(f"  Loaded chunk {i // chunk_size + 1} ({len(chunk_keys)} tensors)")
+
+        _fix_quantized_bits(model, {})
 
     if not hasattr(model, "config"):
         model.config = config
 
-    mx.eval(model.parameters())
+    mx.eval(model.parameters())  # noqa: S307 — MLX tensor materialization
     elapsed = time.perf_counter() - start
     from mlx.utils import tree_flatten
     n_params = sum(
