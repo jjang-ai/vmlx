@@ -683,7 +683,14 @@ export function registerModelHandlers(): void {
     }
   }
 
-  /** Parse HuggingFace tqdm progress from stderr */
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  /** Parse HuggingFace tqdm progress from stderr (legacy fallback) */
   function parseTqdmProgress(line: string): Partial<DownloadProgress> {
     // Strip ANSI escape codes before parsing
     const clean = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
@@ -745,20 +752,42 @@ export function registerModelHandlers(): void {
 
     const pythonPath = await getPythonPath()
     // Pass HF token to snapshot_download for gated model access (reads HF_TOKEN env var)
+    // Download script that reports total progress across all files as JSON lines on stdout.
+    // huggingface_hub's snapshot_download uses tqdm per-file, which only shows shard progress.
+    // Instead, we use hf_hub_download per file and track cumulative bytes ourselves.
     const script = [
-      'import sys, json, os',
-      'from huggingface_hub import snapshot_download',
+      'import sys, json, os, time',
+      'from huggingface_hub import HfApi, hf_hub_download',
+      'from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError',
       'repo_id = sys.argv[1]',
       'local_dir = sys.argv[2]',
       'token = os.environ.get("HF_TOKEN") or None',
       'try:',
-      '    path = snapshot_download(repo_id, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
-      '    print(json.dumps({"status": "complete", "path": path}), flush=True)',
+      '    api = HfApi()',
+      '    info = api.repo_info(repo_id, token=token)',
+      '    files = [s for s in info.siblings if s.rfilename and not s.rfilename.startswith(".")]',
+      '    total_bytes = sum(s.size or 0 for s in files)',
+      '    downloaded_bytes = 0',
+      '    total_files = len(files)',
+      '    print(json.dumps({"type":"init","total_bytes":total_bytes,"total_files":total_files}), flush=True)',
+      '    for i, f in enumerate(files):',
+      '        file_size = f.size or 0',
+      '        print(json.dumps({"type":"file_start","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes}), flush=True)',
+      '        t0 = time.time()',
+      '        hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
+      '        downloaded_bytes += file_size',
+      '        elapsed = time.time() - t0',
+      '        speed = file_size / elapsed if elapsed > 0 else 0',
+      '        print(json.dumps({"type":"file_done","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes,"speed":speed}), flush=True)',
+      '    print(json.dumps({"status":"complete","path":local_dir}), flush=True)',
       'except KeyboardInterrupt:',
-      '    print(json.dumps({"status": "cancelled"}), flush=True)',
+      '    print(json.dumps({"status":"cancelled"}), flush=True)',
       '    sys.exit(0)',
+      'except (GatedRepoError, RepositoryNotFoundError) as e:',
+      '    print(json.dumps({"status":"error","error":str(e),"gated":True}), flush=True)',
+      '    sys.exit(1)',
       'except Exception as e:',
-      '    print(json.dumps({"status": "error", "error": str(e)}), flush=True)',
+      '    print(json.dumps({"status":"error","error":str(e)}), flush=True)',
       '    sys.exit(1)',
     ].join('\n')
 
@@ -785,45 +814,79 @@ export function registerModelHandlers(): void {
     job.process = proc
 
     let stdout = ''
-    let lastStderr = ''
     let lastProgress: Partial<DownloadProgress> = {}
+    let stdoutBuffer = ''
 
+    // Parse JSON progress lines from stdout (our custom script outputs structured data)
     proc.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-
-    proc.stderr?.on('data', (data: Buffer) => {
-      const chunk = data.toString()
-      lastStderr = chunk
-      // tqdm uses \r to overwrite progress lines — split on \r and \n to get each update
-      const segments = chunk.split(/[\r\n]+/).filter(s => s.trim())
-      // Parse each segment and keep the best (highest percent) result
-      let bestParsed: Partial<DownloadProgress> = { raw: chunk.trim() }
-      let bestPercent = lastProgress.percent ?? -1
-      for (const seg of segments) {
-        const parsed = parseTqdmProgress(seg)
-        if (parsed.percent != null && parsed.percent >= bestPercent) {
-          bestParsed = { ...bestParsed, ...parsed }
-          bestPercent = parsed.percent
-        } else if (parsed.currentFile || parsed.filesProgress) {
-          // Merge metadata even if percent didn't improve
-          if (parsed.currentFile) bestParsed.currentFile = parsed.currentFile
-          if (parsed.filesProgress) bestParsed.filesProgress = parsed.filesProgress
+      stdoutBuffer += data.toString()
+      const lines = stdoutBuffer.split('\n')
+      stdoutBuffer = lines.pop() || '' // Keep incomplete line in buffer
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        stdout += trimmed + '\n'
+        try {
+          const msg = JSON.parse(trimmed)
+          if (msg.type === 'init') {
+            lastProgress = {
+              percent: 0,
+              downloaded: '0 B',
+              total: formatBytes(msg.total_bytes),
+              filesProgress: `0/${msg.total_files}`,
+              speed: '',
+              eta: 'calculating...',
+              currentFile: '',
+              raw: trimmed,
+            }
+          } else if (msg.type === 'file_start') {
+            const pct = msg.total_bytes > 0 ? Math.round((msg.downloaded_bytes / msg.total_bytes) * 100) : 0
+            lastProgress = {
+              ...lastProgress,
+              percent: pct,
+              downloaded: formatBytes(msg.downloaded_bytes),
+              currentFile: msg.file,
+              filesProgress: `${msg.file_num - 1}/${msg.total_files}`,
+              raw: trimmed,
+            }
+          } else if (msg.type === 'file_done') {
+            const pct = msg.total_bytes > 0 ? Math.round((msg.downloaded_bytes / msg.total_bytes) * 100) : 0
+            lastProgress = {
+              ...lastProgress,
+              percent: pct,
+              downloaded: formatBytes(msg.downloaded_bytes),
+              total: formatBytes(msg.total_bytes),
+              currentFile: msg.file,
+              filesProgress: `${msg.file_num}/${msg.total_files}`,
+              speed: msg.speed ? formatBytes(msg.speed) + '/s' : '',
+              raw: trimmed,
+            }
+            // Estimate ETA from average speed
+            const remaining = msg.total_bytes - msg.downloaded_bytes
+            if (msg.speed > 0 && remaining > 0) {
+              const secs = Math.round(remaining / msg.speed)
+              lastProgress.eta = secs > 60 ? `${Math.round(secs / 60)}m ${secs % 60}s` : `${secs}s`
+            } else {
+              lastProgress.eta = ''
+            }
+          }
+          job.progress = lastProgress as DownloadProgress
+          emitToRenderer('models:downloadProgress', {
+            jobId: job.id,
+            repoId: job.repoId,
+            progress: lastProgress,
+          })
+        } catch {
+          // Not JSON — ignore (could be stray output)
         }
       }
-      // If no segment had percent but we got metadata, still merge
-      if (bestParsed.percent == null && segments.length > 0) {
-        const lastSeg = parseTqdmProgress(segments[segments.length - 1])
-        bestParsed = { ...bestParsed, ...lastSeg }
-      }
-      // Merge with last known progress (tqdm lines may only have partial info)
-      lastProgress = { ...lastProgress, ...bestParsed }
-      job.progress = lastProgress as DownloadProgress
-      emitToRenderer('models:downloadProgress', {
-        jobId: job.id,
-        repoId: job.repoId,
-        progress: lastProgress
-      })
+    })
+
+    // Capture stderr for error reporting but don't parse tqdm
+    proc.stderr?.on('data', (data: Buffer) => {
+      // Log stderr but don't parse — our progress comes from structured stdout
+      const chunk = data.toString().trim()
+      if (chunk) console.log(`[DOWNLOADS] stderr: ${chunk.slice(0, 200)}`)
     })
 
     proc.on('close', async (code: number | null) => {
@@ -863,9 +926,7 @@ export function registerModelHandlers(): void {
             errorMsg = result.error || errorMsg
           }
         } catch { }
-        if (!errorMsg.includes(lastStderr.slice(0, 100)) && lastStderr.trim()) {
-          errorMsg += `: ${lastStderr.slice(0, 200)}`
-        }
+        // stderr is logged to console but not parsed for progress anymore
         try { await unlink(markerFile) } catch (_) { }
         job.status = 'error'
         job.error = errorMsg

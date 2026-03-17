@@ -299,6 +299,7 @@ response = requests.post("http://localhost:8000/v1/images/edits", json={
 | `POST` | `/v1/responses` | OpenAI Responses API |
 | `POST` | `/v1/completions` | Text completions |
 | `POST` | `/v1/images/generations` | Image generation |
+| `POST` | `/v1/images/edits` | Image editing (Qwen Image Edit) |
 | `POST` | `/v1/embeddings` | Text embeddings |
 | `POST` | `/v1/rerank` | Document reranking |
 | `POST` | `/v1/audio/transcriptions` | Speech-to-text (Whisper) |

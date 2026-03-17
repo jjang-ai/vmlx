@@ -30,7 +30,7 @@ interface ImageTopBarProps {
   onLogs: () => void
   onStop: () => void
   onChangeModel: () => void
-  onSelectModel: (modelId: string, category: 'generate' | 'edit') => void
+  onSelectModel: (modelId: string, quantize: number | undefined, category: 'generate' | 'edit') => void
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
 }
@@ -67,18 +67,21 @@ export function ImageTopBar({
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showPicker])
 
-  // Check model availability when dropdown opens
+  // Check model availability when dropdown opens — check ALL quantize options per model
   useEffect(() => {
     if (!showPicker) return
     setCheckingAvail(true)
     const checks = AVAILABLE_MODELS.map(async (m) => {
-      const q = m.quantizeOptions[0] // Check default quantize
-      try {
-        const result = await window.api.models.checkImageModel(m.id, q)
-        return { id: m.id, available: result.available }
-      } catch {
-        return { id: m.id, available: false }
-      }
+      // Check all quantize options, report available if ANY is downloaded
+      const results = await Promise.all(
+        m.quantizeOptions.map(async (q) => {
+          try {
+            const result = await window.api.models.checkImageModel(m.id, q)
+            return result.available
+          } catch { return false }
+        })
+      )
+      return { id: m.id, available: results.some(Boolean) }
     })
     Promise.all(checks).then(results => {
       const avail: Record<string, boolean> = {}
@@ -134,7 +137,7 @@ export function ImageTopBar({
                   downloaded={isDownloaded(m.id)}
                   checking={checkingAvail}
                   running={isActive(m.id) && status === 'running'}
-                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, m.category) }}
+                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, m.quantizeOptions[0], m.category) }}
                 />
               ))}
 
@@ -152,7 +155,7 @@ export function ImageTopBar({
                   downloaded={isDownloaded(m.id)}
                   checking={checkingAvail}
                   running={isActive(m.id) && status === 'running'}
-                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, m.category) }}
+                  onSelect={() => { setShowPicker(false); onSelectModel(m.id, m.quantizeOptions[0], m.category) }}
                 />
               ))}
 

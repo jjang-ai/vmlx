@@ -56,21 +56,9 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     tier: 'small',
     encoderType: 'dual',
   },
-  {
-    id: 'flux2-klein-4b',
-    name: 'FLUX.2 Klein 4B',
-    desc: 'Compact next-gen model (20 steps)',
-    category: 'generate',
-    steps: 20,
-    size: '~4-8 GB',
-    quantizeOptions: [8, 0],
-    repoMap: {
-      8: 'AITRADER/FLUX2-klein-4B-mlx-8bit',
-      0: 'black-forest-labs/FLUX.2-klein-4B',
-    },
-    tier: 'small',
-    encoderType: 'single',
-  },
+  // Klein 4B removed: mflux's Flux1() constructor requires text_encoder_2 which Klein
+  // doesn't have. Local loading fails. from_name() downloads full model from HF silently.
+  // Re-add when mflux adds single-encoder local loading support.
   {
     id: 'z-image-turbo',
     name: 'Z-Image Turbo',
@@ -88,20 +76,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     encoderType: 'single',
   },
   // Medium
-  {
-    id: 'flux2-klein-9b',
-    name: 'FLUX.2 Klein 9B',
-    desc: 'Next-gen mid-size model (20 steps)',
-    category: 'generate',
-    steps: 20,
-    size: '~16 GB',
-    quantizeOptions: [0],
-    repoMap: {
-      0: 'black-forest-labs/FLUX.2-klein-9B',
-    },
-    tier: 'medium',
-    encoderType: 'single',
-  },
+  // Klein 9B removed: same issue as Klein 4B — mflux can't load single-encoder locally.
   {
     id: 'dev',
     name: 'Flux Dev',

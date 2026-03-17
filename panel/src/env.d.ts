@@ -29,6 +29,7 @@ declare global {
         startDownload: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
         checkImageModel: (modelName: string, quantize?: number) => Promise<{ available: boolean; localPath?: string; repoId?: string; missing?: string[] }>
         downloadImageModel: (modelName: string, quantize?: number) => Promise<{ jobId?: string; status: string; localPath?: string; repoId?: string; queuePosition?: number }>
+        openDownloadWindow: () => Promise<void>
       }
       chat: {
         createFolder: (name: string, parentId?: string) => Promise<any>
@@ -135,7 +136,7 @@ declare global {
           width: number; height: number; steps: number; guidance: number; strength: number;
           seed?: number; serverPort: number
         }) => Promise<{ success: boolean; generations?: any[]; error?: string }>
-        startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit') => Promise<{ success: boolean; sessionId?: string; port?: number; error?: string }>
+        startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string }) => Promise<{ success: boolean; sessionId?: string; port?: number; error?: string }>
         stopServer: () => Promise<{ success: boolean; error?: string }>
         getRunningServer: () => Promise<{ sessionId: string; modelName: string; modelPath?: string; host: string; port: number; status: string; quantize: number; imageMode: 'generate' | 'edit' } | null>
         getRunningServers: () => Promise<Array<{ sessionId: string; modelName: string; modelPath?: string; host: string; port: number; status: string; quantize: number; imageMode: 'generate' | 'edit' }>>

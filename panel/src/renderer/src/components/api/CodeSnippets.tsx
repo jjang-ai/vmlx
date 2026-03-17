@@ -212,6 +212,12 @@ export function CodeSnippets({ baseUrl, apiKey, modelId, isImage, isEdit }: Code
   const [lang, setLang] = useState<Lang>(availableLangs[0].key)
   const [copied, setCopied] = useState(false)
 
+  // Reset lang when switching between image/text servers to avoid stale tab
+  const validKeys = availableLangs.map(l => l.key)
+  if (!validKeys.includes(lang)) {
+    setLang(availableLangs[0].key)
+  }
+
   const model = modelId || 'your-model-name'
   const builders = isImage ? (isEdit ? IMAGE_EDIT_BUILDERS : IMAGE_BUILDERS) : BUILDERS
   const snippet = useMemo(() => (builders[lang] || builders[availableLangs[0].key])(baseUrl, apiKey, model), [lang, baseUrl, apiKey, model, isImage, isEdit])
