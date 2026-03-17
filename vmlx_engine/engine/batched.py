@@ -413,7 +413,7 @@ class BatchedEngine(BaseEngine):
                 prompt, messages, tools, tokenizer, template_kwargs
             )
 
-            if enable_thinking is False and "<think>" in prompt.split("\nassistant\n")[-1]:
+            if enable_thinking is False and "<think>" in prompt:
                 prompt = prompt[:prompt.rfind("<think>")].rstrip()
             return prompt
         else:
