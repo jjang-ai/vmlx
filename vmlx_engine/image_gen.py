@@ -214,24 +214,20 @@ class ImageGenEngine:
         logger.info(f"Image model loaded in {elapsed:.1f}s: {base_name}")
 
     def _load_zimage(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
-        """Load a Z-Image model (single text encoder, ZImage class)."""
+        """Load a Z-Image model (single text encoder, ZImage class).
+        ZImage handles both mflux-native and diffusers format from local paths.
+        """
         from mflux.models.z_image.variants.z_image import ZImage
 
         model_config = ModelConfig.from_name(base_name)
 
-        # ZImage supports model_path directly — no text_encoder_2 required
-        # Only load locally if files are in mflux-save format (numbered: 0.safetensors, 1.safetensors)
-        # NOT PyTorch diffusers format (diffusion_pytorch_model-*.safetensors)
+        # ZImage can load from local path in both mflux-native AND diffusers format
         if model_path and Path(model_path).is_dir():
             transformer_dir = Path(model_path) / "transformer"
-            try:
-                is_mflux_format = transformer_dir.is_dir() and any(
-                    f.name.split('.')[0].isdigit() and f.suffix == '.safetensors'
-                    for f in transformer_dir.iterdir()
-                )
-            except OSError:
-                is_mflux_format = False
-            if is_mflux_format:
+            has_transformer = transformer_dir.is_dir() and any(
+                f.suffix == '.safetensors' for f in transformer_dir.iterdir()
+            )
+            if has_transformer:
                 logger.info(f"Loading ZImage from local path: {model_path}")
                 try:
                     self._model = ZImage(
@@ -242,27 +238,16 @@ class ImageGenEngine:
                     )
                     return
                 except Exception as e:
-                    logger.warning(f"Local ZImage loading failed ({e}), falling back to HF download")
+                    raise RuntimeError(
+                        f"Failed to load ZImage from {model_path}: {e}. "
+                        f"Try re-downloading from the Image tab."
+                    ) from e
 
-        # Fall back to HuggingFace download
-        logger.info(f"Loading ZImage via HuggingFace: {base_name} (quantize={quantize})")
-        try:
-            self._model = ZImage(
-                model_config=model_config,
-                quantize=quantize,
-                lora_paths=[],
-            )
-        except (ValueError, RuntimeError) as e:
-            if ("dequantize" in str(e) or "uint32" in str(e)) and quantize:
-                logger.warning(f"Quantized ZImage loading failed ({e}), falling back to unquantized")
-                self._model = ZImage(
-                    model_config=model_config,
-                    quantize=None,
-                    lora_paths=[],
-                )
-                self._quantize = None
-            else:
-                raise
+        # No local path — NEVER silently download from HuggingFace
+        raise RuntimeError(
+            f"No local model files found for {base_name}. "
+            f"Download the model first from the Image tab."
+        )
 
     def _load_flux(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
         """Load a Flux model (dual text encoder, Flux1 class)."""
@@ -270,21 +255,13 @@ class ImageGenEngine:
 
         model_config = ModelConfig.from_name(base_name)
 
-        # Try local path first (needs text_encoder + text_encoder_2, except Klein)
+        # Try local path — Flux1 handles both mflux-native and diffusers format
         if model_path and Path(model_path).is_dir():
             transformer_dir = Path(model_path) / "transformer"
-            te2_dir = Path(model_path) / "text_encoder_2"
-            has_safetensors = transformer_dir.is_dir() and any(
+            has_transformer = transformer_dir.is_dir() and any(
                 f.suffix == '.safetensors' for f in transformer_dir.iterdir()
             )
-            # Klein models are single-encoder — skip local path loading.
-            # mflux's Flux1() constructor always checks for text_encoder_2 even for Klein.
-            # Klein loads correctly via from_name() which handles single-encoder internally.
-            is_klein = 'klein' in base_name.lower()
-            if is_klein:
-                has_safetensors = False  # Force fallback to from_name()
-            te2_ok = te2_dir.is_dir()
-            if has_safetensors and te2_ok:
+            if has_transformer:
                 logger.info(f"Loading Flux from local path: {model_path}")
                 try:
                     self._model = Flux1(
@@ -295,19 +272,16 @@ class ImageGenEngine:
                     )
                     return
                 except Exception as e:
-                    logger.warning(f"Local Flux loading failed ({e}), falling back to from_name()")
+                    raise RuntimeError(
+                        f"Failed to load from {model_path}: {e}. "
+                        f"Try re-downloading from the Image tab."
+                    ) from e
 
-        # Fall back to from_name (HuggingFace resolution)
-        logger.info(f"Loading Flux via from_name: {base_name} (quantize={quantize})")
-        try:
-            self._model = Flux1.from_name(model_name=base_name, quantize=quantize)
-        except (ValueError, RuntimeError) as e:
-            if ("dequantize" in str(e) or "uint32" in str(e)) and quantize:
-                logger.warning(f"Quantized loading failed ({e}), falling back to unquantized")
-                self._model = Flux1.from_name(model_name=base_name, quantize=None)
-                self._quantize = None
-            else:
-                raise
+        # No local path — NEVER silently download from HuggingFace
+        raise RuntimeError(
+            f"No local model files found for {base_name}. "
+            f"Download the model first from the Image tab."
+        )
 
     def unload(self) -> None:
         """Unload the current model to free memory."""

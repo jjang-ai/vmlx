@@ -24,8 +24,15 @@ const QUANTIZE_OPTIONS = [
   { value: 0, label: 'Full', desc: 'Best quality, most memory' },
 ]
 
+export interface ImageServerSettings {
+  host: string
+  port: number
+  apiKey: string
+  logLevel: string
+}
+
 interface ImageModelPickerProps {
-  onSelect: (modelId: string, quantize?: number, category?: 'generate' | 'edit') => void
+  onSelect: (modelId: string, quantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => void
 }
 
 type DownloadState = 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
@@ -36,6 +43,12 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [customPath, setCustomPath] = useState('')
   const [customCategory, setCustomCategory] = useState<'generate' | 'edit'>('generate')
   const [showCustom, setShowCustom] = useState(false)
+
+  // Server settings (same as Server tab CreateSession simplified config)
+  const [serverHost, setServerHost] = useState('0.0.0.0')
+  const [serverPort, setServerPort] = useState(0) // 0 = auto
+  const [serverApiKey, setServerApiKey] = useState('')
+  const [serverLogLevel, setServerLogLevel] = useState('INFO')
 
   // Download state
   const [downloadState, setDownloadState] = useState<DownloadState>('idle')
@@ -143,11 +156,12 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   }
 
   const handleStart = () => {
+    const settings: ImageServerSettings = { host: serverHost, port: serverPort, apiKey: serverApiKey, logLevel: serverLogLevel }
     if (showCustom && customPath.trim()) {
-      onSelect(customPath.trim(), selectedQuantize, customCategory)
+      onSelect(customPath.trim(), selectedQuantize, customCategory, settings)
     } else if (selectedModel) {
       const modelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
-      onSelect(selectedModel, selectedQuantize, modelInfo?.category || 'generate')
+      onSelect(selectedModel, selectedQuantize, modelInfo?.category || 'generate', settings)
     }
   }
 
@@ -429,6 +443,38 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
                     <span className="block text-[10px] opacity-75 mt-0.5">{opt.desc}</span>
                   </button>
                 ))}
+              </div>
+            </div>
+
+            {/* Server Settings */}
+            <div className="flex-1 min-w-[200px]">
+              <label className="text-xs text-muted-foreground block mb-1.5">Server Settings</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] text-muted-foreground">Host</label>
+                  <input type="text" value={serverHost} onChange={e => setServerHost(e.target.value)}
+                    className="w-full px-2 py-1 bg-muted border border-input rounded text-xs" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground">Port (0=auto)</label>
+                  <input type="number" value={serverPort} onChange={e => setServerPort(parseInt(e.target.value) || 0)}
+                    className="w-full px-2 py-1 bg-muted border border-input rounded text-xs" min={0} max={65535} />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground">API Key</label>
+                  <input type="password" value={serverApiKey} onChange={e => setServerApiKey(e.target.value)}
+                    placeholder="Optional" className="w-full px-2 py-1 bg-muted border border-input rounded text-xs" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground">Log Level</label>
+                  <select value={serverLogLevel} onChange={e => setServerLogLevel(e.target.value)}
+                    className="w-full px-2 py-1 bg-muted border border-input rounded text-xs">
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                  </select>
+                </div>
               </div>
             </div>
 

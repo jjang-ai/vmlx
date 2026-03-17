@@ -49,8 +49,8 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
       if (filterType === 'image' || filterType === 'text') {
         try {
           const modelTypes = await window.api.models.detectTypes(list.map((s: any) => s.modelPath))
-          list = list.filter((s: any, i: number) => {
-            const type = modelTypes[i] // 'image' | 'text' | 'unknown'
+          list = list.filter((s: any) => {
+            const type = modelTypes[s.modelPath] // 'image' | 'text' | 'unknown'
             if (filterType === 'image') return type === 'image'
             if (filterType === 'text') return type !== 'image'
             return true

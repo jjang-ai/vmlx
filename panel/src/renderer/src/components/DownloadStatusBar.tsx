@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, Maximize2, Minimize2, Download, Loader2 } from 'lucide-react'
+import { Maximize2, Download, Loader2 } from 'lucide-react'
 
 interface DownloadProgress {
   percent: number
@@ -26,13 +26,13 @@ interface DownloadStatusBarProps {
 export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
   const [active, setActive] = useState<ActiveDownload | null>(null)
   const [queue, setQueue] = useState<Array<{ jobId: string; repoId: string }>>([])
-  const [expanded, setExpanded] = useState(false)
+  const [_expanded, _setExpanded] = useState(false) // kept for event compat
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
-  // Allow other components to open the download popup via custom event
+  // Allow other components to open the download window via custom event
   useEffect(() => {
-    const handler = () => setExpanded(true)
+    const handler = () => window.api.models.openDownloadWindow()
     window.addEventListener('open-download-popup', handler)
     return () => window.removeEventListener('open-download-popup', handler)
   }, [])
@@ -74,7 +74,8 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
     })
     const unsubStart = window.api.models.onDownloadStarted?.((data: any) => {
       setActive({ jobId: data.jobId, repoId: data.repoId })
-      setExpanded(true) // Auto-expand when download starts
+      // Auto-open the downloads window when a download starts
+      window.api.models.openDownloadWindow()
     })
 
     return () => {
@@ -116,8 +117,8 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
             </div>
           )}
         </div>
-        <button onClick={() => setExpanded(!expanded)} className="p-1 text-muted-foreground hover:text-foreground" title={expanded ? 'Collapse' : 'Expand downloads'}>
-          {expanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+        <button onClick={() => window.api.models.openDownloadWindow()} className="p-1 text-muted-foreground hover:text-foreground" title="Open Downloads window">
+          <Maximize2 className="h-3 w-3" />
         </button>
         {active && !active.error && (
           <button onClick={() => window.api.models.cancelDownload(active.jobId)} className="text-[10px] text-destructive hover:text-destructive/80 px-1.5 py-0.5 border border-destructive/30 rounded flex-shrink-0">
@@ -128,97 +129,5 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
     </div>
   )
 
-  // Expanded popup panel
-  const expandedPanel = expanded ? (
-    <div className="fixed inset-x-0 top-20 mx-auto w-[500px] max-h-[400px] bg-card border border-border rounded-lg shadow-2xl z-50 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30">
-        <div className="flex items-center gap-2">
-          <Download className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-medium">Downloads</h3>
-        </div>
-        <button onClick={() => setExpanded(false)} className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-accent">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="p-4 space-y-4 overflow-auto max-h-[340px]">
-        {/* Active download */}
-        {active && (
-          <div className={`p-3 rounded-lg border ${active.error ? 'border-destructive/30 bg-destructive/5' : 'border-primary/20 bg-primary/5'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                {active.error ? (
-                  <span className="w-2 h-2 bg-destructive rounded-full" />
-                ) : (
-                  <Loader2 className="h-4 w-4 text-primary animate-spin" />
-                )}
-                <span className="text-sm font-medium">{active.repoId}</span>
-              </div>
-              {!active.error && (
-                <button onClick={() => window.api.models.cancelDownload(active.jobId)} className="text-xs text-destructive hover:text-destructive/80 px-2 py-1 border border-destructive/30 rounded">
-                  Cancel
-                </button>
-              )}
-            </div>
-            {active.error && (
-              <p className="text-xs text-destructive mb-2">{active.error}</p>
-            )}
-            {p && (
-              <div className="space-y-1.5">
-                <div className="h-2 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${Math.min(p.percent || 0, 100)}%` }} />
-                </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{p.percent != null ? `${p.percent}%` : 'Starting...'}</span>
-                  <div className="flex gap-3">
-                    {p.downloaded && p.total && <span>{p.downloaded} / {p.total}</span>}
-                    {p.speed && <span>{p.speed}</span>}
-                    {p.eta && <span>ETA {p.eta}</span>}
-                  </div>
-                </div>
-                {p.currentFile && (
-                  <p className="text-[10px] text-muted-foreground truncate" title={p.currentFile}>{p.currentFile}</p>
-                )}
-                {p.filesProgress && (
-                  <p className="text-[10px] text-muted-foreground">{p.filesProgress}</p>
-                )}
-              </div>
-            )}
-            {!p && !active.error && (
-              <p className="text-xs text-muted-foreground">Preparing download...</p>
-            )}
-          </div>
-        )}
-
-        {/* Queued downloads */}
-        {queue.length > 0 && (
-          <div>
-            <h4 className="text-xs font-medium text-muted-foreground mb-2">Queued ({queue.length})</h4>
-            {queue.map((item, i) => (
-              <div key={item.jobId || i} className="flex items-center justify-between py-1.5 px-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 bg-warning rounded-full" />
-                  <span className="text-muted-foreground">{item.repoId}</span>
-                </div>
-                <button onClick={() => window.api.models.cancelDownload(item.jobId)} className="text-[10px] text-muted-foreground hover:text-destructive">
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* No active downloads */}
-        {!active && queue.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center py-4">No active downloads</p>
-        )}
-      </div>
-    </div>
-  ) : null
-
-  return (
-    <>
-      {inlineBar}
-      {expandedPanel}
-    </>
-  )
+  return inlineBar
 }

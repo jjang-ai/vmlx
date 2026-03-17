@@ -310,7 +310,7 @@ export function registerImageHandlers(): void {
 
   // ─── Server Lifecycle ────────────────────────────────────────────────
 
-  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit') => {
+  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string }) => {
     // Serialize concurrent startServer calls to prevent race conditions.
     // Each call chains onto the previous one so only one stop+create+start
     // sequence runs at a time.
@@ -335,6 +335,11 @@ export function registerImageHandlers(): void {
             modelPath = storedPath.localPath
             console.log(`[IMAGE] Using stored model path: ${modelPath}`)
           } else {
+            // Clean up stale DB entry (file was deleted from disk)
+            if (storedPath) {
+              console.log(`[IMAGE] Stale DB entry for ${modelName} (quantize=${quantize}): path no longer exists, removing.`)
+              db.deleteImageModelPath(modelName, quantize || 0)
+            }
             console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
             return { success: false, error: `Model "${modelName}" not downloaded. Use the Download button first.` }
           }
@@ -344,9 +349,11 @@ export function registerImageHandlers(): void {
           // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
           const mode = imageMode || 'generate'
           const config: Partial<ServerConfig> = {
-            host: '0.0.0.0',
-            port: 0,  // auto-assign
-            timeout: 600,
+            host: serverSettings?.host || '0.0.0.0',
+            port: serverSettings?.port || 0,  // 0 = auto-assign
+            apiKey: serverSettings?.apiKey || '',
+            logLevel: (serverSettings?.logLevel || 'INFO') as 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR',
+            timeout: 1800,  // 30 minutes — image edits can take 10+ minutes for large models
             modelType: 'image',
             imageMode: mode,
             imageQuantize: quantize || 0,

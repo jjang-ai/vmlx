@@ -6,7 +6,8 @@ import { ImageHistory } from './ImageHistory'
 import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
-import { getDefaultSteps } from '../../../../shared/imageModels'
+import { getDefaultSteps, getImageModel } from '../../../../shared/imageModels'
+import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
   id: string
@@ -195,7 +196,7 @@ export function ImageTab() {
     setGenerations(result || [])
   }, [])
 
-  const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number, category?: 'generate' | 'edit') => {
+  const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => {
     const mode = category || 'generate'
 
     // Stop any currently running/starting server before switching models
@@ -212,7 +213,9 @@ export function ImageTab() {
     setSelectedModel(modelId)
     setShowModelPicker(false)
     setError(null)
-    const q = modelQuantize ?? 4
+    // Use the provided quantize, or fall back to the model's first supported quantize option
+    const modelDef = getImageModel(modelId)
+    const q = modelQuantize ?? modelDef?.quantizeOptions[0] ?? 4
     setQuantize(q)
 
     // Use the explicit category from model picker — no guessing
@@ -238,7 +241,7 @@ export function ImageTab() {
     // Auto-start server, passing imageMode so it's stored in session config
     setServerStatus('starting')
     try {
-      const result = await window.api.image.startServer(modelId, q, mode)
+      const result = await window.api.image.startServer(modelId, q, mode, serverSettings)
       if (result.success) {
         setServerSessionId(result.sessionId ?? null)
         setServerPort(result.port ?? null)
@@ -408,9 +411,9 @@ export function ImageTab() {
           onLogs={() => setShowLogs(!showLogs)}
           onStop={handleStop}
           onChangeModel={handleChangeModel}
-          onSelectModel={(modelId, category) => {
-            // Quick switch: stop current, start new model
-            handleModelSelect(modelId, undefined, category)
+          onSelectModel={(modelId, modelQuantize, category) => {
+            // Quick switch: stop current, start new model with correct quantize
+            handleModelSelect(modelId, modelQuantize, category)
           }}
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
