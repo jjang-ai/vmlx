@@ -42,6 +42,16 @@ export function DownloadsView() {
         setActiveDownloads([])
       }
       setQueue(status.queue || [])
+      // Restore completed downloads so re-opening window shows history
+      if (status.completed?.length) {
+        setCompleted(prev => {
+          const existing = new Set(prev.map(c => c.jobId))
+          const newItems = status.completed
+            .filter((c: any) => !existing.has(c.jobId))
+            .map((c: any) => ({ jobId: c.jobId, repoId: c.repoId, status: c.status as 'complete' | 'cancelled', time: Date.now() }))
+          return [...newItems, ...prev]
+        })
+      }
     }).catch(() => {})
   }
 
@@ -62,13 +72,15 @@ export function DownloadsView() {
       setTimeout(refreshStatus, 500)
     })
     const unsubError = window.api.models.onDownloadError((data: any) => {
+      // Show error on active card briefly, then move to completed as failed
       setActiveDownloads(prev => prev.map(d =>
         d.jobId === data.jobId ? { ...d, error: data.error || 'Download failed', progress: undefined } : d
       ))
       setTimeout(() => {
         setActiveDownloads(prev => prev.filter(d => d.jobId !== data.jobId))
+        setCompleted(prev => [{ jobId: data.jobId, repoId: data.repoId, status: 'cancelled' as const, time: Date.now() }, ...prev])
         refreshStatus()
-      }, 5000)
+      }, 3000)
     })
     const unsubStart = window.api.models.onDownloadStarted?.((data: any) => {
       setActiveDownloads(prev => {
