@@ -372,7 +372,14 @@ export function registerImageHandlers(): void {
               }
             }
           } catch {
-            // Fall through to use model name directly (mflux will resolve/download)
+            // Local search failed
+          }
+
+          // If no local model found, don't let mflux silently download multi-GB files.
+          // Tell the user to download first via the model picker.
+          if (modelPath === modelName) {
+            console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
+            return { success: false, error: `Model "${modelName}" not found locally. Use the Download button to download it first, then try again.` }
           }
 
           // Create a session config for image serving
