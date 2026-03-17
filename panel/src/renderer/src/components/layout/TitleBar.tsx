@@ -1,4 +1,4 @@
-import { MessageSquare, Server, Wrench, Code2, ImageIcon, PanelLeftClose, PanelLeft, Info } from 'lucide-react'
+import { MessageSquare, Server, Wrench, Code2, ImageIcon, PanelLeftClose, PanelLeft, Info, Terminal } from 'lucide-react'
 import { ThemeToggle } from '../ui/theme-toggle'
 import { useAppState } from '../../contexts/AppStateContext'
 
@@ -36,6 +36,12 @@ export function TitleBar() {
           className="flex items-center bg-muted rounded-md p-0.5 gap-0.5"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
+          <ModeButton
+            active={state.mode === 'code'}
+            onClick={() => setMode('code')}
+            icon={<Terminal className="h-3 w-3" />}
+            label="Code"
+          />
           <ModeButton
             active={state.mode === 'chat'}
             onClick={() => setMode('chat')}

@@ -1158,7 +1158,11 @@ export function registerModelHandlers(): void {
       if (!res.ok) return null
       const text = await res.text()
       // Strip YAML frontmatter
-      const stripped = text.replace(/^---[\s\S]*?---\s*/, '')
+      let stripped = text.replace(/^---[\s\S]*?---\s*/, '')
+      // Strip HTML tags (HF READMEs mix markdown and HTML — raw tags look broken in plain text)
+      stripped = stripped.replace(/<[^>]+>/g, '')
+      // Collapse excessive blank lines (from stripped HTML blocks)
+      stripped = stripped.replace(/\n{3,}/g, '\n\n').trim()
       // Truncate to ~3000 chars for display
       return stripped.length > 3000 ? stripped.slice(0, 3000) + '\n\n...(truncated)' : stripped
     } catch {

@@ -507,7 +507,7 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
         </div>
       </div>
       {showReadme && (
-        <div className="border-t border-border px-3 py-2 max-h-48 overflow-auto bg-muted/30">
+        <div className="border-t border-border px-3 py-2 max-h-64 overflow-auto bg-muted/30">
           {loadingReadme ? (
             <p className="text-xs text-muted-foreground">Loading README...</p>
           ) : (
