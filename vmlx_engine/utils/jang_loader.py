@@ -117,8 +117,9 @@ def load_jang_model(model_path: str | Path):
 
     mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
+    from mlx.utils import tree_flatten
     n_params = sum(
-        p.size for _, p in mx.utils.tree_flatten(model.parameters())
+        p.size for _, p in tree_flatten(model.parameters())
     )
     logger.info(
         f"JANG model loaded in {elapsed:.1f}s: "
