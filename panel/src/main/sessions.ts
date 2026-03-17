@@ -988,8 +988,8 @@ export class SessionManager extends EventEmitter {
             }
             this.emit('session:health', {
               sessionId: session.id,
-              running: true,
-              status: 'ok',
+              running: modelReady,
+              status: modelReady ? 'ok' : 'loading',
               modelName: data.model_name,
               port: session.port,
               memory: data.memory  // { active_mb, peak_mb, cache_mb } from /health
