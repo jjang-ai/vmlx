@@ -365,28 +365,44 @@ def load_jang_model(model_path: str | Path):
     # Replace SwitchLinear with QuantizedSwitchLinear BEFORE loading weights
     _upgrade_switch_to_quantized(model, default_bits, block_size)
 
-    # Repack JANG weights -> temp safetensors shards on disk
-    shard_files, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
-
+    # Decide: in-memory fast path vs disk streaming path.
+    # If model weight bytes fit in 90% of system RAM, load entirely in-memory (fast).
+    # Otherwise use disk-backed temp shards (slower but avoids OOM on 397B+ models).
+    model_bytes = jang_cfg.get("runtime", {}).get("total_weight_bytes", 0)
     try:
-        # Load each temp shard via mx.load (mmap) and feed to model
-        logger.info(f"  Loading {len(shard_files)} repacked shards via mmap")
-        for i, sf in enumerate(shard_files):
-            shard_weights = mx.load(sf)
+        import psutil
+        system_ram = psutil.virtual_memory().total
+    except ImportError:
+        system_ram = 128 * 1024 * 1024 * 1024  # assume 128 GB
+    use_fast_path = model_bytes > 0 and model_bytes < system_ram * 0.9
 
-            # Apply model-specific sanitization per shard
-            if hasattr(model, "sanitize"):
-                shard_weights = model.sanitize(shard_weights)
-
-            model.load_weights(list(shard_weights.items()), strict=False)
-            del shard_weights
-            gc.collect()
-
+    if use_fast_path:
+        # Fast in-memory path: repack all weights into a single dict, load at once
+        logger.info(f"  Fast path: model {model_bytes / 1e9:.1f} GB fits in RAM ({system_ram / 1e9:.0f} GB)")
+        all_weights = _repack_jang_to_mlx_inmemory(path, block_size, config)
+        if hasattr(model, "sanitize"):
+            all_weights = model.sanitize(all_weights)
+        model.load_weights(list(all_weights.items()), strict=False)
+        del all_weights
+        gc.collect()
         _fix_quantized_bits(model, {})
-    finally:
-        # Always clean up temp files
-        if tmp_dir:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+    else:
+        # Disk streaming path for very large models
+        logger.info(f"  Streaming path: model {model_bytes / 1e9:.1f} GB exceeds 90% of RAM ({system_ram / 1e9:.0f} GB)")
+        shard_files, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
+        try:
+            logger.info(f"  Loading {len(shard_files)} repacked shards via mmap")
+            for i, sf in enumerate(shard_files):
+                shard_weights = mx.load(sf)
+                if hasattr(model, "sanitize"):
+                    shard_weights = model.sanitize(shard_weights)
+                model.load_weights(list(shard_weights.items()), strict=False)
+                del shard_weights
+                gc.collect()
+            _fix_quantized_bits(model, {})
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     if not hasattr(model, "config"):
         model.config = config
@@ -405,6 +421,151 @@ def load_jang_model(model_path: str | Path):
     )
 
     return model, tokenizer
+
+
+def _repack_jang_to_mlx_inmemory(
+    model_path: Path,
+    block_size: int,
+    config: dict,
+) -> dict[str, mx.array]:
+    """Fast in-memory repack for models that fit in system RAM.
+    Returns a single dict of all repacked weights (no disk I/O).
+    """
+    from safetensors import safe_open
+
+    INDEX_NAMES = ["model.jang.index.json", "model.jjqf.index.json", "model.mxq.index.json"]
+    SHARD_GLOBS = ["*.jang.safetensors", "*.jjqf.safetensors", "*.mxq.safetensors"]
+    SUFFIXES = (".qweight", ".scales", ".zeros", ".biases", ".bit_map", ".block_offsets", ".shape", ".bits")
+
+    index_path = None
+    for name in INDEX_NAMES:
+        p = model_path / name
+        if p.exists():
+            index_path = p
+            break
+
+    shard_files = []
+    if index_path:
+        index = json.loads(index_path.read_text())
+        shard_files = [model_path / sf for sf in sorted(set(index["weight_map"].values()))]
+    else:
+        for pattern in SHARD_GLOBS:
+            shard_files.extend(sorted(model_path.glob(pattern)))
+
+    # Read all tensors into memory
+    weights: dict[str, np.ndarray] = {}
+    for sf in shard_files:
+        logger.info(f"  Loading shard: {sf.name}")
+        handle = safe_open(str(sf), framework="numpy")
+        for key in handle.keys():
+            weights[key] = handle.get_tensor(key)
+
+    # Classify tensors
+    quantized_bases: set[str] = set()
+    non_quantized_names: list[str] = []
+    for name in weights:
+        matched = False
+        for suffix in SUFFIXES:
+            if name.endswith(suffix):
+                quantized_bases.add(name[: -len(suffix)])
+                matched = True
+                break
+        if not matched:
+            non_quantized_names.append(name)
+
+    logger.info(f"  {len(quantized_bases)} quantized tensors, {len(non_quantized_names)} non-quantized tensors")
+
+    import re
+    _per_expert_2d_pattern = re.compile(
+        r".+\.experts\.(\d+)\.(w[123]|gate_proj|up_proj|down_proj)\."
+    )
+    result: dict[str, mx.array] = {}
+    expert_buffer: dict[str, mx.array] = {}
+    bit_counts: dict[int, int] = {}
+
+    # Process quantized tensors
+    for base in sorted(quantized_bases):
+        qweight_raw = weights[f"{base}.qweight"]
+        jang_scales = weights[f"{base}.scales"].astype(np.float32)
+        biases_key = f"{base}.biases"
+        zeros_key = f"{base}.zeros"
+        if biases_key in weights:
+            jang_biases_raw = weights[biases_key].astype(np.float32)
+        elif zeros_key in weights:
+            jang_zeros = weights[zeros_key].astype(np.float32)
+            jang_biases_raw = -jang_scales * jang_zeros
+        else:
+            jang_biases_raw = np.zeros_like(jang_scales)
+
+        n_blocks = len(jang_scales)
+        bits_key = f"{base}.bits"
+        if bits_key in weights:
+            bits = int(weights[bits_key].item())
+        else:
+            bits = int(config.get("quantization", {}).get("bits", 4))
+
+        bit_counts[bits] = bit_counts.get(bits, 0) + qweight_raw.size
+
+        shape_key = f"{base}.shape"
+        if shape_key in weights:
+            original_shape = tuple(int(d) for d in weights[shape_key])
+        else:
+            original_shape = None
+
+        if original_shape and len(original_shape) == 2:
+            out_dim, in_dim = original_shape
+        elif original_shape and len(original_shape) == 3:
+            n_experts, out_dim, in_dim = original_shape
+        else:
+            in_dim = n_blocks * block_size
+            out_dim = (qweight_raw.size * 8) // (n_blocks * bits) if n_blocks > 0 else 0
+
+        n_groups_per_row = in_dim // block_size
+        if n_groups_per_row <= 0:
+            n_groups_per_row = 1
+
+        mlx_qweight = mx.array(np.frombuffer(qweight_raw.tobytes(), dtype=np.uint32).copy())
+        if original_shape and len(original_shape) == 3:
+            packed_per_row = (in_dim * bits + 31) // 32
+            mlx_qweight = mlx_qweight.reshape(n_experts * out_dim, packed_per_row)
+        else:
+            packed_per_row = (in_dim * bits + 31) // 32
+            if packed_per_row > 0 and out_dim > 0:
+                mlx_qweight = mlx_qweight.reshape(out_dim, packed_per_row)
+
+        mlx_scales = mx.array(jang_scales.reshape(-1, n_groups_per_row).astype(np.float16))
+        mlx_biases = mx.array(jang_biases_raw.reshape(-1, n_groups_per_row).astype(np.float16))
+
+        weight_key = f"{base}.weight"
+        is_expert = _per_expert_2d_pattern.match(weight_key)
+        if is_expert:
+            expert_buffer[weight_key] = mlx_qweight
+            expert_buffer[f"{base}.scales"] = mlx_scales
+            expert_buffer[f"{base}.biases"] = mlx_biases
+        else:
+            result[weight_key] = mlx_qweight
+            result[f"{base}.scales"] = mlx_scales
+            result[f"{base}.biases"] = mlx_biases
+
+    # Process non-quantized tensors
+    for name in non_quantized_names:
+        result[name] = mx.array(weights[name])
+
+    # Stack per-expert buffers
+    if expert_buffer:
+        _stack_per_expert_weights(expert_buffer, config)
+        result.update(expert_buffer)
+
+    # Log bit distribution
+    if bit_counts:
+        total_elements = sum(bit_counts.values())
+        dist_str = ", ".join(
+            f"{bits}-bit: {count} ({count * 100 // total_elements}%)"
+            for bits, count in sorted(bit_counts.items())
+        )
+        logger.info(f"  Bit distribution: {dist_str}")
+
+    return result
 
 
 def _repack_jang_to_mlx(
