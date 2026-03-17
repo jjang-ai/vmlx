@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import { db } from '../database'
-// validateImageModelCompleteness removed — startServer now uses DB-backed path lookup
+// startServer uses DB-backed path lookup via db.getImageModelPath()
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
 

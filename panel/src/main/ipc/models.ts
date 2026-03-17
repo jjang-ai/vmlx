@@ -7,7 +7,7 @@ import { spawn, ChildProcess } from 'child_process'
 import { db } from '../database'
 import { detectModelConfigFromDir } from '../model-config-registry'
 import { getBundledPythonPath } from '../engine-manager'
-import { IMAGE_MODELS, resolveImageModelRepo as _resolveImageModelRepo, getImageModel } from '../../shared/imageModels'
+import { IMAGE_MODELS, resolveImageModelRepo as _resolveImageModelRepo } from '../../shared/imageModels'
 
 /** Generation defaults read from a model's generation_config.json */
 export interface GenerationDefaults {
@@ -690,36 +690,7 @@ export function registerModelHandlers(): void {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
   }
 
-  /** Parse HuggingFace tqdm progress from stderr (legacy fallback) */
-  function parseTqdmProgress(line: string): Partial<DownloadProgress> {
-    // Strip ANSI escape codes before parsing
-    const clean = line.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-    const result: Partial<DownloadProgress> = { raw: clean.trim() }
-
-    // Match filename from "Downloading <filename>:" or "Fetching N files:" patterns
-    const fileMatch = clean.match(/(?:Downloading|Fetching)\s+(.+?)(?:\s*:|\s*\|)/)
-    if (fileMatch) result.currentFile = fileMatch[1].trim()
-
-    // Match tqdm bar: "  45%|████      | 1.2G/4.5G [01:30<02:30, 45.2MB/s]"
-    const tqdmMatch = clean.match(/(\d+)%\|[^|]*\|\s*([\d.]+\w*)\/([\d.]+\w*)\s*\[([^\]<]*)<([^\],]*),\s*([^\]]+)\]/)
-    if (tqdmMatch) {
-      result.percent = parseInt(tqdmMatch[1], 10)
-      result.downloaded = tqdmMatch[2]
-      result.total = tqdmMatch[3]
-      result.eta = tqdmMatch[5].trim()
-      result.speed = tqdmMatch[6].trim()
-    } else {
-      // Simpler percent match: " 45%|" or "45%|" (tqdm may start at line beginning after \r)
-      const simplePercent = clean.match(/\b(\d+)%\|/)
-      if (simplePercent) result.percent = parseInt(simplePercent[1], 10)
-    }
-
-    // Match "Fetching N files:  45%|" for files progress
-    const filesMatch = clean.match(/Fetching\s+(\d+)\s+files.*?(\d+)%/)
-    if (filesMatch) result.filesProgress = `${Math.round(parseInt(filesMatch[2]) * parseInt(filesMatch[1]) / 100)}/${filesMatch[1]}`
-
-    return result
-  }
+  // parseTqdmProgress removed — download manager now uses structured JSON stdout
 
   function emitToRenderer(channel: string, data: any) {
     try {

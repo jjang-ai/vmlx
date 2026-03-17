@@ -121,18 +121,6 @@ export function getDefaultSteps(modelId: string): number {
 }
 
 /**
- * Build a flat repo-map keyed by model ID, equivalent to the old IMAGE_MODEL_REPOS.
- * Used by resolveImageModelRepo in main process.
- */
-export function buildRepoMap(): Record<string, Record<number, string>> {
-  const map: Record<string, Record<number, string>> = {}
-  for (const m of IMAGE_MODELS) {
-    map[m.id] = { ...m.repoMap }
-  }
-  return map
-}
-
-/**
  * Resolve a named image model to its HF repo ID based on quantization level.
  * Exact match first, then closest available quantization.
  */
