@@ -141,30 +141,6 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
               </div>
             )}
           </div>
-
-          {/* Persistent action buttons (always visible, not hover-only) */}
-          {!loading && imageData && (
-            <div className="absolute top-1.5 left-1.5 flex gap-1">
-              {onRegenerate && (
-                <button
-                  onClick={() => onRegenerate(generation)}
-                  className="px-2 py-1 bg-black/60 text-white rounded text-xs flex items-center gap-1 hover:bg-black/80 transition-colors backdrop-blur-sm"
-                  title="Re-edit with same settings"
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  Redo
-                </button>
-              )}
-              <button
-                onClick={handleSave}
-                className="px-2 py-1 bg-black/60 text-white rounded text-xs flex items-center gap-1 hover:bg-black/80 transition-colors backdrop-blur-sm"
-                title="Save edited image"
-              >
-                <Download className="h-3 w-3" />
-                Save
-              </button>
-            </div>
-          )}
         </div>
       ) : (
         // Standard single-image layout for generations
@@ -185,37 +161,17 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
             </div>
           )}
 
-          {/* Hover overlay */}
-          {hovered && !loading && imageData && (
-            <div className="absolute inset-0 bg-black/40 flex items-end justify-end p-2 gap-1.5">
-              {onRegenerate && (
-                <button
-                  onClick={() => onRegenerate(generation)}
-                  className="px-2 py-1 bg-white/90 text-black rounded text-xs flex items-center gap-1 hover:bg-white transition-colors"
-                  title="Regenerate with same settings"
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  Redo
-                </button>
-              )}
+          {/* Hover overlay for seed copy */}
+          {hovered && !loading && imageData && generation.seed != null && (
+            <div className="absolute top-1.5 right-1.5">
               <button
-                onClick={handleSave}
-                className="px-2 py-1 bg-white/90 text-black rounded text-xs flex items-center gap-1 hover:bg-white transition-colors"
-                title="Save image"
+                onClick={handleCopySeed}
+                className="px-2 py-1 bg-black/60 text-white rounded text-xs flex items-center gap-1 hover:bg-black/80 transition-colors backdrop-blur-sm"
+                title="Copy seed"
               >
-                <Download className="h-3 w-3" />
-                Save
+                <Copy className="h-3 w-3" />
+                {generation.seed}
               </button>
-              {generation.seed != null && (
-                <button
-                  onClick={handleCopySeed}
-                  className="px-2 py-1 bg-white/90 text-black rounded text-xs flex items-center gap-1 hover:bg-white transition-colors"
-                  title="Copy seed"
-                >
-                  <Copy className="h-3 w-3" />
-                  Seed
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -244,6 +200,34 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
             <span>seed: {generation.seed}</span>
           )}
         </div>
+
+        {/* Action buttons — always visible */}
+        {!loading && imageData && (
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border">
+            {onRegenerate && (
+              <button
+                onClick={() => onRegenerate(generation)}
+                className={`flex-1 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
+                  isEdit
+                    ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25'
+                    : 'bg-primary/10 text-primary hover:bg-primary/20'
+                }`}
+                title={isEdit ? 'Re-edit with same settings (new seed)' : 'Regenerate with same settings (new seed)'}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Redo
+              </button>
+            )}
+            <button
+              onClick={handleSave}
+              className="flex-1 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1.5 bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+              title="Save image to disk"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Save
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

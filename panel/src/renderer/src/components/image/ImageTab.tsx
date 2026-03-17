@@ -257,8 +257,11 @@ export function ImageTab() {
     }
   }, [serverStatus])
 
-  const handleSubmit = useCallback(async (prompt: string) => {
+  const handleSubmit = useCallback(async (prompt: string, overrideSettings?: Partial<ImageSettings>) => {
     if (!serverPort || serverStatus !== 'running' || !selectedModel) return
+
+    // Merge override settings (used by reiteration to bypass React batching)
+    const s = overrideSettings ? { ...settings, ...overrideSettings } : settings
 
     // Edit mode requires a source image
     if (sessionMode === 'edit' && !sourceImage) {
@@ -288,30 +291,30 @@ export function ImageTab() {
         result = await window.api.image.edit({
           sessionId: sessionId!,
           prompt,
-          negativePrompt: settings.negativePrompt || undefined,
+          negativePrompt: s.negativePrompt || undefined,
           model: selectedModel,
           imageBase64: sourceImage!.dataUrl,
-          width: settings.width,
-          height: settings.height,
-          steps: settings.steps,
-          guidance: settings.guidance,
-          strength: settings.strength,
-          seed: settings.seed,
+          width: s.width,
+          height: s.height,
+          steps: s.steps,
+          guidance: s.guidance,
+          strength: s.strength,
+          seed: s.seed,
           serverPort
         })
       } else {
         result = await window.api.image.generate({
           sessionId: sessionId!,
           prompt,
-          negativePrompt: settings.negativePrompt || undefined,
+          negativePrompt: s.negativePrompt || undefined,
           model: selectedModel,
-          width: settings.width,
-          height: settings.height,
-          steps: settings.steps,
-          guidance: settings.guidance,
-          seed: settings.seed,
-          count: settings.count,
-          quantize: settings.quantize,
+          width: s.width,
+          height: s.height,
+          steps: s.steps,
+          guidance: s.guidance,
+          seed: s.seed,
+          count: s.count,
+          quantize: s.quantize,
           serverPort
         })
       }
@@ -352,7 +355,14 @@ export function ImageTab() {
   const handleNewSession = useCallback(() => {
     setCurrentSessionId(null)
     setGenerations([])
-  }, [])
+    setSourceImage(null)
+    setError(null)
+    // Reset mode to match the currently running model's category
+    if (selectedModel) {
+      const modelDef = getImageModel(selectedModel)
+      if (modelDef) setSessionMode(modelDef.category)
+    }
+  }, [selectedModel])
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     setCurrentSessionId(sessionId)
@@ -457,18 +467,20 @@ export function ImageTab() {
             generating={generating}
             mode={sessionMode}
             onRegenerate={(gen) => {
-              // Reiterate: restore settings from generation and re-submit
-              setSettings(prev => ({
-                ...prev,
+              // Reiterate: restore settings from generation and re-submit with new random seed
+              const redoSettings = {
                 steps: gen.steps,
                 width: gen.width,
                 height: gen.height,
                 guidance: gen.guidance,
-                strength: gen.strength ?? prev.strength,
+                strength: gen.strength ?? settings.strength,
                 negativePrompt: gen.negativePrompt || '',
-              }))
-              // Re-submit with the same prompt (new random seed for variation)
-              handleSubmit(gen.prompt)
+                seed: undefined, // new random seed for variation
+              }
+              // Update UI settings to show restored values
+              setSettings(prev => ({ ...prev, ...redoSettings }))
+              // Pass settings directly to avoid React batching delay
+              handleSubmit(gen.prompt, redoSettings)
             }}
           />
         </div>

@@ -1314,7 +1314,7 @@ export function registerModelHandlers(): void {
     return {
       active: active[0] || null,  // Backward compat: first active as primary
       activeAll: active,           // All active downloads
-      queue: downloadQueue.map(j => ({ jobId: j.id, repoId: j.repoId })),
+      queue: downloadQueue.map(j => ({ jobId: j.id, repoId: j.repoId, status: j.status })),
       completed: completedJobs.slice(-10).map(j => ({ jobId: j.id, repoId: j.repoId, status: j.status, error: j.error }))
     }
   })

@@ -65,6 +65,8 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
         if (prev.some(d => d.jobId === data.jobId)) return prev
         return [...prev, { jobId: data.jobId, repoId: data.repoId }]
       })
+      // Download moved from queue to active — decrement queue count
+      setQueueCount(prev => Math.max(0, prev - 1))
       window.api.models.openDownloadWindow()
     })
     const unsubQueued = window.api.models.onDownloadQueued?.((data: any) => {

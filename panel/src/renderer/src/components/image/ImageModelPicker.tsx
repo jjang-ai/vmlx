@@ -510,23 +510,13 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
                 Checking...
               </button>
             ) : (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleDownload}
-                  className="px-5 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 font-medium text-sm"
-                >
-                  <Download className="h-4 w-4" />
-                  Download First
-                </button>
-                <button
-                  onClick={handleStart}
-                  className="px-5 py-3 border border-border text-foreground rounded-lg hover:bg-accent flex items-center gap-2 font-medium text-sm"
-                  title="Start anyway — the server will download the model (no progress bar)"
-                >
-                  <Play className="h-4 w-4" />
-                  Start
-                </button>
-              </div>
+              <button
+                onClick={handleDownload}
+                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 font-medium text-sm"
+              >
+                <Download className="h-4 w-4" />
+                Download
+              </button>
             )}
           </div>
         )}

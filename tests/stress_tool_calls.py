@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-BASE_URL = os.environ.get("VLLM_BASE_URL", "http://100.76.98.16:2310")
+BASE_URL = os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:2310")
 API_URL = f"{BASE_URL}/v1/chat/completions"
 HEADERS = {"Content-Type": "application/json"}
 PID = os.environ.get("VLLM_PID", "85152")

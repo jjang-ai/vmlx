@@ -5,6 +5,38 @@ All notable changes to vMLX Engine will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-03-18
+
+### Fixed
+- **JANG model loading crash**: `mx.utils.tree_flatten` import was wrong (`mx` = `mlx.core`, `tree_flatten` lives in `mlx.utils`). Every JANG model load was failing. Fixed to `from mlx.utils import tree_flatten`.
+- **Scheduler memory leak**: `self.requests` dict in `_cleanup_finished` was never cleaned. Grows unbounded on long-running servers. Now calls `self.requests.pop(request_id, None)`.
+- **SQLite thread safety**: DiskCacheManager pool connections shared between threads without `check_same_thread=False`. Would crash under concurrent disk cache writes.
+- **Memory cache race condition**: `remove()` method had no lock. Now acquires `self._lock`.
+- **MCP `mcpServers` key not recognized**: Standard MCP config key silently loaded 0 servers. Now accepts both `servers` and `mcpServers`.
+- **PYTHONPATH/PATH blocked in MCP**: Python MCP servers couldn't set import paths. Unblocked PYTHONPATH, PATH, NODE_PATH.
+- **Image reiteration race condition**: Redo button used `setSettings` + `handleSubmit` in same sync block — React batching meant old settings were used. Now passes override settings directly.
+- **New image session mode mismatch**: Clicking + to start new session preserved mode from last-viewed history entry instead of matching the running model's category.
+- **Download window paused state lost**: Paused downloads showed as "Queued" when reopening download window. `getDownloadStatus` now includes job status.
+- **Download status bar queue count drift**: Queue count only incremented on new queued events, never decremented when downloads started. Now decrements on download start.
+- **Misleading "Start" button for undownloaded models**: Image model picker showed "Start anyway" button that always failed (server rejects models without stored paths). Removed.
+- **Streaming timeout variable out of scope**: `stream_chat_completion` used `timeout` but it was only defined in non-streaming paths. Fixed with `_default_timeout`.
+- **Anthropic SDK base_url wrong in code snippets**: Was `"${baseUrl}/v1"` causing double `/v1/v1/messages`. Fixed to `"${baseUrl}"`.
+- **Session health events false positive**: Health monitor emitted `status: 'ok'` regardless of model state. Now checks `data.status === 'healthy'` before transitioning loading → running.
+- **Image fetch timeout**: Node.js default ~5min timeout killed long image edits. Now uses explicit 30-min timeout.
+- **Z-Image Turbo full precision rejected**: Was wrongly rejected as "diffusers format". ZImage handles both formats.
+
+### Removed
+- **Klein models from image picker**: mflux's `Flux1()` requires `text_encoder_2` which Klein doesn't have. Local loading fails; `from_name()` silently downloads from HF. Removed until mflux adds single-encoder support.
+- **Silent HF downloads**: All `from_name()` fallbacks removed from image loading. Models must be downloaded explicitly via the download manager.
+
+### Improved
+- **Image redo buttons always visible**: Moved from hover-only overlay to always-visible action bar below each image. Colored to match mode (violet for edit, blue for gen).
+- **New image session cleanup**: + button now clears source image, error state, and resets mode to match running model.
+- **Download progress**: Per-file JSON tracking with cumulative bytes, speed, ETA. File-count fallback when byte totals unavailable.
+- **Concurrent downloads**: Up to 3 simultaneous downloads with pause/resume support.
+- **HuggingFace README viewer**: Inline README display in download search with lazy loading and YAML frontmatter stripping.
+- **Session timeout**: Increased from 60s to 300s for JANG model loading.
+
 ## [0.2.18] - 2026-03-09
 
 ### Fixed

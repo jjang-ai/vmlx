@@ -147,8 +147,8 @@ vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
 | **Vision LLMs** | Qwen-VL, Qwen3.5-VL, Pixtral, InternVL, LLaVA, Gemma 3n |
 | **MoE Models** | Qwen 3.5 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3, MiniMax M2.5, Llama 4 |
 | **Hybrid SSM** | Nemotron-H, Jamba, GatedDeltaNet (Mamba + Attention) |
-| **Image Gen** | Flux Schnell/Dev, Z-Image Turbo, Flux Klein (via mflux) |
-| **Image Edit** | Flux Kontext, Flux Fill, Qwen Image Edit (via mflux) |
+| **Image Gen** | Flux Schnell/Dev, Z-Image Turbo (via mflux) |
+| **Image Edit** | Qwen Image Edit (via mflux) |
 | **Embeddings** | Any mlx-lm compatible embedding model |
 | **Reranking** | Cross-encoder reranking models |
 | **Audio** | Kokoro TTS, Whisper STT (via mlx-audio) |
@@ -216,13 +216,11 @@ Generate and edit images locally with Flux models via [mflux](https://github.com
 pip install vmlx[image]
 
 # Image generation
-vmlx serve schnell                    # or dev, z-image-turbo, flux2-klein-4b
+vmlx serve schnell                    # or dev, z-image-turbo
 vmlx serve ~/.mlxstudio/models/image/flux1-schnell-4bit
 
 # Image editing
-vmlx serve flux-kontext               # subject-consistent editing
 vmlx serve qwen-image-edit            # instruction-based editing
-vmlx serve flux-fill                  # inpainting with mask
 ```
 
 ### Generation API
@@ -285,18 +283,14 @@ response = requests.post("http://localhost:8000/v1/images/edits", json={
 | Model | Steps | Speed | Memory |
 |-------|-------|-------|--------|
 | **Flux Schnell** | 4 | Fastest | ~6-24 GB |
-| **Flux Dev** | 20 | Slow | ~6-24 GB |
 | **Z-Image Turbo** | 4 | Fast | ~6-24 GB |
-| **Flux Klein 4B** | 20 | Medium | ~4-8 GB |
-| **Flux Klein 9B** | 20 | Medium | ~16 GB |
+| **Flux Dev** | 20 | Slow | ~6-24 GB |
 
 **Editing Models:**
 
 | Model | Steps | Type | Memory |
 |-------|-------|------|--------|
-| **Flux Kontext** | 24 | Subject-consistent editing | ~6-12 GB |
 | **Qwen Image Edit** | 28 | Instruction-based editing | ~54 GB |
-| **Flux Fill** | 20 | Inpainting with mask | ~24 GB |
 
 ---
 
@@ -601,17 +595,16 @@ vmlx convert <model> \
 pip install vmlx[image]
 
 # Generation models
-vmlx serve schnell \            # or dev, z-image-turbo, flux2-klein-4b
-  --image-quantize 4 \          # Quantization: 3, 4, 5, 6, 8 (omit for full precision)
+vmlx serve schnell \            # or dev, z-image-turbo
+  --image-quantize 4 \          # Quantization: 4, 8 (omit for full precision)
   --port 8001
 
 # Editing models
-vmlx serve flux-kontext \       # or qwen-image-edit, flux-fill
-  --image-quantize 4 \          # Quantization (if available)
+vmlx serve qwen-image-edit \    # Instruction-based editing (full precision only)
   --port 8001
 
 # Local model directory
-vmlx serve ~/.mlxstudio/models/image/flux-kontext-dev-4bit
+vmlx serve ~/.mlxstudio/models/image/FLUX.1-schnell-mflux-4bit
 ```
 
 ### Audio Options
@@ -684,12 +677,12 @@ cd vmlx
 # Python engine
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,jang,image]"
-pytest tests/ -k "not Async"    # 1894+ tests
+pytest tests/ -k "not Async"    # 2000+ tests
 
 # Electron desktop app
 cd panel && npm install
 npm run dev                      # Development mode with hot reload
-npx vitest run                   # 1253+ tests
+npx vitest run                   # 1545+ tests
 ```
 
 ### Project Structure
@@ -747,7 +740,7 @@ vmlx serve mlx-community/Llama-3.2-3B-Instruct-4bit
 |------|------|
 | **텍스트 생성** | MLX 및 JANG 형식의 LLM 추론 |
 | **비전-언어 모델** | 이미지 + 텍스트 멀티모달 추론 |
-| **이미지 생성** | Flux Schnell/Dev, Z-Image Turbo, FLUX.2 Klein (mflux 기반) |
+| **이미지 생성** | Flux Schnell/Dev, Z-Image Turbo (mflux 기반) |
 | **이미지 편집** | Qwen Image Edit (텍스트 지시 기반 이미지 편집) |
 | **5단계 캐싱** | 프리픽스, 페이지드, KV 양자화, 디스크, 메모리 인식 캐시 |
 | **연속 배칭** | 다중 동시 요청 처리 |
