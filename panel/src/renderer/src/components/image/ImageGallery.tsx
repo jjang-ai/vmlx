@@ -37,9 +37,9 @@ export function ImageGallery({ generations, generating, mode }: ImageGalleryProp
     <div className="h-full overflow-auto p-4">
       <div className={`grid gap-4 ${
         mode === 'edit'
-          ? 'grid-cols-1 sm:grid-cols-2'
-          : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-      }`}>
+          ? 'grid-cols-1 md:grid-cols-2'
+          : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
+      }`} style={{ minWidth: 0 }}>
         {generations.map((gen) => (
           <ImageCard key={gen.id} generation={gen} />
         ))}
@@ -109,6 +109,7 @@ function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
   return (
     <div
       className="border border-border rounded-lg overflow-hidden group"
+      style={{ minWidth: 240 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -123,7 +124,7 @@ function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
                 <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
               </div>
             ) : imageData ? (
-              <img src={imageData} alt="Edited" className="w-full h-full object-cover" />
+              <img src={imageData} alt="Edited" className="w-full h-full object-contain" />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-xs">
                 Failed to load
@@ -134,7 +135,7 @@ function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
             {/* Source image thumbnail (bottom-left corner) */}
             {sourceData && (
               <div className="absolute bottom-2 left-2 w-16 h-16 rounded border-2 border-white/60 overflow-hidden shadow-lg">
-                <img src={sourceData} alt="Original" className="w-full h-full object-cover" />
+                <img src={sourceData} alt="Original" className="w-full h-full object-contain" />
                 <span className="absolute bottom-0 left-0 right-0 text-[7px] text-center bg-black/60 text-white py-px">Original</span>
               </div>
             )}
@@ -165,7 +166,7 @@ function ImageCard({ generation }: { generation: ImageGenerationInfo }) {
             <img
               src={imageData}
               alt={generation.prompt}
-              className="w-full h-full object-cover"
+              className="w-full h-full object-contain"
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-xs">
