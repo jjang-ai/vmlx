@@ -97,7 +97,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
     const loading = current.find(s => s.modelPath === modelPath && s.status === 'loading')
     if (loading) {
       return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => { unsubReady(); unsubErr(); reject(new Error('Session start timed out')) }, 60000)
+        const timeout = setTimeout(() => { unsubReady(); unsubErr(); reject(new Error('Session start timed out')) }, 300000) // 5 min — JANG/large models need time
         const unsubReady = window.api.sessions.onReady((data: any) => {
           if (data.sessionId === loading.id) {
             clearTimeout(timeout)
