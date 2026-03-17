@@ -77,9 +77,9 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
       window.api.sessions.onStopped(() => loadSessions()),
       window.api.sessions.onError(() => loadSessions()),
       window.api.sessions.onHealth((data: any) => {
-        // Targeted update — only patch the specific session's status fields
-        // instead of reloading the entire list every 5 seconds
-        if (data?.sessionId) {
+        // Targeted update — only patch if the health check confirms the model is loaded.
+        // Don't falsely set 'running' when the process is up but model is still loading.
+        if (data?.sessionId && data?.status === 'ok') {
           setSessions(prev => prev.map(s =>
             s.id === data.sessionId
               ? { ...s, status: 'running' as const, modelName: data.modelName || s.modelName }
