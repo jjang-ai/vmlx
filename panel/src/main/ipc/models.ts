@@ -185,21 +185,16 @@ export function validateImageModelCompleteness(modelDir: string, encoderType?: '
       missing.push('text_encoder/')
     }
 
-    // Determine encoder type: prefer the explicit parameter, then look up from the
-    // shared registry, and finally fall back to directory-name heuristic.
+    // Determine encoder type from the explicit parameter.
+    // Single-encoder models (ZImage, Flux2Klein, QwenImage, FIBO, etc.) don't need text_encoder_2.
+    // Dual-encoder models (Flux1 schnell/dev) require text_encoder_2.
+    const SINGLE_ENCODER_CLASSES = new Set(['ZImage', 'Flux2Klein', 'QwenImage', 'QwenImageEdit', 'FIBO', 'Flux1Kontext', 'Flux1Fill', 'SeedVR2'])
     let isSingleEncoder: boolean
     if (encoderType) {
       isSingleEncoder = encoderType === 'single'
     } else {
-      // Try to match the directory name against the shared image model registry
-      const dirLower = modelDir.toLowerCase()
-      const modelDef = IMAGE_MODELS.find(m => dirLower.includes(m.id))
-      if (modelDef) {
-        isSingleEncoder = modelDef.encoderType === 'single'
-      } else {
-        // Legacy fallback: string-based heuristic
-        isSingleEncoder = dirLower.includes('z-image') || dirLower.includes('zimage') || dirLower.includes('klein')
-      }
+      // Default to dual encoder (safest — will flag missing text_encoder_2)
+      isSingleEncoder = false
     }
     if (!isSingleEncoder && !files.includes('text_encoder_2')) {
       missing.push('text_encoder_2/')
@@ -1024,7 +1019,9 @@ export function registerModelHandlers(): void {
             const repoName = repoId.split('/').pop()?.toLowerCase() || ''
             if (dirLower === repoName) {
               // Validate completeness before registering
-              const validation = validateImageModelCompleteness(fullPath, model.encoderType)
+              // Derive encoder type from mfluxClass — Flux1 is dual, everything else is single
+              const encType = model.mfluxClass === 'Flux1' ? 'dual' : 'single'
+              const validation = validateImageModelCompleteness(fullPath, encType)
               if (validation.complete) {
                 db.setImageModelPath(model.id, quantize, fullPath, repoId)
                 migrated++

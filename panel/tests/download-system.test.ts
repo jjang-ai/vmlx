@@ -14,15 +14,19 @@ describe('Download System', () => {
         expect(m.steps).toBeGreaterThan(0)
         expect(m.quantizeOptions.length).toBeGreaterThan(0)
         expect(Object.keys(m.repoMap).length).toBeGreaterThan(0)
-        expect(m.encoderType).toMatch(/^(single|dual)$/)
+        expect(m.mfluxClass).toBeTruthy()
+        expect(m.mfluxName).toBeTruthy()
+        expect(typeof m.supportsImg2Img).toBe('boolean')
       }
     })
 
-    it('Klein models are removed from registry', async () => {
+    it('Klein models use correct Flux2Klein class', async () => {
       const { IMAGE_MODELS } = await import('../src/shared/imageModels')
-      const ids = IMAGE_MODELS.map(m => m.id)
-      expect(ids).not.toContain('flux2-klein-4b')
-      expect(ids).not.toContain('flux2-klein-9b')
+      const klein = IMAGE_MODELS.filter(m => m.id.includes('klein'))
+      expect(klein.length).toBeGreaterThan(0)
+      for (const m of klein) {
+        expect(m.mfluxClass).toBe('Flux2Klein')
+      }
     })
 
     it('resolveImageModelRepo returns correct repo for exact quantize', async () => {

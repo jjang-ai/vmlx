@@ -1,14 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """
-Image Generation Engine — Text-to-image using mflux (MLX-native Flux).
+Image Generation Engine — Text-to-image and img2img using mflux (MLX-native).
 
-Supports: Flux-dev, Flux-schnell, Z-Image-Turbo, Flux-Klein, and other
-mflux-compatible models. Provides OpenAI-compatible /v1/images/generations API.
+Supports all mflux model classes: Flux1, Flux2Klein, ZImage, FIBO,
+Flux1Kontext, Flux1Fill, QwenImage, QwenImageEdit, SeedVR2.
+
+Model class selection is EXPLICIT — passed via mflux_class parameter from the
+shared imageModels.ts registry. NO regex, NO directory name matching.
 
 Usage:
     engine = ImageGenEngine()
-    engine.load("schnell")  # or "dev", "z-image-turbo", "flux2-klein-4b"
+    engine.load("schnell", mflux_class="Flux1", mflux_name="schnell")
     image = engine.generate("A cat in space", width=1024, height=1024, steps=4)
+    # img2img:
+    image = engine.generate("Golden cat", image_path="/tmp/cat.png", image_strength=0.7)
 """
 
 import base64
@@ -20,36 +25,25 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# mflux base model names (from mflux CLI --base-model choices)
-SUPPORTED_MODELS = {
-    "schnell": "schnell",
-    "dev": "dev",
-    "z-image": "z-image",
-    "z-image-turbo": "z-image-turbo",
-    "flux2-klein-4b": "flux2-klein-4b",
-    "flux2-klein-9b": "flux2-klein-9b",
-    "flux2-klein-base-4b": "flux2-klein-base-4b",
-    "flux2-klein-base-9b": "flux2-klein-base-9b",
-    # Aliases for convenience
-    "flux-schnell": "schnell",
-    "flux-dev": "dev",
-    "flux1-schnell": "schnell",
-    "flux1-dev": "dev",
+# ── Class dispatch table ──────────────────────────────────────────────
+# Maps mfluxClass string -> (module_path, class_name)
+# Used by _import_model_class() to import the correct Python class.
+# NO regex. NO directory name matching. Explicit mapping only.
+MODEL_CLASS_MAP: dict[str, tuple[str, str]] = {
+    "Flux1": ("mflux.models.flux.variants.txt2img.flux", "Flux1"),
+    "Flux2Klein": ("mflux.models.flux2.variants.txt2img.flux2_klein", "Flux2Klein"),
+    "Flux2KleinEdit": ("mflux.models.flux2.variants.edit.flux2_klein_edit", "Flux2KleinEdit"),
+    "ZImage": ("mflux.models.z_image.variants.z_image", "ZImage"),
+    "FIBO": ("mflux.models.fibo.variants.txt2img.fibo", "FIBO"),
+    "QwenImage": ("mflux.models.qwen.variants.txt2img.qwen_image", "QwenImage"),
+    "QwenImageEdit": ("mflux.models.qwen.variants.edit.qwen_image_edit", "QwenImageEdit"),
+    "Flux1Kontext": ("mflux.models.flux.variants.kontext.flux_kontext", "Flux1Kontext"),
+    "Flux1Fill": ("mflux.models.flux.variants.fill.flux_fill", "Flux1Fill"),
+    "SeedVR2": ("mflux.models.seedvr2.variants.upscale.seedvr2", "SeedVR2"),
 }
 
-# Image editing model names (separate from generation models)
-EDIT_MODELS = {
-    "qwen-image-edit": "qwen-image-edit",
-    "flux-kontext": "kontext-dev",
-    "kontext": "kontext-dev",
-    "kontext-dev": "kontext-dev",
-    "flux-fill": "fill-dev",
-    "fill": "fill-dev",
-    "fill-dev": "fill-dev",
-}
-
-# Default inference steps per model (schnell is fast, dev needs more)
-DEFAULT_STEPS = {
+# Default inference steps per mflux canonical name
+DEFAULT_STEPS: dict[str, int] = {
     "schnell": 4,
     "dev": 20,
     "z-image": 20,
@@ -58,28 +52,68 @@ DEFAULT_STEPS = {
     "flux2-klein-9b": 20,
     "flux2-klein-base-4b": 20,
     "flux2-klein-base-9b": 20,
-    # Edit models
+    "qwen-image": 20,
     "qwen-image-edit": 28,
-    "kontext-dev": 24,
-    "fill-dev": 20,
+    "dev-kontext": 24,
+    "dev-fill": 20,
+    "fibo": 20,
+    "fibo-lite": 20,
+    "seedvr2-3b": 1,
+    "seedvr2-7b": 1,
 }
 
+# Legacy name aliases (kept for backward compat with CLI and stored configs)
+SUPPORTED_MODELS: dict[str, str] = {
+    "schnell": "schnell",
+    "dev": "dev",
+    "z-image": "z-image",
+    "z-image-turbo": "z-image-turbo",
+    "flux2-klein-4b": "flux2-klein-4b",
+    "flux2-klein-9b": "flux2-klein-9b",
+    "flux2-klein-base-4b": "flux2-klein-base-4b",
+    "flux2-klein-base-9b": "flux2-klein-base-9b",
+    "qwen-image": "qwen-image",
+    "fibo": "fibo",
+    # Aliases
+    "flux-schnell": "schnell",
+    "flux-dev": "dev",
+    "flux1-schnell": "schnell",
+    "flux1-dev": "dev",
+    "klein-4b": "flux2-klein-4b",
+    "klein-9b": "flux2-klein-9b",
+}
 
-@dataclass
-class ImageGenResult:
-    """Result from image generation."""
-    image_bytes: bytes  # PNG image data
-    width: int
-    height: int
-    model: str
-    seed: int
-    steps: int
-    elapsed_seconds: float
-    b64_json: str = ""  # Base64-encoded PNG for API response
+EDIT_MODELS: dict[str, str] = {
+    "qwen-image-edit": "qwen-image-edit",
+    "flux-kontext": "dev-kontext",
+    "kontext": "dev-kontext",
+    "kontext-dev": "dev-kontext",
+    "dev-kontext": "dev-kontext",
+    "flux-fill": "dev-fill",
+    "fill": "dev-fill",
+    "fill-dev": "dev-fill",
+    "dev-fill": "dev-fill",
+}
 
-    def __post_init__(self):
-        if not self.b64_json and self.image_bytes:
-            self.b64_json = base64.b64encode(self.image_bytes).decode('utf-8')
+# Map mflux canonical name -> mfluxClass (for legacy load paths that don't pass mflux_class)
+_NAME_TO_CLASS: dict[str, str] = {
+    "schnell": "Flux1",
+    "dev": "Flux1",
+    "z-image": "ZImage",
+    "z-image-turbo": "ZImage",
+    "flux2-klein-4b": "Flux2Klein",
+    "flux2-klein-9b": "Flux2Klein",
+    "flux2-klein-base-4b": "Flux2Klein",
+    "flux2-klein-base-9b": "Flux2Klein",
+    "qwen-image": "QwenImage",
+    "qwen-image-edit": "QwenImageEdit",
+    "dev-kontext": "Flux1Kontext",
+    "dev-fill": "Flux1Fill",
+    "fibo": "FIBO",
+    "fibo-lite": "FIBO",
+    "seedvr2-3b": "SeedVR2",
+    "seedvr2-7b": "SeedVR2",
+}
 
 
 def _fix_quantized_layers(model) -> int:
@@ -135,12 +169,48 @@ def _fix_quantized_layers(model) -> int:
     return fixed
 
 
+def _import_model_class(mflux_class: str):
+    """Import and return the mflux model class by explicit name.
+    No regex. No guessing. Fails fast with clear error.
+    """
+    if mflux_class not in MODEL_CLASS_MAP:
+        raise ValueError(
+            f"Unknown mflux class: '{mflux_class}'. "
+            f"Available: {sorted(MODEL_CLASS_MAP.keys())}"
+        )
+    module_path, class_name = MODEL_CLASS_MAP[mflux_class]
+    import importlib
+    mod = importlib.import_module(module_path)
+    return getattr(mod, class_name)
+
+
+@dataclass
+class ImageGenResult:
+    """Result from image generation."""
+    image_bytes: bytes  # PNG image data
+    width: int
+    height: int
+    model: str
+    seed: int
+    steps: int
+    elapsed_seconds: float
+
+    @property
+    def b64_json(self) -> str:
+        return base64.b64encode(self.image_bytes).decode("utf-8")
+
+
 class ImageGenEngine:
-    """MLX-native image generation engine using mflux."""
+    """MLX-native image generation engine using mflux.
+
+    All model loading uses explicit class names from the MODEL_CLASS_MAP.
+    No regex, no directory name matching.
+    """
 
     def __init__(self):
         self._model = None
         self._model_name: str | None = None
+        self._mflux_class: str | None = None
         self._quantize: int | None = None
         self._loaded = False
 
@@ -157,29 +227,49 @@ class ImageGenEngine:
         model_name: str,
         quantize: int | None = None,
         model_path: str | None = None,
+        mflux_class: str | None = None,
+        mflux_name: str | None = None,
     ) -> None:
-        """Load a Flux model for image generation.
+        """Load any image model (generation or editing).
 
         Args:
-            model_name: Model identifier (e.g., "schnell", "dev", "z-image-turbo")
-            quantize: Quantization bits (3, 4, 5, 6, 8, or None for full precision)
-            model_path: Optional path to local model weights
+            model_name: Model identifier (e.g., "schnell", "qwen-image-edit")
+            quantize: Quantization bits (4, 8, or None for full precision)
+            model_path: Path to local model weights
+            mflux_class: Explicit mflux Python class name (e.g., "Flux1", "Flux2Klein").
+                         If not provided, falls back to name-based lookup.
+            mflux_name: Canonical mflux model name for ModelConfig.from_name().
+                        If not provided, resolved from model_name.
         """
         try:
             from mflux.models.common.config.model_config import ModelConfig
         except ImportError:
             raise ImportError("mflux not installed. Install with: pip install mflux")
 
-        # Resolve model name alias
-        resolved = SUPPORTED_MODELS.get(model_name.lower(), model_name)
+        # Resolve canonical mflux name
+        resolved_name = mflux_name
+        if not resolved_name:
+            resolved_name = SUPPORTED_MODELS.get(model_name.lower())
+            if not resolved_name:
+                resolved_name = EDIT_MODELS.get(model_name.lower())
+            if not resolved_name:
+                resolved_name = model_name
 
-        logger.info(f"Loading image model: {resolved} (quantize={quantize})")
+        # Resolve mflux class
+        resolved_class = mflux_class
+        if not resolved_class:
+            resolved_class = _NAME_TO_CLASS.get(resolved_name)
+            if not resolved_class:
+                raise ValueError(
+                    f"Cannot determine mflux class for model '{model_name}' "
+                    f"(resolved name: '{resolved_name}'). "
+                    f"Pass mflux_class explicitly or add to _NAME_TO_CLASS."
+                )
+
+        logger.info(f"Loading image model: {resolved_name} (class={resolved_class}, quantize={quantize})")
         start = time.perf_counter()
 
-        # Detect the base model name from directory structure
-        base_name = self._detect_base_model(model_path, resolved) if model_path else resolved
-
-        # Detect quantization level from local model if present
+        # Detect quantization from local config if not set
         if model_path and quantize is None:
             try:
                 import json
@@ -192,96 +282,59 @@ class ImageGenEngine:
             except Exception:
                 pass
 
-        # Z-Image models use ZImage class (single text encoder, different architecture)
-        # Flux models (schnell, dev, klein) use Flux1 class (dual text encoder)
-        is_zimage = base_name in ("z-image", "z-image-turbo")
+        # Import the correct model class
+        ModelClass = _import_model_class(resolved_class)
 
-        if is_zimage:
-            self._load_zimage(base_name, quantize, model_path, ModelConfig)
+        # Get mflux model config
+        model_config = ModelConfig.from_name(resolved_name)
+
+        # Load from local path (NEVER silently download from HuggingFace)
+        if model_path and Path(model_path).is_dir():
+            logger.info(f"Loading {resolved_class} from local path: {model_path}")
+            try:
+                self._model = ModelClass(
+                    model_config=model_config,
+                    quantize=quantize,
+                    model_path=model_path,
+                    lora_paths=[],
+                )
+            except TypeError:
+                # Some classes (SeedVR2) don't accept lora_paths
+                self._model = ModelClass(
+                    model_config=model_config,
+                    quantize=quantize,
+                    model_path=model_path,
+                )
         else:
-            self._load_flux(base_name, quantize, model_path, ModelConfig)
+            raise RuntimeError(
+                f"No local model files found for {resolved_name}. "
+                f"Download the model first from the Image tab."
+            )
 
-        # Fix quantized embeddings that have non-uint32 weights (mflux bug)
+        # Fix quantized embeddings with non-uint32 weights (mflux bug)
         if quantize and self._model is not None:
             fixed = _fix_quantized_layers(self._model)
             if fixed:
                 logger.info(f"Fixed {fixed} non-quantized embedding layers")
 
         elapsed = time.perf_counter() - start
-        self._model_name = base_name  # Use canonical mflux name for DEFAULT_STEPS lookup
+        self._model_name = resolved_name
+        self._mflux_class = resolved_class
         self._quantize = quantize
         self._loaded = True
-        logger.info(f"Image model loaded in {elapsed:.1f}s: {base_name}")
+        logger.info(f"Image model loaded in {elapsed:.1f}s: {resolved_name} ({resolved_class})")
 
-    def _load_zimage(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
-        """Load a Z-Image model (single text encoder, ZImage class).
-        ZImage handles both mflux-native and diffusers format from local paths.
-        """
-        from mflux.models.z_image.variants.z_image import ZImage
-
-        model_config = ModelConfig.from_name(base_name)
-
-        # ZImage can load from local path in both mflux-native AND diffusers format
-        if model_path and Path(model_path).is_dir():
-            transformer_dir = Path(model_path) / "transformer"
-            has_transformer = transformer_dir.is_dir() and any(
-                f.suffix == '.safetensors' for f in transformer_dir.iterdir()
-            )
-            if has_transformer:
-                logger.info(f"Loading ZImage from local path: {model_path}")
-                try:
-                    self._model = ZImage(
-                        model_config=model_config,
-                        quantize=quantize,
-                        model_path=model_path,
-                        lora_paths=[],
-                    )
-                    return
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to load ZImage from {model_path}: {e}. "
-                        f"Try re-downloading from the Image tab."
-                    ) from e
-
-        # No local path — NEVER silently download from HuggingFace
-        raise RuntimeError(
-            f"No local model files found for {base_name}. "
-            f"Download the model first from the Image tab."
-        )
-
-    def _load_flux(self, base_name: str, quantize: int | None, model_path: str | None, ModelConfig) -> None:
-        """Load a Flux model (dual text encoder, Flux1 class)."""
-        from mflux.models.flux.variants.txt2img.flux import Flux1
-
-        model_config = ModelConfig.from_name(base_name)
-
-        # Try local path — Flux1 handles both mflux-native and diffusers format
-        if model_path and Path(model_path).is_dir():
-            transformer_dir = Path(model_path) / "transformer"
-            has_transformer = transformer_dir.is_dir() and any(
-                f.suffix == '.safetensors' for f in transformer_dir.iterdir()
-            )
-            if has_transformer:
-                logger.info(f"Loading Flux from local path: {model_path}")
-                try:
-                    self._model = Flux1(
-                        model_config=model_config,
-                        quantize=quantize,
-                        model_path=model_path,
-                        lora_paths=[],
-                    )
-                    return
-                except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to load from {model_path}: {e}. "
-                        f"Try re-downloading from the Image tab."
-                    ) from e
-
-        # No local path — NEVER silently download from HuggingFace
-        raise RuntimeError(
-            f"No local model files found for {base_name}. "
-            f"Download the model first from the Image tab."
-        )
+    # Keep backward compat — load_edit_model just delegates to load()
+    def load_edit_model(
+        self,
+        model_name: str,
+        quantize: int | None = None,
+        model_path: str | None = None,
+        mflux_class: str | None = None,
+        mflux_name: str | None = None,
+    ) -> None:
+        """Load an image editing model. Delegates to load()."""
+        self.load(model_name, quantize, model_path, mflux_class, mflux_name)
 
     def unload(self) -> None:
         """Unload the current model to free memory."""
@@ -290,7 +343,7 @@ class ImageGenEngine:
             self._model = None
             self._loaded = False
             self._model_name = None
-            # Release Metal memory back to the system
+            self._mflux_class = None
             try:
                 import mlx.core as mx
                 if hasattr(mx, 'clear_memory_cache'):
@@ -298,48 +351,6 @@ class ImageGenEngine:
             except Exception:
                 pass
             logger.info("Image model unloaded")
-
-    @staticmethod
-    def _detect_base_model(model_path: str, fallback_name: str) -> str:
-        """Detect the mflux base model type from a local directory.
-
-        Checks model_index.json for _class_name, then falls back to directory name matching.
-        Returns a name that ModelConfig.from_name() recognizes.
-        """
-        import json
-        model_dir = Path(model_path)
-
-        # Check model_index.json for class name hints
-        index_path = model_dir / "model_index.json"
-        if index_path.exists():
-            try:
-                idx = json.loads(index_path.read_text())
-                class_name = idx.get("_class_name", "").lower()
-                if "zimage" in class_name or "z-image" in class_name:
-                    # Distinguish z-image-turbo from z-image by checking directory
-                    # name or scheduler config hints
-                    dir_lower = model_dir.name.lower()
-                    if "turbo" in dir_lower:
-                        return "z-image-turbo"
-                    # Default: check scheduler — turbo uses fewer default steps
-                    scheduler_cfg = idx.get("scheduler", [None, {}])
-                    if isinstance(scheduler_cfg, list) and len(scheduler_cfg) > 1:
-                        sched_class = str(scheduler_cfg[0]).lower()
-                        if "euler" in sched_class:
-                            return "z-image"  # Non-turbo uses Euler scheduler
-                    return "z-image-turbo"  # Default to turbo for ZImage class
-            except Exception:
-                pass
-
-        # Check directory name against known model names (longest first to avoid
-        # partial matches, e.g., "z-image" matching before "z-image-turbo")
-        dir_lower = model_dir.name.lower()
-        for known in sorted(SUPPORTED_MODELS, key=len, reverse=True):
-            if known.replace("-", "") in dir_lower.replace("-", ""):
-                return SUPPORTED_MODELS[known]
-
-        # Fallback to the provided name (may work if it's a valid mflux name)
-        return fallback_name
 
     def generate(
         self,
@@ -355,31 +366,29 @@ class ImageGenEngine:
     ) -> ImageGenResult:
         """Generate an image from a text prompt, optionally using a source image (img2img).
 
+        Works with ALL generation models (Flux1, Flux2Klein, ZImage, FIBO, QwenImage).
+        img2img is supported when image_path + image_strength are provided.
+
         Args:
             prompt: Text description of the desired image
             width: Output image width (must be multiple of 16)
             height: Output image height (must be multiple of 16)
             steps: Number of denoising steps (None = model default)
-            guidance: Classifier-free guidance scale (higher = more prompt adherence)
+            guidance: Classifier-free guidance scale
             seed: Random seed for reproducibility (None = random)
             negative_prompt: What to avoid in the image
-            image_path: Path to source image for img2img (None = txt2img from scratch)
-            image_strength: How much to change the source (0.0=keep, 1.0=full regen). Only used with image_path.
-
-        Returns:
-            ImageGenResult with PNG image data
+            image_path: Path to source image for img2img (None = txt2img)
+            image_strength: How much to change source (0-1). Only used with image_path.
         """
         if not self.is_loaded:
             raise RuntimeError("No image model loaded. Call load() first.")
 
-        # Resolve defaults
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
         if seed is None:
             import random
             seed = random.randint(0, 2**32 - 1)
 
-        # Ensure dimensions are multiples of 16
         width = (width // 16) * 16
         height = (height // 16) * 16
 
@@ -391,7 +400,6 @@ class ImageGenEngine:
         )
         start = time.perf_counter()
 
-        # Generate using mflux (img2img when image_path provided, txt2img otherwise)
         kwargs: dict = dict(
             seed=seed,
             prompt=prompt,
@@ -399,8 +407,10 @@ class ImageGenEngine:
             height=height,
             width=width,
             guidance=guidance,
-            negative_prompt=negative_prompt,
         )
+        # Not all models accept negative_prompt (Klein doesn't)
+        if negative_prompt and 'negative_prompt' in self._get_generate_params():
+            kwargs["negative_prompt"] = negative_prompt
         if is_img2img:
             kwargs["image_path"] = image_path
             kwargs["image_strength"] = image_strength
@@ -408,8 +418,6 @@ class ImageGenEngine:
         generated_image = self._model.generate_image(**kwargs)
 
         elapsed = time.perf_counter() - start
-
-        # Convert to PNG bytes
         pil_image = generated_image.image
         buffer = io.BytesIO()
         pil_image.save(buffer, format="PNG")
@@ -430,83 +438,6 @@ class ImageGenEngine:
             elapsed_seconds=elapsed,
         )
 
-    def load_edit_model(
-        self,
-        model_name: str,
-        quantize: int | None = None,
-        model_path: str | None = None,
-    ) -> None:
-        """Load an image editing model.
-
-        Args:
-            model_name: Edit model identifier (e.g., "qwen-image-edit", "flux-kontext")
-            quantize: Quantization bits (4, 8, or None for full precision)
-            model_path: Optional path to local model weights
-        """
-        try:
-            from mflux.models.common.config.model_config import ModelConfig
-        except ImportError:
-            raise ImportError("mflux not installed. Install with: pip install mflux")
-
-        resolved = EDIT_MODELS.get(model_name.lower(), model_name)
-
-        # Detect quantization level from local model config if not explicitly set
-        if model_path and quantize is None:
-            try:
-                import json
-                cfg_path = Path(model_path) / "config.json"
-                if cfg_path.exists():
-                    cfg = json.loads(cfg_path.read_text())
-                    if "quantization_config" in cfg:
-                        quantize = cfg["quantization_config"].get("bits")
-                        logger.info(f"Detected quantization from config: {quantize}-bit")
-            except Exception:
-                pass
-
-        logger.info(f"Loading edit model: {resolved} (quantize={quantize})")
-        start = time.perf_counter()
-
-        model_config = ModelConfig.from_name(resolved)
-
-        if resolved == "qwen-image-edit":
-            from mflux.models.qwen.variants.edit.qwen_image_edit import QwenImageEdit
-            self._model = QwenImageEdit(
-                model_config=model_config,
-                quantize=quantize,
-                model_path=model_path,
-                lora_paths=[],
-            )
-        elif resolved == "kontext-dev":
-            from mflux.models.flux.variants.kontext.flux_kontext import Flux1Kontext
-            self._model = Flux1Kontext(
-                model_config=model_config,
-                quantize=quantize,
-                model_path=model_path,
-                lora_paths=[],
-            )
-        elif resolved == "fill-dev":
-            from mflux.models.flux.variants.fill.flux_fill import Flux1Fill
-            self._model = Flux1Fill(
-                model_config=model_config,
-                quantize=quantize,
-                model_path=model_path,
-                lora_paths=[],
-            )
-        else:
-            raise ValueError(f"Unknown edit model: {model_name}. Available: {list(EDIT_MODELS.keys())}")
-
-        # Fix quantized embeddings that have non-uint32 weights (mflux bug)
-        if quantize and self._model is not None:
-            fixed = _fix_quantized_layers(self._model)
-            if fixed:
-                logger.info(f"Fixed {fixed} non-quantized embedding layers")
-
-        elapsed = time.perf_counter() - start
-        self._model_name = resolved
-        self._quantize = quantize
-        self._loaded = True
-        logger.info(f"Edit model loaded in {elapsed:.1f}s: {resolved}")
-
     def edit(
         self,
         prompt: str,
@@ -522,23 +453,12 @@ class ImageGenEngine:
     ) -> ImageGenResult:
         """Edit an image using a loaded editing model.
 
-        Args:
-            prompt: Text instruction for the edit
-            image_path: Path to the source image
-            width: Output width
-            height: Output height
-            steps: Denoising steps (None = model default)
-            guidance: Guidance scale
-            seed: Random seed
-            strength: How much to change the image (0.0 = no change, 1.0 = full regen)
-            negative_prompt: What to avoid
-            mask_path: Path to mask image (for inpainting with Flux Fill)
-
-        Returns:
-            ImageGenResult with edited PNG image data
+        For instruction-based editing (QwenImageEdit), the prompt describes
+        what to change. For Kontext/Fill, the source image is blended with
+        the prompt at the given strength.
         """
         if not self.is_loaded:
-            raise RuntimeError("No edit model loaded. Call load_edit_model() first.")
+            raise RuntimeError("No edit model loaded. Call load() first.")
 
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
@@ -555,9 +475,10 @@ class ImageGenEngine:
         )
         start = time.perf_counter()
 
-        model_name = self._model_name or ""
+        # Build kwargs based on the model class
+        mclass = self._mflux_class or ""
 
-        if model_name == "qwen-image-edit":
+        if mclass == "QwenImageEdit":
             generated_image = self._model.generate_image(
                 seed=seed,
                 prompt=prompt,
@@ -569,7 +490,7 @@ class ImageGenEngine:
                 guidance=guidance,
                 negative_prompt=negative_prompt,
             )
-        elif model_name == "kontext-dev":
+        elif mclass == "Flux1Kontext":
             generated_image = self._model.generate_image(
                 seed=seed,
                 prompt=prompt,
@@ -580,7 +501,7 @@ class ImageGenEngine:
                 width=width,
                 guidance=guidance,
             )
-        elif model_name == "fill-dev":
+        elif mclass == "Flux1Fill":
             if not mask_path:
                 raise ValueError("Flux Fill requires a mask_path for inpainting")
             generated_image = self._model.generate_image(
@@ -594,20 +515,37 @@ class ImageGenEngine:
                 width=width,
                 guidance=guidance,
             )
+        elif mclass == "Flux2KleinEdit":
+            generated_image = self._model.generate_image(
+                seed=seed,
+                prompt=prompt,
+                image_paths=[image_path],
+                image_strength=strength,
+                num_inference_steps=steps,
+                height=height,
+                width=width,
+                guidance=guidance,
+            )
         else:
-            raise RuntimeError(f"Model {model_name} does not support editing")
+            # Generic img2img fallback (works for Flux1, ZImage, etc.)
+            generated_image = self._model.generate_image(
+                seed=seed,
+                prompt=prompt,
+                image_path=image_path,
+                image_strength=strength,
+                num_inference_steps=steps,
+                height=height,
+                width=width,
+                guidance=guidance,
+            )
 
         elapsed = time.perf_counter() - start
-
         pil_image = generated_image.image
         buffer = io.BytesIO()
         pil_image.save(buffer, format="PNG")
         image_bytes = buffer.getvalue()
 
-        logger.info(
-            f"Image edited in {elapsed:.1f}s: {width}x{height}, "
-            f"{len(image_bytes) / 1024:.0f} KB"
-        )
+        logger.info(f"Image edited in {elapsed:.1f}s: {width}x{height}")
 
         return ImageGenResult(
             image_bytes=image_bytes,
@@ -618,3 +556,14 @@ class ImageGenEngine:
             steps=steps,
             elapsed_seconds=elapsed,
         )
+
+    def _get_generate_params(self) -> set[str]:
+        """Get the parameter names of the model's generate_image method."""
+        import inspect
+        if self._model is None:
+            return set()
+        try:
+            sig = inspect.signature(self._model.generate_image)
+            return set(sig.parameters.keys())
+        except Exception:
+            return set()
