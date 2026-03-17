@@ -375,6 +375,10 @@ def _repack_jang_to_mlx(
             weights[f"{scale_key}.scales"] = mx.array(mlx_scales)
             weights[f"{scale_key}.biases"] = mx.array(mlx_biases)
 
+        # Free numpy source tensors immediately to reduce peak RAM
+        for suffix in [".qweight", ".scales", ".zeros", ".biases", ".bits", ".shape", ".bit_map", ".block_offsets"]:
+            raw_tensors.pop(f"{base}{suffix}", None)
+
     # Stack per-expert 2D quantized weights into 3D for QuantizedSwitchLinear
     # (MiniMax-style: experts.N.w1.weight → switch_mlp.gate_proj.weight [num_experts, out, packed])
     _stack_per_expert_weights(weights, config)
