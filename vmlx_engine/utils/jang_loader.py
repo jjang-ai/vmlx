@@ -365,97 +365,34 @@ def load_jang_model(model_path: str | Path):
     # Replace SwitchLinear with QuantizedSwitchLinear BEFORE loading weights
     _upgrade_switch_to_quantized(model, default_bits, block_size)
 
-    # ── Cache-on-first-load (like GGUF: convert once, load fast forever) ──
-    # After first repack, save MLX-native safetensors in .mlx_cache/ next to the model.
-    # Next load: detect cached files, mx.load() via mmap — instant loading.
-    cache_dir = path / ".mlx_cache"
-    cache_index = cache_dir / "model.safetensors.index.json"
-    used_cache = False
+    # Repack JANG weights — returns either (shard_files, tmp_dir) for streaming
+    # or (weights_dict, None) for in-memory mode
+    result, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
 
-    if cache_index.exists():
-        # Fast path: load from cached MLX-native safetensors (mmap, seconds)
-        try:
-            idx = json.loads(cache_index.read_text())
-            cache_shards = sorted(set(idx["weight_map"].values()))
-            logger.info(f"  Loading from MLX cache ({len(cache_shards)} shards)")
-            for sf_name in cache_shards:
-                sf_path = cache_dir / sf_name
-                shard_weights = mx.load(str(sf_path))
+    try:
+        if tmp_dir is not None:
+            # Streaming mode: load from disk shards via mmap
+            logger.info(f"  Loading {len(result)} repacked shards via mmap")
+            for sf in result:
+                shard_weights = mx.load(sf)
                 if hasattr(model, "sanitize"):
                     shard_weights = model.sanitize(shard_weights)
                 model.load_weights(list(shard_weights.items()), strict=False)
                 del shard_weights
-            _fix_quantized_bits(model, {})
-            used_cache = True
-        except Exception as e:
-            logger.warning(f"  MLX cache load failed ({e}), falling back to repack")
-            used_cache = False
-
-    if not used_cache:
-        # Repack JANG weights — streaming to disk shards
-        result, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
-
-        try:
-            if tmp_dir is not None:
-                # Streaming mode: load from disk shards via mmap
-                logger.info(f"  Loading {len(result)} repacked shards via mmap")
-                for sf in result:
-                    shard_weights = mx.load(sf)
-                    if hasattr(model, "sanitize"):
-                        shard_weights = model.sanitize(shard_weights)
-                    model.load_weights(list(shard_weights.items()), strict=False)
-                    del shard_weights
-                    gc.collect()
-            else:
-                weights = result
-                if hasattr(model, "sanitize"):
-                    weights = model.sanitize(weights)
-                model.load_weights(list(weights.items()), strict=False)
-                del weights
                 gc.collect()
+        else:
+            # In-memory mode: weights dict returned directly (fast)
+            weights = result
+            if hasattr(model, "sanitize"):
+                weights = model.sanitize(weights)
+            model.load_weights(list(weights.items()), strict=False)
+            del weights
+            gc.collect()
 
-            _fix_quantized_bits(model, {})
-
-            # Save to MLX cache for instant loading next time
-            try:
-                cache_dir.mkdir(parents=True, exist_ok=True)
-                from mlx.utils import tree_flatten
-                all_weights = dict(tree_flatten(model.parameters()))
-                # Write in 2 GB shards
-                _CACHE_SHARD_BYTES = 2_000_000_000
-                weight_map = {}
-                current_shard = {}
-                current_bytes = 0
-                shard_idx = 0
-                for k, v in all_weights.items():
-                    current_shard[k] = v
-                    current_bytes += v.nbytes
-                    weight_map[k] = f"shard-{shard_idx:04d}.safetensors"
-                    if current_bytes >= _CACHE_SHARD_BYTES:
-                        sf_path = cache_dir / f"shard-{shard_idx:04d}.safetensors"
-                        mx.save_safetensors(str(sf_path), current_shard)
-                        logger.info(f"  Cached shard {shard_idx} ({current_bytes / 1e9:.1f} GB)")
-                        shard_idx += 1
-                        current_shard = {}
-                        current_bytes = 0
-                if current_shard:
-                    sf_path = cache_dir / f"shard-{shard_idx:04d}.safetensors"
-                    mx.save_safetensors(str(sf_path), current_shard)
-                    for k in current_shard:
-                        weight_map[k] = f"shard-{shard_idx:04d}.safetensors"
-                    logger.info(f"  Cached shard {shard_idx} ({current_bytes / 1e9:.1f} GB)")
-
-                # Write index
-                cache_index.write_text(json.dumps({"weight_map": weight_map}, indent=2))
-                logger.info(f"  MLX cache saved — next load will be instant")
-            except Exception as e:
-                logger.warning(f"  Failed to save MLX cache: {e}")
-                # Clean up partial cache
-                if cache_dir.exists():
-                    shutil.rmtree(cache_dir, ignore_errors=True)
-        finally:
-            if tmp_dir:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+        _fix_quantized_bits(model, {})
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     if not hasattr(model, "config"):
         model.config = config
