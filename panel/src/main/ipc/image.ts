@@ -149,12 +149,15 @@ export function registerImageHandlers(): void {
       if (params.quantize != null) body.quantize = params.quantize
 
       activeGenerationController = new AbortController()
+      // 30-minute timeout for image generation
+      const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
       const resp = await fetch(`${baseUrl}/v1/images/generations`, {
         method: 'POST',
         headers: getImageFetchHeaders(),
         body: JSON.stringify(body),
         signal: activeGenerationController.signal,
       })
+      clearTimeout(timeoutId)
 
       if (!resp.ok) {
         const errText = await resp.text().catch(() => resp.statusText)
@@ -248,12 +251,17 @@ export function registerImageHandlers(): void {
       if (maskBase64) body.mask = maskBase64
 
       activeGenerationController = new AbortController()
+      // 30-minute timeout for image edits (Qwen full precision can take 7+ minutes)
+      const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
       const resp = await fetch(`${baseUrl}/v1/images/edits`, {
         method: 'POST',
         headers: getImageFetchHeaders(),
         body: JSON.stringify(body),
         signal: activeGenerationController.signal,
+        // @ts-ignore — Node.js fetch keepalive prevents socket timeout
+        keepalive: true,
       })
+      clearTimeout(timeoutId)
 
       if (!resp.ok) {
         const errText = await resp.text().catch(() => resp.statusText)
