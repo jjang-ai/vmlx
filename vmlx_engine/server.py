@@ -3515,24 +3515,30 @@ async def _stream_with_keepalive(async_gen, interval: float = _SSE_KEEPALIVE_INT
     """Yield items from async generator, inserting None sentinels on timeout.
     If total_timeout is set, raises TimeoutError after that many seconds of total streaming.
 
-    Uses asyncio.wait_for per-token for keepalive detection, but avoids the
-    overhead of asyncio.wait({set}) which creates sets and futures per token.
+    Uses asyncio.wait() which does NOT cancel the pending future on timeout —
+    critical because cancelling an async generator's __anext__() finalizes it.
+    asyncio.wait_for() MUST NOT be used here: it cancels on timeout, which
+    kills the stream during long prefills or tool call generation.
     """
     it = async_gen.__aiter__()
+    pending = asyncio.ensure_future(it.__anext__())
     start = time.monotonic()
     try:
         while True:
             if total_timeout and (time.monotonic() - start) > total_timeout:
                 raise TimeoutError(f"Streaming exceeded {total_timeout}s timeout")
-            try:
-                item = await asyncio.wait_for(it.__anext__(), timeout=interval)
-                yield item
-            except asyncio.TimeoutError:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if done:
+                try:
+                    yield pending.result()
+                except StopAsyncIteration:
+                    return
+                pending = asyncio.ensure_future(it.__anext__())
+            else:
                 yield None  # keep-alive sentinel
-            except StopAsyncIteration:
-                return
-    except asyncio.CancelledError:
-        raise
+    finally:
+        if not pending.done():
+            pending.cancel()
 
 
 async def stream_chat_completion(
