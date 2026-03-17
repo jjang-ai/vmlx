@@ -1963,9 +1963,10 @@ class Scheduler:
             # Clean up streaming detokenizer
             self._cleanup_detokenizer(request_id)
 
-            # Remove from running
+            # Remove from running and requests dict (prevents memory leak)
             if request_id in self.running:
                 del self.running[request_id]
+            self.requests.pop(request_id, None)
 
             # Remove UID mappings
             if request_id in self.request_id_to_uid:
