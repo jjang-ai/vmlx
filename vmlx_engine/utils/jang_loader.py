@@ -407,7 +407,8 @@ def load_jang_model(model_path: str | Path):
     if not hasattr(model, "config"):
         model.config = config
 
-    mx.eval(model.parameters())
+    # Skip mx.eval — MLX evaluates lazily on first inference. Forcing eval here
+    # blocks for minutes on large models (60GB+) with no benefit.
     elapsed = time.perf_counter() - start
     from mlx.utils import tree_flatten
     n_params = sum(p.size for _, p in tree_flatten(model.parameters()))
