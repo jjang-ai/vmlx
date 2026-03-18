@@ -170,7 +170,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium truncate">{sourceImage.name}</p>
                 <p className="text-[10px] text-muted-foreground">
-                  {isEdit ? 'Source image for editing' : 'Source for img2img (strength controls how much changes)'}
+                  {isEdit ? 'Source image for editing' : 'Source for variation (higher strength = more change, but won\'t follow specific edit instructions)'}
                 </p>
               </div>
               <button
@@ -193,7 +193,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
             >
               <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="text-[11px] text-muted-foreground">
-                {isEdit ? 'Upload source image (required)' : 'Drop image to iterate or restyle (optional)'}
+                {isEdit ? 'Upload source image (required)' : 'Drop image for variations (not instruction-based editing)'}
               </span>
             </div>
           )}
@@ -274,7 +274,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           onPaste={handlePaste}
           placeholder={
             disabled ? 'Waiting for server to start...'
-              : isIterating ? 'Add modifications (or leave empty for variation with new seed)...'
+              : isIterating ? 'Describe changes to guide the next variation (or leave empty for random variation)...'
               : isEdit && !sourceImage ? 'Upload a source image above, then describe your edit...'
               : isEdit ? 'Describe the edit to apply...'
               : 'Describe the image you want to generate...'
@@ -310,9 +310,12 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
       </div>
 
       {/* Combined prompt preview when iterating */}
-      {isIterating && prompt.trim() && (
+      {isIterating && (
         <p className="mt-1.5 text-[10px] text-muted-foreground truncate">
-          Prompt: <span className="text-foreground/70">{iteratePrompt}, {prompt.trim()}</span>
+          {prompt.trim()
+            ? <>Full prompt: <span className="text-foreground/70">{iteratePrompt}, {prompt.trim()}</span></>
+            : <>Variation of: <span className="text-foreground/70">{iteratePrompt}</span> (new seed, strength {settings.strength})</>
+          }
         </p>
       )}
     </div>
