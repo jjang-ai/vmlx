@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
-import { Send, ImagePlus, X, Pencil } from 'lucide-react'
+import { Send, ImagePlus, X, Pencil, RefreshCw } from 'lucide-react'
 
 interface ImagePromptBarSettings {
   steps: number
@@ -31,36 +31,53 @@ interface ImagePromptBarProps {
   mode: 'generate' | 'edit'
   sourceImage: { dataUrl: string; name: string } | null
   onSourceImageChange: (img: { dataUrl: string; name: string } | null) => void
-  /** Pre-fill prompt text (set by Iterate button) */
+  /** Original prompt when iterating (shown as base, user adds modifications) */
   iteratePrompt?: string | null
   /** Counter to force re-trigger even with same prompt */
   iterateCounter?: number
+  /** Called when user clears the iterate state */
+  onClearIterate?: () => void
 }
 
-export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, iteratePrompt, iterateCounter }: ImagePromptBarProps) {
+export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, iteratePrompt, iterateCounter, onClearIterate }: ImagePromptBarProps) {
   const [prompt, setPrompt] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // When Iterate button is clicked, pre-fill the prompt and focus the textarea
+  // Iterate mode: source image is from a previous generation
+  const isIterating = !!(iteratePrompt && sourceImage)
+  const isEdit = mode === 'edit'
+
+  // When Iterate button is clicked, focus the modification input
   useEffect(() => {
     if (iteratePrompt != null) {
-      setPrompt(iteratePrompt)
-      // Focus and select the text so user can easily modify or just hit Enter
+      setPrompt('') // Clear the modification field — user types what to change
       setTimeout(() => {
         textareaRef.current?.focus()
-        textareaRef.current?.select()
       }, 100)
     }
   }, [iteratePrompt, iterateCounter])
 
-  const isEdit = mode === 'edit'
-  const canSubmit = !disabled && !generating && prompt.trim() && (!isEdit || !!sourceImage)
+  // Build the actual prompt sent to the engine
+  const buildFinalPrompt = useCallback((): string => {
+    if (isIterating && prompt.trim()) {
+      // Combine: original prompt + user's modification
+      return `${iteratePrompt}, ${prompt.trim()}`
+    }
+    if (isIterating && !prompt.trim()) {
+      // No modification — use original prompt as-is (variation with new seed)
+      return iteratePrompt!
+    }
+    return prompt.trim()
+  }, [prompt, iteratePrompt, isIterating])
+
+  const canSubmit = !disabled && !generating && (isIterating ? true : prompt.trim()) && (!isEdit || !!sourceImage)
 
   const handleSubmit = useCallback(() => {
     if (!canSubmit) return
-    onGenerate(prompt.trim())
-  }, [prompt, canSubmit, onGenerate])
+    const finalPrompt = buildFinalPrompt()
+    if (finalPrompt) onGenerate(finalPrompt)
+  }, [canSubmit, buildFinalPrompt, onGenerate])
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -101,51 +118,87 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
     }
   }
 
+  const handleClearIterate = () => {
+    onSourceImageChange(null)
+    setPrompt('')
+    onClearIterate?.()
+  }
+
   const currentSize = SIZE_PRESETS.find(p => p.width === settings.width && p.height === settings.height)
   const sizeLabel = currentSize?.label || `${settings.width}x${settings.height}`
 
   return (
     <div className="border-t border-border bg-background px-4 py-3">
-      {/* Source image zone — required for edit, optional for gen (img2img) */}
-      <div className="mb-2">
-        {sourceImage ? (
-          <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
+      {/* Source image zone */}
+      {isIterating ? (
+        // Iterate mode: show source image + original prompt as context
+        <div className="mb-2 p-2 bg-primary/5 border border-primary/20 rounded-md">
+          <div className="flex items-center gap-3">
             <img
               src={sourceImage.dataUrl}
               alt="Source"
-              className="h-12 w-12 rounded object-cover flex-shrink-0"
+              className="h-14 w-14 rounded object-cover flex-shrink-0 border border-border"
             />
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium truncate">{sourceImage.name}</p>
-              <p className="text-[10px] text-muted-foreground">
-                {isEdit ? 'Source image for editing' : 'Source image for img2img (optional)'}
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <RefreshCw className="h-3 w-3 text-primary flex-shrink-0" />
+                <span className="text-[10px] font-medium text-primary uppercase tracking-wider">Iterating</span>
+              </div>
+              <p className="text-xs text-foreground line-clamp-2" title={iteratePrompt!}>
+                {iteratePrompt}
               </p>
             </div>
             <button
-              onClick={() => onSourceImageChange(null)}
-              className="p-1 text-muted-foreground hover:text-destructive rounded"
-              title="Remove source image"
+              onClick={handleClearIterate}
+              className="p-1 text-muted-foreground hover:text-destructive rounded flex-shrink-0"
+              title="Cancel iteration"
             >
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-        ) : (
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-            onClick={handlePickImage}
-            className={`flex items-center justify-center gap-2 p-2 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
-              dragOver ? 'border-primary bg-primary/5' : 'border-border/50 hover:border-primary/40 hover:bg-accent/30'
-            }`}
-          >
-            <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-[11px] text-muted-foreground">
-              {isEdit ? 'Upload source image (required)' : 'Drop image to iterate or restyle (uses strength — not instruction-based editing)'}
-            </span>
-          </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        // Normal mode: upload zone
+        <div className="mb-2">
+          {sourceImage ? (
+            <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
+              <img
+                src={sourceImage.dataUrl}
+                alt="Source"
+                className="h-12 w-12 rounded object-cover flex-shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{sourceImage.name}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {isEdit ? 'Source image for editing' : 'Source for img2img (strength controls how much changes)'}
+                </p>
+              </div>
+              <button
+                onClick={() => onSourceImageChange(null)}
+                className="p-1 text-muted-foreground hover:text-destructive rounded"
+                title="Remove source image"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={handlePickImage}
+              className={`flex items-center justify-center gap-2 p-2 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
+                dragOver ? 'border-primary bg-primary/5' : 'border-border/50 hover:border-primary/40 hover:bg-accent/30'
+              }`}
+            >
+              <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-[11px] text-muted-foreground">
+                {isEdit ? 'Upload source image (required)' : 'Drop image to iterate or restyle (optional)'}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Quick settings row */}
       <div className="flex items-center gap-4 mb-2 text-xs">
@@ -190,7 +243,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           />
         </div>
 
-        {/* Strength: always show for edit mode, show for gen mode when source image is uploaded */}
+        {/* Strength: show when source image is present (iterate or edit) */}
         {(isEdit || sourceImage) && (
           <div className="flex items-center gap-1.5">
             <label className="text-muted-foreground">Strength</label>
@@ -206,7 +259,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           </div>
         )}
 
-        {!isEdit && settings.count > 1 && (
+        {!isEdit && !isIterating && settings.count > 1 && (
           <span className="text-muted-foreground">x{settings.count} images</span>
         )}
       </div>
@@ -221,6 +274,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
           onPaste={handlePaste}
           placeholder={
             disabled ? 'Waiting for server to start...'
+              : isIterating ? 'Add modifications (or leave empty for variation with new seed)...'
               : isEdit && !sourceImage ? 'Upload a source image above, then describe your edit...'
               : isEdit ? 'Describe the edit to apply...'
               : 'Describe the image you want to generate...'
@@ -242,16 +296,25 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
             onClick={handleSubmit}
             disabled={!canSubmit}
             className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end ${
-              isEdit
+              isIterating
+                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : isEdit
                 ? 'bg-violet-600 text-white hover:bg-violet-700'
                 : 'bg-primary text-primary-foreground hover:bg-primary/90'
             }`}
           >
-            {isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-            <span className="text-sm">{isEdit ? 'Edit' : 'Generate'}</span>
+            {isIterating ? <RefreshCw className="h-4 w-4" /> : isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            <span className="text-sm">{isIterating ? 'Iterate' : isEdit ? 'Edit' : 'Generate'}</span>
           </button>
         )}
       </div>
+
+      {/* Combined prompt preview when iterating */}
+      {isIterating && prompt.trim() && (
+        <p className="mt-1.5 text-[10px] text-muted-foreground truncate">
+          Prompt: <span className="text-foreground/70">{iteratePrompt}, {prompt.trim()}</span>
+        </p>
+      )}
     </div>
   )
 }
