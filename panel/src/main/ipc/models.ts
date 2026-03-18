@@ -1158,7 +1158,9 @@ export function registerModelHandlers(): void {
       let stripped = text.replace(/^---[\s\S]*?---\s*/, '')
       // Strip HTML tags (HF READMEs mix markdown and HTML — raw tags look broken in plain text)
       stripped = stripped.replace(/<[^>]+>/g, '')
-      // Collapse excessive blank lines (from stripped HTML blocks)
+      // Strip lines that are only whitespace (left behind by stripped HTML blocks)
+      stripped = stripped.replace(/^\s+$/gm, '')
+      // Collapse excessive blank lines
       stripped = stripped.replace(/\n{3,}/g, '\n\n').trim()
       // Truncate to ~3000 chars for display
       return stripped.length > 3000 ? stripped.slice(0, 3000) + '\n\n...(truncated)' : stripped
