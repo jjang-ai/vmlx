@@ -218,37 +218,81 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
                 class_predicate=get_class_predicate)
 
     # Load weights via mmap
-    # JANG v2 weights are ALREADY in MLX-native format (switch_mlp, not experts.gate_up_proj).
-    # model.sanitize() does TWO things: (1) MoE rename (experts→switch_mlp) and (2) prefix remap.
-    # JANG already did (1), so we only need (2). Do the prefix remap + norm fix manually.
+    # Matches jang-tools 2.1.0 loader: try model.sanitize() first (works for dense models),
+    # fall back to minimal sanitize for MoE models where gate_up_proj is already split.
+    from mlx_vlm.utils import sanitize_weights
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
+        shard_weights = {k: v for k, v in shard_weights.items()
+                         if not k.endswith(".importance")}
 
-        # Manual sanitize: prefix remap + norm adjustment (skip MoE rename)
-        sanitized = {}
-        norm_keys = (".input_layernorm.weight", ".post_attention_layernorm.weight",
-                     "model.norm.weight", ".q_norm.weight", ".k_norm.weight")
-        for key, value in shard_weights.items():
-            if "mtp." in key:
-                continue  # Skip MTP weights
-            # Prefix remap (same as model.sanitize but without MoE rename)
-            if "model.language_model" in key:
-                key = key.replace("model.language_model", "language_model.model")
-            elif "model.visual" in key:
-                key = key.replace("model.visual", "vision_tower")
-            elif "lm_head" in key:
-                key = key.replace("lm_head", "language_model.lm_head")
-            # Conv1d transpose
-            if "conv1d.weight" in key and value.shape[-1] != 1:
-                value = value.moveaxis(2, 1)
-            # RMSNorm convention: add 1.0
-            if any(key.endswith(sfx) for sfx in norm_keys):
-                if value.ndim == 1:
-                    value = value + 1.0
-            sanitized[key] = value
+        # Try model.sanitize() — works for dense VL models.
+        # Fails on MoE models because it tries to split gate_up_proj which JANG already split.
+        sanitize_ok = False
+        if hasattr(model, "sanitize"):
+            try:
+                shard_weights = model.sanitize(shard_weights)
+                sanitize_ok = True
+            except (KeyError, ValueError):
+                pass
 
-        model.load_weights(list(sanitized.items()), strict=False)
-        del shard_weights, sanitized
+        if not sanitize_ok:
+            # Minimal sanitize: rename keys, transpose conv1d, fix norms (skip MoE rename)
+            norm_suffixes = (
+                ".input_layernorm.weight", ".post_attention_layernorm.weight",
+                "model.norm.weight", ".q_norm.weight", ".k_norm.weight",
+            )
+            fixed = {}
+            for k, v in shard_weights.items():
+                if "mtp." in k:
+                    continue
+                if "model.language_model" in k:
+                    k = k.replace("model.language_model", "language_model.model")
+                elif "model.visual" in k:
+                    k = k.replace("model.visual", "vision_tower")
+                elif "lm_head" in k and "language_model" not in k:
+                    k = k.replace("lm_head", "language_model.lm_head")
+                if "conv1d.weight" in k and v.ndim == 3 and v.shape[-1] != 1:
+                    v = mx.transpose(v, axes=(0, 2, 1))
+                if any(k.endswith(s) for s in norm_suffixes) and v.ndim == 1:
+                    v = v + 1.0
+                fixed[k] = v
+            shard_weights = fixed
+
+        # Apply vision/language sanitizers (may not exist for all model classes)
+        try:
+            shard_weights = sanitize_weights(
+                model_class.VisionModel, shard_weights, model_config.vision_config)
+            shard_weights = sanitize_weights(
+                model_class.LanguageModel, shard_weights, model_config.text_config)
+        except (KeyError, ValueError, AttributeError):
+            pass
+
+        # Dequantize vision conv weights that were incorrectly quantized
+        for k in list(shard_weights.keys()):
+            if ("patch_embed" in k or "temporal_embed" in k) and k.endswith(".weight"):
+                w = shard_weights[k]
+                if w.dtype == mx.uint32:
+                    base = k[:-7]
+                    s_key, b_key = f"{base}.scales", f"{base}.biases"
+                    if s_key in shard_weights and b_key in shard_weights:
+                        s, b = shard_weights[s_key], shard_weights[b_key]
+                        for try_bits in (2, 3, 4, 6, 8):
+                            in_dim = w.shape[-1] * 32 // try_bits
+                            if w.shape[-1] * 32 % try_bits != 0 or in_dim % s.shape[-1] != 0:
+                                continue
+                            try_gs = in_dim // s.shape[-1]
+                            if try_gs >= 2:
+                                try:
+                                    dq = mx.dequantize(w, s, b, group_size=try_gs, bits=try_bits)
+                                    shard_weights[k] = dq.astype(mx.float16)
+                                    del shard_weights[s_key], shard_weights[b_key]
+                                    break
+                                except Exception:
+                                    continue
+
+        model.load_weights(list(shard_weights.items()), strict=False)
+        del shard_weights
         gc.collect()
 
     _fix_quantized_bits(model, {})

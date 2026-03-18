@@ -403,6 +403,27 @@ class MLLMBatch:
             if hasattr(c, "filter"):
                 c.filter(keep_idx_array)
 
+    def extend(self, other: "MLLMBatch") -> None:
+        """
+        Extend this batch with another batch's requests.
+
+        Merges all metadata lists and extends cache layers. Both batches
+        must have batch-aware caches (BatchKVCache/BatchMambaCache) — raw
+        KVCache/ArraysCache cannot be extended.
+
+        Args:
+            other: Another MLLMBatch to merge into this one
+        """
+        self.uids.extend(other.uids)
+        self.request_ids.extend(other.request_ids)
+        self.y = mx.concatenate([self.y, other.y])
+        self.logprobs.extend(other.logprobs)
+        self.max_tokens.extend(other.max_tokens)
+        self.num_tokens.extend(other.num_tokens)
+        self.requests.extend(other.requests)
+        for c, o in zip(self.cache, other.cache):
+            c.extend(o)
+
     def extract_cache(self, idx: int) -> List[Any]:
         """
         Extract cache for a single request (for caching).
@@ -556,6 +577,57 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
             logger.warning(f"Layer {i} merge failed ({type(layer_cache).__name__}), using empty BatchKVCache: {e}")
             batch_cache.append(BatchKVCache([0] * len(caches)))
     return batch_cache
+
+
+def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
+    """Convert unbatched caches to batch-aware format for a single request.
+
+    When a batch was created with a single request, _process_prompts() keeps
+    raw KVCache/ArraysCache to preserve integer offsets (needed by Qwen3.5).
+    When a second request needs to extend() into this batch, the cache must
+    be converted to BatchKVCache/BatchMambaCache first.
+
+    This wraps each layer cache using merge([cache]) which creates the
+    batch-aware version with batch_size=1.
+    """
+    from mlx_lm.models.cache import KVCache, ArraysCache, BatchKVCache
+    try:
+        from mlx_lm.models.cache import RotatingKVCache
+    except ImportError:
+        RotatingKVCache = None
+    try:
+        from mlx_lm.models.cache import CacheList as _CacheList
+    except ImportError:
+        _CacheList = None
+    try:
+        from mlx_lm.generate import BatchRotatingKVCache
+    except ImportError:
+        BatchRotatingKVCache = None
+
+    converted = []
+    for c in cache:
+        if isinstance(c, BatchKVCache):
+            converted.append(c)  # Already batch-aware
+        elif isinstance(c, KVCache):
+            converted.append(BatchKVCache.merge([c]))
+        elif RotatingKVCache is not None and isinstance(c, RotatingKVCache):
+            if BatchRotatingKVCache is not None:
+                converted.append(BatchRotatingKVCache.merge([c]))
+            else:
+                converted.append(BatchKVCache.merge([c]))
+        elif isinstance(c, ArraysCache):
+            from .utils.mamba_cache import BatchMambaCache
+            converted.append(BatchMambaCache.merge([c]))
+        elif _CacheList is not None and isinstance(c, _CacheList):
+            # Recursively convert each sub-cache
+            inner = _ensure_batch_cache(list(c.caches))
+            converted.append(_CacheList(*inner))
+        elif hasattr(c, "merge"):
+            converted.append(type(c).merge([c]))
+        else:
+            # Unknown type — wrap as single-element merge via _merge_caches
+            converted.append(c)
+    return converted
 
 
 class _BatchOffsetSafeCache:
@@ -1078,7 +1150,9 @@ class MLLMBatchGenerator:
             return output.logits
         return output
 
-    def _process_prompts(self, requests: List[MLLMBatchRequest]) -> MLLMBatch:
+    def _process_prompts(
+        self, requests: List[MLLMBatchRequest], force_batch_cache: bool = False
+    ) -> MLLMBatch:
         """Prefill all requests: vision encoding, cache fetch, and batch merge.
 
         This is the most complex method in the batch generator. For each request:
@@ -1524,12 +1598,11 @@ class MLLMBatchGenerator:
         # Merge per-request caches into batch-aware caches for batched decode.
         # Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache, etc.
         try:
-            if len(per_request_caches) == 1:
-                # Single request: keep original per-request caches (KVCache, ArraysCache)
-                # instead of converting to BatchKVCache/BatchMambaCache.
-                # This preserves integer offsets that models like Qwen3.5 require
-                # (Qwen3_5Attention uses cache.offset as Python int for mask slicing).
-                # No filter/extend is needed for single-request batches.
+            if len(per_request_caches) == 1 and not force_batch_cache:
+                # Single request with no active batch: keep raw KVCache/ArraysCache
+                # to preserve integer offsets (Qwen3.5 needs cache.offset as int).
+                # If force_batch_cache is True, we're extending into an active batch
+                # and MUST produce batch-aware caches for extend() compatibility.
                 batch_cache = per_request_caches[0]
             else:
                 batch_cache = _merge_caches(per_request_caches)
@@ -1658,7 +1731,14 @@ class MLLMBatchGenerator:
 
     def _next(self) -> List[MLLMBatchResponse]:
         """
-        Internal next() implementation.
+        Internal next() with true continuous batching.
+
+        New requests can join the active batch mid-generation:
+        1. Finish pending async GPU work
+        2. Prefill new requests (with batch-aware caches)
+        3. Convert existing batch cache if needed
+        4. Extend active batch with new requests
+        5. Continue decode step for the merged batch
 
         Returns:
             List of MLLMBatchResponse for this step
@@ -1668,23 +1748,48 @@ class MLLMBatchGenerator:
         prompt_processing = False
         batch = self.active_batch
         num_active = len(batch) if batch else 0
+        num_to_add = self.completion_batch_size - num_active
 
-        # Only start a new batch when there is no active batch generating.
-        # MLLM vision encoding produces per-request KV caches that cannot be
-        # safely extended into an active batch's cache (shape mismatch in
-        # attention layers). Instead, queued requests wait until the current
-        # batch finishes, then all get processed together in one prefill.
-        if num_active == 0:
-            requests = self.unprocessed_requests[: self.completion_batch_size]
+        # Process new prompts — fresh batch or extend into active one
+        if num_to_add > 0 and self.unprocessed_requests:
+            requests = self.unprocessed_requests[:num_to_add]
 
-            if len(requests) == 0:
-                self.active_batch = None
-                return []
+            if num_active == 0:
+                # No active batch — create fresh
+                new_batch = self._process_prompts(requests)
+                self.unprocessed_requests = self.unprocessed_requests[len(requests):]
+                self.active_batch = new_batch
+                prompt_processing = True
+            else:
+                # Active batch exists — prefill new requests and extend.
+                # Must finish pending async work before extending cache arrays.
+                mx.synchronize()
+                self._stats.generation_time += time.perf_counter() - tic
+                tic = time.perf_counter()
 
-            new_batch = self._process_prompts(requests)
-            self.unprocessed_requests = self.unprocessed_requests[len(requests) :]
-            self.active_batch = new_batch
-            prompt_processing = True
+                # force_batch_cache=True: even single new request produces
+                # batch-aware caches (BatchKVCache/BatchMambaCache) for extend().
+                new_batch = self._process_prompts(requests, force_batch_cache=True)
+                self.unprocessed_requests = self.unprocessed_requests[len(requests):]
+
+                if new_batch is not None:
+                    # Convert existing batch cache from raw KVCache to BatchKVCache
+                    # if it was a single-request batch (Qwen3.5 offset optimization).
+                    from mlx_lm.models.cache import BatchKVCache, KVCache
+                    needs_convert = any(
+                        isinstance(c, KVCache) and not isinstance(c, BatchKVCache)
+                        for c in batch.cache
+                    )
+                    if needs_convert:
+                        batch.cache = _ensure_batch_cache(batch.cache)
+
+                    batch.extend(new_batch)
+                    prompt_processing = True
+
+        elif num_active == 0:
+            # No active batch and no pending requests
+            self.active_batch = None
+            return []
 
         # Drain any per-request prefill errors (from M6 per-request isolation)
         prefill_errors = list(self._prefill_errors)

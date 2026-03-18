@@ -75,13 +75,17 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
-    # JANG models: text path only for now
-    # JANG VL works on dense models (4B) but MoE models (35B, 122B) have
-    # architecture mismatches between mlx-vlm and mlx-lm model classes.
-    # All JANG models use text path (mlx-lm) which works perfectly.
-    # VLM support for JANG MoE is planned for a future version.
+    # JANG models: check jang_config.json has_vision field
     from ..utils.jang_loader import is_jang_model
+    from pathlib import Path
     if is_jang_model(model_name):
+        try:
+            import json
+            jang_cfg = json.loads((Path(model_name) / "jang_config.json").read_text())
+            if jang_cfg.get("architecture", {}).get("has_vision", False):
+                return True
+        except Exception:
+            pass
         return False
 
     # Primary: check config.json for vision_config (authoritative for local models)
