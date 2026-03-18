@@ -526,8 +526,10 @@ export function registerImageHandlers(): void {
         try {
           const cfg = JSON.parse(s.config || '{}')
           if (cfg.modelType === 'image') {
-            const rawName = s.modelName || s.modelPath || ''
-            const modelName = rawName.includes('/') ? rawName.split('/').pop()! : rawName
+            // Prefer servedModelName from config (canonical mflux name, no path guessing)
+            const modelName = cfg.servedModelName
+              || (s.modelName?.includes('/') ? s.modelName.split('/').pop()! : s.modelName)
+              || ''
             results.push({
               sessionId: s.id,
               modelName,
