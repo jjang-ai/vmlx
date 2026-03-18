@@ -36,8 +36,19 @@ function safeWriteJSON(path: string, data: any): void {
 }
 
 function commandExists(cmd: string): boolean {
+  // Check common install locations (Electron strips user PATH)
+  const paths = [
+    join(homedir(), '.local', 'bin', cmd),
+    join(homedir(), '.npm-global', 'bin', cmd),
+    '/usr/local/bin/' + cmd,
+    '/opt/homebrew/bin/' + cmd,
+    join(homedir(), '.nvm', 'versions', 'node'),  // nvm — just check the dir
+  ]
+  if (paths.some(p => existsSync(p))) return true
+  // Fallback: try which with full PATH
   try {
-    execFileSync('which', [cmd], { stdio: 'pipe' })
+    const env = { ...process.env, PATH: `${process.env.PATH}:${homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin` }
+    execFileSync('which', [cmd], { stdio: 'pipe', env })
     return true
   } catch { return false }
 }
