@@ -151,6 +151,12 @@ declare global {
         isGenerating: () => Promise<{ generating: boolean; startTime: number | null }>
         getModelPaths: () => Promise<Array<{ modelId: string; quantize: number; localPath: string; repoId?: string; downloadedAt: number }>>
       }
+      tools: {
+        getCodingToolStatus: () => Promise<Record<string, { installed: boolean; configured: boolean; configPath: string; entries: Array<{ label: string; baseUrl: string }> }>>
+        installCodingTool: (toolId: string) => Promise<{ success: boolean; error?: string }>
+        addCodingToolConfig: (toolId: string, baseUrl: string, modelName: string, port: number | null) => Promise<{ success: boolean; error?: string }>
+        removeCodingToolConfig: (toolId: string, label: string) => Promise<{ success: boolean; error?: string }>
+      }
       modelSettings: {
         get: (modelPath: string) => Promise<any>
         getAll: () => Promise<any[]>

@@ -291,6 +291,14 @@ const api = {
     getModelPaths: () => ipcRenderer.invoke('image:getModelPaths'),
   },
 
+  // Coding tool integration
+  tools: {
+    getCodingToolStatus: () => ipcRenderer.invoke('tools:getCodingToolStatus'),
+    installCodingTool: (toolId: string) => ipcRenderer.invoke('tools:installCodingTool', toolId),
+    addCodingToolConfig: (toolId: string, baseUrl: string, modelName: string, port: number | null) => ipcRenderer.invoke('tools:addCodingToolConfig', toolId, baseUrl, modelName, port),
+    removeCodingToolConfig: (toolId: string, label: string) => ipcRenderer.invoke('tools:removeCodingToolConfig', toolId, label),
+  },
+
   // Session management
   sessions: {
     list: () => ipcRenderer.invoke('sessions:list'),
