@@ -212,6 +212,10 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
             remapped = p.replace("language_model.model.", "model.language_model.", 1)
             if remapped in quantized_suffixes:
                 return True
+        # Handle lm_head: module path is language_model.lm_head, weight key is just lm_head
+        if p.endswith("lm_head") or "language_model.lm_head" in p:
+            if "lm_head" in quantized_suffixes:
+                return True
         return False
 
     nn.quantize(model, group_size=block_size, bits=default_bits,
@@ -1006,11 +1010,8 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
 def _fix_quantized_bits(model, weights):
     """Fix per-layer bits AND group_size for JANG mixed-precision models.
 
-    JANG uses different bit widths per tensor and may use different group_sizes
-    (e.g., gs=64 for gates, gs=128 for experts). After nn.quantize creates the
-    model skeleton with uniform defaults, this infers actual (bits, group_size)
-    from each tensor's packed weight shape, using known architectural dimensions
-    to disambiguate when multiple solutions exist.
+    Matches jang-tools 2.1.0 logic: router/gate tensors prefer gs=64 (precision-critical),
+    everything else prefers the module's initialized gs (from config.json).
     """
     import mlx.nn as nn
     try:
@@ -1019,68 +1020,48 @@ def _fix_quantized_bits(model, weights):
     except ImportError:
         quant_types = (nn.QuantizedLinear, nn.QuantizedEmbedding)
 
-    # Collect known architectural dims for disambiguation
-    known_dims = set()
-    config = getattr(model, 'config', None)
-    if isinstance(config, dict):
-        cfgs = [config, config.get('text_config', {})]
-    else:
-        cfgs = [config, getattr(config, 'text_config', None)] if config else []
-    for cfg in cfgs:
-        if cfg is None:
-            continue
-        for attr in ('hidden_size', 'intermediate_size', 'shared_expert_intermediate_size'):
-            val = cfg.get(attr) if isinstance(cfg, dict) else getattr(cfg, attr, None)
-            if isinstance(val, int) and val > 0:
-                known_dims.add(val)
-
-    valid_bits = {2, 3, 4, 5, 6, 8}
-
     for name, module in model.named_modules():
         if not isinstance(module, quant_types):
             continue
         if not hasattr(module, 'scales') or not hasattr(module, 'weight'):
             continue
         try:
-            n_groups = module.scales.shape[-1]
-            packed = module.weight.shape[-1]
-            total = packed * 32
+            w_cols = module.weight.shape[-1]
+            s_cols = module.scales.shape[-1]
+            fixed = False
 
-            # Collect all valid (gs, bits, in_dim) solutions
-            candidates = []
-            for gs in (32, 64, 128, 256):
-                in_dim = n_groups * gs
-                if in_dim == 0:
+            # Router/gate tensors prefer gs=64 (precision-critical in JANG)
+            name_lower = name.lower()
+            is_router = (".gate." in name_lower or name_lower.endswith(".gate")
+                         or "shared_expert_gate" in name_lower)
+            if is_router:
+                gs_candidates = [64, module.group_size, 128]
+            else:
+                gs_candidates = [module.group_size]
+                for gs in (64, 128):
+                    if gs not in gs_candidates:
+                        gs_candidates.append(gs)
+
+            for try_gs in gs_candidates:
+                in_dim = s_cols * try_gs
+                if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
                     continue
-                bits = total // in_dim
-                if bits in valid_bits and total == bits * in_dim:
-                    candidates.append((gs, bits, in_dim))
-
-            if not candidates:
-                continue
-
-            # Pick best candidate:
-            # 1. Prefer in_dim matching a known architectural dimension
-            # 2. If no match, prefer current group_size
-            # 3. If still ambiguous, prefer smallest group_size (most precise)
-            best = None
-            for gs, bits, in_dim in candidates:
-                if in_dim in known_dims:
-                    best = (gs, bits)
+                try_bits = (w_cols * 32) // in_dim
+                if try_bits in (2, 3, 4, 5, 6, 8):
+                    if try_bits != module.bits:
+                        module.bits = try_bits
+                    if try_gs != module.group_size:
+                        module.group_size = try_gs
+                    fixed = True
                     break
-            if best is None:
-                for gs, bits, in_dim in candidates:
-                    if gs == module.group_size:
-                        best = (gs, bits)
-                        break
-            if best is None:
-                best = (candidates[0][0], candidates[0][1])
 
-            gs, bits = best
-            if gs != module.group_size:
-                module.group_size = gs
-            if bits != module.bits:
-                module.bits = bits
+            if not fixed:
+                # Last resort: try current gs with whatever bits result
+                in_dim = s_cols * module.group_size
+                if in_dim > 0:
+                    actual_bits = (w_cols * 32) // in_dim
+                    if actual_bits != module.bits and actual_bits in (2, 3, 4, 5, 6, 8):
+                        module.bits = actual_bits
         except Exception:
             pass
 
