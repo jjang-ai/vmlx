@@ -1917,7 +1917,7 @@ async def create_image(request: Request):
         if source_image_b64 and image_strength is not None:
             import tempfile
             from pathlib import Path
-            raw_b64 = source_image_b64.replace("data:image/png;base64,", "").replace("data:image/jpeg;base64,", "")
+            raw_b64 = re.sub(r'^data:image/[^;]+;base64,', '', source_image_b64)
             img_bytes = base64.b64decode(raw_b64)
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
             tmp.write(img_bytes)

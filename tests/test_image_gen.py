@@ -321,111 +321,38 @@ class TestFixQuantizedLayers:
 
 
 # ===========================================================================
-# 5. _detect_base_model()
+# 5. MODEL_CLASS_MAP and _import_model_class
 # ===========================================================================
 
-class TestDetectBaseModel:
+class TestModelClassMap:
+    """Verify the explicit class dispatch table covers all models."""
 
-    def test_zimage_turbo_from_model_index(self, tmp_path):
-        """ZImage class in model_index.json + 'turbo' in dir name → z-image-turbo."""
-        model_dir = tmp_path / "z-image-turbo-q4"
-        model_dir.mkdir()
-        index = {"_class_name": "ZImagePipeline"}
-        (model_dir / "model_index.json").write_text(json.dumps(index))
+    def test_all_name_to_class_entries_have_class_map(self):
+        """Every entry in _NAME_TO_CLASS must have a matching MODEL_CLASS_MAP entry."""
+        from vmlx_engine.image_gen import _NAME_TO_CLASS, MODEL_CLASS_MAP
+        for name, cls in _NAME_TO_CLASS.items():
+            assert cls in MODEL_CLASS_MAP, f"_NAME_TO_CLASS['{name}'] = '{cls}' not in MODEL_CLASS_MAP"
 
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "z-image-turbo"
+    def test_class_map_has_all_expected_classes(self):
+        """MODEL_CLASS_MAP must include all known mflux model classes."""
+        from vmlx_engine.image_gen import MODEL_CLASS_MAP
+        expected = {'Flux1', 'Flux2Klein', 'ZImage', 'QwenImage', 'QwenImageEdit',
+                    'Flux1Kontext', 'Flux1Fill', 'FIBO', 'SeedVR2', 'Flux2KleinEdit'}
+        for cls in expected:
+            assert cls in MODEL_CLASS_MAP, f"Missing '{cls}' in MODEL_CLASS_MAP"
 
-    def test_zimage_non_turbo_euler_scheduler(self, tmp_path):
-        """ZImage class + Euler scheduler → z-image (not turbo)."""
-        model_dir = tmp_path / "zimage-model"
-        model_dir.mkdir()
-        index = {
-            "_class_name": "ZImagePipeline",
-            "scheduler": ["EulerDiscreteScheduler", {}],
-        }
-        (model_dir / "model_index.json").write_text(json.dumps(index))
+    def test_import_model_class_rejects_unknown(self):
+        """_import_model_class raises ValueError for unknown class names."""
+        from vmlx_engine.image_gen import _import_model_class
+        import pytest
+        with pytest.raises(ValueError, match="Unknown mflux class"):
+            _import_model_class("NonExistentClass")
 
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "z-image"
-
-    def test_zimage_defaults_to_turbo(self, tmp_path):
-        """ZImage class with no turbo hint and no Euler scheduler → z-image-turbo default."""
-        model_dir = tmp_path / "some-zimage"
-        model_dir.mkdir()
-        index = {"_class_name": "ZImagePipeline"}
-        (model_dir / "model_index.json").write_text(json.dumps(index))
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "z-image-turbo"
-
-    def test_schnell_from_dir_name(self, tmp_path):
-        """Directory name containing 'schnell' → detected as schnell."""
-        model_dir = tmp_path / "FLUX.1-schnell-4bit"
-        model_dir.mkdir()
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "schnell"
-
-    def test_dev_from_dir_name(self, tmp_path):
-        """Directory name containing 'dev' → detected as dev."""
-        model_dir = tmp_path / "flux-dev-q8"
-        model_dir.mkdir()
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "dev"
-
-    def test_klein_from_dir_name(self, tmp_path):
-        """Directory name containing 'flux2klein4b' → detected as flux2-klein-4b."""
-        model_dir = tmp_path / "flux2-klein-4b-quantized"
-        model_dir.mkdir()
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "flux2-klein-4b"
-
-    def test_z_image_turbo_dir_name(self, tmp_path):
-        """Directory name containing 'z-image-turbo' → detected correctly."""
-        model_dir = tmp_path / "z-image-turbo-fp16"
-        model_dir.mkdir()
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "unknown")
-        assert result == "z-image-turbo"
-
-    def test_fallback_for_unknown_dir(self, tmp_path):
-        """Unrecognized directory name → fallback to provided name."""
-        model_dir = tmp_path / "my-custom-model"
-        model_dir.mkdir()
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "schnell")
-        assert result == "schnell"
-
-    def test_fallback_when_no_model_index(self, tmp_path):
-        """No model_index.json and unrecognizable dir → fallback."""
-        model_dir = tmp_path / "random-model"
-        model_dir.mkdir()
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "dev")
-        assert result == "dev"
-
-    def test_malformed_model_index_falls_through(self, tmp_path):
-        """Malformed JSON in model_index.json → falls back to dir name matching."""
-        model_dir = tmp_path / "flux1schnell-broken"
-        model_dir.mkdir()
-        (model_dir / "model_index.json").write_text("{bad json!!!")
-
-        from vmlx_engine.image_gen import ImageGenEngine
-        result = ImageGenEngine._detect_base_model(str(model_dir), "fallback")
-        # Dir name contains 'schnell' so it should match
-        assert result == "schnell"
+    def test_default_steps_covers_all_names(self):
+        """DEFAULT_STEPS must have entries for all _NAME_TO_CLASS keys."""
+        from vmlx_engine.image_gen import _NAME_TO_CLASS, DEFAULT_STEPS
+        for name in _NAME_TO_CLASS:
+            assert name in DEFAULT_STEPS, f"Missing DEFAULT_STEPS entry for '{name}'"
 
 
 # ===========================================================================
