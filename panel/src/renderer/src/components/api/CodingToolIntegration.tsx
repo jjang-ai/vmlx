@@ -158,21 +158,34 @@ export function CodingToolIntegration({ baseUrl, modelName, port }: CodingToolIn
               <div className="mt-2 space-y-1">
                 {status.entries.map((entry, i) => (
                   <div key={i} className="flex items-center justify-between text-[11px] px-2 py-1 bg-muted/50 rounded">
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                      <span className="font-medium">{entry.label}</span>
-                      <span className="text-muted-foreground">{entry.baseUrl}</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                      <span className="font-medium truncate">{entry.label}</span>
+                      <span className="text-muted-foreground truncate">{entry.baseUrl}</span>
                     </div>
                     <button
                       onClick={() => handleRemove(tool.id, entry.label)}
                       disabled={isLoading}
-                      className="p-0.5 text-muted-foreground hover:text-destructive"
-                      title="Remove this entry"
+                      className="p-0.5 text-muted-foreground hover:text-destructive flex-shrink-0"
+                      title="Remove this entry from config"
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
                 ))}
+                {status.entries.length > 1 && (
+                  <button
+                    onClick={async () => {
+                      for (const entry of status.entries) {
+                        await handleRemove(tool.id, entry.label)
+                      }
+                    }}
+                    disabled={isLoading}
+                    className="text-[10px] text-muted-foreground hover:text-destructive mt-1"
+                  >
+                    Remove all MLX Studio entries
+                  </button>
+                )}
               </div>
             )}
 
