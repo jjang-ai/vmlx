@@ -734,7 +734,7 @@ export class SessionManager extends EventEmitter {
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens',
     'defaultTemperature', 'defaultTopP',
-    'embeddingModel', 'additionalArgs',
+    'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice',
     'logLevel', 'corsOrigins',
     'enableJit',
@@ -1202,13 +1202,14 @@ export class SessionManager extends EventEmitter {
       if (config.imageMode === 'edit') args.push('--image-mode', 'edit')
       if (config.imageQuantize && config.imageQuantize > 0) args.push('--image-quantize', config.imageQuantize.toString())
       if (config.servedModelName) args.push('--served-model-name', config.servedModelName)
+      if (config.mfluxClass) args.push('--mflux-class', config.mfluxClass)
       // Logging + CORS still apply to image servers
       if (config.logLevel && config.logLevel !== 'INFO') args.push('--log-level', config.logLevel)
       if (config.corsOrigins && config.corsOrigins !== '*') args.push('--allowed-origins', config.corsOrigins)
       // Strip image-specific flags from additionalArgs to prevent duplication
       // (stale additionalArgs may survive config merge from a previous session)
       if (config.additionalArgs?.trim()) {
-        const imageFlags = new Set(['--image-mode', '--image-quantize', '--served-model-name'])
+        const imageFlags = new Set(['--image-mode', '--image-quantize', '--served-model-name', '--mflux-class'])
         const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
         const filtered: string[] = []
         for (let i = 0; i < extra.length; i++) {
@@ -1415,9 +1416,19 @@ export class SessionManager extends EventEmitter {
       args.push('--allowed-origins', config.corsOrigins)
     }
 
-    // Additional arguments
+    // Additional arguments — strip stale image-only flags from old session configs
     if (config.additionalArgs?.trim()) {
-      args.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
+      const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
+      const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
+      const filtered: string[] = []
+      for (let i = 0; i < extra.length; i++) {
+        if (staleImageFlags.has(extra[i])) {
+          i++ // skip the flag's value too
+        } else {
+          filtered.push(extra[i])
+        }
+      }
+      if (filtered.length) args.push(...filtered)
     }
 
     return args

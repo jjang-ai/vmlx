@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Download, Copy, Loader2, ImageIcon, Pencil, RefreshCw } from 'lucide-react'
 import type { ImageGenerationInfo } from './ImageTab'
 
@@ -9,6 +9,7 @@ interface ImageGalleryProps {
   onRegenerate?: (gen: ImageGenerationInfo) => void
 }
 
+// MLX Studio Image Gallery — mlx.studio — Jinho Jang
 export function ImageGallery({ generations, generating, mode, onRegenerate }: ImageGalleryProps) {
   if (generations.length === 0 && !generating) {
     return (
@@ -30,6 +31,7 @@ export function ImageGallery({ generations, generating, mode, onRegenerate }: Im
             : 'Type a prompt below and click Generate to create an image with the selected model.'
           }
         </p>
+        <p className="text-[9px] text-muted-foreground/30 mt-8">mlx.studio</p>
       </div>
     )
   }
@@ -47,15 +49,7 @@ export function ImageGallery({ generations, generating, mode, onRegenerate }: Im
 
         {/* Loading skeleton while generating */}
         {generating && (
-          <div className="border border-border rounded-lg overflow-hidden animate-pulse">
-            <div className="aspect-square bg-muted flex items-center justify-center">
-              <Loader2 className="h-8 w-8 text-muted-foreground animate-spin" />
-            </div>
-            <div className="p-3 space-y-2">
-              <div className="h-3 bg-muted rounded w-3/4" />
-              <div className="h-3 bg-muted rounded w-1/2" />
-            </div>
-          </div>
+          <GeneratingSkeleton mode={mode} />
         )}
       </div>
     </div>
@@ -142,7 +136,7 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
             {sourceData && (
               <div className="absolute bottom-2 left-2 w-16 h-16 rounded border-2 border-white/60 overflow-hidden shadow-lg">
                 <img src={sourceData} alt="Source" className="w-full h-full object-contain" />
-                <span className="absolute bottom-0 left-0 right-0 text-[7px] text-center bg-black/60 text-white py-px">{isVariation ? 'Source' : 'Original'}</span>
+                <span className="absolute bottom-0 left-0 right-0 text-[8px] text-center bg-black/60 text-white py-px">{isVariation ? 'Source' : 'Original'}</span>
               </div>
             )}
           </div>
@@ -174,7 +168,7 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
                 className="px-2 py-1 bg-black/60 text-white rounded text-xs flex items-center gap-1 hover:bg-black/80 transition-colors backdrop-blur-sm"
                 title="Copy seed"
               >
-                <Copy className="h-3 w-3" />
+                <Copy className="h-3.5 w-3.5" />
                 {generation.seed}
               </button>
             </div>
@@ -236,6 +230,36 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
             </button>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function GeneratingSkeleton({ mode }: { mode?: 'generate' | 'edit' }) {
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    const interval = setInterval(() => setElapsed(prev => prev + 1), 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const formatTime = (s: number) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
+  const label = mode === 'edit' ? 'Editing' : 'Generating'
+  const color = mode === 'edit' ? 'text-violet-400' : 'text-primary'
+
+  return (
+    <div className="border border-border rounded-lg overflow-hidden">
+      <div className="aspect-square bg-muted flex flex-col items-center justify-center gap-3">
+        <Loader2 className={`h-10 w-10 ${color} animate-spin`} />
+        <div className="text-center">
+          <p className={`text-sm font-medium ${color}`}>{label}...</p>
+          <p className="text-xs text-muted-foreground mt-1">{formatTime(elapsed)}</p>
+        </div>
+      </div>
+      <div className="p-3">
+        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+          <div className={`h-full rounded-full animate-pulse ${mode === 'edit' ? 'bg-violet-500/50' : 'bg-primary/50'}`} style={{ width: '100%' }} />
+        </div>
       </div>
     </div>
   )

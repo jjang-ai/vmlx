@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# MLX Studio — eric@mlx.studio — Jinho Jang
 """
 Image Generation Engine — Text-to-image and img2img using mflux (MLX-native).
 
@@ -496,11 +497,13 @@ class ImageGenEngine:
                 negative_prompt=negative_prompt,
             )
         elif mclass == "Flux1Kontext":
+            # Kontext uses reference image for subject conditioning
+            # image_strength=None (default) = full denoising with reference conditioning
+            # Passing a strength value skips denoising steps, causing noisy output
             generated_image = self._model.generate_image(
                 seed=seed,
                 prompt=prompt,
                 image_path=image_path,
-                image_strength=strength,
                 num_inference_steps=steps,
                 height=height,
                 width=width,
@@ -509,23 +512,24 @@ class ImageGenEngine:
         elif mclass == "Flux1Fill":
             if not mask_path:
                 raise ValueError("Flux Fill requires a mask_path for inpainting")
+            # Fill uses the mask to define regions — do NOT pass image_strength
+            # (defaults to None = full denoising in masked area, which is correct)
             generated_image = self._model.generate_image(
                 seed=seed,
                 prompt=prompt,
                 image_path=image_path,
                 masked_image_path=mask_path,
-                image_strength=strength,
                 num_inference_steps=steps,
                 height=height,
                 width=width,
                 guidance=guidance,
             )
         elif mclass == "Flux2KleinEdit":
+            # Klein Edit uses image_paths for reference — no image_strength
             generated_image = self._model.generate_image(
                 seed=seed,
                 prompt=prompt,
                 image_paths=[image_path],
-                image_strength=strength,
                 num_inference_steps=steps,
                 height=height,
                 width=width,

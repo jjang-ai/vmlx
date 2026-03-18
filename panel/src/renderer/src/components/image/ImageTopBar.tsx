@@ -1,6 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import { Settings, Square, RefreshCw, PanelLeftOpen, ChevronDown, Download, Loader2, ScrollText } from 'lucide-react'
 
+function formatElapsed(secs: number): string {
+  if (secs < 60) return `${secs}s`
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}m ${s}s`
+}
+
 import { IMAGE_MODELS } from '../../../../shared/imageModels'
 
 type ServerStatus = 'stopped' | 'starting' | 'running' | 'error'
@@ -53,6 +60,19 @@ export function ImageTopBar({
 }: ImageTopBarProps) {
   const quantizeLabel = quantize === 0 ? 'Full' : `${quantize}-bit`
   const [showPicker, setShowPicker] = useState(false)
+  const [loadingElapsed, setLoadingElapsed] = useState(0)
+
+  // Elapsed time counter when model is loading
+  useEffect(() => {
+    if (status !== 'starting') {
+      setLoadingElapsed(0)
+      return
+    }
+    const interval = setInterval(() => {
+      setLoadingElapsed(prev => prev + 1)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [status])
   const [availability, setAvailability] = useState<Record<string, boolean>>({})
   const [checkingAvail, setCheckingAvail] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -198,7 +218,7 @@ export function ImageTopBar({
           }`} />
           <span className="text-xs text-muted-foreground">
             {status === 'running' && port ? `Running on :${port}` :
-             status === 'starting' ? 'Starting...' :
+             status === 'starting' ? `Loading model... ${formatElapsed(loadingElapsed)}` :
              status === 'error' ? 'Error' :
              'Stopped'}
           </span>

@@ -101,6 +101,7 @@ export function ApiDashboard() {
           <p className="text-sm text-muted-foreground mt-1">
             Your local inference server exposes an OpenAI-compatible API. Connect any app, SDK, or tool.
           </p>
+          <p className="text-[9px] text-muted-foreground/40 mt-0.5">MLX Studio by Jinho Jang &middot; mlx.studio</p>
         </div>
 
         {/* Session selector pills */}

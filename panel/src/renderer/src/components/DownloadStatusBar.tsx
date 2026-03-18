@@ -105,6 +105,7 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
                 : `Downloading ${shortName(primary?.repoId || '')}`}
             </span>
             {p?.percent != null && <span className="text-muted-foreground">{p.percent}%</span>}
+            {p?.downloaded && p?.total && <span className="text-muted-foreground">{p.downloaded} / {p.total}</span>}
             {p?.speed && <span className="text-muted-foreground">{p.speed}</span>}
             {p?.eta && <span className="text-muted-foreground">{p.eta}</span>}
             {!p && !primary?.error && <span className="text-muted-foreground">Starting...</span>}
