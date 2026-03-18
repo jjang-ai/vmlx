@@ -123,6 +123,29 @@ class BatchMambaCache(MambaCache):
         cache.left_padding = None  # Single sequence, no batch padding
         return cache
 
+    def extend(self, other: "BatchMambaCache") -> None:
+        """Extend this batch cache with another batch's SSM states.
+
+        Concatenates each state array along the batch dimension.
+        Mirrors BatchKVCache.extend() for continuous batching support.
+        """
+        if not self.cache or not other.cache:
+            return
+        merged = []
+        for sc, oc in zip(self.cache, other.cache):
+            if sc is not None and oc is not None:
+                merged.append(mx.concatenate([sc, oc], axis=0))
+            elif sc is not None:
+                merged.append(sc)
+            elif oc is not None:
+                merged.append(oc)
+            else:
+                merged.append(None)
+        self.cache = merged
+        self._batch_size = (self._batch_size or 0) + (other._batch_size or 0)
+        # Reset left_padding — merged batch uses no-op masking
+        self.left_padding = None
+
     @classmethod
     def merge(cls, caches: List[MambaCache]) -> "BatchMambaCache":
         """
