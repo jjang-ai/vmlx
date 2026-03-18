@@ -123,16 +123,18 @@ class TestEditModels:
     def test_kontext_aliases(self):
         from vmlx_engine.image_gen import EDIT_MODELS
 
-        assert EDIT_MODELS["flux-kontext"] == "kontext-dev"
-        assert EDIT_MODELS["kontext"] == "kontext-dev"
-        assert EDIT_MODELS["kontext-dev"] == "kontext-dev"
+        assert EDIT_MODELS["flux-kontext"] == "dev-kontext"
+        assert EDIT_MODELS["kontext"] == "dev-kontext"
+        assert EDIT_MODELS["kontext-dev"] == "dev-kontext"
+        assert EDIT_MODELS["dev-kontext"] == "dev-kontext"
 
     def test_fill_aliases(self):
         from vmlx_engine.image_gen import EDIT_MODELS
 
-        assert EDIT_MODELS["flux-fill"] == "fill-dev"
-        assert EDIT_MODELS["fill"] == "fill-dev"
-        assert EDIT_MODELS["fill-dev"] == "fill-dev"
+        assert EDIT_MODELS["flux-fill"] == "dev-fill"
+        assert EDIT_MODELS["fill"] == "dev-fill"
+        assert EDIT_MODELS["fill-dev"] == "dev-fill"
+        assert EDIT_MODELS["dev-fill"] == "dev-fill"
 
     def test_qwen_is_canonical(self):
         from vmlx_engine.image_gen import EDIT_MODELS
@@ -185,8 +187,8 @@ class TestDefaultSteps:
         from vmlx_engine.image_gen import DEFAULT_STEPS
 
         assert DEFAULT_STEPS["qwen-image-edit"] == 28
-        assert DEFAULT_STEPS["kontext-dev"] == 24
-        assert DEFAULT_STEPS["fill-dev"] == 20
+        assert DEFAULT_STEPS["dev-kontext"] == 24
+        assert DEFAULT_STEPS["dev-fill"] == 20
 
 
 # ===========================================================================
@@ -373,7 +375,8 @@ class TestImageGenResult:
         decoded = base64.b64decode(result.b64_json)
         assert decoded == raw
 
-    def test_b64_json_not_overwritten_if_provided(self):
+    def test_b64_json_is_computed_property(self):
+        """b64_json is a computed property — always derived from image_bytes."""
         from vmlx_engine.image_gen import ImageGenResult
 
         result = ImageGenResult(
@@ -384,9 +387,8 @@ class TestImageGenResult:
             seed=1,
             steps=20,
             elapsed_seconds=0.5,
-            b64_json="pre-computed",
         )
-        assert result.b64_json == "pre-computed"
+        assert result.b64_json == base64.b64encode(b"abc").decode("utf-8")
 
     def test_empty_bytes_no_b64(self):
         from vmlx_engine.image_gen import ImageGenResult
@@ -508,6 +510,11 @@ class TestGenerateParameters:
 
     def test_negative_prompt_passed_through(self):
         engine = self._setup_engine()
+        # generate() checks _get_generate_params() before passing negative_prompt
+        engine._get_generate_params = lambda: {
+            "prompt", "seed", "width", "height", "guidance",
+            "num_inference_steps", "negative_prompt",
+        }
         result = engine.generate("test", negative_prompt="ugly", seed=42)
 
         call_kwargs = engine._model.generate_image.call_args
@@ -563,6 +570,15 @@ class TestGenerateParameters:
 
 class TestEditModelDispatch:
 
+    # Map model names to mflux class for dispatch
+    _MODEL_TO_CLASS = {
+        "qwen-image-edit": "QwenImageEdit",
+        "dev-kontext": "Flux1Kontext",
+        "kontext-dev": "Flux1Kontext",
+        "dev-fill": "Flux1Fill",
+        "fill-dev": "Flux1Fill",
+    }
+
     def _setup_edit_engine(self, model_name):
         """Create an engine pre-loaded with a mock edit model."""
         from vmlx_engine.image_gen import ImageGenEngine
@@ -570,6 +586,7 @@ class TestEditModelDispatch:
         engine._model = MagicMock()
         engine._loaded = True
         engine._model_name = model_name
+        engine._mflux_class = self._MODEL_TO_CLASS.get(model_name)
 
         gen_result = MagicMock()
         gen_result.image = _fake_pil_image()
@@ -581,12 +598,12 @@ class TestEditModelDispatch:
         result = engine.edit("make it red", image_path="/tmp/img.png", seed=42)
 
         call_kwargs = engine._model.generate_image.call_args.kwargs
-        assert call_kwargs["image_path"] == "/tmp/img.png"
         assert call_kwargs["image_paths"] == ["/tmp/img.png"]
+        assert "image_path" not in call_kwargs  # QwenImageEdit uses image_paths only
         assert call_kwargs["prompt"] == "make it red"
 
     def test_kontext_edit_passes_strength(self):
-        engine = self._setup_edit_engine("kontext-dev")
+        engine = self._setup_edit_engine("dev-kontext")
         result = engine.edit("add hat", image_path="/tmp/img.png", strength=0.6, seed=42)
 
         call_kwargs = engine._model.generate_image.call_args.kwargs
@@ -594,13 +611,13 @@ class TestEditModelDispatch:
         assert call_kwargs["image_strength"] == 0.6
 
     def test_fill_requires_mask(self):
-        engine = self._setup_edit_engine("fill-dev")
+        engine = self._setup_edit_engine("dev-fill")
 
         with pytest.raises(ValueError, match="mask_path"):
             engine.edit("fill area", image_path="/tmp/img.png", seed=42)
 
     def test_fill_with_mask(self):
-        engine = self._setup_edit_engine("fill-dev")
+        engine = self._setup_edit_engine("dev-fill")
         result = engine.edit(
             "fill area", image_path="/tmp/img.png",
             mask_path="/tmp/mask.png", seed=42,
@@ -610,11 +627,14 @@ class TestEditModelDispatch:
         assert call_kwargs["image_path"] == "/tmp/img.png"
         assert call_kwargs["masked_image_path"] == "/tmp/mask.png"
 
-    def test_unknown_edit_model_raises(self):
+    def test_unknown_edit_model_uses_generic_fallback(self):
+        """Unknown mflux class falls through to generic img2img branch."""
         engine = self._setup_edit_engine("nonexistent-model")
+        result = engine.edit("test", image_path="/tmp/img.png", seed=42)
 
-        with pytest.raises(RuntimeError, match="does not support editing"):
-            engine.edit("test", image_path="/tmp/img.png", seed=42)
+        call_kwargs = engine._model.generate_image.call_args.kwargs
+        assert call_kwargs["image_path"] == "/tmp/img.png"
+        assert call_kwargs["prompt"] == "test"
 
     def test_edit_raises_when_not_loaded(self):
         from vmlx_engine.image_gen import ImageGenEngine
@@ -653,8 +673,11 @@ class TestEditModelDispatch:
 
 class TestLoadEditModel:
 
-    def test_qwen_import_path(self):
+    def test_qwen_import_path(self, tmp_path):
         """load_edit_model('qwen-image-edit') imports QwenImageEdit."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
@@ -665,14 +688,17 @@ class TestLoadEditModel:
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
-            engine.load_edit_model("qwen-image-edit")
+            engine.load_edit_model("qwen-image-edit", model_path=str(tmp_path))
 
         MockQwen.assert_called_once()
         assert engine._model_name == "qwen-image-edit"
         assert engine._loaded is True
 
-    def test_kontext_import_path(self):
+    def test_kontext_import_path(self, tmp_path):
         """load_edit_model('flux-kontext') imports Flux1Kontext with resolved name."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
@@ -683,13 +709,16 @@ class TestLoadEditModel:
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
-            engine.load_edit_model("flux-kontext")
+            engine.load_edit_model("flux-kontext", model_path=str(tmp_path))
 
         MockKontext.assert_called_once()
-        assert engine._model_name == "kontext-dev"
+        assert engine._model_name == "dev-kontext"
 
-    def test_fill_import_path(self):
-        """load_edit_model('flux-fill') imports Flux1Fill with resolved name."""
+    def test_fill_import_path(self, tmp_path):
+        """load_edit_model('fill') imports Flux1Fill with resolved name."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
@@ -700,22 +729,21 @@ class TestLoadEditModel:
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
-            engine.load_edit_model("fill")
+            engine.load_edit_model("fill", model_path=str(tmp_path))
 
         MockFill.assert_called_once()
-        assert engine._model_name == "fill-dev"
+        assert engine._model_name == "dev-fill"
 
     def test_unknown_edit_model_raises(self):
         mocks = _mock_mflux_modules()
         mock_config = MagicMock()
-        mocks["mflx.models.common.config.model_config"] = MagicMock()
         mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
 
         with patch.dict(sys.modules, mocks):
             from vmlx_engine.image_gen import ImageGenEngine
             engine = ImageGenEngine()
 
-            with pytest.raises(ValueError, match="Unknown edit model"):
+            with pytest.raises(ValueError, match="Cannot determine mflux class"):
                 engine.load_edit_model("totally-fake-model")
 
     def test_mflux_not_installed_raises(self):

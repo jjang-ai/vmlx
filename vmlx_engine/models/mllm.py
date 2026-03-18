@@ -724,6 +724,18 @@ class MLXMultimodalLM:
         if self._loaded:
             return
 
+        # JANG VL models: use JANG loader (handles mixed-precision + mlx-vlm sanitization)
+        from ..utils.jang_loader import is_jang_model
+        if is_jang_model(self.model_name):
+            logger.info(f"Loading JANG VL model: {self.model_name}")
+            from ..utils.jang_loader import load_jang_vlm_model
+            from mlx_vlm.utils import load_config
+            self.model, self.processor = load_jang_vlm_model(self.model_name)
+            self.config = load_config(self.model_name)
+            self._loaded = True
+            logger.info(f"JANG VL model loaded: {self.model_name}")
+            return
+
         try:
             from mlx_vlm import load
             from mlx_vlm.utils import load_config

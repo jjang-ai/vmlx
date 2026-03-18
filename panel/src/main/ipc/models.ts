@@ -753,6 +753,34 @@ export function registerModelHandlers(): void {
       'repo_id = sys.argv[1]',
       'local_dir = sys.argv[2]',
       'token = os.environ.get("HF_TOKEN") or None',
+      '',
+      '# Shared state for per-byte progress tracking',
+      'pstate = {"done_bytes": 0, "total_bytes": 0, "file": "", "fnum": 0, "ftotal": 0}',
+      '',
+      '# Custom tqdm class that emits JSON byte-level progress during file download',
+      'class ProgressTqdm:',
+      '    def __init__(self, *args, **kwargs):',
+      '        self.total = kwargs.get("total", 0) or 0',
+      '        self.n = kwargs.get("initial", 0) or 0',
+      '        self._last = 0',
+      '        self._t0 = time.time()',
+      '    def update(self, n=1):',
+      '        self.n += n',
+      '        now = time.time()',
+      '        if now - self._last >= 0.5 or self.n >= self.total:',
+      '            elapsed = now - self._t0',
+      '            speed = self.n / elapsed if elapsed > 0 else 0',
+      '            overall = pstate["done_bytes"] + self.n',
+      '            tb = pstate["total_bytes"]',
+      '            pct = int(overall * 100 / tb) if tb > 0 else 0',
+      '            print(json.dumps({"type":"file_progress","file":pstate["file"],"file_num":pstate["fnum"],"total_files":pstate["ftotal"],"file_bytes":self.n,"file_total":self.total,"downloaded_bytes":overall,"total_bytes":tb,"speed":speed,"percent":pct}), flush=True)',
+      '            self._last = now',
+      '    def close(self): pass',
+      '    def __enter__(self): return self',
+      '    def __exit__(self, *a): self.close()',
+      '    def set_description(self, *a, **k): pass',
+      '    def set_postfix(self, *a, **k): pass',
+      '',
       'try:',
       '    api = HfApi()',
       '    tree = list(api.list_repo_tree(repo_id, token=token, recursive=True))',
@@ -760,12 +788,17 @@ export function registerModelHandlers(): void {
       '    total_bytes = sum(getattr(f, "size", 0) or 0 for f in files)',
       '    downloaded_bytes = 0',
       '    total_files = len(files)',
+      '    pstate["total_bytes"] = total_bytes',
+      '    pstate["ftotal"] = total_files',
       '    print(json.dumps({"type":"init","total_bytes":total_bytes,"total_files":total_files}), flush=True)',
       '    for i, f in enumerate(files):',
       '        est_size = getattr(f, "size", 0) or 0',
+      '        pstate["file"] = f.rfilename',
+      '        pstate["fnum"] = i + 1',
+      '        pstate["done_bytes"] = downloaded_bytes',
       '        print(json.dumps({"type":"file_start","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes}), flush=True)',
       '        t0 = time.time()',
-      '        dl_path = hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False)',
+      '        dl_path = hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False, tqdm_class=ProgressTqdm)',
       '        actual_size = os.path.getsize(dl_path) if os.path.exists(dl_path) else est_size',
       '        downloaded_bytes += actual_size',
       '        elapsed = time.time() - t0',
@@ -846,6 +879,26 @@ export function registerModelHandlers(): void {
               filesProgress: `${msg.file_num}/${msg.total_files}`,
               eta: 'downloading...',
               raw: trimmed,
+            }
+          } else if (msg.type === 'file_progress') {
+            // Per-byte progress during file download — updates every 0.5s
+            lastProgress = {
+              ...lastProgress,
+              percent: msg.percent ?? lastProgress.percent,
+              downloaded: msg.downloaded_bytes > 0 ? formatBytes(msg.downloaded_bytes) : lastProgress.downloaded,
+              total: msg.total_bytes > 0 ? formatBytes(msg.total_bytes) : lastProgress.total,
+              currentFile: msg.file,
+              filesProgress: `${msg.file_num}/${msg.total_files}`,
+              speed: msg.speed ? formatBytes(msg.speed) + '/s' : lastProgress.speed,
+              raw: trimmed,
+            }
+            // ETA from current speed
+            const progressRemaining = msg.total_bytes - msg.downloaded_bytes
+            if (msg.speed > 0 && progressRemaining > 0) {
+              const secs = Math.round(progressRemaining / msg.speed)
+              lastProgress.eta = secs > 3600
+                ? `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
+                : secs > 60 ? `${Math.round(secs / 60)}m ${secs % 60}s` : `${secs}s`
             }
           } else if (msg.type === 'file_done') {
             // Use percent from Python script (handles both byte and file-count modes)
@@ -978,11 +1031,22 @@ export function registerModelHandlers(): void {
               try {
                 await access(markerPath)
                 const content = await readFile(markerPath, 'utf-8')
-                const ts = parseInt(content.split('\n')[1], 10)
-                // Remove markers older than 1 hour (stale from crashed downloads)
-                if (!isNaN(ts) && Date.now() - ts > 3600000) {
-                  console.log(`[DOWNLOADS] Removing stale marker: ${markerPath}`)
-                  await unlink(markerPath)
+                const [repoId, tsStr] = content.split('\n')
+                const ts = parseInt(tsStr, 10)
+                if (repoId && !isNaN(ts)) {
+                  // Auto-resume interrupted downloads (app was closed mid-download)
+                  // hf_hub_download skips already-downloaded files, so this is safe
+                  const modelDir = join(orgPath, model.name)
+                  const alreadyQueued = downloadQueue.some(j => j.repoId === repoId) || [...activeJobs.values()].some(j => j.repoId === repoId)
+                  if (!alreadyQueued) {
+                    console.log(`[DOWNLOADS] Auto-resuming interrupted download: ${repoId} → ${modelDir}`)
+                    downloadQueue.push({
+                      id: `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                      repoId,
+                      modelDir,
+                      status: 'queued',
+                    })
+                  }
                 }
               } catch { /* no marker */ }
             }
@@ -991,7 +1055,12 @@ export function registerModelHandlers(): void {
       } catch { /* base dir doesn't exist */ }
     }
   }
-  cleanStaleMarkers().catch(() => { })
+  cleanStaleMarkers().then(() => {
+    if (downloadQueue.length > 0) {
+      console.log(`[DOWNLOADS] Found ${downloadQueue.length} interrupted download(s) to resume`)
+      processQueue()
+    }
+  }).catch(() => { })
 
   // ─── One-time migration: scan existing image models into DB ──────────────────
   // On first launch after this update, scan ~/.mlxstudio/models/image/ for
@@ -1083,6 +1152,12 @@ export function registerModelHandlers(): void {
       search: query,
       limit: '30'
     })
+    // Build headers — include HF token if configured (shows gated models in results)
+    const searchHeaders: Record<string, string> = {}
+    const hfSearchToken = db.getSetting('hf_api_key')
+    if (hfSearchToken) {
+      searchHeaders['Authorization'] = `Bearer ${hfSearchToken}`
+    }
     // Filter by model type: 'image' searches both text-to-image AND image-to-image (for edit models),
     // default searches MLX text models
     const wantAsc = sortDir === 'asc'
@@ -1105,8 +1180,8 @@ export function registerModelHandlers(): void {
       p2.set('filter', 'image-to-image')
       console.log(`[MODELS] Searching HuggingFace image models: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
       const [r1, r2] = await Promise.all([
-        fetch(`https://huggingface.co/api/models?${p1}`, { signal: AbortSignal.timeout(15000) }),
-        fetch(`https://huggingface.co/api/models?${p2}`, { signal: AbortSignal.timeout(15000) })
+        fetch(`https://huggingface.co/api/models?${p1}`, { headers: searchHeaders, signal: AbortSignal.timeout(15000) }),
+        fetch(`https://huggingface.co/api/models?${p2}`, { headers: searchHeaders, signal: AbortSignal.timeout(15000) })
       ])
       if (!r1.ok) throw new Error(`HuggingFace API error: ${r1.status}`)
       const m1 = await r1.json()
@@ -1124,7 +1199,7 @@ export function registerModelHandlers(): void {
       params.set('filter', 'mlx')
       const url = `https://huggingface.co/api/models?${params}`
       console.log(`[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || 'downloads'} dir=${sortDir || 'desc'})`)
-      const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+      const response = await fetch(url, { headers: searchHeaders, signal: AbortSignal.timeout(15000) })
       if (!response.ok) throw new Error(`HuggingFace API error: ${response.status}`)
       models = await response.json()
     }
@@ -1149,7 +1224,11 @@ export function registerModelHandlers(): void {
   // Fetch model README from HuggingFace
   ipcMain.handle('models:fetchReadme', async (_, repoId: string) => {
     try {
+      const readmeHeaders: Record<string, string> = {}
+      const readmeToken = db.getSetting('hf_api_key')
+      if (readmeToken) readmeHeaders['Authorization'] = `Bearer ${readmeToken}`
       const res = await fetch(`https://huggingface.co/${repoId}/raw/main/README.md`, {
+        headers: readmeHeaders,
         signal: AbortSignal.timeout(10000),
       })
       if (!res.ok) return null

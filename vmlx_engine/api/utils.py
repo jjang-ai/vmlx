@@ -75,10 +75,15 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
-    # JANG models: always use text path (mlx-lm + JANG loader)
-    # JANG's weight repacking is incompatible with mlx-vlm's sanitizer
-    from ..utils.jang_loader import is_jang_model
+    # JANG models: check for VL capability before defaulting to text path
+    from ..utils.jang_loader import is_jang_model, _is_vlm_config
+    from pathlib import Path
     if is_jang_model(model_name):
+        # JANG VL models have vision_config — route through MLLM path
+        # (load_jang_vlm_model handles repacking + mlx-vlm sanitization)
+        if _is_vlm_config(Path(model_name)):
+            return True
+        # Text-only JANG models use text path (mlx-lm + JANG loader)
         return False
 
     # Primary: check config.json for vision_config (authoritative for local models)

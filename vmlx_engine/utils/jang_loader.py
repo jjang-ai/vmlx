@@ -184,6 +184,16 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
         del data
         gc.collect()
 
+    # Build set of quantized module paths from weight keys
+    # Weight keys (safetensors): model.language_model.layers.0.mlp.gate_proj.scales
+    # Module paths (nn.quantize): language_model.model.layers.0.mlp.gate_proj
+    # These don't match — build a suffix set for robust matching
+    quantized_suffixes = set()
+    for k in all_weight_keys:
+        if k.endswith('.scales'):
+            qpath = k[:-len('.scales')]
+            quantized_suffixes.add(qpath)
+
     quantization = {"group_size": block_size, "bits": default_bits}
 
     def get_class_predicate(p, m):
@@ -191,7 +201,18 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
             return False
         if not hasattr(m, "to_quantized"):
             return False
-        return f"{p}.scales" in all_weight_keys
+        # Try exact match first
+        if p in quantized_suffixes:
+            return True
+        # Try with model. prefix (safetensors often has model. prefix)
+        if f"model.{p}" in quantized_suffixes:
+            return True
+        # Handle mlx-vlm naming: language_model.model.X → model.language_model.X
+        if "language_model.model." in p:
+            remapped = p.replace("language_model.model.", "model.language_model.", 1)
+            if remapped in quantized_suffixes:
+                return True
+        return False
 
     nn.quantize(model, group_size=block_size, bits=default_bits,
                 class_predicate=get_class_predicate)

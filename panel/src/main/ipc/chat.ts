@@ -1,3 +1,4 @@
+// MLX Studio Chat — eric@mlx.studio
 import { ipcMain, BrowserWindow, net } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { request as httpsRequest } from 'node:https'

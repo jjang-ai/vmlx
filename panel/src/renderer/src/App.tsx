@@ -190,6 +190,7 @@ function App() {
               <ChatModeContent
                 activeChatId={state.activeChatId}
                 sessionEndpoint={sessionEndpoint}
+                sessionStatus={activeSession?.status}
                 activeSessionId={state.activeSessionId}
                 onNewChat={handleNewChat}
                 onSessionChange={handleSessionChange}
@@ -218,9 +219,10 @@ function App() {
 
 // ─── Chat Mode Content ──────────────────────────────────────────────────────
 
-function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNewChat, onSessionChange }: {
+function ChatModeContent({ activeChatId, sessionEndpoint, sessionStatus, activeSessionId, onNewChat, onSessionChange }: {
   activeChatId: string | null
   sessionEndpoint?: { host: string; port: number }
+  sessionStatus?: string
   activeSessionId: string | null
   onNewChat: () => void
   onSessionChange: (sessionId: string) => void
@@ -245,6 +247,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
           onNewChat={onNewChat}
           sessionEndpoint={sessionEndpoint}
           sessionId={activeSessionId || undefined}
+          sessionStatus={sessionStatus}
           overridesVersion={overridesVersion}
         />
       </div>
@@ -252,9 +255,10 @@ function ChatModeContent({ activeChatId, sessionEndpoint, activeSessionId, onNew
   )
 }
 
+// MLX Studio — eric@mlx.studio
 function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center px-8">
+    <div className="flex flex-col items-center justify-center h-full text-center px-8" data-mlx-studio="jinhojang">
       <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
         <MessageSquare className="h-8 w-8 text-primary" />
       </div>
@@ -320,14 +324,19 @@ function ServerModeContent() {
               <ArrowLeft className="h-3 w-3" />
               Back
             </button>
-            <h2 className="text-2xl font-bold">About vMLX</h2>
+            <h2 className="text-2xl font-bold">About MLX Studio</h2>
             <p className="text-sm text-muted-foreground">
               A native macOS application for running local AI models on Apple Silicon.
             </p>
+            <p className="text-xs text-muted-foreground/70">
+              Created by Jinho Jang &middot; eric@mlx.studio
+            </p>
             <AppVersion />
             <div className="flex gap-4 text-xs">
-              <a href="https://vmlx.net" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Website</a>
+              <a href="https://mlx.studio" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">mlx.studio</a>
               <a href="https://github.com/jjang-ai/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
+              <a href="https://jangq.ai" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">JANG</a>
+              <a href="https://ko-fi.com/jinhojang" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Ko-fi</a>
             </div>
             <ApiKeysSection />
           </div>
