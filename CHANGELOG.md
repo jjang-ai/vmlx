@@ -2,6 +2,37 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.0.8] - 2026-03-18
+
+### Fixed
+- **Static/noise output on Fill, Kontext, KleinEdit**: Removed incorrect `image_strength` parameter — these models use full denoising with reference conditioning, not latent blending
+- **Stream exception handling**: Engine errors (OOM, tokenizer crash) now logged and propagated instead of silently killing the stream
+- **Anthropic thinking→tool call**: Close thinking block before opening tool call block (fixes Claude Code SSE)
+- **MCP `mcpServers` config key**: `MCPConfig.from_dict()` now falls back to `mcpServers` key
+- **Parallel tool call accumulation**: Non-streaming Anthropic path uses `tc.index` for correct multi-tool routing
+- **Mask b64 stripping**: `/v1/images/edits` strips data URL prefix from mask before decode
+- **Temp file scope**: `/v1/images/generations` temp file creation inside try/finally
+- **`--mflux-class` startup error**: Moved from additionalArgs to dedicated config field, strips stale args from old sessions
+- **Stop server resets generating state**: No more stale loading skeleton after stopping mid-generation
+- **maskBase64 cleared** on new session, model switch, session switch, and session delete
+
+### Added
+- **Mask Painter for Fill inpainting**: Brush, rectangle, and eraser tools. Auto-opens on image upload for Fill model.
+- **Per-byte download progress**: Smooth progress bars during large file downloads via custom tqdm class
+- **Auto-resume interrupted downloads** on app restart (scans `.vmlx-downloading` markers)
+- **Loading elapsed time** on Image tab, Server tab, and Chat tab
+- **Chat "Loading model..." banner** replaces "Model is not running" during model load
+- **Generation persists across tab switches** with elapsed time skeleton
+- **Custom model support**: mflux class selector for loading custom/fine-tuned image models
+- **Help tooltips** on all image parameters
+- **HF auth token** for search, README, and downloads
+- **JANG VL inference**: Vision-Language support for JANG quantized models
+- **About page**: Credits, Ko-fi, JANG links
+
+### Tests
+- Fixed 13 stale Python tests, rewrote 6 engine tests
+- 2020 Python + 1545 panel tests pass
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 

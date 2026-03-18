@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# MLX Studio — eric@mlx.studio — Created by Jinho Jang
 """
 Unified OpenAI-compatible API server for vmlx-engine.
 
@@ -1509,14 +1510,18 @@ async def create_anthropic_message(
                     reasoning_text += reasoning
                 if delta.get("tool_calls"):
                     for tc in delta["tool_calls"]:
+                        tc_idx = tc.get("index", 0)
                         if tc.get("id"):
-                            tool_calls.append({"id": tc["id"], "function": tc.get("function", {})})
-                        elif tool_calls:
-                            # Append arguments to last tool call
+                            # Ensure tool_calls list is big enough for this index
+                            while len(tool_calls) <= tc_idx:
+                                tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
+                            tool_calls[tc_idx] = {"id": tc["id"], "function": tc.get("function", {})}
+                        elif tc_idx < len(tool_calls):
+                            # Append arguments to the correct tool call by index
                             args = tc.get("function", {}).get("arguments", "")
                             if args:
-                                last_fn = tool_calls[-1].get("function", {})
-                                last_fn["arguments"] = last_fn.get("arguments", "") + args
+                                fn = tool_calls[tc_idx].get("function", {})
+                                fn["arguments"] = fn.get("arguments", "") + args
                 fr = choices[0].get("finish_reason")
                 if fr:
                     finish_reason = fr
@@ -1914,19 +1919,19 @@ async def create_image(request: Request):
 
         # If source image provided (img2img), save to temp file for mflux
         source_image_path = None
-        if source_image_b64 and image_strength is not None:
-            import tempfile
-            from pathlib import Path
-            raw_b64 = re.sub(r'^data:image/[^;]+;base64,', '', source_image_b64)
-            img_bytes = base64.b64decode(raw_b64)
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            tmp.write(img_bytes)
-            tmp.close()
-            source_image_path = tmp.name
-
-        # Generate images (inside lock to prevent concurrent model swap)
         images = []
         try:
+            if source_image_b64 and image_strength is not None:
+                import tempfile
+                from pathlib import Path
+                raw_b64 = re.sub(r'^data:image/[^;]+;base64,', '', source_image_b64)
+                img_bytes = base64.b64decode(raw_b64)
+                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                tmp.write(img_bytes)
+                tmp.close()
+                source_image_path = tmp.name
+
+            # Generate images (inside lock to prevent concurrent model swap)
             for i in range(n):
                 img_seed = (seed + i) if seed is not None else None
                 try:
@@ -2092,7 +2097,8 @@ async def create_image_edit(request: Request):
         # Decode and save mask if provided — also convert via PIL
         if mask_b64:
             mask_path = Path(tmp_dir) / "mask.png"
-            mask_data = base64.b64decode(mask_b64)
+            mask_b64_clean = re.sub(r'^data:image/[^;]+;base64,', '', mask_b64)
+            mask_data = base64.b64decode(mask_b64_clean)
             try:
                 from PIL import Image as _PILImage, ImageOps as _ImageOps
                 import io as _io
@@ -3559,6 +3565,9 @@ async def _stream_with_keepalive(async_gen, interval: float = _SSE_KEEPALIVE_INT
                     yield pending.result()
                 except StopAsyncIteration:
                     return
+                except Exception as e:
+                    logger.error(f"Stream generator error: {e}")
+                    raise
                 pending = asyncio.ensure_future(it.__anext__())
             else:
                 yield None  # keep-alive sentinel

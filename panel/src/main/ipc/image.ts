@@ -1,3 +1,4 @@
+// MLX Studio Image System — mlx.studio — Jinho Jang
 import { ipcMain } from 'electron'
 import { v4 as uuidv4 } from 'uuid'
 import { join, resolve } from 'path'
@@ -14,6 +15,9 @@ let handlersRegistered = false
 // Track the current image server session ID (only one at a time)
 let activeImageSessionId: string | null = null
 let activeGenerationController: AbortController | null = null
+// Track whether image generation is in-flight (persists across tab switches)
+let isImageGenerating = false
+let generationStartTime: number | null = null
 
 // Serialize startServer calls to prevent race conditions when the user
 // rapidly switches models (e.g., clicks model A then immediately model B).
@@ -157,6 +161,8 @@ export function registerImageHandlers(): void {
       }
 
       activeGenerationController = new AbortController()
+      isImageGenerating = true
+      generationStartTime = Date.now()
       // 30-minute timeout — use Node.js http.request instead of Electron fetch
       // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
       const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
@@ -231,8 +237,12 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
+      isImageGenerating = false
+      generationStartTime = null
       return { success: true, generations }
     } catch (error) {
+      isImageGenerating = false
+      generationStartTime = null
       console.error('[IMAGE] Generation failed:', error)
       return { success: false, error: (error as Error).message }
     }
@@ -284,6 +294,8 @@ export function registerImageHandlers(): void {
       if (maskBase64) body.mask = maskBase64
 
       activeGenerationController = new AbortController()
+      isImageGenerating = true
+      generationStartTime = Date.now()
       // 30-minute timeout for image edits (Qwen full precision can take 10+ minutes)
       // Use Node.js http.request instead of Electron fetch — Chromium's net stack
       // has its own socket timeout (~5 min) that ignores keepalive, causing
@@ -356,16 +368,29 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
+      isImageGenerating = false
+      generationStartTime = null
       return { success: true, generations }
     } catch (error) {
+      isImageGenerating = false
+      generationStartTime = null
       console.error('[IMAGE] Edit failed:', error)
       return { success: false, error: (error as Error).message }
     }
   })
 
+  // ─── Generation Status (persists across tab switches) ─────────────
+
+  ipcMain.handle('image:isGenerating', async () => {
+    return {
+      generating: isImageGenerating,
+      startTime: generationStartTime,
+    }
+  })
+
   // ─── Server Lifecycle ────────────────────────────────────────────────
 
-  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string }) => {
+  ipcMain.handle('image:startServer', async (_, modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: { host?: string; port?: number; apiKey?: string; logLevel?: string; mfluxClass?: string }) => {
     // Serialize concurrent startServer calls to prevent race conditions.
     // Each call chains onto the previous one so only one stop+create+start
     // sequence runs at a time.
@@ -375,6 +400,12 @@ export function registerImageHandlers(): void {
         try {
           // Stop any existing image server first
           if (activeImageSessionId) {
+            if (activeGenerationController) {
+              activeGenerationController.abort()
+              activeGenerationController = null
+            }
+            isImageGenerating = false
+            generationStartTime = null
             try {
               await sessionManager.stopSession(activeImageSessionId)
             } catch (e) {
@@ -407,7 +438,7 @@ export function registerImageHandlers(): void {
           // Look up model definition for explicit mflux class + name (NO regex detection)
           const modelDef = getImageModel(modelName)
           const mfluxName = modelDef?.mfluxName || modelName
-          const mfluxClass = modelDef?.mfluxClass || ''
+          const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
 
           const config: Partial<ServerConfig> = {
             host: serverSettings?.host || '0.0.0.0',
@@ -420,10 +451,8 @@ export function registerImageHandlers(): void {
             imageQuantize: quantize || 0,
             // Pass mflux canonical name so engine uses the correct class (not directory name)
             servedModelName: mfluxName,
-            // Store mflux class in additionalArgs for the engine to pick up
-            // (buildArgs passes --served-model-name which the server uses for mflux_name;
-            //  mflux_class is passed as a separate flag)
-            additionalArgs: mfluxClass ? `--mflux-class ${mfluxClass}` : undefined,
+            // Explicit mflux class — buildArgs passes --mflux-class flag
+            mfluxClass: mfluxClass || undefined,
           }
 
           const session = await sessionManager.createSession(modelPath, config)
@@ -444,6 +473,13 @@ export function registerImageHandlers(): void {
   ipcMain.handle('image:stopServer', async () => {
     try {
       if (activeImageSessionId) {
+        // Cancel any in-flight generation before stopping
+        if (activeGenerationController) {
+          activeGenerationController.abort()
+          activeGenerationController = null
+        }
+        isImageGenerating = false
+        generationStartTime = null
         await sessionManager.stopSession(activeImageSessionId)
         activeImageSessionId = null
       }
@@ -457,6 +493,8 @@ export function registerImageHandlers(): void {
     if (activeGenerationController) {
       activeGenerationController.abort()
       activeGenerationController = null
+      isImageGenerating = false
+      generationStartTime = null
       return { success: true }
     }
     return { success: false, error: 'No active generation' }

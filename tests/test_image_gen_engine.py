@@ -5,10 +5,10 @@ from unittest.mock import patch, MagicMock
 
 
 class TestImageGenEngineLoading:
-    """Verify _load_flux and _load_zimage load locally and never download."""
+    """Verify unified load() loads locally and never downloads."""
 
-    def test_load_flux_local_mflux_native(self, tmp_path):
-        """Flux loads from mflux-native format (numbered safetensors)."""
+    def test_load_local_mflux_native(self, tmp_path):
+        """Model loads from mflux-native format (numbered safetensors)."""
         (tmp_path / "transformer").mkdir()
         (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
         (tmp_path / "text_encoder_2").mkdir()
@@ -21,24 +21,22 @@ class TestImageGenEngineLoading:
         )
         assert has_transformer
 
-    def test_load_flux_no_local_raises(self):
-        """Flux raises RuntimeError when no local files exist."""
+    def test_load_no_local_raises(self):
+        """load() raises RuntimeError when no local files exist."""
         from vmlx_engine.image_gen import ImageGenEngine
         eng = ImageGenEngine()
         with pytest.raises(RuntimeError, match="No local model files"):
-            from mflux.models.common.config.model_config import ModelConfig
-            eng._load_flux("schnell", 4, "/nonexistent/path", ModelConfig)
+            eng.load("schnell", quantize=4, model_path="/nonexistent/path")
 
-    def test_load_zimage_no_local_raises(self):
-        """ZImage raises RuntimeError when no local files exist."""
+    def test_load_no_model_path_raises(self):
+        """load() raises RuntimeError when model_path is None."""
         from vmlx_engine.image_gen import ImageGenEngine
         eng = ImageGenEngine()
         with pytest.raises(RuntimeError, match="No local model files"):
-            from mflux.models.common.config.model_config import ModelConfig
-            eng._load_zimage("z-image-turbo", 4, "/nonexistent/path", ModelConfig)
+            eng.load("z-image-turbo")
 
-    def test_load_zimage_diffusers_format(self, tmp_path):
-        """ZImage accepts diffusers format."""
+    def test_load_diffusers_format(self, tmp_path):
+        """Model directory with diffusers format has safetensors."""
         (tmp_path / "transformer").mkdir()
         (tmp_path / "transformer" / "diffusion_pytorch_model-00001.safetensors").write_bytes(b"fake")
         transformer_dir = Path(str(tmp_path)) / "transformer"
@@ -47,24 +45,25 @@ class TestImageGenEngineLoading:
         )
         assert has_transformer
 
-    def test_no_from_name_in_load_flux(self):
-        """_load_flux source should not call Flux1.from_name()."""
+    def test_no_model_class_from_name_in_load(self):
+        """load() should not call ModelClass.from_name() — only ModelConfig.from_name()."""
         import vmlx_engine.image_gen as img_mod
         source = open(img_mod.__file__).read()
-        flux_section = source.split("def _load_flux")[1].split("\n    def ")[0]
-        # ModelConfig.from_name is OK (metadata lookup), Flux1.from_name is NOT
-        lines_with_from_name = [l for l in flux_section.split('\n')
+        load_section = source.split("def load(")[1].split("\n    def ")[0]
+        # ModelConfig.from_name is OK (metadata lookup)
+        # Flux1.from_name / ZImage.from_name etc. would trigger downloads — NOT OK
+        lines_with_from_name = [l for l in load_section.split('\n')
                                 if 'from_name(' in l and 'ModelConfig' not in l]
         assert len(lines_with_from_name) == 0, f"Found from_name() calls: {lines_with_from_name}"
 
-    def test_no_from_name_in_load_zimage(self):
-        """_load_zimage source should not call ZImage() without model_path."""
+    def test_no_silent_download_in_load(self):
+        """load() source should not contain download/hub/snapshot calls."""
         import vmlx_engine.image_gen as img_mod
         source = open(img_mod.__file__).read()
-        zimage_section = source.split("def _load_zimage")[1].split("\n    def ")[0]
-        lines_with_from_name = [l for l in zimage_section.split('\n')
-                                if 'from_name(' in l and 'ModelConfig' not in l]
-        assert len(lines_with_from_name) == 0, f"Found from_name() calls: {lines_with_from_name}"
+        load_section = source.split("def load(")[1].split("\n    def ")[0]
+        download_patterns = ["hf_hub_download", "snapshot_download", "from_pretrained"]
+        for pattern in download_patterns:
+            assert pattern not in load_section, f"Found '{pattern}' in load() — may silently download"
 
 
 class TestEditModels:

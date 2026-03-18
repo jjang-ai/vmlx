@@ -519,7 +519,15 @@ class AnthropicStreamAdapter:
 
             # Start new tool block
             if tc.get("id"):
-                # Close previous blocks
+                # Close any open blocks before starting tool block
+                if self._thinking_block_open:
+                    events.append(self._sse("content_block_stop", {
+                        "type": "content_block_stop",
+                        "index": self._content_index,
+                    }))
+                    self._content_index += 1
+                    self._thinking_block_open = False
+
                 if self._tool_block_open:
                     events.append(self._sse("content_block_stop", {
                         "type": "content_block_stop",

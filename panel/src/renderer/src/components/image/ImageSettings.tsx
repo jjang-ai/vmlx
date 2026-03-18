@@ -127,7 +127,7 @@ export function ImageSettings({ settings, onChange, model, mode }: ImageSettings
         {/* Count (generate mode only — edit always returns 1) */}
         {!isEdit && (
           <div>
-            <label className="text-xs text-muted-foreground block mb-1">Number of Images</label>
+            <label className="text-xs text-muted-foreground block mb-1" title="How many images to generate per prompt. Each uses the same settings but different random seeds. Max 4.">Count &#9432;</label>
             <input
               type="number"
               value={settings.count}

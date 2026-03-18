@@ -71,6 +71,7 @@ export function ImageTab() {
   // Edit mode state
   const [sessionMode, setSessionMode] = useState<'generate' | 'edit'>('generate')
   const [sourceImage, setSourceImage] = useState<{ dataUrl: string; name: string } | null>(null)
+  const [maskBase64, setMaskBase64] = useState<string | null>(null)
   // Iterate: pre-fill prompt in the prompt bar (counter forces re-trigger for same prompt)
   const [iteratePrompt, setIteratePrompt] = useState<string | null>(null)
   const [iterateCounter, setIterateCounter] = useState(0)
@@ -138,6 +139,19 @@ export function ImageTab() {
         // Restore proper default steps for this model
         const defaultSteps = getDefaultSteps(name)
         setSettings(prev => ({ ...prev, steps: defaultSteps, quantize: q }))
+      }
+    }).catch(() => {})
+  }, [])
+
+  // Check if image generation is in-flight (persists across tab switches)
+  // Also reload gallery if generation completed while we were on another tab
+  useEffect(() => {
+    window.api.image.isGenerating().then((status: { generating: boolean; startTime: number | null }) => {
+      if (status.generating) {
+        setGenerating(true)
+      } else if (currentSessionId) {
+        // Generation may have completed while we were away — reload gallery
+        loadGenerations(currentSessionId)
       }
     }).catch(() => {})
   }, [])
@@ -247,6 +261,7 @@ export function ImageTab() {
     // Use the explicit category from model picker — no guessing
     setSessionMode(mode)
     setSourceImage(null)
+    setMaskBase64(null)
 
     // Reset ALL settings to defaults for the new model (not just steps/quantize).
     // Without this, guidance, strength, width, height, count, seed, negativePrompt
@@ -320,6 +335,7 @@ export function ImageTab() {
           negativePrompt: s.negativePrompt || undefined,
           model: selectedModel,
           imageBase64: sourceImage!.dataUrl,
+          maskBase64: maskBase64 || undefined,
           width: s.width,
           height: s.height,
           steps: s.steps,
@@ -388,6 +404,7 @@ export function ImageTab() {
     setCurrentSessionId(null)
     setGenerations([])
     setSourceImage(null)
+    setMaskBase64(null)
     setError(null)
     setIteratePrompt(null)
     // Reset mode to match the currently running model's category
@@ -399,7 +416,8 @@ export function ImageTab() {
 
   const handleSelectSession = useCallback(async (sessionId: string) => {
     setCurrentSessionId(sessionId)
-    setSourceImage(null) // Clear source image when switching sessions
+    setSourceImage(null)
+    setMaskBase64(null)
     setError(null)
     setIteratePrompt(null)
     // Restore sessionMode from the selected session's type
@@ -543,11 +561,14 @@ export function ImageTab() {
           settings={settings}
           onSettingsChange={handleSettingsChange}
           mode={sessionMode}
+          modelName={selectedModel}
           sourceImage={sourceImage}
-          onSourceImageChange={setSourceImage}
+          onSourceImageChange={(img) => { setSourceImage(img); if (!img) setMaskBase64(null) }}
+          maskBase64={maskBase64}
+          onMaskChange={setMaskBase64}
           iteratePrompt={iteratePrompt}
           iterateCounter={iterateCounter}
-          onClearIterate={() => { setIteratePrompt(null); setSourceImage(null) }}
+          onClearIterate={() => { setIteratePrompt(null); setSourceImage(null); setMaskBase64(null) }}
         />
       </div>
     </div>

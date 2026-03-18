@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Sparkles } from 'lucide-react'
+import { Sparkles, Loader2 } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { InputBox, ImageAttachment } from './InputBox'
 import { useToast } from '../Toast'
@@ -46,10 +46,11 @@ interface ChatInterfaceProps {
   onNewChat?: () => void
   sessionEndpoint?: { host: string; port: number }
   sessionId?: string
+  sessionStatus?: string
   overridesVersion?: number
 }
 
-export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, overridesVersion }: ChatInterfaceProps) {
+export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, sessionStatus, overridesVersion }: ChatInterfaceProps) {
   const { showToast } = useToast()
   const [messages, setMessages] = useState<Message[]>([])
   // Track current chatId via ref so async handleSend can detect stale closures
@@ -475,8 +476,15 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, o
           </div>
         </div>
       )}
+      {/* Model loading banner */}
+      {!sessionEndpoint && sessionId && !loading && sessionStatus === 'loading' && (
+        <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-yellow-500/5">
+          <Loader2 className="h-3.5 w-3.5 text-yellow-500 animate-spin" />
+          <span className="text-xs text-muted-foreground">Loading model...</span>
+        </div>
+      )}
       {/* Model not running banner */}
-      {!sessionEndpoint && sessionId && !loading && (
+      {!sessionEndpoint && sessionId && !loading && sessionStatus !== 'loading' && (
         <div className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-warning/5">
           <span className="text-xs text-muted-foreground">Model is not running.</span>
           <button

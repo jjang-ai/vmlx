@@ -102,7 +102,7 @@ class MCPConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "MCPConfig":
         """Create config from dictionary."""
         servers = {}
-        for name, server_data in data.get("servers", {}).items():
+        for name, server_data in data.get("servers", data.get("mcpServers", {})).items():
             server_data["name"] = name
             servers[name] = MCPServerConfig(**server_data)
 

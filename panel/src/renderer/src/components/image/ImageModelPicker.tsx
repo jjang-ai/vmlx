@@ -26,6 +26,7 @@ export interface ImageServerSettings {
   host: string
   port: number
   apiKey: string
+  mfluxClass?: string
   logLevel: string
 }
 
@@ -40,6 +41,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [selectedQuantize, setSelectedQuantize] = useState<number>(4)
   const [customPath, setCustomPath] = useState('')
   const [customCategory, setCustomCategory] = useState<'generate' | 'edit'>('generate')
+  const [customMfluxClass, setCustomMfluxClass] = useState('Flux1')
   const [showCustom, setShowCustom] = useState(false)
 
   // Server settings (same as Server tab CreateSession simplified config)
@@ -156,7 +158,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const handleStart = () => {
     const settings: ImageServerSettings = { host: serverHost, port: serverPort, apiKey: serverApiKey, logLevel: serverLogLevel }
     if (showCustom && customPath.trim()) {
-      onSelect(customPath.trim(), selectedQuantize, customCategory, settings)
+      onSelect(customPath.trim(), selectedQuantize, customCategory, { ...settings, mfluxClass: customMfluxClass })
     } else if (selectedModel) {
       const modelInfo = NAMED_MODELS.find(m => m.id === selectedModel)
       onSelect(selectedModel, selectedQuantize, modelInfo?.category || 'generate', settings)
@@ -328,16 +330,36 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
                   <FolderOpen className="h-4 w-4" />
                 </button>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs text-muted-foreground">Mode:</label>
-                <select
-                  value={customCategory}
-                  onChange={e => setCustomCategory(e.target.value as 'generate' | 'edit')}
-                  className="px-2 py-1 text-xs bg-background border border-input rounded"
-                >
-                  <option value="generate">Image Generation</option>
-                  <option value="edit">Image Editing</option>
-                </select>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-muted-foreground">Mode:</label>
+                  <select
+                    value={customCategory}
+                    onChange={e => setCustomCategory(e.target.value as 'generate' | 'edit')}
+                    className="px-2 py-1 text-xs bg-background border border-input rounded"
+                  >
+                    <option value="generate">Image Generation</option>
+                    <option value="edit">Image Editing</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-muted-foreground" title="Which mflux Python class to use for loading this model">Class:</label>
+                  <select
+                    value={customMfluxClass}
+                    onChange={e => setCustomMfluxClass(e.target.value)}
+                    className="px-2 py-1 text-xs bg-background border border-input rounded"
+                  >
+                    <option value="Flux1">Flux1 (Schnell, Dev)</option>
+                    <option value="ZImage">ZImage (Z-Image Turbo)</option>
+                    <option value="Flux2Klein">Flux2Klein (Klein 4B/9B)</option>
+                    <option value="QwenImage">QwenImage</option>
+                    <option value="QwenImageEdit">QwenImageEdit</option>
+                    <option value="Flux1Kontext">Flux1Kontext</option>
+                    <option value="Flux1Fill">Flux1Fill</option>
+                    <option value="FIBO">FIBO</option>
+                    <option value="SeedVR2">SeedVR2 (Upscale)</option>
+                  </select>
+                </div>
               </div>
             </div>
           )}

@@ -29,7 +29,7 @@ interface CompletedDownload {
 export function DownloadsView() {
   const [activeDownloads, setActiveDownloads] = useState<ActiveDownload[]>([])
   const [queue, setQueue] = useState<Array<{ jobId: string; repoId: string }>>([])
-  const [paused, setPaused] = useState<Array<{ jobId: string; repoId: string }>>([])
+  const [paused, setPaused] = useState<Array<{ jobId: string; repoId: string; progress?: DownloadProgress }>>([])
   const [completed, setCompleted] = useState<CompletedDownload[]>([])
 
   const refreshStatus = () => {
@@ -107,10 +107,21 @@ export function DownloadsView() {
       })
     })
     const unsubPaused = window.api.models.onDownloadPaused?.((data: any) => {
-      setActiveDownloads(prev => prev.filter(d => d.jobId !== data.jobId))
-      setPaused(prev => {
-        if (prev.some(p => p.jobId === data.jobId)) return prev
-        return [...prev, { jobId: data.jobId, repoId: data.repoId }]
+      // Capture last known progress before removing from active
+      setActiveDownloads(prev => {
+        const dl = prev.find(d => d.jobId === data.jobId)
+        if (dl) {
+          setPaused(p => {
+            if (p.some(x => x.jobId === data.jobId)) return p
+            return [...p, { jobId: data.jobId, repoId: data.repoId, progress: dl.progress }]
+          })
+        } else {
+          setPaused(p => {
+            if (p.some(x => x.jobId === data.jobId)) return p
+            return [...p, { jobId: data.jobId, repoId: data.repoId }]
+          })
+        }
+        return prev.filter(d => d.jobId !== data.jobId)
       })
     })
 
@@ -157,10 +168,10 @@ export function DownloadsView() {
                   <div className="flex gap-1 flex-shrink-0 ml-2">
                     <button
                       onClick={() => window.api.models.pauseDownload(dl.jobId)}
-                      className="text-xs text-yellow-600 hover:text-yellow-500 px-2 py-1 border border-yellow-500/30 rounded"
+                      className="text-xs text-yellow-600 hover:text-yellow-500 px-2 py-1 border border-yellow-500/30 rounded flex items-center gap-1"
                       title="Pause download"
                     >
-                      <Pause className="h-3 w-3" />
+                      <Pause className="h-3 w-3" /> Pause
                     </button>
                     <button
                       onClick={() => window.api.models.cancelDownload(dl.jobId)}
@@ -208,31 +219,43 @@ export function DownloadsView() {
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Paused ({paused.length})</h3>
             {paused.map((item) => (
-              <div key={item.jobId} className="flex items-center justify-between py-2 px-3 border border-yellow-500/30 bg-yellow-500/5 rounded mb-1">
-                <div className="flex items-center gap-2">
-                  <Pause className="h-3.5 w-3.5 text-yellow-500" />
-                  <span className="text-sm truncate">{item.repoId}</span>
+              <div key={item.jobId} className="py-2 px-3 border border-yellow-500/30 bg-yellow-500/5 rounded mb-1">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Pause className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />
+                    <span className="text-sm truncate">{item.repoId}</span>
+                    {item.progress && (
+                      <span className="text-xs text-yellow-600 flex-shrink-0">
+                        {item.progress.percent}% · {item.progress.downloaded} / {item.progress.total}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-1 flex-shrink-0 ml-2">
+                    <button
+                      onClick={() => {
+                        window.api.models.resumeDownload(item.jobId)
+                        setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
+                      }}
+                      className="text-xs text-green-600 hover:text-green-500 px-2 py-1 border border-green-500/30 rounded flex items-center gap-1"
+                    >
+                      <Play className="h-3 w-3" /> Resume
+                    </button>
+                    <button
+                      onClick={() => {
+                        window.api.models.cancelDownload(item.jobId)
+                        setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
+                      }}
+                      className="p-1 text-muted-foreground hover:text-destructive"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => {
-                      window.api.models.resumeDownload(item.jobId)
-                      setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
-                    }}
-                    className="text-xs text-green-600 hover:text-green-500 px-2 py-1 border border-green-500/30 rounded flex items-center gap-1"
-                  >
-                    <Play className="h-3 w-3" /> Resume
-                  </button>
-                  <button
-                    onClick={() => {
-                      window.api.models.cancelDownload(item.jobId)
-                      setPaused(prev => prev.filter(p => p.jobId !== item.jobId))
-                    }}
-                    className="p-1 text-muted-foreground hover:text-destructive"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                {item.progress && (
+                  <div className="mt-1.5 h-1.5 bg-yellow-500/20 rounded-full overflow-hidden">
+                    <div className="h-full bg-yellow-500/50 rounded-full" style={{ width: `${Math.min(item.progress.percent || 0, 100)}%` }} />
+                  </div>
+                )}
               </div>
             ))}
           </div>

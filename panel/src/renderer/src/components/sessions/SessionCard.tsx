@@ -35,6 +35,13 @@ const statusColors: Record<string, string> = {
   loading: 'bg-yellow-500 animate-pulse'
 }
 
+function formatElapsed(secs: number): string {
+  if (secs < 60) return `${secs}s`
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}m ${s}s`
+}
+
 const statusLabels: Record<string, string> = {
   running: 'Running',
   stopped: 'Stopped',
@@ -47,6 +54,19 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
   const isImage = (() => { try { return JSON.parse(session.config || '{}').modelType === 'image' } catch { return false } })()
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const [jangLabel, setJangLabel] = useState<string | undefined>(undefined)
+  const [loadingElapsed, setLoadingElapsed] = useState(0)
+
+  // Elapsed time counter when model is loading
+  useEffect(() => {
+    if (session.status !== 'loading') {
+      setLoadingElapsed(0)
+      return
+    }
+    const interval = setInterval(() => {
+      setLoadingElapsed(prev => prev + 1)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [session.status])
 
   useEffect(() => {
     if (isRemote) return
@@ -85,7 +105,11 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <span className={`w-2 h-2 rounded-full ${statusColors[session.status]}`} />
-          <span className="text-xs text-muted-foreground">{statusLabels[session.status]}</span>
+          <span className="text-xs text-muted-foreground">
+            {session.status === 'loading'
+              ? `Loading... ${formatElapsed(loadingElapsed)}`
+              : statusLabels[session.status]}
+          </span>
         </div>
       </div>
 

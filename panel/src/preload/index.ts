@@ -283,6 +283,7 @@ const api = {
     startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: any) => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode, serverSettings),
     stopServer: () => ipcRenderer.invoke('image:stopServer'),
     cancelGeneration: () => ipcRenderer.invoke('image:cancelGeneration'),
+    isGenerating: () => ipcRenderer.invoke('image:isGenerating') as Promise<{ generating: boolean; startTime: number | null }>,
     getRunningServer: () => ipcRenderer.invoke('image:getRunningServer'),
     getRunningServers: () => ipcRenderer.invoke('image:getRunningServers'),
     readFile: (imagePath: string) => ipcRenderer.invoke('image:readFile', imagePath),

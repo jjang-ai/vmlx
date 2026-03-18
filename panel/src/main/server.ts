@@ -12,6 +12,7 @@ export interface ServerConfig {
   // Image-specific settings (stored in config, passed as CLI flags)
   imageMode?: 'generate' | 'edit'
   imageQuantize?: number
+  mfluxClass?: string
 
   // Server settings
   host: string
