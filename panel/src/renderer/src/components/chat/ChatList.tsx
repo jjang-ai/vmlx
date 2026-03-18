@@ -72,6 +72,8 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
+      // Abort any active stream before deleting (prevents orphaned generation)
+      try { await window.api.chat.abort(id) } catch {}
       await window.api.chat.delete(id)
       setChats(prev => prev.filter(c => c.id !== id))
       if (id === currentChatId) {
