@@ -147,14 +147,14 @@ export function ApiDashboard() {
           <CodeSnippets baseUrl={baseUrl} apiKey={apiKey} modelId={modelName} isImage={isImageServer} isEdit={isEditServer} />
         )}
 
+        {/* Coding tool integration — prominent position */}
+        {!isImageServer && (
+          <CodingToolIntegration baseUrl={baseUrl} modelName={modelName} port={selected?.port ?? null} />
+        )}
+
         {/* Endpoint reference */}
         {baseUrl && (
           <EndpointList isImage={isImageServer} isEdit={isEditServer} />
-        )}
-
-        {/* Coding tool integration */}
-        {!isImageServer && (
-          <CodingToolIntegration baseUrl={baseUrl} modelName={modelName} port={selected?.port ?? null} />
         )}
       </div>
     </div>
