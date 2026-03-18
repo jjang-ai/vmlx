@@ -75,15 +75,23 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
-    # JANG models: check for VL capability before defaulting to text path
-    from ..utils.jang_loader import is_jang_model, _is_vlm_config
+    # JANG models: check jang_config.json has_vision field (NOT config.json vision_config)
+    # Many JANG models inherit vision_config from the source model but don't have
+    # working vision weights — only trust the JANG config's explicit has_vision flag.
+    from ..utils.jang_loader import is_jang_model
     from pathlib import Path
     if is_jang_model(model_name):
-        # JANG VL models have vision_config — route through MLLM path
-        # (load_jang_vlm_model handles repacking + mlx-vlm sanitization)
-        if _is_vlm_config(Path(model_name)):
-            return True
-        # Text-only JANG models use text path (mlx-lm + JANG loader)
+        try:
+            import json
+            jang_cfg_path = Path(model_name) / "jang_config.json"
+            if jang_cfg_path.exists():
+                jang_cfg = json.loads(jang_cfg_path.read_text())
+                has_vision = jang_cfg.get("architecture", {}).get("has_vision", False)
+                if has_vision:
+                    return True
+        except Exception:
+            pass
+        # Text-only JANG models (or has_vision=false) use text path
         return False
 
     # Primary: check config.json for vision_config (authoritative for local models)
