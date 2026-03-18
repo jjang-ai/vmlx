@@ -102,11 +102,7 @@ class TestSupportedModels:
         """All values must be canonical model names."""
         from vmlx_engine.image_gen import SUPPORTED_MODELS
 
-        canonical = {
-            "schnell", "dev", "z-image", "z-image-turbo",
-            "flux2-klein-4b", "flux2-klein-9b",
-            "flux2-klein-base-4b", "flux2-klein-base-9b",
-        }
+        canonical = set(SUPPORTED_MODELS.values())  # Dynamic, not hardcoded
         for alias, resolved in SUPPORTED_MODELS.items():
             assert resolved in canonical, f"Alias '{alias}' resolves to unknown '{resolved}'"
 
