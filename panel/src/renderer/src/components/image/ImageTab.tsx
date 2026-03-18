@@ -71,6 +71,9 @@ export function ImageTab() {
   // Edit mode state
   const [sessionMode, setSessionMode] = useState<'generate' | 'edit'>('generate')
   const [sourceImage, setSourceImage] = useState<{ dataUrl: string; name: string } | null>(null)
+  // Iterate: pre-fill prompt in the prompt bar (counter forces re-trigger for same prompt)
+  const [iteratePrompt, setIteratePrompt] = useState<string | null>(null)
+  const [iterateCounter, setIterateCounter] = useState(0)
 
   // Image generation settings (quick settings + full settings)
   const [settings, setSettings] = useState<ImageSettings>({
@@ -504,22 +507,28 @@ export function ImageTab() {
               // Read the generated image and set as source
               try {
                 const dataUrl = await window.api.image.readFile(gen.imagePath)
-                if (dataUrl) {
-                  setSourceImage({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
-                  // Restore settings from this generation
-                  setSettings(prev => ({
-                    ...prev,
-                    steps: gen.steps,
-                    width: gen.width,
-                    height: gen.height,
-                    guidance: gen.guidance,
-                    strength: gen.strength ?? 0.7,
-                    negativePrompt: gen.negativePrompt || '',
-                    seed: undefined,
-                  }))
+                if (!dataUrl) {
+                  setError('Failed to load image for iteration — file may have been deleted')
+                  return
                 }
+                setSourceImage({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
+                // Restore settings from this generation
+                setSettings(prev => ({
+                  ...prev,
+                  steps: gen.steps,
+                  width: gen.width,
+                  height: gen.height,
+                  guidance: gen.guidance,
+                  strength: gen.strength ?? 0.7,
+                  negativePrompt: gen.negativePrompt || '',
+                  seed: undefined,
+                }))
+                // Pre-fill the prompt bar with the original prompt so user can modify
+                setIteratePrompt(gen.prompt)
+                setIterateCounter(c => c + 1) // force re-trigger even if same prompt
               } catch (err) {
                 console.error('Failed to load image for iteration:', err)
+                setError('Failed to load image for iteration')
               }
             }}
           />
@@ -534,6 +543,7 @@ export function ImageTab() {
           mode={sessionMode}
           sourceImage={sourceImage}
           onSourceImageChange={setSourceImage}
+          iteratePrompt={iteratePrompt}
         />
       </div>
     </div>

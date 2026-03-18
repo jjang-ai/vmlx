@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
 import { Send, ImagePlus, X, Pencil } from 'lucide-react'
 
 interface ImagePromptBarSettings {
@@ -31,12 +31,26 @@ interface ImagePromptBarProps {
   mode: 'generate' | 'edit'
   sourceImage: { dataUrl: string; name: string } | null
   onSourceImageChange: (img: { dataUrl: string; name: string } | null) => void
+  /** Pre-fill prompt text (set by Iterate button) */
+  iteratePrompt?: string | null
 }
 
-export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange }: ImagePromptBarProps) {
+export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, iteratePrompt }: ImagePromptBarProps) {
   const [prompt, setPrompt] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // When Iterate button is clicked, pre-fill the prompt and focus the textarea
+  useEffect(() => {
+    if (iteratePrompt != null) {
+      setPrompt(iteratePrompt)
+      // Focus and select the text so user can easily modify or just hit Enter
+      setTimeout(() => {
+        textareaRef.current?.focus()
+        textareaRef.current?.select()
+      }, 100)
+    }
+  }, [iteratePrompt])
 
   const isEdit = mode === 'edit'
   const canSubmit = !disabled && !generating && prompt.trim() && (!isEdit || !!sourceImage)
