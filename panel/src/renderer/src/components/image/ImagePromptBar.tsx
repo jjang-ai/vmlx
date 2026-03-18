@@ -44,34 +44,30 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
   const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // Iterate mode: source image is from a previous generation
-  const isIterating = !!(iteratePrompt && sourceImage)
   const isEdit = mode === 'edit'
+  // Variation mode: gen model with source image from Iterate button
+  const isVariation = !isEdit && !!(iteratePrompt && sourceImage)
 
-  // When Iterate button is clicked, focus the modification input
+  // When Iterate button is clicked, focus the input
   useEffect(() => {
     if (iteratePrompt != null) {
-      setPrompt('') // Clear the modification field — user types what to change
-      setTimeout(() => {
-        textareaRef.current?.focus()
-      }, 100)
+      setPrompt('')
+      setTimeout(() => textareaRef.current?.focus(), 100)
     }
   }, [iteratePrompt, iterateCounter])
 
   // Build the actual prompt sent to the engine
   const buildFinalPrompt = useCallback((): string => {
-    if (isIterating && prompt.trim()) {
-      // Combine: original prompt + user's modification
+    if (isVariation && prompt.trim()) {
       return `${iteratePrompt}, ${prompt.trim()}`
     }
-    if (isIterating && !prompt.trim()) {
-      // No modification — use original prompt as-is (variation with new seed)
+    if (isVariation && !prompt.trim()) {
       return iteratePrompt!
     }
     return prompt.trim()
-  }, [prompt, iteratePrompt, isIterating])
+  }, [prompt, iteratePrompt, isVariation])
 
-  const canSubmit = !disabled && !generating && (isIterating ? true : prompt.trim()) && (!isEdit || !!sourceImage)
+  const canSubmit = !disabled && !generating && (isVariation ? true : prompt.trim()) && (!isEdit || !!sourceImage)
 
   const handleSubmit = useCallback(() => {
     if (!canSubmit) return
@@ -104,7 +100,6 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
   }
 
   const handlePaste = (e: ClipboardEvent) => {
-    // Allow paste for both edit and gen (img2img) modes
     const items = e.clipboardData.items
     for (const item of Array.from(items)) {
       if (item.type.startsWith('image/')) {
@@ -118,203 +113,135 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
     }
   }
 
-  const handleClearIterate = () => {
-    onSourceImageChange(null)
-    setPrompt('')
-    onClearIterate?.()
-  }
-
   const currentSize = SIZE_PRESETS.find(p => p.width === settings.width && p.height === settings.height)
   const sizeLabel = currentSize?.label || `${settings.width}x${settings.height}`
 
   return (
     <div className="border-t border-border bg-background px-4 py-3">
       {/* Source image zone */}
-      {isIterating ? (
-        // Iterate mode: show source image + original prompt as context
-        <div className="mb-2 p-2 bg-primary/5 border border-primary/20 rounded-md">
+      {isVariation ? (
+        // Variation mode: show source + original prompt
+        <div className="mb-2 p-2 bg-emerald-500/5 border border-emerald-500/20 rounded-md">
           <div className="flex items-center gap-3">
-            <img
-              src={sourceImage.dataUrl}
-              alt="Source"
-              className="h-14 w-14 rounded object-cover flex-shrink-0 border border-border"
-            />
+            <img src={sourceImage!.dataUrl} alt="Source" className="h-14 w-14 rounded object-cover flex-shrink-0 border border-border" />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 mb-0.5">
-                <RefreshCw className="h-3 w-3 text-primary flex-shrink-0" />
-                <span className="text-[10px] font-medium text-primary uppercase tracking-wider">Iterating</span>
+                <RefreshCw className="h-3 w-3 text-emerald-500 flex-shrink-0" />
+                <span className="text-[10px] font-medium text-emerald-500 uppercase tracking-wider">Variation</span>
+                <span className="text-[10px] text-muted-foreground ml-1">strength {settings.strength}</span>
               </div>
-              <p className="text-xs text-foreground line-clamp-2" title={iteratePrompt!}>
-                {iteratePrompt}
-              </p>
+              <p className="text-xs text-foreground line-clamp-2" title={iteratePrompt!}>{iteratePrompt}</p>
             </div>
-            <button
-              onClick={handleClearIterate}
-              className="p-1 text-muted-foreground hover:text-destructive rounded flex-shrink-0"
-              title="Cancel iteration"
-            >
+            <button onClick={() => { onSourceImageChange(null); onClearIterate?.() }}
+              className="p-1 text-muted-foreground hover:text-destructive rounded flex-shrink-0" title="Cancel">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
-      ) : (
-        // Normal mode: upload zone
+      ) : isEdit ? (
+        // Edit mode: source required
         <div className="mb-2">
           {sourceImage ? (
-            <div className="flex items-center gap-3 p-2 bg-muted/50 rounded-md">
-              <img
-                src={sourceImage.dataUrl}
-                alt="Source"
-                className="h-12 w-12 rounded object-cover flex-shrink-0"
-              />
+            <div className="flex items-center gap-3 p-2 bg-violet-500/5 border border-violet-500/20 rounded-md">
+              <img src={sourceImage.dataUrl} alt="Source" className="h-12 w-12 rounded object-cover flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium truncate">{sourceImage.name}</p>
-                <p className="text-[10px] text-muted-foreground">
-                  {isEdit ? 'Source image for editing' : 'Source for variation (higher strength = more change, but won\'t follow specific edit instructions)'}
-                </p>
+                <p className="text-[10px] text-muted-foreground">Source image for instruction-based editing</p>
               </div>
-              <button
-                onClick={() => onSourceImageChange(null)}
-                className="p-1 text-muted-foreground hover:text-destructive rounded"
-                title="Remove source image"
-              >
+              <button onClick={() => onSourceImageChange(null)} className="p-1 text-muted-foreground hover:text-destructive rounded" title="Remove">
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
           ) : (
-            <div
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={handlePickImage}
-              className={`flex items-center justify-center gap-2 p-2 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
-                dragOver ? 'border-primary bg-primary/5' : 'border-border/50 hover:border-primary/40 hover:bg-accent/30'
-              }`}
-            >
-              <ImagePlus className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-[11px] text-muted-foreground">
-                {isEdit ? 'Upload source image (required)' : 'Drop image for variations (not instruction-based editing)'}
-              </span>
+            <div onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop} onClick={handlePickImage}
+              className={`flex items-center justify-center gap-2 p-3 border-2 border-dashed rounded-md cursor-pointer transition-colors ${
+                dragOver ? 'border-violet-500 bg-violet-500/5' : 'border-border hover:border-violet-500/40'
+              }`}>
+              <ImagePlus className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Upload source image to edit (required)</span>
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* Quick settings row */}
       <div className="flex items-center gap-4 mb-2 text-xs">
         <div className="flex items-center gap-1.5">
           <label className="text-muted-foreground">Steps</label>
-          <input
-            type="number"
-            value={settings.steps}
+          <input type="number" value={settings.steps}
             onChange={(e) => onSettingsChange({ ...settings, steps: Math.max(1, Math.min(100, parseInt(e.target.value) || 1)) })}
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
-            min={1}
-            max={100}
-          />
+            min={1} max={100} />
         </div>
-
         <div className="flex items-center gap-1.5">
           <label className="text-muted-foreground">Size</label>
-          <select
-            value={sizeLabel}
-            onChange={(e) => {
-              const preset = SIZE_PRESETS.find(p => p.label === e.target.value)
-              if (preset) onSettingsChange({ ...settings, width: preset.width, height: preset.height })
-            }}
-            className="px-1.5 py-0.5 bg-muted border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-          >
-            {SIZE_PRESETS.map((p) => (
-              <option key={p.label} value={p.label}>{p.label}</option>
-            ))}
+          <select value={sizeLabel}
+            onChange={(e) => { const preset = SIZE_PRESETS.find(p => p.label === e.target.value); if (preset) onSettingsChange({ ...settings, width: preset.width, height: preset.height }) }}
+            className="px-1.5 py-0.5 bg-muted border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring">
+            {SIZE_PRESETS.map((p) => (<option key={p.label} value={p.label}>{p.label}</option>))}
           </select>
         </div>
-
         <div className="flex items-center gap-1.5">
           <label className="text-muted-foreground">Guidance</label>
-          <input
-            type="number"
-            value={settings.guidance}
+          <input type="number" value={settings.guidance}
             onChange={(e) => onSettingsChange({ ...settings, guidance: Math.max(0, Math.min(20, parseFloat(e.target.value) || 0)) })}
             className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
-            min={0}
-            max={20}
-            step={0.5}
-          />
+            min={0} max={20} step={0.5} />
         </div>
-
-        {/* Strength: show when source image is present (iterate or edit) */}
-        {(isEdit || sourceImage) && (
+        {/* Strength: show for edit mode and variation mode */}
+        {(isEdit || isVariation) && (
           <div className="flex items-center gap-1.5">
             <label className="text-muted-foreground">Strength</label>
-            <input
-              type="number"
-              value={settings.strength}
+            <input type="number" value={settings.strength}
               onChange={(e) => onSettingsChange({ ...settings, strength: Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)) })}
               className="w-14 px-1.5 py-0.5 bg-muted border border-input rounded text-xs text-center focus:outline-none focus:ring-1 focus:ring-ring"
-              min={0}
-              max={1}
-              step={0.05}
-            />
+              min={0} max={1} step={0.05} />
           </div>
         )}
-
-        {!isEdit && !isIterating && settings.count > 1 && (
+        {!isEdit && !isVariation && settings.count > 1 && (
           <span className="text-muted-foreground">x{settings.count} images</span>
         )}
       </div>
 
-      {/* Prompt input + submit button */}
+      {/* Prompt input + submit */}
       <div className="flex gap-2">
-        <textarea
-          ref={textareaRef}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
+        <textarea ref={textareaRef} value={prompt}
+          onChange={(e) => setPrompt(e.target.value)} onKeyDown={handleKeyDown} onPaste={handlePaste}
           placeholder={
             disabled ? 'Waiting for server to start...'
-              : isIterating ? 'Describe changes to guide the next variation (or leave empty for random variation)...'
+              : isVariation ? 'Add to prompt for next variation (or leave empty for random variation)...'
               : isEdit && !sourceImage ? 'Upload a source image above, then describe your edit...'
-              : isEdit ? 'Describe the edit to apply...'
+              : isEdit ? 'Describe the edit to apply (e.g., "make the sky purple")...'
               : 'Describe the image you want to generate...'
           }
-          disabled={disabled || generating}
-          rows={2}
+          disabled={disabled || generating} rows={2}
           className="flex-1 px-3 py-2 bg-muted border border-input rounded-md text-sm resize-none focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 placeholder:text-muted-foreground/60"
         />
         {generating ? (
-          <button
-            onClick={() => window.api.image.cancelGeneration()}
-            className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center gap-2 self-end"
-          >
-            <X className="h-4 w-4" />
-            <span className="text-sm">Cancel</span>
+          <button onClick={() => window.api.image.cancelGeneration()}
+            className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center gap-2 self-end">
+            <X className="h-4 w-4" /><span className="text-sm">Cancel</span>
           </button>
         ) : (
-          <button
-            onClick={handleSubmit}
-            disabled={!canSubmit}
+          <button onClick={handleSubmit} disabled={!canSubmit}
             className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 self-end ${
-              isIterating
-                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                : isEdit
-                ? 'bg-violet-600 text-white hover:bg-violet-700'
+              isVariation ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : isEdit ? 'bg-violet-600 text-white hover:bg-violet-700'
                 : 'bg-primary text-primary-foreground hover:bg-primary/90'
-            }`}
-          >
-            {isIterating ? <RefreshCw className="h-4 w-4" /> : isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-            <span className="text-sm">{isIterating ? 'Iterate' : isEdit ? 'Edit' : 'Generate'}</span>
+            }`}>
+            {isVariation ? <RefreshCw className="h-4 w-4" /> : isEdit ? <Pencil className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            <span className="text-sm">{isVariation ? 'Vary' : isEdit ? 'Edit' : 'Generate'}</span>
           </button>
         )}
       </div>
 
-      {/* Combined prompt preview when iterating */}
-      {isIterating && (
+      {/* Prompt preview for variation */}
+      {isVariation && (
         <p className="mt-1.5 text-[10px] text-muted-foreground truncate">
           {prompt.trim()
-            ? <>Full prompt: <span className="text-foreground/70">{iteratePrompt}, {prompt.trim()}</span></>
-            : <>Variation of: <span className="text-foreground/70">{iteratePrompt}</span> (new seed, strength {settings.strength})</>
+            ? <>Prompt: <span className="text-foreground/70">{iteratePrompt}, {prompt.trim()}</span></>
+            : <>Variation of: <span className="text-foreground/70">{iteratePrompt}</span> (new seed)</>
           }
         </p>
       )}
