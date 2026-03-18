@@ -219,25 +219,36 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
 
     # Load weights via mmap
     # JANG v2 weights are ALREADY in MLX-native format (switch_mlp, not experts.gate_up_proj).
-    # Skip model.sanitize() which tries to rename HF-format weights and crashes on pre-converted ones.
-    # Only apply mlx-vlm's sanitize_weights for vision/language module remapping.
-    from mlx_vlm.utils import sanitize_weights
+    # model.sanitize() does TWO things: (1) MoE rename (experts→switch_mlp) and (2) prefix remap.
+    # JANG already did (1), so we only need (2). Do the prefix remap + norm fix manually.
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
-        # Do NOT call model.sanitize() — JANG v2 weights are already MLX-native
-        # (model.sanitize expects HF format like experts.gate_up_proj, but JANG uses switch_mlp)
-        try:
-            shard_weights = sanitize_weights(
-                model_class.VisionModel, shard_weights, model_config.vision_config)
-        except Exception:
-            pass  # Vision sanitizer may not apply to all shards
-        try:
-            shard_weights = sanitize_weights(
-                model_class.LanguageModel, shard_weights, model_config.text_config)
-        except Exception:
-            pass  # Language sanitizer may not apply to all shards
-        model.load_weights(list(shard_weights.items()), strict=False)
-        del shard_weights
+
+        # Manual sanitize: prefix remap + norm adjustment (skip MoE rename)
+        sanitized = {}
+        norm_keys = (".input_layernorm.weight", ".post_attention_layernorm.weight",
+                     "model.norm.weight", ".q_norm.weight", ".k_norm.weight")
+        for key, value in shard_weights.items():
+            if "mtp." in key:
+                continue  # Skip MTP weights
+            # Prefix remap (same as model.sanitize but without MoE rename)
+            if "model.language_model" in key:
+                key = key.replace("model.language_model", "language_model.model")
+            elif "model.visual" in key:
+                key = key.replace("model.visual", "vision_tower")
+            elif "lm_head" in key:
+                key = key.replace("lm_head", "language_model.lm_head")
+            # Conv1d transpose
+            if "conv1d.weight" in key and value.shape[-1] != 1:
+                value = value.moveaxis(2, 1)
+            # RMSNorm convention: add 1.0
+            if any(key.endswith(sfx) for sfx in norm_keys):
+                if value.ndim == 1:
+                    value = value + 1.0
+            sanitized[key] = value
+
+        model.load_weights(list(sanitized.items()), strict=False)
+        del shard_weights, sanitized
         gc.collect()
 
     _fix_quantized_bits(model, {})
@@ -949,6 +960,14 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
 
 
 def _fix_quantized_bits(model, weights):
+    """Fix per-layer bits AND group_size for JANG mixed-precision models.
+
+    JANG uses different bit widths per tensor and may use different group_sizes
+    (e.g., gs=64 for gates, gs=128 for experts). After nn.quantize creates the
+    model skeleton with uniform defaults, this infers actual (bits, group_size)
+    from each tensor's packed weight shape, using known architectural dimensions
+    to disambiguate when multiple solutions exist.
+    """
     import mlx.nn as nn
     try:
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear
@@ -956,16 +975,68 @@ def _fix_quantized_bits(model, weights):
     except ImportError:
         quant_types = (nn.QuantizedLinear, nn.QuantizedEmbedding)
 
+    # Collect known architectural dims for disambiguation
+    known_dims = set()
+    config = getattr(model, 'config', None)
+    if isinstance(config, dict):
+        cfgs = [config, config.get('text_config', {})]
+    else:
+        cfgs = [config, getattr(config, 'text_config', None)] if config else []
+    for cfg in cfgs:
+        if cfg is None:
+            continue
+        for attr in ('hidden_size', 'intermediate_size', 'shared_expert_intermediate_size'):
+            val = cfg.get(attr) if isinstance(cfg, dict) else getattr(cfg, attr, None)
+            if isinstance(val, int) and val > 0:
+                known_dims.add(val)
+
+    valid_bits = {2, 3, 4, 5, 6, 8}
+
     for name, module in model.named_modules():
         if not isinstance(module, quant_types):
             continue
         if not hasattr(module, 'scales') or not hasattr(module, 'weight'):
             continue
         try:
-            in_dim = module.scales.shape[-1] * module.group_size
-            actual_bits = (module.weight.shape[-1] * 32) // in_dim
-            if actual_bits != module.bits and actual_bits in (2, 3, 4, 5, 6, 8):
-                module.bits = actual_bits
+            n_groups = module.scales.shape[-1]
+            packed = module.weight.shape[-1]
+            total = packed * 32
+
+            # Collect all valid (gs, bits, in_dim) solutions
+            candidates = []
+            for gs in (32, 64, 128, 256):
+                in_dim = n_groups * gs
+                if in_dim == 0:
+                    continue
+                bits = total // in_dim
+                if bits in valid_bits and total == bits * in_dim:
+                    candidates.append((gs, bits, in_dim))
+
+            if not candidates:
+                continue
+
+            # Pick best candidate:
+            # 1. Prefer in_dim matching a known architectural dimension
+            # 2. If no match, prefer current group_size
+            # 3. If still ambiguous, prefer smallest group_size (most precise)
+            best = None
+            for gs, bits, in_dim in candidates:
+                if in_dim in known_dims:
+                    best = (gs, bits)
+                    break
+            if best is None:
+                for gs, bits, in_dim in candidates:
+                    if gs == module.group_size:
+                        best = (gs, bits)
+                        break
+            if best is None:
+                best = (candidates[0][0], candidates[0][1])
+
+            gs, bits = best
+            if gs != module.group_size:
+                module.group_size = gs
+            if bits != module.bits:
+                module.bits = bits
         except Exception:
             pass
 
