@@ -171,6 +171,7 @@ export function ImageTab() {
       if (data.sessionId === serverSessionIdRef.current) {
         setServerStatus('stopped')
         setServerPort(null)
+        setGenerating(false)  // Server stopped — cancel any in-flight generation
       }
     })
     const unsubError = window.api.sessions.onError((data: any) => {
@@ -386,6 +387,7 @@ export function ImageTab() {
       setServerStatus('stopped')
       setServerPort(null)
       setServerSessionId(null)
+      setGenerating(false)  // Reset generating state when server stops
     } catch (err) {
       console.error('Failed to stop image server:', err)
     }

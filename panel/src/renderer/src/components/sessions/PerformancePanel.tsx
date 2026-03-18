@@ -91,7 +91,7 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             {health.quantization_format && (
               <InfoCard
                 label="Weight Quant"
-                value={`${health.quantization_format.format_name || 'JANG'} ${health.quantization_format.actual_bits ?? health.quantization_format.target_bits}-bit`}
+                value={`${(health.quantization_format.type || 'JANG').toUpperCase()} ${health.quantization_format.actual_bits ?? health.quantization_format.target_bits}-bit`}
               />
             )}
             {health.kv_cache_quantization?.enabled && (
