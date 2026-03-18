@@ -69,9 +69,9 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
   const [hovered, setHovered] = useState(false)
 
   const hasSource = !!generation.sourceImagePath
-  // Distinguish iteration (gen model + source) from edit (edit model + source)
-  const isIteration = hasSource && sessionMode === 'generate'
-  const isEdit = hasSource && !isIteration
+  // Gen model + source = variation, edit model + source = edit
+  const isVariation = hasSource && sessionMode === 'generate'
+  const isEdit = hasSource && !isVariation
 
   useEffect(() => {
     let cancelled = false
@@ -134,15 +134,15 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
                 Failed to load
               </div>
             )}
-            <span className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 text-white rounded font-medium ${isIteration ? 'bg-emerald-600/80' : 'bg-violet-600/80'}`}>
-              {isIteration ? 'Iterated' : 'Edited'}
+            <span className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 text-white rounded font-medium ${isVariation ? 'bg-emerald-600/80' : 'bg-violet-600/80'}`}>
+              {isVariation ? 'Variation' : 'Edited'}
             </span>
 
             {/* Source image thumbnail (bottom-left corner) */}
             {sourceData && (
               <div className="absolute bottom-2 left-2 w-16 h-16 rounded border-2 border-white/60 overflow-hidden shadow-lg">
                 <img src={sourceData} alt="Source" className="w-full h-full object-contain" />
-                <span className="absolute bottom-0 left-0 right-0 text-[7px] text-center bg-black/60 text-white py-px">{isIteration ? 'Source' : 'Original'}</span>
+                <span className="absolute bottom-0 left-0 right-0 text-[7px] text-center bg-black/60 text-white py-px">{isVariation ? 'Source' : 'Original'}</span>
               </div>
             )}
           </div>
@@ -185,8 +185,8 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
       {/* Metadata */}
       <div className="p-3">
         <div className="flex items-center gap-1 mb-1">
-          {isIteration && (
-            <span className="text-[9px] px-1 py-0 rounded bg-emerald-500/15 text-emerald-500 flex-shrink-0">Iter</span>
+          {isVariation && (
+            <span className="text-[9px] px-1 py-0 rounded bg-emerald-500/15 text-emerald-500 flex-shrink-0">Var</span>
           )}
           {isEdit && (
             <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">Edit</span>
