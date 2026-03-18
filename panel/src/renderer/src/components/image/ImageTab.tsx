@@ -521,7 +521,7 @@ export function ImageTab() {
                   width: gen.width,
                   height: gen.height,
                   guidance: gen.guidance,
-                  strength: gen.strength ?? 0.7,
+                  strength: 0.85, // High default so iterate changes are visible
                   negativePrompt: gen.negativePrompt || '',
                   seed: undefined,
                 }))
