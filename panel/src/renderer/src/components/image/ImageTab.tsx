@@ -547,6 +547,7 @@ export function ImageTab() {
           onSourceImageChange={setSourceImage}
           iteratePrompt={iteratePrompt}
           iterateCounter={iterateCounter}
+          onClearIterate={() => { setIteratePrompt(null); setSourceImage(null) }}
         />
       </div>
     </div>
