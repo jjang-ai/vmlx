@@ -349,15 +349,12 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         if (config) {
           const detected = configToDetected(familyName, config)
           detected.maxContextLength = maxContextLength
-          // VLM detection: vision_config in config.json, BUT check JANG models' has_vision flag first
-          // JANG models inherit vision_config from source model even when vision isn't usable
+          // VLM detection: vision_config in config.json
+          // JANG models always use text path (VLM MoE loading not yet supported)
           if ('vision_config' in parsed) {
             const jangConfigPath = join(modelPath, 'jang_config.json')
             if (existsSync(jangConfigPath)) {
-              try {
-                const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
-                detected.isMultimodal = jangCfg?.architecture?.has_vision === true
-              } catch { detected.isMultimodal = false }
+              detected.isMultimodal = false  // JANG: text path only for now
             } else {
               detected.isMultimodal = true
             }
