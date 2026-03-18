@@ -3,6 +3,7 @@ import { Server, Copy, Check } from 'lucide-react'
 import { useSessionsContext } from '../../contexts/SessionsContext'
 import { EndpointList } from './EndpointList'
 import { CodeSnippets } from './CodeSnippets'
+import { CodingToolIntegration } from './CodingToolIntegration'
 
 interface SessionSummary {
   id: string
@@ -149,6 +150,11 @@ export function ApiDashboard() {
         {/* Endpoint reference */}
         {baseUrl && (
           <EndpointList isImage={isImageServer} isEdit={isEditServer} />
+        )}
+
+        {/* Coding tool integration */}
+        {!isImageServer && (
+          <CodingToolIntegration baseUrl={baseUrl} modelName={modelName} port={selected?.port ?? null} />
         )}
       </div>
     </div>

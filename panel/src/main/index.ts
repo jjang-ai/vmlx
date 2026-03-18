@@ -13,6 +13,7 @@ import { registerEmbeddingHandlers } from './ipc/embeddings'
 import { registerExportHandlers } from './ipc/export'
 import { registerPerformanceHandlers } from './ipc/performance'
 import { registerDeveloperHandlers, killActiveOperation } from './ipc/developer'
+import { registerCodingToolHandlers } from './ipc/coding-tools'
 import { sessionManager } from './sessions'
 import { db } from './database'
 import { checkEngineVersion, installEngineStreaming } from './engine-manager'
@@ -94,6 +95,7 @@ function createWindow(): void {
     registerDeveloperHandlers(() => mainWindow)
     registerModelSettingsHandlers()
     registerImageHandlers()
+    registerCodingToolHandlers()
 
     // Download window — a real separate window for showing download progress
     ipcMain.handle('downloads:openWindow', () => {
