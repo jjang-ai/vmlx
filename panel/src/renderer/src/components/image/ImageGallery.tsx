@@ -42,7 +42,7 @@ export function ImageGallery({ generations, generating, mode, onRegenerate }: Im
           : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
       }`} style={{ minWidth: 0 }}>
         {generations.map((gen) => (
-          <ImageCard key={gen.id} generation={gen} onRegenerate={onRegenerate} />
+          <ImageCard key={gen.id} generation={gen} onRegenerate={onRegenerate} sessionMode={mode} />
         ))}
 
         {/* Loading skeleton while generating */}
@@ -62,13 +62,16 @@ export function ImageGallery({ generations, generating, mode, onRegenerate }: Im
   )
 }
 
-function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationInfo; onRegenerate?: (gen: ImageGenerationInfo) => void }) {
+function ImageCard({ generation, onRegenerate, sessionMode }: { generation: ImageGenerationInfo; onRegenerate?: (gen: ImageGenerationInfo) => void; sessionMode?: 'generate' | 'edit' }) {
   const [imageData, setImageData] = useState<string | null>(null)
   const [sourceData, setSourceData] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [hovered, setHovered] = useState(false)
 
-  const isEdit = !!generation.sourceImagePath
+  const hasSource = !!generation.sourceImagePath
+  // Distinguish iteration (gen model + source) from edit (edit model + source)
+  const isIteration = hasSource && sessionMode === 'generate'
+  const isEdit = hasSource && !isIteration
 
   useEffect(() => {
     let cancelled = false
@@ -115,8 +118,8 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
       onMouseLeave={() => setHovered(false)}
     >
       {/* Image display */}
-      {isEdit ? (
-        // Edit layout: large result image with small source thumbnail overlay
+      {hasSource ? (
+        // Edit/iterate layout: large result image with small source thumbnail overlay
         <div className="relative">
           {/* Main result image (full size) */}
           <div className="aspect-square bg-muted relative">
@@ -131,13 +134,15 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
                 Failed to load
               </div>
             )}
-            <span className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 bg-violet-600/80 text-white rounded font-medium">Edited</span>
+            <span className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 text-white rounded font-medium ${isIteration ? 'bg-emerald-600/80' : 'bg-violet-600/80'}`}>
+              {isIteration ? 'Iterated' : 'Edited'}
+            </span>
 
             {/* Source image thumbnail (bottom-left corner) */}
             {sourceData && (
               <div className="absolute bottom-2 left-2 w-16 h-16 rounded border-2 border-white/60 overflow-hidden shadow-lg">
-                <img src={sourceData} alt="Original" className="w-full h-full object-contain" />
-                <span className="absolute bottom-0 left-0 right-0 text-[7px] text-center bg-black/60 text-white py-px">Original</span>
+                <img src={sourceData} alt="Source" className="w-full h-full object-contain" />
+                <span className="absolute bottom-0 left-0 right-0 text-[7px] text-center bg-black/60 text-white py-px">{isIteration ? 'Source' : 'Original'}</span>
               </div>
             )}
           </div>
@@ -180,6 +185,9 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
       {/* Metadata */}
       <div className="p-3">
         <div className="flex items-center gap-1 mb-1">
+          {isIteration && (
+            <span className="text-[9px] px-1 py-0 rounded bg-emerald-500/15 text-emerald-500 flex-shrink-0">Iter</span>
+          )}
           {isEdit && (
             <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">Edit</span>
           )}
@@ -210,7 +218,7 @@ function ImageCard({ generation, onRegenerate }: { generation: ImageGenerationIn
                 className={`flex-1 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
                   isEdit
                     ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25'
-                    : 'bg-primary/10 text-primary hover:bg-primary/20'
+                    : 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
                 }`}
                 title="Use this image as starting point for next generation"
               >
