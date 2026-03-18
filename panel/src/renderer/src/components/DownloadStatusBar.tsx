@@ -42,9 +42,14 @@ export function DownloadStatusBar({ onComplete }: DownloadStatusBarProps) {
     refreshStatus()
 
     const unsubProgress = window.api.models.onDownloadProgress((data: any) => {
-      setActiveDownloads(prev => prev.map(d =>
-        d.jobId === data.jobId ? { ...d, progress: data.progress } : d
-      ))
+      setActiveDownloads(prev => {
+        const exists = prev.some(d => d.jobId === data.jobId)
+        if (exists) {
+          return prev.map(d => d.jobId === data.jobId ? { ...d, progress: data.progress } : d)
+        }
+        // Job not yet in state (race between start event and first progress) — add it
+        return [...prev, { jobId: data.jobId, repoId: data.repoId, progress: data.progress }]
+      })
     })
     const unsubComplete = window.api.models.onDownloadComplete((data: any) => {
       if (data.status === 'complete') onCompleteRef.current?.()

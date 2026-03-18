@@ -1933,6 +1933,10 @@ async def create_image(request: Request):
 
             # Generate images (inside lock to prevent concurrent model swap)
             for i in range(n):
+                # Check for client disconnect between images
+                if await request.is_disconnected():
+                    logger.info("Image generation cancelled: client disconnected")
+                    break
                 img_seed = (seed + i) if seed is not None else None
                 try:
                     result = await asyncio.to_thread(
@@ -2166,6 +2170,9 @@ async def create_image_edit(request: Request):
                         f"strength={strength} seed={seed}")
 
             for i in range(n):
+                if await request.is_disconnected():
+                    logger.info("Image edit cancelled: client disconnected")
+                    break
                 img_seed = (seed + i) if seed is not None else None
                 try:
                     result = await asyncio.to_thread(
