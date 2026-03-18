@@ -1117,8 +1117,11 @@ class MLLMBatchGenerator:
         """
         Run the initial VLM forward pass to encode vision and get first logits.
 
-        This runs the full VLM model (vision + language) on the prompt,
-        which encodes the images and prepares the language model cache.
+        For image requests: runs full VLM model (vision + language) in one shot
+        (vision encoding cannot be chunked).
+
+        For text-only requests or long prompts after cache hit: uses chunked prefill
+        via prefill_step_size to reduce peak GPU memory and enable interleaving.
 
         Args:
             request: Preprocessed request with input_ids and pixel_values
@@ -1128,11 +1131,8 @@ class MLLMBatchGenerator:
             Logits from the forward pass
         """
         kwargs = dict(request.extra_kwargs)
-        # Always pass pixel_values — some VLM models (Mistral3/Pixtral, Gemma 3)
-        # require it as a positional argument even for text-only requests.
         kwargs["pixel_values"] = request.pixel_values
         if request.attention_mask is not None:
-            # VLM models use "mask" parameter (not "attention_mask")
             kwargs["mask"] = request.attention_mask
         if request.image_grid_thw is not None:
             kwargs["image_grid_thw"] = request.image_grid_thw
@@ -1143,6 +1143,34 @@ class MLLMBatchGenerator:
         if input_ids.ndim == 1:
             input_ids = input_ids[None, :]
 
+        has_images = request.pixel_values is not None
+        seq_len = input_ids.shape[1]
+
+        # Chunked prefill for text-only VLM requests with long prompts.
+        # Image requests must run in one shot (vision encoder needs full sequence).
+        # Short prompts (< 2x prefill_step_size) also run in one shot (overhead not worth it).
+        if not has_images and seq_len > self.prefill_step_size * 2:
+            # Use language_model directly for chunked text prefill
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None and cache is not None:
+                processed = 0
+                while processed < seq_len - 1:  # -1: keep last token for final logits
+                    chunk_size = min(self.prefill_step_size, seq_len - 1 - processed)
+                    chunk = input_ids[:, processed:processed + chunk_size]
+                    lm(chunk, cache=cache)
+                    mx.eval([c.state for c in cache if hasattr(c, 'state')])
+                    processed += chunk_size
+                    mx.clear_cache()
+
+                # Final chunk: get logits from last token
+                last_chunk = input_ids[:, processed:]
+                output = lm(last_chunk, cache=cache)
+                request.vision_encoded = True
+                if hasattr(output, "logits"):
+                    return output.logits
+                return output
+
+        # Standard single-shot VLM forward (image requests or short text)
         output = self.model(input_ids, **kwargs)
         request.vision_encoded = True
 
@@ -1784,6 +1812,8 @@ class MLLMBatchGenerator:
                         batch.cache = _ensure_batch_cache(batch.cache)
 
                     batch.extend(new_batch)
+                    # Free peak memory from prefill before continuing decode
+                    mx.clear_cache()
                     prompt_processing = True
 
         elif num_active == 0:

@@ -143,6 +143,8 @@ import os
 import time
 import uuid
 import threading
+
+import mlx.core as mx
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
@@ -1161,6 +1163,24 @@ class MLLMScheduler:
         batch_requests = []
 
         while self.waiting and len(self.running) < self.config.max_num_seqs:
+            # Memory-pressure guard: don't admit new requests if GPU memory is critically low
+            try:
+                active_mem = mx.metal.get_active_memory()
+                peak_mem = mx.metal.get_peak_memory()
+                cache_mem = mx.metal.get_cache_memory()
+                # Use 85% of peak as threshold (leaves room for KV cache growth)
+                if active_mem > 0 and len(self.running) > 0:
+                    mem_info = mx.metal.device_info()
+                    max_mem = mem_info.get('max_recommended_working_set_size', 0)
+                    if max_mem > 0 and active_mem / max_mem > 0.85:
+                        logger.debug(
+                            f"Memory pressure ({active_mem/1e9:.1f}GB / {max_mem/1e9:.1f}GB = "
+                            f"{active_mem/max_mem:.0%}), deferring new request admission"
+                        )
+                        break
+            except Exception:
+                pass  # Metal API not available or error — skip check
+
             request = self.waiting.popleft()
 
             # Create batch request
