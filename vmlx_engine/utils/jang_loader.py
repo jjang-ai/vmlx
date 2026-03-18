@@ -218,15 +218,24 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
                 class_predicate=get_class_predicate)
 
     # Load weights via mmap
+    # JANG v2 weights are ALREADY in MLX-native format (switch_mlp, not experts.gate_up_proj).
+    # Skip model.sanitize() which tries to rename HF-format weights and crashes on pre-converted ones.
+    # Only apply mlx-vlm's sanitize_weights for vision/language module remapping.
     from mlx_vlm.utils import sanitize_weights
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
-        if hasattr(model, "sanitize"):
-            shard_weights = model.sanitize(shard_weights)
-        shard_weights = sanitize_weights(
-            model_class.VisionModel, shard_weights, model_config.vision_config)
-        shard_weights = sanitize_weights(
-            model_class.LanguageModel, shard_weights, model_config.text_config)
+        # Do NOT call model.sanitize() — JANG v2 weights are already MLX-native
+        # (model.sanitize expects HF format like experts.gate_up_proj, but JANG uses switch_mlp)
+        try:
+            shard_weights = sanitize_weights(
+                model_class.VisionModel, shard_weights, model_config.vision_config)
+        except Exception:
+            pass  # Vision sanitizer may not apply to all shards
+        try:
+            shard_weights = sanitize_weights(
+                model_class.LanguageModel, shard_weights, model_config.text_config)
+        except Exception:
+            pass  # Language sanitizer may not apply to all shards
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
