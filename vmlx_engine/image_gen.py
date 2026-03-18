@@ -180,7 +180,13 @@ def _import_model_class(mflux_class: str):
         )
     module_path, class_name = MODEL_CLASS_MAP[mflux_class]
     import importlib
-    mod = importlib.import_module(module_path)
+    try:
+        mod = importlib.import_module(module_path)
+    except ImportError as e:
+        raise ImportError(
+            f"Cannot import {class_name} from {module_path}: {e}. "
+            f"Your mflux version may be incompatible. Try: pip install --upgrade mflux"
+        ) from e
     return getattr(mod, class_name)
 
 
@@ -482,7 +488,6 @@ class ImageGenEngine:
             generated_image = self._model.generate_image(
                 seed=seed,
                 prompt=prompt,
-                image_path=image_path,
                 image_paths=[image_path],
                 num_inference_steps=steps,
                 height=height,
