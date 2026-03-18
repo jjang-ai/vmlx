@@ -80,7 +80,6 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     from pathlib import Path
     if is_jang_model(model_name):
         try:
-            import json
             jang_cfg = json.loads((Path(model_name) / "jang_config.json").read_text())
             if jang_cfg.get("architecture", {}).get("has_vision", False):
                 return True
@@ -92,23 +91,20 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     config_path = os.path.join(model_name, "config.json")
     if os.path.isfile(config_path):
         try:
-            with open(config_path, "r") as f:
-                config = json.load(f)
-            if "vision_config" in config:
+            model_config = json.loads(open(config_path).read())
+            if "vision_config" in model_config:
                 return True
-            # vision_config not found — fall through to registry
-            # (some models use different keys or the registry may know better)
         except Exception:
-            pass  # Fall through to registry
+            pass
 
     # Secondary: use model config registry (reads model_type from config.json)
     try:
         from ..model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
-        config = registry.lookup(model_name)
-        if config.family_name != "unknown":
-            return config.is_mllm
+        reg_config = registry.lookup(model_name)
+        if reg_config.family_name != "unknown":
+            return reg_config.is_mllm
     except Exception:
         pass
 
