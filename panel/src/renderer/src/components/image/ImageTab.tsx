@@ -389,6 +389,7 @@ export function ImageTab() {
     setGenerations([])
     setSourceImage(null)
     setError(null)
+    setIteratePrompt(null)
     // Reset mode to match the currently running model's category
     if (selectedModel) {
       const modelDef = getImageModel(selectedModel)
@@ -400,6 +401,7 @@ export function ImageTab() {
     setCurrentSessionId(sessionId)
     setSourceImage(null) // Clear source image when switching sessions
     setError(null)
+    setIteratePrompt(null)
     // Restore sessionMode from the selected session's type
     const session = sessions.find(s => s.id === sessionId)
     if (session?.sessionType) {
@@ -544,6 +546,7 @@ export function ImageTab() {
           sourceImage={sourceImage}
           onSourceImageChange={setSourceImage}
           iteratePrompt={iteratePrompt}
+          iterateCounter={iterateCounter}
         />
       </div>
     </div>

@@ -33,9 +33,11 @@ interface ImagePromptBarProps {
   onSourceImageChange: (img: { dataUrl: string; name: string } | null) => void
   /** Pre-fill prompt text (set by Iterate button) */
   iteratePrompt?: string | null
+  /** Counter to force re-trigger even with same prompt */
+  iterateCounter?: number
 }
 
-export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, iteratePrompt }: ImagePromptBarProps) {
+export function ImagePromptBar({ onGenerate, disabled, generating, settings, onSettingsChange, mode, sourceImage, onSourceImageChange, iteratePrompt, iterateCounter }: ImagePromptBarProps) {
   const [prompt, setPrompt] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -50,7 +52,7 @@ export function ImagePromptBar({ onGenerate, disabled, generating, settings, onS
         textareaRef.current?.select()
       }, 100)
     }
-  }, [iteratePrompt])
+  }, [iteratePrompt, iterateCounter])
 
   const isEdit = mode === 'edit'
   const canSubmit = !disabled && !generating && prompt.trim() && (!isEdit || !!sourceImage)
