@@ -1732,6 +1732,12 @@ async def create_anthropic_message(
         _msg_kwargs["repetition_penalty"] = chat_req.repetition_penalty
     if chat_req.stop:
         _msg_kwargs["stop"] = chat_req.stop
+    # Forward enable_thinking to engine — without this, the model always thinks
+    # internally even when the client sends thinking: {type: "disabled"}
+    if chat_req.enable_thinking is not None:
+        _msg_kwargs["enable_thinking"] = chat_req.enable_thinking
+    elif _default_enable_thinking is not None:
+        _msg_kwargs["enable_thinking"] = _default_enable_thinking
 
     messages_dump = [m.model_dump(exclude_none=True) for m in chat_req.messages]
 
