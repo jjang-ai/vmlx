@@ -71,6 +71,8 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
       try {
         const s = await window.api.sessions.get(sessionId)
         setSession(s)
+        // Auto-open logs panel if session is in error state
+        if (s?.status === 'error') setShowLogs(true)
 
         if (s) {
           // Skip chat loading for image model sessions — they don't use chat
