@@ -3092,21 +3092,6 @@ async def create_chat_completion(
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
 
-    # Think-completion seed: when thinking is OFF but the model has a reasoning
-    # parser (thinking model), inject <think>\n</think>\n as prompt suffix.
-    # This pre-completes the thinking phase so the model immediately outputs
-    # content instead of spontaneously generating <think> tokens or outputting
-    # its chain-of-thought as plain text (which wastes compute and leaks
-    # reasoning into visible content).
-    # Only for non-Harmony models (Harmony uses <|channel|> not <think>).
-    _explicit_off = chat_kwargs.get("enable_thinking") is False
-    if (_explicit_off
-            and _reasoning_parser
-            and not isinstance(_reasoning_parser, GptOssReasoningParser)
-            and "prompt_suffix" not in chat_kwargs):
-        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
-        logger.debug("[chat] Injecting think-completion seed (enable_thinking=False)")
-
     if request.stream:
         return StreamingResponse(
             stream_chat_completion(
@@ -3636,15 +3621,6 @@ async def create_response(
         if "<|im_end|>" not in _stop:
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
-
-    # Think-completion seed (same as Chat Completions path — see comment there)
-    _explicit_off = chat_kwargs.get("enable_thinking") is False
-    if (_explicit_off
-            and _reasoning_parser
-            and not isinstance(_reasoning_parser, GptOssReasoningParser)
-            and "prompt_suffix" not in chat_kwargs):
-        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
-        logger.debug("[responses] Injecting think-completion seed (enable_thinking=False)")
 
     if request.stream:
         return StreamingResponse(

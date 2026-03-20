@@ -1,5 +1,5 @@
 // MLX Studio — Coding Tool Integration IPC
-// Non-destructive config management for Claude Code, Codex CLI, OpenCode
+// Non-destructive config management for Claude Code, Codex CLI, OpenCode, OpenClaw
 import { ipcMain } from 'electron'
 import { execFileSync } from 'child_process'
 import { homedir } from 'os'
@@ -209,10 +209,73 @@ const openCode: ToolConfig = {
   },
 }
 
+// ═══ OpenClaw ═══
+// Config: ~/.openclaw/openclaw.json (JSON5) — models.providers + agents.defaults.models allowlist
+// OpenClaw uses OpenAI-compatible API via "openai-completions" wire format
+const OPENCLAW_JSON = join(homedir(), '.openclaw', 'openclaw.json')
+const openClaw: ToolConfig = {
+  detect: () => commandExists('openclaw'),
+  installCmd: 'npm',
+  installArgs: ['install', '-g', 'openclaw@latest'],
+  configPath: OPENCLAW_JSON,
+  getEntries: () => {
+    const cfg = safeReadJSON(OPENCLAW_JSON)
+    if (!cfg?.models?.providers) return []
+    const entries: Array<{ label: string; baseUrl: string }> = []
+    for (const [name, provider] of Object.entries(cfg.models.providers)) {
+      const p = provider as any
+      if (!p?.[MLXSTUDIO_TAG]) continue
+      entries.push({ label: name, baseUrl: p.baseUrl || '' })
+    }
+    return entries
+  },
+  addEntry: (baseUrl, modelName) => {
+    const cfg = safeReadJSON(OPENCLAW_JSON) || {}
+    if (!cfg.models) cfg.models = {}
+    if (!cfg.models.mode) cfg.models.mode = 'merge'
+    if (!cfg.models.providers) cfg.models.providers = {}
+    if (!cfg.agents) cfg.agents = {}
+    if (!cfg.agents.defaults) cfg.agents.defaults = {}
+    if (!cfg.agents.defaults.models) cfg.agents.defaults.models = {}
+    const providerKey = `mlxstudio`
+    const fqModel = `${providerKey}/${modelName}`
+    cfg.models.providers[providerKey] = {
+      baseUrl: `${baseUrl}/v1`,
+      apiKey: 'mlxstudio',
+      api: 'openai-completions',
+      models: [{
+        id: modelName,
+        name: modelName,
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 32768,
+      }],
+      [MLXSTUDIO_TAG]: true,
+    }
+    cfg.agents.defaults.models[fqModel] = { alias: modelName }
+    safeWriteJSON(OPENCLAW_JSON, cfg)
+  },
+  removeEntry: () => {
+    const cfg = safeReadJSON(OPENCLAW_JSON)
+    if (!cfg) return
+    if (cfg.models?.providers?.mlxstudio) delete cfg.models.providers.mlxstudio
+    // Remove all mlxstudio/ entries from allowlist
+    if (cfg.agents?.defaults?.models) {
+      for (const key of Object.keys(cfg.agents.defaults.models)) {
+        if (key.startsWith('mlxstudio/')) delete cfg.agents.defaults.models[key]
+      }
+    }
+    safeWriteJSON(OPENCLAW_JSON, cfg)
+  },
+}
+
 const TOOLS: Record<string, ToolConfig> = {
   'claude-code': claudeCode,
   'codex': codexCli,
   'opencode': openCode,
+  'openclaw': openClaw,
 }
 
 let registered = false
@@ -267,6 +330,85 @@ export function registerCodingToolHandlers(): void {
       return { success: true }
     } catch (e) {
       return { success: false, error: (e as Error).message }
+    }
+  })
+
+  // Returns tailored config snippets for manual setup instructions
+  ipcMain.handle('tools:getConfigSnippets', async (_, baseUrl: string, modelName: string) => {
+    const home = homedir()
+    return {
+      'claude-code': {
+        filePath: `${home}/.claude/settings.json`,
+        language: 'json',
+        snippet: JSON.stringify({
+          env: {
+            ANTHROPIC_BASE_URL: baseUrl,
+            ANTHROPIC_MODEL: modelName,
+            ANTHROPIC_API_KEY: 'mlxstudio',
+          }
+        }, null, 2),
+        notes: 'Claude Code appends /v1/messages automatically. Merge the "env" key into your existing settings.json — do not replace the whole file. Verify: claude --version && claude /status',
+      },
+      'codex': {
+        filePath: `${home}/.codex/config.toml`,
+        language: 'toml',
+        snippet: `[model_providers.MLXSTUDIO_${modelName.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()}]\nname = "MLX Studio (${modelName})"\nbase_url = "${baseUrl}/v1"\nwire_api = "responses"\nmax_context = 32768`,
+        notes: 'Append this section to the end of your config.toml. If the file doesn\'t exist, create ~/.codex/config.toml. Then run: codex --provider MLXSTUDIO_... Verify: codex --version',
+      },
+      'opencode': {
+        filePath: `${home}/.config/opencode/opencode.json`,
+        language: 'json',
+        snippet: JSON.stringify({
+          provider: {
+            [`mlxstudio-${modelName.replace(/[^a-zA-Z0-9-]/g, '-')}`]: {
+              npm: '@ai-sdk/openai-compatible',
+              name: `MLX Studio (${modelName})`,
+              options: { baseURL: `${baseUrl}/v1` },
+              models: {
+                [modelName]: {
+                  name: modelName,
+                  limit: { context: 32768, output: 4096 },
+                  modalities: { input: ['text'], output: ['text'] },
+                },
+              },
+            },
+          },
+        }, null, 2),
+        notes: 'Merge the "provider" key into your existing opencode.json. If the file doesn\'t exist, create it with { "$schema": "https://opencode.ai/config.json", "provider": { ... } }. Verify: opencode --version',
+      },
+      'openclaw': {
+        filePath: `${home}/.openclaw/openclaw.json`,
+        language: 'json',
+        snippet: JSON.stringify({
+          models: {
+            mode: 'merge',
+            providers: {
+              mlxstudio: {
+                baseUrl: `${baseUrl}/v1`,
+                apiKey: 'mlxstudio',
+                api: 'openai-completions',
+                models: [{
+                  id: modelName,
+                  name: modelName,
+                  reasoning: false,
+                  input: ['text'],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32768,
+                  maxTokens: 32768,
+                }],
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              models: {
+                [`mlxstudio/${modelName}`]: { alias: modelName },
+              },
+            },
+          },
+        }, null, 2),
+        notes: 'Merge into your existing openclaw.json (JSON5 format). "mode": "merge" ensures your existing providers are kept. Both the provider AND the agents.defaults.models allowlist entry are required. Verify: openclaw --version && openclaw doctor',
+      },
     }
   })
 }

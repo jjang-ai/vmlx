@@ -54,8 +54,6 @@ declare global {
         onStream: (callback: (data: any) => void) => () => void
         onComplete: (callback: (data: any) => void) => () => void
         onReasoningDone: (callback: (data: any) => void) => () => void
-        onThinkingSilently: (callback: (data: any) => void) => () => void
-        onThinkingDone: (callback: (data: any) => void) => () => void
         onTyping: (callback: (data: any) => void) => () => void
         onToolStatus: (callback: (data: any) => void) => () => void
         abort: (chatId: string) => Promise<void>
@@ -159,6 +157,7 @@ declare global {
         installCodingTool: (toolId: string) => Promise<{ success: boolean; error?: string }>
         addCodingToolConfig: (toolId: string, baseUrl: string, modelName: string, port: number | null) => Promise<{ success: boolean; error?: string }>
         removeCodingToolConfig: (toolId: string, label: string) => Promise<{ success: boolean; error?: string }>
+        getConfigSnippets: (baseUrl: string, modelName: string) => Promise<Record<string, { filePath: string; language: string; snippet: string; notes: string }>>
       }
       modelSettings: {
         get: (modelPath: string) => Promise<any>
