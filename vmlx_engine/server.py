@@ -136,6 +136,7 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
+_default_enable_thinking: bool | None = None  # Set via --default-enable-thinking
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 
@@ -1302,6 +1303,10 @@ async def admin_wake():
                 if _engine and hasattr(_engine, '_needs_async_start') and _engine._needs_async_start:
                     await _engine.start()
                     _engine._needs_async_start = False
+                # Re-apply JIT compilation after deep wake (load_model skips it
+                # because _engine._loaded is False at check time inside event loop)
+                if _enable_jit and _engine is not None:
+                    _apply_jit_compilation()
                 _standby_state = None
                 logger.info(f"Woke from deep sleep — model {_model_name} reloaded")
                 return {"status": "active"}
@@ -2974,11 +2979,14 @@ async def create_chat_completion(
         chat_kwargs["repetition_penalty"] = request.repetition_penalty
 
     # Pass enable_thinking to engine
-    # Priority: top-level field > chat_template_kwargs > auto-detect from model config
+    # Priority: top-level field > chat_template_kwargs > server default > auto-detect
     if request.enable_thinking is not None:
         chat_kwargs["enable_thinking"] = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
         chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
+    elif _default_enable_thinking is not None:
+        # Server-level default (--default-enable-thinking flag)
+        chat_kwargs["enable_thinking"] = _default_enable_thinking
     else:
         # Auto-detect from model config + tokenizer vocabulary.
         from .model_config_registry import get_model_config_registry
@@ -3157,8 +3165,10 @@ async def create_chat_completion(
             # Truncated reasoning (e.g., max_tokens hit during <think> phase):
             # reasoning extracted but no content after it — don't leak raw <think> tags
             content_for_parsing = ""
-        # Suppress reasoning when user explicitly disabled thinking
-        _suppress = request.enable_thinking is False
+        # Suppress reasoning when thinking is disabled (check resolved value from chat_kwargs,
+        # not just raw request — covers --default-enable-thinking and auto-detect paths)
+        _resolved = chat_kwargs.get("enable_thinking")
+        _suppress = _resolved is False or request.enable_thinking is False
         if not _suppress and request.chat_template_kwargs:
             _suppress = request.chat_template_kwargs.get("enable_thinking") is False
         if _suppress:
@@ -3509,11 +3519,14 @@ async def create_response(
         chat_kwargs["repetition_penalty"] = request.repetition_penalty
 
     # Pass enable_thinking to engine
-    # Priority: top-level field > chat_template_kwargs > auto-detect from model config
+    # Priority: top-level field > chat_template_kwargs > server default > auto-detect
     if request.enable_thinking is not None:
         chat_kwargs["enable_thinking"] = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
         chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
+    elif _default_enable_thinking is not None:
+        # Server-level default (--default-enable-thinking flag)
+        chat_kwargs["enable_thinking"] = _default_enable_thinking
     else:
         # Auto-detect from model config + tokenizer vocabulary.
         from .model_config_registry import get_model_config_registry
@@ -3681,8 +3694,10 @@ async def create_response(
             # Truncated reasoning (e.g., max_tokens hit during <think> phase):
             # reasoning extracted but no content after it — don't leak raw <think> tags
             content_for_parsing = ""
-        # Suppress reasoning when user explicitly disabled thinking
-        _suppress = request.enable_thinking is False
+        # Suppress reasoning when thinking is disabled (check resolved value from chat_kwargs,
+        # not just raw request — covers --default-enable-thinking and auto-detect paths)
+        _resolved = chat_kwargs.get("enable_thinking")
+        _suppress = _resolved is False or request.enable_thinking is False
         if not _suppress and request.chat_template_kwargs:
             _suppress = request.chat_template_kwargs.get("enable_thinking") is False
         if _suppress:
@@ -3970,12 +3985,14 @@ async def stream_chat_completion(
     yield f"data: {_dump_sse_json(first_chunk)}\n\n"
 
     # Resolve effective enable_thinking:
-    # Priority: top-level field > chat_template_kwargs > auto-detect
+    # Priority: top-level field > chat_template_kwargs > server default > auto-detect
     _ct_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         _effective_thinking = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
         _effective_thinking = bool(_ct_kwargs["enable_thinking"])
+    elif _default_enable_thinking is not None:
+        _effective_thinking = _default_enable_thinking
     else:
         _effective_thinking = None  # auto-detect below
 
@@ -4651,12 +4668,14 @@ async def stream_responses_api(
     last_output = None  # Track last engine output for finish_reason (status: incomplete)
 
     # Resolve effective enable_thinking:
-    # Priority: top-level field > chat_template_kwargs > auto-detect
+    # Priority: top-level field > chat_template_kwargs > server default > auto-detect
     _ct_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         _effective_thinking = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
         _effective_thinking = bool(_ct_kwargs["enable_thinking"])
+    elif _default_enable_thinking is not None:
+        _effective_thinking = _default_enable_thinking
     else:
         _effective_thinking = None  # auto-detect below
 
@@ -5258,6 +5277,15 @@ Examples:
         help="Default top_p for generation when not specified in request",
     )
     parser.add_argument(
+        "--default-enable-thinking",
+        type=str,
+        default=None,
+        choices=["true", "false"],
+        help="Server-level default for enable_thinking when not specified in request. "
+             "Without this, models with reasoning parsers default to thinking ON. "
+             "Use 'false' to disable thinking for external API clients (OpenCode, etc.)",
+    )
+    parser.add_argument(
         "--enable-auto-tool-choice",
         action="store_true",
         help="Enable automatic tool choice for supported models",
@@ -5279,13 +5307,15 @@ Examples:
 
     # Set global configuration
     global _api_key, _default_timeout, _rate_limiter
-    global _default_temperature, _default_top_p
+    global _default_temperature, _default_top_p, _default_enable_thinking
     _api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     _default_timeout = args.timeout
     if args.default_temperature is not None:
         _default_temperature = args.default_temperature
     if args.default_top_p is not None:
         _default_top_p = args.default_top_p
+    if args.default_enable_thinking is not None:
+        _default_enable_thinking = args.default_enable_thinking == "true"
 
     # Configure rate limiter
     if args.rate_limit > 0:
