@@ -111,6 +111,15 @@ export class SessionManager extends EventEmitter {
   // tokens) can block the server's event loop for 30+ seconds.
   private static readonly MAX_FAIL_COUNT = 60
 
+  // ── Idle / Sleep tracking ──
+  /** Timestamp of last API request per session (for idle detection) */
+  private lastRequestAt = new Map<string, number>()
+  /** Default idle timeouts in milliseconds */
+  private static readonly DEFAULT_SOFT_TIMEOUT_TEXT_MS = 10 * 60 * 1000   // 10 min
+  private static readonly DEFAULT_HARD_TIMEOUT_TEXT_MS = 30 * 60 * 1000   // 30 min
+  private static readonly DEFAULT_SOFT_TIMEOUT_IMAGE_MS = 5 * 60 * 1000   // 5 min
+  private static readonly DEFAULT_HARD_TIMEOUT_IMAGE_MS = 15 * 60 * 1000  // 15 min
+
   constructor() {
     super()
   }
@@ -192,6 +201,7 @@ export class SessionManager extends EventEmitter {
 
         let healthy = false
         let modelName: string | undefined
+        let standbyDepth: 'soft' | 'deep' | null = null
         try {
           const res = await fetch(
             `http://127.0.0.1:${parsed.port}/health`,
@@ -201,6 +211,9 @@ export class SessionManager extends EventEmitter {
             const data = await res.json()
             healthy = true
             modelName = data.model_name
+            // Detect standby state for proper re-adoption
+            if (data.status === 'standby_soft') standbyDepth = 'soft'
+            else if (data.status === 'standby_deep') standbyDepth = 'deep'
           }
         } catch (_) { }
 
@@ -209,7 +222,8 @@ export class SessionManager extends EventEmitter {
           port: parsed.port,
           modelPath: parsed.modelPath,
           healthy,
-          modelName
+          modelName,
+          standbyDepth
         })
       }
     } catch (_) { }
@@ -406,6 +420,12 @@ export class SessionManager extends EventEmitter {
     if (!isImageSession) {
       if (!existsSync(config.modelPath)) throw new Error(`Model not found at: ${config.modelPath}`)
 
+      // Block starting a session with an actively downloading model
+      const downloadMarker = join(config.modelPath, '.vmlx-downloading')
+      if (existsSync(downloadMarker)) {
+        throw new Error('This model is still downloading. Please wait for the download to complete before starting a session.')
+      }
+
       // Validate model format: vmlx-engine only supports MLX (safetensors) models
       try {
         const files = readdirSync(config.modelPath)
@@ -434,6 +454,39 @@ export class SessionManager extends EventEmitter {
         // Ignore filesystem errors — let the server handle them
       }
     } // end if (!isImageSession)
+
+    // Re-detect model config from disk — handles case where model files were
+    // replaced with a different model (same folder name, different model_type).
+    // User-set overrides (port, host, apiKey, etc.) are preserved.
+    if (!isImageSession) {
+      try {
+        const freshConfig = detectModelConfigFromDir(config.modelPath)
+        if (freshConfig) {
+          const oldFamily = config.toolCallParser
+          // Update auto-detected fields only if user hasn't explicitly overridden them
+          // Use === checks, not falsy — '' means "None/disabled" (explicit user choice)
+          if (config.toolCallParser === undefined || config.toolCallParser === 'auto') {
+            config.toolCallParser = freshConfig.toolParser || 'auto'
+          }
+          if (config.reasoningParser === undefined || config.reasoningParser === 'auto') {
+            config.reasoningParser = freshConfig.reasoningParser || 'auto'
+          }
+          // Refresh multimodal detection from disk — but only if user hasn't explicitly overridden
+          // (undefined = auto-detect, true/false = user forced via "Force On"/"Force Off" in settings)
+          if (config.isMultimodal === undefined) {
+            config.isMultimodal = freshConfig.isMultimodal
+          }
+          // Log if model type changed
+          if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
+            this.pushLog(sessionId, `[INFO] Model config re-detected from disk (was: ${oldFamily}, now: ${freshConfig.toolParser})`)
+          }
+          // Update DB with refreshed config
+          db.updateSession(sessionId, { config: JSON.stringify(config) })
+        }
+      } catch (e) {
+        this.pushLog(sessionId, `[WARN] Could not re-detect model config: ${(e as Error).message}`)
+      }
+    }
 
     // Memory estimation: warn if model is too large for available RAM
     const modelSizeBytes = estimateModelMemory(config.modelPath)
@@ -535,11 +588,25 @@ export class SessionManager extends EventEmitter {
         console.error(`[SERVER] ${text.trimEnd()}`)
       }
       this.emit('session:log', { sessionId, data: text })
-      // Capture last meaningful stderr line for error reporting
+      // Capture most meaningful stderr line for error reporting.
+      // Python exceptions print the error type several lines before the
+      // final output (e.g., RuntimeError on line N, then "library not found"
+      // on line N+3). Prefer exception lines over the last line.
       const managed = this.processes.get(sessionId)
       if (managed) {
-        const lastLine = text.trim().split('\n').filter((l: string) => l.trim()).pop()
-        if (lastLine) managed.lastStderr = lastLine
+        const lines = text.trim().split('\n').filter((l: string) => l.trim())
+        // Look for Python exception lines (most informative)
+        const exceptionLine = lines.find((l: string) =>
+          /^(RuntimeError|ImportError|ModuleNotFoundError|OSError|ValueError|TypeError|MemoryError|FileNotFoundError):/.test(l.trim()) ||
+          /^(mlx|mflux|torch|jax)\./.test(l.trim()) && l.includes('Error')
+        )
+        if (exceptionLine) {
+          managed.lastStderr = exceptionLine.trim()
+        } else if (!managed.lastStderr || !/^(RuntimeError|ImportError|ModuleNotFoundError|OSError|ValueError|TypeError|MemoryError|FileNotFoundError):/.test(managed.lastStderr)) {
+          // Only overwrite if we haven't already captured an exception line
+          const lastLine = lines.pop()
+          if (lastLine) managed.lastStderr = lastLine
+        }
       }
     })
     proc.stdout?.on('error', () => { })
@@ -601,6 +668,7 @@ export class SessionManager extends EventEmitter {
     try {
       await this.waitForReady(session.host, session.port, startupTimeoutMs, sessionId)
       db.updateSession(sessionId, { status: 'running' })
+      this.touchSession(sessionId)  // Start idle timer from model-ready time
       this.emit('session:ready', { sessionId, port: session.port })
     } catch (err) {
       db.updateSession(sessionId, { status: 'error' })
@@ -694,9 +762,11 @@ export class SessionManager extends EventEmitter {
       db.updateSession(sessionId, {
         status: 'stopped',
         pid: undefined,
-        lastStoppedAt: Date.now()
+        lastStoppedAt: Date.now(),
+        standbyDepth: null
       })
-      // Clear log buffer so a fresh restart doesn't show old logs
+      // Clear idle tracking and log buffer
+      this.lastRequestAt.delete(sessionId)
       this.logBuffers.delete(sessionId)
       this.emit('session:stopped', { sessionId })
     })
@@ -705,7 +775,7 @@ export class SessionManager extends EventEmitter {
   async deleteSession(sessionId: string): Promise<void> {
     // Stop first if running
     const session = db.getSession(sessionId)
-    if (session && (session.status === 'running' || session.status === 'loading')) {
+    if (session && (session.status === 'running' || session.status === 'loading' || session.status === 'standby')) {
       await this.stopSession(sessionId)
     }
 
@@ -738,6 +808,7 @@ export class SessionManager extends EventEmitter {
     'enableAutoToolChoice',
     'logLevel', 'corsOrigins',
     'enableJit',
+    'imageMode', 'imageQuantize',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -756,7 +827,7 @@ export class SessionManager extends EventEmitter {
         s.port === config.port &&
         s.id !== sessionId &&
         s.type === 'local' &&
-        (s.status === 'running' || s.status === 'loading')
+        (s.status === 'running' || s.status === 'loading' || s.status === 'standby')
       )
       if (conflicting) {
         throw new Error(`Port ${config.port} is in use by running session "${conflicting.modelName || conflicting.modelPath}".`)
@@ -769,7 +840,18 @@ export class SessionManager extends EventEmitter {
     } catch {
       // Corrupted config in DB — start fresh
     }
-    const merged = { ...currentConfig, ...config }
+    // Strip undefined values before merging — prevents config spread from
+    // overwriting existing DB values with undefined (which JSON.stringify would then drop)
+    const cleanConfig: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(config as Record<string, unknown>)) {
+      if (v !== undefined) cleanConfig[k] = v
+    }
+    const merged = { ...currentConfig, ...cleanConfig }
+
+    // Log sleep config changes
+    if ('idleTimeoutSoftMin' in cleanConfig || 'idleTimeoutHardMin' in cleanConfig || 'autoSleepEnabled' in cleanConfig) {
+      console.log(`[SLEEP] Config saved for ${sessionId.slice(0, 8)}: soft=${merged.idleTimeoutSoftMin}min, hard=${merged.idleTimeoutHardMin}min, enabled=${merged.autoSleepEnabled}`)
+    }
 
     // Always keep host/port in sync between JSON blob and DB columns
     // Extract from merged to ensure JSON blob and DB columns always agree
@@ -784,9 +866,9 @@ export class SessionManager extends EventEmitter {
 
     // H6: Determine if changed keys require a restart
     const isRunning = session.status === 'running' || session.status === 'loading'
-    const changedKeys = Object.keys(config).filter(k =>
+    const changedKeys = Object.keys(cleanConfig).filter(k =>
       SessionManager.RESTART_REQUIRED_KEYS.has(k) &&
-      (config as Record<string, unknown>)[k] !== currentConfig[k]
+      (cleanConfig as Record<string, unknown>)[k] !== currentConfig[k]
     )
     return {
       restartRequired: isRunning && changedKeys.length > 0,
@@ -808,6 +890,10 @@ export class SessionManager extends EventEmitter {
 
       // Check if we already have a session for this model path
       let session = db.getSessionByModelPath(proc.modelPath)
+
+      // Determine correct session status from health response
+      const adoptStatus = proc.standbyDepth ? 'standby' : 'running'
+      const adoptStandbyDepth = proc.standbyDepth || null
 
       if (!session) {
         // Create a new session record for this detected process
@@ -847,18 +933,20 @@ export class SessionManager extends EventEmitter {
           host: '0.0.0.0',
           port: proc.port,
           pid: proc.pid,
-          status: 'running',
+          status: adoptStatus,
           config: JSON.stringify(defaultConfig),
           createdAt: now,
           updatedAt: now,
           lastStartedAt: now,
-          type: 'local'
+          type: 'local',
+          standbyDepth: adoptStandbyDepth
         }
         db.createSession(session)
       } else {
         // Update existing session with live process info (also normalize stored path)
         db.updateSession(session.id, {
-          status: 'running',
+          status: adoptStatus,
+          standbyDepth: adoptStandbyDepth,
           pid: proc.pid,
           port: proc.port,
           modelPath: normalizePath(session.modelPath),
@@ -875,15 +963,13 @@ export class SessionManager extends EventEmitter {
     // Mark sessions that were running but no longer have a process
     const allSessions = db.getSessions()
     for (const s of allSessions) {
-      if (s.status === 'running' || s.status === 'loading') {
+      if (s.status === 'running' || s.status === 'loading' || s.status === 'standby') {
         if (s.type === 'remote') {
-          // Remote sessions have no persistent connection — if the app restarts,
-          // they must be reconnected. Mark them stopped so the user can reconnect.
           console.log(`[SESSIONS] Resetting stale remote session "${s.modelName}" to stopped (was ${s.status})`)
-          db.updateSession(s.id, { status: 'stopped' })
+          db.updateSession(s.id, { status: 'stopped', standbyDepth: null })
           this.emit('session:stopped', { sessionId: s.id })
         } else if (!adopted.find(a => a.id === s.id)) {
-          db.updateSession(s.id, { status: 'stopped', pid: undefined })
+          db.updateSession(s.id, { status: 'stopped', pid: undefined, standbyDepth: null })
         }
       }
     }
@@ -900,6 +986,42 @@ export class SessionManager extends EventEmitter {
       const sessions = db.getSessions()
 
       for (const session of sessions) {
+        // Skip stopped/error sessions. Standby sessions are monitored for health but not fail-counted.
+        if (session.status === 'stopped' || session.status === 'error') continue
+
+        // Standby sessions: just check process is alive, don't fail-count
+        if (session.status === 'standby') {
+          if (session.type !== 'remote' && session.pid) {
+            const alive = this.isProcessAlive(session.id, session.pid)
+            if (!alive) {
+              db.updateSession(session.id, { status: 'stopped', standbyDepth: null })
+              this.emit('session:stopped', { sessionId: session.id })
+              this.pushLog(session.id, '[Sleep] Process died during standby')
+              continue
+            }
+            // Check if model was woken externally (e.g., external curl triggered JIT wake)
+            try {
+              const res = await fetch(
+                `http://${connectHost(session.host)}:${session.port}/health`,
+                { signal: AbortSignal.timeout(3000) }
+              )
+              if (res.ok) {
+                const data = await res.json()
+                if (data.status === 'healthy') {
+                  // Model woke externally — sync DB to running
+                  db.updateSession(session.id, { status: 'running', standbyDepth: null })
+                  this.touchSession(session.id)
+                  this.emit('session:ready', { sessionId: session.id, port: session.port })
+                  this.pushLog(session.id, '[Wake] Model woke externally — synced to running')
+                }
+              }
+            } catch {
+              // Health check failed — process alive but server unresponsive, keep standby
+            }
+          }
+          continue
+        }
+
         if (session.status !== 'running' && session.status !== 'loading') continue
 
         // Remote sessions: check /v1/models instead of /health
@@ -966,10 +1088,15 @@ export class SessionManager extends EventEmitter {
           )
           if (res.ok) {
             const data = await res.json()
+            // Handle standby states from server
+            const isStandby = data.status?.startsWith('standby_')
             // Only count as truly healthy if the model is loaded (status: "healthy")
             // The server returns "no_model" while still loading in lifespan()
             const modelReady = data.status === 'healthy'
-            if (modelReady) {
+            if (isStandby) {
+              // Server is in standby — keep session alive, don't fail-count
+              this.failCounts.delete(session.id)
+            } else if (modelReady) {
               // Reset fail counter on success
               this.failCounts.delete(session.id)
               this.lastHealthyAt.set(session.id, Date.now())
@@ -977,14 +1104,29 @@ export class SessionManager extends EventEmitter {
                 db.updateSession(session.id, { modelName: data.model_name })
               }
               if (session.status === 'loading') {
-                db.updateSession(session.id, { status: 'running' })
+                db.updateSession(session.id, { status: 'running', standbyDepth: null })
+                this.touchSession(session.id)
                 this.emit('session:ready', { sessionId: session.id, port: session.port })
               }
+              // Sync server-side last_request_time to idle timer — catches direct API
+              // requests (curl, benchmarks, external tools) that bypass Electron IPC
+              if (data.last_request_time) {
+                const serverLastReq = Math.round(data.last_request_time * 1000) // Python epoch → JS epoch
+                const electronLastReq = this.lastRequestAt.get(session.id) || 0
+                if (serverLastReq > electronLastReq) {
+                  this.lastRequestAt.set(session.id, serverLastReq)
+                  db.updateSession(session.id, { lastRequestAt: serverLastReq })
+                }
+              }
+            } else if (isStandby && session.status === 'loading') {
+              // Wake failed — server reverted to standby but DB says loading.
+              // Sync DB back to standby so user can retry.
+              const depth = data.status === 'standby_deep' ? 'deep' : 'soft'
+              db.updateSession(session.id, { status: 'standby', standbyDepth: depth })
+              this.emit('session:standby', { sessionId: session.id, depth })
+              this.pushLog(session.id, `[Wake] Model reload failed — reverted to ${depth} sleep`)
             } else {
               // Server is up but model not loaded yet — keep as loading
-              if (session.status !== 'loading') {
-                // Don't increment fail count — server is alive, just loading
-              }
             }
             this.emit('session:health', {
               sessionId: session.id,
@@ -1024,6 +1166,9 @@ export class SessionManager extends EventEmitter {
           }
         }
       }
+
+      // Check for idle sessions that should enter sleep
+      await this.checkIdleSessions()
     }, 5000)
   }
 
@@ -1031,6 +1176,189 @@ export class SessionManager extends EventEmitter {
     if (this.monitorInterval) {
       clearInterval(this.monitorInterval)
       this.monitorInterval = null
+    }
+  }
+
+  // ── Idle / Sleep Management ──
+
+  /** Mark a session as having received a request (resets idle timer) */
+  touchSession(sessionId: string): void {
+    const now = Date.now()
+    const prev = this.lastRequestAt.get(sessionId) || 0
+    this.lastRequestAt.set(sessionId, now)
+    db.updateSession(sessionId, { lastRequestAt: now })
+    // Log touch events to help debug idle timer issues (only if previous touch was >10s ago)
+    if (now - prev > 10000) {
+      console.log(`[SLEEP] touchSession ${sessionId.slice(0, 8)} — idle timer reset`)
+    }
+  }
+
+  /** Get idle timeouts for a session based on its model type */
+  private getIdleTimeouts(session: import('./database').Session): { softMs: number; hardMs: number } {
+    // Determine if this is an image session + read per-session overrides in one parse
+    let isImage = false
+    let perSessionSoft: number | undefined
+    let perSessionHard: number | undefined
+    try {
+      const cfg = JSON.parse(session.config)
+      isImage = cfg.modelType === 'image'
+      // Accept each timeout independently (don't require BOTH to be set)
+      if (typeof cfg.idleTimeoutSoftMin === 'number') perSessionSoft = cfg.idleTimeoutSoftMin
+      if (typeof cfg.idleTimeoutHardMin === 'number') perSessionHard = cfg.idleTimeoutHardMin
+    } catch {}
+
+    // Defaults based on model type
+    const defaultSoftMs = isImage ? SessionManager.DEFAULT_SOFT_TIMEOUT_IMAGE_MS : SessionManager.DEFAULT_SOFT_TIMEOUT_TEXT_MS
+    const defaultHardMs = isImage ? SessionManager.DEFAULT_HARD_TIMEOUT_IMAGE_MS : SessionManager.DEFAULT_HARD_TIMEOUT_TEXT_MS
+
+    // Check global settings
+    const globalSoftStr = db.getSetting('idle_timeout_soft_min')
+    const globalHardStr = db.getSetting('idle_timeout_hard_min')
+
+    // Priority: per-session > global > model-type default (each timeout resolved independently)
+    const softMs = perSessionSoft != null ? perSessionSoft * 60 * 1000
+      : globalSoftStr ? parseInt(globalSoftStr) * 60 * 1000
+      : defaultSoftMs
+    const hardMs = perSessionHard != null ? perSessionHard * 60 * 1000
+      : globalHardStr ? parseInt(globalHardStr) * 60 * 1000
+      : defaultHardMs
+
+    return { softMs, hardMs }
+  }
+
+  /** Check if auto-sleep is enabled (global setting, default true) */
+  private isAutoSleepEnabled(): boolean {
+    const setting = db.getSetting('auto_sleep_enabled')
+    return setting !== '0' && setting !== 'false'
+  }
+
+  /** Trigger soft sleep on a session — clear caches, model stays loaded */
+  async softSleep(sessionId: string): Promise<{ success: boolean; error?: string }> {
+    const session = db.getSession(sessionId)
+    if (!session || session.status !== 'running') {
+      return { success: false, error: 'Session not running' }
+    }
+    if (session.type === 'remote') {
+      return { success: false, error: 'Cannot sleep remote sessions' }
+    }
+
+    try {
+      const host = connectHost(session.host)
+      const res = await fetch(`http://${host}:${session.port}/admin/soft-sleep`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000)
+      })
+      if (res.ok) {
+        db.updateSession(sessionId, { status: 'standby', standbyDepth: 'soft' })
+        this.emit('session:standby', { sessionId, depth: 'soft' })
+        this.pushLog(sessionId, '[Sleep] Entered soft sleep — caches cleared, model loaded')
+        return { success: true }
+      }
+      return { success: false, error: `Server returned ${res.status}` }
+    } catch (e) {
+      return { success: false, error: (e as Error).message }
+    }
+  }
+
+  /** Trigger deep sleep on a session — unload model, process stays alive */
+  async deepSleep(sessionId: string): Promise<{ success: boolean; error?: string }> {
+    const session = db.getSession(sessionId)
+    if (!session || (session.status !== 'running' && session.status !== 'standby')) {
+      return { success: false, error: 'Session not running or standby' }
+    }
+    if (session.type === 'remote') {
+      return { success: false, error: 'Cannot sleep remote sessions' }
+    }
+
+    try {
+      const host = connectHost(session.host)
+      const res = await fetch(`http://${host}:${session.port}/admin/deep-sleep`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10000)
+      })
+      if (res.ok) {
+        db.updateSession(sessionId, { status: 'standby', standbyDepth: 'deep' })
+        this.emit('session:standby', { sessionId, depth: 'deep' })
+        this.pushLog(sessionId, '[Sleep] Entered deep sleep — model unloaded, port alive')
+        return { success: true }
+      }
+      return { success: false, error: `Server returned ${res.status}` }
+    } catch (e) {
+      return { success: false, error: (e as Error).message }
+    }
+  }
+
+  /** Wake a session from any sleep state — reload model */
+  async wakeSession(sessionId: string): Promise<{ success: boolean; error?: string }> {
+    const session = db.getSession(sessionId)
+    if (!session || session.status !== 'standby') {
+      return { success: false, error: 'Session not in standby' }
+    }
+    if (session.type === 'remote') {
+      return { success: false, error: 'Cannot wake remote sessions' }
+    }
+
+    try {
+      const host = connectHost(session.host)
+      // 120s timeout — admin/wake does synchronous model load (JANG mmap ~9s, large models 30-60s)
+      const res = await fetch(`http://${host}:${session.port}/admin/wake`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(120000)
+      })
+      if (res.ok) {
+        db.updateSession(sessionId, { status: 'loading', standbyDepth: null })
+        this.emit('session:starting', { sessionId })
+        this.pushLog(sessionId, '[Wake] Waking from sleep — reloading model...')
+        // The global monitor will pick up the 'loading' status and wait for /health
+        this.touchSession(sessionId)
+        return { success: true }
+      }
+      return { success: false, error: `Server returned ${res.status}` }
+    } catch (e) {
+      return { success: false, error: (e as Error).message }
+    }
+  }
+
+  /** Check idle sessions and trigger sleep transitions (called from monitor) */
+  private async checkIdleSessions(): Promise<void> {
+    if (!this.isAutoSleepEnabled()) return
+
+    const sessions = db.getSessions()
+    const now = Date.now()
+
+    for (const session of sessions) {
+      if (session.type === 'remote') continue
+      if (session.status !== 'running' && session.status !== 'standby') continue
+
+      // Check per-session autoSleepEnabled override
+      let autoSleepDisabled = false
+      try {
+        const cfg = JSON.parse(session.config)
+        if (cfg.autoSleepEnabled === false) autoSleepDisabled = true
+      } catch {}
+      if (autoSleepDisabled) continue
+
+      const mapTs = this.lastRequestAt.get(session.id)
+      const lastReq = mapTs || session.lastRequestAt || session.lastStartedAt || 0
+      if (!lastReq) continue
+
+      const idleMs = now - lastReq
+      const { softMs, hardMs } = this.getIdleTimeouts(session)
+
+      // Skip if timeouts are 0 (disabled)
+      if (softMs <= 0 && hardMs <= 0) continue
+
+      if (session.status === 'running' && softMs > 0 && idleMs >= softMs) {
+        // Running and idle past soft timeout → soft sleep
+        console.log(`[SLEEP] Session ${session.id.slice(0, 8)} idle ${Math.round(idleMs / 1000)}s >= soft ${Math.round(softMs / 1000)}s → soft sleep`)
+        this.pushLog(session.id, `[Sleep] Idle for ${Math.round(idleMs / 60000)}min — entering soft sleep (timeout: ${Math.round(softMs / 60000)}min)`)
+        await this.softSleep(session.id)
+      } else if (session.status === 'standby' && session.standbyDepth === 'soft' && hardMs > 0 && idleMs >= hardMs) {
+        // In soft sleep and idle past hard timeout → deep sleep
+        console.log(`[SLEEP] Session ${session.id.slice(0, 8)} idle ${Math.round(idleMs / 1000)}s >= hard ${Math.round(hardMs / 1000)}s → deep sleep`)
+        this.pushLog(session.id, `[Sleep] Idle for ${Math.round(idleMs / 60000)}min — entering deep sleep (timeout: ${Math.round(hardMs / 60000)}min)`)
+        await this.deepSleep(session.id)
+      }
     }
   }
 
@@ -1158,11 +1486,11 @@ export class SessionManager extends EventEmitter {
 
     this.processes.clear()
 
-    // Mark all sessions as stopped in DB
+    // Mark all sessions as stopped in DB (including standby — their processes were killed above)
     const sessions = db.getSessions()
     for (const s of sessions) {
-      if (s.status === 'running' || s.status === 'loading') {
-        db.updateSession(s.id, { status: 'stopped', pid: undefined, lastStoppedAt: Date.now() })
+      if (s.status === 'running' || s.status === 'loading' || s.status === 'standby') {
+        db.updateSession(s.id, { status: 'stopped', pid: undefined, lastStoppedAt: Date.now(), standbyDepth: null })
       }
     }
   }

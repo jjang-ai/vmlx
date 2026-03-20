@@ -650,7 +650,7 @@ class MemoryAwarePrefixCache:
             del entry.cache
         del entry
 
-        self._current_memory -= freed_bytes
+        self._current_memory = max(0, self._current_memory - freed_bytes)
         self._stats.evictions += 1
         self._stats.entry_count = len(self._entries)
         self._stats.current_memory_bytes = self._current_memory
@@ -682,7 +682,7 @@ class MemoryAwarePrefixCache:
             if hasattr(entry, 'cache'):
                 del entry.cache
             del entry
-            self._current_memory -= freed_bytes
+            self._current_memory = max(0, self._current_memory - freed_bytes)
             self._stats.evictions += 1
 
         if expired_keys:
@@ -706,7 +706,7 @@ class MemoryAwarePrefixCache:
             if tokens_key not in self._entries:
                 return False
             entry = self._entries.pop(tokens_key)
-            self._current_memory -= entry.memory_bytes
+            self._current_memory = max(0, self._current_memory - entry.memory_bytes)
             self._stats.evictions += 1
             self._stats.entry_count = len(self._entries)
             self._stats.current_memory_bytes = self._current_memory

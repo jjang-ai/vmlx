@@ -42,6 +42,9 @@ export interface SessionConfig {
   embeddingModel: string
   additionalArgs: string
   enableJit: boolean
+  idleTimeoutSoftMin?: number
+  idleTimeoutHardMin?: number
+  autoSleepEnabled?: boolean
   logLevel: string
   corsOrigins: string
   maxContextLength: number
@@ -123,6 +126,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     pagedCache: false,
     kvCacheQuant: false,
     diskCache: false,
+    power: false,
     performance: false,
     tools: false,
     specDecode: false
@@ -532,12 +536,58 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
       </Section>
 
+      {/* Power Management — visible for ALL model types (text + image) */}
+      <Section title="Power Management" expanded={expandedSections.power} onToggle={() => toggleSection('power')}>
+        <PerformanceHint text="Control when idle models automatically sleep to free GPU memory. Sleeping models auto-wake when a new request arrives." />
+        <Field label="Auto-Sleep" tooltip="Automatically put the model to sleep after a period of inactivity to free memory. Light sleep clears caches but keeps the model loaded (instant wake). Deep sleep unloads the model entirely (2-15s wake). Models auto-wake when a new request arrives.">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={config.autoSleepEnabled !== false}
+              onChange={e => onChange('autoSleepEnabled', e.target.checked)}
+              className="rounded border-input"
+            />
+            <span className="text-xs text-muted-foreground">
+              Put model to sleep when idle (frees GPU memory)
+            </span>
+          </label>
+        </Field>
+        {config.autoSleepEnabled !== false && (
+          <>
+            <SliderField
+              label="Light Sleep After"
+              tooltip="Minutes of inactivity before entering light sleep. Light sleep clears KV/prefix caches to free memory but keeps the model loaded in GPU. Wake is instant — no reload needed. Set to 0 to disable light sleep."
+              value={config.idleTimeoutSoftMin ?? (isImage ? 5 : 10)}
+              onChange={v => onChange('idleTimeoutSoftMin', v)}
+              min={0}
+              max={120}
+              step={1}
+              defaultValue={isImage ? 5 : 10}
+              allowUnlimited
+              unlimitedValue={0}
+              unlimitedLabel="Disabled"
+            />
+            <SliderField
+              label="Deep Sleep After"
+              tooltip="Minutes of inactivity before entering deep sleep. Deep sleep unloads the model entirely from GPU memory. The server process stays alive and the model auto-reloads when a new request arrives (2-15 seconds for most models). Set to 0 to disable deep sleep."
+              value={config.idleTimeoutHardMin ?? (isImage ? 15 : 30)}
+              onChange={v => onChange('idleTimeoutHardMin', v)}
+              min={0}
+              max={240}
+              step={1}
+              defaultValue={isImage ? 15 : 30}
+              allowUnlimited
+              unlimitedValue={0}
+              unlimitedLabel="Disabled"
+            />
+          </>
+        )}
+      </Section>
+
       {/* Performance */}
       <Section title="Performance & Generation" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
-        {/* JIT is not available for image models (mflux uses its own GPU pipeline).
-            Image models never reach this form — CreateSession.tsx renders a simplified
-            settings block for filterType === 'image' instead of SessionConfigForm. */}
+        {/* JIT is not available for image models (mflux uses its own GPU pipeline). */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -551,6 +601,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
+
         <SliderField
           label="Stream Interval"
           tooltip="Controls how often streaming tokens are sent to the client. A value of 1 sends each token immediately (smoothest streaming). Higher values batch multiple tokens together, which improves throughput but makes streaming feel chunkier. Set to 1 for chat use, higher for batch processing."

@@ -125,6 +125,10 @@ logger = logging.getLogger(__name__)
 
 # Global engine instance
 _engine: BaseEngine | None = None
+_standby_state: str | None = None  # None = active, 'soft' = caches cleared, 'deep' = model unloaded
+_pre_sleep_cache_limit: int | None = None  # Saved cache limit before soft sleep
+_cli_args: dict = {}  # Saved CLI args for model reload on wake
+_wake_lock: asyncio.Lock | None = None  # Lazy-init mutex for JIT wake (prevents double load_model)
 _model_name: str | None = None
 _model_path: str | None = None  # Full local path for config.json lookups
 _served_model_name: str | None = None  # Custom name for API (--served-model-name)
@@ -132,7 +136,7 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
-_last_request_time: float = 0.0  # Epoch timestamp of last API request (for memory enforcer)
+_last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 
 _FALLBACK_TEMPERATURE = 0.7
@@ -210,10 +214,17 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
     result = False
     try:
         test_msgs = [{"role": "user", "content": "__test__"}]
-        rendered = tokenizer.apply_chat_template(
-            test_msgs, enable_thinking=False,
-            add_generation_prompt=True, tokenize=False,
-        )
+        try:
+            rendered = tokenizer.apply_chat_template(
+                test_msgs, enable_thinking=False,
+                add_generation_prompt=True, tokenize=False,
+            )
+        except TypeError:
+            # Tokenizer doesn't accept enable_thinking — render without it
+            # and check if <think> is always present (it's an always-thinking template)
+            rendered = tokenizer.apply_chat_template(
+                test_msgs, add_generation_prompt=True, tokenize=False,
+            )
         # Check if <think> appears after the user message (in the generation prefix)
         after_user = rendered.rsplit("__test__", 1)[-1]
         result = "<think>" in after_user
@@ -253,10 +264,16 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
         import re
 
         test_msgs = [{"role": "user", "content": "__test__"}]
-        rendered = tokenizer.apply_chat_template(
-            test_msgs, enable_thinking=True,
-            add_generation_prompt=True, tokenize=False,
-        )
+        try:
+            rendered = tokenizer.apply_chat_template(
+                test_msgs, enable_thinking=True,
+                add_generation_prompt=True, tokenize=False,
+            )
+        except TypeError:
+            # Tokenizer doesn't accept enable_thinking — render without it
+            rendered = tokenizer.apply_chat_template(
+                test_msgs, add_generation_prompt=True, tokenize=False,
+            )
         # Check if generation prompt ends with </think> (+ optional whitespace)
         # This means thinking is completed in the prompt, model outputs plain text
         if re.search(r"</think>\s*$", rendered):
@@ -370,11 +387,63 @@ security = HTTPBearer(auto_error=False)
 
 @app.middleware("http")
 async def track_request_time(request: Request, call_next):
-    """Track last request time + gate text endpoints on image servers."""
-    global _last_request_time
+    """Track last request time, JIT wake from sleep, gate text endpoints on image servers."""
+    global _last_request_time, _standby_state
     path = request.url.path
-    if path.startswith("/v1/"):
+    # Identify actual inference endpoints (not metadata like /v1/models, /v1/cache, /v1/mcp/tools)
+    # This list drives BOTH idle timer reset AND JIT wake
+    # Cancel endpoints should NOT trigger JIT wake or reset idle timer —
+    # they are lightweight checks, not inference requests.
+    is_cancel = "/cancel" in path
+    is_inference = not is_cancel and any(path.startswith(p) for p in [
+        "/v1/chat/", "/v1/completions", "/v1/images/", "/v1/mcp/execute",
+        "/v1/messages", "/v1/responses", "/v1/embeddings",
+        "/v1/audio/transcriptions", "/v1/audio/speech"
+    ])
+    # Update last request time for inference only — metadata queries shouldn't keep model awake
+    if is_inference:
         _last_request_time = time.time()
+
+    # JIT wake: if in standby and an inference request comes in, auto-wake first
+    if _standby_state is not None and is_inference:
+        global _wake_lock
+        if _wake_lock is None:
+            _wake_lock = asyncio.Lock()
+
+        async with _wake_lock:
+            # Re-check after acquiring lock (another request may have woken us)
+            if _standby_state is None:
+                pass  # Already awake — proceed
+            else:
+                logger.info(f"JIT wake: request to {path} while in {_standby_state} sleep")
+                try:
+                    from starlette.responses import JSONResponse
+                    wake_result = await admin_wake()
+                    if isinstance(wake_result, dict) and wake_result.get("error"):
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": {"message": f"Failed to wake model: {wake_result['error']}", "type": "server_error"}}
+                        )
+                    # For deep sleep, model takes time to reload — wait up to 300s
+                    # (large models like 60GB+ JANG MoE can take 30-60s to mmap load)
+                    for i in range(600):
+                        if _standby_state is None:
+                            break
+                        if i > 0 and i % 20 == 0:
+                            logger.info(f"JIT wake: still loading after {i * 0.5:.0f}s...")
+                        await asyncio.sleep(0.5)
+                    if _standby_state is not None:
+                        return JSONResponse(
+                            status_code=503,
+                            content={"error": {"message": "Model still loading after 300s wake timeout", "type": "server_error"}}
+                        )
+                except Exception as e:
+                    logger.error(f"JIT wake failed: {e}")
+                    from starlette.responses import JSONResponse
+                    return JSONResponse(
+                        status_code=503,
+                        content={"error": {"message": f"JIT wake failed: {e}", "type": "server_error"}}
+                    )
 
     # Gate: image servers only serve /health, /v1/models, /v1/images/*
     if _model_type == "image" and path.startswith("/v1/"):
@@ -750,7 +819,17 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata
+    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args
+
+    # Save CLI args for model reload on wake from deep sleep
+    _cli_args = {
+        'use_batching': use_batching,
+        'scheduler_config': scheduler_config,
+        'stream_interval': stream_interval,
+        'max_tokens': max_tokens,
+        'force_mllm': force_mllm,
+        'served_model_name': served_model_name,
+    }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
     # Note: load_model() is only called from CLI startup (before uvicorn), never during live serving.
@@ -812,8 +891,17 @@ def load_model(
     else:
         logger.info(f"Loading model with SimpleEngine: {model_name}")
         _engine = SimpleEngine(model_name=model_name, force_mllm=force_mllm)
-        # Start SimpleEngine synchronously (no background loop)
-        asyncio.run(_engine.start())
+        # Start SimpleEngine — asyncio.run() crashes inside a running event loop
+        # (e.g., when called from admin_wake during deep sleep recovery).
+        # Detect and skip; the engine's lazy start will handle it on first request.
+        try:
+            asyncio.get_running_loop()
+            # Inside running loop — can't use asyncio.run(). Mark for deferred async start.
+            _engine._needs_async_start = True
+            logger.info("SimpleEngine created (deferred start — inside event loop)")
+        except RuntimeError:
+            # No running loop (CLI startup) — safe to use asyncio.run
+            asyncio.run(_engine.start())
         model_type = "MLLM" if _engine.is_mllm else "LLM"
         logger.info(f"{model_type} model loaded (simple mode): {model_name}")
 
@@ -938,7 +1026,9 @@ async def health():
 
     # Differentiate status: "healthy" when model is loaded, "no_model" otherwise
     # Image models don't use _engine — they use _image_gen
-    if _model_type == "image":
+    if _standby_state:
+        status = f"standby_{_standby_state}"  # "standby_soft" or "standby_deep"
+    elif _model_type == "image":
         status = "healthy" if (_image_gen is not None and _image_gen.is_loaded) else "no_model"
     else:
         status = "healthy" if _engine is not None else "no_model"
@@ -1044,6 +1134,173 @@ def _get_scheduler():
     return None
 
 
+# ── Admin: Sleep / Wake ──
+
+@app.post("/admin/soft-sleep")
+async def admin_soft_sleep():
+    """Enter soft sleep: clear all caches, reduce Metal cache limit. Model stays loaded."""
+    global _standby_state, _pre_sleep_cache_limit, _wake_lock
+    from starlette.responses import JSONResponse
+    if _wake_lock is None:
+        _wake_lock = asyncio.Lock()
+
+    async with _wake_lock:
+        if _standby_state == 'deep':
+            return JSONResponse(status_code=409, content={"error": "Already in deep sleep"})
+        if _standby_state == 'soft':
+            return {"status": "already_soft"}
+
+        try:
+            import mlx.core as mx
+
+            scheduler = _get_scheduler()
+            if scheduler is not None:
+                if hasattr(scheduler, 'deep_reset'):
+                    scheduler.deep_reset()
+                elif hasattr(scheduler, '_prefix_cache') and scheduler._prefix_cache:
+                    scheduler._prefix_cache.clear()
+
+            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            if _set_cache:
+                _pre_sleep_cache_limit = _set_cache(512 * 1024 * 1024)
+
+            if hasattr(mx, 'clear_cache'):
+                mx.clear_cache()
+            elif hasattr(mx.metal, 'clear_cache'):
+                mx.metal.clear_cache()
+
+            _standby_state = 'soft'
+            logger.info("Entered soft sleep — caches cleared, model loaded")
+            return {"status": "soft_sleep"}
+
+        except Exception as e:
+            logger.error(f"Failed to enter soft sleep: {e}")
+            return {"error": str(e)}
+
+
+@app.post("/admin/deep-sleep")
+async def admin_deep_sleep():
+    """Enter deep sleep: unload model entirely. Process stays alive, port stays allocated."""
+    global _engine, _standby_state, _pre_sleep_cache_limit, _wake_lock
+    from starlette.responses import JSONResponse
+    if _wake_lock is None:
+        _wake_lock = asyncio.Lock()
+
+    async with _wake_lock:
+        if _standby_state == 'deep':
+            return JSONResponse(status_code=409, content={"error": "Already in deep sleep"})
+
+        try:
+            import mlx.core as mx
+            import gc
+
+            # Save Metal cache limit before deep sleep (if not already saved by soft sleep)
+            if _pre_sleep_cache_limit is None:
+                _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+                if _set_cache:
+                    _pre_sleep_cache_limit = _set_cache(512 * 1024 * 1024)
+
+            scheduler = _get_scheduler()
+            if scheduler is not None:
+                if hasattr(scheduler, 'deep_reset'):
+                    scheduler.deep_reset()
+
+            if _model_type == "image" and _image_gen is not None:
+                _image_gen.unload()
+            elif _engine is not None:
+                if hasattr(_engine, 'stop'):
+                    try:
+                        await _engine.stop()
+                    except Exception:
+                        pass
+                _engine = None
+
+            gc.collect()
+            if hasattr(mx, 'clear_cache'):
+                mx.clear_cache()
+            elif hasattr(mx.metal, 'clear_cache'):
+                mx.metal.clear_cache()
+
+            _standby_state = 'deep'
+            logger.info("Entered deep sleep — model unloaded, process alive")
+            return {"status": "deep_sleep"}
+
+        except Exception as e:
+            logger.error(f"Failed to enter deep sleep: {e}")
+            return {"error": str(e)}
+
+
+@app.post("/admin/wake")
+async def admin_wake():
+    """Wake from sleep: reload model. Triggered by JIT or manual wake."""
+    global _engine, _standby_state, _pre_sleep_cache_limit
+
+    if _standby_state is None:
+        return {"status": "already_active"}
+
+    try:
+        import mlx.core as mx
+
+        if _standby_state == 'soft':
+            # Soft sleep: model is still loaded, just restore cache limit
+            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            if _set_cache and _pre_sleep_cache_limit:
+                _set_cache(_pre_sleep_cache_limit)
+            _standby_state = None
+            _pre_sleep_cache_limit = None
+            logger.info("Woke from soft sleep — cache limit restored")
+            return {"status": "active"}
+
+        elif _standby_state == 'deep':
+            # Deep sleep: need to reload model
+            # Restore cache limit first
+            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            if _set_cache and _pre_sleep_cache_limit:
+                _set_cache(_pre_sleep_cache_limit)
+            _pre_sleep_cache_limit = None
+
+            if _model_type == "image" and _image_gen is not None:
+                # Reload image model — run in thread to avoid blocking event loop
+                # (loading Flux models takes 15-60s)
+                await asyncio.to_thread(
+                    _image_gen.load,
+                    _model_name,
+                    quantize=getattr(_image_gen, '_quantize', None),
+                    model_path=getattr(_image_gen, '_model_path', None),
+                    mflux_class=getattr(_image_gen, '_mflux_class', None),
+                )
+                _standby_state = None
+                logger.info(f"Woke from deep sleep — image model {_model_name} reloaded")
+                return {"status": "active"}
+            elif _model_path or _model_name:
+                # Reload text model — run in thread to avoid blocking event loop
+                # (loading large models takes 10-60s; _wake_lock prevents concurrent
+                # access to the globals that load_model modifies)
+                await asyncio.to_thread(
+                    load_model,
+                    _model_path or _model_name,
+                    use_batching=_cli_args.get('use_batching', False),
+                    scheduler_config=_cli_args.get('scheduler_config'),
+                    stream_interval=_cli_args.get('stream_interval', 1),
+                    max_tokens=_cli_args.get('max_tokens', 32768),
+                    force_mllm=_cli_args.get('force_mllm', False),
+                    served_model_name=_cli_args.get('served_model_name'),
+                )
+                # SimpleEngine needs async start (load_model defers it inside event loop)
+                if _engine and hasattr(_engine, '_needs_async_start') and _engine._needs_async_start:
+                    await _engine.start()
+                    _engine._needs_async_start = False
+                _standby_state = None
+                logger.info(f"Woke from deep sleep — model {_model_name} reloaded")
+                return {"status": "active"}
+            else:
+                return {"error": "No model name saved — cannot reload"}
+
+    except Exception as e:
+        logger.error(f"Failed to wake from sleep: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/v1/cache/stats", dependencies=[Depends(verify_api_key)])
 async def cache_stats():
     """Get cache statistics for debugging and monitoring."""
@@ -1073,9 +1330,15 @@ async def cache_stats():
                 "group_size": scheduler._kv_cache_group_size,
             }
 
-    # Disk cache (L2) stats
+    # Disk cache (L2) stats — prompt-level
     if scheduler and getattr(scheduler, "disk_cache", None) is not None:
         result["disk_cache"] = scheduler.disk_cache.stats()
+
+    # Block disk store (L2) stats — paged cache blocks
+    paged_mgr = getattr(scheduler, "paged_cache_manager", None) if scheduler else None
+    block_store = getattr(paged_mgr, "_disk_store", None) if paged_mgr else None
+    if block_store is not None and hasattr(block_store, "get_stats"):
+        result["block_disk_cache"] = block_store.get_stats()
 
     # MLLM-specific cache stats
     try:
@@ -1303,10 +1566,11 @@ async def cancel_chat_completion(request_id: str):
           -H "Authorization: Bearer your-api-key"
         ```
     """
-    engine = get_engine()
+    if _engine is None:
+        raise HTTPException(status_code=404, detail="No model loaded — no active requests to cancel")
 
     # Abort the request (returns True if found, False if not found/already finished)
-    success = await engine.abort_request(request_id)
+    success = await _engine.abort_request(request_id)
 
     if success:
         logger.info(f"Request {request_id} cancelled via API")
@@ -1332,8 +1596,9 @@ async def cancel_response(response_id: str):
     Returns:
         Success message or 404 if request not found
     """
-    engine = get_engine()
-    success = await engine.abort_request(response_id)
+    if _engine is None:
+        raise HTTPException(status_code=404, detail="No model loaded — no active requests to cancel")
+    success = await _engine.abort_request(response_id)
 
     if success:
         logger.info(f"Response {response_id} cancelled via API")
@@ -1361,8 +1626,9 @@ async def cancel_completion(request_id: str):
     Returns:
         Success message or 404 if request not found
     """
-    engine = get_engine()
-    success = await engine.abort_request(request_id)
+    if _engine is None:
+        raise HTTPException(status_code=404, detail="No model loaded — no active requests to cancel")
+    success = await _engine.abort_request(request_id)
 
     if success:
         logger.info(f"Request {request_id} cancelled via API")
@@ -1457,21 +1723,23 @@ async def create_anthropic_message(
         adapter = AnthropicStreamAdapter(model=resolved_name)
 
         async def generate():
-            async for chunk_str in stream_chat_completion(
-                engine=engine,
-                messages=messages_dump,
-                request=chat_req,
-                fastapi_request=fastapi_request,
-                **_msg_kwargs,
-            ):
-                # Pass through SSE comments (keep-alive) to prevent client timeout
-                if chunk_str.startswith(":"):
-                    yield chunk_str
-                    continue
-                for event in adapter.process_chunk(chunk_str):
+            try:
+                async for chunk_str in stream_chat_completion(
+                    engine=engine,
+                    messages=messages_dump,
+                    request=chat_req,
+                    fastapi_request=fastapi_request,
+                    **_msg_kwargs,
+                ):
+                    # Pass through SSE comments (keep-alive) to prevent client timeout
+                    if chunk_str.startswith(":"):
+                        yield chunk_str
+                        continue
+                    for event in adapter.process_chunk(chunk_str):
+                        yield event
+            finally:
+                for event in adapter.finalize():
                     yield event
-            for event in adapter.finalize():
-                yield event
 
         return StreamingResponse(generate(), media_type="text/event-stream")
     else:
@@ -1888,6 +2156,11 @@ async def create_image(request: Request):
     # Hold the lock for both load AND generate to prevent model-swap races.
     # On a single-GPU Mac, image generation must be serialized anyway.
     async with _image_gen_lock:
+        # If in standby (deep/soft sleep), wake first to avoid split-brain
+        # where _standby_state='deep' but we're about to load a model
+        if _standby_state is not None:
+            await admin_wake()
+
         # Load engine if needed (or if model changed)
         if _image_gen is None:
             try:
@@ -2124,6 +2397,10 @@ async def create_image_edit(request: Request):
                 )
 
         async with _image_gen_lock:
+            # Wake from standby if needed (prevents split-brain state)
+            if _standby_state is not None:
+                await admin_wake()
+
             # Load edit engine if needed
             if _image_gen is None:
                 try:
@@ -2643,6 +2920,30 @@ async def create_chat_completion(
             # Inject JSON instruction into messages
             messages = _inject_json_instruction(messages, json_instruction)
 
+    # When thinking is explicitly disabled, strip <think> blocks from prior assistant
+    # messages in the conversation history. Without this, the model sees prior thinking
+    # in context and mimics the pattern, producing reasoning even when the generation
+    # prompt doesn't inject <think>. This is the root cause of "thinking OFF but model
+    # still thinks on 2nd message" bugs.
+    _ct_kwargs = request.chat_template_kwargs or {}
+    _explicit_thinking_off = (
+        request.enable_thinking is False
+        or (_ct_kwargs.get("enable_thinking") is False)
+    )
+    if _explicit_thinking_off and messages:
+        _think_strip_re = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
+        cleaned = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("content"):
+                content = msg["content"]
+                stripped = _think_strip_re.sub('', content).strip()
+                if stripped != content:
+                    if not stripped:
+                        continue  # Drop assistant messages that were ONLY thinking
+                    msg = {**msg, "content": stripped}
+            cleaned.append(msg)
+        messages = cleaned
+
     # Prepare kwargs
     chat_kwargs = {
         "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
@@ -2662,7 +2963,6 @@ async def create_chat_completion(
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > auto-detect from model config
-    _ct_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         chat_kwargs["enable_thinking"] = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
@@ -2759,17 +3059,30 @@ async def create_chat_completion(
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
         if _think_val is True:
-            # Build analysis prefix with optional effort hint
-            _effort = chat_kwargs.get("reasoning_effort", "").lower()
-            if _effort == "low":
-                _analysis_hint = "<|start|>assistant<|channel|>analysis (brief)<|message|>"
-            elif _effort == "high":
-                _analysis_hint = "<|start|>assistant<|channel|>analysis (thorough)<|message|>"
-            else:
-                _analysis_hint = "<|start|>assistant<|channel|>analysis<|message|>"
+            _analysis_hint = "<|start|>assistant<|channel|>analysis<|message|>"
             chat_kwargs["prompt_suffix"] = _analysis_hint
             # Skip template's generation prompt — suffix provides the full assistant prefix
             chat_kwargs["skip_generation_prompt"] = True
+            # Reasoning effort: scale total max_tokens to control how much the model
+            # can reason. Like OpenAI's reasoning_effort, lower effort = tighter token
+            # budget = less reasoning before the model must produce an answer.
+            # This is the genuine mechanism — the model allocates its token budget
+            # between analysis and final answer within the limit.
+            _effort = chat_kwargs.get("reasoning_effort", "").lower()
+            _original_max = chat_kwargs.get("max_tokens", 4096)
+            if _effort == "low":
+                # Cap total output to force concise analysis + answer
+                chat_kwargs["max_tokens"] = min(_original_max, 512)
+            elif _effort == "high":
+                # Allow generous budget for deep analysis
+                chat_kwargs["max_tokens"] = max(_original_max, 16384)
+            # medium/auto: use request's max_tokens as-is
+            _adjusted = chat_kwargs.get("max_tokens", _original_max)
+            if _adjusted != _original_max:
+                logger.info(
+                    f"[chat] reasoning_effort='{_effort}' adjusted max_tokens: "
+                    f"{_original_max} -> {_adjusted}"
+                )
             logger.info(f"[chat] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})")
         # GPT-OSS/GLM Flash models sometimes generate <|im_end|> (ChatML format)
         # which is NOT a single token in the Harmony vocabulary — it shatters into
@@ -2778,6 +3091,21 @@ async def create_chat_completion(
         if "<|im_end|>" not in _stop:
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
+
+    # Think-completion seed: when thinking is OFF but the model has a reasoning
+    # parser (thinking model), inject <think>\n</think>\n as prompt suffix.
+    # This pre-completes the thinking phase so the model immediately outputs
+    # content instead of spontaneously generating <think> tokens or outputting
+    # its chain-of-thought as plain text (which wastes compute and leaks
+    # reasoning into visible content).
+    # Only for non-Harmony models (Harmony uses <|channel|> not <think>).
+    _explicit_off = chat_kwargs.get("enable_thinking") is False
+    if (_explicit_off
+            and _reasoning_parser
+            and not isinstance(_reasoning_parser, GptOssReasoningParser)
+            and "prompt_suffix" not in chat_kwargs):
+        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
+        logger.debug("[chat] Injecting think-completion seed (enable_thinking=False)")
 
     if request.stream:
         return StreamingResponse(
@@ -2821,7 +3149,9 @@ async def create_chat_completion(
     reasoning_text = None
     content_for_parsing = output.text
     if _reasoning_parser:
-        reasoning_text, remaining_text = _reasoning_parser.extract_reasoning(
+        # Clone parser per-request to avoid shared state across concurrent requests
+        request_parser = _reasoning_parser.__class__()
+        reasoning_text, remaining_text = request_parser.extract_reasoning(
             output.text
         )
         if remaining_text is not None:
@@ -3144,6 +3474,26 @@ async def create_response(
         if json_instruction:
             messages = _inject_json_instruction(messages, json_instruction)
 
+    # Strip <think> blocks from history when thinking is OFF (same as Chat Completions path)
+    _ct_kwargs = request.chat_template_kwargs or {}
+    _explicit_thinking_off = (
+        request.enable_thinking is False
+        or (_ct_kwargs.get("enable_thinking") is False)
+    )
+    if _explicit_thinking_off and messages:
+        _think_strip_re = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
+        cleaned = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("content"):
+                content = msg["content"]
+                stripped = _think_strip_re.sub('', content).strip()
+                if stripped != content:
+                    if not stripped:
+                        continue  # Drop assistant messages that were ONLY thinking
+                    msg = {**msg, "content": stripped}
+            cleaned.append(msg)
+        messages = cleaned
+
     # Build kwargs
     chat_kwargs = {
         "max_tokens": request.max_output_tokens if request.max_output_tokens is not None else _default_max_tokens,
@@ -3163,7 +3513,6 @@ async def create_response(
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > auto-detect from model config
-    _ct_kwargs = request.chat_template_kwargs or {}
     if request.enable_thinking is not None:
         chat_kwargs["enable_thinking"] = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
@@ -3266,21 +3615,36 @@ async def create_response(
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
         if _think_val is True:
-            _effort = chat_kwargs.get("reasoning_effort", "").lower()
-            if _effort == "low":
-                _analysis_hint = "<|start|>assistant<|channel|>analysis (brief)<|message|>"
-            elif _effort == "high":
-                _analysis_hint = "<|start|>assistant<|channel|>analysis (thorough)<|message|>"
-            else:
-                _analysis_hint = "<|start|>assistant<|channel|>analysis<|message|>"
+            _analysis_hint = "<|start|>assistant<|channel|>analysis<|message|>"
             chat_kwargs["prompt_suffix"] = _analysis_hint
             chat_kwargs["skip_generation_prompt"] = True
+            _effort = chat_kwargs.get("reasoning_effort", "").lower()
+            _original_max = chat_kwargs.get("max_tokens", 4096)
+            if _effort == "low":
+                chat_kwargs["max_tokens"] = min(_original_max, 512)
+            elif _effort == "high":
+                chat_kwargs["max_tokens"] = max(_original_max, 16384)
+            _adjusted = chat_kwargs.get("max_tokens", _original_max)
+            if _adjusted != _original_max:
+                logger.info(
+                    f"[responses] reasoning_effort='{_effort}' adjusted max_tokens: "
+                    f"{_original_max} -> {_adjusted}"
+                )
             logger.info(f"[responses] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})")
         # GPT-OSS/GLM Flash: add <|im_end|> as string stop sequence (see Chat Completions path)
         _stop = chat_kwargs.get("stop") or []
         if "<|im_end|>" not in _stop:
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
+
+    # Think-completion seed (same as Chat Completions path — see comment there)
+    _explicit_off = chat_kwargs.get("enable_thinking") is False
+    if (_explicit_off
+            and _reasoning_parser
+            and not isinstance(_reasoning_parser, GptOssReasoningParser)
+            and "prompt_suffix" not in chat_kwargs):
+        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
+        logger.debug("[responses] Injecting think-completion seed (enable_thinking=False)")
 
     if request.stream:
         return StreamingResponse(
@@ -3318,7 +3682,9 @@ async def create_response(
     reasoning_text = None
     content_for_parsing = output.text
     if _reasoning_parser:
-        reasoning_text, remaining_text = _reasoning_parser.extract_reasoning(
+        # Clone parser per-request to avoid shared state across concurrent requests
+        request_parser = _reasoning_parser.__class__()
+        reasoning_text, remaining_text = request_parser.extract_reasoning(
             output.text
         )
         if remaining_text is not None:
@@ -3762,7 +4128,13 @@ async def stream_chat_completion(
 
                 if delta_msg is None:
                     # Skip this chunk (e.g., <think> token itself)
+                    if suppress_reasoning:
+                        logger.debug(f"[reasoning-debug] parser returned None for delta={repr(delta_text[:50])}, suppress={suppress_reasoning}, think_in_prompt={effective_think_in_template}")
                     continue
+
+                # Debug: log parser output when suppress is active
+                if suppress_reasoning and (delta_msg.content or delta_msg.reasoning):
+                    logger.debug(f"[reasoning-debug] content={repr((delta_msg.content or '')[:30])}, reasoning={repr((delta_msg.reasoning or '')[:30])}, suppress={suppress_reasoning}")
 
                 # Accumulate for marker detection (before buffering check)
                 if delta_msg.content:

@@ -45,7 +45,7 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
 // relies on config.json vision_config, not the family's isMultimodal flag.
 registerFamily('qwen3.5', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 (dense)', priority: 4 })
 registerFamily('qwen3.5-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: false, description: 'Qwen 3.5 MoE', priority: 4 })
-registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 })
+registerFamily('qwen3-next', { cacheType: 'mamba', toolParser: 'qwen', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'Qwen 3 Next (hybrid Mamba)', priority: 1 })
 registerFamily('qwen3-vl', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 3 Vision-Language', priority: 5 })
 registerFamily('qwen3-moe', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 MoE', priority: 5 })
 registerFamily('qwen3', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Qwen 3 / QwQ', priority: 10 })
@@ -125,7 +125,7 @@ registerFamily('step', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser
 registerFamily('xlam', { cacheType: 'kv', toolParser: 'xlam', enableAutoToolChoice: true, description: 'xLAM', priority: 20 })
 
 // Kimi/Moonshot
-registerFamily('kimi-k2', { cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi K2 (MoE)', priority: 5 })
+registerFamily('kimi-k2', { cacheType: 'kv', toolParser: 'kimi', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Kimi K2 (MoE)', priority: 5 })
 registerFamily('kimi', { cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi/Moonshot', priority: 20 })
 
 // InternLM

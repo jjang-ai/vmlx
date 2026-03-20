@@ -350,7 +350,7 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     try:
         from jang_tools.allocate import JANG_PROFILES, profile_for_bits
     except ImportError:
-        print("\nError: jang-tools not installed. Install with: pip install jang-tools")
+        print("\nError: jang package not installed. Install with: pip install jang")
         sys.exit(1)
 
     # Accept profile name, bit number, or custom CUSTOM_C_I_P format
@@ -375,11 +375,6 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     elif raw_profile.isdigit():
         # User passed a number like "2" or "4"
         profile = profile_for_bits(int(raw_profile))
-        # Fallback: jang-tools may return profiles not in JANG_PROFILES (e.g., JANG_3K)
-        if profile not in JANG_PROFILES:
-            _fallback_map = {1: "JANG_1L", 2: "JANG_2S", 3: "JANG_3S", 4: "JANG_4S",
-                             5: "JANG_5M", 6: "JANG_6M", 7: "JANG_7L", 8: "JANG_8L"}
-            profile = _fallback_map.get(int(raw_profile), profile)
         print(f"Bit target {raw_profile} → using profile {profile}")
     else:
         profile = raw_profile.upper()
@@ -392,9 +387,16 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
         print(f"\nError: {e}")
         sys.exit(1)
 
-    if profile not in JANG_PROFILES:
+    # Accept both fixed 3-tier profiles (JANG_2S, etc.) and K-quant dynamic profiles (JANG_3K, etc.)
+    try:
+        from jang_tools.allocate import is_k_quant, JANG_K_TARGETS
+        _is_valid = profile in JANG_PROFILES or is_k_quant(profile)
+    except ImportError:
+        _is_valid = profile in JANG_PROFILES
+    if not _is_valid:
         print(f"\nError: Unknown JANG profile '{profile}'.")
-        print(f"Available: {', '.join(sorted(JANG_PROFILES.keys()))}")
+        all_profiles = sorted(set(list(JANG_PROFILES.keys()) + list(JANG_K_TARGETS.keys())) if 'JANG_K_TARGETS' in dir() else JANG_PROFILES.keys())
+        print(f"Available: {', '.join(all_profiles)}")
         print(f"Or use a number 1-8 for automatic profile selection.")
         sys.exit(1)
 
@@ -419,7 +421,16 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
             shutil.rmtree(output_dir)
 
     # Show pre-conversion estimate
-    crit, imp, comp = JANG_PROFILES[profile]
+    if profile in JANG_PROFILES:
+        crit, imp, comp = JANG_PROFILES[profile]
+    else:
+        # K-quant dynamic profile — use target bits as the compress tier
+        try:
+            from jang_tools.allocate import JANG_K_TARGETS
+            comp = int(JANG_K_TARGETS.get(profile, int(raw_profile) if raw_profile.isdigit() else 3))
+        except Exception:
+            comp = int(raw_profile) if raw_profile.isdigit() else 3
+        crit, imp = comp, comp  # K-quant uses dynamic per-layer, not fixed 3-tier
 
     # Estimate size and check memory
     est_str = ""
@@ -466,7 +477,10 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     print()
     print("=" * 60)
     print(f"  JANG Convert — {profile}")
-    print(f"  CRITICAL={crit}b  IMPORTANT={imp}b  COMPRESS={comp}b")
+    if profile in JANG_PROFILES:
+        print(f"  CRITICAL={crit}b  IMPORTANT={imp}b  COMPRESS={comp}b")
+    else:
+        print(f"  K-Quant dynamic allocation — target ~{comp}b average")
     print(f"  Source: {model_path}")
     print(f"  Output: {output_path}")
     print(f"  Method: {args.jang_method}")
@@ -488,7 +502,7 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
         result = convert_model(
             model_path=str(model_path),
             output_path=str(output_dir),
-            target_bits=comp,  # target is the COMPRESS tier bits
+            target_bits=comp,  # COMPRESS tier bits (fixed profile) or K target average (K-quant profile)
             profile=profile,
             quantization_method=args.jang_method,
             calibration_method=calibration_method,

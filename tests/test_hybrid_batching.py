@@ -585,8 +585,13 @@ class TestCacheEndpointAuth:
                 f"Endpoint {endpoint} is missing verify_api_key dependency"
             )
 
-        # DELETE /v1/cache
-        idx = source.find('"/v1/cache"')
+        # DELETE /v1/cache — find the actual endpoint decorator, not middleware references
+        # Search for the delete method decorator pattern to avoid matching middleware text
+        delete_cache_pattern = 'delete("/v1/cache"'
+        idx = source.find(delete_cache_pattern)
+        if idx < 0:
+            # Fallback: find last occurrence (endpoint is after middleware)
+            idx = source.rfind('"/v1/cache"')
         assert idx >= 0
         context = source[max(0, idx - 200):idx + 100]
         assert "verify_api_key" in context, (

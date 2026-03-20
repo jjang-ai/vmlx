@@ -136,7 +136,7 @@ class ModelConfigRegistry:
 
             if model_type:
                 # Name-based disambiguation for models sharing model_type:
-                # GLM-Z1 uses model_type "glm4" but needs deepseek_r1 reasoning
+                # GLM-Z1 uses model_type "glm4" but needs openai_gptoss reasoning (Harmony protocol)
                 if model_type == "glm4" and re.search(r"glm.?z1", model_name, re.IGNORECASE):
                     for config in self._configs:
                         if config.family_name == "glm_z1":

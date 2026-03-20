@@ -433,6 +433,44 @@ class Scheduler:
             logger.debug(f"Could not detect head_dim: {e}")
         return None
 
+    def _detect_n_kv_heads(self) -> int:
+        """Detect number of KV heads from model config (for GQA head normalization).
+
+        BatchKVCache.merge() inflates the H dimension to the maximum across
+        all caches in the batch. When the cache is extracted and stored in
+        paged blocks, the inflated head count persists. On the next turn,
+        reconstruct_cache() builds a cache with wrong H, causing a broadcast
+        error. This method provides the ground-truth KV head count so
+        extraction can slice away the inflated heads.
+        """
+        if hasattr(self, '_n_kv_heads_cached'):
+            return self._n_kv_heads_cached
+        n_kv = 0
+        try:
+            for cfg_source in ('args', 'config'):
+                cfg = getattr(self.model, cfg_source, None)
+                if cfg is None:
+                    continue
+                # Try model-specific KV head count attributes
+                n_kv = (
+                    getattr(cfg, 'num_key_value_heads', 0)
+                    or getattr(cfg, 'num_kv_heads', 0)
+                )
+                if n_kv:
+                    break
+                # Fall back to num_attention_heads (MHA — all heads are KV heads)
+                n_kv = getattr(cfg, 'num_attention_heads', 0)
+                if n_kv:
+                    break
+        except Exception:
+            pass
+        # Ensure the result is always a plain int (guards against MagicMock
+        # or other non-int returns from getattr on unusual model configs)
+        if not isinstance(n_kv, int):
+            n_kv = 0
+        self._n_kv_heads_cached = n_kv
+        return n_kv
+
     def _wrap_make_cache_quantized(self, bits: int, group_size: int) -> None:
         """
         Configure KV cache quantization for prefix cache storage.
@@ -1062,10 +1100,106 @@ class Scheduler:
         class_counts: Dict[str, int] = {}
         for i, layer_cache in enumerate(raw_cache):
             try:
-                if hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
+                # CacheList (MoE models like DeepSeek V3.2, Falcon H1):
+                # wrapper with .caches attribute containing sub-caches.
+                # Extract each sub-cache's state and store as a list.
+                if hasattr(layer_cache, "caches") and isinstance(
+                    getattr(layer_cache, "caches", None), (list, tuple)
+                ):
+                    sub_states = []
+                    all_ok = True
+                    n_kv = self._detect_n_kv_heads()
+                    for j, sub_cache in enumerate(layer_cache.caches):
+                        if hasattr(sub_cache, "state") and hasattr(sub_cache, "meta_state"):
+                            sub_state = sub_cache.state
+                            # Normalize GQA head inflation in sub-caches too
+                            # (handles both plain tensors and quantized tuples)
+                            if (isinstance(sub_state, tuple) and len(sub_state) == 2
+                                    and n_kv > 0):
+                                sk, sv = sub_state
+                                if (hasattr(sk, 'shape') and len(sk.shape) == 4
+                                        and sk.shape[1] > n_kv):
+                                    sub_state = (sk[:, :n_kv, :, :],
+                                                 sv[:, :n_kv, :, :])
+                                elif (isinstance(sk, (tuple, list)) and len(sk) >= 1
+                                        and hasattr(sk[0], 'shape')
+                                        and len(sk[0].shape) == 4
+                                        and sk[0].shape[1] > n_kv):
+                                    sub_state = (
+                                        tuple(t[:, :n_kv, :, :] for t in sk),
+                                        tuple(t[:, :n_kv, :, :] for t in sv),
+                                    )
+                            sub_states.append({
+                                "state": sub_state,
+                                "meta_state": sub_cache.meta_state,
+                                "class_name": type(sub_cache).__name__,
+                            })
+                        else:
+                            logger.debug(
+                                f"Layer {i} CacheList sub-cache {j} "
+                                f"({type(sub_cache).__name__}) lacks state/meta_state"
+                            )
+                            all_ok = False
+                            break
+                    if all_ok and sub_states:
+                        cls_name = "CacheList"
+                        class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+                        extracted.append({
+                            "state": None,
+                            "meta_state": None,
+                            "class_name": cls_name,
+                            "sub_caches": sub_states,
+                        })
+                    else:
+                        failed += 1
+                elif hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
                     state = layer_cache.state  # (keys, values) MLX arrays
                     meta = layer_cache.meta_state  # (offset,) as strings
                     cls_name = type(layer_cache).__name__
+
+                    # Normalize GQA head inflation from BatchKVCache.merge().
+                    # merge() broadcasts H to max across all caches in the batch,
+                    # but the true KV head count is smaller for GQA/MQA models.
+                    # Slice away the inflated heads before storing.
+                    # Handles both standard KVCache (plain tensors) and
+                    # QuantizedKVCache (tuple-of-tuples: (data, scales, zeros)).
+                    if isinstance(state, tuple) and len(state) == 2:
+                        keys, values = state
+                        n_kv = self._detect_n_kv_heads()
+                        if n_kv > 0:
+                            if hasattr(keys, 'shape') and len(keys.shape) == 4:
+                                # Standard KVCache: keys/values are 4D tensors
+                                if keys.shape[1] > n_kv:
+                                    orig_h = keys.shape[1]
+                                    keys = keys[:, :n_kv, :, :]
+                                    values = values[:, :n_kv, :, :]
+                                    state = (keys, values)
+                                    if i == 0:
+                                        logger.debug(
+                                            f"GQA head normalization: sliced H "
+                                            f"{orig_h} → {n_kv}"
+                                        )
+                            elif isinstance(keys, (tuple, list)) and len(keys) >= 1:
+                                # QuantizedKVCache: keys/values are tuples of
+                                # (data, scales, zeros) — check first component
+                                first_k = keys[0]
+                                if (hasattr(first_k, 'shape')
+                                        and len(first_k.shape) == 4
+                                        and first_k.shape[1] > n_kv):
+                                    orig_h = first_k.shape[1]
+                                    keys = tuple(
+                                        t[:, :n_kv, :, :] for t in keys
+                                    )
+                                    values = tuple(
+                                        t[:, :n_kv, :, :] for t in values
+                                    )
+                                    state = (keys, values)
+                                    if i == 0:
+                                        logger.debug(
+                                            f"GQA head normalization (quantized): "
+                                            f"sliced H {orig_h} → {n_kv}"
+                                        )
+
                     class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
                     extracted.append(
                         {
@@ -1488,11 +1622,18 @@ class Scheduler:
                         cache_bytes = estimate_kv_cache_memory(cache_to_use)
                         import psutil
                         avail = psutil.virtual_memory().available
-                        # Need ~1.5x cache memory for merge overhead.
-                        # BatchGenerator._merge_caches temporarily holds both
-                        # old and new arrays during concatenation.
-                        # (was 2.5x which was too conservative for large models)
-                        needed = cache_bytes * 1.5
+                        # Memory amplification during dequantize + merge:
+                        # - q4: quantized + full precision coexist = ~5x quantized size
+                        # - q8: quantized + full precision coexist = ~3x quantized size
+                        # - No quant: merge overhead only = ~2x
+                        kv_bits = getattr(self, '_kv_cache_bits', 0)
+                        if kv_bits and kv_bits <= 4:
+                            multiplier = 5.0
+                        elif kv_bits and kv_bits <= 8:
+                            multiplier = 3.0
+                        else:
+                            multiplier = 2.0
+                        needed = cache_bytes * multiplier
                         if needed > avail:
                             logger.warning(
                                 f"Request {request.request_id}: skipping cache reuse "
@@ -2204,6 +2345,11 @@ class Scheduler:
         """
         # Standard reset first
         self.reset()
+
+        # Invalidate cached model config values so they are re-detected
+        # if the scheduler is ever reused with a different model
+        if hasattr(self, '_n_kv_heads_cached'):
+            del self._n_kv_heads_cached
 
         # Clear any model-level cache state
         # MLX models may have internal cache references

@@ -19,7 +19,7 @@ interface SessionDetail {
   host: string
   port: number
   pid?: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
   config: string
   type?: 'local' | 'remote'
   remoteUrl?: string
@@ -93,6 +93,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
     ? (displaySession.modelName || displaySession.modelPath.split('/').pop() || 'Model')
     : 'No model selected'
   const isRunning = displaySession?.status === 'running'
+  const isStandby = displaySession?.status === 'standby'
   const isLoading = displaySession?.status === 'loading'
   const isError = displaySession?.status === 'error'
   const isStopped = displaySession?.status === 'stopped' || isError
@@ -236,7 +237,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
             className="flex items-center gap-1.5 text-xs px-2 py-1 rounded border border-border hover:bg-accent transition-colors min-w-0 max-w-[280px]"
           >
             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-              isRunning ? 'bg-success' : isLoading ? 'bg-warning animate-pulse' : 'bg-muted-foreground'
+              isRunning ? 'bg-success' : isStandby ? 'bg-blue-400' : isLoading ? 'bg-warning animate-pulse' : 'bg-muted-foreground'
             }`} />
             <span className="font-medium truncate">{shortName}</span>
             {isRemote && (
@@ -261,6 +262,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
                   >
                     <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                       s.status === 'running' ? 'bg-success'
+                        : s.status === 'standby' ? 'bg-blue-400'
                         : s.status === 'loading' ? 'bg-warning animate-pulse'
                         : 'bg-muted-foreground'
                     }`} />
@@ -269,7 +271,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
                       <span className="text-[10px] bg-primary/15 text-primary px-1 py-0.5 rounded">Remote</span>
                     )}
                     <span className="text-[10px] text-muted-foreground">
-                      {s.status === 'running' ? 'Running' : s.status === 'loading' ? 'Loading' : 'Stopped'}
+                      {s.status === 'running' ? 'Running' : s.status === 'standby' ? 'Sleeping' : s.status === 'loading' ? 'Loading' : 'Stopped'}
                     </span>
                   </button>
                 )

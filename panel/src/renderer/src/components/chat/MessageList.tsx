@@ -28,13 +28,14 @@ interface MessageListProps {
   currentMetrics?: MessageMetrics | null
   reasoningMap?: Record<string, string>
   reasoningDoneMap?: Record<string, boolean>
+  thinkingSilentlyMap?: Record<string, boolean>
   toolStatusMap?: Record<string, any[]>
   hideToolStatus?: boolean
   sessionId?: string
   sessionEndpoint?: { host: string; port: number }
 }
 
-export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint }: MessageListProps) {
+export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, thinkingSilentlyMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
@@ -97,6 +98,7 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
             metrics={message.id === streamingMessageId ? currentMetrics : message.metrics}
             reasoningContent={reasoningMap?.[message.id]}
             reasoningDone={reasoningDoneMap?.[message.id] ?? false}
+            thinkingSilently={thinkingSilentlyMap?.[message.id] ?? false}
             toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
             sessionId={sessionId}
             sessionEndpoint={sessionEndpoint}

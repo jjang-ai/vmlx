@@ -24,6 +24,7 @@ interface MessageBubbleProps {
   metrics?: MessageMetrics | null
   reasoningContent?: string
   reasoningDone?: boolean
+  thinkingSilently?: boolean
   toolStatuses?: any[]
   sessionId?: string
   sessionEndpoint?: { host: string; port: number }
@@ -93,7 +94,7 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
 /** Prose classes for rendered markdown */
 const proseClasses = 'prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:text-sm [&_th]:text-left [&_th]:font-medium [&_th]:px-3 [&_th]:py-1.5 [&_td]:px-3 [&_td]:py-1.5'
 
-export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, sessionId, sessionEndpoint }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, thinkingSilently, toolStatuses, sessionId, sessionEndpoint }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [zoomedImage, setZoomedImage] = useState<string | null>(null)
 
@@ -332,14 +333,18 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
           <ToolCallStatus statuses={toolStatuses} isStreaming={!!isStreaming} />
         )}
 
-        {/* Typing indicator */}
+        {/* Typing / thinking silently indicator */}
         {isStreaming && !message.content && !reasoningContent && !(toolStatuses && toolStatuses.length > 0) && (
           <div className="flex items-center gap-2 text-muted-foreground text-sm py-1">
-            <span className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            </span>
+            {thinkingSilently ? (
+              <span className="italic animate-pulse">Thinking...</span>
+            ) : (
+              <span className="flex gap-1">
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </span>
+            )}
           </div>
         )}
 

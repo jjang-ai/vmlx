@@ -107,4 +107,5 @@ export interface DetectedProcess {
   modelPath: string
   healthy: boolean
   modelName?: string
+  standbyDepth?: 'soft' | 'deep' | null  // null = running, 'soft'/'deep' = in standby
 }

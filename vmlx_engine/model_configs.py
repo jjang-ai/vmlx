@@ -155,6 +155,8 @@ def register_all(registry=None):
         cache_type="mamba",
         eos_tokens=["<|im_end|>"],
         tool_parser="qwen",
+        reasoning_parser="qwen3",
+        think_in_template=True,
         priority=1,
     ))
 
@@ -298,15 +300,16 @@ def register_all(registry=None):
         priority=3,
     ))
 
-    # GLM-Z1: reasoning model using deepseek_r1 (shares model_type "glm4" with base GLM-4,
-    # but detected by name matching in lookup() — see model_config_registry.py)
+    # GLM-Z1: reasoning model using Harmony channel protocol (same as GPT-OSS/GLM-4.7).
+    # Uses openai_gptoss parser for <|channel|>analysis reasoning, NOT deepseek_r1.
+    # The Harmony template does not inject <think>, so think_in_template must be False.
+    # (Shares model_type "glm4" with base GLM-4, disambiguated by name in lookup())
     _register(ModelConfig(
         family_name="glm_z1",
         model_types=[],  # No unique model_type — disambiguated by name in lookup()
         cache_type="kv",
         tool_parser="glm47",
-        reasoning_parser="deepseek_r1",
-        think_in_template=True,
+        reasoning_parser="openai_gptoss",
         chat_template_custom=HARMONY_CHAT_TEMPLATE,
         preserve_native_tool_format=True,
         priority=2,
@@ -515,6 +518,7 @@ def register_all(registry=None):
         model_types=["kimi_k2"],
         cache_type="kv",
         tool_parser="kimi",
+        reasoning_parser="deepseek_r1",
         priority=20,
     ))
 

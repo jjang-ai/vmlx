@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Menu, Settings, X, ImageIcon } from 'lucide-react'
+import { ArrowLeft, Menu, Settings, X, ImageIcon, AlertTriangle } from 'lucide-react'
 import { ChatInterface } from '../chat/ChatInterface'
 import { ChatList } from '../chat/ChatList'
 import { ChatSettings } from '../chat/ChatSettings'
@@ -19,7 +19,7 @@ interface Session {
   host: string
   port: number
   pid?: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
   config: string
   createdAt: number
   updatedAt: number
@@ -50,6 +50,20 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const [overridesVersion, setOverridesVersion] = useState(0)
   const [effectiveReasoningParser, setEffectiveReasoningParser] = useState<string | undefined>(undefined)
   const [jangLabel, setJangLabel] = useState<string | undefined>(undefined)
+  const [jangNoticeDismissed, setJangNoticeDismissed] = useState(true) // hidden by default until checked
+
+  // Check JANG redownload notice dismiss state
+  useEffect(() => {
+    try {
+      const val = window.api.settings?.get('jang_redownload_dismissed')
+      if (val instanceof Promise) {
+        val.then((v: any) => { if (v !== '2026-03-19') setJangNoticeDismissed(false) })
+           .catch(() => setJangNoticeDismissed(false))
+      } else {
+        if (val !== '2026-03-19') setJangNoticeDismissed(false)
+      }
+    } catch { setJangNoticeDismissed(false) }
+  }, [])
 
   // Load session and its chats
   useEffect(() => {
@@ -146,6 +160,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
     const unsubReady = window.api.sessions.onReady(handleReady)
     const unsubStopped = window.api.sessions.onStopped(handleStopped)
     const unsubError = window.api.sessions.onError(handleError)
+    const unsubStandby = window.api.sessions.onStandby?.((data: any) => {
+      if (data.sessionId === sessionId) {
+        setSession(prev => prev ? { ...prev, status: 'standby' as const } : prev)
+      }
+    })
 
     return () => {
       unsubHealth()
@@ -153,6 +172,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
       unsubReady()
       unsubStopped()
       unsubError()
+      unsubStandby?.()
     }
   }, [sessionId])
 
@@ -203,6 +223,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const statusColor = session.status === 'running'
     ? (isRemote ? 'bg-success' : 'bg-primary')
+    : session.status === 'standby' ? 'bg-blue-400'
     : session.status === 'loading' ? 'bg-warning'
     : session.status === 'error' ? 'bg-destructive'
     : 'bg-muted-foreground'
@@ -342,6 +363,27 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               </button>
             </>
           )}
+          {session.status === 'standby' && (
+            <>
+              <span className="text-xs text-blue-400 font-medium px-1">
+                {(session as any).standbyDepth === 'deep' ? 'Deep Sleep' : 'Light Sleep'}
+              </span>
+              <button
+                onClick={async () => {
+                  try { await window.api.sessions.wake?.(session.id) } catch {}
+                }}
+                className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Wake
+              </button>
+              <button
+                onClick={handleStop}
+                className="text-xs px-2 py-1 border border-border text-muted-foreground rounded hover:bg-destructive hover:text-destructive-foreground"
+              >
+                Stop
+              </button>
+            </>
+          )}
           {(session.status === 'stopped' || session.status === 'error') && (
             <>
               {isRemote && (
@@ -370,6 +412,27 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           )}
         </div>
       </div>
+
+      {/* JANG Redownload Notice */}
+      {jangLabel && !jangNoticeDismissed && (
+        <div className="flex items-start gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex-shrink-0">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-300/90 flex-1">
+            <span className="font-semibold">JANG Model Update Required:</span>{' '}
+            As of 3/19/2026, all JANG models must be re-downloaded from HuggingFace (JANGQ-AI) to include proper chat templates.
+            Without updated models, thinking on/off may not work correctly and some models may loop.
+          </p>
+          <button
+            onClick={() => {
+              setJangNoticeDismissed(true)
+              try { window.api.settings?.set('jang_redownload_dismissed', '2026-03-19') } catch {}
+            }}
+            className="text-amber-400/60 hover:text-amber-300 flex-shrink-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Chat List Overlay */}
       {showChatList && (
@@ -418,7 +481,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
             <ChatInterface
               chatId={currentChatId}
               onNewChat={handleNewChat}
-              sessionEndpoint={session.status === 'running' ? { host: session.host, port: session.port } : undefined}
+              sessionEndpoint={(session.status === 'running' || session.status === 'standby') ? { host: session.host, port: session.port } : undefined}
               sessionId={session.id}
               overridesVersion={overridesVersion}
             />

@@ -11,7 +11,7 @@ interface Session {
   host: string
   port: number
   pid?: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
   config: string
   createdAt: number
   updatedAt: number
@@ -89,6 +89,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
       }),
       window.api.sessions.onCreated(() => loadSessions()),
       window.api.sessions.onDeleted(() => loadSessions()),
+      ...(window.api.sessions.onStandby ? [window.api.sessions.onStandby(() => loadSessions())] : []),
     ]
 
     return () => {
@@ -173,8 +174,18 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
     await loadDirectories()
   }
 
-  const runningSessions = sessions.filter(s => s.status === 'running' || s.status === 'loading')
+  const runningSessions = sessions.filter(s => s.status === 'running' || s.status === 'loading' || s.status === 'standby')
   const stoppedSessions = sessions.filter(s => s.status === 'stopped' || s.status === 'error')
+
+  const handleSleep = async (sessionId: string) => {
+    try { await window.api.sessions.softSleep?.(sessionId) } catch {}
+    loadSessions()
+  }
+
+  const handleWake = async (sessionId: string) => {
+    try { await window.api.sessions.wake?.(sessionId) } catch {}
+    loadSessions()
+  }
 
   if (loading && sessions.length === 0) {
     return (
@@ -275,6 +286,8 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
                     onStart={handleStart}
                     onStop={handleStop}
                     onDelete={handleDelete}
+                    onSleep={handleSleep}
+                    onWake={handleWake}
                   />
                 ))}
               </div>
@@ -297,6 +310,8 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
                     onStart={handleStart}
                     onStop={handleStop}
                     onDelete={handleDelete}
+                    onSleep={handleSleep}
+                    onWake={handleWake}
                   />
                 ))}
               </div>

@@ -207,7 +207,7 @@ function createWindow(): void {
           " script-src 'self';" +
           " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
           " font-src 'self' https://fonts.gstatic.com;" +
-          " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;" +
+          " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://mlx.studio https://*.mlx.studio;" +
           " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co;" +
           " media-src 'self' blob:;"
         ]

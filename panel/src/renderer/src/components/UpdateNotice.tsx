@@ -1,15 +1,32 @@
 import { useState, useEffect } from 'react'
 import { X } from 'lucide-react'
 
-const CURRENT_NOTICE_VERSION = '1.2.6'
+const CURRENT_NOTICE_VERSION = '1.2.7'
 
 const NOTICE_CONTENT = {
   title: "What's New in MLX Studio",
-  lines: [
-    "JANG quantization now supports Vision-Language (VL) models — load images directly in chat with JANG MoE models like Qwen3.5-35B and 122B.",
-    "JANG models scored 73% MMLU on 122B (vs 46% MLX uniform) and 5/6 free-form on 35B — the highest quality 2-bit quantization for Apple Silicon.",
-    "Please re-download JANG models from HuggingFace (JANGQ-AI) to get the latest v2 format with VL support and mixed group-size fixes.",
-    "New: Fill inpainting with mask painter, per-byte download progress, loading indicators, and 6 critical bug fixes.",
+  sections: [
+    {
+      heading: "JIT Sleep & Auto-Wake",
+      lines: [
+        "Idle models now automatically sleep to free GPU memory — light sleep clears caches instantly, deep sleep fully unloads the model.",
+        "Models auto-wake on the next request (JIT) in 2-15 seconds. Configure per-session timeouts in Power Management settings.",
+      ],
+    },
+    {
+      heading: "Disk Cache & Stability",
+      lines: [
+        "Fixed disk cache writes that silently failed (ENOENT on rename). Orphaned temp files are now cleaned up on startup.",
+        "Smoother token streaming (8ms throttle), fixed memory graph visibility, and 38+ bug fixes across the production audit.",
+      ],
+    },
+    {
+      heading: "JANG v2 Quantization",
+      lines: [
+        "JANG now supports Vision-Language (VL) models — load images in chat with JANG MoE models like Qwen3.5-35B and 122B.",
+        "Re-download JANG models from HuggingFace (JANGQ-AI) to get the latest v2 format with VL support and mixed group-size fixes.",
+      ],
+    },
   ],
   footer: "Thank you for using MLX Studio and JANG. — Jinho Jang",
 }
@@ -46,9 +63,14 @@ export function UpdateNotice() {
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="space-y-2 text-xs text-muted-foreground leading-relaxed">
-          {NOTICE_CONTENT.lines.map((line, i) => (
-            <p key={i}>{line}</p>
+        <div className="space-y-3 text-xs text-muted-foreground leading-relaxed max-h-[60vh] overflow-y-auto">
+          {NOTICE_CONTENT.sections.map((section, si) => (
+            <div key={si}>
+              <p className="text-[11px] font-semibold text-foreground/80 mb-1">{section.heading}</p>
+              {section.lines.map((line, li) => (
+                <p key={li} className="ml-2">{line}</p>
+              ))}
+            </div>
           ))}
         </div>
         <p className="text-[10px] text-muted-foreground/60 mt-3 italic">{NOTICE_CONTENT.footer}</p>

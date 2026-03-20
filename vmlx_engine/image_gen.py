@@ -217,6 +217,7 @@ class ImageGenEngine:
     def __init__(self):
         self._model = None
         self._model_name: str | None = None
+        self._model_path: str | None = None
         self._mflux_class: str | None = None
         self._quantize: int | None = None
         self._loaded = False
@@ -326,6 +327,7 @@ class ImageGenEngine:
 
         elapsed = time.perf_counter() - start
         self._model_name = resolved_name
+        self._model_path = model_path
         self._mflux_class = resolved_class
         self._quantize = quantize
         self._loaded = True
@@ -344,13 +346,13 @@ class ImageGenEngine:
         self.load(model_name, quantize, model_path, mflux_class, mflux_name)
 
     def unload(self) -> None:
-        """Unload the current model to free memory."""
+        """Unload the current model to free memory.
+        Preserves _model_name, _mflux_class, _quantize, _model_path for reload on wake."""
         if self._model is not None:
             del self._model
             self._model = None
             self._loaded = False
-            self._model_name = None
-            self._mflux_class = None
+            # Keep metadata for wake/reload: _model_name, _mflux_class, _quantize, _model_path
             try:
                 import mlx.core as mx
                 if hasattr(mx, 'clear_memory_cache'):

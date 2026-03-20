@@ -395,10 +395,13 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     // AND for endpoint resolution (remote sessions need remoteUrl/apiKey/type)
     let timeoutSeconds = 300
     let sessionHasReasoningParser = false
+    let isHarmonyModel = false
     let chatSession: import('../database').Session | undefined
     if (chat.modelPath) {
       chatSession = sessionManager.getSessionByModelPath(chat.modelPath.replace(/\/+$/, ''))
       if (chatSession) {
+        // Touch session to reset idle timer — prevents premature sleep during active chat
+        sessionManager.touchSession(chatSession.id)
         try {
           const sessionConfig = JSON.parse(chatSession.config)
           if (sessionConfig.timeout && sessionConfig.timeout > 0) {
@@ -407,10 +410,12 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           // Check if model has a reasoning parser (for enable_thinking default)
           if (sessionConfig.reasoningParser && sessionConfig.reasoningParser !== 'auto') {
             sessionHasReasoningParser = true
+            isHarmonyModel = sessionConfig.reasoningParser === 'openai_gptoss'
           } else if (sessionConfig.reasoningParser === 'auto' && chat.modelPath) {
             // "auto" means use detection
             const detected = detectModelConfigFromDir(chat.modelPath)
             sessionHasReasoningParser = !!detected.reasoningParser
+            isHarmonyModel = detected.reasoningParser === 'openai_gptoss'
           }
         } catch (_) { }
       }
@@ -568,6 +573,12 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // these are UI-only annotations saved to DB on abort, not meant for the model
       if (m.role === 'assistant' && typeof msgContent === 'string') {
         msgContent = msgContent.replace(/\n\n\[Generation interrupted\]$/, '').replace(/^\[Generation interrupted\]$/, '')
+        // Strip any leaked <think> blocks from prior messages when thinking is OFF.
+        // These can leak if server didn't catch them or model was mid-think on abort.
+        // Without stripping, the model sees prior thinking in context and mimics it.
+        if (overrides?.enableThinking === false) {
+          msgContent = msgContent.replace(/<think>[\s\S]*?<\/think>\s*/g, '')
+        }
         if (!msgContent.trim()) continue // Skip entirely empty aborted messages
       }
       // Detect JSON content arrays (multimodal messages with images)
@@ -610,8 +621,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     let tpsTokenBase = 0 // re-anchor point for tpsSnapshots after iteration reset
     // Throttle IPC emission to renderer (~30 fps for smooth streaming)
     let lastStreamEmitTime = 0
-    const STREAM_THROTTLE_MS = 32
+    const STREAM_THROTTLE_MS = 8  // ~120fps — smooth token-by-token even at 100+ tok/s
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let thinkingTimer: ReturnType<typeof setTimeout> | null = null
     let fullContent = ''
     let reasoningContent = ''
     // Accumulates content across tool iterations so abort during tool execution can recover
@@ -810,6 +822,34 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // Track whether server sends real token counts (via usage in each SSE chunk)
       let serverSendsUsage = false
 
+      // Suppress-reasoning UX: detect when model is thinking silently
+      // (reasoning suppressed, no visible content arrives for 2+ seconds).
+      // Only armed for sessions with a reasoning parser (avoid false "Thinking..."
+      // on non-reasoning models during slow prefill).
+      let firstVisibleContent = false
+      let sentThinkingIndicator = false
+
+      /** Arm (or re-arm) the thinking-silently timer. Called at stream start
+       *  and at each tool iteration boundary so follow-up streams also get it. */
+      const armThinkingTimer = () => {
+        if (thinkingTimer) clearTimeout(thinkingTimer)
+        firstVisibleContent = false
+        sentThinkingIndicator = false
+        if (!sessionHasReasoningParser) return // only for reasoning models
+        thinkingTimer = setTimeout(() => {
+          if (!firstVisibleContent && !abortController.signal.aborted) {
+            sentThinkingIndicator = true
+            try {
+              const win = getWindow()
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('chat:thinkingSilently', { chatId, messageId: assistantMessage.id })
+              }
+            } catch (_) { }
+          }
+        }, 2000)
+      }
+      armThinkingTimer()
+
       // Track tool calls received during streaming for MCP auto-execution
       let receivedToolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = []
       // Track finish_reason from server to detect truncation (length), content filter, etc.
@@ -872,8 +912,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           // not when the model is explaining tool syntax in prose (e.g., "I'll use <tool_call>...")
           if (!clientToolCallBuffering) {
             // Catch real tool call formats AND hallucinated Claude-style tool calls
+            // Use trailing window (last 200 chars) to avoid O(n) regex on full response
             const lineStartPattern = /(?:^|\n)\s*(?:<minimax:tool_call|<tool_call>|\[Calling tool:|<invoke name=|<read_file\b|<write_file\b|<run_command\b|<search_files\b|<edit_file\b|<list_directory\b|<execute_command\b|<bash\b)/
-            if (lineStartPattern.test(rawAccumulated)) {
+            const searchWindow = rawAccumulated.length > 200 ? rawAccumulated.slice(-200) : rawAccumulated
+            if (lineStartPattern.test(searchWindow)) {
               clientToolCallBuffering = true
               console.log(`[CHAT] Client-side tool call buffering activated`)
             }
@@ -883,13 +925,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         // Strip any leaked chat template tokens from the delta
         delta = delta.replace(TEMPLATE_TOKEN_REGEX, '')
         if (!delta) return
-        // Strip Harmony protocol residue: after <|start|>, <|channel|>, <|message|> are
-        // removed above, words like "assistant", "analysis", "final" may remain concatenated.
-        // Catches all garbled forms: </assistantassistantanalysis, assistantfinal, etc.
-        delta = delta.replace(/<\/?(?:assistant|analysis|final)+/gi, '')
-        delta = delta.replace(/(?:assistant\s*){1,3}(?:analysis|final)/gi, '')
-        delta = delta.replace(/(?:analysis|final)\s*(?:assistant\s*){1,3}/gi, '')
-        if (!delta) return
+        // Strip Harmony protocol residue — only for GLM/GPT-OSS models that use the
+        // Harmony <|start|><|channel|><|message|> protocol. Without this guard, these
+        // regexes would strip legitimate prose like "assistant analysis" from all models.
+        if (isHarmonyModel) {
+          delta = delta.replace(/<\/?(?:assistant|analysis|final)+/gi, '')
+          delta = delta.replace(/(?:assistant\s*){1,3}(?:analysis|final)/gi, '')
+          delta = delta.replace(/(?:analysis|final)\s*(?:assistant\s*){1,3}/gi, '')
+          if (!delta) return
+        }
         // Strip U+FFFD replacement characters
         delta = delta.replace(/\uFFFD/g, '')
         if (!delta) return
@@ -920,6 +964,19 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             } catch (_) { }
           }
           fullContent += delta
+          // First visible content arrived — clear "thinking silently" indicator
+          if (!firstVisibleContent && delta) {
+            firstVisibleContent = true
+            if (thinkingTimer) clearTimeout(thinkingTimer)
+            if (sentThinkingIndicator) {
+              try {
+                const win = getWindow()
+                if (win && !win.isDestroyed()) {
+                  win.webContents.send('chat:thinkingDone', { chatId, messageId: assistantMessage.id })
+                }
+              } catch (_) { }
+            }
+          }
           // Update content offset immediately (not throttled) for accurate tool call positioning
           lastEmittedContentLength = allGeneratedContent
             ? allGeneratedContent.length + 2 + fullContent.length
@@ -947,7 +1004,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         // Suppress rendering (but not counting/TPS) when tool call content is detected
         if (!isReasoningDelta && clientToolCallBuffering) return
 
-        // === Throttled IPC emission (~31 fps, STREAM_THROTTLE_MS=32ms) ===
+        // === Throttled IPC emission (~120fps, STREAM_THROTTLE_MS=8ms) ===
         // First token always emits immediately; subsequent tokens throttled to STREAM_THROTTLE_MS
         if (now - lastStreamEmitTime < STREAM_THROTTLE_MS) return
         lastStreamEmitTime = now
@@ -1236,7 +1293,12 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           }
 
         } catch (e) {
-          // Skip malformed JSON
+          // Skip malformed JSON lines — log at debug level for troubleshooting
+          if (e instanceof SyntaxError) {
+            // Expected: malformed SSE data line
+          } else {
+            console.warn('[CHAT] Error processing SSE line:', (e as Error).message)
+          }
         }
       }
 
@@ -1252,9 +1314,16 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n')
           buf = lines.pop() || ''
-          for (const line of lines) {
+          // Reset throttle so the FIRST token in this TCP chunk emits immediately.
+          // TCP batches 3-5 SSE lines into one read() — without this reset,
+          // the first token's Date.now() matches the previous chunk's emission
+          // time and gets throttled. Subsequent tokens in the same chunk are
+          // still throttled against each other (same Date.now() → 8ms gate),
+          // which is correct since they arrived simultaneously.
+          lastStreamEmitTime = 0
+          for (let li = 0; li < lines.length; li++) {
             if (abortController.signal.aborted) break
-            processLine(line.trim())
+            processLine(lines[li].trim())
           }
         }
         if (abortController.signal.aborted) return
@@ -1466,6 +1535,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         }
       }
 
+      if (thinkingTimer) clearTimeout(thinkingTimer)
       console.log(`[CHAT] Stream ended — content: ${fullContent.length} chars, reasoning: ${reasoningContent.length} chars, tool calls: ${receivedToolCalls.length}, buffered: ${clientToolCallBuffering}`)
 
       // ─── Unified Tool Execution + Auto-Continue Loop ───────────────────
@@ -1510,6 +1580,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               })
             }
           } catch (_) { }
+          // Reset idle timer before tool execution — builtin tools run locally
+          // without server contact, so the model could sleep during long tool runs
+          if (chatSession) sessionManager.touchSession(chatSession.id)
           await executeToolCalls()
           receivedToolCalls = []
           fullContent = ''
@@ -1534,7 +1607,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             } catch (_) { }
           }
           isReasoning = false // Reset reasoning state for new iteration
+          reasoningContent = '' // Reset so next iteration's reasoning doesn't accumulate with previous
+          armThinkingTimer() // Re-arm thinking indicator for follow-up stream
           emitToolStatus('processing', '', undefined, toolIteration)
+          // Reset idle timer before follow-up — tools may have consumed minutes
+          if (chatSession) sessionManager.touchSession(chatSession.id)
           if (!await sendFollowUp()) break
 
         } else if (
@@ -1586,7 +1663,11 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             } catch (_) { }
           }
           isReasoning = false // Reset reasoning state for new iteration
+          reasoningContent = '' // Reset so next iteration's reasoning doesn't accumulate with previous
+          armThinkingTimer() // Re-arm thinking indicator for follow-up stream
           emitToolStatus('processing', '', 'Generating response...', toolIteration)
+          // Reset idle timer before auto-continue follow-up
+          if (chatSession) sessionManager.touchSession(chatSession.id)
           if (!await sendFollowUp()) break
 
         } else {
@@ -1710,6 +1791,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       return assistantMessage
     } catch (error) {
       stopPeriodicSave()
+      if (thinkingTimer) clearTimeout(thinkingTimer)
       // Release the SSE reader if it was acquired
       try { reader?.cancel() } catch (_) { }
 

@@ -401,7 +401,7 @@ class AnthropicStreamAdapter:
         self._finish_reason: str | None = None
 
     def _sse(self, event_type: str, data: dict) -> str:
-        return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n"
 
     def process_chunk(self, chunk_line: str) -> list[str]:
         """Process a single SSE line from Chat Completions stream.
@@ -573,6 +573,10 @@ class AnthropicStreamAdapter:
 
     def finalize(self) -> list[str]:
         """Generate closing events for the stream."""
+        # Guard: if stream errored before any data was emitted, don't send
+        # orphaned message_delta/message_stop without a preceding message_start
+        if not self._started:
+            return []
         events = []
 
         # Determine stop reason from Chat Completions finish_reason

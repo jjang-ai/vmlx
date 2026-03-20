@@ -17,6 +17,7 @@ declare global {
         searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string }>>
         fetchReadme: (repoId: string) => Promise<string | null>
         getRecommendedModels: () => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string }>>
+        getCollectionModels: (slug: string) => Promise<Array<{ id: string; author: string; downloads: number; likes: number; lastModified: string; tags: string[]; pipelineTag?: string; size?: string; note?: string }>>
         downloadModel: (repoId: string) => Promise<{ status: string; path?: string; error?: string }>
         cancelDownload: (jobId?: string) => Promise<{ success: boolean; error?: string }>
         getDownloadDir: () => Promise<string>
@@ -53,6 +54,8 @@ declare global {
         onStream: (callback: (data: any) => void) => () => void
         onComplete: (callback: (data: any) => void) => () => void
         onReasoningDone: (callback: (data: any) => void) => () => void
+        onThinkingSilently: (callback: (data: any) => void) => () => void
+        onThinkingDone: (callback: (data: any) => void) => () => void
         onTyping: (callback: (data: any) => void) => () => void
         onToolStatus: (callback: (data: any) => void) => () => void
         abort: (chatId: string) => Promise<void>
@@ -175,6 +178,10 @@ declare global {
         update: (sessionId: string, config: any) => Promise<{ success: boolean; error?: string; restartRequired?: boolean; changedKeys?: string[] }>
         getLogs: (sessionId: string) => Promise<string[]>
         clearLogs: (sessionId: string) => Promise<{ success: boolean }>
+        softSleep: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+        deepSleep: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+        wake: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+        touch: (sessionId: string) => Promise<{ success: boolean }>
         onStarting: (callback: (data: any) => void) => () => void
         onReady: (callback: (data: any) => void) => () => void
         onStopped: (callback: (data: any) => void) => () => void
@@ -183,6 +190,7 @@ declare global {
         onLog: (callback: (data: any) => void) => () => void
         onCreated: (callback: (data: any) => void) => () => void
         onDeleted: (callback: (data: any) => void) => () => void
+        onStandby: (callback: (data: any) => void) => () => void
       }
     }
   }

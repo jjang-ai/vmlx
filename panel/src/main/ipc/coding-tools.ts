@@ -25,6 +25,22 @@ function safeReadJSON(path: string): any {
   } catch { return null }
 }
 
+function safeReadTOML(path: string): string | null {
+  try {
+    if (!existsSync(path)) return null
+    return readFileSync(path, 'utf-8')
+  } catch { return null }
+}
+
+function safeWriteTOML(path: string, content: string): void {
+  if (existsSync(path)) {
+    try { copyFileSync(path, path + '.bak') } catch {}
+  }
+  const dir = path.substring(0, path.lastIndexOf('/'))
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(path, content, { encoding: 'utf-8', mode: 0o600 })
+}
+
 function safeWriteJSON(path: string, data: any): void {
   // Backup before writing
   if (existsSync(path)) {
@@ -32,7 +48,7 @@ function safeWriteJSON(path: string, data: any): void {
   }
   const dir = path.substring(0, path.lastIndexOf('/'))
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(path, JSON.stringify(data, null, 2) + '\n', 'utf-8')
+  writeFileSync(path, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 })
 }
 
 function commandExists(cmd: string): boolean {
@@ -41,86 +57,112 @@ function commandExists(cmd: string): boolean {
     join(homedir(), '.local', 'bin', cmd),
     join(homedir(), '.npm-global', 'bin', cmd),
     '/usr/local/bin/' + cmd,
+    '/usr/bin/' + cmd,
     '/opt/homebrew/bin/' + cmd,
-    join(homedir(), '.nvm', 'versions', 'node'),  // nvm — just check the dir
+    join(homedir(), '.cargo', 'bin', cmd),
+    join(homedir(), '.bun', 'bin', cmd),
+    join(homedir(), '.volta', 'bin', cmd),
   ]
   if (paths.some(p => existsSync(p))) return true
-  // Fallback: try which with full PATH
+  // Fallback: try which with augmented PATH (includes nvm, pnpm, yarn)
   try {
-    const env = { ...process.env, PATH: `${process.env.PATH}:${homedir()}/.local/bin:/opt/homebrew/bin:/usr/local/bin` }
+    const extraPaths = [
+      `${homedir()}/.local/bin`,
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      `${homedir()}/.cargo/bin`,
+      `${homedir()}/.bun/bin`,
+      `${homedir()}/.volta/bin`,
+      `${homedir()}/.yarn/bin`,
+    ].join(':')
+    const env = { ...process.env, PATH: `${process.env.PATH}:${extraPaths}` }
     execFileSync('which', [cmd], { stdio: 'pipe', env })
     return true
   } catch { return false }
 }
 
 // ═══ Claude Code ═══
-// Config: ~/.claude.json — we add/remove "apiUrl" and "apiModelId" fields
+// Config: ~/.claude/settings.json — env vars (ANTHROPIC_BASE_URL, ANTHROPIC_MODEL)
+// Claude Code requires Anthropic Messages API format (/v1/messages) — vMLX supports this
+const CLAUDE_SETTINGS = join(homedir(), '.claude', 'settings.json')
 const claudeCode: ToolConfig = {
   detect: () => commandExists('claude'),
   installCmd: 'npm',
   installArgs: ['install', '-g', '@anthropic-ai/claude-code'],
-  configPath: join(homedir(), '.claude.json'),
+  configPath: CLAUDE_SETTINGS,
   getEntries: () => {
-    const cfg = safeReadJSON(join(homedir(), '.claude.json'))
-    if (!cfg) return []
-    const entries: Array<{ label: string; baseUrl: string }> = []
-    if (cfg.apiUrl && cfg[MLXSTUDIO_TAG]) {
-      entries.push({ label: cfg.apiModelId || 'default', baseUrl: cfg.apiUrl })
-    }
-    return entries
+    const cfg = safeReadJSON(CLAUDE_SETTINGS)
+    if (!cfg?.env?.ANTHROPIC_BASE_URL || !cfg?.env?.[MLXSTUDIO_TAG]) return []
+    return [{ label: cfg.env.ANTHROPIC_MODEL || 'default', baseUrl: cfg.env.ANTHROPIC_BASE_URL }]
   },
   addEntry: (baseUrl, modelName) => {
-    const path = join(homedir(), '.claude.json')
-    const cfg = safeReadJSON(path) || {}
-    cfg.apiUrl = baseUrl
-    cfg.apiModelId = modelName
-    cfg[MLXSTUDIO_TAG] = true
-    safeWriteJSON(path, cfg)
+    const cfg = safeReadJSON(CLAUDE_SETTINGS) || {}
+    if (!cfg.env) cfg.env = {}
+    // Claude Code appends /v1/messages itself — base URL should NOT include /v1
+    cfg.env.ANTHROPIC_BASE_URL = baseUrl
+    cfg.env.ANTHROPIC_MODEL = modelName
+    cfg.env.ANTHROPIC_API_KEY = 'mlxstudio'  // Required non-empty value
+    cfg.env[MLXSTUDIO_TAG] = 'true'
+    safeWriteJSON(CLAUDE_SETTINGS, cfg)
   },
   removeEntry: () => {
-    const path = join(homedir(), '.claude.json')
-    const cfg = safeReadJSON(path)
-    if (!cfg) return
-    delete cfg.apiUrl
-    delete cfg.apiModelId
-    delete cfg[MLXSTUDIO_TAG]
-    safeWriteJSON(path, cfg)
+    const cfg = safeReadJSON(CLAUDE_SETTINGS)
+    if (!cfg?.env) return
+    delete cfg.env.ANTHROPIC_BASE_URL
+    delete cfg.env.ANTHROPIC_MODEL
+    delete cfg.env.ANTHROPIC_API_KEY
+    delete cfg.env[MLXSTUDIO_TAG]
+    // Clean up empty env object
+    if (Object.keys(cfg.env).length === 0) delete cfg.env
+    safeWriteJSON(CLAUDE_SETTINGS, cfg)
   },
 }
 
 // ═══ Codex CLI ═══
-// Config: ~/.codex/config.json — we add provider entries tagged with MLXSTUDIO_TAG
+// Config: ~/.codex/config.toml — TOML format with [model_providers.NAME] sections
+const CODEX_TOML = join(homedir(), '.codex', 'config.toml')
 const codexCli: ToolConfig = {
   detect: () => commandExists('codex'),
   installCmd: 'npm',
   installArgs: ['install', '-g', '@openai/codex'],
-  configPath: join(homedir(), '.codex', 'config.json'),
+  configPath: CODEX_TOML,
   getEntries: () => {
-    const cfg = safeReadJSON(join(homedir(), '.codex', 'config.json'))
-    if (!cfg?.providers) return []
-    return Object.entries(cfg.providers)
-      .filter(([_, v]: any) => v?.[MLXSTUDIO_TAG])
-      .map(([k, v]: any) => ({ label: k, baseUrl: v?.baseUrl || '' }))
+    const toml = safeReadTOML(CODEX_TOML)
+    if (!toml) return []
+    // Parse TOML: find [model_providers.MLXSTUDIO_*] sections with _mlxstudio marker
+    const entries: Array<{ label: string; baseUrl: string }> = []
+    const sectionRegex = /\[model_providers\.([^\]]+)\]/g
+    let match
+    while ((match = sectionRegex.exec(toml)) !== null) {
+      const name = match[1]
+      if (!name.startsWith('MLXSTUDIO_')) continue
+      // Extract base_url from this section
+      const sectionStart = match.index + match[0].length
+      const nextSection = toml.indexOf('\n[', sectionStart)
+      const sectionBody = nextSection >= 0 ? toml.slice(sectionStart, nextSection) : toml.slice(sectionStart)
+      const urlMatch = sectionBody.match(/base_url\s*=\s*"([^"]+)"/)
+      entries.push({ label: name, baseUrl: urlMatch ? urlMatch[1] : '' })
+    }
+    return entries
   },
   addEntry: (baseUrl, modelName) => {
-    const path = join(homedir(), '.codex', 'config.json')
-    const cfg = safeReadJSON(path) || {}
-    if (!cfg.providers) cfg.providers = {}
-    const key = `mlxstudio-${modelName.replace(/[^a-zA-Z0-9-]/g, '-')}`
-    cfg.providers[key] = {
-      name: `MLX Studio (${modelName})`,
-      baseUrl: `${baseUrl}/v1`,
-      model: modelName,
-      [MLXSTUDIO_TAG]: true,
-    }
-    safeWriteJSON(path, cfg)
+    let toml = safeReadTOML(CODEX_TOML) || ''
+    const providerKey = `MLXSTUDIO_${modelName.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()}`
+    // Remove existing section if present
+    const sectionPattern = new RegExp(`\\[model_providers\\.${providerKey}\\][\\s\\S]*?(?=\\n\\[|$)`, 'g')
+    toml = toml.replace(sectionPattern, '').replace(/\n{3,}/g, '\n\n').trim()
+    // Append new section
+    const section = `\n\n[model_providers.${providerKey}]\nname = "MLX Studio (${modelName})"\nbase_url = "${baseUrl}/v1"\nwire_api = "responses"\nmax_context = 32768\n`
+    toml += section
+    safeWriteTOML(CODEX_TOML, toml)
   },
   removeEntry: (label) => {
-    const path = join(homedir(), '.codex', 'config.json')
-    const cfg = safeReadJSON(path)
-    if (!cfg?.providers?.[label]) return
-    delete cfg.providers[label]
-    safeWriteJSON(path, cfg)
+    let toml = safeReadTOML(CODEX_TOML)
+    if (!toml) return
+    // Remove the [model_providers.LABEL] section
+    const sectionPattern = new RegExp(`\\[model_providers\\.${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\][\\s\\S]*?(?=\\n\\[|$)`, 'g')
+    toml = toml.replace(sectionPattern, '').replace(/\n{3,}/g, '\n\n').trim()
+    safeWriteTOML(CODEX_TOML, toml + '\n')
   },
 }
 

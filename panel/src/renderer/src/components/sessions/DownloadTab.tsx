@@ -10,6 +10,7 @@ interface HFModel {
   tags: string[]
   pipelineTag?: string
   size?: string
+  note?: string
 }
 
 interface DownloadTabProps {
@@ -34,6 +35,12 @@ function timeAgo(dateStr: string | null | undefined): string {
   return `${Math.floor(days / 365)}y ago`
 }
 
+const COLLECTION_SLUGS = {
+  jang: 'jangq/jang-quantized-gguf-for-mlx',
+  uncensored: 'dealignai/xtreme-quality-uncensored-gguf-on-mlx',
+} as const
+type CollectionTab = keyof typeof COLLECTION_SLUGS
+
 export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const { showToast } = useToast()
   const [searchQuery, setSearchQuery] = useState('')
@@ -41,10 +48,13 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [sortBy, setSortBy] = useState<string>('downloads')
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [searchResults, setSearchResults] = useState<HFModel[]>([])
-  const [recommended, setRecommended] = useState<HFModel[]>([])
   const [loading, setLoading] = useState(false)
-  const [loadingRecommended, setLoadingRecommended] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Collection tabs (JANG / Uncensored)
+  const [collectionTab, setCollectionTab] = useState<CollectionTab>('jang')
+  const [collectionModels, setCollectionModels] = useState<Record<string, HFModel[]>>({})
+  const [loadingCollectionTabs, setLoadingCollectionTabs] = useState<Record<string, boolean>>({})
 
   // Download state: track which repos are downloading/queued
   const [downloadingRepos, setDownloadingRepos] = useState<Set<string>>(new Set())
@@ -60,6 +70,11 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   // Track locally available models for "already downloaded" detection
   const [localModelIds, setLocalModelIds] = useState<Set<string>>(new Set())
+
+  // Split layout: selected model for right-side README panel
+  const [selectedModel, setSelectedModel] = useState<HFModel | null>(null)
+  const [selectedReadme, setSelectedReadme] = useState<string | null>(null)
+  const [loadingReadme, setLoadingReadme] = useState(false)
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onDownloadCompleteRef = useRef(onDownloadComplete)
@@ -85,15 +100,18 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
       }
       setLocalModelIds(ids)
     }).catch((err) => console.error('Failed to scan models:', err))
-    window.api.models.getRecommendedModels()
-      .then(setRecommended)
-      .catch(err => console.error('Failed to load recommended models:', err))
-      .finally(() => setLoadingRecommended(false))
+    // Fetch default collection (JANG)
+    setLoadingCollectionTabs(prev => ({ ...prev, jang: true }))
+    window.api.models.getCollectionModels(COLLECTION_SLUGS.jang)
+      .then(models => setCollectionModels(prev => ({ ...prev, jang: models })))
+      .catch(err => console.error('Failed to load JANG collection:', err))
+      .finally(() => setLoadingCollectionTabs(prev => ({ ...prev, jang: false })))
 
-    // Check for any in-progress downloads
+    // Check for any in-progress downloads (activeAll covers concurrent downloads)
     window.api.models.getDownloadStatus().then((status: any) => {
       const repos = new Set<string>()
-      if (status.active) repos.add(status.active.repoId)
+      for (const aj of status.activeAll || []) repos.add(aj.repoId)
+      if (!repos.size && status.active) repos.add(status.active.repoId) // fallback for older IPC
       for (const q of status.queue || []) repos.add(q.repoId)
       setDownloadingRepos(repos)
     }).catch((err) => console.error('Failed to get download status:', err))
@@ -248,6 +266,21 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }
   }
 
+  const handleCollectionTabChange = useCallback(async (tab: CollectionTab) => {
+    setCollectionTab(tab)
+    if (!collectionModels[tab]) {
+      setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
+      try {
+        const models = await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
+        setCollectionModels(prev => ({ ...prev, [tab]: models }))
+      } catch (err) {
+        console.error(`Failed to load ${tab} collection:`, err)
+      } finally {
+        setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
+      }
+    }
+  }, [collectionModels])
+
   const handleBrowseDownloadDir = async () => {
     const result = await window.api.models.browseDownloadDir()
     if (!result.canceled && result.path) {
@@ -256,8 +289,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }
   }
 
-  const displayModels = searchQuery.trim() ? searchResults : recommended
-  const showSection = searchQuery.trim() ? 'Search Results' : 'Recommended (JANGQ AI)'
+  const activeCollection = collectionModels[collectionTab] || []
+  const displayModels = searchQuery.trim() ? searchResults : activeCollection
+  const isCollectionLoading = !searchQuery.trim() && !!loadingCollectionTabs[collectionTab]
 
   return (
     <div className="space-y-4">
@@ -394,30 +428,138 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         </div>
       )}
 
-      {/* Model List */}
-      <div>
-        <span className="text-xs text-muted-foreground uppercase tracking-wider">{showSection}</span>
-        <div className="mt-2 space-y-1">
-          {(loadingRecommended && !searchQuery.trim()) ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">Loading recommendations...</p>
-          ) : displayModels.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              {searchQuery.trim() ? (modelType === 'image' ? 'No image models found' : 'No MLX models found') : 'No recommended models available'}
-            </p>
+      {/* Split Layout: Model List (left) + README (right) */}
+      <div className="flex gap-4" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
+        {/* Left: Model List */}
+        <div className="w-1/2 flex flex-col min-w-0">
+          {searchQuery.trim() ? (
+            <span className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Search Results</span>
           ) : (
-            displayModels.map(model => (
-              <ModelCard
-                key={model.id}
-                model={model}
-                isDownloading={downloadingRepos.has(model.id)}
-                isDownloaded={localModelIds.has(model.id)}
-                onDownload={() => handleDownload(model.id)}
-              />
-            ))
+            <div className="flex items-center gap-1 mb-2">
+              <button
+                onClick={() => handleCollectionTabChange('jang')}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${collectionTab === 'jang' ? 'bg-primary/15 text-primary font-medium' : 'text-muted-foreground hover:bg-accent'}`}
+              >
+                JANG Models
+              </button>
+              <button
+                onClick={() => handleCollectionTabChange('uncensored')}
+                className={`px-2.5 py-1 text-xs rounded transition-colors ${collectionTab === 'uncensored' ? 'bg-red-500/15 text-red-400 font-medium' : 'text-muted-foreground hover:bg-accent'}`}
+              >
+                Uncensored
+              </button>
+            </div>
+          )}
+          <div className="flex-1 overflow-y-auto space-y-1 pr-1">
+            {isCollectionLoading ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">Loading models...</p>
+            ) : displayModels.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                {searchQuery.trim() ? (modelType === 'image' ? 'No image models found' : 'No MLX models found') : 'No models in this collection'}
+              </p>
+            ) : (
+              displayModels.map(model => (
+                <div key={model.id} onClick={() => {
+                  setSelectedModel(model)
+                  setSelectedReadme(null)
+                  setLoadingReadme(true)
+                  window.api.models.fetchReadme(model.id).then(text => {
+                    setSelectedReadme(text || 'No README available.')
+                    setLoadingReadme(false)
+                  }).catch(() => {
+                    setSelectedReadme('Failed to load README.')
+                    setLoadingReadme(false)
+                  })
+                }} className={`cursor-pointer ${selectedModel?.id === model.id ? 'ring-1 ring-primary rounded' : ''}`}>
+                  <ModelCard
+                    model={model}
+                    isDownloading={downloadingRepos.has(model.id)}
+                    isDownloaded={localModelIds.has(model.id)}
+                    onDownload={() => handleDownload(model.id)}
+                  />
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Right: README Panel */}
+        <div className="w-1/2 flex flex-col min-w-0 border-l border-border pl-4">
+          {selectedModel ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold truncate">{selectedModel.id}</h3>
+                {selectedModel.size && <span className="text-xs font-bold text-foreground ml-2 flex-shrink-0">{selectedModel.size}</span>}
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {loadingReadme ? (
+                  <p className="text-xs text-muted-foreground py-4">Loading README...</p>
+                ) : (
+                  <ReadmeContent markdown={selectedReadme || ''} />
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              Click a model to view its README
+            </div>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+/** Simple markdown-to-HTML converter for HuggingFace READMEs.
+ * Sanitized: only allows safe tags (no script, no event handlers).
+ * Content comes from HF README files which are trusted markdown. */
+function simpleMarkdownToHtml(md: string): string {
+  let html = md
+    // Code blocks (``` ... ```)
+    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+    // Inline code
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // Images: ![alt](url)
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />')
+    // Links: [text](url)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    // Headers
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    // Bold and italic
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    // Horizontal rule
+    .replace(/^---+$/gm, '<hr />')
+    // Lists
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
+    // Blockquotes
+    .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+    // Paragraphs (double newlines)
+    .replace(/\n\n/g, '</p><p>')
+    // Single newlines to <br> (within paragraphs)
+    .replace(/\n/g, '<br />')
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/(<li>.*?<\/li>(?:<br \/>)?)+/g, (match) =>
+    '<ul>' + match.replace(/<br \/>/g, '') + '</ul>'
+  )
+  // Sanitize: strip any script tags, event handlers, or dangerous attributes
+  html = html.replace(/<script[\s\S]*?<\/script>/gi, '')
+  html = html.replace(/\bon\w+\s*=\s*"[^"]*"/gi, '')
+  html = html.replace(/\bon\w+\s*=\s*'[^']*'/gi, '')
+  html = html.replace(/javascript:/gi, '')
+  return '<p>' + html + '</p>'
+}
+
+function ReadmeContent({ markdown }: { markdown: string }) {
+  const html = simpleMarkdownToHtml(markdown)
+  return (
+    <div
+      className="prose prose-xs prose-invert max-w-none text-xs text-muted-foreground [&_h1]:text-sm [&_h1]:font-bold [&_h1]:mt-3 [&_h1]:mb-1 [&_h2]:text-xs [&_h2]:font-bold [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-2 [&_p]:my-1 [&_img]:max-w-full [&_img]:rounded [&_img]:my-2 [&_table]:text-[10px] [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-1.5 [&_td]:py-0.5 [&_th]:border [&_th]:border-border [&_th]:px-1.5 [&_th]:py-0.5 [&_th]:bg-muted [&_code]:bg-muted [&_code]:px-1 [&_code]:rounded [&_code]:text-[10px] [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-[10px] [&_pre]:overflow-x-auto [&_a]:text-primary [&_a]:underline [&_ul]:pl-4 [&_ul]:list-disc [&_ol]:pl-4 [&_li]:my-0.5 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-2 [&_blockquote]:italic [&_hr]:border-border [&_hr]:my-2"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   )
 }
 
@@ -427,25 +569,7 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
   isDownloaded: boolean
   onDownload: () => void
 }) {
-  const [showReadme, setShowReadme] = useState(false)
-  const [readme, setReadme] = useState<string | null>(null)
-  const [loadingReadme, setLoadingReadme] = useState(false)
   const shortName = model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id
-
-  const handleToggleReadme = async () => {
-    if (showReadme) { setShowReadme(false); return }
-    setShowReadme(true)
-    if (readme !== null) return // already loaded
-    setLoadingReadme(true)
-    try {
-      const text = await window.api.models.fetchReadme(model.id)
-      setReadme(text || 'No README available.')
-    } catch {
-      setReadme('Failed to load README.')
-    } finally {
-      setLoadingReadme(false)
-    }
-  }
 
   return (
     <div className="rounded border border-border hover:border-primary/30 transition-colors">
@@ -457,11 +581,14 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
             </div>
             <div className="text-xs text-muted-foreground">{model.author}</div>
             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+              {model.size && <span title="Model size (safetensors)" className="font-semibold text-foreground">{model.size}</span>}
               <span title="Downloads">{formatNumber(model.downloads)} downloads</span>
               <span title="Likes">{model.likes} likes</span>
-              {model.size && <span title="Model size" className="font-medium text-foreground">{model.size}</span>}
               {timeAgo(model.lastModified) && <span>{timeAgo(model.lastModified)}</span>}
             </div>
+            {model.note && (
+              <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">{model.note}</p>
+            )}
             {model.tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mt-1.5">
                 {model.tags.slice(0, 5).map(tag => (
@@ -477,13 +604,6 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <button
-              onClick={handleToggleReadme}
-              className={`px-1.5 py-1.5 text-xs border rounded transition-colors ${showReadme ? 'bg-primary/10 text-primary border-primary/30' : 'text-muted-foreground hover:text-foreground border-border'}`}
-              title="Show README"
-            >
-              📄
-            </button>
-            <button
               onClick={(e) => { e.stopPropagation(); window.open(`https://huggingface.co/${model.id}`, '_blank') }}
               className="px-1.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded"
               title="View on HuggingFace"
@@ -496,7 +616,7 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
               </span>
             ) : (
               <button
-                onClick={onDownload}
+                onClick={(e) => { e.stopPropagation(); onDownload() }}
                 disabled={isDownloading}
                 className="px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40 whitespace-nowrap"
               >
@@ -506,15 +626,6 @@ function ModelCard({ model, isDownloading, isDownloaded, onDownload }: {
           </div>
         </div>
       </div>
-      {showReadme && (
-        <div className="border-t border-border px-3 py-2 max-h-64 overflow-auto bg-muted/30">
-          {loadingReadme ? (
-            <p className="text-xs text-muted-foreground">Loading README...</p>
-          ) : (
-            <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-sans leading-relaxed">{readme}</pre>
-          )}
-        </div>
-      )}
     </div>
   )
 }

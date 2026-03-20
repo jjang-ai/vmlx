@@ -162,7 +162,7 @@ function MiniGraph({ data }: { data: Array<{ time: number; active: number; peak:
       <polyline
         points={points}
         fill="none"
-        stroke="hsl(var(--primary))"
+        stroke="rgb(var(--primary))"
         strokeWidth="1.5"
         strokeLinejoin="round"
       />
@@ -170,13 +170,13 @@ function MiniGraph({ data }: { data: Array<{ time: number; active: number; peak:
       <line
         x1="0" y1={h - (data[data.length - 1].peak / maxVal) * h}
         x2={w} y2={h - (data[data.length - 1].peak / maxVal) * h}
-        stroke="hsl(var(--destructive))"
+        stroke="rgb(var(--destructive))"
         strokeWidth="0.5"
         strokeDasharray="4 2"
         opacity="0.5"
       />
       {/* Label */}
-      <text x={w - 2} y={10} textAnchor="end" fontSize="8" fill="hsl(var(--muted-foreground))">
+      <text x={w - 2} y={10} textAnchor="end" fontSize="8" fill="rgb(var(--muted-foreground))">
         {(maxVal >= 1024 ? (maxVal / 1024).toFixed(1) + ' GB' : maxVal.toFixed(0) + ' MB')}
       </text>
     </svg>

@@ -121,6 +121,9 @@ class DiskCacheManager:
         )
         self._writer_thread.start()
 
+        # Clean up orphaned .tmp files from crashed writes
+        self._cleanup_orphaned_tmp()
+
         logger.info(
             f"Disk cache initialized: dir={self.cache_dir}, "
             f"max_size={'unlimited' if not self.max_size_bytes else f'{max_size_gb:.1f}GB'}, "
@@ -149,6 +152,24 @@ class DiskCacheManager:
         """)
         conn.commit()
         conn.close()
+
+    def _cleanup_orphaned_tmp(self) -> None:
+        """Remove orphaned .tmp files left from crashed or buggy writes.
+        Matches both *.tmp and *.tmp.safetensors (from mx.save_safetensors
+        appending .safetensors to the path)."""
+        try:
+            count = 0
+            for pattern in ("*.tmp", "*.tmp.safetensors"):
+                for tmp in self.cache_dir.glob(pattern):
+                    try:
+                        tmp.unlink()
+                        count += 1
+                    except OSError:
+                        pass
+            if count:
+                logger.info(f"Disk cache: cleaned up {count} orphaned tmp file(s)")
+        except Exception:
+            pass
 
     def _count_entries(self) -> int:
         conn = self._pool.get()
@@ -338,7 +359,11 @@ class DiskCacheManager:
         # Generate filename
         file_name = f"cache_{token_hash[:16]}_{len(tokens)}tok.safetensors"
         file_path = self.cache_dir / file_name
-        tmp_path = file_path.with_suffix(".tmp")
+        # mlx-lm's save_prompt_cache → mx.save_safetensors APPENDS ".safetensors"
+        # to the path. So we give it a stem without .safetensors, and it creates
+        # stem.safetensors. We then rename that to our final path.
+        tmp_stem = self.cache_dir / f"cache_{token_hash[:16]}_{len(tokens)}tok.tmp"
+        tmp_actual = Path(str(tmp_stem) + ".safetensors")  # What save_prompt_cache creates
 
         try:
             from mlx_lm.models.cache import save_prompt_cache
@@ -347,11 +372,14 @@ class DiskCacheManager:
             save_metadata["num_tokens"] = str(len(tokens))
             save_metadata["created_at"] = str(time.time())
 
+            # Ensure the cache directory exists before writing.
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+
             # Atomic write: write to temp file then rename.
             # os.rename is atomic on macOS (same filesystem), so readers
             # never see a partially-written cache file.
-            save_prompt_cache(str(tmp_path), cache, save_metadata)
-            os.rename(str(tmp_path), str(file_path))
+            save_prompt_cache(str(tmp_stem), cache, save_metadata)
+            os.rename(str(tmp_actual), str(file_path))
 
             file_size = file_path.stat().st_size
             now = time.time()
@@ -383,7 +411,7 @@ class DiskCacheManager:
         except Exception as e:
             logger.warning(f"Failed to store disk cache: {e}")
             # Clean up temp file and any partial final file
-            for p in (tmp_path, file_path):
+            for p in (tmp_stem, tmp_actual, file_path):
                 try:
                     p.unlink(missing_ok=True)
                 except Exception:

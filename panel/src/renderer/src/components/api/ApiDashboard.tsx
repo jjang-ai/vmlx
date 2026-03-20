@@ -11,7 +11,8 @@ interface SessionSummary {
   modelName?: string
   host: string
   port: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
+  standbyDepth?: 'soft' | 'deep' | null
   type?: 'local' | 'remote'
   config?: string
   remoteUrl?: string
@@ -24,7 +25,7 @@ function connectHost(host: string): string {
 export function ApiDashboard() {
   const { sessions } = useSessionsContext()
   const runningSessions = useMemo(
-    () => (sessions as SessionSummary[]).filter(s => s.status === 'running'),
+    () => (sessions as SessionSummary[]).filter(s => s.status === 'running' || s.status === 'standby'),
     [sessions]
   )
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -117,9 +118,10 @@ export function ApiDashboard() {
                   : 'border-border hover:bg-accent text-muted-foreground'
               }`}
             >
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${s.status === 'standby' ? 'bg-blue-400' : 'bg-green-500'}`} />
               <span className="font-medium">{s.modelName || s.modelPath?.split('/').pop()}</span>
               <span className="opacity-60">:{s.port}</span>
+              {s.status === 'standby' && <span className="text-[9px] text-blue-400">(sleeping)</span>}
             </button>
           ))}
         </div>
@@ -129,9 +131,14 @@ export function ApiDashboard() {
           <div className="p-4 rounded-lg border border-border bg-card space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">Connection</h3>
-              {apiKey && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">Key set</span>
-              )}
+              <div className="flex items-center gap-1.5">
+                {selected?.status === 'standby' && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">Sleeping — auto-wakes on request</span>
+                )}
+                {apiKey && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">Key set</span>
+                )}
+              </div>
             </div>
             <div className="space-y-1.5">
               <CopyRow label="Base URL" value={baseUrl} />
