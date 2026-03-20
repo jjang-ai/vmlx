@@ -1297,17 +1297,57 @@ class Scheduler:
                             f"treating as cache miss"
                         )
                     else:
-                        request.prompt_cache = reconstructed
-                        request.block_table = block_table
-                        request.cached_tokens = block_table.num_tokens
-                        request.shared_prefix_blocks = len(block_table.block_ids)
-                        request.remaining_tokens = remaining
-                        logger.info(
-                            f"Request {request.request_id}: paged cache hit, "
-                            f"{request.cached_tokens} tokens in "
-                            f"{request.shared_prefix_blocks} blocks, "
-                            f"{len(remaining)} remaining to process"
-                        )
+                        # Fix hybrid cache structure: prefix cache stores only
+                        # KVCache (attention) layers. For hybrid SSM models
+                        # (KVCache + MambaCache/ArraysCache), the reconstructed
+                        # cache may have fewer entries than model layers. Expand
+                        # it by inserting fresh SSM caches at non-KV positions.
+                        if self._is_hybrid and hasattr(self.model, 'make_cache'):
+                            try:
+                                from .mllm_batch_generator import _fix_hybrid_cache
+                                reconstructed = _fix_hybrid_cache(
+                                    reconstructed, self.model
+                                )
+                                # If _fix_hybrid_cache fell back to a fresh cache
+                                # (all KV offsets=0), treat as cache miss to avoid
+                                # prefilling only the suffix with an empty cache.
+                                if reconstructed is not None:
+                                    from mlx_lm.models.cache import KVCache as _KVC
+                                    kv_layers = [c for c in reconstructed
+                                                 if isinstance(c, _KVC)]
+                                    if kv_layers and all(
+                                        getattr(c, 'offset', 1) == 0
+                                        for c in kv_layers
+                                    ):
+                                        logger.warning(
+                                            f"Request {request.request_id}: "
+                                            f"hybrid cache fix returned fresh cache, "
+                                            f"treating as cache miss"
+                                        )
+                                        reconstructed = None
+                                        request.remaining_tokens = request.prompt_token_ids
+                            except ImportError:
+                                pass
+                            except Exception as e:
+                                logger.warning(
+                                    f"Request {request.request_id}: "
+                                    f"hybrid cache fix failed: {e}, "
+                                    f"treating as cache miss"
+                                )
+                                reconstructed = None
+                                request.remaining_tokens = request.prompt_token_ids
+                        if reconstructed is not None:
+                            request.prompt_cache = reconstructed
+                            request.block_table = block_table
+                            request.cached_tokens = block_table.num_tokens
+                            request.shared_prefix_blocks = len(block_table.block_ids)
+                            request.remaining_tokens = remaining
+                            logger.info(
+                                f"Request {request.request_id}: paged cache hit, "
+                                f"{request.cached_tokens} tokens in "
+                                f"{request.shared_prefix_blocks} blocks, "
+                                f"{len(remaining)} remaining to process"
+                            )
                 else:
                     # Reconstruction failed, treat as cache miss
                     request.remaining_tokens = request.prompt_token_ids

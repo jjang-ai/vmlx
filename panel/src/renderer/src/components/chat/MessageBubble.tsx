@@ -2,7 +2,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import DOMPurify from 'dompurify'
-import { useState, useMemo, useCallback, memo } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react'
 import { Copy, Check, User, Sparkles } from 'lucide-react'
 import { ReasoningBox } from './ReasoningBox'
 import { ToolCallStatus } from './ToolCallStatus'
@@ -93,6 +93,51 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
 /** Prose classes for rendered markdown */
 const proseClasses = 'prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:text-sm [&_th]:text-left [&_th]:font-medium [&_th]:px-3 [&_th]:py-1.5 [&_td]:px-3 [&_td]:py-1.5'
 
+/** rAF-based typewriter for smooth streaming — reveals characters gradually instead of
+ *  showing 3-5 tokens at once (caused by TCP batching + React 18 state coalescing). */
+function useTypewriter(fullContent: string, isStreaming: boolean): string {
+  const [displayed, setDisplayed] = useState(fullContent)
+  const rafRef = useRef<number>(0)
+  const lenRef = useRef(fullContent.length)
+  const fullRef = useRef(fullContent)
+  fullRef.current = fullContent
+
+  useEffect(() => {
+    if (!isStreaming) {
+      cancelAnimationFrame(rafRef.current)
+      setDisplayed(fullContent)
+      lenRef.current = fullContent.length
+      return
+    }
+    // Content shrunk (rare correction) — snap
+    if (fullContent.length < lenRef.current) {
+      lenRef.current = fullContent.length
+      setDisplayed(fullContent)
+      return
+    }
+    if (lenRef.current >= fullContent.length) return
+
+    const tick = () => {
+      const full = fullRef.current
+      const cur = lenRef.current
+      if (cur >= full.length) return
+      const remaining = full.length - cur
+      // Catch up within ~200ms (12 frames at 60fps), min 1 char/frame
+      const chars = Math.max(1, Math.ceil(remaining / 12))
+      const newLen = Math.min(cur + chars, full.length)
+      lenRef.current = newLen
+      setDisplayed(full.slice(0, newLen))
+      if (newLen < full.length) {
+        rafRef.current = requestAnimationFrame(tick)
+      }
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [fullContent, isStreaming])
+
+  return displayed
+}
+
 export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, sessionId, sessionEndpoint }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [zoomedImage, setZoomedImage] = useState<string | null>(null)
@@ -120,6 +165,11 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     if (!toolStatuses || toolStatuses.length === 0) return null
     return groupToolStatuses(toolStatuses)
   }, [toolStatuses])
+
+  // Typewriter: smooth character-by-character reveal during streaming
+  const displayedContent = useTypewriter(message.content, !!isStreaming)
+  // Same for reasoning content (separate stream, same TCP batching problem)
+  const displayedReasoning = useTypewriter(reasoningContent || '', !!isStreaming && !(reasoningDone ?? false))
 
   // Render a DOMPurify-sanitized markdown segment
   const renderMarkdownSegment = useCallback((text: string, key: string) => {
@@ -167,7 +217,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
   const renderInlineContent = () => {
     if (!message.content && (!toolGroups || toolGroups.groups.length === 0)) return null
 
-    const content = message.content || ''
+    const content = displayedContent || ''
 
     if (toolGroups && toolGroups.hasOffsets && toolGroups.groups.length > 0) {
       const elements: JSX.Element[] = []
@@ -315,7 +365,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
         {reasoningContent &&
          !(message.content && reasoningContent.trim() === message.content.trim()) && (
           <ReasoningBox
-            content={reasoningContent}
+            content={displayedReasoning}
             isStreaming={!!isStreaming}
             isDone={reasoningDone ?? false}
           />

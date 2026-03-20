@@ -485,6 +485,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               onNewChat={handleNewChat}
               sessionEndpoint={(session.status === 'running' || session.status === 'standby') ? { host: session.host, port: session.port } : undefined}
               sessionId={session.id}
+              sessionStatus={session.status}
               overridesVersion={overridesVersion}
             />
           )}

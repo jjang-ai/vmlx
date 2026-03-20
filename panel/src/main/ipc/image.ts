@@ -174,28 +174,32 @@ export function registerImageHandlers(): void {
       const touchInterval = setInterval(() => {
         if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
       }, 60_000) // Every 60 seconds
-      const resp = await new Promise<any>((resolve, reject) => {
-        const http = require('http')
-        const bodyStr = JSON.stringify(body)
-        const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
-        const req = http.request(`${baseUrl}/v1/images/generations`, {
-          method: 'POST',
-          headers,
-          timeout: 30 * 60 * 1000,
-        }, (res: any) => {
-          let data = ''
-          res.on('data', (chunk: any) => { data += chunk })
-          res.on('end', () => {
-            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, statusText: res.statusMessage, data })
+      let resp: any
+      try {
+        resp = await new Promise<any>((resolve, reject) => {
+          const http = require('http')
+          const bodyStr = JSON.stringify(body)
+          const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
+          const req = http.request(`${baseUrl}/v1/images/generations`, {
+            method: 'POST',
+            headers,
+            timeout: 30 * 60 * 1000,
+          }, (res: any) => {
+            let data = ''
+            res.on('data', (chunk: any) => { data += chunk })
+            res.on('end', () => {
+              resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, statusText: res.statusMessage, data })
+            })
           })
+          req.on('error', reject)
+          activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
+          req.write(bodyStr)
+          req.end()
         })
-        req.on('error', reject)
-        activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
-        req.write(bodyStr)
-        req.end()
-      })
-      clearTimeout(timeoutId)
-      clearInterval(touchInterval)
+      } finally {
+        clearTimeout(timeoutId)
+        clearInterval(touchInterval)
+      }
 
       if (!resp.ok) {
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
@@ -317,28 +321,32 @@ export function registerImageHandlers(): void {
       const touchInterval = setInterval(() => {
         if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
       }, 60_000)
-      const resp = await new Promise<any>((resolve, reject) => {
-        const http = require('http')
-        const bodyStr = JSON.stringify(body)
-        const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
-        const req = http.request(`${baseUrl}/v1/images/edits`, {
-          method: 'POST',
-          headers,
-          timeout: 30 * 60 * 1000,
-        }, (res: any) => {
-          let data = ''
-          res.on('data', (chunk: any) => { data += chunk })
-          res.on('end', () => {
-            resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, statusText: res.statusMessage, data })
+      let resp: any
+      try {
+        resp = await new Promise<any>((resolve, reject) => {
+          const http = require('http')
+          const bodyStr = JSON.stringify(body)
+          const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
+          const req = http.request(`${baseUrl}/v1/images/edits`, {
+            method: 'POST',
+            headers,
+            timeout: 30 * 60 * 1000,
+          }, (res: any) => {
+            let data = ''
+            res.on('data', (chunk: any) => { data += chunk })
+            res.on('end', () => {
+              resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, statusText: res.statusMessage, data })
+            })
           })
+          req.on('error', reject)
+          activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
+          req.write(bodyStr)
+          req.end()
         })
-        req.on('error', reject)
-        activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
-        req.write(bodyStr)
-        req.end()
-      })
-      clearTimeout(timeoutId)
-      clearInterval(touchInterval)
+      } finally {
+        clearTimeout(timeoutId)
+        clearInterval(touchInterval)
+      }
 
       if (!resp.ok) {
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }

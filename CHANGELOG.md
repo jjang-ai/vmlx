@@ -2,6 +2,29 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.3.0] - 2026-03-20
+
+### Added
+- **Nemotron-H JANG support**: Gate dequantization (8-bit high-to-low), fc1/fc2 weight rename, MTP key filter — 42GB GPU, 46 tok/s
+- **Hybrid SSM cache support**: Full caching pipeline (prefix, paged, disk) now works with hybrid SSM models (Qwen3.5-A3B, Nemotron-H)
+- **Session status banners**: Chat tab shows loading, sleeping, and stopped banners reflecting true session state
+- **Smooth token streaming**: Renderer-side typewriter animation (rAF) for both main content and reasoning — fixes chunky 3-5 token batching
+
+### Fixed
+- **Metal crash on disk cache store (P0)**: Background writer was triggering GPU ops on wrong thread. Pre-materialize all arrays on calling thread before enqueuing — preserves bfloat16
+- **Paged cache layer mismatch (P1)**: Block reuse now checks cumulative SSM state for last-block position. Fixes "Reconstructed 10 layers but expected 40" for hybrid models
+- **Hybrid cache reconstruction (P1)**: Text scheduler now applies `_fix_hybrid_cache` to expand KV-only caches to full model layer count (was only in VLM path)
+- **Fresh-cache fallback detection**: Detects when hybrid fix returns empty cache (all KV offsets=0), treats as miss instead of silent context corruption
+- **Image generation interval leak**: `clearInterval(touchInterval)` now in `finally` block — no more leaked timers on abort/error for both gen and edit
+- **JANG VLM config detection**: Uses `_find_config_path()` for legacy config names (`jjqf_config.json`, `mxq_config.json`) instead of hardcoded `jang_config.json`
+- **MTP key filter consistency**: Text loader now uses substring match (`"mtp." not in k`) matching VLM loader behavior
+- **ReasoningBox performance**: Plain text rendering during streaming, markdown parsing only when reasoning completes — eliminates 60fps `marked.parse()` on 30K+ chains
+
+### Removed
+- Dead `STREAM_THROTTLE_MS` constant and throttle check in streaming pipeline
+- Dead `_is_vlm_config()` function in JANG loader
+- Dead `weights` parameter from `_fix_quantized_bits()` (made optional)
+
 ## [1.0.8] - 2026-03-18
 
 ### Fixed

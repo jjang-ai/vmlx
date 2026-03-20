@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.3.0 — 2026-03-20 — Hybrid SSM Cache, Nemotron, Reasoning Fixes
+
+### Critical Bug Fixes
+- **Metal crash on disk cache store (P0)**: Background writer triggered GPU ops on wrong thread — pre-materialize all arrays on calling thread, preserves bfloat16
+- **Paged cache layer mismatch (P1)**: Block reuse now checks cumulative SSM state for last-block position — fixes "Reconstructed 10 layers but expected 40" for hybrid models
+- **Hybrid cache reconstruction (P1)**: Text scheduler applies `_fix_hybrid_cache` to expand KV-only caches to full model layer count (was only in VLM path)
+- **Fresh-cache fallback detection**: Detects empty cache (all KV offsets=0), treats as miss instead of silent context corruption
+- **Reasoning OFF not working**: `_template_always_thinks()` now checks for unclosed `<think>` only — Nemotron, MiniMax, and all models respect thinking toggle
+- **Image generation interval leak**: `clearInterval(touchInterval)` now in `finally` block for both gen and edit
+- **JANG VLM config detection**: Uses `_find_config_path()` instead of hardcoded `jang_config.json`
+- **MTP key filter consistency**: Text loader uses substring match matching VLM loader
+- **JIT wake for /v1/rerank**: Added to inference endpoint list for idle timer and JIT wake
+
+### New
+- **Nemotron-H JANG support**: Gate dequantization (8-bit high-to-low), fc1/fc2 weight rename, MTP key filter — 42GB GPU, 46 tok/s
+- **Hybrid SSM full cache support**: Prefix, paged, and disk caching all work with hybrid SSM models (Qwen3.5-A3B, Nemotron-H)
+- **Session status banners**: Chat tab shows loading, sleeping, and stopped banners reflecting true session state
+- **Smooth token streaming**: Renderer-side typewriter animation (rAF) for both main content and reasoning
+
+### Performance
+- **ReasoningBox**: Plain text during streaming, markdown parse only when done — eliminates 60fps `marked.parse()` on 30K+ chains
+
+### Removed
+- Dead `STREAM_THROTTLE_MS` constant and throttle check
+- Dead `_is_vlm_config()` function
+- All think-completion seed injection code (`prompt_suffix = "<think>\n</think>\n"`)
+
+### Tests
+- 2021 Python + 1545 panel tests (3566 total), 0 regressions
+- Full 7-section 76-check audit: reasoning ON/OFF for 11 model types, Anthropic API, OpenAI API, streaming pipeline, cache system, JANG/Nemotron engine, sleep/wake/JIT
+
 ## v1.2.4 — 2026-03-18 — Image System, Downloads, JANG Fixes
 
 ### Fixed
@@ -449,5 +480,5 @@ Complete redesign from tab-based single-server to session-centric multi-instance
 
 ---
 
-**Current Version:** v1.2.0
+**Current Version:** v1.3.0
 **Status:** Production release — macOS Apple Silicon

@@ -63,11 +63,15 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
     userScrolledUp.current = !atBottom
   }
 
-  // Render markdown with code highlighting (reuses global marked config from MessageBubble)
+  // Render markdown with code highlighting (reuses global marked config from MessageBubble).
+  // During active streaming, the typewriter updates content every rAF frame — parsing
+  // markdown 60fps would cause heavy CPU load on long chains (DeepSeek R1 at 30K+ chars).
+  // Instead, render plain text during streaming and only parse markdown when done.
   const renderedHtml = useMemo(() => {
     if (!content) return ''
+    if (isStreaming && !isDone) return ''  // plain text path during streaming
     return sanitizeHtml(marked.parse(content) as string)
-  }, [content])
+  }, [content, isStreaming, isDone])
 
   // Handle copy button clicks inside code blocks (same as MessageBubble)
   const handleProseClick = useCallback((e: React.MouseEvent) => {
@@ -126,11 +130,15 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
           className={`px-3 py-2 border-t border-border text-xs text-muted-foreground overflow-y-auto ${isMaximized ? '' : 'max-h-[300px]'}`}
           style={{ lineHeight: '1.6' }}
         >
-          <div
-            className="prose prose-invert prose-xs max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_pre]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_pre]:my-1.5 [&_pre]:rounded [&_blockquote]:my-1"
-            dangerouslySetInnerHTML={{ __html: renderedHtml }}
-            onClick={handleProseClick}
-          />
+          {isStreaming && !isDone ? (
+            <div className="whitespace-pre-wrap">{content}</div>
+          ) : (
+            <div
+              className="prose prose-invert prose-xs max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_pre]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_pre]:my-1.5 [&_pre]:rounded [&_blockquote]:my-1"
+              dangerouslySetInnerHTML={{ __html: renderedHtml }}  // sanitized via DOMPurify
+              onClick={handleProseClick}
+            />
+          )}
           {isStreaming && !isDone && (
             <span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
           )}
