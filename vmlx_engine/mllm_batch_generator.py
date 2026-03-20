@@ -1634,6 +1634,38 @@ class MLLMBatchGenerator:
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
           except Exception as prefill_err:
+                # Broadcast shape errors from stale prefix cache — retry with fresh cache
+                if "broadcast" in str(prefill_err).lower() and req.prompt_cache is not None:
+                    logger.warning(
+                        f"Cache shape mismatch for {req.request_id}, "
+                        f"retrying without prefix cache: {prefill_err}"
+                    )
+                    if self.block_aware_cache is not None:
+                        try:
+                            self.block_aware_cache.release_cache(req.request_id)
+                        except Exception:
+                            pass
+                    req.prompt_cache = None
+                    req.input_ids = mx.array([req._original_token_ids])
+                    try:
+                        if hasattr(self.language_model, 'make_cache'):
+                            req_cache = self.language_model.make_cache()
+                        else:
+                            from mlx_lm.models.cache import KVCache
+                            req_cache = [KVCache() for _ in self.language_model.layers]
+                        logits = self._run_vision_encoding(req, cache=req_cache)
+                        per_request_caches.append(req_cache)
+                        last_logits = logits[:, -1, :]
+                        logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
+                        req_sampler = self._make_request_sampler(req)
+                        sampled = req_sampler(logprobs)
+                        mx.async_eval(sampled, logprobs)
+                        first_tokens.append(sampled.item())
+                        all_logprobs.append(logprobs.squeeze(0))
+                        succeeded_requests.append(req)
+                        continue  # Successfully retried
+                    except Exception as retry_err:
+                        logger.error(f"Retry also failed for {req.request_id}: {retry_err}")
                 # Per-request prefill failure (bad image, OOM, etc.)
                 # Queue an immediate error response instead of killing the entire batch.
                 logger.error(
