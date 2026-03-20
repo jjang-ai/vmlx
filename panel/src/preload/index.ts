@@ -106,16 +106,6 @@ const api = {
       ipcRenderer.on('chat:reasoningDone', handler)
       return () => { ipcRenderer.removeListener('chat:reasoningDone', handler) }
     },
-    onThinkingSilently: (callback: (data: any) => void) => {
-      const handler = (_: any, data: any) => callback(data)
-      ipcRenderer.on('chat:thinkingSilently', handler)
-      return () => { ipcRenderer.removeListener('chat:thinkingSilently', handler) }
-    },
-    onThinkingDone: (callback: (data: any) => void) => {
-      const handler = (_: any, data: any) => callback(data)
-      ipcRenderer.on('chat:thinkingDone', handler)
-      return () => { ipcRenderer.removeListener('chat:thinkingDone', handler) }
-    },
     onTyping: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
       ipcRenderer.on('chat:typing', handler)
@@ -308,6 +298,7 @@ const api = {
     installCodingTool: (toolId: string) => ipcRenderer.invoke('tools:installCodingTool', toolId),
     addCodingToolConfig: (toolId: string, baseUrl: string, modelName: string, port: number | null) => ipcRenderer.invoke('tools:addCodingToolConfig', toolId, baseUrl, modelName, port),
     removeCodingToolConfig: (toolId: string, label: string) => ipcRenderer.invoke('tools:removeCodingToolConfig', toolId, label),
+    getConfigSnippets: (baseUrl: string, modelName: string) => ipcRenderer.invoke('tools:getConfigSnippets', baseUrl, modelName),
   },
 
   // Session management

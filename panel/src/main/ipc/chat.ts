@@ -621,9 +621,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     let tpsTokenBase = 0 // re-anchor point for tpsSnapshots after iteration reset
     // Throttle IPC emission to renderer (~30 fps for smooth streaming)
     let lastStreamEmitTime = 0
-    const STREAM_THROTTLE_MS = 8  // ~120fps — smooth token-by-token even at 100+ tok/s
+    const STREAM_THROTTLE_MS = 0  // No throttle — emit every token. React 18 auto-batching handles render coalescing.
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
-    let thinkingTimer: ReturnType<typeof setTimeout> | null = null
+    // (thinkingTimer removed — "Thinking silently" indicator disabled)
     let fullContent = ''
     let reasoningContent = ''
     // Accumulates content across tool iterations so abort during tool execution can recover
@@ -822,33 +822,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // Track whether server sends real token counts (via usage in each SSE chunk)
       let serverSendsUsage = false
 
-      // Suppress-reasoning UX: detect when model is thinking silently
-      // (reasoning suppressed, no visible content arrives for 2+ seconds).
-      // Only armed for sessions with a reasoning parser (avoid false "Thinking..."
-      // on non-reasoning models during slow prefill).
-      let firstVisibleContent = false
-      let sentThinkingIndicator = false
-
-      /** Arm (or re-arm) the thinking-silently timer. Called at stream start
-       *  and at each tool iteration boundary so follow-up streams also get it. */
-      const armThinkingTimer = () => {
-        if (thinkingTimer) clearTimeout(thinkingTimer)
-        firstVisibleContent = false
-        sentThinkingIndicator = false
-        if (!sessionHasReasoningParser) return // only for reasoning models
-        thinkingTimer = setTimeout(() => {
-          if (!firstVisibleContent && !abortController.signal.aborted) {
-            sentThinkingIndicator = true
-            try {
-              const win = getWindow()
-              if (win && !win.isDestroyed()) {
-                win.webContents.send('chat:thinkingSilently', { chatId, messageId: assistantMessage.id })
-              }
-            } catch (_) { }
-          }
-        }, 2000)
-      }
-      armThinkingTimer()
 
       // Track tool calls received during streaming for MCP auto-execution
       let receivedToolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = []
@@ -964,19 +937,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             } catch (_) { }
           }
           fullContent += delta
-          // First visible content arrived — clear "thinking silently" indicator
-          if (!firstVisibleContent && delta) {
-            firstVisibleContent = true
-            if (thinkingTimer) clearTimeout(thinkingTimer)
-            if (sentThinkingIndicator) {
-              try {
-                const win = getWindow()
-                if (win && !win.isDestroyed()) {
-                  win.webContents.send('chat:thinkingDone', { chatId, messageId: assistantMessage.id })
-                }
-              } catch (_) { }
-            }
-          }
           // Update content offset immediately (not throttled) for accurate tool call positioning
           lastEmittedContentLength = allGeneratedContent
             ? allGeneratedContent.length + 2 + fullContent.length
@@ -1004,8 +964,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         // Suppress rendering (but not counting/TPS) when tool call content is detected
         if (!isReasoningDelta && clientToolCallBuffering) return
 
-        // === Throttled IPC emission (~120fps, STREAM_THROTTLE_MS=8ms) ===
-        // First token always emits immediately; subsequent tokens throttled to STREAM_THROTTLE_MS
+        // === IPC emission — no throttle (STREAM_THROTTLE_MS=0) ===
+        // Every token emits immediately. React 18 auto-batching handles render coalescing.
         if (now - lastStreamEmitTime < STREAM_THROTTLE_MS) return
         lastStreamEmitTime = now
 
@@ -1314,13 +1274,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n')
           buf = lines.pop() || ''
-          // Reset throttle so the FIRST token in this TCP chunk emits immediately.
-          // TCP batches 3-5 SSE lines into one read() — without this reset,
-          // the first token's Date.now() matches the previous chunk's emission
-          // time and gets throttled. Subsequent tokens in the same chunk are
-          // still throttled against each other (same Date.now() → 8ms gate),
-          // which is correct since they arrived simultaneously.
-          lastStreamEmitTime = 0
           for (let li = 0; li < lines.length; li++) {
             if (abortController.signal.aborted) break
             processLine(lines[li].trim())
@@ -1535,7 +1488,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         }
       }
 
-      if (thinkingTimer) clearTimeout(thinkingTimer)
       console.log(`[CHAT] Stream ended — content: ${fullContent.length} chars, reasoning: ${reasoningContent.length} chars, tool calls: ${receivedToolCalls.length}, buffered: ${clientToolCallBuffering}`)
 
       // ─── Unified Tool Execution + Auto-Continue Loop ───────────────────
@@ -1608,7 +1560,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           }
           isReasoning = false // Reset reasoning state for new iteration
           reasoningContent = '' // Reset so next iteration's reasoning doesn't accumulate with previous
-          armThinkingTimer() // Re-arm thinking indicator for follow-up stream
+          // (thinking indicator removed)
           emitToolStatus('processing', '', undefined, toolIteration)
           // Reset idle timer before follow-up — tools may have consumed minutes
           if (chatSession) sessionManager.touchSession(chatSession.id)
@@ -1664,7 +1616,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           }
           isReasoning = false // Reset reasoning state for new iteration
           reasoningContent = '' // Reset so next iteration's reasoning doesn't accumulate with previous
-          armThinkingTimer() // Re-arm thinking indicator for follow-up stream
+          // (thinking indicator removed)
           emitToolStatus('processing', '', 'Generating response...', toolIteration)
           // Reset idle timer before auto-continue follow-up
           if (chatSession) sessionManager.touchSession(chatSession.id)
@@ -1791,7 +1743,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       return assistantMessage
     } catch (error) {
       stopPeriodicSave()
-      if (thinkingTimer) clearTimeout(thinkingTimer)
       // Release the SSE reader if it was acquired
       try { reader?.cancel() } catch (_) { }
 
