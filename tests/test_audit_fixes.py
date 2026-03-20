@@ -474,9 +474,9 @@ class TestJANGLoader:
             load_jang_model(str(tmp_path))
 
     def test_unsupported_version_error(self, tmp_path):
-        """Format version 2.x should be rejected."""
-        (tmp_path / "jang_config.json").write_text('{"format": "jang", "format_version": "2.0"}')
-        (tmp_path / "config.json").write_text('{"model_type": "llama", "hidden_size": 128, "num_attention_heads": 2, "vocab_size": 100}')
+        """Format version 3.x should be rejected (1.x and 2.x are supported)."""
+        (tmp_path / "jang_config.json").write_text('{"format": "jang", "format_version": "3.0"}')
+        (tmp_path / "config.json").write_text('{"model_type": "llama", "hidden_size": 128, "num_attention_heads": 2, "vocab_size": 100, "num_hidden_layers": 2, "intermediate_size": 256, "rms_norm_eps": 1e-5}')
         from vmlx_engine.utils.jang_loader import load_jang_model
         with pytest.raises(ValueError, match="Unsupported JANG format version"):
             load_jang_model(str(tmp_path))
@@ -558,12 +558,13 @@ class TestJANGLoader:
         shape = _infer_weight_shape("some.unknown.weight", config, 8192 * 4096)
         assert shape == (8192, 4096)
 
-    def test_infer_shape_fallback_unknown_dim_returns_none(self):
-        """Fallback returns None when inferred dim doesn't match any known config dimension."""
+    def test_infer_shape_fallback_unknown_dim_factors(self):
+        """Fallback factors elements using hidden_size when name is unknown."""
         from vmlx_engine.utils.jang_loader import _infer_weight_shape
         config = {"hidden_size": 4096}
         shape = _infer_weight_shape("some.unknown.weight", config, 8192 * 4096)
-        assert shape is None
+        # Function factors using hidden_size: 8192*4096 / 4096 = 8192, so (8192, 4096)
+        assert shape == (8192, 4096)
 
     def test_infer_shape_no_match(self):
         from vmlx_engine.utils.jang_loader import _infer_weight_shape

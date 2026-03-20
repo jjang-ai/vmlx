@@ -18,6 +18,7 @@ const api = {
     searchHF: (query: string, sortBy?: string, sortDir?: string, modelType?: string) => ipcRenderer.invoke('models:searchHF', query, sortBy, sortDir, modelType),
     fetchReadme: (repoId: string) => ipcRenderer.invoke('models:fetchReadme', repoId),
     getRecommendedModels: () => ipcRenderer.invoke('models:getRecommendedModels'),
+    getCollectionModels: (slug: string) => ipcRenderer.invoke('models:getCollectionModels', slug),
     downloadModel: (repoId: string) => ipcRenderer.invoke('models:downloadModel', repoId),
     startDownload: (repoId: string) => ipcRenderer.invoke('models:startDownload', repoId),
     cancelDownload: (jobId?: string) => ipcRenderer.invoke('models:cancelDownload', jobId),
@@ -104,6 +105,16 @@ const api = {
       const handler = (_: any, data: any) => callback(data)
       ipcRenderer.on('chat:reasoningDone', handler)
       return () => { ipcRenderer.removeListener('chat:reasoningDone', handler) }
+    },
+    onThinkingSilently: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('chat:thinkingSilently', handler)
+      return () => { ipcRenderer.removeListener('chat:thinkingSilently', handler) }
+    },
+    onThinkingDone: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('chat:thinkingDone', handler)
+      return () => { ipcRenderer.removeListener('chat:thinkingDone', handler) }
     },
     onTyping: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
@@ -313,6 +324,10 @@ const api = {
     update: (sessionId: string, config: any) => ipcRenderer.invoke('sessions:update', sessionId, config),
     getLogs: (sessionId: string) => ipcRenderer.invoke('sessions:getLogs', sessionId),
     clearLogs: (sessionId: string) => ipcRenderer.invoke('sessions:clearLogs', sessionId),
+    softSleep: (sessionId: string) => ipcRenderer.invoke('sessions:softSleep', sessionId),
+    deepSleep: (sessionId: string) => ipcRenderer.invoke('sessions:deepSleep', sessionId),
+    wake: (sessionId: string) => ipcRenderer.invoke('sessions:wake', sessionId),
+    touch: (sessionId: string) => ipcRenderer.invoke('sessions:touch', sessionId),
 
     // Events — each returns an unsubscribe function for targeted cleanup
     onStarting: (callback: (data: any) => void) => {
@@ -354,6 +369,11 @@ const api = {
       const handler = (_: any, data: any) => callback(data)
       ipcRenderer.on('session:deleted', handler)
       return () => { ipcRenderer.removeListener('session:deleted', handler) }
+    },
+    onStandby: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('session:standby', handler)
+      return () => { ipcRenderer.removeListener('session:standby', handler) }
     },
   }
 }

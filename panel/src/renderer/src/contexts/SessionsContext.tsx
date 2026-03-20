@@ -6,7 +6,8 @@ export interface SessionSummary {
   modelName?: string
   host: string
   port: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
+  standbyDepth?: 'soft' | 'deep' | null
   type?: 'local' | 'remote'
   remoteUrl?: string
   config?: string // JSON blob — includes modelType, imageMode, etc.
@@ -81,6 +82,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
           ))
         }
       }),
+      ...(window.api.sessions.onStandby ? [window.api.sessions.onStandby((data: any) => {
+        setSessions(prev => prev.map(s =>
+          s.id === data.sessionId ? { ...s, status: 'standby' as const, standbyDepth: data.depth || 'soft' } : s
+        ))
+      })] : []),
     ]
 
     return () => unsubs.forEach(fn => fn())
@@ -92,6 +98,14 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
     // Check if already running
     const existing = current.find(s => s.modelPath === modelPath && s.status === 'running')
     if (existing) return existing
+
+    // Standby sessions have a live process — wake them instead of starting fresh
+    const standby = current.find(s => s.modelPath === modelPath && s.status === 'standby')
+    if (standby) {
+      await window.api.sessions.wake?.(standby.id)
+      // Return immediately — JIT middleware on the server handles the rest
+      return { ...standby, status: 'running' }
+    }
 
     // Check if loading
     const loading = current.find(s => s.modelPath === modelPath && s.status === 'loading')

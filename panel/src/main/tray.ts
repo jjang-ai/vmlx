@@ -96,7 +96,7 @@ function buildMenu(
   // Count ALL running models: ProcessManager + SessionManager (deduplicated)
   let runningSessions: any[] = []
   try {
-    runningSessions = db.getSessions().filter((s: any) => s.status === 'running')
+    runningSessions = db.getSessions().filter((s: any) => s.status === 'running' || s.status === 'standby')
   } catch {}
   const sessionOnlyCount = runningSessions.filter((s: any) =>
     !processes.some(p => p.port === s.port)
@@ -166,7 +166,7 @@ function buildMenu(
 
   // Add SessionManager sessions (includes image servers not in ProcessManager)
   try {
-    const sessions = db.getSessions().filter(s => s.status === 'running')
+    const sessions = db.getSessions().filter(s => s.status === 'running' || s.status === 'standby')
     for (const s of sessions) {
       // Skip if already shown via ProcessManager
       const alreadyShown = processes.some(p => p.port === s.port)
@@ -174,7 +174,8 @@ function buildMenu(
 
       let isImage = false
       try { isImage = JSON.parse(s.config || '{}').modelType === 'image' } catch {}
-      const icon = isImage ? '🖼' : '●'
+      const isSleeping = s.status === 'standby'
+      const icon = isSleeping ? '💤' : isImage ? '🖼' : '●'
       const modelName = s.modelName || s.modelPath?.split('/').pop() || 'Unknown'
       const sessMem = sessionMemoryMB.get(s.id) || 0
       const sessMemLabel = sessMem > 0 ? ` — ${(sessMem / 1024).toFixed(1)} GB` : ''
@@ -187,6 +188,28 @@ function buildMenu(
             click: () => { clipboard.writeText(`http://${connectHost(s.host)}:${s.port}/v1`) },
           },
           { type: 'separator' },
+          ...(isSleeping ? [{
+            label: 'Wake',
+            click: async () => {
+              try {
+                await sessionManager.wakeSession(s.id)
+                rebuildMenu(processManager, getWindow)
+              } catch (err) {
+                console.error(`[Tray] Failed to wake session ${s.id}:`, err)
+              }
+            },
+          }] : [{
+            label: 'Sleep',
+            click: async () => {
+              try {
+                await sessionManager.softSleep(s.id)
+                rebuildMenu(processManager, getWindow)
+              } catch (err) {
+                console.error(`[Tray] Failed to sleep session ${s.id}:`, err)
+              }
+            },
+          }]),
+          { type: 'separator' as const },
           {
             label: 'Stop',
             click: async () => {
@@ -251,31 +274,39 @@ export function rebuildMenu(
   if (!tray) return
   const processes = processManager.list()
 
-  // Icon color: check BOTH ProcessManager and SessionManager for running models
+  // Icon color: check BOTH ProcessManager and SessionManager for running/standby models
   let hasRunning = processes.some(p => p.status === 'running')
   let hasStarting = processes.some(p => p.status === 'starting')
+  let hasStandby = false
   if (!hasRunning) {
     try {
       const sessions = db.getSessions()
       hasRunning = sessions.some((s: any) => s.status === 'running')
+      hasStandby = sessions.some((s: any) => s.status === 'standby')
       hasStarting = hasStarting || sessions.some((s: any) => s.status === 'loading')
     } catch {}
   }
-  const iconColor = hasRunning ? 'green' : hasStarting ? 'yellow' : 'gray'
+  // Green = running, Yellow = starting or standby (process alive, model sleeping), Gray = nothing
+  const iconColor = hasRunning ? 'green' : (hasStarting || hasStandby) ? 'yellow' : 'gray'
   tray.setImage(createTrayIcon(iconColor))
   tray.setContextMenu(buildMenu(processManager, getWindow))
 
-  // Tooltip: count all running models
+  // Tooltip: count all active models (running + standby)
   let totalRunning = 0
+  let totalStandby = 0
   try {
-    const sessions = db.getSessions().filter((s: any) => s.status === 'running')
+    const sessions = db.getSessions()
+    const runningSessions = sessions.filter((s: any) => s.status === 'running')
+    const standbySessions = sessions.filter((s: any) => s.status === 'standby')
     const pmRunning = processes.filter(p => p.status === 'running')
-    const sessionOnly = sessions.filter((s: any) => !pmRunning.some(p => p.port === s.port))
+    const sessionOnly = runningSessions.filter((s: any) => !pmRunning.some(p => p.port === s.port))
     totalRunning = pmRunning.length + sessionOnly.length
+    totalStandby = standbySessions.length
   } catch {}
+  const total = totalRunning + totalStandby
   tray.setToolTip(
-    totalRunning > 0
-      ? `vMLX — ${totalRunning} model${totalRunning !== 1 ? 's' : ''} running`
+    total > 0
+      ? `vMLX — ${totalRunning} running${totalStandby > 0 ? `, ${totalStandby} sleeping` : ''}`
       : 'vMLX — No models loaded'
   )
 }
@@ -309,7 +340,7 @@ export function createTray(
 
   // Also listen for SessionManager events (sessions started from Server/Image tabs)
   const sessionRebuild = () => rebuildMenu(processManager, getWindow)
-  for (const event of ['session:created', 'session:ready', 'session:stopped', 'session:error', 'session:deleted']) {
+  for (const event of ['session:created', 'session:starting', 'session:ready', 'session:stopped', 'session:error', 'session:deleted', 'session:standby']) {
     sessionManager.on(event, sessionRebuild)
     boundListeners.push({ event, fn: sessionRebuild })
   }

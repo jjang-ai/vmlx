@@ -63,6 +63,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
   // Reasoning state: track per-message reasoning content and done status
   const [reasoningMap, setReasoningMap] = useState<Record<string, string>>({})
   const [reasoningDoneMap, setReasoningDoneMap] = useState<Record<string, boolean>>({})
+  const [thinkingSilentlyMap, setThinkingSilentlyMap] = useState<Record<string, boolean>>({})
   // Tool call status: track per-message tool call phases
   const [toolStatusMap, setToolStatusMap] = useState<Record<string, Array<{ phase: string; toolName: string; detail?: string; iteration?: number; contentOffset?: number; timestamp: number }>>>({})
   // Per-chat setting: hide tool status display
@@ -255,6 +256,16 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       setAskUserInput('')
     }
 
+    // Suppress-reasoning UX: show "Thinking..." when model is thinking silently
+    const handleThinkingSilently = (data: any) => {
+      if (data.chatId !== chatId) return
+      setThinkingSilentlyMap(prev => ({ ...prev, [data.messageId]: true }))
+    }
+    const handleThinkingDone = (data: any) => {
+      if (data.chatId !== chatId) return
+      setThinkingSilentlyMap(prev => ({ ...prev, [data.messageId]: false }))
+    }
+
     // Store individual cleanup functions (avoids removeAllListeners race conditions)
     const cleanupTyping = window.api.chat.onTyping(handleTyping)
     const cleanupStream = window.api.chat.onStream(handleStream)
@@ -262,6 +273,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     const cleanupReasoningDone = window.api.chat.onReasoningDone(handleReasoningDone)
     const cleanupToolStatus = window.api.chat.onToolStatus(handleToolStatus)
     const cleanupAskUser = window.api.chat.onAskUser(handleAskUser)
+    const cleanupThinkingSilently = window.api.chat.onThinkingSilently(handleThinkingSilently)
+    const cleanupThinkingDone = window.api.chat.onThinkingDone(handleThinkingDone)
 
     return () => {
       // Do NOT abort active generation when navigating away — the user explicitly
@@ -273,9 +286,12 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       cleanupReasoningDone()
       cleanupToolStatus()
       cleanupAskUser()
+      cleanupThinkingSilently()
+      cleanupThinkingDone()
       setReasoningMap({})
       setReasoningDoneMap({})
       setToolStatusMap({})
+      setThinkingSilentlyMap({})
       setAskUserQuestion(null)
     }
   }, [chatId])
@@ -428,6 +444,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         currentMetrics={currentMetrics}
         reasoningMap={reasoningMap}
         reasoningDoneMap={reasoningDoneMap}
+        thinkingSilentlyMap={thinkingSilentlyMap}
         toolStatusMap={toolStatusMap}
         hideToolStatus={hideToolStatus}
         sessionId={sessionId}
@@ -474,6 +491,12 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
               </button>
             </form>
           </div>
+        </div>
+      )}
+      {/* Model sleeping banner */}
+      {sessionEndpoint && sessionId && !loading && sessionStatus === 'standby' && (
+        <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-blue-500/5">
+          <span className="text-xs text-blue-400">Model sleeping — will auto-wake on your next message</span>
         </div>
       )}
       {/* Model loading banner */}

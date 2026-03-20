@@ -31,12 +31,14 @@ export interface Session {
   host: string
   port: number
   pid?: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
   config: string // JSON blob of ServerConfig
   createdAt: number
   updatedAt: number
   lastStartedAt?: number
   lastStoppedAt?: number
+  lastRequestAt?: number
+  standbyDepth?: 'soft' | 'deep' | null  // soft = caches cleared; deep = model unloaded
   // Remote endpoint support
   type: 'local' | 'remote'
   remoteUrl?: string
@@ -250,7 +252,7 @@ class DatabaseManager {
         port INTEGER NOT NULL UNIQUE,
         pid INTEGER,
         status TEXT NOT NULL DEFAULT 'stopped'
-          CHECK(status IN ('running','stopped','error','loading')),
+          CHECK(status IN ('running','stopped','error','loading','standby')),
         config TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
@@ -506,6 +508,62 @@ class DatabaseManager {
       this.db.exec("ALTER TABLE image_sessions ADD COLUMN session_type TEXT DEFAULT 'generate'")
     }
 
+    // Safe migration: add sleep/standby columns to sessions table
+    if (!sessionColumns.find(c => c.name === 'last_request_at')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN last_request_at INTEGER')
+    }
+    if (!sessionColumns.find(c => c.name === 'standby_depth')) {
+      // 'soft' = caches cleared, model loaded; 'deep' = model unloaded; null = not in standby
+      this.db.exec('ALTER TABLE sessions ADD COLUMN standby_depth TEXT')
+    }
+
+    // Safe migration: widen the CHECK constraint on sessions.status to include 'standby'.
+    // SQLite cannot ALTER CHECK constraints, so we recreate the table if needed.
+    // Detect by trying to insert+rollback a standby row.
+    try {
+      this.db.exec("SAVEPOINT check_standby")
+      this.db.exec("INSERT INTO sessions (id, model_path, host, port, status, config, created_at, updated_at) VALUES ('__check__', '__check__', '0.0.0.0', 0, 'standby', '{}', 0, 0)")
+      this.db.exec("DELETE FROM sessions WHERE id = '__check__'")
+      this.db.exec("RELEASE check_standby")
+    } catch {
+      this.db.exec("ROLLBACK TO check_standby")
+      this.db.exec("RELEASE check_standby")
+      // CHECK rejects 'standby' — recreate the table with updated constraint
+      this.db.exec(`
+        CREATE TABLE sessions_new (
+          id TEXT PRIMARY KEY,
+          model_path TEXT NOT NULL UNIQUE,
+          model_name TEXT,
+          host TEXT NOT NULL DEFAULT '0.0.0.0',
+          port INTEGER NOT NULL UNIQUE,
+          pid INTEGER,
+          status TEXT NOT NULL DEFAULT 'stopped'
+            CHECK(status IN ('running','stopped','error','loading','standby')),
+          config TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          last_started_at INTEGER,
+          last_stopped_at INTEGER,
+          type TEXT NOT NULL DEFAULT 'local',
+          remote_url TEXT,
+          remote_api_key TEXT,
+          remote_model TEXT,
+          remote_organization TEXT,
+          last_request_at INTEGER,
+          standby_depth TEXT
+        )
+      `)
+      this.db.exec(`INSERT INTO sessions_new SELECT
+        id, model_path, model_name, host, port, pid, status, config, created_at, updated_at,
+        last_started_at, last_stopped_at,
+        COALESCE(type, 'local'), remote_url, remote_api_key, remote_model, remote_organization,
+        last_request_at, standby_depth
+        FROM sessions`)
+      this.db.exec('DROP TABLE sessions')
+      this.db.exec('ALTER TABLE sessions_new RENAME TO sessions')
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)')
+    }
+
     // Image model paths table — tracks where downloaded image models live on disk
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS image_model_paths (
@@ -518,8 +576,61 @@ class DatabaseManager {
       )
     `)
 
+    // Download queue persistence — survives app crash/restart
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS downloads (
+        id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        model_dir TEXT NOT NULL,
+        image_model_name TEXT,
+        image_quantize INTEGER,
+        started_at INTEGER NOT NULL,
+        error TEXT
+      )
+    `)
+
     }) // end runMigrations transaction
     runMigrations()
+  }
+
+  // Downloads
+  upsertDownload(id: string, repoId: string, status: string, modelDir: string,
+    imageModelName?: string, imageQuantize?: number): void {
+    this.ensureOpen()
+    this.db.prepare(`
+      INSERT INTO downloads (id, repo_id, status, model_dir, image_model_name, image_quantize, started_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status
+    `).run(id, repoId, status, modelDir, imageModelName ?? null, imageQuantize ?? null, Date.now())
+  }
+
+  updateDownloadStatus(id: string, status: string, error?: string): void {
+    this.ensureOpen()
+    this.db.prepare('UPDATE downloads SET status = ?, error = ? WHERE id = ?')
+      .run(status, error ?? null, id)
+  }
+
+  deleteDownload(id: string): void {
+    this.ensureOpen()
+    this.db.prepare('DELETE FROM downloads WHERE id = ?').run(id)
+  }
+
+  getPendingDownloads(): Array<{
+    id: string; repoId: string; status: string; modelDir: string;
+    imageModelName?: string; imageQuantize?: number
+  }> {
+    this.ensureOpen()
+    return this.db.prepare(
+      "SELECT id, repo_id as repoId, status, model_dir as modelDir, " +
+      "image_model_name as imageModelName, image_quantize as imageQuantize " +
+      "FROM downloads WHERE status IN ('queued', 'downloading', 'paused')"
+    ).all() as any[]
+  }
+
+  clearCompletedDownloads(): void {
+    this.ensureOpen()
+    this.db.prepare("DELETE FROM downloads WHERE status IN ('complete', 'cancelled', 'error')").run()
   }
 
   // Folders
@@ -902,6 +1013,8 @@ class DatabaseManager {
     if ('remoteApiKey' in updates) { fields.push('remote_api_key = ?'); values.push(updates.remoteApiKey ? encryptValue(updates.remoteApiKey) : null) }
     if ('remoteModel' in updates) { fields.push('remote_model = ?'); values.push(updates.remoteModel ?? null) }
     if ('remoteOrganization' in updates) { fields.push('remote_organization = ?'); values.push(updates.remoteOrganization ?? null) }
+    if ('lastRequestAt' in updates) { fields.push('last_request_at = ?'); values.push(updates.lastRequestAt ?? null) }
+    if ('standbyDepth' in updates) { fields.push('standby_depth = ?'); values.push(updates.standbyDepth ?? null) }
 
     if (fields.length === 0) return
 
@@ -938,7 +1051,9 @@ class DatabaseManager {
       remoteUrl: row.remote_url,
       remoteApiKey: row.remote_api_key ? decryptValue(row.remote_api_key) : undefined,
       remoteModel: row.remote_model,
-      remoteOrganization: row.remote_organization
+      remoteOrganization: row.remote_organization,
+      lastRequestAt: row.last_request_at,
+      standbyDepth: row.standby_depth || null
     }
   }
 

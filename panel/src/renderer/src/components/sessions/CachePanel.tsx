@@ -19,7 +19,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const fetchStats = async () => {
-    if (sessionStatus !== 'running') return
+    if (sessionStatus !== 'running' && sessionStatus !== 'standby') return
     try {
       const s = await window.api.cache.stats(endpoint, sessionId)
       setStats(s)
@@ -128,6 +128,21 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {schedulerCache.evictions != null && (
               <StatCard label="Evictions" value={String(schedulerCache.evictions)} />
             )}
+            {schedulerCache.block_size != null && (
+              <StatCard label="Block Size" value={`${schedulerCache.block_size} tokens`} />
+            )}
+            {schedulerCache.allocated_blocks != null && (
+              <StatCard label="Blocks" value={`${schedulerCache.allocated_blocks} / ${schedulerCache.max_blocks} (${schedulerCache.shared_blocks ?? 0} shared)`} />
+            )}
+            {schedulerCache.utilization != null && (
+              <StatCard label="Utilization" value={`${(schedulerCache.utilization * 100).toFixed(1)}%`} />
+            )}
+            {schedulerCache.disk_hits != null && (schedulerCache.disk_hits > 0 || schedulerCache.disk_misses > 0) && (
+              <StatCard label="L2 Disk Hits" value={`${schedulerCache.disk_hits} / ${schedulerCache.disk_misses} miss`} />
+            )}
+            {schedulerCache.cow_copies != null && schedulerCache.cow_copies > 0 && (
+              <StatCard label="COW Copies" value={String(schedulerCache.cow_copies)} />
+            )}
           </div>
         </div>
       )}
@@ -152,7 +167,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
         </div>
       )}
 
-      {/* Disk Cache */}
+      {/* Disk Cache (L2 prompt-level) */}
       {diskCache && (
         <div>
           <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Disk Cache (L2)</h4>
@@ -160,6 +175,23 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {diskCache.entries != null && <StatCard label="Entries" value={String(diskCache.entries)} />}
             {(diskCache.total_size_mb ?? diskCache.size_mb) != null && <StatCard label="Size" value={`${(diskCache.total_size_mb ?? diskCache.size_mb ?? 0).toFixed(1)} MB`} />}
             {diskCache.hit_rate != null && <StatCard label="Hit Rate" value={`${(diskCache.hit_rate * 100).toFixed(1)}%`} />}
+            {diskCache.hits != null && <StatCard label="Hits / Misses" value={`${diskCache.hits} / ${diskCache.misses ?? 0}`} />}
+            {diskCache.stores != null && <StatCard label="Stores" value={String(diskCache.stores)} />}
+            {diskCache.pending_writes != null && diskCache.pending_writes > 0 && <StatCard label="Pending Writes" value={String(diskCache.pending_writes)} />}
+          </div>
+        </div>
+      )}
+
+      {/* Block Disk Cache (L2 paged blocks) */}
+      {stats?.block_disk_cache && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Block Disk Cache (L2 Paged)</h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <StatCard label="Blocks on Disk" value={String(stats.block_disk_cache.blocks_on_disk ?? 0)} />
+            <StatCard label="Disk Size" value={`${(stats.block_disk_cache.disk_size_gb ?? 0).toFixed(2)} GB`} />
+            <StatCard label="Disk Hits / Misses" value={`${stats.block_disk_cache.disk_hits ?? 0} / ${stats.block_disk_cache.disk_misses ?? 0}`} />
+            <StatCard label="Disk Writes" value={String(stats.block_disk_cache.disk_writes ?? 0)} />
+            {(stats.block_disk_cache.disk_evictions ?? 0) > 0 && <StatCard label="Disk Evictions" value={String(stats.block_disk_cache.disk_evictions)} />}
           </div>
         </div>
       )}

@@ -531,21 +531,21 @@ class TestModelConfigs:
         assert config.reasoning_parser is None
 
     def test_glm_z1_config(self, registry):
-        """GLM-Z1 uses model_type glm4 but should get deepseek_r1 reasoning via name match."""
+        """GLM-Z1 uses model_type glm4 but should get openai_gptoss reasoning (Harmony protocol) via name match."""
         config = self._lookup(registry, "zai-org/GLM-Z1-32B-0414", "glm4")
         assert config.family_name == "glm_z1"
-        assert config.reasoning_parser == "deepseek_r1"
-        assert config.think_in_template is True
+        assert config.reasoning_parser == "openai_gptoss"
+        assert config.think_in_template is False
         assert config.tool_parser == "glm47"
 
     def test_glm_z1_9b_config(self, registry):
-        """GLM-Z1 9B variant also gets deepseek_r1."""
+        """GLM-Z1 9B variant also gets openai_gptoss (Harmony protocol)."""
         config = self._lookup(registry, "zai-org/GLM-Z1-9B-0414", "glm4")
         assert config.family_name == "glm_z1"
-        assert config.reasoning_parser == "deepseek_r1"
+        assert config.reasoning_parser == "openai_gptoss"
 
     def test_glm4_base_not_z1(self, registry):
-        """Plain GLM-4 (not Z1) should NOT get deepseek_r1."""
+        """Plain GLM-4 (not Z1) should NOT get reasoning parser."""
         config = self._lookup(registry, "THUDM/GLM-4-9B", "glm4")
         assert config.family_name == "chatglm"
         assert config.reasoning_parser is None

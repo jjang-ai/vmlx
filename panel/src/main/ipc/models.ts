@@ -680,6 +680,18 @@ export function registerModelHandlers(): void {
   const trackCompleted = (job: DownloadJob) => {
     completedJobs.push(job)
     if (completedJobs.length > MAX_COMPLETED_JOBS) completedJobs.splice(0, completedJobs.length - MAX_COMPLETED_JOBS)
+    // Remove from persistent store — completed/cancelled/error jobs don't need to survive restart
+    try { db.deleteDownload(job.id) } catch (_) { }
+  }
+
+  /** Persist download state to DB so it survives app crash/restart. */
+  const persistDownload = (job: DownloadJob, status?: string) => {
+    try {
+      const s = status || job.status
+      if (s === 'queued' || s === 'downloading' || s === 'paused') {
+        db.upsertDownload(job.id, job.repoId, s, job.modelDir, job.imageModelName, job.imageQuantize)
+      }
+    } catch (_) { }
   }
 
   // Expose kill function for app quit cleanup
@@ -733,6 +745,7 @@ export function registerModelHandlers(): void {
       // Register in activeJobs BEFORE async work to prevent over-dispatch
       activeJobs.set(job.id, job)
       job.status = 'downloading'
+      persistDownload(job)
       startDownloadJob(job)
     }
   }
@@ -1014,6 +1027,32 @@ export function registerModelHandlers(): void {
     })
   }
 
+  // ─── Restore persisted downloads from DB on startup ─────────────────────────
+  try {
+    const pending = db.getPendingDownloads()
+    for (const row of pending) {
+      const alreadyQueued = downloadQueue.some(j => j.repoId === row.repoId)
+        || [...activeJobs.values()].some(j => j.repoId === row.repoId)
+      if (!alreadyQueued) {
+        const status = row.status === 'paused' ? 'paused' : 'queued'
+        console.log(`[DOWNLOADS] Restoring from DB: ${row.repoId} (${status})`)
+        downloadQueue.push({
+          id: row.id,
+          repoId: row.repoId,
+          modelDir: row.modelDir,
+          status: status as any,
+          imageModelName: row.imageModelName,
+          imageQuantize: row.imageQuantize,
+          wasPaused: status === 'paused',
+        })
+      }
+    }
+    // Clean stale completed/error/cancelled rows
+    db.clearCompletedDownloads()
+  } catch (e) {
+    console.warn('[DOWNLOADS] Failed to restore downloads from DB:', e)
+  }
+
   // ─── Stale marker cleanup on startup ──────────────────────────────────────────
   async function cleanStaleMarkers() {
     const dirs = getModelDirectories()
@@ -1150,7 +1189,8 @@ export function registerModelHandlers(): void {
   ipcMain.handle('models:searchHF', async (_, query: string, sortBy?: string, sortDir?: string, modelType?: string) => {
     const params = new URLSearchParams({
       search: query,
-      limit: '30'
+      limit: '30',
+      'expand[]': 'safetensors'  // Get safetensors size data for model GB display
     })
     // Build headers — include HF token if configured (shows gated models in results)
     const searchHeaders: Record<string, string> = {}
@@ -1204,6 +1244,8 @@ export function registerModelHandlers(): void {
       models = await response.json()
     }
 
+    // Filter out non-model repos (e.g., user profiles, empty repos) — must have library_name or safetensors
+    models = models.filter((m: any) => m.library_name || m.safetensors || (m.tags && m.tags.includes('safetensors')))
     let results = models.map((m: any) => mapHFModel(m))
 
     // HF API only returns descending — reverse for ascending
@@ -1233,16 +1275,22 @@ export function registerModelHandlers(): void {
       })
       if (!res.ok) return null
       const text = await res.text()
-      // Strip YAML frontmatter
-      let stripped = text.replace(/^---[\s\S]*?---\s*/, '')
-      // Strip HTML tags (HF READMEs mix markdown and HTML — raw tags look broken in plain text)
-      stripped = stripped.replace(/<[^>]+>/g, '')
-      // Strip lines that are only whitespace (left behind by stripped HTML blocks)
-      stripped = stripped.replace(/^\s+$/gm, '')
+      // Strip YAML frontmatter but keep markdown + HTML intact for rendering
+      let content = text.replace(/^---[\s\S]*?---\s*/, '')
+      // Convert relative image URLs to absolute HF URLs
+      content = content.replace(
+        /!\[([^\]]*)\]\((?!https?:\/\/)([^)]+)\)/g,
+        (_, alt, path) => `![${alt}](https://huggingface.co/${repoId}/resolve/main/${path})`
+      )
+      // Also fix HTML img tags with relative src
+      content = content.replace(
+        /src="(?!https?:\/\/)([^"]+)"/g,
+        (_, path) => `src="https://huggingface.co/${repoId}/resolve/main/${path}"`
+      )
       // Collapse excessive blank lines
-      stripped = stripped.replace(/\n{3,}/g, '\n\n').trim()
-      // Truncate to ~3000 chars for display
-      return stripped.length > 3000 ? stripped.slice(0, 3000) + '\n\n...(truncated)' : stripped
+      content = content.replace(/\n{3,}/g, '\n\n').trim()
+      // Truncate to ~8000 chars for display (longer since we're rendering rich content)
+      return content.length > 8000 ? content.slice(0, 8000) + '\n\n...(truncated)' : content
     } catch {
       return null
     }
@@ -1252,7 +1300,7 @@ export function registerModelHandlers(): void {
   ipcMain.handle('models:getRecommendedModels', async () => {
     console.log('[MODELS] Fetching JANGQ-AI recommended models')
     const urls = [
-      `https://huggingface.co/api/models?author=JANGQ-AI&sort=downloads&direction=-1`,
+      `https://huggingface.co/api/models?author=JANGQ-AI&sort=downloads&direction=-1&expand[]=safetensors`,
     ]
     const allModels: any[] = []
     for (const url of urls) {
@@ -1274,7 +1322,43 @@ export function registerModelHandlers(): void {
       return true
     })
     unique.sort((a, b) => (b.downloads || 0) - (a.downloads || 0))
-    return unique.map((m: any) => mapHFModel(m))
+    // Filter out non-model repos (profiles, empty repos)
+    const filtered = unique.filter((m: any) => m.library_name || m.safetensors || (m.tags && m.tags.includes('safetensors')))
+    return filtered.map((m: any) => mapHFModel(m))
+  })
+
+  // Fetch models from a HuggingFace Collection (live list, sorted by position)
+  ipcMain.handle('models:getCollectionModels', async (_, collectionSlug: string) => {
+    console.log(`[MODELS] Fetching HF collection: ${collectionSlug}`)
+    const collectionToken = db.getSetting('hf_api_key')
+    const collectionHeaders: Record<string, string> = {}
+    if (collectionToken) collectionHeaders['Authorization'] = `Bearer ${collectionToken}`
+    const url = `https://huggingface.co/api/collections/${collectionSlug}`
+    const response = await fetch(url, { headers: collectionHeaders, signal: AbortSignal.timeout(15000) })
+    if (!response.ok) throw new Error(`Failed to fetch collection: ${response.status}`)
+    const collection = await response.json()
+    const items = (collection.items || [])
+      .filter((item: any) => item.type === 'model')
+      .sort((a: any, b: any) => (a.position ?? 999) - (b.position ?? 999))
+    return items.map((item: any) => {
+      // Format numParameters as human-readable size (e.g., "35B", "122B")
+      let size: string | undefined
+      if (item.numParameters) {
+        const p = item.numParameters
+        size = p >= 1e9 ? `${(p / 1e9).toFixed(1)}B params` : `${(p / 1e6).toFixed(0)}M params`
+      }
+      return {
+        id: item.id || '',
+        author: item.author || (item.id || '').split('/')[0] || 'Unknown',
+        downloads: item.downloads ?? 0,
+        likes: item.likes ?? 0,
+        lastModified: item.lastModified,
+        tags: [],
+        pipelineTag: item.pipeline_tag,
+        size,
+        note: item.note?.text,
+      }
+    })
   })
 
   // Start a download (non-blocking — returns jobId immediately)
@@ -1297,6 +1381,7 @@ export function registerModelHandlers(): void {
 
     const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
     downloadQueue.push(job)
+    persistDownload(job)
     console.log(`[DOWNLOADS] Queued: ${repoId} (${downloadQueue.length} in queue, ${activeJobs.size} active)`)
 
     // Notify UI about new queue entry immediately
@@ -1357,6 +1442,7 @@ export function registerModelHandlers(): void {
       job.status = 'paused'
       activeJobs.delete(jobId)
       downloadQueue.unshift(job)
+      persistDownload(job)
       emitToRenderer('models:downloadPaused', { jobId: job.id, repoId: job.repoId })
       processQueue()  // Start next queued job if any
       return { success: true }
@@ -1378,9 +1464,11 @@ export function registerModelHandlers(): void {
       if (activeJobs.size < MAX_CONCURRENT) {
         job.status = 'downloading'
         activeJobs.set(job.id, job)
+        persistDownload(job)
         startDownloadJob(job)
       } else {
         downloadQueue.unshift(job)
+        persistDownload(job)
         emitToRenderer('models:downloadQueued', { jobId: job.id, repoId: job.repoId })
       }
       return { success: true }
@@ -1419,6 +1507,7 @@ export function registerModelHandlers(): void {
     const modelDir = join(targetDir, repoId)
     const job: DownloadJob = { id, repoId, status: 'queued', modelDir }
     downloadQueue.push(job)
+    persistDownload(job)
     processQueue()
 
     // Poll for completion
@@ -1519,6 +1608,7 @@ export function registerModelHandlers(): void {
 
     const job: DownloadJob = { id, repoId, status: 'queued', modelDir, imageModelName: modelName, imageQuantize: quantize }
     downloadQueue.push(job)
+    persistDownload(job)
     console.log(`[DOWNLOADS] Queued image model: ${repoId} → ${modelDir} (${downloadQueue.length} in queue, ${activeJobs.size} active)`)
 
     // Notify UI about new queue entry immediately

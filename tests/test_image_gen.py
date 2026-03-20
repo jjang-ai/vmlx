@@ -879,18 +879,22 @@ class TestEngineState:
         assert engine.model_name is None
         assert engine._model is None
 
-    def test_unload_clears_state(self):
+    def test_unload_clears_model_keeps_metadata(self):
+        """unload() clears model reference but preserves metadata for wake/reload."""
         from vmlx_engine.image_gen import ImageGenEngine
         engine = ImageGenEngine()
         engine._model = MagicMock()
         engine._loaded = True
         engine._model_name = "schnell"
+        engine._mflux_class = "Flux1"
 
         engine.unload()
 
         assert engine.is_loaded is False
-        assert engine.model_name is None
         assert engine._model is None
+        # Metadata preserved for deep sleep wake
+        assert engine._model_name == "schnell"
+        assert engine._mflux_class == "Flux1"
 
     def test_unload_when_already_unloaded(self):
         """unload() on fresh engine should not raise."""

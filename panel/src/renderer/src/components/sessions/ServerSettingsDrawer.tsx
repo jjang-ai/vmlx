@@ -9,7 +9,7 @@ interface Session {
   host: string
   port: number
   pid?: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
   config: string
 }
 

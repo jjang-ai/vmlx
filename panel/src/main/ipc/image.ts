@@ -134,6 +134,9 @@ export function registerImageHandlers(): void {
       const { sessionId, prompt, negativePrompt, model, width, height, steps, guidance, seed, count, serverPort } = params
       const baseUrl = `http://127.0.0.1:${serverPort}`
 
+      // Touch session to reset idle timer — prevents sleep during image generation
+      if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
+
       // Ensure output directory exists
       const outputDir = join(homedir(), '.mlxstudio', 'generated', sessionId)
       mkdirSync(outputDir, { recursive: true })
@@ -166,6 +169,11 @@ export function registerImageHandlers(): void {
       // 30-minute timeout — use Node.js http.request instead of Electron fetch
       // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
       const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
+      // Periodically touch session during long image generations (Qwen edits can take 10+ min)
+      // to prevent idle timer from triggering sleep mid-generation
+      const touchInterval = setInterval(() => {
+        if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
+      }, 60_000) // Every 60 seconds
       const resp = await new Promise<any>((resolve, reject) => {
         const http = require('http')
         const bodyStr = JSON.stringify(body)
@@ -187,6 +195,7 @@ export function registerImageHandlers(): void {
         req.end()
       })
       clearTimeout(timeoutId)
+      clearInterval(touchInterval)
 
       if (!resp.ok) {
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }
@@ -269,6 +278,9 @@ export function registerImageHandlers(): void {
       const { sessionId, prompt, model, imageBase64, maskBase64, width, height, steps, guidance, strength, seed, serverPort } = params
       const baseUrl = `http://127.0.0.1:${serverPort}`
 
+      // Touch session to reset idle timer
+      if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
+
       // Ensure output directory exists
       const outputDir = join(homedir(), '.mlxstudio', 'generated', sessionId)
       mkdirSync(outputDir, { recursive: true })
@@ -301,6 +313,10 @@ export function registerImageHandlers(): void {
       // has its own socket timeout (~5 min) that ignores keepalive, causing
       // "fetch failed" errors on long image edits.
       const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
+      // Periodically touch session during long image edits (Qwen can take 10+ min)
+      const touchInterval = setInterval(() => {
+        if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
+      }, 60_000)
       const resp = await new Promise<any>((resolve, reject) => {
         const http = require('http')
         const bodyStr = JSON.stringify(body)
@@ -322,6 +338,7 @@ export function registerImageHandlers(): void {
         req.end()
       })
       clearTimeout(timeoutId)
+      clearInterval(touchInterval)
 
       if (!resp.ok) {
         return { success: false, error: `Server returned ${resp.status}: ${resp.data?.slice(0, 500) || resp.statusText}` }

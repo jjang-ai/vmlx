@@ -427,6 +427,35 @@ class BlockAwarePrefixCache:
         self._misses = 0
         self._tokens_saved = 0
 
+        # Lazy-cached expected KV head count for validation
+        self._n_kv_heads: Optional[int] = None
+
+    def _get_n_kv_heads(self) -> int:
+        """Get expected KV head count from model config (cached)."""
+        if self._n_kv_heads is not None:
+            return self._n_kv_heads
+        n_kv = 0
+        try:
+            for attr in ('args', 'config'):
+                cfg = getattr(self.model, attr, None)
+                if cfg is None:
+                    continue
+                n_kv = (
+                    getattr(cfg, 'num_key_value_heads', 0)
+                    or getattr(cfg, 'num_kv_heads', 0)
+                )
+                if n_kv:
+                    break
+                n_kv = getattr(cfg, 'num_attention_heads', 0)
+                if n_kv:
+                    break
+        except Exception:
+            pass
+        if not isinstance(n_kv, int):
+            n_kv = 0
+        self._n_kv_heads = n_kv
+        return n_kv
+
     def fetch_cache(
         self,
         request_id: str,
@@ -736,6 +765,11 @@ class BlockAwarePrefixCache:
             first = state_tuple[0]
             if hasattr(first, "shape") and len(first.shape) in (3, 4):
                 return True
+            # QuantizedKVCache: state is ((data, scales, zeros), (data, scales, zeros))
+            # first element is a tuple of arrays, not an array itself
+            if isinstance(first, tuple) and len(first) >= 2:
+                if hasattr(first[0], "shape") and len(first[0].shape) in (3, 4):
+                    return True
         return False
 
     def _extract_block_tensor_slice(
@@ -775,8 +809,61 @@ class BlockAwarePrefixCache:
             if "state" not in layer_state:
                 continue
 
-            state = layer_state["state"]
             class_name = layer_state.get("class_name", "")
+
+            # CacheList (MoE models): extract slices from each sub-cache
+            if class_name == "CacheList" and "sub_caches" in layer_state:
+                sub_slices = []
+                for sub in layer_state["sub_caches"]:
+                    sub_state = sub.get("state")
+                    sub_cls = sub.get("class_name", "")
+                    if sub_state is None:
+                        sub_slices.append(("skip",))
+                        continue
+                    if self._is_positional_cache(sub_state, sub_cls):
+                        try:
+                            keys, values = sub_state
+                            if isinstance(keys, tuple):
+                                first_k = keys[0]
+                                seq_len = first_k.shape[-2]
+                                actual_end = min(end_idx, seq_len)
+                                if start_idx >= actual_end:
+                                    sub_slices.append(("skip",))
+                                    continue
+                                keys_slice = tuple(t[..., start_idx:actual_end, :] for t in keys)
+                                values_slice = tuple(t[..., start_idx:actual_end, :] for t in values)
+                                meta = sub.get("meta_state", ())
+                                sub_slices.append(("quantized_kv", keys_slice, values_slice, meta))
+                            else:
+                                ndim = len(keys.shape)
+                                seq_dim = 2 if ndim == 4 else (1 if ndim == 3 else -1)
+                                if seq_dim < 0:
+                                    sub_slices.append(("skip",))
+                                    continue
+                                seq_len = keys.shape[seq_dim]
+                                actual_end = min(end_idx, seq_len)
+                                if start_idx >= actual_end:
+                                    sub_slices.append(("skip",))
+                                    continue
+                                if ndim == 4:
+                                    ks = keys[:, :, start_idx:actual_end, :]
+                                    vs = values[:, :, start_idx:actual_end, :]
+                                else:
+                                    ks = keys[:, start_idx:actual_end, :]
+                                    vs = values[:, start_idx:actual_end, :]
+                                sub_slices.append(("kv", ks, vs))
+                        except Exception:
+                            sub_slices.append(("skip",))
+                    else:
+                        if is_last_block:
+                            meta = sub.get("meta_state", "")
+                            sub_slices.append(("cumulative", sub_state, meta, sub_cls))
+                        else:
+                            sub_slices.append(("skip",))
+                block_slices.append(("cache_list", sub_slices))
+                continue
+
+            state = layer_state["state"]
 
             # Detect if this is a positional (KVCache) or cumulative (MambaCache) layer
             if self._is_positional_cache(state, class_name):
@@ -1036,6 +1123,8 @@ class BlockAwarePrefixCache:
                 quantized_kv_slices_values = []
                 quantized_meta = None
 
+                cache_list_entries = []  # sub-slice lists from CacheList blocks
+
                 for entry in layer_entries:
                     if not isinstance(entry, (tuple, list)):
                         continue
@@ -1055,6 +1144,8 @@ class BlockAwarePrefixCache:
                             rotating_params = (entry[3], entry[4] if len(entry) > 4 else 0)
                     elif tag == "cumulative":
                         best_cumulative = entry  # Last cumulative entry wins
+                    elif tag == "cache_list":
+                        cache_list_entries.append(entry[1])  # list of sub-slices
                     # "skip" entries are ignored
 
                 if quantized_kv_slices_keys:
@@ -1072,6 +1163,18 @@ class BlockAwarePrefixCache:
                     # Materialize concatenated quantized tensors
                     mx.eval(*concat_keys, *concat_values)
 
+                    # Validate head count for quantized cache too
+                    first_k = concat_keys[0]
+                    if len(first_k.shape) == 4:
+                        n_kv = self._get_n_kv_heads()
+                        if n_kv > 0 and first_k.shape[1] != n_kv:
+                            logger.warning(
+                                f"Quantized head count mismatch in layer {layer_idx}: "
+                                f"got {first_k.shape[1]}, expected {n_kv} — "
+                                f"forcing cache miss"
+                            )
+                            return None
+
                     try:
                         from mlx_lm.models.cache import QuantizedKVCache as QKVCache
                         # Parse meta_state for group_size and bits
@@ -1080,7 +1183,21 @@ class BlockAwarePrefixCache:
                             try:
                                 _, g_size, q_bits = map(int, quantized_meta[:3])
                             except (ValueError, TypeError):
-                                pass
+                                logger.warning(
+                                    f"Layer {layer_idx}: failed to parse quantized meta "
+                                    f"{quantized_meta!r}, using defaults "
+                                    f"g_size={g_size} bits={q_bits} — "
+                                    f"dequantize may produce wrong values"
+                                )
+                        elif quantized_kv_slices_keys:
+                            # Have quantized data but no valid metadata —
+                            # this is a corruption risk (wrong dequantize params)
+                            logger.warning(
+                                f"Layer {layer_idx}: quantized cache block has no "
+                                f"metadata (meta={quantized_meta!r}), "
+                                f"using defaults g_size={g_size} bits={q_bits} — "
+                                f"possible stale disk cache"
+                            )
                         cache = QKVCache(group_size=g_size, bits=q_bits)
                         cache.keys = concat_keys
                         cache.values = concat_values
@@ -1101,6 +1218,20 @@ class BlockAwarePrefixCache:
                     # Materialize lazy concatenation to avoid accumulating a massive
                     # Metal command buffer that can trigger GPU timeout (SIGTERM)
                     mx.eval(concat_keys, concat_values)
+
+                    # Validate head count against model config.
+                    # Catches stale blocks with inflated H from BatchKVCache.merge().
+                    n_kv = self._get_n_kv_heads()
+                    if n_kv > 0:
+                        # 4D: (batch, heads, seq, dim), 3D: (heads, seq, dim)
+                        head_axis = 1 if ndim == 4 else 0
+                        if concat_keys.shape[head_axis] != n_kv:
+                            logger.warning(
+                                f"Head count mismatch in layer {layer_idx}: "
+                                f"got {concat_keys.shape[head_axis]}, expected {n_kv} — "
+                                f"forcing cache miss"
+                            )
+                            return None
 
                     cache = KVCache()
                     cache.keys = concat_keys
@@ -1157,6 +1288,118 @@ class BlockAwarePrefixCache:
 
                     reconstructed_caches.append(cache)
                     cumulative_count += 1
+
+                elif cache_list_entries:
+                    # CacheList (MoE models): reconstruct each sub-cache
+                    # then wrap in CacheList
+                    try:
+                        from mlx_lm.models.cache import CacheList as CLCache
+                    except ImportError:
+                        logger.warning("Cannot reconstruct CacheList: import failed")
+                        return None
+
+                    # Determine number of sub-caches from first entry
+                    num_subs = len(cache_list_entries[0])
+                    sub_caches_rebuilt = []
+                    for sub_idx in range(num_subs):
+                        # Collect this sub-cache's slices across all blocks
+                        sub_kv_keys = []
+                        sub_kv_vals = []
+                        sub_qkv_keys = []  # quantized KV
+                        sub_qkv_vals = []
+                        sub_qkv_meta = None
+                        sub_cumulative = None
+                        for block_entry in cache_list_entries:
+                            if sub_idx >= len(block_entry):
+                                continue
+                            sub = block_entry[sub_idx]
+                            if not isinstance(sub, (tuple, list)):
+                                continue
+                            st = sub[0]
+                            if st == "kv":
+                                sub_kv_keys.append(sub[1])
+                                sub_kv_vals.append(sub[2])
+                            elif st == "quantized_kv":
+                                sub_qkv_keys.append(sub[1])
+                                sub_qkv_vals.append(sub[2])
+                                if len(sub) > 3 and sub_qkv_meta is None:
+                                    sub_qkv_meta = sub[3]
+                            elif st == "cumulative":
+                                sub_cumulative = sub
+
+                        if sub_qkv_keys:
+                            # Quantized sub-cache: concatenate each component
+                            n_comp = len(sub_qkv_keys[0])
+                            ck = tuple(
+                                mx.concatenate([s[c] for s in sub_qkv_keys], axis=-2)
+                                for c in range(n_comp)
+                            )
+                            cv = tuple(
+                                mx.concatenate([s[c] for s in sub_qkv_vals], axis=-2)
+                                for c in range(n_comp)
+                            )
+                            mx.eval(*ck, *cv)
+                            try:
+                                from mlx_lm.models.cache import QuantizedKVCache as QKVCache
+                                g_size, q_bits = 64, 8
+                                if sub_qkv_meta and len(sub_qkv_meta) >= 3:
+                                    try:
+                                        _, g_size, q_bits = map(int, sub_qkv_meta[:3])
+                                    except (ValueError, TypeError):
+                                        pass
+                                sc = QKVCache(group_size=g_size, bits=q_bits)
+                                sc.keys = ck
+                                sc.values = cv
+                                sc.offset = ck[0].shape[-2]
+                                sub_caches_rebuilt.append(sc)
+                            except ImportError:
+                                logger.warning(f"CacheList sub {sub_idx}: QuantizedKVCache import failed")
+                                return None
+                        elif sub_kv_keys:
+                            ndim = len(sub_kv_keys[0].shape)
+                            seq_axis = 1 if ndim == 3 else 2
+                            ck = mx.concatenate(sub_kv_keys, axis=seq_axis)
+                            cv = mx.concatenate(sub_kv_vals, axis=seq_axis)
+                            mx.eval(ck, cv)
+
+                            # Validate head count in sub-cache
+                            if ndim == 4:
+                                n_kv = self._get_n_kv_heads()
+                                if n_kv > 0 and ck.shape[1] != n_kv:
+                                    logger.warning(
+                                        f"CacheList sub {sub_idx} head mismatch: "
+                                        f"got {ck.shape[1]}, expected {n_kv}"
+                                    )
+                                    return None
+
+                            sc = KVCache()
+                            sc.keys = ck
+                            sc.values = cv
+                            sc.offset = ck.shape[seq_axis]
+                            sub_caches_rebuilt.append(sc)
+                        elif sub_cumulative is not None:
+                            _, sstate, smeta, scls = sub_cumulative
+                            try:
+                                import mlx_lm.models.cache as cache_mod
+                                scls_obj = getattr(cache_mod, scls, None)
+                                if scls_obj and hasattr(scls_obj, "from_state"):
+                                    sc = scls_obj.from_state(sstate, smeta)
+                                elif has_mamba:
+                                    sc = MambaCache.from_state(sstate, smeta)
+                                else:
+                                    sc = KVCache.from_state(sstate, smeta)
+                            except Exception:
+                                logger.warning(f"CacheList sub {sub_idx}: reconstruction failed")
+                                return None
+                            sub_caches_rebuilt.append(sc)
+                        else:
+                            # Skip-only sub-cache — can't reconstruct
+                            return None
+
+                    cl = CLCache.__new__(CLCache)
+                    cl.caches = tuple(sub_caches_rebuilt)
+                    reconstructed_caches.append(cl)
+                    kv_count += 1
 
             if not reconstructed_caches:
                 return None
