@@ -88,6 +88,9 @@ export interface ServerConfig {
   // Additional
   additionalArgs?: string
 
+  // Server-level default for enable_thinking (from model_settings.reasoning_mode)
+  defaultEnableThinking?: boolean
+
   // JIT compilation (mx.compile)
   enableJit?: boolean
 
