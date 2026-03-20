@@ -75,14 +75,6 @@ def _is_v2_model(model_path: Path) -> bool:
     return False
 
 
-def _is_vlm_config(model_path: Path) -> bool:
-    """Check if a model has vision_config in its config.json (i.e., is a VL model)."""
-    config_path = model_path / "config.json"
-    if not config_path.exists():
-        return False
-    config = json.loads(config_path.read_text())
-    return "vision_config" in config
-
 
 # ─── v2 loader (instant) ────────────────────────────────────────────
 
@@ -131,18 +123,49 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
 
     for sf in weight_files:
         weights = mx.load(str(sf))
+        # Nemotron-H: filter mtp/importance, rename fc1/fc2, dequantize gate weights
+        if _needs_fc_rename:
+            weights = {k: v for k, v in weights.items()
+                       if not k.endswith(".importance") and "mtp." not in k}
         if hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
-        # Nemotron fc1/fc2 rename: JANG uses up_proj/down_proj, mlx-lm expects fc1/fc2
         if _needs_fc_rename:
             renamed = {}
+            gate_parts = {}  # prefix -> {scales, biases}
             for k, v in weights.items():
                 new_k = k
+                # Collect gate scales/biases for dequantization
+                if ".gate." in k and (k.endswith(".scales") or k.endswith(".biases")):
+                    prefix = k.rsplit(".", 1)[0]
+                    gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
+                    continue
+                # Apply fc1/fc2 rename
                 for old, new in _nemotron_renames.items():
                     if old in k:
                         new_k = k.replace(old, new)
                         break
                 renamed[new_k] = v
+            # Dequantize gate weights (uint32 packed → float for nn.Linear)
+            # Gate is 8-bit quantized — try bits high-to-low to find correct shape
+            for prefix, parts in gate_parts.items():
+                wkey = f"{prefix}.weight"
+                if wkey in renamed and "scales" in parts:
+                    qw = renamed[wkey]
+                    scales = parts["scales"]
+                    biases = parts.get("biases", mx.zeros_like(scales))
+                    for bits in [8, 6, 4, 3, 2]:
+                        elem_per_u32 = 32 // bits
+                        real_cols = qw.shape[-1] * elem_per_u32
+                        gs = real_cols // scales.shape[-1] if scales.shape[-1] > 0 else 0
+                        if gs > 0 and gs * scales.shape[-1] == real_cols:
+                            try:
+                                dq = mx.dequantize(qw, scales, biases, gs, bits)
+                                mx.eval(dq)
+                                renamed[wkey] = dq.astype(mx.bfloat16)
+                                logger.info(f"  Dequantized gate: {wkey} bits={bits} gs={gs} -> {dq.shape}")
+                                break
+                            except Exception:
+                                continue
             weights = renamed
         model.load_weights(list(weights.items()), strict=False)
         del weights
@@ -1077,7 +1100,7 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
             setattr(parent, parts[1], ql)
 
 
-def _fix_quantized_bits(model, weights):
+def _fix_quantized_bits(model, weights=None):
     """Fix per-layer bits AND group_size for JANG mixed-precision models.
 
     Matches jang-tools 2.1.0 logic: router/gate tensors prefer gs=64 (precision-critical),

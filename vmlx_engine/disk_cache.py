@@ -30,6 +30,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+try:
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+    _HAS_MLX = True
+except ImportError:
+    _HAS_MLX = False
+
 
 def _hash_tokens(tokens: List[int]) -> str:
     """Create a stable hash of a token sequence for cache indexing."""
@@ -267,12 +274,10 @@ class DiskCacheManager:
         is non-blocking. Returns True if the write was enqueued (or already
         cached), False if the queue is full or the cache is not serializable.
 
-        Note on reference lifetime: queued items hold Python references to the
-        cache objects until the background writer processes them. This extends
-        the lifetime of those objects (and their underlying memory). This is
-        by design — the alternative would be deep-copying all cache tensors at
-        enqueue time, which is far more expensive than the temporary extra
-        memory from delayed garbage collection.
+        IMPORTANT: All MLX operations (serialize + materialize) happen on the
+        calling thread to prevent concurrent GPU access from the background
+        writer. The background thread only does file I/O — no MLX ops.
+        This mirrors the pattern in BlockDiskStore.write_block_async().
 
         Args:
             tokens: The prompt token IDs this cache corresponds to.
@@ -306,16 +311,58 @@ class DiskCacheManager:
                 )
                 return False
 
-        # Enqueue for background write
+        if not _HAS_MLX:
+            return False
+
+        # Pre-serialize on the calling (main) thread to prevent MLX GPU ops
+        # on the background writer thread, which causes Metal assertion failures
+        # from concurrent command buffer access (SIGSEGV / failed assertion).
         try:
-            self._write_queue.put_nowait((token_hash, tokens, cache, metadata))
+            # Extract tensor data + metadata the same way save_prompt_cache does
+            cache_data = [c.state for c in cache]
+            cache_info = [c.meta_state for c in cache]
+            cache_data_flat = dict(tree_flatten(cache_data))
+            cache_classes = [type(c).__name__ for c in cache]
+
+            save_metadata = metadata or {}
+            save_metadata["num_tokens"] = str(len(tokens))
+            save_metadata["created_at"] = str(time.time())
+
+            cache_metadata = [cache_info, save_metadata, cache_classes]
+            cache_metadata_flat = dict(tree_flatten(cache_metadata))
+
+            # Materialize all lazy MLX arrays on the calling thread.
+            # mx.eval forces GPU computation NOW so the background thread
+            # won't need to trigger any Metal operations — the arrays are
+            # fully concrete values in memory with no pending Metal work.
+            # We pass pre-evaluated MLX arrays (not numpy) to preserve
+            # bfloat16 and other dtypes that numpy may not support.
+            arrays_to_materialize = [v for v in cache_data_flat.values()
+                                     if isinstance(v, mx.array)]
+            if arrays_to_materialize:
+                mx.eval(*arrays_to_materialize)  # noqa: S307 — MLX GPU eval, not Python eval
+
+        except Exception as e:
+            logger.warning(f"Failed to pre-serialize cache for disk: {e}")
+            return False
+
+        # Enqueue for background write (pre-evaluated arrays — no lazy Metal ops)
+        try:
+            self._write_queue.put_nowait(
+                (token_hash, tokens, cache_data_flat, cache_metadata_flat)
+            )
             return True
         except queue.Full:
             logger.warning("Disk cache write queue full, dropping store request")
             return False
 
     def _background_writer(self) -> None:
-        """Background thread: drain write queue and persist caches."""
+        """Background thread: drain write queue and persist caches.
+
+        All tensor data arrives as pre-evaluated MLX arrays (mx.eval called
+        on the main thread). mx.save_safetensors reads the raw bytes without
+        triggering new Metal computation, preserving bfloat16 and all dtypes.
+        """
         while not self._stop_event.is_set():
             try:
                 item = self._write_queue.get(timeout=0.5)
@@ -323,8 +370,8 @@ class DiskCacheManager:
                 continue
 
             try:
-                token_hash, tokens, cache, metadata = item
-                self._write_cache(token_hash, tokens, cache, metadata)
+                token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                self._write_cache(token_hash, tokens, cache_data_flat, cache_metadata_flat)
             except OSError as e:
                 if e.errno == errno.ENOSPC:
                     logger.warning(
@@ -340,10 +387,16 @@ class DiskCacheManager:
         self,
         token_hash: str,
         tokens: List[int],
-        cache: List[Any],
-        metadata: Optional[Dict[str, str]],
+        cache_data_flat: Dict[str, Any],
+        cache_metadata_flat: Dict[str, str],
     ) -> None:
-        """Write a cache to disk (called from background thread)."""
+        """Write a pre-serialized cache to disk (called from background thread).
+
+        All tensor data arrives as pre-evaluated MLX arrays (mx.eval already
+        called on the main thread). No lazy Metal operations will be triggered
+        — the arrays are fully concrete values in memory. mx.save_safetensors
+        only reads the raw bytes, preserving bfloat16 and all other dtypes.
+        """
         # Double-check not already cached (race with concurrent stores)
         conn = self._pool.get()
         try:
@@ -359,32 +412,29 @@ class DiskCacheManager:
         # Generate filename
         file_name = f"cache_{token_hash[:16]}_{len(tokens)}tok.safetensors"
         file_path = self.cache_dir / file_name
-        # mlx-lm's save_prompt_cache → mx.save_safetensors APPENDS ".safetensors"
-        # to the path. So we give it a stem without .safetensors, and it creates
-        # stem.safetensors. We then rename that to our final path.
-        tmp_stem = self.cache_dir / f"cache_{token_hash[:16]}_{len(tokens)}tok.tmp"
-        tmp_actual = Path(str(tmp_stem) + ".safetensors")  # What save_prompt_cache creates
+        tmp_path = self.cache_dir / f"cache_{token_hash[:16]}_{len(tokens)}tok.tmp.safetensors"
 
         try:
-            from mlx_lm.models.cache import save_prompt_cache
-
-            save_metadata = metadata or {}
-            save_metadata["num_tokens"] = str(len(tokens))
-            save_metadata["created_at"] = str(time.time())
-
             # Ensure the cache directory exists before writing.
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
             # Atomic write: write to temp file then rename.
             # os.rename is atomic on macOS (same filesystem), so readers
             # never see a partially-written cache file.
-            save_prompt_cache(str(tmp_stem), cache, save_metadata)
-            os.rename(str(tmp_actual), str(file_path))
+            # Arrays are pre-evaluated (mx.eval on main thread) — no lazy
+            # Metal ops will be triggered. mx.save_safetensors preserves
+            # bfloat16 and all dtypes (numpy conversion would lose bfloat16).
+            if not _HAS_MLX:
+                return
+            mx.save_safetensors(str(tmp_path), cache_data_flat, cache_metadata_flat)
+
+            os.rename(str(tmp_path), str(file_path))
 
             file_size = file_path.stat().st_size
             now = time.time()
 
             # Insert into index
+            db_meta = {"num_tokens": str(len(tokens)), "created_at": str(now)}
             conn = self._pool.get()
             try:
                 conn.execute(
@@ -392,7 +442,7 @@ class DiskCacheManager:
                     "(token_hash, file_name, num_tokens, file_size, created_at, last_accessed, access_count, metadata) "
                     "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
                     (token_hash, file_name, len(tokens), file_size, now, now,
-                     json.dumps(save_metadata) if save_metadata else None)
+                     json.dumps(db_meta))
                 )
                 conn.commit()
             finally:
@@ -411,7 +461,7 @@ class DiskCacheManager:
         except Exception as e:
             logger.warning(f"Failed to store disk cache: {e}")
             # Clean up temp file and any partial final file
-            for p in (tmp_stem, tmp_actual, file_path):
+            for p in (tmp_path, file_path):
                 try:
                     p.unlink(missing_ok=True)
                 except Exception:
@@ -489,8 +539,8 @@ class DiskCacheManager:
         while not self._write_queue.empty():
             try:
                 item = self._write_queue.get_nowait()
-                token_hash, tokens, cache, metadata = item
-                self._write_cache(token_hash, tokens, cache, metadata)
+                token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                self._write_cache(token_hash, tokens, cache_data_flat, cache_metadata_flat)
             except queue.Empty:
                 break
             except Exception as e:

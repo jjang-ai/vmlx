@@ -362,6 +362,43 @@ class PrefixCacheManager:
 # =============================================================================
 
 
+def _block_needs_cumulative_update(cache_data) -> bool:
+    """Check if a block's cache_data is missing cumulative SSM state.
+
+    Returns True if the block has "skip" entries (SSM layers stored as
+    non-last) but no "cumulative" entries. This indicates the block was
+    originally stored at a non-last position and needs cumulative state
+    before it can be used as the last block in a sequence.
+
+    Checks both top-level entries and sub-slices inside CacheList entries
+    (for MoE hybrid models where SSM sub-caches are nested).
+
+    Used by store_cache() to detect when block reuse would lose SSM state
+    for hybrid models (KVCache + MambaCache/ArraysCache).
+    """
+    if not cache_data:
+        return False
+    has_skip = False
+    has_cumulative = False
+    for entry in cache_data:
+        if not isinstance(entry, (tuple, list)) or len(entry) == 0:
+            continue
+        tag = entry[0]
+        if tag == "skip":
+            has_skip = True
+        elif tag == "cumulative":
+            has_cumulative = True
+        elif tag == "cache_list" and len(entry) > 1:
+            # Recurse into CacheList sub-slices for MoE hybrid models
+            for sub in entry[1]:
+                if isinstance(sub, (tuple, list)) and len(sub) > 0:
+                    if sub[0] == "skip":
+                        has_skip = True
+                    elif sub[0] == "cumulative":
+                        has_cumulative = True
+    return has_skip and not has_cumulative
+
+
 @dataclass
 class BlockCacheEntry:
     """Entry mapping a token sequence to cache blocks."""
@@ -611,17 +648,30 @@ class BlockAwarePrefixCache:
             # Check if this block already exists via chain hash (deduplication)
             # IMPORTANT: lookup + ref bump must be atomic under _lock to prevent
             # the block from being freed between get_block and increment_ref.
+            is_last = (i == num_new_blocks - 1)
             reused = False
             with self.paged_cache._lock:
                 existing_block = self.paged_cache.cached_block_hash_to_block.get_block(
                     block_chain_hash
                 )
                 if existing_block:
-                    existing_block.ref_count += 1
-                    existing_block.touch()
-                    if existing_block.ref_count == 2:
-                        self.paged_cache.stats.shared_blocks += 1
-                    reused = True
+                    # If this is the last block in the new sequence and the
+                    # existing block was stored as non-last (SSM layers tagged
+                    # "skip" without cumulative state), skip reuse so we can
+                    # allocate a new block with proper cumulative SSM state.
+                    # Without this, hybrid SSM models get "Reconstructed 10
+                    # layers but expected 40" because cumulative entries are
+                    # never stored.
+                    if is_last and is_tensor_data and _block_needs_cumulative_update(
+                        existing_block.cache_data
+                    ):
+                        pass  # Fall through to new block allocation
+                    else:
+                        existing_block.ref_count += 1
+                        existing_block.touch()
+                        if existing_block.ref_count == 2:
+                            self.paged_cache.stats.shared_blocks += 1
+                        reused = True
             if reused:
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
@@ -639,17 +689,24 @@ class BlockAwarePrefixCache:
                     bid = self.paged_cache.hash_to_block[hash_value]
                     if bid in self.paged_cache.allocated_blocks:
                         existing_block = self.paged_cache.allocated_blocks[bid]
-                        existing_block.ref_count += 1
-                        existing_block.touch()
-                        if existing_block.ref_count == 2:
-                            self.paged_cache.stats.shared_blocks += 1
-                        self.paged_cache.stats.cache_hits += 1
-                        # Set chain hash on the existing block if it doesn't have one
-                        if existing_block.block_hash is None:
-                            existing_block.block_hash = block_chain_hash
-                            self.paged_cache.cached_block_hash_to_block.insert(
-                                block_chain_hash, existing_block
-                            )
+                        # Same cumulative state check as chain hash path:
+                        # skip reuse if last block needs cumulative SSM state
+                        if is_last and is_tensor_data and _block_needs_cumulative_update(
+                            existing_block.cache_data
+                        ):
+                            existing_block = None  # Fall through to allocation
+                        else:
+                            existing_block.ref_count += 1
+                            existing_block.touch()
+                            if existing_block.ref_count == 2:
+                                self.paged_cache.stats.shared_blocks += 1
+                            self.paged_cache.stats.cache_hits += 1
+                            # Set chain hash on the existing block if it doesn't have one
+                            if existing_block.block_hash is None:
+                                existing_block.block_hash = block_chain_hash
+                                self.paged_cache.cached_block_hash_to_block.insert(
+                                    block_chain_hash, existing_block
+                                )
                 if existing_block is None:
                     self.paged_cache.stats.cache_misses += 1
             if existing_block:
@@ -681,7 +738,7 @@ class BlockAwarePrefixCache:
 
             # Extract and store actual tensor slices for this block
             if is_tensor_data and HAS_MLX:
-                is_last = (i == num_new_blocks - 1)
+                # is_last already computed above (for cumulative state checks)
                 block_kv_data = self._extract_block_tensor_slice(
                     cache_data, global_start, global_end, is_last_block=is_last,
                 )

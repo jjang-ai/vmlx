@@ -225,13 +225,25 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
             rendered = tokenizer.apply_chat_template(
                 test_msgs, add_generation_prompt=True, tokenize=False,
             )
-        # Check if <think> appears after the user message (in the generation prefix)
+        # Check if an UNCLOSED <think> appears after the user message.
+        # Templates that output <think></think> (empty, closed) ARE honoring
+        # enable_thinking=False — the model won't reason. Only flag templates
+        # that inject an open <think> without immediate </think> (those truly
+        # ignore the flag and the model will reason regardless).
         after_user = rendered.rsplit("__test__", 1)[-1]
-        result = "<think>" in after_user
+        has_think = "<think>" in after_user
+        # Strip <think></think> (empty closed block) — that's a proper "no think" signal
+        cleaned = after_user.replace("<think></think>", "")
+        result = "<think>" in cleaned  # still has an unclosed <think>?
         if result:
             logger.info(
                 f"Template for {model_name} always injects <think> "
                 "(ignores enable_thinking=False)"
+            )
+        elif has_think:
+            logger.info(
+                f"Template for {model_name} outputs <think></think> with "
+                "enable_thinking=False (properly handled, not always-thinks)"
             )
     except Exception as e:
         logger.debug(f"_template_always_thinks check failed for {model_name}: {e}")
@@ -398,7 +410,7 @@ async def track_request_time(request: Request, call_next):
     is_inference = not is_cancel and any(path.startswith(p) for p in [
         "/v1/chat/", "/v1/completions", "/v1/images/", "/v1/mcp/execute",
         "/v1/messages", "/v1/responses", "/v1/embeddings",
-        "/v1/audio/transcriptions", "/v1/audio/speech"
+        "/v1/audio/transcriptions", "/v1/audio/speech", "/v1/rerank"
     ])
     # Update last request time for inference only — metadata queries shouldn't keep model awake
     if is_inference:
@@ -3092,19 +3104,6 @@ async def create_chat_completion(
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
 
-    # Think-completion seed: when thinking is OFF and model has think_in_template
-    # (model spontaneously generates <think> regardless of template), inject
-    # <think>\n</think>\n as prompt_suffix to pre-close the thinking phase.
-    # Without this, models like MiniMax generate reasoning that gets suppressed,
-    # leaving no visible content for the user.
-    # Only for non-Harmony models and only when prompt_suffix isn't already set.
-    _explicit_off = chat_kwargs.get("enable_thinking") is False
-    if (_explicit_off
-            and _reasoning_parser
-            and not isinstance(_reasoning_parser, GptOssReasoningParser)
-            and "prompt_suffix" not in chat_kwargs):
-        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
-
     if request.stream:
         return StreamingResponse(
             stream_chat_completion(
@@ -3634,14 +3633,6 @@ async def create_response(
         if "<|im_end|>" not in _stop:
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
-
-    # Think-completion seed (same as Chat Completions path)
-    _explicit_off = chat_kwargs.get("enable_thinking") is False
-    if (_explicit_off
-            and _reasoning_parser
-            and not isinstance(_reasoning_parser, GptOssReasoningParser)
-            and "prompt_suffix" not in chat_kwargs):
-        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
 
     if request.stream:
         return StreamingResponse(

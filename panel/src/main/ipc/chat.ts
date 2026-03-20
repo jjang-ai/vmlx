@@ -619,9 +619,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     const tpsSnapshots: Array<[number, number]> = [] // [timestamp, relative tokenCount]
     let liveTps = 0
     let tpsTokenBase = 0 // re-anchor point for tpsSnapshots after iteration reset
-    // Throttle IPC emission to renderer (~30 fps for smooth streaming)
-    let lastStreamEmitTime = 0
-    const STREAM_THROTTLE_MS = 0  // No throttle — emit every token. React 18 auto-batching handles render coalescing.
+    // No streaming throttle — emit every token. Renderer-side useTypewriter
+    // in MessageBubble.tsx handles smooth character reveal via rAF.
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     // (thinkingTimer removed — "Thinking silently" indicator disabled)
     let fullContent = ''
@@ -964,10 +963,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         // Suppress rendering (but not counting/TPS) when tool call content is detected
         if (!isReasoningDelta && clientToolCallBuffering) return
 
-        // === IPC emission — no throttle (STREAM_THROTTLE_MS=0) ===
-        // Every token emits immediately. React 18 auto-batching handles render coalescing.
-        if (now - lastStreamEmitTime < STREAM_THROTTLE_MS) return
-        lastStreamEmitTime = now
+        // === IPC emission — every token emitted immediately ===
+        // Renderer-side useTypewriter handles smooth character reveal via rAF.
 
         // Live generation TPS from rolling window (real-time speed of incoming tokens).
         // Cumulative TPS (tokenCount / generationMs) is used for final saved metrics only.

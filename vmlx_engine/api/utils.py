@@ -75,14 +75,16 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
-    # JANG models: check jang_config.json has_vision field
-    from ..utils.jang_loader import is_jang_model
+    # JANG models: check jang config has_vision field
+    from ..utils.jang_loader import is_jang_model, _find_config_path
     from pathlib import Path
     if is_jang_model(model_name):
         try:
-            jang_cfg = json.loads((Path(model_name) / "jang_config.json").read_text())
-            if jang_cfg.get("architecture", {}).get("has_vision", False):
-                return True
+            cfg_path = _find_config_path(Path(model_name))
+            if cfg_path is not None:
+                jang_cfg = json.loads(cfg_path.read_text())
+                if jang_cfg.get("architecture", {}).get("has_vision", False):
+                    return True
         except Exception:
             pass
         return False
