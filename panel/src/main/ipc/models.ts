@@ -1334,7 +1334,12 @@ export function registerModelHandlers(): void {
     const collectionHeaders: Record<string, string> = {}
     if (collectionToken) collectionHeaders['Authorization'] = `Bearer ${collectionToken}`
     const url = `https://huggingface.co/api/collections/${collectionSlug}`
-    const response = await fetch(url, { headers: collectionHeaders, signal: AbortSignal.timeout(15000) })
+    let response = await fetch(url, { headers: collectionHeaders, signal: AbortSignal.timeout(15000) })
+    // If token causes 401/403 (expired/invalid), retry without auth — public collections don't need it
+    if (!response.ok && (response.status === 401 || response.status === 403) && collectionToken) {
+      console.log(`[MODELS] HF collection returned ${response.status} with token, retrying without auth`)
+      response = await fetch(url, { signal: AbortSignal.timeout(15000) })
+    }
     if (!response.ok) throw new Error(`Failed to fetch collection: ${response.status}`)
     const collection = await response.json()
     const items = (collection.items || [])

@@ -410,6 +410,11 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
 
+    // Apply model_settings.reasoning_mode as server-level default for external API clients
+    const modelSettings = db.getModelSettings(session.modelPath)
+    if (modelSettings?.reasoning_mode === 'on') config.defaultEnableThinking = true
+    else if (modelSettings?.reasoning_mode === 'off') config.defaultEnableThinking = false
+
     const engineResult = this.findEnginePath()
     if (!engineResult) throw new Error('vmlx-engine not found. Please install it first.')
 
@@ -1730,6 +1735,10 @@ export class SessionManager extends EventEmitter {
     if (config.embeddingModel) {
       args.push('--embedding-model', config.embeddingModel)
     }
+
+    // Server-level default for enable_thinking (applies to all API clients)
+    if (config.defaultEnableThinking === true) args.push('--default-enable-thinking', 'true')
+    else if (config.defaultEnableThinking === false) args.push('--default-enable-thinking', 'false')
 
     // JIT compilation
     if (config.enableJit) args.push('--enable-jit')
