@@ -3092,6 +3092,19 @@ async def create_chat_completion(
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
 
+    # Think-completion seed: when thinking is OFF and model has think_in_template
+    # (model spontaneously generates <think> regardless of template), inject
+    # <think>\n</think>\n as prompt_suffix to pre-close the thinking phase.
+    # Without this, models like MiniMax generate reasoning that gets suppressed,
+    # leaving no visible content for the user.
+    # Only for non-Harmony models and only when prompt_suffix isn't already set.
+    _explicit_off = chat_kwargs.get("enable_thinking") is False
+    if (_explicit_off
+            and _reasoning_parser
+            and not isinstance(_reasoning_parser, GptOssReasoningParser)
+            and "prompt_suffix" not in chat_kwargs):
+        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
+
     if request.stream:
         return StreamingResponse(
             stream_chat_completion(
@@ -3621,6 +3634,14 @@ async def create_response(
         if "<|im_end|>" not in _stop:
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
+
+    # Think-completion seed (same as Chat Completions path)
+    _explicit_off = chat_kwargs.get("enable_thinking") is False
+    if (_explicit_off
+            and _reasoning_parser
+            and not isinstance(_reasoning_parser, GptOssReasoningParser)
+            and "prompt_suffix" not in chat_kwargs):
+        chat_kwargs["prompt_suffix"] = "<think>\n</think>\n"
 
     if request.stream:
         return StreamingResponse(

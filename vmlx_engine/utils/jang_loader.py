@@ -119,10 +119,31 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
     weight_files = _get_v2_weight_files(path)
     logger.info(f"  Loading {len(weight_files)} safetensors shards via mmap")
 
+    # Nemotron-H naming fix: JANG converter uses switch_mlp.up_proj/down_proj
+    # but mlx-lm's nemotron_h expects switch_mlp.fc1/fc2. Without this rename,
+    # weights are silently dropped (strict=False) and the model runs on random values.
+    _nemotron_renames = {
+        ".switch_mlp.up_proj.": ".switch_mlp.fc1.",
+        ".switch_mlp.down_proj.": ".switch_mlp.fc2.",
+    }
+    _model_type = config.get("model_type", "")
+    _needs_fc_rename = _model_type in ("nemotron_h", "nemotron")
+
     for sf in weight_files:
         weights = mx.load(str(sf))
         if hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
+        # Nemotron fc1/fc2 rename: JANG uses up_proj/down_proj, mlx-lm expects fc1/fc2
+        if _needs_fc_rename:
+            renamed = {}
+            for k, v in weights.items():
+                new_k = k
+                for old, new in _nemotron_renames.items():
+                    if old in k:
+                        new_k = k.replace(old, new)
+                        break
+                renamed[new_k] = v
+            weights = renamed
         model.load_weights(list(weights.items()), strict=False)
         del weights
         gc.collect()

@@ -215,6 +215,16 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
           </button>
         )}
 
+        {session.status === 'error' && (
+          <button
+            onClick={() => onOpen(session.id)}
+            className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
+            title="View crash logs"
+          >
+            <ScrollText className="h-4 w-4" />
+          </button>
+        )}
+
         {(session.status === 'stopped' || session.status === 'error') && (
           <button
             onClick={() => onDelete(session.id)}
