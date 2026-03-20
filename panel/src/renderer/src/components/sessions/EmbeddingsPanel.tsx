@@ -144,7 +144,7 @@ export function EmbeddingsPanel({ endpoint, sessionStatus, sessionId }: Embeddin
                   className="h-2 rounded-full transition-all"
                   style={{
                     width: `${Math.max(0, result.similarity) * 100}%`,
-                    backgroundColor: result.similarity > 0.8 ? 'hsl(var(--primary))' : result.similarity > 0.5 ? 'hsl(var(--warning, 45 93% 47%))' : 'hsl(var(--destructive))'
+                    backgroundColor: result.similarity > 0.8 ? 'rgb(var(--primary))' : result.similarity > 0.5 ? 'rgb(var(--warning, 234 179 8))' : 'rgb(var(--destructive))'
                   }}
                 />
               </div>

@@ -347,9 +347,11 @@ class BatchedEngine(BaseEngine):
                     prompt = self._processor.apply_chat_template(
                         built_messages, **tpl_kwargs
                     )
-                    if enable_thinking is False:
-                        if "<think>" in prompt.split("\nassistant\n")[-1]:
-                            prompt = prompt[:prompt.rfind("<think>")].rstrip()
+                    if enable_thinking is False and "<think>" in prompt:
+                        # Only strip <think> from the generation suffix (last ~100 chars)
+                        think_pos = prompt.rfind("<think>")
+                        if think_pos >= 0 and (len(prompt) - think_pos) < 100:
+                            prompt = prompt[:think_pos].rstrip()
                 return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
@@ -414,7 +416,11 @@ class BatchedEngine(BaseEngine):
             )
 
             if enable_thinking is False and "<think>" in prompt:
-                prompt = prompt[:prompt.rfind("<think>")].rstrip()
+                # Only strip <think> from the generation suffix (last ~100 chars),
+                # not from prior conversation turns that may contain <think> in history.
+                think_pos = prompt.rfind("<think>")
+                if think_pos >= 0 and (len(prompt) - think_pos) < 100:
+                    prompt = prompt[:think_pos].rstrip()
             return prompt
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)

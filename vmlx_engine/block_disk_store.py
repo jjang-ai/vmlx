@@ -102,6 +102,9 @@ class BlockDiskStore:
         )
         self._writer_thread.start()
 
+        # Clean up orphaned .tmp files from crashed writes
+        self._cleanup_orphaned_tmp()
+
         entry_count = self._count_entries()
         total_size = self._total_size()
         logger.info(
@@ -134,6 +137,21 @@ class BlockDiskStore:
             conn.commit()
         finally:
             conn.close()
+
+    def _cleanup_orphaned_tmp(self) -> None:
+        """Remove orphaned .tmp files left from crashed writes."""
+        try:
+            count = 0
+            for tmp in self.blocks_dir.rglob("*.tmp.safetensors"):
+                try:
+                    tmp.unlink()
+                    count += 1
+                except OSError:
+                    pass
+            if count:
+                logger.info(f"BlockDiskStore: cleaned up {count} orphaned .tmp file(s)")
+        except Exception:
+            pass
 
     def _count_entries(self) -> int:
         return self._read_conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]

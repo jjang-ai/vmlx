@@ -11,7 +11,8 @@ const SESSION_EVENTS = [
   'session:error',
   'session:health',
   'session:log',
-  'session:deleted'
+  'session:deleted',
+  'session:standby'
 ]
 
 let handlersRegistered = false
@@ -116,6 +117,35 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
 
     ipcMain.handle('sessions:clearLogs', async (_, sessionId: string) => {
       sessionManager.clearLogs(sessionId)
+      return { success: true }
+    })
+
+    ipcMain.handle('sessions:softSleep', async (_, sessionId: string) => {
+      try {
+        return await sessionManager.softSleep(sessionId)
+      } catch (error) {
+        return { success: false, error: (error as Error).message }
+      }
+    })
+
+    ipcMain.handle('sessions:deepSleep', async (_, sessionId: string) => {
+      try {
+        return await sessionManager.deepSleep(sessionId)
+      } catch (error) {
+        return { success: false, error: (error as Error).message }
+      }
+    })
+
+    ipcMain.handle('sessions:wake', async (_, sessionId: string) => {
+      try {
+        return await sessionManager.wakeSession(sessionId)
+      } catch (error) {
+        return { success: false, error: (error as Error).message }
+      }
+    })
+
+    ipcMain.handle('sessions:touch', async (_, sessionId: string) => {
+      sessionManager.touchSession(sessionId)
       return { success: true }
     })
 

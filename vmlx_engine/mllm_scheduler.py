@@ -2092,3 +2092,35 @@ class MLLMScheduler:
             mx.clear_memory_cache()
         except Exception:
             pass
+
+    def deep_reset(self) -> None:
+        """Deep reset: clear ALL state including cache tiers.
+
+        Unlike reset(), this also clears prefix/paged/memory-aware caches
+        and model-level cache state. Used for sleep/wake transitions.
+        """
+        self.reset()
+
+        # Clear all cache tiers
+        if self.block_aware_cache is not None:
+            self.block_aware_cache.clear()
+        if self.memory_aware_cache is not None:
+            self.memory_aware_cache.clear()
+        if self.prefix_cache is not None:
+            self.prefix_cache.clear()
+
+        # Clear model-level cache state
+        if hasattr(self.model, 'cache'):
+            self.model.cache = None
+        if hasattr(self.model, 'layers'):
+            for layer in self.model.layers:
+                if hasattr(layer, 'cache'):
+                    layer.cache = None
+                if hasattr(layer, 'self_attn') and hasattr(layer.self_attn, 'cache'):
+                    layer.self_attn.cache = None
+
+        try:
+            import mlx.core as mx
+            mx.clear_memory_cache()
+        except Exception:
+            pass

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, ScrollText } from 'lucide-react'
+import { Settings, ScrollText, Moon, Sun } from 'lucide-react'
 
 interface Session {
   id: string
@@ -8,7 +8,8 @@ interface Session {
   host: string
   port: number
   pid?: number
-  status: 'running' | 'stopped' | 'error' | 'loading'
+  status: 'running' | 'stopped' | 'error' | 'loading' | 'standby'
+  standbyDepth?: 'soft' | 'deep' | null
   config: string
   createdAt: number
   updatedAt: number
@@ -26,13 +27,16 @@ interface SessionCardProps {
   onStart: (sessionId: string) => void
   onStop: (sessionId: string) => void
   onDelete: (sessionId: string) => void
+  onSleep?: (sessionId: string) => void
+  onWake?: (sessionId: string) => void
 }
 
 const statusColors: Record<string, string> = {
   running: 'bg-green-500',
   stopped: 'bg-muted-foreground',
   error: 'bg-destructive',
-  loading: 'bg-yellow-500 animate-pulse'
+  loading: 'bg-yellow-500 animate-pulse',
+  standby: 'bg-blue-400'
 }
 
 function formatElapsed(secs: number): string {
@@ -46,10 +50,11 @@ const statusLabels: Record<string, string> = {
   running: 'Running',
   stopped: 'Stopped',
   error: 'Error',
-  loading: 'Loading...'
+  loading: 'Loading...',
+  standby: 'Sleeping'
 }
 
-export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onDelete }: SessionCardProps) {
+export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onDelete, onSleep, onWake }: SessionCardProps) {
   const isRemote = session.type === 'remote'
   const isImage = (() => { try { return JSON.parse(session.config || '{}').modelType === 'image' } catch { return false } })()
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
@@ -104,11 +109,17 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
           </p>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          <span className={`w-2 h-2 rounded-full ${statusColors[session.status]}`} />
+          {session.status === 'standby' ? (
+            <Moon className={`h-3 w-3 ${session.standbyDepth === 'deep' ? 'text-indigo-400' : 'text-blue-400'}`} />
+          ) : (
+            <span className={`w-2 h-2 rounded-full ${statusColors[session.status]}`} />
+          )}
           <span className="text-xs text-muted-foreground">
             {session.status === 'loading'
               ? `Loading... ${formatElapsed(loadingElapsed)}`
-              : statusLabels[session.status]}
+              : session.status === 'standby'
+                ? (session.standbyDepth === 'deep' ? 'Deep Sleep' : 'Light Sleep')
+                : statusLabels[session.status]}
           </span>
         </div>
       </div>
@@ -130,6 +141,17 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
             className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:bg-primary/90"
           >
             Open
+          </button>
+        )}
+
+        {session.status === 'standby' && onWake && (
+          <button
+            onClick={() => onWake(session.id)}
+            className="flex-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center justify-center gap-1.5"
+            title={session.standbyDepth === 'deep' ? 'Reload model and resume' : 'Resume from light sleep'}
+          >
+            <Sun className="h-3.5 w-3.5" />
+            Wake
           </button>
         )}
 
@@ -164,12 +186,32 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
           </button>
         )}
 
+        {session.status === 'running' && !isRemote && onSleep && (
+          <button
+            onClick={() => onSleep(session.id)}
+            className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30"
+            title="Put model to sleep (frees memory)"
+          >
+            <Moon className="h-4 w-4" />
+          </button>
+        )}
+
         {(session.status === 'running' || session.status === 'loading') && (
           <button
             onClick={() => onStop(session.id)}
             className="px-3 py-1.5 bg-destructive text-destructive-foreground text-sm rounded hover:bg-destructive/90"
           >
             {isRemote ? 'Disconnect' : 'Stop'}
+          </button>
+        )}
+
+        {(session.status === 'standby') && (
+          <button
+            onClick={() => onStop(session.id)}
+            className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
+            title="Stop server process completely"
+          >
+            Stop
           </button>
         )}
 

@@ -77,7 +77,8 @@ function App() {
 
   // Resolve the endpoint for the active session
   const activeSession = sessions.find(s => s.id === state.activeSessionId)
-  const sessionEndpoint = activeSession?.status === 'running'
+  // Standby sessions still have a live process on their port — JIT middleware auto-wakes
+  const sessionEndpoint = (activeSession?.status === 'running' || activeSession?.status === 'standby')
     ? { host: activeSession.host, port: activeSession.port }
     : undefined
 

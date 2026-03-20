@@ -1292,6 +1292,7 @@ class PagedCacheManager:
         """Get memory usage information."""
         with self._lock:
             stats = self.get_stats()
+            total_hits = stats.cache_hits + stats.cache_misses
             return {
                 "block_size": self.block_size,
                 "max_blocks": self.max_blocks,
@@ -1300,11 +1301,13 @@ class PagedCacheManager:
                 "shared_blocks": stats.shared_blocks,
                 "total_tokens_cached": stats.total_tokens_cached,
                 "utilization": stats.allocated_blocks / self.max_blocks,
-                "cache_hit_rate": (
-                    stats.cache_hits / (stats.cache_hits + stats.cache_misses)
-                    if (stats.cache_hits + stats.cache_misses) > 0
-                    else 0
-                ),
+                "cache_hit_rate": stats.cache_hits / total_hits if total_hits > 0 else 0,
+                "cache_hits": stats.cache_hits,
+                "cache_misses": stats.cache_misses,
+                "disk_hits": stats.disk_hits,
+                "disk_misses": stats.disk_misses,
+                "cow_copies": stats.cow_copies,
+                "evictions": stats.evictions,
             }
 
     def reset_stats(self) -> None:

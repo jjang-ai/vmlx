@@ -1525,7 +1525,42 @@ class MLLMBatchGenerator:
                         from mlx_lm.models.cache import KVCache
                         req_cache = [KVCache() for _ in self.language_model.layers]
 
-                logits = self._run_vision_encoding(req, cache=req_cache)
+                try:
+                    logits = self._run_vision_encoding(req, cache=req_cache)
+                except ValueError as ve:
+                    if "broadcast" in str(ve).lower() and req.prompt_cache is not None:
+                        # Cache shape mismatch (e.g., GQA head count differs between
+                        # stored cache and model's current KV projection — root cause:
+                        # BatchKVCache.merge() inflates H to max across all caches,
+                        # so if any cache had expanded n_heads, extracted caches
+                        # inherit inflated H and get stored in blocks with wrong shape).
+                        # Discard cached prefix and retry with full prefill.
+                        logger.warning(
+                            f"Cache shape mismatch for {req.request_id}, "
+                            f"retrying without prefix cache: {ve}"
+                        )
+                        # Release stale blocks so they can be evicted/overwritten —
+                        # without this, next turn would hit the same stale block
+                        # and retry every single turn
+                        if self.block_aware_cache is not None:
+                            try:
+                                self.block_aware_cache.release_cache(req.request_id)
+                            except Exception:
+                                pass
+                        req.prompt_cache = None
+                        req.input_ids = mx.array([req._original_token_ids])
+                        try:
+                            if hasattr(self.language_model, 'make_cache'):
+                                req_cache = self.language_model.make_cache()
+                            else:
+                                from mlx_lm.models.cache import KVCache
+                                req_cache = [KVCache() for _ in self.language_model.layers]
+                        except Exception:
+                            from mlx_lm.models.cache import KVCache
+                            req_cache = [KVCache() for _ in self.language_model.layers]
+                        logits = self._run_vision_encoding(req, cache=req_cache)
+                    else:
+                        raise
                 per_request_caches.append(req_cache)
 
                 last_logits = logits[:, -1, :]
