@@ -37,7 +37,7 @@ function timeAgo(dateStr: string | null | undefined): string {
 
 const COLLECTION_SLUGS = {
   jang: 'jangq/jang-quantized-gguf-for-mlx',
-  uncensored: 'dealignai/xtreme-quality-uncensored-gguf-on-mlx',
+  uncensored: 'dealignai/crack-xtreme-quality-uncensored-gguf-on-mlx-69ba7ed343004d49cf8ca53f',
 } as const
 type CollectionTab = keyof typeof COLLECTION_SLUGS
 
