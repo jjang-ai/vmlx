@@ -822,9 +822,9 @@ class BlockAwarePrefixCache:
             first = state_tuple[0]
             if hasattr(first, "shape") and len(first.shape) in (3, 4):
                 return True
-            # QuantizedKVCache: state is ((data, scales, zeros), (data, scales, zeros))
-            # first element is a tuple of arrays, not an array itself
-            if isinstance(first, tuple) and len(first) >= 2:
+            # QuantizedKVCache: state is ([data, scales, zeros], [data, scales, zeros]).
+            # mx.quantize() returns a list, so keys/values may be list or tuple.
+            if isinstance(first, (tuple, list)) and len(first) >= 2:
                 if hasattr(first[0], "shape") and len(first[0].shape) in (3, 4):
                     return True
         return False
@@ -880,7 +880,7 @@ class BlockAwarePrefixCache:
                     if self._is_positional_cache(sub_state, sub_cls):
                         try:
                             keys, values = sub_state
-                            if isinstance(keys, tuple):
+                            if isinstance(keys, (tuple, list)):
                                 first_k = keys[0]
                                 seq_len = first_k.shape[-2]
                                 actual_end = min(end_idx, seq_len)
@@ -927,8 +927,10 @@ class BlockAwarePrefixCache:
                 try:
                     keys, values = state
 
-                    # QuantizedKVCache: keys/values are tuples of (data, scales, zeros)
-                    if isinstance(keys, tuple):
+                    # QuantizedKVCache: keys/values are tuples of (data, scales, zeros).
+                    # Also accept list — mx.quantize() returns a list, and when
+                    # assigned directly to qkv.keys the state becomes (list, list).
+                    if isinstance(keys, (tuple, list)):
                         # Use first component to detect shape
                         first_k = keys[0]
                         seq_len = first_k.shape[-2]  # seq axis is always -2

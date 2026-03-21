@@ -603,12 +603,16 @@ class Scheduler:
             ):
                 try:
                     qkv = QuantizedKVCache(group_size=group_size, bits=bits)
-                    qkv.keys = mx.quantize(
+                    # mx.quantize() returns a list [data, scales, zeros].
+                    # Wrap as tuple so qkv.state returns (tuple, tuple),
+                    # consistent with the init_quant() path and with the
+                    # isinstance(keys, tuple) check in prefix_cache.py.
+                    qkv.keys = tuple(mx.quantize(
                         layer_cache.keys, group_size=group_size, bits=bits
-                    )
-                    qkv.values = mx.quantize(
+                    ))
+                    qkv.values = tuple(mx.quantize(
                         layer_cache.values, group_size=group_size, bits=bits
-                    )
+                    ))
                     qkv.offset = layer_cache.offset
                     result.append(qkv)
                     quantized_count += 1
