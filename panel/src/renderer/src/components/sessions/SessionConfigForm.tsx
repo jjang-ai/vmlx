@@ -41,6 +41,7 @@ export interface SessionConfig {
   defaultTopP: number
   embeddingModel: string
   additionalArgs: string
+  streamFromDisk: boolean
   enableJit: boolean
   idleTimeoutSoftMin?: number
   idleTimeoutHardMin?: number
@@ -94,6 +95,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultTopP: 0,
   embeddingModel: '',
   additionalArgs: '',
+  streamFromDisk: false,
   enableJit: false,
   logLevel: 'INFO',
   corsOrigins: '*',
@@ -126,6 +128,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     pagedCache: false,
     kvCacheQuant: false,
     diskCache: false,
+    diskStreaming: false,
     power: false,
     performance: false,
     tools: false,
@@ -272,6 +275,23 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {!config.continuousBatching && (
           <InfoNote text="Turning this off disables: prefix caching, paged KV cache, KV cache quantization, and disk caching. Enable it to unlock these features." />
+        )}
+      </Section>
+
+      {/* Disk-Streaming Mode */}
+      <Section title="Disk-Streaming Mode" expanded={expandedSections.diskStreaming} onToggle={() => toggleSection('diskStreaming')} hidden={isImage}>
+        <CheckField
+          label="Stream from Disk (SSD)"
+          tooltip="Enable for models that exceed available RAM. Weights stay on SSD and are paged in on demand by macOS. Automatically disables ALL caching, limits to 1 sequence. Expect 2-5x slower inference but the model RUNS instead of crashing."
+          checked={config.streamFromDisk}
+          onChange={v => onChange('streamFromDisk', v)}
+        />
+        {config.streamFromDisk && (
+          <div className="rounded-md border border-yellow-600/40 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-200">
+            Disk-streaming mode: All caching features will be automatically disabled.
+            Performance will be 2-5x slower than normal. Only use this when the model
+            exceeds your available RAM.
+          </div>
         )}
       </Section>
 
