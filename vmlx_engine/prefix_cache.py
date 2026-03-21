@@ -1014,7 +1014,7 @@ class BlockAwarePrefixCache:
                 t = bs[0] if isinstance(bs, (tuple, list)) else "?"
                 tag_counts[t] = tag_counts.get(t, 0) + 1
             tag_str = ", ".join(f"{k}={v}" for k, v in tag_counts.items())
-            logger.info(
+            logger.debug(
                 f"Block tensor slice: {len(block_slices)}/{len(cache_data)} layers "
                 f"({tag_str}), tokens [{start_idx}:{end_idx}], is_last={is_last_block}"
             )
