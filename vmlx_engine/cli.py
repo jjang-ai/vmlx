@@ -401,6 +401,7 @@ def serve_command(args):
             served_model_name=getattr(args, 'served_model_name', None),
             force_mllm=getattr(args, 'is_mllm', False),
             stream_from_disk=getattr(args, 'stream_from_disk', False),
+            stream_memory_percent=getattr(args, 'stream_memory_percent', 90),
         )
 
     # Configure CORS middleware
@@ -931,6 +932,14 @@ Examples:
              "Weights stay mmap'd on SSD and are paged in on demand by macOS. "
              "Automatically disables all caching features and limits to 1 sequence. "
              "Expect 2-5x slower inference (SSD ~7.4GB/s vs GPU ~200GB/s).",
+    )
+    serve_parser.add_argument(
+        "--stream-memory-percent",
+        type=int,
+        default=90,
+        help="Percentage of total RAM to allocate for Metal when disk-streaming. "
+             "Lower values leave more headroom for KV cache. "
+             "Default: 90. For very large models, try 75-80. (default: 90)",
     )
     # MCP options
     serve_parser.add_argument(

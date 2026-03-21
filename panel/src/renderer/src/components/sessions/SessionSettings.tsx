@@ -65,6 +65,9 @@ function buildCommandPreview(
   // Disk-streaming mode — before cache flags for clarity
   if (config.streamFromDisk) {
     parts.push('--stream-from-disk')
+    if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
+      parts.push('--stream-memory-percent', config.streamMemoryPercent.toString())
+    }
   }
 
   // Prefix cache (mirrors buildArgs lines 1077-1114)

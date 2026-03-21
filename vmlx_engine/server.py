@@ -809,6 +809,7 @@ def load_model(
     force_mllm: bool = False,
     served_model_name: str | None = None,
     stream_from_disk: bool = False,
+    stream_memory_percent: int = 90,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -834,6 +835,7 @@ def load_model(
         'force_mllm': force_mllm,
         'served_model_name': served_model_name,
         'stream_from_disk': stream_from_disk,
+        'stream_memory_percent': stream_memory_percent,
     }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
@@ -966,11 +968,12 @@ def load_model(
             import mlx.core as mx
             import psutil
             mem = psutil.virtual_memory()
-            # Set Metal limit to 90% of total RAM — let macOS manage paging
-            limit = int(mem.total * 0.90)
+            # Set Metal limit to user-specified % of total RAM — let macOS manage paging
+            pct = max(50, min(95, stream_memory_percent)) / 100.0
+            limit = int(mem.total * pct)
             if hasattr(mx, 'metal') and hasattr(mx.metal, 'set_memory_limit'):
                 mx.metal.set_memory_limit(limit)
-                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB (90% of {mem.total / (1024**3):.1f}GB) for disk streaming")
+                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB ({stream_memory_percent}% of {mem.total / (1024**3):.1f}GB) for disk streaming")
             else:
                 logger.warning("Cannot set Metal memory limit — mlx.metal.set_memory_limit not available")
         except Exception as e:
@@ -1356,6 +1359,7 @@ async def admin_wake():
                     force_mllm=_cli_args.get('force_mllm', False),
                     served_model_name=_cli_args.get('served_model_name'),
                     stream_from_disk=_cli_args.get('stream_from_disk', False),
+                    stream_memory_percent=_cli_args.get('stream_memory_percent', 90),
                 )
                 # SimpleEngine needs async start (load_model defers it inside event loop)
                 if _engine and hasattr(_engine, '_needs_async_start') and _engine._needs_async_start:

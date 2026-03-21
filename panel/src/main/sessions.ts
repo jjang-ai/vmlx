@@ -858,7 +858,7 @@ export class SessionManager extends EventEmitter {
     'logLevel', 'corsOrigins',
     'enableJit',
     'imageMode', 'imageQuantize',
-    'streamFromDisk',
+    'streamFromDisk', 'streamMemoryPercent',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -1673,6 +1673,9 @@ export class SessionManager extends EventEmitter {
     // Disk-streaming mode — must come BEFORE cache flags so Python-side gating is clear
     if (config.streamFromDisk) {
       args.push('--stream-from-disk')
+      if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
+        args.push('--stream-memory-percent', config.streamMemoryPercent.toString())
+      }
     }
 
     // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
