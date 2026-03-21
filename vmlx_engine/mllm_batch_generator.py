@@ -2152,7 +2152,15 @@ class MLLMBatchGenerator:
             List of MLLMBatchResponse, one per active request
         """
         with mx.stream(MLLMBatchGenerator._stream):
-            return self._next()
+            result = self._next()
+        # Synchronize the generation stream before returning so that KV cache
+        # arrays computed on _stream are fully materialized in their Metal
+        # buffers.  Without this, write_block_async() accesses these arrays
+        # from the default stream AFTER _stream's command buffer was already
+        # committed — triggering "addCompletedHandler after commit" (or a
+        # segfault on older MLX builds).
+        mx.synchronize(MLLMBatchGenerator._stream)
+        return result
 
     def stats(self) -> MLLMBatchStats:
         """

@@ -362,6 +362,78 @@ class PrefixCacheManager:
 # =============================================================================
 
 
+
+def _numpy_block_slice(
+    cache_data, np_sources, start_idx, end_idx, is_last_block,
+):
+    """Create per-block cache_data using numpy slicing (no MLX/Metal ops).
+
+    Args:
+        cache_data: Full layer-state dicts from _extract_cache_states.
+        np_sources: dict mapping layer_idx → (np_keys, np_values).
+        start_idx, end_idx: Token range for this block.
+        is_last_block: Whether this is the last block in the sequence.
+
+    Returns:
+        List of tuples per layer in the same format as _extract_block_tensor_slice
+        but with numpy arrays instead of MLX arrays.
+    """
+    import numpy as np
+
+    block_slices = []
+    for idx, layer_state in enumerate(cache_data):
+        if "state" not in layer_state:
+            continue
+        cls = layer_state.get("class_name", "")
+
+        # CacheList (MoE): not yet supported in numpy path
+        if cls == "CacheList":
+            block_slices.append(("skip",))
+            continue
+
+        if idx in np_sources:
+            np_k, np_v = np_sources[idx]
+            ndim = np_k.ndim
+            if ndim == 4:
+                seq_len = np_k.shape[2]
+            elif ndim == 3:
+                seq_len = np_k.shape[1]
+            else:
+                block_slices.append(("skip",))
+                continue
+            actual_end = min(end_idx, seq_len)
+            if start_idx >= actual_end:
+                block_slices.append(("skip",))
+                continue
+            if ndim == 4:
+                ks = np_k[:, :, start_idx:actual_end, :]
+                vs = np_v[:, :, start_idx:actual_end, :]
+            else:
+                ks = np_k[:, start_idx:actual_end, :]
+                vs = np_v[:, start_idx:actual_end, :]
+            block_slices.append(("kv", ks, vs))
+        else:
+            # Cumulative / non-positional layer
+            state = layer_state.get("state")
+            if is_last_block and state is not None:
+                meta = layer_state.get("meta_state", "")
+                # Convert cumulative state to numpy
+                if isinstance(state, (list, tuple)):
+                    np_state = []
+                    for s in state:
+                        if hasattr(s, '__array__'):
+                            np_state.append(np.array(s))
+                        else:
+                            np_state.append(s)
+                    block_slices.append(("cumulative", np_state, meta, cls))
+                else:
+                    block_slices.append(("skip",))
+            else:
+                block_slices.append(("skip",))
+
+    return block_slices if block_slices else None
+
+
 def _block_needs_cumulative_update(cache_data) -> bool:
     """Check if a block's cache_data is missing cumulative SSM state.
 
@@ -635,6 +707,33 @@ class BlockAwarePrefixCache:
 
         disk_store = self.paged_cache._disk_store  # May be None
 
+        # Pre-convert source KV arrays to numpy for disk writes.
+        # MLX has a Metal command buffer bug: any evaluation of lazy slices
+        # whose source was previously evaluated (e.g. by disk_cache.store())
+        # triggers fatal Metal assertions.  By converting the full evaluated
+        # source arrays to numpy here (just a CPU memcpy on unified memory),
+        # we can do all per-block slicing in numpy — zero Metal operations.
+        np_sources: dict = {}  # layer_idx → (np_keys, np_values)
+        if disk_store is not None and is_tensor_data and HAS_MLX:
+            import numpy as np
+            for idx, layer_state in enumerate(cache_data):
+                state = layer_state.get("state")
+                if state is None:
+                    continue
+                cls = layer_state.get("class_name", "")
+                if self._is_positional_cache(state, cls):
+                    try:
+                        keys, values = state
+                        if isinstance(keys, (tuple, list)):
+                            # Quantized: skip numpy path for now
+                            continue
+                        if hasattr(keys, '__array__'):
+                            np_sources[idx] = (np.array(keys), np.array(values))
+                    except Exception:
+                        pass
+
+        pending_disk_writes: list = []
+
         for i in range(num_new_blocks):
             start_idx = i * self.block_size
             end_idx = min(start_idx + self.block_size, len(new_tokens))
@@ -752,11 +851,16 @@ class BlockAwarePrefixCache:
                         f"{' (includes cumulative states)' if is_last else ''}"
                     )
 
-                    # Write-through to disk L2 (async, non-blocking)
-                    if disk_store is not None:
-                        disk_store.write_block_async(
-                            block_chain_hash, block_kv_data, len(block_tokens)
+                    # Defer disk write using numpy slices (no MLX ops)
+                    if disk_store is not None and np_sources:
+                        np_block = _numpy_block_slice(
+                            cache_data, np_sources,
+                            global_start, global_end, is_last,
                         )
+                        if np_block:
+                            pending_disk_writes.append(
+                                (block_chain_hash, np_block, len(block_tokens))
+                            )
 
             # Register in hash caches under lock (both chain hash and legacy)
             with self.paged_cache._lock:
@@ -766,6 +870,10 @@ class BlockAwarePrefixCache:
             self.paged_cache.register_block_hash(block, block_tokens)
 
             parent_hash = block_chain_hash
+
+        # Write deferred disk blocks (all numpy — no MLX/Metal ops).
+        if pending_disk_writes and disk_store is not None:
+            disk_store.batch_write_blocks(pending_disk_writes)
 
         # Update prefix index
         self._update_prefix_index(tokens, block_table.block_ids)

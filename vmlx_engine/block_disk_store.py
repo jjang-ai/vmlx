@@ -217,7 +217,7 @@ class BlockDiskStore:
 
         try:
             data = mx.load(str(file_path))
-            cache_data = _deserialize_block(data, dtype)
+            cache_data = _deserialize_block(data, dtype, file_path=str(file_path))
             with self._stats_lock:
                 self.disk_hits += 1
             # Queue access metadata update to background (non-blocking)
@@ -287,7 +287,19 @@ class BlockDiskStore:
             # Materialize all lazy MLX arrays on the calling thread.
             arrays_to_materialize = [v for v in tensors.values() if isinstance(v, mx.array)]
             if arrays_to_materialize:
-                mx.eval(*arrays_to_materialize)
+                # Flush the default stream before materializing.
+                # mlx-lm's in-place KV cache updates (keys[...] = new_k) create
+                # lazy side-effect arrays that are NOT in the output-token
+                # dependency graph, so they may still be pending on the Metal
+                # command queue when we arrive here.  Synchronizing first ensures
+                # those command buffers are fully committed and complete, which
+                # prevents Metal's "addCompletedHandler after commit" assertion
+                # (or a segfault on older MLX builds where that check is absent).
+                # For MLLM models the generation stream (_stream) is already
+                # synced by MLLMBatchGenerator.next() before this point, so the
+                # default-stream sync is sufficient to cover both cases.
+                mx.synchronize()
+                mx.eval(*arrays_to_materialize)  # noqa: S307 — MLX GPU materialization, not Python eval
 
             # Write safetensors file on the main thread.
             # mx.save_safetensors accesses Metal buffer memory internally,
@@ -315,6 +327,65 @@ class BlockDiskStore:
             except Exception:
                 pass
             logger.warning("BlockDiskStore write queue full (1000), dropping block write")
+
+    def batch_write_blocks(
+        self,
+        blocks: list,
+    ) -> None:
+        """Write multiple blocks to disk using pure numpy (zero MLX/Metal ops).
+
+        The caller (store_cache) pre-converts source KV arrays to numpy and
+        creates per-block slices in numpy space.  This method serializes and
+        saves those numpy slices via safetensors.numpy — no mx.eval(),
+        mx.save_safetensors(), or any other MLX call that could trigger
+        Metal command buffer assertions.
+
+        Args:
+            blocks: List of (block_hash_bytes, cache_data, token_count) tuples
+                    where cache_data entries contain numpy arrays (not MLX).
+        """
+        if not blocks:
+            return
+
+        import json
+        import numpy as np
+        from safetensors.numpy import save_file as _np_save
+
+        for block_hash, cache_data, token_count in blocks:
+            hash_hex = block_hash.hex()
+            try:
+                tensors, dtype, num_layers, meta_json = _serialize_block_numpy(
+                    cache_data
+                )
+                if num_layers == 0:
+                    continue
+
+                file_path = self._hash_to_path(hash_hex)
+                seq = self._tmp_seq
+                self._tmp_seq += 1
+                tmp_path = file_path.with_name(
+                    f"{file_path.stem}.{seq}.tmp.safetensors"
+                )
+                # Store layer metadata in safetensors header (not as a
+                # tensor — __metadata__ is a reserved safetensors key).
+                sf_meta = {"vmlx_block_meta": meta_json} if meta_json else None
+                _np_save(tensors, str(tmp_path), metadata=sf_meta)
+            except Exception as e:
+                logger.debug(f"Batch write failed for {hash_hex[:12]}: {e}")
+                continue
+
+            try:
+                self._write_queue.put_nowait(
+                    (block_hash, str(tmp_path), dtype, num_layers, token_count)
+                )
+            except queue.Full:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+                logger.warning(
+                    "BlockDiskStore write queue full, dropping block write"
+                )
 
     def _background_writer(self) -> None:
         """Background thread: drain write queue and persist blocks.
@@ -586,6 +657,55 @@ class BlockDiskStore:
 # Serialization / Deserialization (module-level functions)
 # =============================================================================
 
+def _serialize_block_numpy(cache_data):
+    """Serialize cache_data containing numpy arrays to a safetensors-ready dict.
+
+    Same layout as _serialize_block but operates on numpy arrays instead of
+    MLX arrays — no Metal operations at all.
+
+    Returns:
+        (tensor_dict, dtype_string, num_layers, meta_json_or_None)
+        meta_json is returned separately because ``__metadata__`` is a
+        reserved key in safetensors (used for the header metadata dict).
+        The caller passes it via ``save_file(..., metadata=...)`` and
+        _deserialize_block reads it back from either location.
+    """
+    import json
+    import numpy as np
+
+    tensors = {}
+    num_layers = 0
+    meta = {"__layer_types__": {}}
+
+    for i, layer_data in enumerate(cache_data):
+        tag = layer_data[0]
+        if tag == "skip":
+            continue
+        num_layers += 1
+        meta["__layer_types__"][str(i)] = tag
+
+        if tag == "kv":
+            _, keys, values = layer_data
+            tensors[f"layer_{i}_keys"] = keys
+            tensors[f"layer_{i}_values"] = values
+        elif tag == "cumulative":
+            _, state_list, layer_meta, class_name = layer_data
+            if isinstance(state_list, (list, tuple)):
+                for j, arr in enumerate(state_list):
+                    if hasattr(arr, "shape"):
+                        tensors[f"layer_{i}_cumulative_{j}"] = (
+                            np.array(arr) if not isinstance(arr, np.ndarray) else arr
+                        )
+            meta[str(i)] = {"class_name": class_name, "meta": layer_meta}
+
+    # Determine dominant dtype
+    type_set = set(meta["__layer_types__"].values())
+    dtype = type_set.pop() if len(type_set) == 1 else ("mixed" if type_set else "kv")
+
+    meta_json = json.dumps(meta) if meta else None
+    return tensors, dtype, num_layers, meta_json
+
+
 def _serialize_block(
     cache_data: List[Tuple],
 ) -> Tuple[Dict[str, Any], str, int]:
@@ -674,6 +794,7 @@ def _serialize_block(
 def _deserialize_block(
     data: Dict[str, Any],
     dtype: str,
+    file_path: str = "",
 ) -> List[Tuple]:
     """
     Reconstruct CacheBlock.cache_data from loaded safetensors dict.
@@ -682,13 +803,24 @@ def _deserialize_block(
     Falls back to the dtype field for backward compatibility with blocks
     serialized before per-layer tags were added.
     """
-    # Extract metadata if present
+    # Extract metadata — check both tensor (__metadata__ array from
+    # mx.save_safetensors) and safetensors header (from numpy save path).
     meta: Dict[str, Any] = {}
     meta_arr = data.get("__metadata__")
     if meta_arr is not None:
         try:
             meta_bytes = bytes(meta_arr.tolist())
             meta = json.loads(meta_bytes.decode("utf-8"))
+        except Exception:
+            pass
+    if not meta and file_path:
+        # Try safetensors header metadata (numpy save path)
+        try:
+            from safetensors import safe_open
+            with safe_open(file_path, framework="numpy") as f:
+                hdr_meta = f.metadata()
+                if hdr_meta and "vmlx_block_meta" in hdr_meta:
+                    meta = json.loads(hdr_meta["vmlx_block_meta"])
         except Exception:
             pass
     # Remove from data dict so it's not picked up as a layer
