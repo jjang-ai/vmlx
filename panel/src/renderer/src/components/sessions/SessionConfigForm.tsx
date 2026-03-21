@@ -291,8 +291,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {config.streamFromDisk && (
           <>
             <SliderField
-              label="Memory Allocation (%)"
-              tooltip="Percentage of total RAM to allocate for Metal GPU. Lower values leave more headroom for KV cache. If your model crashes with 'Out of Memory', try lowering this to 75-80%. Default: 90%."
+              label="Virtual Memory Budget (%)"
+              tooltip="Controls how much virtual memory Metal can allocate (as a multiplier of physical RAM). Higher values allow larger models by letting macOS page weights to SSD. At 90% (default), Metal gets ~3.5x your RAM in virtual space. Lower if you experience system instability."
               value={config.streamMemoryPercent}
               onChange={v => onChange('streamMemoryPercent', v)}
               min={50}
