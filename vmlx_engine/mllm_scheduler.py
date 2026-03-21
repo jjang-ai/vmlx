@@ -856,14 +856,49 @@ class MLLMScheduler:
         BlockAwarePrefixCache.store_cache() expects:
             {"state": (keys, values), "meta_state": (offset,), "class_name": "KVCache"}
 
+        Handles CacheList (MoE models) by extracting each sub-cache independently,
+        matching the format expected by _extract_block_tensor_slice().
+
         This is the VLM equivalent of Scheduler._extract_cache_states().
         """
         if not raw_cache:
             return []
 
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
+
         extracted = []
         for i, layer_cache in enumerate(raw_cache):
             try:
+                # CacheList (MoE models): extract each sub-cache independently.
+                # Produces {"class_name": "CacheList", "sub_caches": [...]} format
+                # matching what _extract_block_tensor_slice expects.
+                if _CacheList is not None and isinstance(layer_cache, _CacheList):
+                    sub_caches = []
+                    for sc in layer_cache.caches:
+                        if hasattr(sc, "cache") and isinstance(
+                            getattr(sc, "cache", None), list
+                        ):
+                            # SSM sub-cache: cumulative state
+                            sub_caches.append({
+                                "state": sc.state,
+                                "meta_state": sc.meta_state,
+                                "class_name": type(sc).__name__,
+                            })
+                        elif hasattr(sc, "state") and hasattr(sc, "meta_state"):
+                            sub_caches.append({
+                                "state": sc.state,
+                                "meta_state": sc.meta_state,
+                                "class_name": type(sc).__name__,
+                            })
+                    if sub_caches:
+                        extracted.append({
+                            "class_name": "CacheList",
+                            "sub_caches": sub_caches,
+                        })
+                    continue
                 # Check MambaCache/ArraysCache FIRST: they also have state/meta_state
                 # but their .cache attribute is a list (cumulative state, can't be blocked)
                 if hasattr(layer_cache, "cache") and isinstance(

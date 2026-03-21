@@ -13,9 +13,15 @@ export interface SessionSummary {
   config?: string // JSON blob — includes modelType, imageMode, etc.
 }
 
+export interface LoadProgress {
+  label: string
+  progress: number
+}
+
 interface SessionsContextValue {
   sessions: SessionSummary[]
   loadingSessions: Set<string>
+  loadProgress: Map<string, LoadProgress>
   ensureSessionRunning: (modelPath: string) => Promise<SessionSummary>
   refreshSessions: () => Promise<void>
 }
@@ -29,6 +35,7 @@ export function useSessionsContext() {
 export function SessionsProvider({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loadingSessions, setLoadingSessions] = useState<Set<string>>(new Set())
+  const [loadProgress, setLoadProgress] = useState<Map<string, LoadProgress>>(new Map())
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
 
@@ -47,6 +54,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
       window.api.sessions.onDeleted(() => refreshSessions()),
       window.api.sessions.onStarting((data: any) => {
         setSessions(prev => prev.map(s => s.id === data.sessionId ? { ...s, status: 'loading' as const } : s))
+        setLoadProgress(prev => { const next = new Map(prev); next.delete(data.sessionId); return next })
       }),
       window.api.sessions.onReady((data: any) => {
         setSessions(prev => prev.map(s =>
@@ -60,9 +68,11 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
           if (session) next.delete(session.modelPath)
           return next
         })
+        setLoadProgress(prev => { const next = new Map(prev); next.set(data.sessionId, { label: 'Ready', progress: 100 }); return next })
       }),
       window.api.sessions.onStopped((data: any) => {
         setSessions(prev => prev.map(s => s.id === data.sessionId ? { ...s, status: 'stopped' as const } : s))
+        setLoadProgress(prev => { const next = new Map(prev); next.delete(data.sessionId); return next })
       }),
       window.api.sessions.onError((data: any) => {
         setSessions(prev => prev.map(s => s.id === data.sessionId ? { ...s, status: 'error' as const } : s))
@@ -72,7 +82,16 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
           if (session) next.delete(session.modelPath)
           return next
         })
+        setLoadProgress(prev => { const next = new Map(prev); next.delete(data.sessionId); return next })
       }),
+      // Loading progress — real-time phase tracking from engine log parsing
+      ...(window.api.sessions.onLoadProgress ? [window.api.sessions.onLoadProgress((data: any) => {
+        setLoadProgress(prev => {
+          const next = new Map(prev)
+          next.set(data.sessionId, { label: data.label, progress: data.progress })
+          return next
+        })
+      })] : []),
       window.api.sessions.onHealth((data: any) => {
         // Only set 'running' when the model is actually loaded (data.running === true)
         // The health monitor sends running=false when server is up but model still loading
@@ -193,7 +212,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
   }, [refreshSessions])
 
   return (
-    <SessionsContext.Provider value={{ sessions, loadingSessions, ensureSessionRunning, refreshSessions }}>
+    <SessionsContext.Provider value={{ sessions, loadingSessions, loadProgress, ensureSessionRunning, refreshSessions }}>
       {children}
     </SessionsContext.Provider>
   )

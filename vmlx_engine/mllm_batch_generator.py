@@ -399,8 +399,17 @@ class MLLMBatch:
         self.y = self.y[keep_idx_array]
 
         # Filter cache entries
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
         for c in self.cache:
-            if hasattr(c, "filter"):
+            if _CacheList is not None and isinstance(c, _CacheList):
+                # CacheList (MoE models): filter each sub-cache independently
+                for sc in c.caches:
+                    if hasattr(sc, "filter"):
+                        sc.filter(keep_idx_array)
+            elif hasattr(c, "filter"):
                 c.filter(keep_idx_array)
 
     def extend(self, other: "MLLMBatch") -> None:
@@ -421,8 +430,17 @@ class MLLMBatch:
         self.max_tokens.extend(other.max_tokens)
         self.num_tokens.extend(other.num_tokens)
         self.requests.extend(other.requests)
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
         for c, o in zip(self.cache, other.cache):
-            c.extend(o)
+            if _CacheList is not None and isinstance(c, _CacheList):
+                # CacheList (MoE models): extend each sub-cache independently
+                for sc, so in zip(c.caches, o.caches):
+                    sc.extend(so)
+            else:
+                c.extend(o)
 
     def extract_cache(self, idx: int) -> List[Any]:
         """
@@ -435,8 +453,27 @@ class MLLMBatch:
             Cache state for that request
         """
         extracted = []
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
         for c in self.cache:
-            if hasattr(c, "extract"):
+            if _CacheList is not None and isinstance(c, _CacheList):
+                # CacheList (MoE models): extract from each sub-cache
+                sub_extracted = []
+                for sc in c.caches:
+                    if hasattr(sc, "extract"):
+                        layer = sc.extract(idx)
+                        if hasattr(layer, "keys") and layer.keys is not None:
+                            layer.keys = mx.contiguous(layer.keys)
+                            layer.values = mx.contiguous(layer.values)
+                        sub_extracted.append(layer)
+                    elif idx == 0:
+                        sub_extracted.append(sc)
+                    else:
+                        sub_extracted.append(None)
+                extracted.append(_CacheList(*sub_extracted))
+            elif hasattr(c, "extract"):
                 # Batched cache (BatchKVCache, BatchMambaCache) — extract single request
                 layer = c.extract(idx)
                 # Make extracted keys/values contiguous: BatchKVCache.extract()
@@ -867,6 +904,15 @@ class MLLMBatchGenerator:
             except Exception as e:
                 logger.warning(f"Failed to pre-compute hybrid cache info: {e}")
 
+        # Pre-computed bool: is this a hybrid model (SSM + attention)?
+        # Used throughout _process_prompts and _run_vision_encoding to gate
+        # hybrid-specific logic (SSM companion cache, chunked prefill skip, etc.)
+        self._is_hybrid: bool = (
+            self._hybrid_kv_positions is not None
+            and self._hybrid_num_layers is not None
+            and len(self._hybrid_kv_positions) < self._hybrid_num_layers
+        )
+
         # Vision embedding cache for repeated images
         self.vision_cache = VisionEmbeddingCache(
             max_pixel_entries=vision_cache_size,
@@ -1069,7 +1115,6 @@ class MLLMBatchGenerator:
         )
 
         # Prepare inputs using mlx_vlm
-        # Prepare inputs using mlx_vlm
         inputs = prepare_inputs(
             self.processor,
             images=all_images if all_images else None,
@@ -1149,17 +1194,43 @@ class MLLMBatchGenerator:
         # Chunked prefill for text-only VLM requests with long prompts.
         # Image requests must run in one shot (vision encoder needs full sequence).
         # Short prompts (< 2x prefill_step_size) also run in one shot (overhead not worth it).
-        if not has_images and seq_len > self.prefill_step_size * 2:
+        # Hybrid SSM models (GatedDeltaNet/Mamba + attention) must run in one shot
+        # because the language_model's forward pass computes masks from specific
+        # cache positions (fa_idx/ssm_idx) that assume full-sequence processing.
+        if not has_images and seq_len > self.prefill_step_size * 2 and not self._is_hybrid:
             # Use language_model directly for chunked text prefill
             lm = getattr(self.model, 'language_model', None)
             if lm is not None and cache is not None:
                 processed = 0
+                chunk_num = 0
                 while processed < seq_len - 1:  # -1: keep last token for final logits
                     chunk_size = min(self.prefill_step_size, seq_len - 1 - processed)
                     chunk = input_ids[:, processed:processed + chunk_size]
-                    lm(chunk, cache=cache)
+                    try:
+                        lm(chunk, cache=cache)
+                    except Exception as chunk_err:
+                        # Log cache state at failure point for diagnosis
+                        _cache_diag = []
+                        for ci, cc in enumerate(cache[:6]):
+                            if hasattr(cc, 'keys') and cc.keys is not None:
+                                _cache_diag.append(f"L{ci}:KV={cc.keys.shape}")
+                            elif hasattr(cc, 'cache') and isinstance(cc.cache, list):
+                                shapes = [a.shape if a is not None else 'None' for a in cc.cache]
+                                _cache_diag.append(f"L{ci}:SSM={shapes}")
+                            elif hasattr(cc, 'offset'):
+                                _cache_diag.append(f"L{ci}:off={cc.offset}")
+                            else:
+                                _cache_diag.append(f"L{ci}:{type(cc).__name__}")
+                        logger.error(
+                            f"Chunked prefill failed at chunk {chunk_num} "
+                            f"(processed={processed}, chunk_size={chunk_size}, "
+                            f"total={seq_len}): {chunk_err} "
+                            f"[cache: {', '.join(_cache_diag)}]"
+                        )
+                        raise
                     mx.eval([c.state for c in cache if hasattr(c, 'state')])
                     processed += chunk_size
+                    chunk_num += 1
                     mx.clear_cache()
 
                 # Final chunk: get logits from last token
@@ -1242,11 +1313,7 @@ class MLLMBatchGenerator:
                                 # For hybrid models without companion SSM state, the cached
                                 # KV blocks are useless — skip reconstruction entirely to
                                 # avoid allocating huge tensors that will be thrown away.
-                                is_hybrid = (
-                                    self._hybrid_kv_positions is not None
-                                    and self._hybrid_num_layers is not None
-                                    and len(self._hybrid_kv_positions) < self._hybrid_num_layers
-                                )
+                                is_hybrid = self._is_hybrid
 
                                 if is_hybrid:
                                     # Check companion SSM state cache BEFORE reconstruction.
@@ -1379,11 +1446,7 @@ class MLLMBatchGenerator:
                                         continue  # Dequantize failed, full prefill
 
                                 # Hybrid model check (same logic as paged path)
-                                is_hybrid = (
-                                    self._hybrid_kv_positions is not None
-                                    and self._hybrid_num_layers is not None
-                                    and len(self._hybrid_kv_positions) < self._hybrid_num_layers
-                                )
+                                is_hybrid = self._is_hybrid
                                 if is_hybrid:
                                     logger.info(
                                         f"VLM memory/legacy cache HIT for {req.request_id}: "
@@ -1439,12 +1502,7 @@ class MLLMBatchGenerator:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
                         disk_result = self.disk_cache.fetch(token_list)
                         if disk_result is not None:
-                            is_hybrid = (
-                                self._hybrid_kv_positions is not None
-                                and self._hybrid_num_layers is not None
-                                and len(self._hybrid_kv_positions) < self._hybrid_num_layers
-                            )
-                            if not is_hybrid:
+                            if not self._is_hybrid:
                                 # Check for image tokens in remaining suffix
                                 model_config = getattr(self.model, "config", None)
                                 img_token_id = (
@@ -1528,7 +1586,7 @@ class MLLMBatchGenerator:
                 try:
                     logits = self._run_vision_encoding(req, cache=req_cache)
                 except ValueError as ve:
-                    if "broadcast" in str(ve).lower() and req.prompt_cache is not None:
+                    if "broadcast" in str(ve).lower():
                         # Cache shape mismatch (e.g., GQA head count differs between
                         # stored cache and model's current KV projection — root cause:
                         # BatchKVCache.merge() inflates H to max across all caches,
@@ -1549,6 +1607,7 @@ class MLLMBatchGenerator:
                                 pass
                         req.prompt_cache = None
                         req.input_ids = mx.array([req._original_token_ids])
+                        req.attention_mask = None
                         try:
                             if hasattr(self.language_model, 'make_cache'):
                                 req_cache = self.language_model.make_cache()
@@ -1556,6 +1615,9 @@ class MLLMBatchGenerator:
                                 from mlx_lm.models.cache import KVCache
                                 req_cache = [KVCache() for _ in self.language_model.layers]
                         except Exception:
+                            # make_cache() failed — use KVCache as last resort.
+                            # For hybrid models this will likely fail too
+                            # (SSM layers need ArraysCache), but at least we tried.
                             from mlx_lm.models.cache import KVCache
                             req_cache = [KVCache() for _ in self.language_model.layers]
                         logits = self._run_vision_encoding(req, cache=req_cache)
@@ -1592,12 +1654,7 @@ class MLLMBatchGenerator:
                 succeeded_requests.append(req)
 
                 # Capture SSM state at prompt boundary for hybrid models
-                if (
-                    self._hybrid_kv_positions is not None
-                    and self._hybrid_num_layers is not None
-                    and len(self._hybrid_kv_positions) < self._hybrid_num_layers
-                    and req.prompt_cache is None
-                ):
+                if self._is_hybrid and req.prompt_cache is None:
                     try:
                         kv_set = set(self._hybrid_kv_positions)
                         ssm_layers = []
@@ -1634,11 +1691,27 @@ class MLLMBatchGenerator:
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
           except Exception as prefill_err:
-                # Broadcast shape errors from stale prefix cache — retry with fresh cache
-                if "broadcast" in str(prefill_err).lower() and req.prompt_cache is not None:
+                # Broadcast shape errors from stale cache (prefix, paged blocks, or
+                # residual batch state) — retry with completely fresh cache.
+                # Don't require req.prompt_cache to be set: the stale shapes can come
+                # from paged cache blocks that were fetched but didn't set prompt_cache,
+                # or from batch KV cache state left over from the previous generation.
+                if "broadcast" in str(prefill_err).lower():
+                    # Log diagnostic info to identify stale shape source
+                    _diag_parts = []
+                    _diag_parts.append(f"prompt_cache={'set' if req.prompt_cache is not None else 'None'}")
+                    _diag_parts.append(f"input_ids_shape={req.input_ids.shape if req.input_ids is not None else 'None'}")
+                    _diag_parts.append(f"attn_mask={'set' if req.attention_mask is not None else 'None'}")
+                    _diag_parts.append(f"pixel_values={'set' if req.pixel_values is not None else 'None'}")
+                    if req.prompt_cache is not None:
+                        for ci, cc in enumerate(req.prompt_cache[:3]):
+                            if hasattr(cc, 'keys') and cc.keys is not None:
+                                _diag_parts.append(f"cache[{ci}].keys={cc.keys.shape}")
+                                break
                     logger.warning(
                         f"Cache shape mismatch for {req.request_id}, "
-                        f"retrying without prefix cache: {prefill_err}"
+                        f"retrying without prefix cache: {prefill_err} "
+                        f"[diag: {', '.join(_diag_parts)}]"
                     )
                     if self.block_aware_cache is not None:
                         try:
@@ -1647,11 +1720,17 @@ class MLLMBatchGenerator:
                             pass
                     req.prompt_cache = None
                     req.input_ids = mx.array([req._original_token_ids])
+                    # Reset vision fields — on broadcast retry we do full prefill from scratch
+                    req.pixel_values = None
+                    req.attention_mask = None
+                    req.image_grid_thw = None
+                    # Flush stale GPU state before retry
+                    mx.clear_cache()
                     try:
-                        if hasattr(self.language_model, 'make_cache'):
+                        from mlx_lm.models.cache import KVCache
+                        try:
                             req_cache = self.language_model.make_cache()
-                        else:
-                            from mlx_lm.models.cache import KVCache
+                        except Exception:
                             req_cache = [KVCache() for _ in self.language_model.layers]
                         logits = self._run_vision_encoding(req, cache=req_cache)
                         per_request_caches.append(req_cache)
@@ -1665,7 +1744,43 @@ class MLLMBatchGenerator:
                         succeeded_requests.append(req)
                         continue  # Successfully retried
                     except Exception as retry_err:
-                        logger.error(f"Retry also failed for {req.request_id}: {retry_err}")
+                        # Nuclear retry: clear ALL paged cache blocks and try once more.
+                        # Hybrid models (Mamba+Attention) can have stale state that
+                        # persists even through make_cache() and mx.clear_cache().
+                        if "broadcast" in str(retry_err).lower() and self.block_aware_cache is not None:
+                            logger.warning(f"Retry failed with broadcast — clearing ALL paged cache and retrying once more: {retry_err}")
+                            try:
+                                self.block_aware_cache.clear()
+                            except Exception:
+                                pass
+                            # Also clear SSM state cache — stale SSM state can cause
+                            # shape mismatches in hybrid models
+                            self._ssm_state_cache.clear()
+                            mx.clear_cache()
+                            try:
+                                # MUST use make_cache() for hybrid models — it returns
+                                # the correct mix of KVCache + ArraysCache. Plain
+                                # [KVCache() for _] breaks hybrid models that need
+                                # ArraysCache.create_attention_mask().
+                                if hasattr(self.language_model, 'make_cache'):
+                                    req_cache = self.language_model.make_cache()
+                                else:
+                                    req_cache = [KVCache() for _ in self.language_model.layers]
+                                logits = self._run_vision_encoding(req, cache=req_cache)
+                                per_request_caches.append(req_cache)
+                                last_logits = logits[:, -1, :]
+                                logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
+                                req_sampler = self._make_request_sampler(req)
+                                sampled = req_sampler(logprobs)
+                                mx.async_eval(sampled, logprobs)
+                                first_tokens.append(sampled.item())
+                                all_logprobs.append(logprobs.squeeze(0))
+                                succeeded_requests.append(req)
+                                continue
+                            except Exception as nuclear_err:
+                                logger.error(f"Nuclear retry also failed for {req.request_id}: {nuclear_err}")
+                        else:
+                            logger.error(f"Retry also failed for {req.request_id}: {retry_err}")
                 # Per-request prefill failure (bad image, OOM, etc.)
                 # Queue an immediate error response instead of killing the entire batch.
                 logger.error(

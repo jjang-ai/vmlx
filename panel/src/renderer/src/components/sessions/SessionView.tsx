@@ -11,6 +11,7 @@ import { PerformancePanel } from './PerformancePanel'
 import { LogsPanel } from './LogsPanel'
 import { useToast } from '../Toast'
 import { useAppState } from '../../contexts/AppStateContext'
+import { useSessionsContext } from '../../contexts/SessionsContext'
 
 interface Session {
   id: string
@@ -415,6 +416,9 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
         </div>
       </div>
 
+      {/* Loading Progress Bar */}
+      {session.status === 'loading' && <SessionViewLoadBar sessionId={session.id} />}
+
       {/* JANG Redownload Notice */}
       {jangLabel && !jangNoticeDismissed && (
         <div className="flex items-start gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex-shrink-0">
@@ -587,6 +591,25 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Extracted component so useSessionsContext() is called from a proper hook scope */
+function SessionViewLoadBar({ sessionId }: { sessionId: string }) {
+  const { loadProgress } = useSessionsContext()
+  const progress = loadProgress.get(sessionId)
+  return (
+    <div className="px-4 py-1.5 border-b border-border bg-card/30 flex-shrink-0">
+      <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+        <div
+          className="h-full bg-warning rounded-full transition-all duration-500 ease-out"
+          style={{ width: `${progress?.progress ?? 2}%` }}
+        />
+      </div>
+      <p className="text-[10px] text-muted-foreground mt-1">
+        {progress?.label ?? 'Starting server...'} {progress ? `(${progress.progress}%)` : ''}
+      </p>
     </div>
   )
 }

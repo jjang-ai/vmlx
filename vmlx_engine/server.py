@@ -206,8 +206,10 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
     if model_name in _template_always_thinks_cache:
         return _template_always_thinks_cache[model_name]
 
-    # Qwen models natively inject <think> but honor enable_thinking=False
-    # (they are explicitly patched in batched.py/mllm.py to strip it).
+    # Qwen text models honor enable_thinking=False via the tokenizer template.
+    # But Qwen VL models use a processor that ignores enable_thinking — the
+    # MLLM _apply_chat_template strips <think> tags after rendering, so from
+    # the server's perspective they DON'T always-think (the strip handles it).
     if "qwen" in model_name.lower():
         _template_always_thinks_cache[model_name] = False
         return False
@@ -602,21 +604,6 @@ async def check_rate_limit(request: Request):
             headers={"Retry-After": str(retry_after)},
         )
 
-
-def require_text_model():
-    """Dependency that rejects requests on image-only servers."""
-    if _model_type == "image":
-        raise HTTPException(
-            status_code=400,
-            detail="This is an image generation server. Text endpoints are not available. "
-                   "Use /v1/images/generations for image generation."
-        )
-
-
-def require_image_model():
-    """Dependency that rejects image requests on text-only servers (unless lazy-load is available)."""
-    # Allow on both — text servers can lazy-load image models, image servers have them loaded
-    pass
 
 
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):

@@ -1791,12 +1791,18 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         partialContent = partialContent.replace(/<\|channel\|>(?:analysis|final)<\|message\|>/g, '')
         partialContent = partialContent.trim()
       }
-      // Save message if we have any content OR reasoning (reasoning stays separate)
-      if (partialContent || reasoningContent.trim()) {
+      // Check abort status BEFORE save/delete decision — needed to preserve
+      // tool call displays that the user already saw on screen.
+      const wasAborted = abortController.signal.aborted
+      const abortTotalTokens = cumulativeTokenOffset + iterationTokenCount
+      const hadVisibleActivity = partialContent || reasoningContent.trim()
+        || collectedToolStatuses.length > 0 || abortTotalTokens > 0
+
+      // Save message if we have any content, reasoning, or visible tool activity
+      if (hadVisibleActivity) {
         assistantMessage.content = partialContent
           ? partialContent + '\n\n[Generation interrupted]'
           : '[Generation interrupted]'
-        const abortTotalTokens = cumulativeTokenOffset + iterationTokenCount
         assistantMessage.tokens = abortTotalTokens
 
         // Calculate real metrics for the partial generation (not hardcoded zeros)
@@ -1852,7 +1858,6 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // CRITICAL: Check abortController.signal.aborted FIRST — when abort fires during
       // reader.read(), the error message can be 'terminated' instead of 'AbortError',
       // which would be misclassified as "server connection lost".
-      const wasAborted = abortController.signal.aborted
       const errMsg = (error as Error).message || ''
       if (timedOut) {
         throw new Error(`Request timed out after ${timeoutSeconds}s. Increase the Timeout setting in Session Config, or the model may be overloaded.`)
@@ -1860,8 +1865,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       if (wasAborted) {
         // User-initiated abort: return normally so the renderer's success path handles it.
         // Content (if any) was already saved to DB and chat:complete event sent above.
-        console.log(`[CHAT] Abort complete — saved ${partialContent ? partialContent.length : 0} chars`)
-        return (partialContent || reasoningContent.trim()) ? assistantMessage : null
+        console.log(`[CHAT] Abort complete — saved ${partialContent ? partialContent.length : 0} chars, ${collectedToolStatuses.length} tool statuses`)
+        return hadVisibleActivity ? assistantMessage : null
       }
       // Check both error message AND error code — Node.js ConnResetException has
       // message "aborted" but code "ECONNRESET", which the message-only check missed.
