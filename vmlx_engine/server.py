@@ -139,6 +139,7 @@ _default_top_p: float | None = None  # Set via --default-top-p
 _default_enable_thinking: bool | None = None  # Set via --default-enable-thinking
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
+_stream_from_disk: bool = False  # --stream-from-disk: lazy mmap loading, no caching
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
@@ -807,6 +808,7 @@ def load_model(
     max_tokens: int = 32768,
     force_mllm: bool = False,
     served_model_name: str | None = None,
+    stream_from_disk: bool = False,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -819,7 +821,9 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args
+    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args, _stream_from_disk
+
+    _stream_from_disk = stream_from_disk
 
     # Save CLI args for model reload on wake from deep sleep
     _cli_args = {
@@ -829,6 +833,7 @@ def load_model(
         'max_tokens': max_tokens,
         'force_mllm': force_mllm,
         'served_model_name': served_model_name,
+        'stream_from_disk': stream_from_disk,
     }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
@@ -954,6 +959,22 @@ def load_model(
             logger.info(f"Metal GPU memory after load: {active_gb:.2f}GB active, {peak_gb:.2f}GB peak")
     except Exception:
         pass
+
+    # Set Metal memory limit for disk streaming (allow macOS to page freely)
+    if stream_from_disk:
+        try:
+            import mlx.core as mx
+            import psutil
+            mem = psutil.virtual_memory()
+            # Set Metal limit to 90% of total RAM — let macOS manage paging
+            limit = int(mem.total * 0.90)
+            if hasattr(mx, 'metal') and hasattr(mx.metal, 'set_memory_limit'):
+                mx.metal.set_memory_limit(limit)
+                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB (90% of {mem.total / (1024**3):.1f}GB) for disk streaming")
+            else:
+                logger.warning("Cannot set Metal memory limit — mlx.metal.set_memory_limit not available")
+        except Exception as e:
+            logger.warning(f"Failed to set Metal memory limit: {e}")
 
     # Log system memory after model load
     try:

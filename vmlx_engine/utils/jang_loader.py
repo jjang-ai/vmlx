@@ -79,7 +79,7 @@ def _is_v2_model(model_path: Path) -> bool:
 # ─── v2 loader (instant) ────────────────────────────────────────────
 
 
-def _load_jang_v2(path: Path, jang_cfg: dict):
+def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
     """
     Load a JANG v2 model — instant via mx.load() mmap.
 
@@ -198,14 +198,15 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
             f"(float16 overflow prevention)"
         )
 
-    mx.eval(model.parameters())
+    if not lazy:
+        mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
 
     actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
     source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
     logger.info(
         f"JANG v2 loaded in {elapsed:.1f}s: {source_model} "
-        f"({actual_bits:.1f}-bit avg)"
+        f"({actual_bits:.1f}-bit avg){' (lazy/mmap)' if lazy else ''}"
     )
 
     tokenizer = load_tokenizer(
@@ -214,7 +215,7 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
     return model, tokenizer
 
 
-def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
+def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
     """Load a JANG v2 Vision-Language model via mmap — instant."""
     import mlx.nn as nn
     from mlx_vlm.utils import (
@@ -381,9 +382,10 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
         model.set_dtype(mx.bfloat16)
         logger.info(f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden}")
 
-    mx.eval(model.parameters())
+    if not lazy:
+        mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
-    logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s")
+    logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s{' (lazy/mmap)' if lazy else ''}")
 
     image_processor = load_image_processor(path)
     eos_token_id = getattr(model.config, "eos_token_id", None)
@@ -414,11 +416,15 @@ def _get_v2_weight_files(path: Path) -> list[Path]:
 # ─── Public API ──────────────────────────────────────────────────────
 
 
-def load_jang_vlm_model(model_path: str | Path):
+def load_jang_vlm_model(model_path: str | Path, lazy: bool = False):
     """
     Load a JANG Vision-Language model into mlx-vlm for multimodal inference.
 
     Automatically detects v2 (instant) or v1 (repack) format.
+
+    Args:
+        model_path: Path to the JANG VLM model directory
+        lazy: If True, skip mx.eval(model.parameters()) to keep weights lazy/mmap'd
 
     Returns:
         Tuple of (model, processor) compatible with mlx-vlm.generate()
@@ -436,20 +442,24 @@ def load_jang_vlm_model(model_path: str | Path):
     # v2: instant load
     if _is_v2_model(path):
         logger.info(f"JANG v2 VLM detected — loading via mmap (instant)")
-        return _load_jang_v2_vlm(path, jang_cfg)
+        return _load_jang_v2_vlm(path, jang_cfg, lazy=lazy)
 
     # v1: repack path (legacy)
     logger.info(f"JANG v1 VLM detected — repacking (this takes a few minutes)")
-    return _load_jang_v1_vlm(path, jang_cfg, config_path)
+    return _load_jang_v1_vlm(path, jang_cfg, config_path, lazy=lazy)
 
 
-def load_jang_model(model_path: str | Path):
+def load_jang_model(model_path: str | Path, lazy: bool = False):
     """
     Load a JANG model for inference.
 
     Automatically detects v2 (instant) or v1 (repack) format.
     v2 loads in seconds via mx.load() mmap.
     v1 repacks JANG uint8 → MLX uint32 (takes 5-10 minutes for large models).
+
+    Args:
+        model_path: Path to the JANG model directory
+        lazy: If True, skip mx.eval(model.parameters()) to keep weights lazy/mmap'd
 
     Returns:
         Tuple of (model, tokenizer) compatible with mlx-lm
@@ -482,17 +492,17 @@ def load_jang_model(model_path: str | Path):
     # v2: instant load via mmap
     if _is_v2_model(path):
         logger.info(f"JANG v2 detected — loading via mmap (instant)")
-        return _load_jang_v2(path, jang_cfg)
+        return _load_jang_v2(path, jang_cfg, lazy=lazy)
 
     # v1: repack path (legacy)
     logger.info(f"JANG v1 detected — repacking to MLX format (this may take a few minutes)")
-    return _load_jang_v1(path, jang_cfg, config_path)
+    return _load_jang_v1(path, jang_cfg, config_path, lazy=lazy)
 
 
 # ─── v1 loader (legacy, repack) ─────────────────────────────────────
 
 
-def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
+def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path, lazy: bool = False):
     """Load a JANG v1 model by repacking weights from uint8 to uint32."""
     from mlx_lm.utils import load_config, load_model as _load_model_skeleton, load_tokenizer
 
@@ -559,7 +569,8 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
         model.set_dtype(mx.bfloat16)
         logger.info(f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden}")
 
-    mx.eval(model.parameters())
+    if not lazy:
+        mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
     from mlx.utils import tree_flatten
     n_params = sum(
@@ -576,7 +587,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     return model, tokenizer
 
 
-def _load_jang_v1_vlm(path: Path, jang_cfg: dict, config_path: Path):
+def _load_jang_v1_vlm(path: Path, jang_cfg: dict, config_path: Path, lazy: bool = False):
     """Load a JANG v1 VLM model by repacking (legacy)."""
     import mlx.nn as nn
     from mlx_vlm.utils import (
@@ -658,9 +669,10 @@ def _load_jang_v1_vlm(path: Path, jang_cfg: dict, config_path: Path):
         model.set_dtype(mx.bfloat16)
         logger.info(f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden}")
 
-    mx.eval(model.parameters())
+    if not lazy:
+        mx.eval(model.parameters())
     elapsed = time.perf_counter() - start
-    logger.info(f"JANG v1 VLM loaded in {elapsed:.1f}s")
+    logger.info(f"JANG v1 VLM loaded in {elapsed:.1f}s{' (lazy/mmap)' if lazy else ''}")
 
     image_processor = load_image_processor(path)
     eos_token_id = getattr(model.config, "eos_token_id", None)
