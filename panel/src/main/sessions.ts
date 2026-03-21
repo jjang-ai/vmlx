@@ -1668,6 +1668,11 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
+    // Disk-streaming mode — must come BEFORE cache flags so Python-side gating is clear
+    if (config.streamFromDisk) {
+      args.push('--stream-from-disk')
+    }
+
     // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
     // When MCP tools + auto-tool-choice are enabled, force prefix cache ON.
     // Tool follow-up requests share most of the prompt with the original request;
@@ -1757,11 +1762,6 @@ export class SessionManager extends EventEmitter {
 
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
-
-    // Disk-streaming mode — passes flag, Python-side force-disables all caching
-    if (config.streamFromDisk) {
-      args.push('--stream-from-disk')
-    }
 
     // Speculative decoding
     if (config.speculativeModel) {
