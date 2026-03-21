@@ -32,9 +32,15 @@ function App() {
   // For chat mode, exclude image sessions — they belong in the Image tab
   const sessions = useMemo(() => allSessions.filter(s => !isImageSession(s)), [allSessions])
 
-  // Check if engine is already installed (skip setup screen if so)
+  // Check if engine is already installed (skip setup screen if so).
+  // Race against a 6s timeout so checkingSetup always resolves and the UI
+  // never stays blank indefinitely if the IPC call hangs.
   useEffect(() => {
-    window.api.engine.checkInstallation()
+    const check = window.api.engine.checkInstallation()
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('installation check timed out')), 6000)
+    )
+    Promise.race([check, timeout])
       .then((result: any) => {
         if (result.installed) setSetupDone(true)
       })
@@ -141,8 +147,12 @@ function App() {
     dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId, sessionId })
   }, [dispatch, state.activeChatId, sessions])
 
-  // Setup screen
-  if (checkingSetup) return null
+  // Setup screen — show a spinner while checking rather than a blank window
+  if (checkingSetup) return (
+    <div className="flex h-screen items-center justify-center bg-background">
+      <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-foreground opacity-40" />
+    </div>
+  )
   if (!setupDone) {
     return (
       <ToastProvider>
