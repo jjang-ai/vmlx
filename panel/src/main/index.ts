@@ -197,23 +197,28 @@ function createWindow(): void {
     handlersRegistered = true
   }
 
-  // Content Security Policy — hardens renderer against XSS
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self';" +
-          " script-src 'self';" +
-          " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
-          " font-src 'self' https://fonts.gstatic.com;" +
-          " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://mlx.studio https://*.mlx.studio;" +
-          " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co;" +
-          " media-src 'self' blob:;"
-        ]
-      }
+  // Content Security Policy — hardens renderer against XSS.
+  // Skipped in dev mode: Vite's React Fast Refresh injects an inline script
+  // preamble that would be blocked by script-src 'self', preventing React
+  // from mounting and producing a black window.
+  if (app.isPackaged) {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [
+            "default-src 'self';" +
+            " script-src 'self';" +
+            " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
+            " font-src 'self' https://fonts.gstatic.com;" +
+            " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://mlx.studio https://*.mlx.studio;" +
+            " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co;" +
+            " media-src 'self' blob:;"
+          ]
+        }
+      })
     })
-  })
+  }
 
   // Close-to-tray: hide window instead of destroying when tray is active
   mainWindow.on('close', (e) => {
