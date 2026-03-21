@@ -2140,9 +2140,11 @@ async def create_rerank(request: Request):
             if _reranker is not None:
                 _reranker.unload()
             _reranker = Reranker(model)
+        # Capture local ref inside lock to prevent concurrent unload during rerank
+        local_reranker = _reranker
 
     try:
-        results = _reranker.rerank(
+        results = local_reranker.rerank(
             query=query,
             documents=doc_texts,
             top_n=top_n,
