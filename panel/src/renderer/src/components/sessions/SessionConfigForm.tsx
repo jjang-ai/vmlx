@@ -42,6 +42,7 @@ export interface SessionConfig {
   embeddingModel: string
   additionalArgs: string
   streamFromDisk: boolean
+  streamMemoryPercent: number
   enableJit: boolean
   idleTimeoutSoftMin?: number
   idleTimeoutHardMin?: number
@@ -96,6 +97,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   embeddingModel: '',
   additionalArgs: '',
   streamFromDisk: false,
+  streamMemoryPercent: 90,
   enableJit: false,
   logLevel: 'INFO',
   corsOrigins: '*',
@@ -287,11 +289,23 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           onChange={v => onChange('streamFromDisk', v)}
         />
         {config.streamFromDisk && (
-          <div className="rounded-md border border-yellow-600/40 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-200">
-            Disk-streaming mode: All caching features will be automatically disabled.
-            Performance will be 2-5x slower than normal. Only use this when the model
-            exceeds your available RAM.
-          </div>
+          <>
+            <SliderField
+              label="Memory Allocation (%)"
+              tooltip="Percentage of total RAM to allocate for Metal GPU. Lower values leave more headroom for KV cache. If your model crashes with 'Out of Memory', try lowering this to 75-80%. Default: 90%."
+              value={config.streamMemoryPercent}
+              onChange={v => onChange('streamMemoryPercent', v)}
+              min={50}
+              max={95}
+              step={5}
+              defaultValue={90}
+            />
+            <div className="rounded-md border border-yellow-600/40 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-200">
+              Disk-streaming mode: All caching features will be automatically disabled.
+              Performance will be 2-5x slower than normal. Only use this when the model
+              exceeds your available RAM. Lower the memory % if inference crashes.
+            </div>
+          </>
         )}
       </Section>
 

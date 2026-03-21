@@ -55,6 +55,7 @@ export interface ServerConfig {
 
   // Disk-streaming mode (models larger than RAM)
   streamFromDisk?: boolean
+  streamMemoryPercent?: number
 
   // Performance
   streamInterval: number
