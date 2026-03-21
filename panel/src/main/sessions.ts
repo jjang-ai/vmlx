@@ -1803,7 +1803,8 @@ export class SessionManager extends EventEmitter {
     // Additional arguments — strip stale image-only flags from old session configs
     if (config.additionalArgs?.trim()) {
       const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
-      const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
+      // Strip commas — common when users copy flag lists from docs (e.g. "--flag1, --flag2")
+      const extra = config.additionalArgs.trim().replace(/,/g, ' ').split(/\s+/).filter(Boolean)
       const filtered: string[] = []
       for (let i = 0; i < extra.length; i++) {
         if (staleImageFlags.has(extra[i])) {
