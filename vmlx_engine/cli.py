@@ -194,6 +194,28 @@ def serve_command(args):
         server.load_embedding_model(args.embedding_model, lock=True)
         print(f"Embedding model loaded: {args.embedding_model}")
 
+    # Disk-streaming mode: override cache flags
+    if getattr(args, 'stream_from_disk', False):
+        print("\n" + "=" * 60)
+        print("DISK-STREAMING MODE ENABLED")
+        print("=" * 60)
+        print("  Weights will be mmap'd from SSD — macOS pages on demand.")
+        print("  All caching disabled, max 1 sequence, expect 2-5x slower.")
+        print("=" * 60 + "\n")
+        # Force-disable all caching features
+        args.use_paged_cache = False
+        args.enable_prefix_cache = False
+        args.disable_prefix_cache = True
+        args.enable_disk_cache = False
+        args.enable_block_disk_cache = False
+        args.kv_cache_quantization = "none"
+        args.cache_memory_percent = 0.0
+        args.cache_memory_mb = 0
+        args.max_num_seqs = 1
+        # Disable speculative decoding if present
+        if hasattr(args, 'speculative_model'):
+            args.speculative_model = None
+
     # Build scheduler config for batched mode
     scheduler_config = None
     if args.continuous_batching:
@@ -885,6 +907,15 @@ Examples:
         default=10.0,
         help="Maximum total size of block disk cache in GB. 0 = unlimited. (default: 10)",
     )
+    # Disk-streaming mode (models larger than RAM)
+    serve_parser.add_argument(
+        "--stream-from-disk",
+        action="store_true",
+        help="Enable disk-streaming mode for models that exceed available RAM. "
+             "Weights stay mmap'd on SSD and are paged in on demand by macOS. "
+             "Automatically disables all caching features and limits to 1 sequence. "
+             "Expect 2-5x slower inference (SSD ~7.4GB/s vs GPU ~200GB/s).",
+    )
     # MCP options
     serve_parser.add_argument(
         "--mcp-config",
@@ -1185,6 +1216,11 @@ Examples:
         type=float,
         default=10.0,
         help="Maximum block disk cache size in GB (default: 10)",
+    )
+    bench_parser.add_argument(
+        "--stream-from-disk",
+        action="store_true",
+        help="Enable disk-streaming mode for benchmarking models that exceed RAM.",
     )
 
     # Detokenizer benchmark
