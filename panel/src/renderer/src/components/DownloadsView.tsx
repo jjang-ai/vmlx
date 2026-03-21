@@ -44,13 +44,11 @@ export function DownloadsView() {
       // Separate paused and queued jobs based on status
       const allQueued = status.queue || []
       setQueue(allQueued.filter((q: any) => q.status !== 'paused'))
-      setPaused(prev => {
-        const pausedFromQueue = allQueued.filter((q: any) => q.status === 'paused')
-        if (pausedFromQueue.length === 0) return prev
-        // Merge without duplicates
-        const existing = new Set(prev.map(p => p.jobId))
-        const newPaused = pausedFromQueue.filter((q: any) => !existing.has(q.jobId))
-        return [...prev, ...newPaused]
+      setPaused(() => {
+        // Rebuild from server state — removes cancelled/completed items
+        return allQueued
+          .filter((q: any) => q.status === 'paused')
+          .map((q: any) => ({ jobId: q.jobId, repoId: q.repoId, progress: q.progress }))
       })
       // Restore completed downloads so re-opening window shows history
       if (status.completed?.length) {

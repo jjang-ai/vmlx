@@ -113,19 +113,51 @@ def _dequantize_cache(cache: List[Any]) -> List[Any]:
 
     BatchGenerator requires full-precision KVCache objects for merge/extract.
     Returns original cache unmodified if no quantized layers found.
+    Recurses into CacheList sub-caches for MoE models.
     """
     try:
         from mlx_lm.models.cache import KVCache, QuantizedKVCache
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
     except ImportError:
         return cache
 
     has_quantized = any(isinstance(c, QuantizedKVCache) for c in cache)
-    if not has_quantized:
+    has_cachelist = _CacheList is not None and any(isinstance(c, _CacheList) for c in cache)
+    if not has_quantized and not has_cachelist:
         return cache
 
     result = []
     for layer_cache in cache:
-        if isinstance(layer_cache, QuantizedKVCache):
+        if _CacheList is not None and isinstance(layer_cache, _CacheList):
+            # MoE: recurse into each sub-cache
+            dequantized_subs = []
+            for sc in layer_cache.caches:
+                if isinstance(sc, QuantizedKVCache):
+                    if sc.keys is not None:
+                        try:
+                            kv = KVCache()
+                            kv.keys = mx.dequantize(
+                                sc.keys[0], sc.keys[1],
+                                sc.keys[2], sc.group_size, sc.bits,
+                            )
+                            kv.values = mx.dequantize(
+                                sc.values[0], sc.values[1],
+                                sc.values[2], sc.group_size, sc.bits,
+                            )
+                            kv.offset = sc.offset
+                            dequantized_subs.append(kv)
+                        except Exception as e:
+                            logger.warning(f"KV dequantization failed in CacheList sub-cache: {e}")
+                            return None
+                    else:
+                        dequantized_subs.append(KVCache())
+                else:
+                    dequantized_subs.append(sc)
+            result.append(_CacheList(*dequantized_subs))
+        elif isinstance(layer_cache, QuantizedKVCache):
             if layer_cache.keys is not None:
                 try:
                     kv = KVCache()
@@ -629,6 +661,10 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
     """
     from mlx_lm.models.cache import KVCache, ArraysCache, BatchKVCache
     try:
+        from mlx_lm.models.cache import QuantizedKVCache
+    except ImportError:
+        QuantizedKVCache = None
+    try:
         from mlx_lm.models.cache import RotatingKVCache
     except ImportError:
         RotatingKVCache = None
@@ -645,6 +681,15 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
     for c in cache:
         if isinstance(c, BatchKVCache):
             converted.append(c)  # Already batch-aware
+        elif QuantizedKVCache is not None and isinstance(c, QuantizedKVCache):
+            # QuantizedKVCache (sibling of KVCache, both extend _BaseCache)
+            # must be dequantized before merge — .keys is a tuple, not array
+            dq = _dequantize_cache([c])
+            if dq and len(dq) == 1:
+                converted.append(BatchKVCache.merge([dq[0]]))
+            else:
+                # Dequant failed — use fresh KVCache
+                converted.append(BatchKVCache.merge([KVCache()]))
         elif isinstance(c, KVCache):
             converted.append(BatchKVCache.merge([c]))
         elif RotatingKVCache is not None and isinstance(c, RotatingKVCache):
@@ -1331,9 +1376,9 @@ class MLLMBatchGenerator:
                                         # Release the block refs that fetch_cache incremented
                                         # to prevent ref_count leak → OOM on subsequent requests.
                                         logger.info(
-                                            f"VLM prefix cache HIT for {req.request_id}: "
-                                            f"{block_table.num_tokens} cached tokens "
-                                            f"(hybrid — no SSM state, full prefill required)"
+                                            f"VLM prefix cache MISS for {req.request_id}: "
+                                            f"{block_table.num_tokens} KV blocks found but "
+                                            f"no SSM companion state — full prefill required"
                                         )
                                         self.block_aware_cache.release_cache(req.request_id)
                                         continue  # Skip reconstruction
@@ -1342,6 +1387,10 @@ class MLLMBatchGenerator:
                                 reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
                                 if reconstructed is not None:
                                     reconstructed = _dequantize_cache(reconstructed)
+                                    if reconstructed is None:
+                                        # Dequantize failed — release block refs to prevent leak
+                                        self.block_aware_cache.release_cache(req.request_id)
+                                        continue
 
                                 if is_hybrid and ssm_states is not None and reconstructed is not None:
                                     # Full hybrid cache reconstruction:
@@ -1557,15 +1606,13 @@ class MLLMBatchGenerator:
                 if req.prompt_cache is not None:
                     # Dequantize before _fix_hybrid_cache (it checks KVCache,
                     # not QuantizedKVCache which inherits from _BaseCache)
-                    cache_for_fix = req.prompt_cache
                     if self._kv_cache_bits:
-                        cache_for_fix = _dequantize_cache(cache_for_fix)
+                        cache_for_fix = _dequantize_cache(req.prompt_cache)
                         if cache_for_fix is None:
-                            # Dequantize failed — discard cache, full prefill
                             req.prompt_cache = None
-                if req.prompt_cache is not None:
-                    if not self._kv_cache_bits:
+                    else:
                         cache_for_fix = req.prompt_cache
+                if req.prompt_cache is not None:
                     req_cache = _fix_hybrid_cache(
                         cache_for_fix, self.language_model,
                         kv_positions=self._hybrid_kv_positions,

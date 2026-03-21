@@ -2076,12 +2076,14 @@ class TestV6DequantizeNoneGuards:
     def test_hybrid_cache_caller_guards_none(self):
         """Hybrid cache path must guard _dequantize_cache returning None before _fix_hybrid_cache."""
         source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
-        # The hybrid cache path should check cache_for_fix is None
-        idx = source.find("_dequantize_cache(cache_for_fix)")
+        # The hybrid cache path should check for None after dequantize
+        idx = source.find("_dequantize_cache(req.prompt_cache)")
+        if idx == -1:
+            idx = source.find("_dequantize_cache(cache_for_fix)")
         assert idx != -1
         after = source[idx:idx + 200]
-        assert "cache_for_fix is None" in after, (
-            "Hybrid cache path must check cache_for_fix is None after _dequantize_cache"
+        assert "is None" in after, (
+            "Hybrid cache path must check for None after _dequantize_cache"
         )
 
 

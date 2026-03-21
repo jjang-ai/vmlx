@@ -319,8 +319,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     // Build display content for user message: if images attached, store as JSON content array
     const displayContent = attachments && attachments.length > 0
       ? JSON.stringify([
+        ...(content.trim() ? [{ type: 'text', text: content }] : []),
         ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
-        ...(content.trim() ? [{ type: 'text', text: content }] : [])
       ])
       : content
 

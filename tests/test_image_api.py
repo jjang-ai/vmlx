@@ -747,16 +747,16 @@ class TestModuleLevelGlobals:
         assert "_image_gen = None" in source
 
     def test_image_gen_lock_defined_at_module_level(self):
-        """_image_gen_lock is defined at module scope, not inside a function."""
+        """_image_gen_lock is declared at module scope with lazy-init (not eagerly created)."""
         import vmlx_engine.server as srv
         source = inspect.getsource(srv)
-        # Should appear as a top-level assignment, not indented inside a def
+        # Should be declared as None at module level (lazy-init to avoid event loop binding)
+        found = False
         for line in source.splitlines():
             stripped = line.lstrip()
-            if stripped.startswith("_image_gen_lock = asyncio.Lock()"):
-                # Check it's not deeply indented (inside a function)
+            if "_image_gen_lock" in stripped and "None" in stripped and "=" in stripped:
                 indent = len(line) - len(stripped)
-                assert indent == 0, f"_image_gen_lock is indented {indent} spaces (should be 0)"
+                assert indent == 0, f"_image_gen_lock declaration is indented {indent} spaces (should be 0)"
+                found = True
                 break
-        else:
-            pytest.fail("_image_gen_lock = asyncio.Lock() not found at module level")
+        assert found, "_image_gen_lock declaration not found at module level"

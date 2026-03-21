@@ -159,7 +159,7 @@ class TestHybridCacheRefLeak:
 
         # The fix: release_cache is called before continue
         assert "release_cache(req.request_id)" in source
-        assert "hybrid — no SSM state, full prefill required" in source
+        assert "no SSM companion state" in source
 
     def test_ssm_check_before_reconstruction(self):
         """SSM state should be checked BEFORE reconstruct_cache to avoid waste."""

@@ -355,9 +355,33 @@ class MemoryAwarePrefixCache:
             New list of cache objects with truncated offsets, or None if
             any layer cannot be truncated (e.g., MambaCache present).
         """
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
+
         truncated = []
         for layer_cache in cache:
-            if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
+            if _CacheList is not None and isinstance(layer_cache, _CacheList):
+                # MoE CacheList: recurse into sub-caches (each is KVCache)
+                truncated_subs = []
+                for sc in layer_cache.caches:
+                    if (hasattr(sc, "keys") and sc.keys is not None
+                            and hasattr(sc, "values") and sc.values is not None):
+                        try:
+                            from mlx_lm.models.cache import KVCache
+                        except ImportError:
+                            return None
+                        safe_target = min(target_len, sc.keys.shape[-2])
+                        new_sc = KVCache()
+                        new_sc.keys = sc.keys[..., :safe_target, :]
+                        new_sc.values = sc.values[..., :safe_target, :]
+                        new_sc.offset = safe_target
+                        truncated_subs.append(new_sc)
+                    else:
+                        return None  # Sub-cache can't be truncated
+                truncated.append(_CacheList(*truncated_subs))
+            elif hasattr(layer_cache, "keys") and layer_cache.keys is not None:
                 k = layer_cache.keys
                 if isinstance(k, tuple):
                     # QuantizedKVCache: keys/values are tuples of 3 arrays
@@ -377,15 +401,19 @@ class MemoryAwarePrefixCache:
                     except ImportError:
                         return None
                 else:
-                    # Positional cache (KVCache): truncate by adjusting offset
+                    # Positional cache (KVCache): slice tensors to target_len.
+                    # Must slice (not just adjust offset) because data beyond
+                    # target_len is from a longer sequence and would corrupt
+                    # attention if the model attends to those positions.
                     try:
                         from mlx_lm.models.cache import KVCache
                     except ImportError:
                         return None
+                    safe_target = min(target_len, k.shape[-2])
                     new_cache = KVCache()
-                    new_cache.keys = layer_cache.keys
-                    new_cache.values = layer_cache.values
-                    new_cache.offset = target_len
+                    new_cache.keys = k[..., :safe_target, :]
+                    new_cache.values = layer_cache.values[..., :safe_target, :]
+                    new_cache.offset = safe_target
                     truncated.append(new_cache)
             elif hasattr(layer_cache, "cache") and isinstance(
                 getattr(layer_cache, "cache", None), list

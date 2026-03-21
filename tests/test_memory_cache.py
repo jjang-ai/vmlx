@@ -110,10 +110,17 @@ class TestCacheStats:
 
 
 class MockArray:
-    """Mock array with nbytes attribute."""
+    """Mock array with nbytes and shape attributes."""
 
     def __init__(self, nbytes: int):
         self.nbytes = nbytes
+        # Shape: (batch=1, heads=8, seq=nbytes//64, dim=8) — mock 4D KV tensor
+        seq_len = max(1, nbytes // 64)
+        self.shape = (1, 8, seq_len, 8)
+
+    def __getitem__(self, key):
+        """Support slicing (returns self for mock purposes)."""
+        return self
 
 
 class MockKVCache:
