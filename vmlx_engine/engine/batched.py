@@ -348,10 +348,12 @@ class BatchedEngine(BaseEngine):
                         built_messages, **tpl_kwargs
                     )
                     if enable_thinking is False and "<think>" in prompt:
-                        # Only strip <think> from the generation suffix (last ~100 chars)
-                        think_pos = prompt.rfind("<think>")
-                        if think_pos >= 0 and (len(prompt) - think_pos) < 100:
-                            prompt = prompt[:think_pos].rstrip()
+                        # Strip only UNCLOSED <think> at end (not <think></think> blocks)
+                        last_think = prompt.rfind("<think>")
+                        if last_think >= 0:
+                            after = prompt[last_think + 7:]
+                            if "</think>" not in after:
+                                prompt = prompt[:last_think].rstrip() + "\n"
                 return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
@@ -415,12 +417,18 @@ class BatchedEngine(BaseEngine):
                 prompt, messages, tools, tokenizer, template_kwargs
             )
 
-            if enable_thinking is False and "<think>" in prompt:
-                # Only strip <think> from the generation suffix (last ~100 chars),
-                # not from prior conversation turns that may contain <think> in history.
-                think_pos = prompt.rfind("<think>")
-                if think_pos >= 0 and (len(prompt) - think_pos) < 100:
-                    prompt = prompt[:think_pos].rstrip()
+            # Only strip an UNCLOSED <think> at the very end (generation prompt
+            # injection from templates that ignore enable_thinking=False).
+            # Do NOT strip <think></think> (closed empty block) — that's the
+            # template's proper "don't think" signal and must be preserved.
+            if enable_thinking is False:
+                # Check for unclosed <think> at end (no matching </think> after it)
+                last_think = prompt.rfind("<think>")
+                if last_think >= 0:
+                    after_think = prompt[last_think + 7:]
+                    if "</think>" not in after_think:
+                        # Unclosed <think> at end — strip it
+                        prompt = prompt[:last_think].rstrip() + "\n"
             return prompt
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)

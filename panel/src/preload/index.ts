@@ -366,6 +366,11 @@ const api = {
       ipcRenderer.on('session:standby', handler)
       return () => { ipcRenderer.removeListener('session:standby', handler) }
     },
+    onLoadProgress: (callback: (data: any) => void) => {
+      const handler = (_: any, data: any) => callback(data)
+      ipcRenderer.on('session:loadProgress', handler)
+      return () => { ipcRenderer.removeListener('session:loadProgress', handler) }
+    },
   }
 }
 
