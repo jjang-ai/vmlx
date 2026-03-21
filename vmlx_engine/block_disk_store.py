@@ -87,9 +87,10 @@ class BlockDiskStore:
         self._read_conn.execute("PRAGMA journal_mode=WAL")
 
         # Background writer thread
-        # Queue items: (block_hash, numpy_tensors_dict, dtype_str, num_layers, token_count)
+        # Queue items: (block_hash, tmp_path_str, dtype_str, num_layers, token_count)
         # or special commands: ("__access__", ...) or ("__cleanup__", ...)
         self._write_queue: queue.Queue = queue.Queue(maxsize=1000)
+        self._tmp_seq = 0  # Monotonic counter for unique temp file names
         self._stop_event = threading.Event()
         self._writer_thread = threading.Thread(
             target=self._background_writer, daemon=True, name="block-disk-writer"
@@ -258,9 +259,14 @@ class BlockDiskStore:
         """
         Queue a block for background writing to disk. Non-blocking.
 
-        IMPORTANT: All MLX operations (serialize + materialize) happen on the
-        calling thread to prevent concurrent GPU access from the background
-        writer. The background thread only does file I/O — no MLX ops.
+        ALL MLX operations happen on the calling (main) thread:
+        - Serialize cache_data to flat tensor dict
+        - Materialize lazy arrays with mx.eval()
+        - Write safetensors file with mx.save_safetensors()
+
+        The background thread ONLY does: atomic rename + SQLite index update.
+        This prevents Metal command buffer crashes from concurrent GPU access
+        (mx.save_safetensors accesses Metal buffer memory internally).
 
         Args:
             block_hash: Chain hash (BlockHash bytes)
@@ -270,35 +276,44 @@ class BlockDiskStore:
         if not HAS_MLX:
             return
 
-        # Pre-serialize on the calling (main) thread to avoid MLX GPU ops
-        # on the background writer thread, which causes SIGSEGV from
-        # concurrent Metal command buffer access.
+        hash_hex = block_hash.hex()
+
+        # Pre-serialize on the calling (main) thread.
         try:
             tensors, dtype, num_layers = _serialize_block(cache_data)
             if num_layers == 0:
                 return
 
             # Materialize all lazy MLX arrays on the calling thread.
-            # mx.eval forces GPU computation NOW so the background thread
-            # won't need to trigger any Metal operations.
             arrays_to_materialize = [v for v in tensors.values() if isinstance(v, mx.array)]
             if arrays_to_materialize:
                 mx.eval(*arrays_to_materialize)
 
-            # Pass pre-evaluated MLX arrays directly to background writer.
-            # mx.save_safetensors handles all dtypes including bfloat16.
-            # Arrays are already materialized (mx.eval above) so no GPU
-            # work happens on the background thread.
-            mx_tensors = tensors
+            # Write safetensors file on the main thread.
+            # mx.save_safetensors accesses Metal buffer memory internally,
+            # so it MUST run on the same thread as inference to avoid
+            # concurrent Metal command buffer assertions.
+            file_path = self._hash_to_path(hash_hex)
+            seq = self._tmp_seq
+            self._tmp_seq += 1
+            tmp_path = file_path.with_name(f"{file_path.stem}.{seq}.tmp.safetensors")
+            mx.save_safetensors(str(tmp_path), tensors)
         except Exception as e:
-            logger.debug(f"Pre-serialize failed for block {block_hash.hex()[:12]}: {e}")
+            logger.debug(f"Pre-serialize/write failed for block {hash_hex[:12]}: {e}")
             return
 
+        # Queue only the rename + DB update for the background thread.
+        # No MLX operations happen after this point.
         try:
             self._write_queue.put_nowait(
-                (block_hash, mx_tensors, dtype, num_layers, token_count)
+                (block_hash, str(tmp_path), dtype, num_layers, token_count)
             )
         except queue.Full:
+            # Clean up the temp file since background won't process it
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
             logger.warning("BlockDiskStore write queue full (1000), dropping block write")
 
     def _background_writer(self) -> None:
@@ -338,8 +353,8 @@ class BlockDiskStore:
                             _, hash_hex, _ = item
                             self._cleanup_entry(write_conn, hash_hex)
                         else:
-                            block_hash, mx_tensors, dtype, num_layers, token_count = item
-                            self._write_block(write_conn, block_hash, mx_tensors, dtype, num_layers, token_count)
+                            block_hash, tmp_path_str, dtype, num_layers, token_count = item
+                            self._write_block(write_conn, block_hash, tmp_path_str, dtype, num_layers, token_count)
                     except Exception as e:
                         h = item[0] if isinstance(item[0], str) else (
                             item[0].hex()[:12] if isinstance(item[0], bytes) else "?"
@@ -378,38 +393,37 @@ class BlockDiskStore:
         self,
         conn: sqlite3.Connection,
         block_hash: bytes,
-        mx_tensors: Dict[str, Any],
+        tmp_path_str: str,
         dtype: str,
         num_layers: int,
         token_count: int,
     ) -> None:
-        """Write a pre-serialized block to disk (called from background thread).
+        """Finalize a pre-written block file (called from background thread).
 
-        IMPORTANT: This method must NOT call any MLX operations. All tensor
-        data arrives as numpy arrays (or pre-evaluated MLX arrays as fallback)
-        to prevent SIGSEGV from concurrent Metal GPU access.
+        The safetensors file was already written by the main thread.
+        This method ONLY does: atomic rename + SQLite index update.
+        No MLX operations — prevents Metal command buffer crashes.
         """
         hash_hex = block_hash.hex()
+        tmp_path = Path(tmp_path_str)
 
         # Skip if already on disk
         exists = conn.execute(
             "SELECT 1 FROM blocks WHERE block_hash = ?", (hash_hex,)
         ).fetchone()
         if exists:
+            # Clean up the temp file — block already persisted
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
             return
 
-        # Atomic write: write to temp file then rename
+        # Atomic rename from temp to final path
         file_path = self._hash_to_path(hash_hex)
         rel_path = file_path.relative_to(self.cache_dir)
-        tmp_path = file_path.with_name(file_path.stem + ".tmp.safetensors")
 
         try:
-            if HAS_MLX:
-                # Use mx.save_safetensors — handles all dtypes including bfloat16.
-                # Arrays are pre-evaluated (no lazy Metal ops on this thread).
-                mx.save_safetensors(str(tmp_path), mx_tensors)
-            else:
-                return
             os.rename(str(tmp_path), str(file_path))
         except Exception:
             # Clean up partial file

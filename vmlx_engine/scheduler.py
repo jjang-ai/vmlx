@@ -1289,7 +1289,7 @@ class Scheduler:
         # Log extraction summary for debugging hybrid model issues
         if extracted:
             counts_str = ", ".join(f"{k}={v}" for k, v in class_counts.items())
-            logger.info(
+            logger.debug(
                 f"Cache extraction: {len(extracted)}/{len(raw_cache)} layers "
                 f"({counts_str})"
             )
