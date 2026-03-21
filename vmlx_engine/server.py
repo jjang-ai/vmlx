@@ -1314,7 +1314,7 @@ async def admin_wake():
         if _standby_state == 'soft':
             # Soft sleep: model is still loaded, just restore cache limit
             _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
-            if _set_cache and _pre_sleep_cache_limit:
+            if _set_cache and _pre_sleep_cache_limit is not None:
                 _set_cache(_pre_sleep_cache_limit)
             _standby_state = None
             _pre_sleep_cache_limit = None
@@ -1325,7 +1325,7 @@ async def admin_wake():
             # Deep sleep: need to reload model
             # Restore cache limit first
             _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
-            if _set_cache and _pre_sleep_cache_limit:
+            if _set_cache and _pre_sleep_cache_limit is not None:
                 _set_cache(_pre_sleep_cache_limit)
             _pre_sleep_cache_limit = None
 
