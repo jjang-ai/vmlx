@@ -962,18 +962,31 @@ def load_model(
     except Exception:
         pass
 
-    # Set Metal memory limit for disk streaming (allow macOS to page freely)
+    # Set Metal memory limit for disk streaming — RAISE it to allow macOS SSD paging.
+    # macOS unified memory lets Metal allocate virtual memory beyond physical RAM.
+    # macOS transparently pages to SSD (~7.4GB/s). The default MLX limit is ~95% of
+    # RAM which blocks models larger than RAM. We set it to a multiple of RAM so
+    # the full model can be mmap'd and macOS handles paging.
     if stream_from_disk:
         try:
             import mlx.core as mx
             import psutil
             mem = psutil.virtual_memory()
-            # Set Metal limit to user-specified % of total RAM — let macOS manage paging
-            pct = max(50, min(95, stream_memory_percent)) / 100.0
-            limit = int(mem.total * pct)
-            if hasattr(mx, 'metal') and hasattr(mx.metal, 'set_memory_limit'):
-                mx.metal.set_memory_limit(limit)
-                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB ({stream_memory_percent}% of {mem.total / (1024**3):.1f}GB) for disk streaming")
+            # User's stream_memory_percent controls the multiplier:
+            #   50% → 1.5x RAM,  75% → 2.5x RAM,  90% → 3.5x RAM (default)
+            # Higher = more virtual memory for model, macOS pages more aggressively
+            multiplier = 1.0 + (stream_memory_percent / 100.0 * 3.0)
+            limit = int(mem.total * multiplier)
+            _set_limit = getattr(mx, 'set_memory_limit', None) or getattr(mx.metal, 'set_memory_limit', None)
+            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            if _set_limit:
+                _set_limit(limit)
+                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB ({multiplier:.1f}x of {mem.total / (1024**3):.1f}GB RAM) for disk streaming")
+            # Disable Metal allocator cache so freed memory returns to macOS immediately
+            # for SSD paging instead of being hoarded in the free-list
+            if _set_cache:
+                _set_cache(0)
+                logger.info("Metal cache limit set to 0 (disabled) for disk streaming")
             else:
                 logger.warning("Cannot set Metal memory limit — mlx.metal.set_memory_limit not available")
         except Exception as e:
