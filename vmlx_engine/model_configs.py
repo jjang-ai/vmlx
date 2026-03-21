@@ -254,6 +254,16 @@ def register_all(registry=None):
         priority=20,
     ))
 
+    _register(ModelConfig(
+        family_name="mistral4",
+        model_types=["mistral4"],
+        cache_type="kv",
+        tool_parser="mistral",
+        supports_native_tools=True,
+        preserve_native_tool_format=True,
+        priority=30,
+    ))
+
     # ── DeepSeek family ──
 
     _register(ModelConfig(
