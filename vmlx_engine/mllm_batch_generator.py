@@ -986,16 +986,25 @@ class MLLMBatchGenerator:
             # Set Metal allocator cache limit to 25% of max working set
             # (floor 512MB). This bounds the Metal allocator's free-list,
             # preventing it from hoarding memory that prefix cache / OS needs.
+            # Skip in disk-streaming mode — server.py already set limit to 90% of RAM.
             try:
-                max_ws = _device_info()["max_recommended_working_set_size"]
-                cache_limit = max(512 * 1024 * 1024, int(max_ws * 0.25))
-                self._old_cache_limit = _set_cache(cache_limit)
-                logger.info(
-                    f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
-                    f"(25% of {max_ws / (1024**3):.1f}GB max working set)"
-                )
-            except Exception as e:
-                logger.debug(f"Metal cache limit not available: {e}")
+                from . import server as _server_module
+                _is_streaming = getattr(_server_module, '_stream_from_disk', False)
+            except Exception:
+                _is_streaming = False
+            if not _is_streaming:
+                try:
+                    max_ws = _device_info()["max_recommended_working_set_size"]
+                    cache_limit = max(512 * 1024 * 1024, int(max_ws * 0.25))
+                    self._old_cache_limit = _set_cache(cache_limit)
+                    logger.info(
+                        f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
+                        f"(25% of {max_ws / (1024**3):.1f}GB max working set)"
+                    )
+                except Exception as e:
+                    logger.debug(f"Metal cache limit not available: {e}")
+            else:
+                logger.info("Disk-streaming mode: skipping Metal cache limit override")
 
     def close(self) -> None:
         """Release resources and reset wired/cache limits."""
