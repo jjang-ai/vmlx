@@ -468,7 +468,12 @@ class BlockAwarePrefixCache:
         self._n_kv_heads: Optional[int] = None
 
     def _get_n_kv_heads(self) -> int:
-        """Get expected KV head count from model config (cached)."""
+        """Get expected KV head count from model config (cached).
+
+        Only returns num_key_value_heads or num_kv_heads — never falls back
+        to num_attention_heads, which is wrong for GQA models (e.g. 32 attn
+        heads but 8 KV heads). Returns 0 if unknown (skips validation).
+        """
         if self._n_kv_heads is not None:
             return self._n_kv_heads
         n_kv = 0
@@ -481,9 +486,6 @@ class BlockAwarePrefixCache:
                     getattr(cfg, 'num_key_value_heads', 0)
                     or getattr(cfg, 'num_kv_heads', 0)
                 )
-                if n_kv:
-                    break
-                n_kv = getattr(cfg, 'num_attention_heads', 0)
                 if n_kv:
                     break
         except Exception:
@@ -880,7 +882,7 @@ class BlockAwarePrefixCache:
                     if self._is_positional_cache(sub_state, sub_cls):
                         try:
                             keys, values = sub_state
-                            if isinstance(keys, tuple):
+                            if isinstance(keys, (tuple, list)):
                                 first_k = keys[0]
                                 seq_len = first_k.shape[-2]
                                 actual_end = min(end_idx, seq_len)
@@ -927,8 +929,8 @@ class BlockAwarePrefixCache:
                 try:
                     keys, values = state
 
-                    # QuantizedKVCache: keys/values are tuples of (data, scales, zeros)
-                    if isinstance(keys, tuple):
+                    # QuantizedKVCache: keys/values are tuples or lists of (data, scales, zeros)
+                    if isinstance(keys, (tuple, list)):
                         # Use first component to detect shape
                         first_k = keys[0]
                         seq_len = first_k.shape[-2]  # seq axis is always -2
@@ -991,7 +993,7 @@ class BlockAwarePrefixCache:
                     else:
                         block_slices.append(("kv", keys_slice, values_slice))
                 except Exception as e:
-                    logger.debug(
+                    logger.warning(
                         f"Layer {layer_idx} ({class_name}): "
                         f"failed to slice positional cache: {e}"
                     )
@@ -1006,6 +1008,16 @@ class BlockAwarePrefixCache:
                 else:
                     block_slices.append(("skip",))
 
+        if block_slices:
+            tag_counts: dict = {}
+            for bs in block_slices:
+                t = bs[0] if isinstance(bs, (tuple, list)) else "?"
+                tag_counts[t] = tag_counts.get(t, 0) + 1
+            tag_str = ", ".join(f"{k}={v}" for k, v in tag_counts.items())
+            logger.info(
+                f"Block tensor slice: {len(block_slices)}/{len(cache_data)} layers "
+                f"({tag_str}), tokens [{start_idx}:{end_idx}], is_last={is_last_block}"
+            )
         return block_slices if block_slices else None
 
     def get_cache_for_generation(
@@ -1462,11 +1474,39 @@ class BlockAwarePrefixCache:
                 return None
 
             if len(reconstructed_caches) != num_layers:
-                logger.warning(
-                    f"Reconstructed {len(reconstructed_caches)} layers "
-                    f"but expected {num_layers}"
-                )
-                return None
+                # Count how many layers were missed and why
+                missed_skip_only = 0
+                missed_other = 0
+                for li in range(num_layers):
+                    layer_entries = []
+                    for bd in all_block_data:
+                        if li < len(bd):
+                            layer_entries.append(bd[li])
+                    tags = [e[0] if isinstance(e, (tuple, list)) else "?" for e in layer_entries]
+                    if all(t == "skip" for t in tags):
+                        missed_skip_only += 1
+                    elif li >= len(reconstructed_caches) or not any(
+                        t in ("kv", "quantized_kv", "rotating_kv", "cumulative", "cache_list")
+                        for t in tags
+                    ):
+                        missed_other += 1
+
+                if missed_other == 0 and missed_skip_only > 0 and reconstructed_caches:
+                    # All missing layers are cumulative/SSM with only "skip" entries
+                    # (non-last blocks don't store cumulative state).
+                    # Return partial reconstruction — the caller's _fix_hybrid_cache
+                    # will expand it by inserting fresh SSM caches at missing positions.
+                    logger.info(
+                        f"Partial hybrid reconstruction: {len(reconstructed_caches)}/{num_layers} layers "
+                        f"({missed_skip_only} cumulative layers deferred to _fix_hybrid_cache)"
+                    )
+                else:
+                    logger.warning(
+                        f"Reconstructed {len(reconstructed_caches)} layers "
+                        f"but expected {num_layers} "
+                        f"(skip_only={missed_skip_only}, other={missed_other})"
+                    )
+                    return None
 
             logger.debug(
                 f"Reconstructed cache: {len(reconstructed_caches)} layers "

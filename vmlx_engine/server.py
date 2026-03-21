@@ -2008,7 +2008,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
 # =============================================================================
 
 _reranker = None  # Lazy-loaded reranker instance
-_reranker_lock = asyncio.Lock()  # Serialize model load/swap
+_reranker_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
 
 
 @app.post(
@@ -2023,7 +2023,11 @@ async def create_rerank(request: Request):
     """
     global _reranker
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+
     query = body.get("query", "")
     documents = body.get("documents", [])
     top_n = body.get("top_n")
@@ -2049,6 +2053,9 @@ async def create_rerank(request: Request):
 
     # Serialize model load/swap — prevents two concurrent requests from
     # racing on unload+create when different models are requested
+    global _reranker_lock
+    if _reranker_lock is None:
+        _reranker_lock = asyncio.Lock()
     async with _reranker_lock:
         # Load reranker if needed (or if model changed)
         if _reranker is None or (model and _reranker.model_path != model):
@@ -2091,7 +2098,7 @@ async def create_rerank(request: Request):
 # =============================================================================
 
 _image_gen = None  # Lazy-loaded ImageGenEngine
-_image_gen_lock = asyncio.Lock()
+_image_gen_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
 
 
 @app.post(
@@ -2117,7 +2124,11 @@ async def create_image(request: Request):
     """
     global _image_gen
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+
     prompt = body.get("prompt", "")
     model = body.get("model", "schnell")
     n = min(body.get("n", 1), 4)  # Cap at 4 images per request
@@ -2165,6 +2176,9 @@ async def create_image(request: Request):
 
     # Hold the lock for both load AND generate to prevent model-swap races.
     # On a single-GPU Mac, image generation must be serialized anyway.
+    global _image_gen_lock
+    if _image_gen_lock is None:
+        _image_gen_lock = asyncio.Lock()
     async with _image_gen_lock:
         # If in standby (deep/soft sleep), wake first to avoid split-brain
         # where _standby_state='deep' but we're about to load a model
@@ -2334,6 +2348,7 @@ async def create_image_edit(request: Request):
         # Handles: JPEG, PNG (with alpha), MPO (iPhone Portrait), WebP, GIF,
         # BMP, TIFF, AVIF, CMYK, 16-bit, EXIF-rotated images.
         # HEIC requires pillow-heif plugin (not bundled).
+        image_b64 = re.sub(r'^data:image/[^;]+;base64,', '', image_b64)
         image_data = base64.b64decode(image_b64)
         try:
             from PIL import Image as _PILImage, ImageOps as _ImageOps
@@ -2406,6 +2421,9 @@ async def create_image_edit(request: Request):
                     detail=f"Failed to process mask image: {mask_err}"
                 )
 
+        global _image_gen_lock
+        if _image_gen_lock is None:
+            _image_gen_lock = asyncio.Lock()
         async with _image_gen_lock:
             # Wake from standby if needed (prevents split-brain state)
             if _standby_state is not None:
@@ -2433,7 +2451,8 @@ async def create_image_edit(request: Request):
                 try:
                     if _image_gen.is_loaded:
                         _image_gen.unload()
-                    _image_gen.load(model, model_path=_model_path, quantize=_image_quantize)
+                    edit_model_path = body.get("model_path") or _model_path
+                    _image_gen.load(model, model_path=edit_model_path, quantize=_image_quantize)
                 except HTTPException:
                     raise
                 except Exception as e:
@@ -2593,7 +2612,7 @@ _stt_engine = None
 _tts_engine = None
 
 
-@app.post("/v1/audio/transcriptions", dependencies=[Depends(verify_api_key)])
+@app.post("/v1/audio/transcriptions", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 async def create_transcription(
     file: UploadFile,
     model: str = "whisper-large-v3",
@@ -2643,7 +2662,7 @@ async def create_transcription(
             os.unlink(tmp_path)
 
         if response_format == "text":
-            return result.text
+            return Response(content=result.text, media_type="text/plain")
 
         return {
             "text": result.text,
@@ -2663,7 +2682,7 @@ async def create_transcription(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/v1/audio/speech", dependencies=[Depends(verify_api_key)])
+@app.post("/v1/audio/speech", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 async def create_speech(request: AudioSpeechRequest):
     """
     Generate speech from text (OpenAI TTS API compatible).

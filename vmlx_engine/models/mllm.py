@@ -1421,7 +1421,7 @@ class MLXMultimodalLM:
                     # generate() does not accept pre-computed vision embeddings.
                     # The KV cache hit path below handles the actual speedup.
                     if prefix_match_len > 0:
-                        logger.info(
+                        logger.debug(
                             f"[PREFIX CACHE] {prefix_match_len} prefix tokens match"
                         )
             except Exception as e:
@@ -1440,14 +1440,14 @@ class MLXMultimodalLM:
             # We only use vmlx-engine's cache for text-only requests (no images).
             if all_images:
                 # Let mlx-vlm's multimodal cache handle this - don't interfere
-                logger.info(
+                logger.debug(
                     "[PREFIX CACHE] Images present - delegating to mlx-vlm multimodal cache"
                 )
                 prompt_cache = None  # Fresh cache, mlx-vlm will handle prefix matching
                 skip_prompt_processing = False
             else:
                 # Text-only: can use skip_prompt_processing for maximum speedup
-                logger.info(
+                logger.debug(
                     "[PREFIX CACHE] Text-only cache hit - using skip_prompt_processing speedup"
                 )
                 cached_prompt_cache = cache_entry.kv_cache
@@ -1471,7 +1471,7 @@ class MLXMultimodalLM:
                                         new_cache.offset = layer_cache.offset
                         prompt_cache.append(new_cache)
                     skip_prompt_processing = True
-                    logger.info(
+                    logger.debug(
                         f"[PREFIX CACHE] Skipping {prefix_match_len} token forward pass"
                     )
                 except Exception as e:

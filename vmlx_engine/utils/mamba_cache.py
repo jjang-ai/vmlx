@@ -179,9 +179,19 @@ class BatchMambaCache(MambaCache):
 
         try:
             for i in range(num_arrays):
-                arrays = [c.cache[i] for c in caches if c.cache[i] is not None]
-                if arrays:
-                    merged_cache.cache.append(mx.concatenate(arrays, axis=0))
+                raw = [c.cache[i] for c in caches]
+                non_none = [a for a in raw if a is not None]
+                if non_none:
+                    # Pad None entries with zeros matching shape of non-None entries
+                    # to preserve batch dimension alignment for extract()
+                    ref_shape = non_none[0].shape
+                    padded = []
+                    for a in raw:
+                        if a is not None:
+                            padded.append(a)
+                        else:
+                            padded.append(mx.zeros(ref_shape))
+                    merged_cache.cache.append(mx.concatenate(padded, axis=0))
                 else:
                     merged_cache.cache.append(None)
         except (MemoryError, RuntimeError) as e:

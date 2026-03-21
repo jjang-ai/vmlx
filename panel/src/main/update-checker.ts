@@ -1,7 +1,10 @@
 import { BrowserWindow } from 'electron'
 import { net } from 'electron'
 
-const LATEST_URL = 'https://raw.githubusercontent.com/jjang-ai/mlxstudio/main/latest.json'
+const LATEST_URLS = [
+  'https://mlx.studio/update/latest.json',
+  'https://raw.githubusercontent.com/jjang-ai/mlxstudio/main/latest.json',
+]
 const CHECK_DELAY_MS = 5000 // Wait 5s after startup before checking
 
 interface LatestRelease {
@@ -27,44 +30,58 @@ function compareVersions(current: string, latest: string): boolean {
 
 export function checkForUpdates(getWindow: () => BrowserWindow | null, currentVersion: string): void {
   setTimeout(async () => {
-    try {
-      const response = await net.fetch(LATEST_URL, { method: 'GET' })
-      if (!response.ok) {
-        console.log(`[UPDATE] Check failed: HTTP ${response.status}`)
-        return
-      }
-      const data: LatestRelease = await response.json()
-      if (!data.version || !data.url) {
-        console.log('[UPDATE] Invalid manifest: missing version or url')
-        return
-      }
-      // Only accept HTTPS GitHub URLs to prevent redirect attacks if manifest is compromised
+    let data: LatestRelease | null = null
+
+    // Try each update URL in order (mlx.studio first, GitHub fallback)
+    for (const url of LATEST_URLS) {
       try {
-        const parsed = new URL(data.url)
-        if (parsed.protocol !== 'https:' || !(parsed.hostname === 'github.com' || parsed.hostname.endsWith('.github.com'))) {
-          console.log(`[UPDATE] Rejected non-GitHub URL: ${data.url}`)
-          return
+        const response = await net.fetch(url, { method: 'GET' })
+        if (!response.ok) {
+          console.log(`[UPDATE] ${url}: HTTP ${response.status}`)
+          continue
         }
-      } catch {
-        console.log(`[UPDATE] Invalid URL in manifest: ${data.url}`)
+        const parsed = await response.json()
+        if (parsed.version && parsed.url) {
+          data = parsed as LatestRelease
+          console.log(`[UPDATE] Fetched manifest from ${url}`)
+          break
+        }
+      } catch (err) {
+        console.log(`[UPDATE] ${url}: ${(err as Error).message}`)
+      }
+    }
+
+    if (!data) {
+      console.log('[UPDATE] All update sources failed')
+      return
+    }
+
+    // Only accept HTTPS URLs from trusted domains
+    try {
+      const parsed = new URL(data.url)
+      const trusted = ['github.com', 'mlx.studio']
+      if (parsed.protocol !== 'https:' || !trusted.some(d => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`))) {
+        console.log(`[UPDATE] Rejected untrusted URL: ${data.url}`)
         return
       }
-      if (compareVersions(currentVersion, data.version)) {
-        console.log(`[UPDATE] New version available: ${currentVersion} → ${data.version}`)
-        const win = getWindow()
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('app:updateAvailable', {
-            currentVersion,
-            latestVersion: data.version,
-            url: data.url,
-            notes: data.notes
-          })
-        }
-      } else {
-        console.log(`[UPDATE] Up to date (${currentVersion})`)
+    } catch {
+      console.log(`[UPDATE] Invalid URL in manifest: ${data.url}`)
+      return
+    }
+
+    if (compareVersions(currentVersion, data.version)) {
+      console.log(`[UPDATE] New version available: ${currentVersion} → ${data.version}`)
+      const win = getWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('app:updateAvailable', {
+          currentVersion,
+          latestVersion: data.version,
+          url: data.url,
+          notes: data.notes
+        })
       }
-    } catch (err) {
-      console.log('[UPDATE] Check failed:', (err as Error).message)
+    } else {
+      console.log(`[UPDATE] Up to date (${currentVersion})`)
     }
   }, CHECK_DELAY_MS)
 }

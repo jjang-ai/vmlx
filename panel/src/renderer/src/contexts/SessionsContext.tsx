@@ -186,8 +186,8 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
         unsubReady()
         unsubErr()
         setLoadingSessions(prev => { const next = new Set(prev); next.delete(modelPath); return next })
-        reject(new Error('Session start timed out after 60s'))
-      }, 60000)
+        reject(new Error('Session start timed out after 5m'))
+      }, 300000)
       const unsubReady = window.api.sessions.onReady((data: any) => {
         if (data.sessionId === sessionId) {
           clearTimeout(timeout)

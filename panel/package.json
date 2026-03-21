@@ -1,6 +1,6 @@
 {
   "name": "vmlx",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "The most complete MLX inference engine for Mac — voice, vision, Mamba, 5-layer caching, 20+ agentic tools",
   "main": "dist/main/index.mjs",
   "author": "Jinho Jang <eric@jangq.ai>",
