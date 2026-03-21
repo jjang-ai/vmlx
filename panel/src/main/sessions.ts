@@ -1,4 +1,5 @@
-import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
+import { spawn, ChildProcess, execSync, execFileSync, execFile as execFileCallback } from 'child_process'
+import { promisify } from 'util'
 import { lookup } from 'dns'
 import { EventEmitter } from 'events'
 import { existsSync, readdirSync, statSync } from 'fs'
@@ -7,6 +8,8 @@ import { homedir, totalmem, freemem } from 'os'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
+
+const execFileAsync = promisify(execFileCallback)
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -229,7 +232,7 @@ export class SessionManager extends EventEmitter {
     const detected: DetectedProcess[] = []
 
     try {
-      const output = execSync('ps aux', { encoding: 'utf-8', timeout: 5000 })
+      const { stdout: output } = await execFileAsync('ps', ['aux'], { encoding: 'utf-8', timeout: 5000 })
       const lines = output.split('\n')
 
       for (const line of lines) {

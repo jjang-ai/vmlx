@@ -407,6 +407,13 @@ function hashSourceFiles(basePath: string): string | null {
  * Used for auto-update on startup.
  */
 export function checkEngineVersion(): { current: string; bundled: string; needsUpdate: boolean } {
+  // In dev mode, skip hash check — developer manages their own engine installation.
+  // hashSourceFiles() reads all Python source files synchronously and would block
+  // the main thread before createWindow() is called.
+  if (!app.isPackaged) {
+    return { needsUpdate: false, current: 'dev', bundled: 'dev' }
+  }
+
   const bundledPython = getBundledPythonPath()
   if (!bundledPython) return { current: '', bundled: '', needsUpdate: false }
 
