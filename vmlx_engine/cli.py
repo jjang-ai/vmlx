@@ -319,7 +319,12 @@ def serve_command(args):
 
     # Configure log level
     log_level = getattr(args, 'log_level', 'INFO').upper()
-    logging.basicConfig(level=getattr(logging, log_level, logging.INFO), force=True)
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
     server._log_level = log_level
 
     # Configure CORS
