@@ -123,7 +123,10 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
     # Gate dequant needed for any MoE model with quantized gate weights (MoEGate is
     # nn.Module not nn.Linear, so nn.quantize skips it but JANG still quantizes raw weights).
     # Applies to: nemotron_h, nemotron, mistral4, deepseek_v3, deepseek_v2, etc.
-    _needs_gate_dequant = _needs_fc_rename or config.get("n_routed_experts", 0) > 0
+    # Check both top-level and text_config for n_routed_experts (VLM wrappers nest it)
+    _text_cfg = config.get("text_config", config)
+    _n_experts = config.get("n_routed_experts", 0) or _text_cfg.get("n_routed_experts", 0)
+    _needs_gate_dequant = _needs_fc_rename or _n_experts > 0
 
     # Nemotron-H gate: MoEGate is a custom nn.Module (not nn.Linear), so
     # nn.quantize() in _load_model_skeleton does NOT convert it. However,
