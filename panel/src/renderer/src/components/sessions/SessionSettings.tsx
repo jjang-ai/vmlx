@@ -137,6 +137,11 @@ function buildCommandPreview(
   // Served model name
   if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
+  // Disk-streaming mode
+  if (config.streamFromDisk) {
+    parts.push('--stream-from-disk')
+  }
+
   // Speculative decoding
   if (config.speculativeModel) {
     parts.push('--speculative-model', config.speculativeModel)

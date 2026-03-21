@@ -858,6 +858,7 @@ export class SessionManager extends EventEmitter {
     'logLevel', 'corsOrigins',
     'enableJit',
     'imageMode', 'imageQuantize',
+    'streamFromDisk',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -1756,6 +1757,11 @@ export class SessionManager extends EventEmitter {
 
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
+
+    // Disk-streaming mode — passes flag, Python-side force-disables all caching
+    if (config.streamFromDisk) {
+      args.push('--stream-from-disk')
+    }
 
     // Speculative decoding
     if (config.speculativeModel) {

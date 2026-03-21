@@ -53,6 +53,9 @@ export interface ServerConfig {
   blockDiskCacheDir?: string
   blockDiskCacheMaxGb?: number
 
+  // Disk-streaming mode (models larger than RAM)
+  streamFromDisk?: boolean
+
   // Performance
   streamInterval: number
   maxTokens?: number
