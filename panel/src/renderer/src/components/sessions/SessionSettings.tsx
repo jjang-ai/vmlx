@@ -62,6 +62,11 @@ function buildCommandPreview(
     : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
       : detected?.reasoningParser)
 
+  // Disk-streaming mode — before cache flags for clarity
+  if (config.streamFromDisk) {
+    parts.push('--stream-from-disk')
+  }
+
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
   const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
@@ -136,11 +141,6 @@ function buildCommandPreview(
 
   // Served model name
   if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
-
-  // Disk-streaming mode
-  if (config.streamFromDisk) {
-    parts.push('--stream-from-disk')
-  }
 
   // Speculative decoding
   if (config.speculativeModel) {
