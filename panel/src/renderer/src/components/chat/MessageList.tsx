@@ -64,8 +64,12 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
   useEffect(() => {
     const isNewMessage = messages.length !== prevMsgCountRef.current
     prevMsgCountRef.current = messages.length
-    // Always scroll for new messages (user just sent); only scroll during streaming if near bottom
-    if (isNewMessage || isNearBottomRef.current) {
+    // Always scroll for new messages and during active streaming.
+    // Only respect "near bottom" check for non-streaming history updates
+    // (e.g. loading older messages). Without this, streaming content grows
+    // below the viewport, pushing the bottom away, which flips isNearBottom
+    // to false and kills auto-scroll — a catch-22.
+    if (isNewMessage || streamingMessageId || isNearBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: streamingMessageId && !isNewMessage ? 'auto' : 'smooth' })
     }
   }, [messages, streamingMessageId, reasoningVersion, toolStatusVersion])

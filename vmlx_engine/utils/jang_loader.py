@@ -121,6 +121,12 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
     _model_type = config.get("model_type", "")
     _needs_fc_rename = _model_type in ("nemotron_h", "nemotron")
 
+    # Nemotron-H gate: MoEGate is a custom nn.Module (not nn.Linear), so
+    # nn.quantize() in _load_model_skeleton does NOT convert it. However,
+    # _load_model_skeleton's model.load_weights() loads the raw uint32 gate
+    # weight into MoEGate.weight. Our custom weight loading loop below
+    # dequantizes the gate weight (uint32 → bfloat16) and overwrites it.
+
     for sf in weight_files:
         weights = mx.load(str(sf))
         # Nemotron-H: filter mtp/importance, rename fc1/fc2, dequantize gate weights
