@@ -444,6 +444,21 @@ def bench_command(args):
     from .request import SamplingParams
     from .scheduler import SchedulerConfig
 
+    # Disk-streaming mode: override cache flags (same gating as serve_command)
+    if getattr(args, 'stream_from_disk', False):
+        from . import server as _server_module
+        _server_module._stream_from_disk = True
+        args.use_paged_cache = False
+        args.enable_prefix_cache = False
+        args.disable_prefix_cache = True
+        args.enable_disk_cache = False
+        args.enable_block_disk_cache = False
+        args.kv_cache_quantization = "none"
+        args.cache_memory_percent = 0.0
+        args.cache_memory_mb = 0
+        args.max_num_seqs = 1
+        print("DISK-STREAMING MODE: All caching disabled for benchmark.")
+
     # Handle prefix cache flags
     enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
 

@@ -1344,6 +1344,7 @@ async def admin_wake():
                     max_tokens=_cli_args.get('max_tokens', 32768),
                     force_mllm=_cli_args.get('force_mllm', False),
                     served_model_name=_cli_args.get('served_model_name'),
+                    stream_from_disk=_cli_args.get('stream_from_disk', False),
                 )
                 # SimpleEngine needs async start (load_model defers it inside event loop)
                 if _engine and hasattr(_engine, '_needs_async_start') and _engine._needs_async_start:
