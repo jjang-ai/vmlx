@@ -980,31 +980,42 @@ def load_model(
     if stream_from_disk:
         try:
             import psutil
+            from pathlib import Path as _Path
             mem = psutil.virtual_memory()
             available_gb = mem.available / (1024 ** 3)
             total_gb = mem.total / (1024 ** 3)
 
-            # Estimate model size from Metal active memory
+            # Estimate model size from safetensors file sizes on disk (lazy=True means
+            # Metal active memory is ~0, so we can't use mx.metal.get_active_memory)
             model_gb = 0
             try:
-                import mlx.core as mx
-                if hasattr(mx, 'metal') and hasattr(mx.metal, 'get_active_memory'):
-                    model_gb = mx.metal.get_active_memory() / (1024 ** 3)
-                elif hasattr(mx, 'get_active_memory'):
-                    model_gb = mx.get_active_memory() / (1024 ** 3)
+                model_dir = _Path(_model_path or model_name)
+                if model_dir.is_dir():
+                    st_files = list(model_dir.glob("*.safetensors"))
+                    if st_files:
+                        model_gb = sum(f.stat().st_size for f in st_files) / (1024 ** 3)
             except Exception:
                 pass
 
-            if model_gb > 0 and model_gb < total_gb * 0.8:
+            if model_gb > 0 and model_gb < total_gb * 0.75:
                 logger.warning(
-                    f"DISK-STREAMING ADVISORY: Model ({model_gb:.1f}GB) fits in RAM "
+                    f"DISK-STREAMING ADVISORY: Model (~{model_gb:.1f}GB) fits in RAM "
                     f"({total_gb:.1f}GB total, {available_gb:.1f}GB available). "
                     f"Consider disabling --stream-from-disk for better performance."
                 )
-                print(f"\n  TIP: Model ({model_gb:.1f}GB) fits in RAM ({total_gb:.1f}GB). "
+                print(f"\n  TIP: Model (~{model_gb:.1f}GB on disk) fits in RAM ({total_gb:.1f}GB). "
                       f"Disable --stream-from-disk for 2-5x faster inference.\n")
+            elif model_gb > 0 and model_gb >= total_gb * 0.90:
+                logger.warning(
+                    f"DISK-STREAMING WARNING: Model (~{model_gb:.1f}GB) may EXCEED available RAM "
+                    f"({total_gb:.1f}GB total). Inference requires additional memory for KV cache. "
+                    f"The first request may crash with a Metal assertion failure. "
+                    f"Consider using a smaller quantization or a machine with more RAM."
+                )
+                print(f"\n  WARNING: Model (~{model_gb:.1f}GB) is very close to or exceeds "
+                      f"your {total_gb:.0f}GB RAM. First inference may fail.\n")
             else:
-                used_desc = f"{model_gb:.1f}GB model" if model_gb > 0 else "Model"
+                used_desc = f"~{model_gb:.1f}GB model" if model_gb > 0 else "Model"
                 logger.info(
                     f"DISK-STREAMING: {used_desc} with {total_gb:.1f}GB RAM — "
                     f"macOS SSD paging active (~7.4GB/s bandwidth)"
