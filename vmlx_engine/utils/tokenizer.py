@@ -48,7 +48,7 @@ _STANDARD_ARCHITECTURES = {
     # Llama
     "llama", "llama4",
     # Mistral
-    "mistral", "mixtral", "pixtral", "codestral", "devstral", "codestral_mamba",
+    "mistral", "mistral4", "mixtral", "pixtral", "codestral", "devstral", "codestral_mamba",
     # DeepSeek
     "deepseek_v2", "deepseek_v3", "deepseek_vl", "deepseek_vl2", "deepseek_vl_v2",
     "deepseek2", "deepseek",
