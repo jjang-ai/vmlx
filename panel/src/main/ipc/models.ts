@@ -211,16 +211,14 @@ function checkImageModelLocal(modelName: string, quantize: number): { available:
   if (stored) {
     try {
       if (existsSync(stored.localPath)) {
-        // Validate completeness — check for essential subdirectories
-        const missing: string[] = []
-        const modelDir = stored.localPath
-        if (!existsSync(join(modelDir, 'transformer'))) missing.push('transformer')
-        if (!existsSync(join(modelDir, 'text_encoder'))) missing.push('text_encoder')
         // Check for .vmlx-downloading marker (download in progress)
-        if (existsSync(join(modelDir, '.vmlx-downloading'))) missing.push('download incomplete')
-
-        if (missing.length > 0) {
-          return { available: false, localPath: stored.localPath, repoId: stored.repoId, missing }
+        if (existsSync(join(stored.localPath, '.vmlx-downloading'))) {
+          return { available: false, localPath: stored.localPath, repoId: stored.repoId, missing: ['download incomplete'] }
+        }
+        // Use thorough validation matching validateImageModelCompleteness
+        const validation = validateImageModelCompleteness(stored.localPath)
+        if (!validation.complete) {
+          return { available: false, localPath: stored.localPath, repoId: stored.repoId, missing: validation.missing }
         }
         return { available: true, localPath: stored.localPath, repoId: stored.repoId }
       } else {
@@ -1055,8 +1053,11 @@ export function registerModelHandlers(): void {
 
   // ─── Stale marker cleanup on startup ──────────────────────────────────────────
   async function cleanStaleMarkers() {
-    const dirs = getModelDirectories()
+    const dirs = [...getModelDirectories(), ...getModelDirectories('image')]
+    const seen = new Set<string>()
     for (const baseDir of dirs) {
+      if (seen.has(baseDir)) continue
+      seen.add(baseDir)
       try {
         const orgs = await readdir(baseDir, { withFileTypes: true })
         for (const org of orgs) {

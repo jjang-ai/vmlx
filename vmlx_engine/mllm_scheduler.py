@@ -745,11 +745,16 @@ class MLLMScheduler:
         """
         Quantize KVCache layers for prefix cache storage (2-4x memory reduction).
         Preserves non-KVCache layers (MambaCache, etc.).
+        Recurses into CacheList sub-caches for MoE models.
         """
         if not self._kv_cache_bits:
             return cache
         try:
             from mlx_lm.models.cache import KVCache, QuantizedKVCache
+            try:
+                from mlx_lm.models.cache import CacheList as _CacheList
+            except ImportError:
+                _CacheList = None
             import mlx.core as mx
         except ImportError:
             return cache
@@ -758,15 +763,36 @@ class MLLMScheduler:
         group_size = self._kv_cache_group_size
         result = []
         for layer_cache in cache:
-            if (
+            if _CacheList is not None and isinstance(layer_cache, _CacheList):
+                # MoE: quantize each sub-cache independently
+                quantized_subs = []
+                for sc in layer_cache.caches:
+                    if (
+                        isinstance(sc, KVCache)
+                        and not isinstance(sc, QuantizedKVCache)
+                        and sc.keys is not None
+                    ):
+                        try:
+                            qkv = QuantizedKVCache(group_size=group_size, bits=bits)
+                            qkv.keys = tuple(mx.quantize(sc.keys, group_size=group_size, bits=bits))
+                            qkv.values = tuple(mx.quantize(sc.values, group_size=group_size, bits=bits))
+                            qkv.offset = sc.offset
+                            quantized_subs.append(qkv)
+                        except Exception as exc:
+                            logger.debug("KV quantization failed for CacheList sub-cache: %s", exc)
+                            quantized_subs.append(sc)
+                    else:
+                        quantized_subs.append(sc)
+                result.append(_CacheList(*quantized_subs))
+            elif (
                 isinstance(layer_cache, KVCache)
                 and not isinstance(layer_cache, QuantizedKVCache)
                 and layer_cache.keys is not None
             ):
                 try:
                     qkv = QuantizedKVCache(group_size=group_size, bits=bits)
-                    qkv.keys = mx.quantize(layer_cache.keys, group_size=group_size, bits=bits)
-                    qkv.values = mx.quantize(layer_cache.values, group_size=group_size, bits=bits)
+                    qkv.keys = tuple(mx.quantize(layer_cache.keys, group_size=group_size, bits=bits))
+                    qkv.values = tuple(mx.quantize(layer_cache.values, group_size=group_size, bits=bits))
                     qkv.offset = layer_cache.offset
                     result.append(qkv)
                 except Exception as exc:

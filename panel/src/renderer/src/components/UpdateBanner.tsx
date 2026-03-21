@@ -31,14 +31,22 @@ export function UpdateBanner() {
         href="#"
         onClick={(e) => {
           e.preventDefault()
-          // Security: window.open is intercepted by setWindowOpenHandler in main/index.ts,
-          // which validates the URL scheme (https/http only) and delegates to shell.openExternal.
-          // This ensures URLs are opened in the system browser, not in the Electron renderer.
           window.open(update.url)
         }}
         className="text-primary hover:text-primary/80 font-medium"
       >
         Download
+      </a>
+      <span className="text-muted-foreground">|</span>
+      <a
+        href="#"
+        onClick={(e) => {
+          e.preventDefault()
+          window.open('https://github.com/jjang-ai/mlxstudio')
+        }}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        Star on GitHub
       </a>
       <button
         onClick={() => setDismissed(true)}

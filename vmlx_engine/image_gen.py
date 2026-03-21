@@ -488,7 +488,7 @@ class ImageGenEngine:
         mclass = self._mflux_class or ""
 
         if mclass == "QwenImageEdit":
-            generated_image = self._model.generate_image(
+            qwen_kwargs: dict = dict(
                 seed=seed,
                 prompt=prompt,
                 image_paths=[image_path],
@@ -496,8 +496,10 @@ class ImageGenEngine:
                 height=height,
                 width=width,
                 guidance=guidance,
-                negative_prompt=negative_prompt,
             )
+            if negative_prompt and 'negative_prompt' in self._get_generate_params():
+                qwen_kwargs["negative_prompt"] = negative_prompt
+            generated_image = self._model.generate_image(**qwen_kwargs)
         elif mclass == "Flux1Kontext":
             # Kontext uses reference image for subject conditioning
             # image_strength=None (default) = full denoising with reference conditioning

@@ -581,12 +581,17 @@ class Scheduler:
 
         Quantizes keys/values using mx.quantize() to reduce memory by 2-4x.
         Preserves non-KVCache layers (MambaCache, RotatingKVCache, etc.).
+        Recurses into CacheList sub-caches for MoE models.
         Falls back to unquantized storage on any error.
         """
         if not getattr(self, '_kv_cache_bits', 0):
             return cache
         try:
             from mlx_lm.models.cache import KVCache, QuantizedKVCache
+            try:
+                from mlx_lm.models.cache import CacheList as _CacheList
+            except ImportError:
+                _CacheList = None
             import mlx.core as mx
         except ImportError:
             return cache
@@ -596,19 +601,48 @@ class Scheduler:
         result = []
         quantized_count = 0
         for i, layer_cache in enumerate(cache):
-            if (
+            if _CacheList is not None and isinstance(layer_cache, _CacheList):
+                # MoE: quantize each sub-cache independently
+                quantized_subs = []
+                for sc in layer_cache.caches:
+                    if (
+                        isinstance(sc, KVCache)
+                        and not isinstance(sc, QuantizedKVCache)
+                        and sc.keys is not None
+                    ):
+                        try:
+                            qkv = QuantizedKVCache(group_size=group_size, bits=bits)
+                            qkv.keys = tuple(mx.quantize(
+                                sc.keys, group_size=group_size, bits=bits
+                            ))
+                            qkv.values = tuple(mx.quantize(
+                                sc.values, group_size=group_size, bits=bits
+                            ))
+                            qkv.offset = sc.offset
+                            quantized_subs.append(qkv)
+                            quantized_count += 1
+                        except Exception as e:
+                            logger.warning(
+                                f"KV quantization failed for CacheList sub-cache in layer {i}: {e}. "
+                                f"Storing unquantized."
+                            )
+                            quantized_subs.append(sc)
+                    else:
+                        quantized_subs.append(sc)
+                result.append(_CacheList(*quantized_subs))
+            elif (
                 isinstance(layer_cache, KVCache)
                 and not isinstance(layer_cache, QuantizedKVCache)
                 and layer_cache.keys is not None
             ):
                 try:
                     qkv = QuantizedKVCache(group_size=group_size, bits=bits)
-                    qkv.keys = mx.quantize(
+                    qkv.keys = tuple(mx.quantize(
                         layer_cache.keys, group_size=group_size, bits=bits
-                    )
-                    qkv.values = mx.quantize(
+                    ))
+                    qkv.values = tuple(mx.quantize(
                         layer_cache.values, group_size=group_size, bits=bits
-                    )
+                    ))
                     qkv.offset = layer_cache.offset
                     result.append(qkv)
                     quantized_count += 1
@@ -636,23 +670,52 @@ class Scheduler:
         Dequantizes stored quantized keys/values back to full precision.
         BatchGenerator requires KVCache (not QuantizedKVCache) for its batch
         operations (merge, extract, filter).
-
-        Note: Both quantized (in cache) and dequantized (returned) versions
-        coexist briefly. For 4K context / 32 layers this can be ~200MB extra.
-        This transient spike is inherent to the design — the quantized source
-        cannot be freed until dequantization completes for all layers.
+        Recurses into CacheList sub-caches for MoE models.
 
         Returns None if dequantization fails (caller should treat as cache miss).
         """
         try:
             from mlx_lm.models.cache import KVCache, QuantizedKVCache
+            try:
+                from mlx_lm.models.cache import CacheList as _CacheList
+            except ImportError:
+                _CacheList = None
             import mlx.core as mx
         except ImportError:
             return cache
 
         result = []
         for i, layer_cache in enumerate(cache):
-            if isinstance(layer_cache, QuantizedKVCache):
+            if _CacheList is not None and isinstance(layer_cache, _CacheList):
+                # MoE: recurse into each sub-cache
+                dequantized_subs = []
+                for sc in layer_cache.caches:
+                    if isinstance(sc, QuantizedKVCache):
+                        if sc.keys is not None:
+                            try:
+                                kv = KVCache()
+                                kv.keys = mx.dequantize(
+                                    sc.keys[0], sc.keys[1],
+                                    sc.keys[2], sc.group_size, sc.bits,
+                                )
+                                kv.values = mx.dequantize(
+                                    sc.values[0], sc.values[1],
+                                    sc.values[2], sc.group_size, sc.bits,
+                                )
+                                kv.offset = sc.offset
+                                dequantized_subs.append(kv)
+                            except Exception as e:
+                                logger.warning(
+                                    f"KV dequantization failed in CacheList layer {i}: {e}. "
+                                    f"Treating as cache miss."
+                                )
+                                return None
+                        else:
+                            dequantized_subs.append(KVCache())
+                    else:
+                        dequantized_subs.append(sc)
+                result.append(_CacheList(*dequantized_subs))
+            elif isinstance(layer_cache, QuantizedKVCache):
                 if layer_cache.keys is not None:
                     try:
                         kv = KVCache()
@@ -1226,7 +1289,7 @@ class Scheduler:
         # Log extraction summary for debugging hybrid model issues
         if extracted:
             counts_str = ", ".join(f"{k}={v}" for k, v in class_counts.items())
-            logger.debug(
+            logger.info(
                 f"Cache extraction: {len(extracted)}/{len(raw_cache)} layers "
                 f"({counts_str})"
             )
