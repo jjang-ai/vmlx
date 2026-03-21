@@ -1350,10 +1350,12 @@ export class SessionManager extends EventEmitter {
 
     try {
       const host = connectHost(session.host)
-      // 120s timeout — admin/wake does synchronous model load (JANG mmap ~9s, large models 30-60s)
+      // 300s timeout — admin/wake does synchronous model load. Disk-streaming mode
+      // with large models (60GB+ JANG MoE) can take >120s for mmap initialization.
+      // Matches the JIT wake timeout on the Python side.
       const res = await fetch(`http://${host}:${session.port}/admin/wake`, {
         method: 'POST',
-        signal: AbortSignal.timeout(120000)
+        signal: AbortSignal.timeout(300000)
       })
       if (res.ok) {
         db.updateSession(sessionId, { status: 'loading', standbyDepth: null })
