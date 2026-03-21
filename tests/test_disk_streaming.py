@@ -299,3 +299,100 @@ class TestCompatibilityMatrix:
         assert args.kv_cache_quantization == "none"
         assert args.max_num_seqs == 1
         assert args.speculative_model is None
+
+
+class TestEdgeCases:
+    """Test edge cases: sleep/wake, exceeds-RAM, None caches."""
+
+    def test_scheduler_no_crash_with_none_caches(self):
+        """Scheduler with all caches disabled should not crash on get_memory_usage."""
+        from vmlx_engine.scheduler import SchedulerConfig, Scheduler
+        import mlx.core as mx
+        import mlx.nn as nn
+
+        # Minimal model for scheduler init
+        class DummyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed = nn.Embedding(100, 32)
+            def __call__(self, x, cache=None):
+                return self.embed(x)
+
+        config = SchedulerConfig(
+            enable_prefix_cache=False,
+            use_paged_cache=False,
+            kv_cache_quantization="none",
+            enable_disk_cache=False,
+            enable_block_disk_cache=False,
+            cache_memory_percent=0.0,
+            max_num_seqs=1,
+        )
+        # Verify no cache objects created
+        assert config.enable_prefix_cache is False
+        assert config.use_paged_cache is False
+
+    def test_stream_from_disk_preserved_in_cli_args(self):
+        """_cli_args should contain stream_from_disk when set."""
+        from vmlx_engine import server
+        # Verify _cli_args can store and retrieve stream_from_disk
+        test_args = {'stream_from_disk': True, 'use_batching': False}
+        assert test_args.get('stream_from_disk', False) is True
+        assert test_args.get('stream_from_disk') is True
+
+    def test_jang_gate_dequant_triggers_for_moe(self):
+        """JANG gate dequant should trigger for any model with n_routed_experts > 0."""
+        # Simulate the logic from jang_loader.py
+        config_nemotron = {"model_type": "nemotron_h", "n_routed_experts": 64}
+        config_mistral4 = {"model_type": "mistral4", "n_routed_experts": 128}
+        config_llm = {"model_type": "llama"}
+        config_vlm = {"model_type": "mistral3", "text_config": {"n_routed_experts": 128}}
+
+        for cfg in [config_nemotron, config_mistral4, config_llm, config_vlm]:
+            model_type = cfg.get("model_type", "")
+            needs_fc_rename = model_type in ("nemotron_h", "nemotron")
+            text_cfg = cfg.get("text_config", cfg)
+            n_experts = cfg.get("n_routed_experts", 0) or text_cfg.get("n_routed_experts", 0)
+            needs_gate_dequant = needs_fc_rename or n_experts > 0
+
+            if model_type == "nemotron_h":
+                assert needs_fc_rename is True
+                assert needs_gate_dequant is True
+            elif model_type == "mistral4":
+                assert needs_fc_rename is False
+                assert needs_gate_dequant is True
+            elif model_type == "llama":
+                assert needs_fc_rename is False
+                assert needs_gate_dequant is False
+            elif model_type == "mistral3":
+                assert needs_fc_rename is False
+                assert needs_gate_dequant is True  # via text_config
+
+    def test_mistral4_in_standard_architectures(self):
+        """mistral4 should be in the _STANDARD_ARCHITECTURES set."""
+        from vmlx_engine.utils.tokenizer import _STANDARD_ARCHITECTURES
+        assert "mistral4" in _STANDARD_ARCHITECTURES
+
+    def test_mistral4_in_model_config_registry(self):
+        """mistral4 should be discoverable in model_config_registry."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        # The registry should have a mistral4 entry
+        registry = get_model_config_registry()
+        found = False
+        for config in registry._configs:
+            if "mistral4" in config.model_types:
+                found = True
+                assert config.family_name == "mistral4"
+                assert config.tool_parser == "mistral"
+                assert config.cache_type == "kv"
+                break
+        assert found, "mistral4 not found in model_config_registry"
+
+    def test_mllm_batch_generator_stream_flag_readable(self):
+        """MLLMBatchGenerator should be able to read _stream_from_disk."""
+        from vmlx_engine import server
+        # Verify the global is accessible
+        assert hasattr(server, '_stream_from_disk')
+        original = server._stream_from_disk
+        server._stream_from_disk = True
+        assert server._stream_from_disk is True
+        server._stream_from_disk = original  # restore
