@@ -136,6 +136,10 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             f"Check that the model directory is available."
         )
 
+    # Check if disk streaming mode is active (lazy mmap loading)
+    from .. import server as _server_module
+    _lazy = getattr(_server_module, '_stream_from_disk', False)
+
     # JANG format MUST be checked FIRST — JANG models use their own loader that
     # repacks weights into QuantizedLinear and handles tokenizer internally.
     # Checking tokenizer fallback first would bypass the JANG loader for Nemotron-H.
@@ -143,27 +147,27 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
     if is_jang_model(model_name):
         from .jang_loader import load_jang_model
         logger.info(f"Detected JANG model: {model_name}")
-        return load_jang_model(model_name)
+        return load_jang_model(model_name, lazy=_lazy)
 
     # Check if model needs tokenizer fallback (e.g., Nemotron)
     if _needs_tokenizer_fallback(model_name):
         logger.info(
             f"Model {model_name} requires tokenizer fallback, loading directly..."
         )
-        return _load_with_tokenizer_fallback(model_name)
+        return _load_with_tokenizer_fallback(model_name, lazy=_lazy)
 
     try:
-        return load(model_name, tokenizer_config=tokenizer_config)
+        return load(model_name, tokenizer_config=tokenizer_config, lazy=_lazy)
     except ValueError as e:
         # Fallback for models with non-standard tokenizers
         if "TokenizersBackend" in str(e) or "Tokenizer class" in str(e):
             logger.warning(f"Standard tokenizer loading failed, using fallback: {e}")
-            return _load_with_tokenizer_fallback(model_name)
+            return _load_with_tokenizer_fallback(model_name, lazy=_lazy)
         else:
             raise
 
 
-def _load_with_tokenizer_fallback(model_name: str):
+def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
     """Load model with fallback tokenizer for non-standard models like Nemotron."""
     from mlx_lm.utils import load_model
 
@@ -182,7 +186,7 @@ def _load_with_tokenizer_fallback(model_name: str):
     ensure_latent_moe_support(str(model_path))
 
     # Load model
-    model, _ = load_model(model_path)
+    model, _ = load_model(model_path, lazy=lazy)
 
     # Try to load tokenizer from tokenizer.json directly
     tokenizer_json = model_path / "tokenizer.json"

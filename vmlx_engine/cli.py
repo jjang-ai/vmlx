@@ -400,6 +400,7 @@ def serve_command(args):
             max_tokens=args.max_tokens,
             served_model_name=getattr(args, 'served_model_name', None),
             force_mllm=getattr(args, 'is_mllm', False),
+            stream_from_disk=getattr(args, 'stream_from_disk', False),
         )
 
     # Configure CORS middleware
