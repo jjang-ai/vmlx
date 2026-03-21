@@ -46,12 +46,6 @@ try:
 except ImportError:
     HAS_MLX = False
 
-try:
-    import numpy as np
-    from safetensors.numpy import save_file as _save_numpy_safetensors
-    HAS_NUMPY_SAFETENSORS = True
-except ImportError:
-    HAS_NUMPY_SAFETENSORS = False
 
 
 class BlockDiskStore:
@@ -291,23 +285,18 @@ class BlockDiskStore:
             if arrays_to_materialize:
                 mx.eval(*arrays_to_materialize)
 
-            # Convert to numpy for thread-safe background write
-            if HAS_NUMPY_SAFETENSORS:
-                np_tensors = {
-                    k: np.array(v) if isinstance(v, mx.array) else v
-                    for k, v in tensors.items()
-                }
-            else:
-                # Fallback: pass pre-materialized MLX arrays (less safe but
-                # still better — save_safetensors won't need GPU computation)
-                np_tensors = tensors
+            # Pass pre-evaluated MLX arrays directly to background writer.
+            # mx.save_safetensors handles all dtypes including bfloat16.
+            # Arrays are already materialized (mx.eval above) so no GPU
+            # work happens on the background thread.
+            mx_tensors = tensors
         except Exception as e:
             logger.debug(f"Pre-serialize failed for block {block_hash.hex()[:12]}: {e}")
             return
 
         try:
             self._write_queue.put_nowait(
-                (block_hash, np_tensors, dtype, num_layers, token_count)
+                (block_hash, mx_tensors, dtype, num_layers, token_count)
             )
         except queue.Full:
             logger.warning("BlockDiskStore write queue full (1000), dropping block write")
@@ -349,8 +338,8 @@ class BlockDiskStore:
                             _, hash_hex, _ = item
                             self._cleanup_entry(write_conn, hash_hex)
                         else:
-                            block_hash, np_tensors, dtype, num_layers, token_count = item
-                            self._write_block(write_conn, block_hash, np_tensors, dtype, num_layers, token_count)
+                            block_hash, mx_tensors, dtype, num_layers, token_count = item
+                            self._write_block(write_conn, block_hash, mx_tensors, dtype, num_layers, token_count)
                     except Exception as e:
                         h = item[0] if isinstance(item[0], str) else (
                             item[0].hex()[:12] if isinstance(item[0], bytes) else "?"
@@ -389,7 +378,7 @@ class BlockDiskStore:
         self,
         conn: sqlite3.Connection,
         block_hash: bytes,
-        np_tensors: Dict[str, Any],
+        mx_tensors: Dict[str, Any],
         dtype: str,
         num_layers: int,
         token_count: int,
@@ -415,13 +404,10 @@ class BlockDiskStore:
         tmp_path = file_path.with_name(file_path.stem + ".tmp.safetensors")
 
         try:
-            if HAS_NUMPY_SAFETENSORS:
-                # Use safetensors.numpy — no MLX operations on this thread
-                _save_numpy_safetensors(np_tensors, str(tmp_path))
-            elif HAS_MLX:
-                # Fallback: use mx.save_safetensors on pre-evaluated arrays.
-                # Less safe but arrays are already materialized.
-                mx.save_safetensors(str(tmp_path), np_tensors)
+            if HAS_MLX:
+                # Use mx.save_safetensors — handles all dtypes including bfloat16.
+                # Arrays are pre-evaluated (no lazy Metal ops on this thread).
+                mx.save_safetensors(str(tmp_path), mx_tensors)
             else:
                 return
             os.rename(str(tmp_path), str(file_path))

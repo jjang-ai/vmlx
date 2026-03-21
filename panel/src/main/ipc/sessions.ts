@@ -12,7 +12,8 @@ const SESSION_EVENTS = [
   'session:health',
   'session:log',
   'session:deleted',
-  'session:standby'
+  'session:standby',
+  'session:loadProgress'
 ]
 
 let handlersRegistered = false

@@ -1006,7 +1006,8 @@ class MLXMultimodalLM:
                 **template_kwargs,
             )
         except TypeError:
-            # Processor doesn't support enable_thinking kwarg -- retry without it
+            # Processor doesn't support enable_thinking kwarg — use processor
+            # WITHOUT the kwarg (correct VLM format), then strip <think> below.
             try:
                 formatted_prompt = get_chat_template(
                     self.processor,
@@ -1022,12 +1023,15 @@ class MLXMultimodalLM:
                 f"Failed to apply chat template: {e}, using last user message"
             )
 
-        # Ensure stripping of forced reasoning loops for abliterated models
-        if enable_thinking is False and formatted_prompt:
-            if formatted_prompt.endswith("<think>\n"):
-                formatted_prompt = formatted_prompt[:-8]
-            elif formatted_prompt.endswith("<think>"):
-                formatted_prompt = formatted_prompt[:-7]
+        # Strip only UNCLOSED <think> at the very end when thinking is OFF.
+        # Do NOT strip <think></think> (closed empty block) — that's the
+        # template's proper "don't think" signal.
+        if enable_thinking is False and formatted_prompt and "<think>" in formatted_prompt:
+            last_think = formatted_prompt.rfind("<think>")
+            if last_think >= 0:
+                after = formatted_prompt[last_think + 7:]
+                if "</think>" not in after:
+                    formatted_prompt = formatted_prompt[:last_think].rstrip() + "\n"
 
         if formatted_prompt is None:
             # Fallback to last user message if template fails

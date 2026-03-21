@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Settings, ScrollText, Moon, Sun } from 'lucide-react'
+import { useSessionsContext, type LoadProgress } from '../../contexts/SessionsContext'
 
 interface Session {
   id: string
@@ -60,6 +61,8 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
   const shortName = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const [jangLabel, setJangLabel] = useState<string | undefined>(undefined)
   const [loadingElapsed, setLoadingElapsed] = useState(0)
+  const { loadProgress } = useSessionsContext()
+  const progress = loadProgress.get(session.id)
 
   // Elapsed time counter when model is loading
   useEffect(() => {
@@ -123,6 +126,23 @@ export function SessionCard({ session, onOpen, onConfigure, onStart, onStop, onD
           </span>
         </div>
       </div>
+
+      {/* Loading progress bar */}
+      {session.status === 'loading' && (
+        <div className="mb-3">
+          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-yellow-500 rounded-full transition-all duration-500 ease-out"
+              style={{ width: `${progress?.progress ?? 2}%` }}
+            />
+          </div>
+          {progress && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              {progress.label} ({progress.progress}%)
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Info */}
       <div className="flex gap-4 text-xs text-muted-foreground mb-3">

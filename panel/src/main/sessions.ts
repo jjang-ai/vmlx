@@ -129,6 +129,47 @@ export class SessionManager extends EventEmitter {
     return this.lastHealthyAt.get(sessionId) || 0
   }
 
+  // Loading progress patterns — matched against engine stdout/stderr to detect loading phase
+  private static readonly LOAD_PROGRESS_PATTERNS: Array<{ pattern: RegExp; label: string; progress: number }> = [
+    { pattern: /Loading model:/, label: 'Initializing...', progress: 5 },
+    { pattern: /System memory before load/, label: 'Checking memory...', progress: 10 },
+    { pattern: /Loading model with (?:Simple|Batched)Engine/, label: 'Creating engine...', progress: 15 },
+    { pattern: /JANG v2 detected/, label: 'Loading JANG weights...', progress: 20 },
+    { pattern: /Loading JANG VL model/, label: 'Loading JANG VL model...', progress: 20 },
+    { pattern: /Loading MLLM:/, label: 'Loading vision model...', progress: 20 },
+    { pattern: /Loading image model:/, label: 'Loading image model...', progress: 20 },
+    { pattern: /Loading \d+ safetensors shards/, label: 'Loading weights...', progress: 30 },
+    { pattern: /JANG v[12] loaded in/, label: 'Weights loaded', progress: 50 },
+    { pattern: /Model loaded successfully/, label: 'Model loaded', progress: 55 },
+    { pattern: /MLLM loaded successfully/, label: 'Vision model loaded', progress: 55 },
+    { pattern: /JANG VL model loaded/, label: 'JANG VL loaded', progress: 55 },
+    { pattern: /Image model loaded in/, label: 'Image model loaded', progress: 55 },
+    { pattern: /model loaded \((?:simple|batched) mode\)/, label: 'Engine ready', progress: 60 },
+    { pattern: /Metal GPU memory after load/, label: 'Configuring GPU...', progress: 70 },
+    { pattern: /KV cache quantization/, label: 'Setting up KV cache...', progress: 75 },
+    { pattern: /(?:Chat template loaded|Applied custom chat template)/, label: 'Loading chat template...', progress: 80 },
+    { pattern: /Native tool format enabled/, label: 'Configuring tools...', progress: 85 },
+    { pattern: /Default max tokens:/, label: 'Finalizing config...', progress: 90 },
+    { pattern: /Uvicorn running on/, label: 'Server started', progress: 95 },
+  ]
+
+  // Track last emitted progress per session to avoid duplicate events
+  private loadProgressState = new Map<string, number>()
+
+  /** Check a log line for loading progress and emit event if phase advanced */
+  private checkLoadProgress(sessionId: string, text: string): void {
+    for (const { pattern, label, progress } of SessionManager.LOAD_PROGRESS_PATTERNS) {
+      if (pattern.test(text)) {
+        const current = this.loadProgressState.get(sessionId) ?? 0
+        if (progress > current) {
+          this.loadProgressState.set(sessionId, progress)
+          this.emit('session:loadProgress', { sessionId, label, progress })
+        }
+        break
+      }
+    }
+  }
+
   /** Append log data to the per-session ring buffer */
   pushLog(sessionId: string, data: string): void {
     let buffer = this.logBuffers.get(sessionId)
@@ -145,6 +186,8 @@ export class SessionManager extends EventEmitter {
     if (buffer.length > SessionManager.LOG_BUFFER_MAX_LINES) {
       buffer.splice(0, buffer.length - SessionManager.LOG_BUFFER_MAX_LINES)
     }
+    // Parse log for loading progress indicators
+    this.checkLoadProgress(sessionId, data)
   }
 
   /** Get all buffered log lines for a session */
@@ -520,6 +563,7 @@ export class SessionManager extends EventEmitter {
       status: 'loading',
       lastStartedAt: Date.now()
     })
+    this.loadProgressState.delete(sessionId) // Reset loading progress for fresh start
     this.emit('session:starting', { sessionId, modelPath: session.modelPath })
 
     const args = this.buildArgs(config)
