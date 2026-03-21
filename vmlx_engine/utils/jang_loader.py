@@ -120,6 +120,10 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
     }
     _model_type = config.get("model_type", "")
     _needs_fc_rename = _model_type in ("nemotron_h", "nemotron")
+    # Gate dequant needed for any MoE model with quantized gate weights (MoEGate is
+    # nn.Module not nn.Linear, so nn.quantize skips it but JANG still quantizes raw weights).
+    # Applies to: nemotron_h, nemotron, mistral4, deepseek_v3, deepseek_v2, etc.
+    _needs_gate_dequant = _needs_fc_rename or config.get("n_routed_experts", 0) > 0
 
     # Nemotron-H gate: MoEGate is a custom nn.Module (not nn.Linear), so
     # nn.quantize() in _load_model_skeleton does NOT convert it. However,
@@ -129,13 +133,14 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
 
     for sf in weight_files:
         weights = mx.load(str(sf))
-        # Nemotron-H: filter mtp/importance, rename fc1/fc2, dequantize gate weights
+        # Nemotron-H: filter mtp/importance weights
         if _needs_fc_rename:
             weights = {k: v for k, v in weights.items()
                        if not k.endswith(".importance") and "mtp." not in k}
         if hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
-        if _needs_fc_rename:
+        # MoE gate dequant + optional Nemotron fc rename
+        if _needs_gate_dequant:
             renamed = {}
             gate_parts = {}  # prefix -> {scales, biases}
             for k, v in weights.items():
@@ -145,13 +150,14 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
                     prefix = k.rsplit(".", 1)[0]
                     gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
                     continue
-                # Apply fc1/fc2 rename
-                for old, new in _nemotron_renames.items():
-                    if old in k:
-                        new_k = k.replace(old, new)
-                        break
+                # Apply fc1/fc2 rename (Nemotron only)
+                if _needs_fc_rename:
+                    for old, new in _nemotron_renames.items():
+                        if old in k:
+                            new_k = k.replace(old, new)
+                            break
                 renamed[new_k] = v
-            # Dequantize gate weights (uint32 packed → float for nn.Linear)
+            # Dequantize gate weights (uint32 packed → float for MoEGate)
             # Gate is 8-bit quantized — try bits high-to-low to find correct shape
             for prefix, parts in gate_parts.items():
                 wkey = f"{prefix}.weight"
