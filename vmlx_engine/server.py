@@ -976,6 +976,44 @@ def load_model(
         except Exception as e:
             logger.warning(f"Failed to set Metal memory limit: {e}")
 
+    # Memory advisory for disk-streaming mode
+    if stream_from_disk:
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            available_gb = mem.available / (1024 ** 3)
+            total_gb = mem.total / (1024 ** 3)
+
+            # Estimate model size from Metal active memory
+            model_gb = 0
+            try:
+                import mlx.core as mx
+                if hasattr(mx, 'metal') and hasattr(mx.metal, 'get_active_memory'):
+                    model_gb = mx.metal.get_active_memory() / (1024 ** 3)
+                elif hasattr(mx, 'get_active_memory'):
+                    model_gb = mx.get_active_memory() / (1024 ** 3)
+            except Exception:
+                pass
+
+            if model_gb > 0 and model_gb < total_gb * 0.8:
+                logger.warning(
+                    f"DISK-STREAMING ADVISORY: Model ({model_gb:.1f}GB) fits in RAM "
+                    f"({total_gb:.1f}GB total, {available_gb:.1f}GB available). "
+                    f"Consider disabling --stream-from-disk for better performance."
+                )
+                print(f"\n  TIP: Model ({model_gb:.1f}GB) fits in RAM ({total_gb:.1f}GB). "
+                      f"Disable --stream-from-disk for 2-5x faster inference.\n")
+            else:
+                used_desc = f"{model_gb:.1f}GB model" if model_gb > 0 else "Model"
+                logger.info(
+                    f"DISK-STREAMING: {used_desc} with {total_gb:.1f}GB RAM — "
+                    f"macOS SSD paging active (~7.4GB/s bandwidth)"
+                )
+                print(f"\n  DISK-STREAMING: {used_desc} — macOS SSD paging active. "
+                      f"First request will be slow as weights page in.\n")
+        except Exception as e:
+            logger.debug(f"Memory advisory failed: {e}")
+
     # Log system memory after model load
     try:
         import psutil
