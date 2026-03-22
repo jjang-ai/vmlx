@@ -1023,15 +1023,20 @@ class Scheduler:
         - On forward prefix match: remaining has extra tokens including
           the Nth token → model processes them normally → correct
 
-        MambaCache layers are cumulative and CANNOT be truncated — if any
-        are found, returns None to skip caching entirely.
+        MambaCache/ArraysCache layers are cumulative and cannot be
+        truncated to an exact token boundary.  When encountered, they are
+        passed through unchanged so that KV layers can still be truncated
+        and stored in the block cache — avoiding a full re-prefill that
+        would otherwise dominate post-generation latency on hybrid models.
 
         Args:
             raw_cache: List of cache layer objects from BatchGenerator
             prompt_len: Number of prompt tokens
 
         Returns:
-            Truncated cache list, or None if truncation not possible
+            Truncated cache list, or None if truncation not possible.
+            For hybrid models, SSM layers are included unchanged (callers
+            should skip L2 disk writes when self._is_hybrid is True).
         """
         # We store N-1 tokens so the last token can be re-fed on cache hit
         target_len = prompt_len - 1
@@ -1132,9 +1137,12 @@ class Scheduler:
             elif hasattr(layer_cache, "cache") and isinstance(
                 getattr(layer_cache, "cache", None), list
             ):
-                # MambaCache/ArraysCache: cumulative state, CANNOT truncate.
-                # Return None to skip caching for hybrid models.
-                return None
+                # MambaCache/ArraysCache: cumulative state — cannot truncate
+                # to an exact token boundary.  Pass through unchanged so KV
+                # layers are still truncated and stored in the block cache.
+                # The SSM state includes output-token effects, so it should
+                # NOT be persisted to the L2 disk cache.
+                truncated.append(layer_cache)
             else:
                 # Unknown cache type
                 return None
@@ -1974,24 +1982,16 @@ class Scheduler:
                                             raw_cache, prompt_len
                                         )
                                     )
-                                    if cache_for_extract is None and self._is_hybrid:
-                                        # Hybrid model: MambaCache can't be truncated.
-                                        # Run separate prefill on N-1 tokens to get
-                                        # prompt-only state for all layer types.
-                                        cache_for_extract = (
-                                            self._prefill_for_prompt_only_cache(
-                                                list(request.prompt_token_ids[:-1])
-                                            )
-                                        )
-                                        if cache_for_extract is not None:
-                                            logger.info(
-                                                f"Re-prefilled {prompt_len - 1} tokens "
-                                                f"for prompt-only cache (hybrid model)"
-                                            )
 
                                     if cache_for_extract is not None:
-                                        # L2: Persist to disk (full-precision, pre-quantization)
-                                        if self.disk_cache is not None:
+                                        # L2: Persist to disk (full-precision,
+                                        # pre-quantization).  Skip for hybrid models
+                                        # because SSM layers retain output-token
+                                        # state that can't be cleanly truncated.
+                                        if (
+                                            self.disk_cache is not None
+                                            and not self._is_hybrid
+                                        ):
                                             try:
                                                 self.disk_cache.store(
                                                     list(request.prompt_token_ids),
@@ -2146,10 +2146,14 @@ class Scheduler:
                                         f"Cache store rejected for request {request_id} "
                                         f"({prompt_len} tokens) — entry too large for budget"
                                     )
-                                # L2: Also persist to disk (full-precision, before GC)
-                                if self.disk_cache is not None:
+                                # L2: Also persist to disk (full-precision, before GC).
+                                # Skip for hybrid models — SSM layers retain
+                                # output-token state that can't be truncated.
+                                if (
+                                    self.disk_cache is not None
+                                    and not self._is_hybrid
+                                ):
                                     try:
-                                        # Store the pre-quantization cache to disk
                                         disk_data = self._truncate_cache_to_prompt_length(
                                             request._extracted_cache, prompt_len
                                         )
@@ -2192,8 +2196,13 @@ class Scheduler:
                                     f"({prompt_len} prompt tokens, "
                                     f"truncated from {prompt_len + len(request.output_token_ids)})"
                                 )
-                                # L2: Also persist to disk (full-precision)
-                                if self.disk_cache is not None:
+                                # L2: Also persist to disk (full-precision).
+                                # Skip for hybrid models — SSM layers retain
+                                # output-token state that can't be truncated.
+                                if (
+                                    self.disk_cache is not None
+                                    and not self._is_hybrid
+                                ):
                                     try:
                                         disk_data = self._truncate_cache_to_prompt_length(
                                             request._extracted_cache, prompt_len
