@@ -112,7 +112,7 @@ async function getVersionFromBinary(path: string): Promise<string> {
       const { execFile: execFileCb } = await import('child_process')
       const { promisify } = await import('util')
       const execFileAsync = promisify(execFileCb)
-      const pyResult = await execFileAsync(shebang, ['-c', "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"])
+      const pyResult = await execFileAsync(shebang, ['-c', "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"], { timeout: 5000 })
       const ver = pyResult.stdout.trim()
       if (/^\d+\.\d+\.\d+/.test(ver)) {
         console.log(`[Engine Manager] Version: ${ver}`)
@@ -121,9 +121,11 @@ async function getVersionFromBinary(path: string): Promise<string> {
     }
   } catch (_) { /* fallback below */ }
 
-  // Fallback: try --version flag
+  // Fallback: try --version flag (use execFile to avoid shell injection, timeout to prevent hang)
   try {
-    const result = await exec(`"${path}" --version 2>&1`)
+    const { execFile: execFileFallback } = await import('child_process')
+    const execFileFallbackAsync = promisify(execFileFallback)
+    const result = await execFileFallbackAsync(path, ['--version'], { timeout: 5000 })
     const match = (result.stdout || result.stderr).match(/(\d+\.\d+\.\d+)/)
     if (match) {
       console.log(`[Engine Manager] Version: ${match[1]}`)
@@ -407,6 +409,13 @@ function hashSourceFiles(basePath: string): string | null {
  * Used for auto-update on startup.
  */
 export function checkEngineVersion(): { current: string; bundled: string; needsUpdate: boolean } {
+  // In dev mode, skip hash check — developer manages their own engine installation.
+  // hashSourceFiles() reads all Python source files synchronously and would block
+  // the main thread before createWindow() is called.
+  if (!app.isPackaged) {
+    return { needsUpdate: false, current: 'dev', bundled: 'dev' }
+  }
+
   const bundledPython = getBundledPythonPath()
   if (!bundledPython) return { current: '', bundled: '', needsUpdate: false }
 

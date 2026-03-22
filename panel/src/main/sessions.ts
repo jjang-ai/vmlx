@@ -1,4 +1,5 @@
-import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
+import { spawn, ChildProcess, execSync, execFileSync, execFile as execFileCallback } from 'child_process'
+import { promisify } from 'util'
 import { lookup } from 'dns'
 import { EventEmitter } from 'events'
 import { existsSync, readdirSync, statSync } from 'fs'
@@ -7,6 +8,8 @@ import { homedir, totalmem, freemem } from 'os'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
+
+const execFileAsync = promisify(execFileCallback)
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -232,7 +235,7 @@ export class SessionManager extends EventEmitter {
     const detected: DetectedProcess[] = []
 
     try {
-      const output = execSync('ps aux', { encoding: 'utf-8', timeout: 5000 })
+      const { stdout: output } = await execFileAsync('ps', ['aux'], { encoding: 'utf-8', timeout: 5000 })
       const lines = output.split('\n')
 
       for (const line of lines) {
@@ -1814,7 +1817,8 @@ export class SessionManager extends EventEmitter {
     // Additional arguments — strip stale image-only flags from old session configs
     if (config.additionalArgs?.trim()) {
       const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
-      const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
+      // Strip commas — common when users copy flag lists from docs (e.g. "--flag1, --flag2")
+      const extra = config.additionalArgs.trim().replace(/,/g, ' ').split(/\s+/).filter(Boolean)
       const filtered: string[] = []
       for (let i = 0; i < extra.length; i++) {
         if (staleImageFlags.has(extra[i])) {
