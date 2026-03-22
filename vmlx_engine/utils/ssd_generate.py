@@ -67,7 +67,13 @@ def _find_model_components(model) -> dict[str, Any]:
     #   Standard: model.model
     #   Nemotron: model.backbone
     #   Direct:   model
+    # Find the inner module that contains embed_tokens/embeddings and norm.
+    # Different architectures use different attribute names.
+    _embed_names = ("embed_tokens", "embeddings", "embedding", "wte")
+    _norm_names = ("norm", "norm_f", "final_layernorm", "final_norm", "ln_f")
+
     inner = None
+    embed_attr = None
     for path in [
         lambda m: getattr(getattr(m, "language_model", None), "model", None),
         lambda m: getattr(m, "model", None),
@@ -75,40 +81,47 @@ def _find_model_components(model) -> dict[str, Any]:
         lambda m: m,
     ]:
         candidate = path(model)
-        if candidate is not None and hasattr(candidate, "embed_tokens"):
-            inner = candidate
+        if candidate is None:
+            continue
+        for ename in _embed_names:
+            if hasattr(candidate, ename):
+                inner = candidate
+                embed_attr = ename
+                break
+        if inner is not None:
             break
 
-    if inner is None:
+    if inner is None or embed_attr is None:
         raise RuntimeError(
-            "Cannot find embed_tokens on model -- unsupported architecture"
+            "Cannot find embedding layer on model -- unsupported architecture"
         )
 
-    components["embed_tokens"] = inner.embed_tokens
+    components["embed_tokens"] = getattr(inner, embed_attr)
 
-    # norm -- usually on the same inner module
-    if hasattr(inner, "norm"):
-        components["norm"] = inner.norm
-    elif hasattr(inner, "final_layernorm"):
-        components["norm"] = inner.final_layernorm
-    else:
+    # norm -- try multiple names
+    norm_found = False
+    for nname in _norm_names:
+        if hasattr(inner, nname):
+            components["norm"] = getattr(inner, nname)
+            norm_found = True
+            break
+    if not norm_found:
         raise RuntimeError("Cannot find norm layer on model")
 
     # lm_head -- check for tied embeddings
     tie = getattr(getattr(model, "args", None), "tie_word_embeddings", False)
     if hasattr(model, "lm_head"):
         components["lm_head"] = model.lm_head
-    elif tie and hasattr(inner.embed_tokens, "as_linear"):
-        components["lm_head"] = inner.embed_tokens.as_linear
+    elif tie and hasattr(components["embed_tokens"], "as_linear"):
+        components["lm_head"] = components["embed_tokens"].as_linear
         components["tie_word_embeddings"] = True
     else:
         # VLM: model.language_model.lm_head
         lm = getattr(model, "language_model", None)
         if lm is not None and hasattr(lm, "lm_head"):
             components["lm_head"] = lm.lm_head
-        elif hasattr(inner.embed_tokens, "as_linear"):
-            # Fallback to tied embeddings
-            components["lm_head"] = inner.embed_tokens.as_linear
+        elif hasattr(components["embed_tokens"], "as_linear"):
+            components["lm_head"] = components["embed_tokens"].as_linear
             components["tie_word_embeddings"] = True
         else:
             raise RuntimeError("Cannot find lm_head on model")
@@ -140,7 +153,9 @@ def _create_attention_mask(
         from mlx_lm.models.base import create_attention_mask
 
         return create_attention_mask(h, cache[0])
-    except (ImportError, AttributeError):
+    except (ImportError, AttributeError, TypeError):
+        # TypeError: custom cache classes (e.g. Nemotron's ArraysCache)
+        # may not accept the same kwargs as standard KVCache.make_mask()
         pass
 
     # Fallback: for single-token decode, mask is typically not needed
@@ -174,8 +189,11 @@ def _load_layer_from_index(
         RuntimeError: If weight loading fails.
     """
     if temp_weight_dir is not None:
-        # JANG model -- load from temp safetensors (relative keys, no prefix)
-        temp_file = temp_weight_dir / f"layer_{layer_idx:04d}.safetensors"
+        # JANG model -- load from temp files (relative keys, no prefix)
+        # Try .npz first (handles all MLX dtypes), fall back to .safetensors
+        temp_file = temp_weight_dir / f"layer_{layer_idx:04d}.npz"
+        if not temp_file.exists():
+            temp_file = temp_weight_dir / f"layer_{layer_idx:04d}.safetensors"
         if not temp_file.exists():
             raise RuntimeError(
                 f"JANG temp weight file not found: {temp_file}"
@@ -272,34 +290,58 @@ def ssd_stream_generate(
     # --- Create KV cache ---
     prompt_cache = make_prompt_cache(model)
 
-    # --- Find model components (needed for decode) ---
+    # --- Find model components ---
     components = _find_model_components(model)
-    num_layers = len(components["layers"])
+    embed_tokens = components["embed_tokens"]
+    layers = components["layers"]
+    norm = components["norm"]
+    lm_head = components["lm_head"]
+    num_layers = len(layers)
+
+    # Verify 1:1 layer-to-cache mapping (hybrid SSM models may differ)
+    if len(prompt_cache) != num_layers:
+        raise RuntimeError(
+            f"SSD streaming requires 1:1 layer-cache mapping but got "
+            f"{num_layers} layers vs {len(prompt_cache)} cache entries. "
+            f"Hybrid SSM models are not yet supported."
+        )
 
     # ===================================================================
-    # PREFILL PHASE -- standard model forward pass, all weights loaded
+    # HELPER: per-layer forward pass (used by both prefill and decode)
+    # ===================================================================
+    def _per_layer_forward(h: mx.array, mask):
+        """Run h through all layers with per-layer weight recycling."""
+        for i, (layer, cache_entry) in enumerate(zip(layers, prompt_cache)):
+            _load_layer_from_index(
+                layer, i, model_path, weight_index, temp_weight_dir
+            )
+            h = layer(h, mask, cache=cache_entry)
+            _gpu_sync(h)
+            free_layer_weights(layer)
+        return h
+
+    # ===================================================================
+    # PREFILL — per-layer weight recycling (1 layer in memory at a time)
     # ===================================================================
     logger.info(
-        "SSD prefill: %d prompt tokens, %d layers", num_prompt_tokens, num_layers
+        "SSD prefill: %d prompt tokens, %d layers (per-layer)", num_prompt_tokens, num_layers
     )
     prefill_start = time.perf_counter()
 
-    prefill_step_size = 2048
-    remaining = num_prompt_tokens
-    offset = 0
+    # Embed all prompt tokens
+    h = embed_tokens(prompt_tokens[None])
+    _gpu_sync(h)
 
-    while remaining > 1:
-        chunk_size = min(prefill_step_size, remaining - 1)
-        chunk = prompt_tokens[offset : offset + chunk_size]
-        model(chunk[None], cache=prompt_cache)
-        _gpu_sync([c.state for c in prompt_cache])
-        offset += chunk_size
-        remaining = num_prompt_tokens - offset
+    # Create mask from embedded prompt
+    mask = _create_attention_mask(h, prompt_cache)
 
-    # Process the last token to get initial logits
-    last_prompt_token = prompt_tokens[-1:]
-    logits = model(last_prompt_token[None], cache=prompt_cache)
-    _gpu_sync([c.state for c in prompt_cache])
+    # Process through all layers one at a time
+    h = _per_layer_forward(h, mask)
+
+    # Final norm + lm_head to get logits for last token
+    h = norm(h)
+    logits = lm_head(h)
+    _gpu_sync(logits)
 
     prefill_time = time.perf_counter() - prefill_start
     prompt_tps = num_prompt_tokens / prefill_time if prefill_time > 0 else 0.0
@@ -308,21 +350,8 @@ def ssd_stream_generate(
     )
 
     # ===================================================================
-    # FREE ALL LAYER WEIGHTS -- reclaim GPU memory before decode
+    # DECODE — per-layer weight recycling (same as prefill, 1 token)
     # ===================================================================
-    freed = free_all_layer_weights(model)
-    gc.collect()
-    logger.info("Freed %d layer weights after prefill", freed)
-
-    # ===================================================================
-    # DECODE PHASE -- per-layer weight recycling from SSD
-    # ===================================================================
-    embed_tokens = components["embed_tokens"]
-    layers = components["layers"]
-    norm = components["norm"]
-    lm_head = components["lm_head"]
-
-    # Apply repetition penalty tracking
     generated_tokens: list[int] = []
 
     # Sample first token from prefill logits
@@ -369,45 +398,17 @@ def ssd_stream_generate(
         )
 
         # --- Decomposed forward pass for next token ---
-        input_token = mx.array([[token_id]])
-
-        # 1. Embed
-        h = embed_tokens(input_token)
-
-        # 2. Create attention mask
+        h = embed_tokens(mx.array([[token_id]]))
         mask = _create_attention_mask(h, prompt_cache)
-
-        # 3. Per-layer: load -> compute -> gpu sync -> free
-        for i, (layer, cache_entry) in enumerate(zip(layers, prompt_cache)):
-            _load_layer_from_index(
-                layer, i, model_path, weight_index, temp_weight_dir
-            )
-
-            # Forward through this layer
-            h = layer(h, mask, cache=cache_entry)
-
-            # Force synchronous GPU execution before freeing weights.
-            # Without this, Metal would try to keep all layers' weights
-            # resident in the lazy compute graph.
-            _gpu_sync(h)
-
-            # Free this layer's weights to reclaim GPU memory
-            free_layer_weights(layer)
-
-        # 4. Final norm
+        h = _per_layer_forward(h, mask)
         h = norm(h)
-
-        # 5. Language model head
         logits = lm_head(h)
-
-        # 6. Sample next token
         logits = logits[:, -1, :]
 
-        # Apply repetition penalty
+        # Repetition penalty
         if repetition_penalty != 1.0 and generated_tokens:
             penalty_tokens = mx.array(generated_tokens)
             penalty_logits = logits[0, penalty_tokens]
-            # Penalize: reduce probability of already-generated tokens
             penalty_logits = mx.where(
                 penalty_logits > 0,
                 penalty_logits / repetition_penalty,
@@ -421,12 +422,7 @@ def ssd_stream_generate(
         token = sampler(logprobs)
         token_id = token.item()
 
-    # Max tokens reached -- yield final token
-    if token_id in tokenizer.eos_token_ids:
-        finish = "stop"
-    else:
-        finish = "length"
-
+    # Max tokens reached
     detokenizer.add_token(token_id)
     detokenizer.finalize()
     yield GenerationResponse(
@@ -439,7 +435,7 @@ def ssd_stream_generate(
         generation_tokens=max_tokens,
         generation_tps=max_tokens / max(time.perf_counter() - decode_start, 1e-9),
         peak_memory=mx.get_peak_memory() / 1e9,
-        finish_reason=finish,
+        finish_reason="length" if token_id not in tokenizer.eos_token_ids else "stop",
     )
 
 

@@ -110,8 +110,6 @@ def save_layer_weights(
     Raises:
         RuntimeError: If model layers cannot be found.
     """
-    from safetensors.mlx import save_file
-
     from vmlx_engine.utils.streaming_wrapper import _find_layers
 
     result = _find_layers(model)
@@ -127,9 +125,11 @@ def save_layer_weights(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    file_path = output_dir / f"layer_{layer_idx:04d}.safetensors"
 
-    save_file(tensors, str(file_path))
+    # Use mx.savez instead of safetensors — handles ALL MLX dtypes including
+    # packed quantized uint arrays from QuantizedLinear (which safetensors rejects).
+    file_path = output_dir / f"layer_{layer_idx:04d}.npz"
+    mx.savez(str(file_path), **tensors)
     logger.debug(
         "Saved layer %d weights (%d tensors) to %s",
         layer_idx,
@@ -243,11 +243,16 @@ def free_layer_weights(layer) -> None:
         params,
     )
     layer.update(tiny)
+    # Force Metal to materialize the tiny placeholders (drops refs to old arrays)
+    _mx_eval(layer.parameters())
     gc.collect()
 
 
 def free_all_layer_weights(model) -> int:
     """Free ALL transformer layer weights to reclaim Metal GPU memory.
+
+    More efficient than calling free_layer_weights N times — does one gc.collect
+    at the end instead of per-layer.
 
     Args:
         model: The loaded model object.
@@ -267,7 +272,16 @@ def free_all_layer_weights(model) -> int:
     count = len(all_layers)
 
     for layer in all_layers:
-        free_layer_weights(layer)
+        params = layer.parameters()
+        tiny = tree_map(
+            lambda p: mx.zeros((1,)) if isinstance(p, mx.array) else p,
+            params,
+        )
+        layer.update(tiny)
+
+    # Single eval + gc at the end — much faster than per-layer
+    _mx_eval([l.parameters() for l in all_layers])
+    gc.collect()
 
     logger.info("Freed weights for %d layers", count)
     return count

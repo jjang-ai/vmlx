@@ -219,6 +219,8 @@ def serve_command(args):
         args.cache_memory_percent = 0.0
         args.cache_memory_mb = 0
         args.max_num_seqs = 1
+        # Force SimpleEngine — BatchedEngine doesn't support weight recycling
+        args.continuous_batching = False
         # Disable speculative decoding if present
         if hasattr(args, 'speculative_model'):
             args.speculative_model = None
