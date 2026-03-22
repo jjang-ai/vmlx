@@ -362,6 +362,78 @@ class PrefixCacheManager:
 # =============================================================================
 
 
+
+def _numpy_block_slice(
+    cache_data, np_sources, start_idx, end_idx, is_last_block,
+):
+    """Create per-block cache_data using numpy slicing (no MLX/Metal ops).
+
+    Args:
+        cache_data: Full layer-state dicts from _extract_cache_states.
+        np_sources: dict mapping layer_idx → (np_keys, np_values).
+        start_idx, end_idx: Token range for this block.
+        is_last_block: Whether this is the last block in the sequence.
+
+    Returns:
+        List of tuples per layer in the same format as _extract_block_tensor_slice
+        but with numpy arrays instead of MLX arrays.
+    """
+    import numpy as np
+
+    block_slices = []
+    for idx, layer_state in enumerate(cache_data):
+        if "state" not in layer_state:
+            continue
+        cls = layer_state.get("class_name", "")
+
+        # CacheList (MoE): not yet supported in numpy path
+        if cls == "CacheList":
+            block_slices.append(("skip",))
+            continue
+
+        if idx in np_sources:
+            np_k, np_v, *_ = np_sources[idx]
+            ndim = np_k.ndim
+            if ndim == 4:
+                seq_len = np_k.shape[2]
+            elif ndim == 3:
+                seq_len = np_k.shape[1]
+            else:
+                block_slices.append(("skip",))
+                continue
+            actual_end = min(end_idx, seq_len)
+            if start_idx >= actual_end:
+                block_slices.append(("skip",))
+                continue
+            if ndim == 4:
+                ks = np_k[:, :, start_idx:actual_end, :]
+                vs = np_v[:, :, start_idx:actual_end, :]
+            else:
+                ks = np_k[:, start_idx:actual_end, :]
+                vs = np_v[:, start_idx:actual_end, :]
+            block_slices.append(("kv", ks, vs))
+        else:
+            # Cumulative / non-positional layer
+            state = layer_state.get("state")
+            if is_last_block and state is not None:
+                meta = layer_state.get("meta_state", "")
+                # Convert cumulative state to numpy
+                if isinstance(state, (list, tuple)):
+                    np_state = []
+                    for s in state:
+                        if hasattr(s, '__array__'):
+                            np_state.append(np.array(s))
+                        else:
+                            np_state.append(s)
+                    block_slices.append(("cumulative", np_state, meta, cls))
+                else:
+                    block_slices.append(("skip",))
+            else:
+                block_slices.append(("skip",))
+
+    return block_slices if block_slices else None
+
+
 def _block_needs_cumulative_update(cache_data) -> bool:
     """Check if a block's cache_data is missing cumulative SSM state.
 
@@ -635,6 +707,80 @@ class BlockAwarePrefixCache:
 
         disk_store = self.paged_cache._disk_store  # May be None
 
+        # Pre-convert source KV arrays to numpy for safe slicing.
+        # MLX has a Metal command buffer bug: any evaluation of lazy slices
+        # whose source was previously evaluated triggers fatal Metal
+        # assertions ("addCompletedHandler after commit") or kernel panics
+        # ("completeMemory() prepare count underflow").  By converting the
+        # full evaluated source arrays to numpy here (just a CPU memcpy on
+        # unified memory), both _extract_block_tensor_slice (for block
+        # cache_data) and _numpy_block_slice (for disk writes) can do all
+        # per-block slicing in numpy space — zero Metal operations.
+        np_sources: dict = {}  # layer_idx → (np_keys, np_values)
+        if is_tensor_data and HAS_MLX:
+            import numpy as np
+            # Synchronize all Metal streams before converting arrays to numpy.
+            # mlx_lm's BatchGenerator.next() does NOT synchronize after
+            # inference — in-place KV/SSM cache updates (keys[...] = new_k)
+            # create lazy side-effect operations that may still be pending on
+            # the Metal command queue.  Without this sync, np.array() on cache
+            # arrays (especially cumulative SSM state in _numpy_block_slice)
+            # triggers "addCompletedHandler after commit" or segfault.
+            # MLLMBatchGenerator.next() already syncs its dedicated _stream,
+            # but the stock BatchGenerator and the default stream are not
+            # covered — a bare mx.synchronize() handles both.
+            mx.synchronize()
+            for idx, layer_state in enumerate(cache_data):
+                state = layer_state.get("state")
+                if state is None:
+                    continue
+                cls = layer_state.get("class_name", "")
+                if self._is_positional_cache(state, cls):
+                    try:
+                        keys, values = state
+                        if isinstance(keys, (tuple, list)):
+                            # Quantized: skip numpy path for now
+                            continue
+                        if hasattr(keys, 'shape'):
+                            k_np, v_np = keys, values
+                            # numpy doesn't support bfloat16 — cast first
+                            if hasattr(k_np, 'dtype') and 'bfloat16' in str(k_np.dtype):
+                                k_np = k_np.astype(mx.float16)
+                                v_np = v_np.astype(mx.float16)
+                            np_sources[idx] = (np.array(k_np), np.array(v_np), keys.dtype)
+                    except Exception:
+                        pass
+
+        # Detect cache_data position offset for cache-hit requests.
+        # After a cache hit, the BatchGenerator's raw cache may only contain
+        # newly-processed tokens (remaining + generated), not the full prompt
+        # history.  Block extraction uses global positions (relative to the
+        # start of the full token sequence), but the cache_data KV arrays may
+        # start at a later position.  Compute the offset to map global → local.
+        cache_pos_offset = 0
+        if is_tensor_data and existing_tokens > 0:
+            for _ls in cache_data:
+                _st = _ls.get("state")
+                _cls = _ls.get("class_name", "")
+                if _st and self._is_positional_cache(_st, _cls):
+                    try:
+                        _k, _ = _st
+                        if not isinstance(_k, (tuple, list)) and hasattr(_k, 'shape'):
+                            _kv_seq_len = _k.shape[2] if len(_k.shape) == 4 else (
+                                _k.shape[1] if len(_k.shape) == 3 else 0
+                            )
+                            if _kv_seq_len > 0 and existing_tokens > _kv_seq_len:
+                                cache_pos_offset = existing_tokens
+                                logger.debug(
+                                    f"Cache position offset: {cache_pos_offset} "
+                                    f"(KV seq_len={_kv_seq_len}, existing={existing_tokens})"
+                                )
+                    except Exception:
+                        pass
+                    break  # Only need to check one KV layer
+
+        pending_disk_writes: list = []
+
         for i in range(num_new_blocks):
             start_idx = i * self.block_size
             end_idx = min(start_idx + self.block_size, len(new_tokens))
@@ -741,8 +887,14 @@ class BlockAwarePrefixCache:
             # Extract and store actual tensor slices for this block
             if is_tensor_data and HAS_MLX:
                 # is_last already computed above (for cumulative state checks)
+                # Use local positions when cache_data doesn't cover the full
+                # token history (cache-hit requests where raw_cache only has
+                # newly-processed tokens).
+                local_start = global_start - cache_pos_offset
+                local_end = global_end - cache_pos_offset
                 block_kv_data = self._extract_block_tensor_slice(
-                    cache_data, global_start, global_end, is_last_block=is_last,
+                    cache_data, local_start, local_end, is_last_block=is_last,
+                    np_sources=np_sources if np_sources else None,
                 )
                 if block_kv_data:
                     block.cache_data = block_kv_data
@@ -752,11 +904,16 @@ class BlockAwarePrefixCache:
                         f"{' (includes cumulative states)' if is_last else ''}"
                     )
 
-                    # Write-through to disk L2 (async, non-blocking)
-                    if disk_store is not None:
-                        disk_store.write_block_async(
-                            block_chain_hash, block_kv_data, len(block_tokens)
+                    # Defer disk write using numpy slices (no MLX ops)
+                    if disk_store is not None and np_sources:
+                        np_block = _numpy_block_slice(
+                            cache_data, np_sources,
+                            local_start, local_end, is_last,
                         )
+                        if np_block:
+                            pending_disk_writes.append(
+                                (block_chain_hash, np_block, len(block_tokens))
+                            )
 
             # Register in hash caches under lock (both chain hash and legacy)
             with self.paged_cache._lock:
@@ -766,6 +923,14 @@ class BlockAwarePrefixCache:
             self.paged_cache.register_block_hash(block, block_tokens)
 
             parent_hash = block_chain_hash
+
+        # Write deferred disk blocks (all numpy — no MLX/Metal ops).
+        if pending_disk_writes and disk_store is not None:
+            for block_hash, block_data, tok_count in pending_disk_writes:
+                try:
+                    disk_store.write_block_async(block_hash, block_data, tok_count)
+                except Exception:
+                    pass
 
         # Update prefix index
         self._update_prefix_index(tokens, block_table.block_ids)
@@ -837,6 +1002,7 @@ class BlockAwarePrefixCache:
         start_idx: int,
         end_idx: int,
         is_last_block: bool = False,
+        np_sources: Optional[dict] = None,
     ) -> Optional[List[Tuple]]:
         """
         Extract tensor slices for a single block from cache data.
@@ -848,11 +1014,24 @@ class BlockAwarePrefixCache:
         For MambaCache layers: stores the full cumulative state (only in
         the last block, since it represents all processed tokens).
 
+        IMPORTANT — Metal safety:
+        When np_sources is provided, positional (KV) layers are sliced in
+        numpy space and wrapped with mx.array() to produce materialized MLX
+        arrays with their own Metal buffers.  This avoids creating lazy MLX
+        slices of already-evaluated parent arrays, which is fundamentally
+        unsafe: evaluating such slices (whether via mx.eval or np.array)
+        corrupts Metal command buffer state, causing either
+        "addCompletedHandler after commit" assertions or IOGPUFamily
+        "completeMemory() prepare count underflow" kernel panics.
+
         Args:
             cache_data: List of layer states from _extract_cache_states
             start_idx: Start token index in the sequence
             end_idx: End token index in the sequence
             is_last_block: Whether this is the last block in the sequence
+            np_sources: Optional dict of layer_idx → (np_keys, np_values)
+                        pre-converted numpy arrays from the parent KV cache.
+                        When present, slicing is done in numpy space.
 
         Returns:
             List of tuples per layer. Each tuple is either:
@@ -967,12 +1146,28 @@ class BlockAwarePrefixCache:
                         block_slices.append(("skip",))
                         continue
 
-                    if ndim == 4:
-                        keys_slice = keys[:, :, start_idx:actual_end, :]
-                        values_slice = values[:, :, start_idx:actual_end, :]
+                    # When numpy sources are available, slice in numpy space
+                    # and wrap with mx.array() to get materialized MLX arrays.
+                    # This avoids creating lazy MLX slices of evaluated parent
+                    # arrays, which corrupts Metal command buffer state.
+                    if np_sources is not None and layer_idx in np_sources:
+                        np_k, np_v, orig_dtype = np_sources[layer_idx]
+                        if ndim == 4:
+                            ks = mx.array(np_k[:, :, start_idx:actual_end, :])
+                            vs = mx.array(np_v[:, :, start_idx:actual_end, :])
+                        else:
+                            ks = mx.array(np_k[:, start_idx:actual_end, :])
+                            vs = mx.array(np_v[:, start_idx:actual_end, :])
+                        # Restore original dtype (e.g. bfloat16 → float16 → bfloat16)
+                        if ks.dtype != orig_dtype:
+                            ks = ks.astype(orig_dtype)
+                            vs = vs.astype(orig_dtype)
+                    elif ndim == 4:
+                        ks = keys[:, :, start_idx:actual_end, :]
+                        vs = values[:, :, start_idx:actual_end, :]
                     else:  # ndim == 3
-                        keys_slice = keys[:, start_idx:actual_end, :]
-                        values_slice = values[:, start_idx:actual_end, :]
+                        ks = keys[:, start_idx:actual_end, :]
+                        vs = values[:, start_idx:actual_end, :]
 
                     # Use rotating_kv tag for RotatingKVCache to preserve params
                     if "Rotating" in class_name:
@@ -989,9 +1184,9 @@ class BlockAwarePrefixCache:
                         else:
                             max_size = layer_state.get("max_size", seq_len)
                             keep = layer_state.get("keep", 0)
-                        block_slices.append(("rotating_kv", keys_slice, values_slice, max_size, keep))
+                        block_slices.append(("rotating_kv", ks, vs, max_size, keep))
                     else:
-                        block_slices.append(("kv", keys_slice, values_slice))
+                        block_slices.append(("kv", ks, vs))
                 except Exception as e:
                     logger.warning(
                         f"Layer {layer_idx} ({class_name}): "
@@ -1167,6 +1362,7 @@ class BlockAwarePrefixCache:
 
             # Reconstruct each layer
             reconstructed_caches = []
+            reconstructed_indices: set = set()  # tracks which layer_idx values were rebuilt
             kv_count = 0
             cumulative_count = 0
 
@@ -1272,6 +1468,7 @@ class BlockAwarePrefixCache:
                         cache.values = concat_values
                         cache.offset = concat_keys[0].shape[-2]
                         reconstructed_caches.append(cache)
+                        reconstructed_indices.add(layer_idx)
                         kv_count += 1
                     except ImportError:
                         logger.warning("Cannot reconstruct QuantizedKVCache: import failed")
@@ -1307,6 +1504,7 @@ class BlockAwarePrefixCache:
                     cache.values = concat_values
                     cache.offset = concat_keys.shape[seq_axis]
                     reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
                     kv_count += 1
 
                 elif rotating_kv_slices_keys:
@@ -1327,6 +1525,7 @@ class BlockAwarePrefixCache:
                     cache.values = concat_values
                     cache.offset = concat_keys.shape[seq_axis]
                     reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
                     kv_count += 1
 
                 elif best_cumulative is not None:
@@ -1356,6 +1555,7 @@ class BlockAwarePrefixCache:
                             return None
 
                     reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
                     cumulative_count += 1
 
                 elif cache_list_entries:
@@ -1468,6 +1668,7 @@ class BlockAwarePrefixCache:
                     cl = CLCache.__new__(CLCache)
                     cl.caches = tuple(sub_caches_rebuilt)
                     reconstructed_caches.append(cl)
+                    reconstructed_indices.add(layer_idx)
                     kv_count += 1
 
             if not reconstructed_caches:
@@ -1478,6 +1679,8 @@ class BlockAwarePrefixCache:
                 missed_skip_only = 0
                 missed_other = 0
                 for li in range(num_layers):
+                    if li in reconstructed_indices:
+                        continue  # successfully rebuilt — not a miss
                     layer_entries = []
                     for bd in all_block_data:
                         if li < len(bd):
@@ -1485,10 +1688,7 @@ class BlockAwarePrefixCache:
                     tags = [e[0] if isinstance(e, (tuple, list)) else "?" for e in layer_entries]
                     if all(t == "skip" for t in tags):
                         missed_skip_only += 1
-                    elif li >= len(reconstructed_caches) or not any(
-                        t in ("kv", "quantized_kv", "rotating_kv", "cumulative", "cache_list")
-                        for t in tags
-                    ):
+                    else:
                         missed_other += 1
 
                 if missed_other == 0 and missed_skip_only > 0 and reconstructed_caches:
