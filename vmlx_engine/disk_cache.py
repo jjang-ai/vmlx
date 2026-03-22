@@ -331,16 +331,21 @@ class DiskCacheManager:
             cache_metadata = [cache_info, save_metadata, cache_classes]
             cache_metadata_flat = dict(tree_flatten(cache_metadata))
 
-            # Materialize all lazy MLX arrays on the calling thread.
-            # mx.eval forces GPU computation NOW so the background thread
-            # won't need to trigger any Metal operations — the arrays are
-            # fully concrete values in memory with no pending Metal work.
-            # We pass pre-evaluated MLX arrays (not numpy) to preserve
-            # bfloat16 and other dtypes that numpy may not support.
-            arrays_to_materialize = [v for v in cache_data_flat.values()
-                                     if isinstance(v, mx.array)]
-            if arrays_to_materialize:
-                mx.eval(*arrays_to_materialize)  # noqa: S307 — MLX GPU eval, not Python eval
+            # Convert all MLX arrays to numpy on the main thread.
+            # mx.save_safetensors on a background thread can trigger
+            # Metal assertions ("addCompletedHandler after commit")
+            # even with pre-evaluated arrays, because accessing Metal
+            # buffer memory from a non-main thread races with ongoing
+            # GPU operations.  Converting to numpy here does a safe CPU
+            # memcpy while we're on the main thread, and the background
+            # writer uses safetensors.numpy.save_file instead.
+            import numpy as np
+            for k, v in cache_data_flat.items():
+                if isinstance(v, mx.array):
+                    a = v
+                    if 'bfloat16' in str(a.dtype):
+                        a = a.astype(mx.float16)
+                    cache_data_flat[k] = np.array(a)
 
         except Exception as e:
             logger.warning(f"Failed to pre-serialize cache for disk: {e}")
@@ -421,12 +426,10 @@ class DiskCacheManager:
             # Atomic write: write to temp file then rename.
             # os.rename is atomic on macOS (same filesystem), so readers
             # never see a partially-written cache file.
-            # Arrays are pre-evaluated (mx.eval on main thread) — no lazy
-            # Metal ops will be triggered. mx.save_safetensors preserves
-            # bfloat16 and all dtypes (numpy conversion would lose bfloat16).
-            if not _HAS_MLX:
-                return
-            mx.save_safetensors(str(tmp_path), cache_data_flat, cache_metadata_flat)
+            # Arrays arrive as numpy (converted on main thread) to avoid
+            # Metal buffer access from this background thread.
+            from safetensors.numpy import save_file as np_save_file
+            np_save_file(cache_data_flat, str(tmp_path), metadata=cache_metadata_flat)
 
             os.rename(str(tmp_path), str(file_path))
 
