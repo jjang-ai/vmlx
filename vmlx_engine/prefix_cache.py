@@ -716,6 +716,17 @@ class BlockAwarePrefixCache:
         np_sources: dict = {}  # layer_idx → (np_keys, np_values)
         if disk_store is not None and is_tensor_data and HAS_MLX:
             import numpy as np
+            # Synchronize all Metal streams before converting arrays to numpy.
+            # mlx_lm's BatchGenerator.next() does NOT synchronize after
+            # inference — in-place KV/SSM cache updates (keys[...] = new_k)
+            # create lazy side-effect operations that may still be pending on
+            # the Metal command queue.  Without this sync, np.array() on cache
+            # arrays (especially cumulative SSM state in _numpy_block_slice)
+            # triggers "addCompletedHandler after commit" or segfault.
+            # MLLMBatchGenerator.next() already syncs its dedicated _stream,
+            # but the stock BatchGenerator and the default stream are not
+            # covered — a bare mx.synchronize() handles both.
+            mx.synchronize()
             for idx, layer_state in enumerate(cache_data):
                 state = layer_state.get("state")
                 if state is None:
