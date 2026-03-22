@@ -1041,42 +1041,51 @@ def load_model(
         except Exception as e:
             logger.debug(f"Memory advisory failed: {e}")
 
-    # Apply layer-by-layer streaming wrapper for disk-streaming mode.
-    # This wraps each transformer layer with a sync barrier (mx.eval) so Metal
-    # executes one layer at a time, allowing macOS to page idle weights to SSD.
-    # Also sets a reduced wired limit so weights are pageable (not pinned).
+    # SSD disk-streaming: set up per-layer weight recycling.
+    # Build weight index, save JANG temp weights if needed, configure model
+    # to use ssd_stream_generate instead of mlx_lm.stream_generate.
     if stream_from_disk and _engine is not None:
         try:
-            from .utils.streaming_wrapper import apply_streaming_layers, compute_streaming_wired_limit, lock_wired_limit
-            import mlx.core as mx
+            from .utils.weight_index import build_weight_index, save_all_layer_weights
+            from .utils.jang_loader import is_jang_model
+            import tempfile
 
-            # Get the raw model from the engine
-            raw_model = None
-            if hasattr(_engine, '_model'):
-                raw_model = _engine._model
-            elif hasattr(_engine, '_mllm_instance') and _engine._mllm_instance:
-                raw_model = _engine._mllm_instance.model
+            # Get the LLM wrapper (has _stream_from_disk attribute)
+            llm_model = None
+            if hasattr(_engine, '_model') and hasattr(_engine._model, '_stream_from_disk'):
+                # SimpleEngine stores the MLXLanguageModel
+                llm_model = _engine._model
+            elif hasattr(_engine, '_model'):
+                llm_model = _engine._model
 
-            if raw_model is not None:
-                n_wrapped = apply_streaming_layers(raw_model)
-                if n_wrapped > 0:
-                    # Set reduced wired limit — allows macOS to page idle layers to SSD
-                    wired_limit = compute_streaming_wired_limit(raw_model)
-                    if wired_limit is not None:
-                        mx.set_wired_limit(wired_limit)
-                        logger.info(f"Wired memory limit set to {wired_limit / (1024**3):.1f}GB for disk streaming")
-                        # Lock wired limit to prevent mlx-lm's generate functions
-                        # from overriding it back to max (wired_limit_context,
-                        # BatchGenerator.__init__ both call mx.set_wired_limit)
-                        lock_wired_limit()
-                    else:
-                        logger.warning("Could not compute streaming wired limit — using default")
-                else:
-                    logger.warning("Streaming wrapper could not find model layers")
+            if llm_model is not None and hasattr(llm_model, '_stream_from_disk'):
+                llm_model._stream_from_disk = True
+                llm_model._model_path = _model_path
+
+                # Build weight index from safetensors files
+                try:
+                    weight_index = build_weight_index(_model_path)
+                    llm_model._weight_index = weight_index
+                    logger.info(f"SSD weight index: {len(weight_index)} layers from {_model_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to build weight index: {e}")
+
+                # For JANG models: save transformed weights to temp files
+                if is_jang_model(_model_path):
+                    try:
+                        raw_model = llm_model.model
+                        temp_dir = tempfile.mkdtemp(prefix="vmlx_ssd_")
+                        paths = save_all_layer_weights(raw_model, temp_dir)
+                        llm_model._temp_weight_dir = temp_dir
+                        logger.info(f"JANG temp weights: {len(paths)} layers saved to {temp_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to save JANG temp weights: {e}")
+
+                logger.info("SSD per-layer weight recycling configured")
             else:
-                logger.warning("Could not access raw model for streaming wrapper")
+                logger.warning("SSD streaming: could not configure model (no _stream_from_disk attr)")
         except Exception as e:
-            logger.warning(f"Failed to apply streaming wrapper: {e}")
+            logger.warning(f"Failed to configure SSD streaming: {e}")
 
     # Log system memory after model load
     try:

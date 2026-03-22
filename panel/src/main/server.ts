@@ -53,9 +53,11 @@ export interface ServerConfig {
   blockDiskCacheDir?: string
   blockDiskCacheMaxGb?: number
 
-  // Disk-streaming mode (models larger than RAM)
+  // SSD disk-streaming mode (per-layer weight recycling for models > RAM)
   streamFromDisk?: boolean
   streamMemoryPercent?: number
+  ssdMemoryBudget?: number
+  ssdPrefetchLayers?: number
 
   // Performance
   streamInterval: number

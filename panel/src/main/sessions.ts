@@ -858,7 +858,7 @@ export class SessionManager extends EventEmitter {
     'logLevel', 'corsOrigins',
     'enableJit',
     'imageMode', 'imageQuantize',
-    'streamFromDisk', 'streamMemoryPercent',
+    'streamFromDisk', 'streamMemoryPercent', 'ssdMemoryBudget', 'ssdPrefetchLayers',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -1670,11 +1670,17 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
-    // Disk-streaming mode — must come BEFORE cache flags so Python-side gating is clear
+    // SSD disk-streaming mode — per-layer weight recycling from SSD
     if (config.streamFromDisk) {
       args.push('--stream-from-disk')
       if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
         args.push('--stream-memory-percent', config.streamMemoryPercent.toString())
+      }
+      if (config.ssdMemoryBudget != null && config.ssdMemoryBudget > 0) {
+        args.push('--ssd-memory-budget', config.ssdMemoryBudget.toString())
+      }
+      if (config.ssdPrefetchLayers != null && config.ssdPrefetchLayers > 0) {
+        args.push('--ssd-prefetch-layers', config.ssdPrefetchLayers.toString())
       }
     }
 

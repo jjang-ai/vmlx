@@ -62,11 +62,17 @@ function buildCommandPreview(
     : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
       : detected?.reasoningParser)
 
-  // Disk-streaming mode — before cache flags for clarity
+  // SSD disk-streaming mode — per-layer weight recycling
   if (config.streamFromDisk) {
     parts.push('--stream-from-disk')
     if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
       parts.push('--stream-memory-percent', config.streamMemoryPercent.toString())
+    }
+    if (config.ssdMemoryBudget != null && config.ssdMemoryBudget > 0) {
+      parts.push('--ssd-memory-budget', config.ssdMemoryBudget.toString())
+    }
+    if (config.ssdPrefetchLayers != null && config.ssdPrefetchLayers > 0) {
+      parts.push('--ssd-prefetch-layers', config.ssdPrefetchLayers.toString())
     }
   }
 

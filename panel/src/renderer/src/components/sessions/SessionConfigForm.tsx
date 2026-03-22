@@ -43,6 +43,8 @@ export interface SessionConfig {
   additionalArgs: string
   streamFromDisk: boolean
   streamMemoryPercent: number
+  ssdMemoryBudget: number
+  ssdPrefetchLayers: number
   enableJit: boolean
   idleTimeoutSoftMin?: number
   idleTimeoutHardMin?: number
@@ -98,6 +100,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
   additionalArgs: '',
   streamFromDisk: false,
   streamMemoryPercent: 90,
+  ssdMemoryBudget: 0,
+  ssdPrefetchLayers: 0,
   enableJit: false,
   logLevel: 'INFO',
   corsOrigins: '*',
@@ -283,8 +287,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Disk-Streaming Mode */}
       <Section title="Disk-Streaming Mode" expanded={expandedSections.diskStreaming} onToggle={() => toggleSection('diskStreaming')} hidden={isImage}>
         <CheckField
-          label="Stream from Disk (SSD)"
-          tooltip="Enable for models that exceed available RAM. Weights stay on SSD and are paged in on demand by macOS. Automatically disables ALL caching, limits to 1 sequence. Expect 2-5x slower inference but the model RUNS instead of crashing."
+          label="SSD Disk Streaming"
+          tooltip="Enable per-layer weight recycling for models that exceed available RAM. Each layer's weights are loaded from SSD, computed, then freed — only 1 layer in GPU memory at a time. Automatically disables all caching, limits to 1 sequence."
           checked={config.streamFromDisk}
           onChange={v => onChange('streamFromDisk', v)}
         />
@@ -292,7 +296,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <>
             <SliderField
               label="Virtual Memory Budget (%)"
-              tooltip="Controls how much virtual memory Metal can allocate (as a multiplier of physical RAM). Higher values allow larger models by letting macOS page weights to SSD. At 90% (default), Metal gets ~3.5x your RAM in virtual space. Lower if you experience system instability."
+              tooltip="Controls how much virtual memory Metal can allocate (as a multiplier of physical RAM). Higher values allow larger models. At 90% (default), Metal gets ~3.5x your RAM in virtual space."
               value={config.streamMemoryPercent}
               onChange={v => onChange('streamMemoryPercent', v)}
               min={50}
@@ -300,10 +304,30 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={5}
               defaultValue={90}
             />
-            <div className="rounded-md border border-yellow-600/40 bg-yellow-900/20 px-3 py-2 text-xs text-yellow-200">
-              Disk-streaming mode: All caching features will be automatically disabled.
-              Performance will be 2-5x slower than normal. Only use this when the model
-              exceeds your available RAM. Lower the memory % if inference crashes.
+            <SliderField
+              label="SSD Memory Budget (MB)"
+              tooltip="Metal GPU memory budget for layer weights in MB. 0 = auto (fit one layer + headroom). Controls how much GPU memory is available for the weight recycling cycle."
+              value={config.ssdMemoryBudget}
+              onChange={v => onChange('ssdMemoryBudget', v)}
+              min={0}
+              max={16384}
+              step={256}
+              defaultValue={0}
+            />
+            <SliderField
+              label="Prefetch Layers"
+              tooltip="Number of layers to prefetch from SSD during decode. 0 = load on demand (safest). Higher values use more memory but may improve throughput by overlapping I/O with compute."
+              value={config.ssdPrefetchLayers}
+              onChange={v => onChange('ssdPrefetchLayers', v)}
+              min={0}
+              max={8}
+              step={1}
+              defaultValue={0}
+            />
+            <div className="rounded-md border border-blue-600/40 bg-blue-900/20 px-3 py-2 text-xs text-blue-200">
+              SSD streaming loads/frees each layer from SSD per token. Only 1 layer
+              in GPU memory at a time. Speed depends on SSD bandwidth (~7.4 GB/s on M4).
+              All caching is automatically disabled.
             </div>
           </>
         )}

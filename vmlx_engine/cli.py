@@ -196,11 +196,18 @@ def serve_command(args):
 
     # Disk-streaming mode: override cache flags
     if getattr(args, 'stream_from_disk', False):
+        ssd_budget = getattr(args, 'ssd_memory_budget', 0)
+        ssd_prefetch = getattr(args, 'ssd_prefetch_layers', 0)
         print("\n" + "=" * 60)
-        print("DISK-STREAMING MODE ENABLED")
+        print("SSD DISK-STREAMING MODE — PER-LAYER WEIGHT RECYCLING")
         print("=" * 60)
-        print("  Weights will be mmap'd from SSD — macOS pages on demand.")
-        print("  All caching disabled, max 1 sequence, expect 2-5x slower.")
+        print("  Loads/frees each layer's weights from SSD per token.")
+        print("  Only 1 layer in GPU memory at a time.")
+        if ssd_budget > 0:
+            print(f"  Memory budget: {ssd_budget} MB")
+        if ssd_prefetch > 0:
+            print(f"  Prefetch layers: {ssd_prefetch}")
+        print("  All caching disabled, max 1 sequence.")
         print("=" * 60 + "\n")
         # Force-disable all caching features
         args.use_paged_cache = False
@@ -940,6 +947,22 @@ Examples:
         help="Percentage of total RAM to allocate for Metal when disk-streaming. "
              "Lower values leave more headroom for KV cache. "
              "Default: 90. For very large models, try 75-80. (default: 90)",
+    )
+    serve_parser.add_argument(
+        "--ssd-memory-budget",
+        type=int,
+        default=0,
+        help="Metal memory budget in MB for SSD streaming layer weights. "
+             "0 = auto (fit one layer + headroom). "
+             "Controls how much GPU memory is available for weight recycling. (default: 0)",
+    )
+    serve_parser.add_argument(
+        "--ssd-prefetch-layers",
+        type=int,
+        default=0,
+        help="Number of layers to prefetch from SSD during decode. "
+             "0 = load on demand. 1+ = async prefetch ahead. "
+             "Higher values use more memory but may improve throughput. (default: 0)",
     )
     # MCP options
     serve_parser.add_argument(
