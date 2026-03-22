@@ -1070,7 +1070,11 @@ def load_model(
                 except Exception as e:
                     logger.warning(f"Failed to build weight index: {e}")
 
-                # For JANG models: save transformed weights to temp files
+                # For JANG models: try to save transformed weights to temp files.
+                # This may fail for quantized models (QuantizedLinear dtype mismatch).
+                # If it fails, SSD streaming falls back to loading from original
+                # safetensors files via the weight index (works for most JANG models
+                # since only gate weights are dequanted at load time).
                 if is_jang_model(_model_path):
                     try:
                         raw_model = llm_model.model
@@ -1079,7 +1083,7 @@ def load_model(
                         llm_model._temp_weight_dir = temp_dir
                         logger.info(f"JANG temp weights: {len(paths)} layers saved to {temp_dir}")
                     except Exception as e:
-                        logger.warning(f"Failed to save JANG temp weights: {e}")
+                        logger.info(f"JANG temp save not possible ({e}) — using original safetensors via weight index")
 
                 logger.info("SSD per-layer weight recycling configured")
             else:
