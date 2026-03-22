@@ -1275,6 +1275,7 @@ class BlockAwarePrefixCache:
 
             # Reconstruct each layer
             reconstructed_caches = []
+            reconstructed_indices: set = set()  # tracks which layer_idx values were rebuilt
             kv_count = 0
             cumulative_count = 0
 
@@ -1380,6 +1381,7 @@ class BlockAwarePrefixCache:
                         cache.values = concat_values
                         cache.offset = concat_keys[0].shape[-2]
                         reconstructed_caches.append(cache)
+                        reconstructed_indices.add(layer_idx)
                         kv_count += 1
                     except ImportError:
                         logger.warning("Cannot reconstruct QuantizedKVCache: import failed")
@@ -1415,6 +1417,7 @@ class BlockAwarePrefixCache:
                     cache.values = concat_values
                     cache.offset = concat_keys.shape[seq_axis]
                     reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
                     kv_count += 1
 
                 elif rotating_kv_slices_keys:
@@ -1435,6 +1438,7 @@ class BlockAwarePrefixCache:
                     cache.values = concat_values
                     cache.offset = concat_keys.shape[seq_axis]
                     reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
                     kv_count += 1
 
                 elif best_cumulative is not None:
@@ -1464,6 +1468,7 @@ class BlockAwarePrefixCache:
                             return None
 
                     reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
                     cumulative_count += 1
 
                 elif cache_list_entries:
@@ -1576,6 +1581,7 @@ class BlockAwarePrefixCache:
                     cl = CLCache.__new__(CLCache)
                     cl.caches = tuple(sub_caches_rebuilt)
                     reconstructed_caches.append(cl)
+                    reconstructed_indices.add(layer_idx)
                     kv_count += 1
 
             if not reconstructed_caches:
@@ -1586,6 +1592,8 @@ class BlockAwarePrefixCache:
                 missed_skip_only = 0
                 missed_other = 0
                 for li in range(num_layers):
+                    if li in reconstructed_indices:
+                        continue  # successfully rebuilt — not a miss
                     layer_entries = []
                     for bd in all_block_data:
                         if li < len(bd):
@@ -1593,10 +1601,7 @@ class BlockAwarePrefixCache:
                     tags = [e[0] if isinstance(e, (tuple, list)) else "?" for e in layer_entries]
                     if all(t == "skip" for t in tags):
                         missed_skip_only += 1
-                    elif li >= len(reconstructed_caches) or not any(
-                        t in ("kv", "quantized_kv", "rotating_kv", "cumulative", "cache_list")
-                        for t in tags
-                    ):
+                    else:
                         missed_other += 1
 
                 if missed_other == 0 and missed_skip_only > 0 and reconstructed_caches:
