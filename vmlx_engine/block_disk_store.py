@@ -284,10 +284,24 @@ class BlockDiskStore:
             if num_layers == 0:
                 return
 
+            # Normalize all tensors to MLX arrays that mx.save_safetensors
+            # can handle.  Two issues to fix:
+            # 1. numpy ndarrays (from numpy-sliced block data) — convert to mx
+            # 2. bfloat16 dtype (unsupported by safetensors) — cast to float16
+            import numpy as np
+            needs_eval = []
+            for k, v in tensors.items():
+                if isinstance(v, np.ndarray):
+                    tensors[k] = mx.array(v)
+                    needs_eval.append(tensors[k])
+                elif isinstance(v, mx.array) and v.dtype == mx.bfloat16:
+                    tensors[k] = v.astype(mx.float16)
+                    needs_eval.append(tensors[k])
+
             # Materialize all lazy MLX arrays on the calling thread.
-            arrays_to_materialize = [v for v in tensors.values() if isinstance(v, mx.array)]
-            if arrays_to_materialize:
-                mx.eval(*arrays_to_materialize)
+            arrays_to_eval = [v for v in tensors.values() if isinstance(v, mx.array)]
+            if arrays_to_eval:
+                mx.eval(*arrays_to_eval)  # noqa: S307 — mlx tensor materialization
 
             # Write safetensors file on the main thread.
             # mx.save_safetensors accesses Metal buffer memory internally,
@@ -727,6 +741,11 @@ def _deserialize_block(
             keys = data.get(f"layer_{i}_keys")
             values = data.get(f"layer_{i}_values")
             if keys is not None and values is not None:
+                # Restore bfloat16 from float16 (serialization casts
+                # bfloat16→float16 because safetensors doesn't support it)
+                if HAS_MLX and keys.dtype == mx.float16:
+                    keys = keys.astype(mx.bfloat16)
+                    values = values.astype(mx.bfloat16)
                 cache_data.append(("kv", keys, values))
             else:
                 cache_data.append(("skip",))
@@ -755,6 +774,9 @@ def _deserialize_block(
             max_size_arr = data.get(f"layer_{i}_max_size")
             keep_arr = data.get(f"layer_{i}_keep")
             if keys is not None and values is not None:
+                if HAS_MLX and keys.dtype == mx.float16:
+                    keys = keys.astype(mx.bfloat16)
+                    values = values.astype(mx.bfloat16)
                 max_size = int(max_size_arr.item()) if max_size_arr is not None else 0
                 keep = int(keep_arr.item()) if keep_arr is not None else 0
                 cache_data.append(("rotating_kv", keys, values, max_size, keep))
