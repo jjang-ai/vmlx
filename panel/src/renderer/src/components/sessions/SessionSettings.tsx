@@ -68,12 +68,6 @@ function buildCommandPreview(
     if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
       parts.push('--stream-memory-percent', config.streamMemoryPercent.toString())
     }
-    if (config.ssdMemoryBudget != null && config.ssdMemoryBudget > 0) {
-      parts.push('--ssd-memory-budget', config.ssdMemoryBudget.toString())
-    }
-    if (config.ssdPrefetchLayers != null && config.ssdPrefetchLayers > 0) {
-      parts.push('--ssd-prefetch-layers', config.ssdPrefetchLayers.toString())
-    }
   }
 
   // Prefix cache (mirrors buildArgs lines 1077-1114)

@@ -507,6 +507,8 @@ class TestLLMDraftModelWiring(unittest.TestCase):
             model.model = MagicMock()
             model.tokenizer = MagicMock()
             model._loaded = True
+            model._stream_from_disk = False
+            model._model_path = None
 
             results = list(model.stream_generate(prompt="Test", max_tokens=10))
 
@@ -533,6 +535,8 @@ class TestLLMDraftModelWiring(unittest.TestCase):
             model.model = MagicMock()
             model.tokenizer = MagicMock()
             model._loaded = True
+            model._stream_from_disk = False
+            model._model_path = None
 
             results = list(model.stream_generate(prompt="Test", max_tokens=10))
 

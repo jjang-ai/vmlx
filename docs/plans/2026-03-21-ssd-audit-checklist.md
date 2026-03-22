@@ -1,6 +1,6 @@
 # SSD Disk Streaming — Full Audit Checklist
 
-**Last updated: 2026-03-21 session f (post-live-testing)**
+**Last updated: 2026-03-21 session g (post-compact full cross-check audit)**
 
 ## VERIFIED WORKING (Python-level tests passed)
 
@@ -36,19 +36,21 @@ The app was rebuilt with all fixes but user has not yet confirmed a successful a
 | F8 | free_all_layer_weights gc.collect N times | Wasteful for 62+ layers | Single gc at end | weight_index.py:280-298 |
 | F9 | 52 layers vs 29 cache zip truncates silently | Nemotron hybrid SSM non-1:1 mapping | Added check + RuntimeError | ssd_generate.py:296-301 |
 
-## BUGS FOUND BUT NOT YET FIXED
+## BUGS FOUND IN AUDIT (cross-checked session g, fixed session h)
 
-| # | Severity | Bug | File | Impact |
-|---|----------|-----|------|--------|
-| A1 | CRITICAL | test_disk_streaming.py imports 5 removed symbols | tests:401-662 | 15 tests crash, breaks CI |
-| A2 | HIGH | --ssd-memory-budget and --ssd-prefetch-layers never forwarded | cli/server/ssd_generate | UI sliders do nothing |
-| A3 | HIGH | Deep sleep wake: SSD not re-configured | server.py:904-911 | Weight recycling stops after sleep |
-| A4 | MEDIUM | MLLM + SSD: silently falls through | server.py:1054-1086 | VLM gets no SSD benefit |
-| A5 | MEDIUM | mx.load reads entire shard for one layer | weight_index.py:199 | Perf: 5GB read per layer |
-| A6 | MEDIUM | make_sampler import path may differ | ssd_generate.py:255 | Could crash on newer mlx_lm |
-| A7 | LOW | Repetition penalty .at[].add() version dep | ssd_generate.py:385 | Older MLX may fail |
-| A8 | LOW | JANG temp dir never cleaned up | server.py:1077 | Disk space leak |
-| A9 | LOW | bench subparser missing new SSD args | cli.py | Cant bench SSD |
+| # | Severity | Bug | File | Impact | Status |
+|---|----------|-----|------|--------|--------|
+| A1 | CRITICAL | test_disk_streaming.py imports 5 removed symbols (12 tests in 4 classes) | tests:401-662 | Tests crash with ImportError | **FIXED** — 4 zombie test classes deleted, 27 tests pass |
+| A2 | HIGH | --ssd-memory-budget and --ssd-prefetch-layers parsed but never forwarded | cli/server/panel | UI sliders do nothing | **FIXED** — Dead sliders removed from UI, dead args removed from buildArgs + preview |
+| ~~A3~~ | ~~HIGH~~ | ~~Deep sleep wake: SSD not re-configured~~ | ~~server.py~~ | ~~Weight recycling stops after sleep~~ | **FALSE POSITIVE** — admin_wake passes stream_from_disk + stream_memory_percent to load_model() |
+| A4 | MEDIUM | MLLM + SSD: model class doesn't have _stream_from_disk attr | server.py | VLM via MLLM path gets no SSD benefit | **FIXED** — Warning logged when MLLM model doesn't support SSD |
+| A5 | MEDIUM | mx.load reads entire shard for one layer | weight_index.py:199 | Perf: loads 5GB file per layer | KNOWN (perf) — future optimization |
+| A6 | MEDIUM | make_sampler import from mlx_lm.generate — path may differ | ssd_generate.py:255 | Could crash on newer mlx_lm | KNOWN (compat risk) |
+| A7 | LOW | Repetition penalty .at[].add() — MLX version dependent | ssd_generate.py:417 | Older MLX may fail | KNOWN (compat risk) |
+| A8 | LOW | JANG temp dir never cleaned up on shutdown | server.py:1081 | Disk space leak | **FIXED** — atexit handler + previous temp dir cleanup on reload |
+| ~~A9~~ | ~~LOW~~ | ~~bench subparser missing new SSD args~~ | ~~cli.py~~ | ~~Cant bench SSD~~ | **FALSE POSITIVE** — bench has --stream-from-disk at cli.py:1271 |
+| A10 | LOW | free_all_layer_weights imported but never called | ssd_generate.py:28 | Dead import | **FIXED** — Removed unused import |
+| NEW | — | Loading progress stalls at 60% during SSD setup | sessions.ts + weight_index.py | No user feedback during JANG temp save | **FIXED** — 3 SSD progress patterns added + per-10-layer logging |
 
 ## SETTINGS INTERACTION MATRIX
 
@@ -80,6 +82,48 @@ The app was rebuilt with all fixes but user has not yet confirmed a successful a
 | Hybrid SSM | YES | SimpleEngine | NO | KNOWN LIMIT |
 | BatchedEngine | YES | IMPOSSIBLE | N/A | Gated by cli.py |
 
+## LAZY LOADING CHAIN (session g cross-check)
+
+All these consumers read server._stream_from_disk to enable lazy mmap loading:
+
+| Consumer | File:Line | Reads Flag | Passes To | Status |
+|----------|-----------|------------|-----------|--------|
+| tokenizer.py (LLM load) | tokenizer.py:141 | `getattr(_server_module, '_stream_from_disk', False)` | load_jang_model(lazy=), _load_with_tokenizer_fallback(lazy=), load(lazy=) | LIVE |
+| mllm.py (JANG VL load) | mllm.py:735 | `getattr(_server_module, '_stream_from_disk', False)` | load_jang_vlm_model(lazy=) | LIVE |
+| mllm.py (standard VL load) | mllm.py:757 | `getattr(_server_module, '_stream_from_disk', False)` | mlx_vlm.load(lazy=) | LIVE |
+| mllm_batch_generator.py | mllm_batch_gen:986 | `getattr(_server_module, '_stream_from_disk', False)` | Skips wired limit + cache limit override if True | LIVE |
+
+## DEEP SLEEP WAKE CHAIN (session g cross-check — A3 verified FALSE POSITIVE)
+
+| Step | File:Line | Verified |
+|------|-----------|----------|
+| _cli_args saves stream_from_disk | server.py:837 | YES |
+| _cli_args saves stream_memory_percent | server.py:838 | YES |
+| admin_wake passes stream_from_disk | server.py:1424 | YES |
+| admin_wake passes stream_memory_percent | server.py:1425 | YES |
+| load_model re-runs SSD init (1047-1092) | server.py:1047 | YES — rebuilds weight_index, saves JANG temp, re-sets all 4 LLM attrs |
+
+## FRONTEND ↔ BACKEND WIRING (session g cross-check)
+
+| Field | TS Type | Form | Default | Whitelist | buildArgs | Preview | CLI Flag | Status |
+|-------|---------|------|---------|-----------|-----------|---------|----------|--------|
+| streamFromDisk | server.ts:56 | CheckField | false | sessions.ts:861 | --stream-from-disk | SessionSettings:66 | cli.py:937 | LIVE |
+| streamMemoryPercent | server.ts:58 | Slider 50-95 | 90 | sessions.ts:861 | --stream-memory-percent N | SessionSettings:68 | cli.py:945 | LIVE |
+| ssdMemoryBudget | server.ts:59 | Slider 0-16384 | 0 | sessions.ts:861 | --ssd-memory-budget N | SessionSettings:71 | cli.py:953 | DEAD (A2) |
+| ssdPrefetchLayers | server.ts:60 | Slider 0-8 | 0 | sessions.ts:861 | --ssd-prefetch-layers N | SessionSettings:74 | cli.py:961 | DEAD (A2) |
+
+## OLD SYMBOLS REMOVAL VERIFICATION (session g cross-check)
+
+All old streaming symbols CONFIRMED removed from production code. Only in test zombie code + docstrings.
+
+| Symbol | Production | Tests | Docs | Status |
+|--------|-----------|-------|------|--------|
+| StreamingLayerWrapper | CLEAN | 4 zombie tests | docstring only | DELETE TESTS |
+| apply_streaming_layers | CLEAN | 3 zombie tests | docstring only | DELETE TESTS |
+| compute_streaming_wired_limit | CLEAN | 2 zombie tests | mentioned | DELETE TESTS |
+| lock_wired_limit | CLEAN | 3 zombie tests | mentioned | DELETE TESTS |
+| unlock_wired_limit | CLEAN | 3 zombie tests | mentioned | DELETE TESTS |
+
 ## EVERY FILE CHANGED
 
 | File | Action | What Changed |
@@ -94,6 +138,9 @@ The app was rebuilt with all fixes but user has not yet confirmed a successful a
 | panel sessions.ts | MODIFIED | buildArgs + config serialization for new fields |
 | panel SessionSettings.tsx | MODIFIED | Command preview for new args |
 | panel server.ts | MODIFIED | Type definitions for new fields |
+| vmlx_engine/mllm_batch_generator.py | MODIFIED | Reads _stream_from_disk, skips wired/cache limit override if True (line 986) |
+| vmlx_engine/models/mllm.py | MODIFIED | Reads _stream_from_disk, passes lazy= to load_jang_vlm_model and mlx_vlm.load (lines 735, 757) |
+| vmlx_engine/utils/tokenizer.py | MODIFIED | Reads _stream_from_disk, passes lazy= to all model loaders (line 141) |
 | docs/plans/ssd-streaming-design.md | UPDATED | Status to IMPLEMENTED |
 | docs/plans/ssd-implementation-matrix.md | NEW | Full technical docs |
-| docs/plans/ssd-audit-checklist.md | NEW | This file |
+| docs/plans/ssd-audit-checklist.md | NEW | This file (updated session g) |
