@@ -143,9 +143,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
 
-  const batchingOff = !config.continuousBatching
+  const ssdActive = !!config.streamFromDisk
+  const batchingOff = !config.continuousBatching || ssdActive
   const effectivelyNoBatching = batchingOff
-  const prefixOff = !config.enablePrefixCache
+  const prefixOff = !config.enablePrefixCache || ssdActive
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
 
   const toggleSection = (section: keyof typeof expandedSections) => {
@@ -225,6 +226,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       )}
 
       <Section title="Concurrent Processing" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')} hidden={isImage}>
+        {ssdActive && <IncompatWarning text="SSD disk streaming forces single-sequence SimpleEngine mode. Continuous batching and all concurrency settings are overridden at launch." />}
         <div className="flex items-center gap-2 mb-2">
           <PerformanceHint text="Controls how many requests your server handles at once. Keep Continuous Batching ON to enable the caching engine." />
           <button
@@ -274,7 +276,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="Default (32)"
         />
-        <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
+        <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={ssdActive} />
         <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
         {!config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
@@ -304,26 +306,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               step={5}
               defaultValue={90}
             />
-            <SliderField
-              label="SSD Memory Budget (MB)"
-              tooltip="Metal GPU memory budget for layer weights in MB. 0 = auto (fit one layer + headroom). Controls how much GPU memory is available for the weight recycling cycle."
-              value={config.ssdMemoryBudget}
-              onChange={v => onChange('ssdMemoryBudget', v)}
-              min={0}
-              max={16384}
-              step={256}
-              defaultValue={0}
-            />
-            <SliderField
-              label="Prefetch Layers"
-              tooltip="Number of layers to prefetch from SSD during decode. 0 = load on demand (safest). Higher values use more memory but may improve throughput by overlapping I/O with compute."
-              value={config.ssdPrefetchLayers}
-              onChange={v => onChange('ssdPrefetchLayers', v)}
-              min={0}
-              max={8}
-              step={1}
-              defaultValue={0}
-            />
             <div className="rounded-md border border-blue-600/40 bg-blue-900/20 px-3 py-2 text-xs text-blue-200">
               SSD streaming loads/frees each layer from SSD per token. Only 1 layer
               in GPU memory at a time. Speed depends on SSD bandwidth (~7.4 GB/s on M4).
@@ -335,9 +317,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Prefix Cache */}
       <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
-        {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
-        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
+        {ssdActive && <IncompatWarning text="SSD disk streaming disables all caching. Prefix cache is overridden at launch." />}
+        {!ssdActive && !effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
+        {!ssdActive && batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
+        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={ssdActive} />
         {config.enablePrefixCache && (
           <>
             <CheckField label="Legacy Entry-Count Cache" tooltip="Switches from memory-aware cache (which uses Cache Memory %, Cache Memory Limit, and Cache TTL controls) to a simpler entry-count cache. When ON: you control cache by max entries only. When OFF: you get fine-grained memory budget controls (% of RAM, MB limit, TTL expiration). Memory-aware mode is recommended for most users." checked={config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} />
@@ -457,11 +440,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Paged Cache */}
       <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
-        {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
+        {ssdActive && <IncompatWarning text="SSD disk streaming disables all caching. Paged KV cache is overridden at launch." />}
+        {!ssdActive && !effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+        {!ssdActive && batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff} />
+        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || ssdActive} />
         {config.usePagedCache && (
           <>
             <SliderField
@@ -524,9 +508,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* KV Cache Quantization */}
       <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
-        {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
-        {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
+        {ssdActive && <IncompatWarning text="SSD disk streaming disables all caching. KV cache quantization is overridden at launch." />}
+        {!ssdActive && !effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
+        {!ssdActive && batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
+        {!ssdActive && !batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid model detected — KV cache quantization will only compress the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
         <InfoNote text="KV cache quantization compresses entries stored in the prefix cache (completed prompts). It does NOT affect model weights or live generation KV cache, which always run at full precision. RAM savings apply only to cached prompt states." />
         <div className="block">
@@ -534,7 +519,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             Quantization
             <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy. Works with both LLMs and VLMs." />
           </span>
-          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
+          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || ssdActive}>
             <option value="none">None (full precision cache)</option>
             <option value="q8">q8 (8-bit, ~2x cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x cache savings)</option>
@@ -556,12 +541,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Disk Cache (L2 Persistent) */}
       <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
-        <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
-        {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
+        {ssdActive && <IncompatWarning text="SSD disk streaming disables all caching. Disk cache is overridden at launch." />}
+        {!ssdActive && !effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
+        {!ssdActive && <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />}
+        {!ssdActive && batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
-        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled={effectivelyNoBatching || prefixOff || config.usePagedCache} />
+        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled={effectivelyNoBatching || prefixOff || config.usePagedCache || ssdActive} />
         {config.enableDiskCache && (
           <>
             <SliderField
@@ -765,8 +751,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Speculative Decoding */}
       <Section title="Speculative Decoding" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage}>
-        <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
-        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
+        {ssdActive && <IncompatWarning text="SSD disk streaming disables speculative decoding. The draft model is overridden to none at launch." />}
+        {!ssdActive && <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />}
+        {!ssdActive && config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
         {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
         <Field label="Draft Model" tooltip="Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.">
           <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder="mlx-community/small-draft-model" className="cfg-input" />

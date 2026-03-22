@@ -39,6 +39,7 @@ The server provides:
 """
 
 import argparse
+import atexit
 import asyncio
 import base64
 import json
@@ -140,6 +141,15 @@ _default_enable_thinking: bool | None = None  # Set via --default-enable-thinkin
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 _stream_from_disk: bool = False  # --stream-from-disk: lazy mmap loading, no caching
+_ssd_temp_dir: str | None = None  # JANG temp weight dir — cleaned up on shutdown
+
+
+def _cleanup_ssd_temp():
+    if _ssd_temp_dir and os.path.isdir(_ssd_temp_dir):
+        import shutil
+        shutil.rmtree(_ssd_temp_dir, ignore_errors=True)
+
+atexit.register(_cleanup_ssd_temp)
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
@@ -822,7 +832,7 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args, _stream_from_disk
+    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args, _stream_from_disk, _ssd_temp_dir
 
     _stream_from_disk = stream_from_disk
 
@@ -1078,7 +1088,12 @@ def load_model(
                 if is_jang_model(_model_path):
                     try:
                         raw_model = llm_model.model
+                        # Clean up previous temp dir if exists (e.g. after deep sleep wake)
+                        if _ssd_temp_dir and os.path.isdir(_ssd_temp_dir):
+                            import shutil
+                            shutil.rmtree(_ssd_temp_dir, ignore_errors=True)
                         temp_dir = tempfile.mkdtemp(prefix="vmlx_ssd_")
+                        _ssd_temp_dir = temp_dir
                         paths = save_all_layer_weights(raw_model, temp_dir)
                         llm_model._temp_weight_dir = temp_dir
                         logger.info(f"JANG temp weights: {len(paths)} layers saved to {temp_dir}")
@@ -1090,6 +1105,14 @@ def load_model(
                 logger.warning("SSD streaming: could not configure model (no _stream_from_disk attr)")
         except Exception as e:
             logger.warning(f"Failed to configure SSD streaming: {e}")
+
+        # Warn if MLLM (multimodal) model — SSD only wired for LLM text path
+        if _engine is not None:
+            if hasattr(_engine, '_model') and not hasattr(getattr(_engine, '_model', None), '_stream_from_disk'):
+                logger.warning(
+                    "SSD disk streaming: model does not support per-layer weight recycling "
+                    "(likely VLM/multimodal). Text inference will use standard loading."
+                )
 
     # Log system memory after model load
     try:
@@ -1820,6 +1843,8 @@ async def create_anthropic_message(
         AnthropicStreamAdapter,
         to_chat_completion,
     )
+
+    from starlette.responses import JSONResponse
 
     try:
         body = await fastapi_request.json()

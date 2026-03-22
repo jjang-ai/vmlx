@@ -172,6 +172,8 @@ def save_all_layer_weights(model, output_dir: str | Path) -> list[Path]:
     for idx in range(num_layers):
         path = save_layer_weights(model, idx, output_dir)
         paths.append(path)
+        if (idx + 1) % 10 == 0 or idx == num_layers - 1:
+            logger.info("Saved %d/%d layer weights to SSD", idx + 1, num_layers)
 
     logger.info("Saved all %d layer weight files", len(paths))
     return paths

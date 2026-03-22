@@ -1368,13 +1368,27 @@ class Scheduler:
                         if self._is_hybrid and hasattr(self.model, 'make_cache'):
                             try:
                                 from .mllm_batch_generator import _fix_hybrid_cache
+                                num_before = len(reconstructed)
                                 reconstructed = _fix_hybrid_cache(
                                     reconstructed, self.model
                                 )
-                                # If _fix_hybrid_cache fell back to a fresh cache
-                                # (all KV offsets=0), treat as cache miss to avoid
-                                # prefilling only the suffix with an empty cache.
-                                if reconstructed is not None:
+                                num_after = len(reconstructed) if reconstructed else 0
+                                # LLM scheduler has no SSM companion cache.
+                                # If _fix_hybrid_cache expanded the cache (added
+                                # zeroed SSM layers), or returned a fresh cache,
+                                # the SSM state is wrong — treat as cache miss.
+                                if reconstructed is not None and num_after > num_before:
+                                    logger.info(
+                                        f"Request {request.request_id}: "
+                                        f"hybrid reconstruction expanded {num_before}->"
+                                        f"{num_after} layers (SSM layers zeroed, no "
+                                        f"companion state in LLM scheduler) — "
+                                        f"treating as cache miss for correctness"
+                                    )
+                                    reconstructed = None
+                                    request.remaining_tokens = request.prompt_token_ids
+                                    self.block_aware_cache.release_cache(request.request_id)
+                                elif reconstructed is not None:
                                     from mlx_lm.models.cache import KVCache as _KVC
                                     kv_layers = [c for c in reconstructed
                                                  if isinstance(c, _KVC)]

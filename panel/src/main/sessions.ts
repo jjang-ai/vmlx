@@ -146,6 +146,9 @@ export class SessionManager extends EventEmitter {
     { pattern: /Image model loaded in/, label: 'Image model loaded', progress: 55 },
     { pattern: /model loaded \((?:simple|batched) mode\)/, label: 'Engine ready', progress: 60 },
     { pattern: /Metal GPU memory after load/, label: 'Configuring GPU...', progress: 70 },
+    { pattern: /Saved \d+\/\d+ layer weights to SSD/, label: 'Saving weights to SSD...', progress: 72 },
+    { pattern: /SSD weight index:/, label: 'Building weight index...', progress: 73 },
+    { pattern: /SSD per-layer weight recycling configured/, label: 'SSD streaming ready', progress: 74 },
     { pattern: /KV cache quantization/, label: 'Setting up KV cache...', progress: 75 },
     { pattern: /(?:Chat template loaded|Applied custom chat template)/, label: 'Loading chat template...', progress: 80 },
     { pattern: /Native tool format enabled/, label: 'Configuring tools...', progress: 85 },
@@ -1675,12 +1678,6 @@ export class SessionManager extends EventEmitter {
       args.push('--stream-from-disk')
       if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
         args.push('--stream-memory-percent', config.streamMemoryPercent.toString())
-      }
-      if (config.ssdMemoryBudget != null && config.ssdMemoryBudget > 0) {
-        args.push('--ssd-memory-budget', config.ssdMemoryBudget.toString())
-      }
-      if (config.ssdPrefetchLayers != null && config.ssdPrefetchLayers > 0) {
-        args.push('--ssd-prefetch-layers', config.ssdPrefetchLayers.toString())
       }
     }
 

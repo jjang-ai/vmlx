@@ -25,7 +25,6 @@ import mlx.nn as nn
 from vmlx_engine.utils.streaming_wrapper import _find_layers
 from vmlx_engine.utils.weight_index import (
     build_weight_index,
-    free_all_layer_weights,
     free_layer_weights,
     load_layer_weights,
 )
@@ -298,13 +297,31 @@ def ssd_stream_generate(
     lm_head = components["lm_head"]
     num_layers = len(layers)
 
-    # Verify 1:1 layer-to-cache mapping (hybrid SSM models may differ)
+    # Check layer-to-cache mapping — hybrid SSM models may differ
     if len(prompt_cache) != num_layers:
-        raise RuntimeError(
-            f"SSD streaming requires 1:1 layer-cache mapping but got "
-            f"{num_layers} layers vs {len(prompt_cache)} cache entries. "
-            f"Hybrid SSM models are not yet supported."
+        logger.warning(
+            "SSD streaming: %d layers vs %d cache entries (hybrid SSM model). "
+            "Falling back to standard generation with lazy-loaded (mmap) weights. "
+            "macOS will page weights in/out from SSD automatically.",
+            num_layers, len(prompt_cache),
         )
+        # Fall back to mlx_lm.stream_generate — model's own __call__ handles
+        # hybrid cache routing internally. Weights are still mmap'd from disk.
+        from mlx_lm import stream_generate as mlx_stream_generate
+        from mlx_lm.generate import make_sampler
+
+        # mlx_lm.stream_generate passes **kwargs to generate_step which expects
+        # a sampler callable, NOT temp/top_p params directly
+        fallback_sampler = make_sampler(temp=temperature, top_p=top_p)
+
+        for response in mlx_stream_generate(
+            model, tokenizer,
+            prompt if isinstance(prompt, str) else tokenizer.decode(prompt.tolist() if hasattr(prompt, 'tolist') else list(prompt)),
+            max_tokens=max_tokens,
+            sampler=fallback_sampler,
+        ):
+            yield response
+        return
 
     # ===================================================================
     # HELPER: per-layer forward pass (used by both prefill and decode)
