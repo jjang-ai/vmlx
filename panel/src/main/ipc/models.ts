@@ -185,16 +185,16 @@ export function validateImageModelCompleteness(modelDir: string, encoderType?: '
       missing.push('text_encoder/')
     }
 
-    // Determine encoder type from the explicit parameter.
+    // Determine encoder type from the explicit parameter OR auto-detect from disk.
     // Single-encoder models (ZImage, Flux2Klein, QwenImage, FIBO, etc.) don't need text_encoder_2.
     // Dual-encoder models (Flux1 schnell/dev) require text_encoder_2.
-    const SINGLE_ENCODER_CLASSES = new Set(['ZImage', 'Flux2Klein', 'QwenImage', 'QwenImageEdit', 'FIBO', 'Flux1Kontext', 'Flux1Fill', 'SeedVR2'])
     let isSingleEncoder: boolean
     if (encoderType) {
       isSingleEncoder = encoderType === 'single'
     } else {
-      // Default to dual encoder (safest — will flag missing text_encoder_2)
-      isSingleEncoder = false
+      // Auto-detect: if text_encoder_2/ doesn't exist on disk but text_encoder/ and
+      // transformer/ do, it's a valid single-encoder model — don't flag as incomplete.
+      isSingleEncoder = !files.includes('text_encoder_2') && files.includes('text_encoder') && files.includes('transformer')
     }
     if (!isSingleEncoder && !files.includes('text_encoder_2')) {
       missing.push('text_encoder_2/')

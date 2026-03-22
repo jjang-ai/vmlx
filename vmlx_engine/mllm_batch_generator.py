@@ -980,19 +980,21 @@ class MLLMBatchGenerator:
             # Use non-deprecated API when available (MLX ≥ 0.25)
             _device_info = getattr(mx, 'device_info', None) or mx.metal.device_info
             _set_cache = getattr(mx, 'set_cache_limit', None) or mx.metal.set_cache_limit
-            self._old_wired_limit = mx.set_wired_limit(
-                _device_info()["max_recommended_working_set_size"]
-            )
-            # Set Metal allocator cache limit to 25% of max working set
-            # (floor 512MB). This bounds the Metal allocator's free-list,
-            # preventing it from hoarding memory that prefix cache / OS needs.
-            # Skip in disk-streaming mode — server.py already set limit to 90% of RAM.
+            # Check disk-streaming mode — server.py manages wired/cache limits
             try:
                 from . import server as _server_module
                 _is_streaming = getattr(_server_module, '_stream_from_disk', False)
             except Exception:
                 _is_streaming = False
+            # In streaming mode: do NOT override wired limit (server.py set a
+            # reduced limit to allow SSD paging) or cache limit (set to 0).
             if not _is_streaming:
+                self._old_wired_limit = mx.set_wired_limit(
+                    _device_info()["max_recommended_working_set_size"]
+                )
+                # Set Metal allocator cache limit to 25% of max working set
+                # (floor 512MB). Bounds the Metal allocator's free-list,
+                # preventing it from hoarding memory that prefix cache / OS needs.
                 try:
                     max_ws = _device_info()["max_recommended_working_set_size"]
                     cache_limit = max(512 * 1024 * 1024, int(max_ws * 0.25))
@@ -1004,7 +1006,7 @@ class MLLMBatchGenerator:
                 except Exception as e:
                     logger.debug(f"Metal cache limit not available: {e}")
             else:
-                logger.info("Disk-streaming mode: skipping Metal cache limit override")
+                logger.info("Disk-streaming mode: skipping wired limit + cache limit override")
 
     def close(self) -> None:
         """Release resources and reset wired/cache limits."""

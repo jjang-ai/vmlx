@@ -1041,6 +1041,43 @@ def load_model(
         except Exception as e:
             logger.debug(f"Memory advisory failed: {e}")
 
+    # Apply layer-by-layer streaming wrapper for disk-streaming mode.
+    # This wraps each transformer layer with a sync barrier (mx.eval) so Metal
+    # executes one layer at a time, allowing macOS to page idle weights to SSD.
+    # Also sets a reduced wired limit so weights are pageable (not pinned).
+    if stream_from_disk and _engine is not None:
+        try:
+            from .utils.streaming_wrapper import apply_streaming_layers, compute_streaming_wired_limit, lock_wired_limit
+            import mlx.core as mx
+
+            # Get the raw model from the engine
+            raw_model = None
+            if hasattr(_engine, '_model'):
+                raw_model = _engine._model
+            elif hasattr(_engine, '_mllm_instance') and _engine._mllm_instance:
+                raw_model = _engine._mllm_instance.model
+
+            if raw_model is not None:
+                n_wrapped = apply_streaming_layers(raw_model)
+                if n_wrapped > 0:
+                    # Set reduced wired limit — allows macOS to page idle layers to SSD
+                    wired_limit = compute_streaming_wired_limit(raw_model)
+                    if wired_limit is not None:
+                        mx.set_wired_limit(wired_limit)
+                        logger.info(f"Wired memory limit set to {wired_limit / (1024**3):.1f}GB for disk streaming")
+                        # Lock wired limit to prevent mlx-lm's generate functions
+                        # from overriding it back to max (wired_limit_context,
+                        # BatchGenerator.__init__ both call mx.set_wired_limit)
+                        lock_wired_limit()
+                    else:
+                        logger.warning("Could not compute streaming wired limit — using default")
+                else:
+                    logger.warning("Streaming wrapper could not find model layers")
+            else:
+                logger.warning("Could not access raw model for streaming wrapper")
+        except Exception as e:
+            logger.warning(f"Failed to apply streaming wrapper: {e}")
+
     # Log system memory after model load
     try:
         import psutil
