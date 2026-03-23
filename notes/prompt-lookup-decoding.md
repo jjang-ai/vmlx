@@ -184,17 +184,48 @@ For temperature > 0, the model samples from a distribution — a draft token
 isn't right or wrong, it's a draw from p(x). Accepting it without
 correction biases the output distribution.
 
-**Probabilistic acceptance (Phase 3):** For a deterministic draft source
-like PLD (no draft model distribution), the correct algorithm is:
+### Temperature=0.3 test — catastrophic failure confirmed
+
+Tested PLD at temperature=0.3 to characterise the failure before Phase 3.
+Two benchmark runs, both with PLD enabled (note: `VMLX_PLD_DISABLED=1` as
+an env var prefix only affects the client process, not the running server).
+
+Observed failures:
+
+- **Open-ended reasoning**: "presents presents a a compelling compelling
+  challenge challenge...the the the the the the..." — word doubling
+  followed by an infinite "the" loop. 14 SSE events for ~421 tokens
+  (~30 tokens/event), confirming PLD was firing aggressively.
+- **Structured JSON**: returned `]` (empty array) — a degenerate sample.
+
+**Root cause — greedy bonus_token:** After accepting K draft tokens, the
+code emits `bonus_token = argmax(logits[num_accept])` — a *greedy*
+prediction. At temperature > 0 this injects a greedy token into a sampled
+context. The model then samples "the" (a high-probability continuation
+after many greedy "the" tokens), creating a runaway feedback loop.
+
+The greedy acceptance check (`argmax == draft`) has the same problem: it
+only accepts a draft token if it would be the greedy choice, but then
+advances the sampled context by one more greedy step.
+
+**The temperature gate (≤ 0.05) is load-bearing** and must be maintained
+until Phase 3 is complete.
+
+### Phase 3 design: probabilistic acceptance + sampled bonus
+
+For a deterministic draft source like PLD (no draft model distribution),
+the correct algorithm is:
 
 1. Accept draft token d_i with probability `p(d_i) = softmax(logits[i]/T)[d_i]`
 2. On rejection: sample the correction token from `p(x)` with d_i excluded
    (set `logits[d_i] = -inf`, then sample)
+3. Bonus token: sample from `p(x)` at position `num_accept` (not argmax)
 
 This provably preserves the original sampling distribution. Implementation
 cost is low — the verification forward pass already computes logits at
-every position. Phase 3 requires adding the accept/reject sampling step
-and modifying the correction token draw.
+every position. Phase 3 requires adding the accept/reject sampling step,
+modifying the correction token draw, and replacing argmax with a sample
+for the bonus token.
 
 **Expected Phase 3 benefit:** On agent workloads with temperature 0.6–0.8,
 hit@1 will be lower than 60% (sampled outputs diverge from n-gram
