@@ -639,6 +639,10 @@ def _serialize_block(
             _, keys, values = layer_data
             tensors[f"layer_{i}_keys"] = keys
             tensors[f"layer_{i}_values"] = values
+            # Record original dtype so deserialization can restore it
+            # after bfloat16→float16 cast (safetensors doesn't support bf16)
+            if hasattr(keys, "dtype"):
+                meta.setdefault("__orig_dtypes__", {})[str(i)] = str(keys.dtype)
 
         elif tag == "quantized_kv":
             _, keys_tuple, values_tuple, layer_meta = layer_data
@@ -657,6 +661,8 @@ def _serialize_block(
             tensors[f"layer_{i}_values"] = values
             tensors[f"layer_{i}_max_size"] = mx.array([max_size], dtype=mx.int32)
             tensors[f"layer_{i}_keep"] = mx.array([keep], dtype=mx.int32)
+            if hasattr(keys, "dtype"):
+                meta.setdefault("__orig_dtypes__", {})[str(i)] = str(keys.dtype)
 
         elif tag == "cumulative":
             _, state_list, layer_meta, class_name = layer_data
@@ -710,6 +716,8 @@ def _deserialize_block(
 
     # Per-layer type map (new format with __layer_types__)
     layer_types = meta.get("__layer_types__", {})
+    # Per-layer original dtypes (for restoring bfloat16 after float16 cast)
+    orig_dtypes = meta.get("__orig_dtypes__", {})
 
     # Find all layer indices
     layer_indices: Dict[int, str] = {}
@@ -741,11 +749,14 @@ def _deserialize_block(
             keys = data.get(f"layer_{i}_keys")
             values = data.get(f"layer_{i}_values")
             if keys is not None and values is not None:
-                # Restore bfloat16 from float16 (serialization casts
-                # bfloat16→float16 because safetensors doesn't support it)
-                if HAS_MLX and keys.dtype == mx.float16:
-                    keys = keys.astype(mx.bfloat16)
-                    values = values.astype(mx.bfloat16)
+                # Restore original dtype if it was cast during serialization
+                # (e.g. bfloat16 -> float16 because safetensors doesn't support bf16)
+                orig_dt = orig_dtypes.get(str(i))
+                if HAS_MLX and orig_dt and orig_dt != str(keys.dtype):
+                    target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                    if target is not None:
+                        keys = keys.astype(target)
+                        values = values.astype(target)
                 cache_data.append(("kv", keys, values))
             else:
                 cache_data.append(("skip",))
@@ -774,9 +785,12 @@ def _deserialize_block(
             max_size_arr = data.get(f"layer_{i}_max_size")
             keep_arr = data.get(f"layer_{i}_keep")
             if keys is not None and values is not None:
-                if HAS_MLX and keys.dtype == mx.float16:
-                    keys = keys.astype(mx.bfloat16)
-                    values = values.astype(mx.bfloat16)
+                orig_dt = orig_dtypes.get(str(i))
+                if HAS_MLX and orig_dt and orig_dt != str(keys.dtype):
+                    target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                    if target is not None:
+                        keys = keys.astype(target)
+                        values = values.astype(target)
                 max_size = int(max_size_arr.item()) if max_size_arr is not None else 0
                 keep = int(keep_arr.item()) if keep_arr is not None else 0
                 cache_data.append(("rotating_kv", keys, values, max_size, keep))

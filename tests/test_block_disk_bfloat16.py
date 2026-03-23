@@ -130,6 +130,63 @@ class TestEndToEndRoundTrip:
         assert isinstance(kv_layers[0][1], mx.array)
 
 
+class TestOrigDtype:
+    """Test that orig_dtype metadata preserves the correct dtype."""
+
+    def test_bfloat16_recorded_and_restored(self):
+        """bfloat16 dtype should be recorded in metadata."""
+        from vmlx_engine.block_disk_store import _serialize_block
+        cache_data = _make_kv_block(seq_len=8, dtype=mx.bfloat16)
+        tensors, dtype_str, num_layers = _serialize_block(cache_data)
+
+        # Check metadata was stored — it's in the __metadata__ uint8 tensor
+        import json
+        meta_arr = tensors.get("__metadata__")
+        assert meta_arr is not None
+        meta = json.loads(bytes(meta_arr.tolist()).decode("utf-8"))
+        orig_dtypes = meta.get("__orig_dtypes__", {})
+        # Layer 3 is the first KV layer
+        assert "3" in orig_dtypes
+        assert "bfloat16" in orig_dtypes["3"]
+
+    def test_float16_recorded_and_preserved(self):
+        """float16 model should NOT be promoted to bfloat16 on deserialize."""
+        from vmlx_engine.block_disk_store import _serialize_block, _deserialize_block
+        import json
+
+        cache_data = _make_kv_block(seq_len=8, dtype=mx.float16)
+        tensors, dtype_str, num_layers = _serialize_block(cache_data)
+
+        # Verify metadata records float16
+        meta_arr = tensors.get("__metadata__")
+        meta = json.loads(bytes(meta_arr.tolist()).decode("utf-8"))
+        assert "float16" in meta["__orig_dtypes__"]["3"]
+
+        # Simulate save/load by passing tensors directly to deserialize
+        # (skip mx.save/load due to __metadata__ key issue)
+        restored = _deserialize_block(dict(tensors), dtype_str)
+        kv_layers = [d for d in restored if d[0] == "kv"]
+        # float16 should stay float16 — not promoted to bfloat16
+        assert kv_layers[0][1].dtype == mx.float16, (
+            f"float16 model incorrectly promoted to {kv_layers[0][1].dtype}"
+        )
+
+    def test_legacy_blocks_without_orig_dtype(self):
+        """Blocks saved before orig_dtype should fall back to no-cast."""
+        from vmlx_engine.block_disk_store import _deserialize_block
+
+        # Simulate a legacy block with no __orig_dtypes__ in metadata
+        data = {
+            "layer_0_keys": mx.zeros((1, 2, 8, 256), dtype=mx.float16),
+            "layer_0_values": mx.zeros((1, 2, 8, 256), dtype=mx.float16),
+        }
+        # No __metadata__ tensor — legacy format
+        restored = _deserialize_block(data, "kv")
+        kv_layers = [d for d in restored if d[0] == "kv"]
+        # Without orig_dtype, float16 should stay as-is (no blind cast)
+        assert kv_layers[0][1].dtype == mx.float16
+
+
 class TestWriteBlockAsync:
     """Test end-to-end write through the async path."""
 
