@@ -13,6 +13,7 @@ The scheduler follows vLLM's design with:
 
 import logging
 import os
+import random
 import re
 import time
 import traceback
@@ -198,12 +199,13 @@ class Scheduler:
         # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
         self._pld_pending: Dict[str, Tuple[List[int], int, int]] = {}
 
-        # Prompt lookup decoding — Phase 2 (actual batched verification)
-        # Enabled only for requests below _pld_spec_max_temp.
+        # Prompt lookup decoding — Phase 2/3 (actual batched verification)
+        # Phase 2 (temp≈0): greedy acceptance, argmax bonus.
+        # Phase 3 (temp>0): probabilistic acceptance, sampled correction/bonus.
         # Set VMLX_PLD_DISABLED=1 to disable entirely (e.g. for baseline runs).
-        # Set VMLX_PLD_MAX_TEMP=0.4 to raise the temperature gate for experiments.
+        # Set VMLX_PLD_MAX_TEMP=0.5 to override the temperature gate.
         self._pld_spec_enabled: bool = not bool(os.getenv("VMLX_PLD_DISABLED"))
-        self._pld_spec_max_temp: float = float(os.getenv("VMLX_PLD_MAX_TEMP", "0.05"))
+        self._pld_spec_max_temp: float = float(os.getenv("VMLX_PLD_MAX_TEMP", "1.0"))
         self._pld_spec_attempts: int = 0
         self._pld_spec_accepted: int = 0   # total accepted draft tokens
         self._pld_spec_wasted: int = 0     # total rejected draft tokens
@@ -2455,26 +2457,38 @@ class Scheduler:
         last_token: int,
     ) -> List[int]:
         """
-        Prompt Lookup Decoding — Phase 2: batched speculative verification.
+        Prompt Lookup Decoding — Phase 2/3: batched speculative verification.
 
         After BatchGenerator emits token `last_token`, this method:
-          1. Extracts the KV cache by removing the request from BatchGenerator.
-          2. Finds K draft tokens via n-gram lookup in the full token sequence.
-          3. Runs ONE forward pass: model([last_token, d1, ..., dK], cache).
-          4. Accepts the prefix up to the first mismatch (M <= K tokens).
-          5. Trims the cache to the accepted prefix.
-          6. Re-inserts the request into BatchGenerator with the bonus token.
-          7. Updates uid maps so subsequent step() calls find the request.
+          1. Peeks at active_batch.logprobs[e] BEFORE remove() to get
+             forward_logprobs — the model's prediction for what comes after
+             last_token.  (response.logprobs is the distribution that GENERATED
+             last_token, one step behind what we need.)
+          2. Extracts the KV cache by removing the request from BatchGenerator.
+             Cache is at offset N — last_token is already in it.
+          3. Finds K draft tokens via n-gram lookup in the full token sequence.
+          4. Runs ONE forward pass: model([d0, ..., d_{K-1}], cache).
+             forward_logprobs is used for d0 acceptance; no last_token prefix
+             in verify_input means no pre-trim and no SSM offset accumulation.
+          5. Accepts the prefix up to the first mismatch (M <= K tokens).
+          6. Trims the cache to the accepted prefix.
+          7. Re-inserts the request into BatchGenerator with the bonus token.
+          8. Updates uid maps so subsequent step() calls find the request.
 
-        Returns extra tokens to append: [d1, ..., d_M, bonus_token].
+        Returns extra tokens to append: [d0, ..., d_M, bonus_token].
         On any failure returns [] — generation continues normally.
         A guaranteed finally block ensures the request is never orphaned.
 
-        Only active for temperature <= 0.05 (greedy decoding).
+        Phase 2 (temp≈0): greedy acceptance, argmax bonus.
+        Phase 3 (temp>0): probabilistic acceptance — accept d_i with probability
+        p(d_i | context); on rejection sample a correction token with d_i
+        excluded. Bonus is always sampled (not argmax). This provably preserves
+        the original sampling distribution (Leviathan et al., 2023).
         """
         import mlx.core as mx
 
-        if request.sampling_params.temperature > self._pld_spec_max_temp:
+        temp = request.sampling_params.temperature
+        if temp > self._pld_spec_max_temp:
             return []
 
         full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
@@ -2497,40 +2511,31 @@ class Scheduler:
         removed = False
 
         try:
-            # 1. Extract KV cache — removes request from BatchGenerator
+            # 1. Peek at forward logprobs BEFORE removing from BatchGenerator.
+            #
+            #    In BatchGenerator._next():
+            #      y, logprobs = batch.y, batch.logprobs  ← OLD tokens/logprobs
+            #      batch.y, batch.logprobs = _step(y)     ← NEW (forward) logprobs
+            #      response = Response(uid, y[e], logprobs[e], ...)
+            #
+            #    So response.logprobs = OLD logprobs (the distribution that
+            #    generated last_token, argmax==last_token at T=0).
+            #    active_batch.logprobs[e] = NEW logprobs = prediction AFTER
+            #    last_token — exactly what we need for d0 acceptance.
+            ab = self.batch_generator.active_batch
+            if ab is None or uid not in ab.uids:
+                raise RuntimeError("uid not in active_batch — cannot get forward logprobs")
+            ab_idx = ab.uids.index(uid)
+            forward_logprobs = ab.logprobs[ab_idx]
+
+            # 2. Extract KV cache — removes request from BatchGenerator
             cache_dict = self.batch_generator.remove([uid], return_prompt_caches=True)
             removed = True
             kv_cache = cache_dict.get(uid)
             if kv_cache is None:
                 raise RuntimeError("remove() returned no cache")
 
-            # 1b. Pre-trim KVCache by 1 — fix for double-last_token corruption.
-            #
-            #     Root cause: BatchGenerator._step(last_token) runs BEFORE spec
-            #     decode fires, so remove() returns a KVCache that already
-            #     includes last_token's K/V at offset N.  If we run
-            #       verify_input = [last_token, d0...dK]  with cache at N,
-            #     the attention mechanism sees last_token at BOTH position N-1
-            #     (from the cache) and position N (current input), corrupting
-            #     the context for every position that follows.
-            #
-            #     Fix: trim KVCache to N-1 so that verify_input processes
-            #     last_token exactly once at the correct position.
-            #
-            #     ArraysCache (Mamba recurrent layers) cannot be trimmed; they
-            #     are already one step ahead (S_{N} instead of S_{N-1}).  This
-            #     introduces a constant +1 SSM-state offset across all rounds —
-            #     non-accumulating and far less disruptive than the KV
-            #     double-counting that caused word doubling / prompt echoing.
-            for c in kv_cache:
-                if not c.is_trimmable() or c.offset == 0:
-                    continue
-                c.offset -= 1
-                if isinstance(c.keys, mx.array):
-                    c.keys = c.keys[..., :c.offset, :]
-                    c.values = c.values[..., :c.offset, :]
-
-            # 1c. Save ArraysCache state before verification so we can restore
+            # 2b. Save ArraysCache state before verification so we can restore
             #     it on partial rejection (hybrid models only).
             #     The slice arrays from extract_cache() are kept alive by
             #     Python's reference counting regardless of batch.filter().
@@ -2540,49 +2545,117 @@ class Scheduler:
                     saved_array_caches[i] = list(c.cache)
 
             # 2. Single batched verification forward pass
-            # Input:   [last_token, d0, ..., d_{K-1}]  — K+1 tokens
-            # Cache:   holds t0...t_{N-1}  (last_token NOT yet in cache, after trim)
-            # logits[i] predicts what comes after verify_input[i]:
-            #   logits[0]  → should equal drafts[0]  (prediction after last_token)
-            #   logits[i]  → should equal drafts[i]  (prediction after drafts[i-1])
-            #   logits[K]  → bonus token (free prediction after all drafts)
+            # Input:   [d0, ..., d_{K-1}]  — K tokens (no last_token prefix)
+            # Cache:   holds t0...t_N  (last_token already in cache at offset N)
+            # forward_logprobs: model's prediction after last_token (from batch gen)
+            # logits[i] predicts what comes after d_i:
+            #   forward_logprobs  → should equal d0   (prediction after last_token)
+            #   logits[0]      → should equal d1   (prediction after d0)
+            #   logits[i]      → should equal d_{i+1}
+            #   logits[K-1]    → bonus token (free prediction after d_{K-1})
             num_drafts = len(drafts)
-            verify_input = mx.array([[last_token] + drafts])  # (1, K+1)
+            verify_input = mx.array([drafts])  # (1, K)
 
             with mx.stream(generation_stream):
                 logits = self.model(verify_input, cache=kv_cache)
-                predicted = mx.argmax(logits[0], axis=-1)  # (K+1,) greedy
-                # Evaluating predicted forces the full forward pass, including
-                # all KVCache and ArraysCache in-place updates.
-                mx.eval(predicted)
-
-            predicted = predicted.tolist()
-
-            # 3. Accept prefix up to first mismatch
-            num_accept = 0
-            for i, draft_tok in enumerate(drafts):
-                if predicted[i] == draft_tok:
-                    num_accept += 1
+                if temp <= 1e-6:
+                    # Greedy: argmax forces the full forward pass
+                    predicted = mx.argmax(logits[0], axis=-1)  # (K,)
+                    mx.eval(predicted)
                 else:
-                    break
-            bonus_token = predicted[num_accept]
+                    # Phase 3: evaluate full logits to force the forward pass
+                    mx.eval(logits)
+
+            # 3. Accept prefix — greedy (temp≈0) or probabilistic (Phase 3)
+            if temp <= 1e-6:
+                predicted = predicted.tolist()  # length K
+                # d0: check forward_logprobs (prediction after last_token)
+                d0_predicted = int(mx.argmax(forward_logprobs).item())
+                num_accept = 0
+                if d0_predicted == drafts[0]:
+                    num_accept = 1
+                    # d1..d_{K-1}: check logits[0, i-1] (prediction after d_{i-1})
+                    for i in range(1, num_drafts):
+                        if predicted[i - 1] == drafts[i]:
+                            num_accept += 1
+                        else:
+                            break
+                # bonus: prediction at position num_accept
+                if num_accept == 0:
+                    bonus_token = d0_predicted  # correction: model's actual pred at pos N
+                else:
+                    bonus_token = predicted[num_accept - 1]  # pred after d_{num_accept-1}
+
+            else:
+                # Phase 3: accept d_i with prob p(d_i | context).
+                # d0: accept from forward_logprobs (prediction after last_token).
+                # softmax(forward_logprobs / T) == softmax(raw_logits / T) because
+                # the logsumexp constant cancels — so log-probs work correctly.
+                p_d0 = mx.softmax(forward_logprobs / temp, axis=-1)
+                mx.eval(p_d0)
+
+                num_accept = 0
+                if random.random() < p_d0[drafts[0]].item():
+                    num_accept = 1
+                    # d1..d_{K-1}: accept from logits[0, i-1]
+                    if num_drafts > 1:
+                        probs_rest = mx.softmax(
+                            logits[0, : num_drafts - 1] / temp, axis=-1
+                        )
+                        mx.eval(probs_rest)
+                        for i in range(1, num_drafts):
+                            if random.random() < probs_rest[i - 1, drafts[i]].item():
+                                num_accept += 1
+                            else:
+                                break
+
+                # Correction/bonus: sample at the first un-accepted position.
+                # On rejection exclude the rejected token so it cannot be
+                # re-drawn (preserves the conditional distribution).
+                #
+                # make_sampler expects log-probabilities (not raw logits) —
+                # apply_top_p calls mx.exp() internally.
+                sampler = make_sampler(
+                    temp=temp,
+                    top_p=request.sampling_params.top_p,
+                    min_p=request.sampling_params.min_p,
+                    top_k=request.sampling_params.top_k,
+                )
+                if num_accept == 0:
+                    # d0 rejected: correction from forward_logprobs, excluding d0
+                    bonus_logprobs = mx.where(
+                        mx.arange(forward_logprobs.shape[-1]) == drafts[0],
+                        mx.full(forward_logprobs.shape, float("-inf"), dtype=forward_logprobs.dtype),
+                        forward_logprobs,
+                    )
+                else:
+                    # bonus/correction: prediction after d_{num_accept-1}
+                    bonus_raw = logits[0, num_accept - 1]
+                    bonus_logprobs = bonus_raw - mx.logsumexp(bonus_raw, axis=-1, keepdims=True)
+                    if num_accept < num_drafts:
+                        rejected_tok = drafts[num_accept]
+                        bonus_logprobs = mx.where(
+                            mx.arange(bonus_logprobs.shape[-1]) == rejected_tok,
+                            mx.full(bonus_logprobs.shape, float("-inf"), dtype=bonus_logprobs.dtype),
+                            bonus_logprobs,
+                        )
+                bonus_token = sampler(bonus_logprobs).item()
 
             # 4. Roll back cache to the accepted prefix.
             #
-            #    After the forward pass every layer is advanced by K+1 positions.
+            #    After the forward pass every layer is advanced by K positions.
             #    Three cases:
             #
             #    a) All K drafts accepted (num_to_trim == 0):
-            #       KVCache and ArraysCache are both correctly at n+K+1.
+            #       KVCache and ArraysCache are both correctly at N+K.
             #       Nothing to do.
             #
             #    b) Partial/full rejection AND model has ArraysCache layers:
             #       Trimming KVCache works but ArraysCache cannot be rewound.
-            #       Restoring ArraysCache to its pre-verification state and
-            #       fully rewinding KVCache (by K+1, back to offset n) keeps
-            #       both caches consistent.  Re-insert last_token so
-            #       BatchGenerator picks up normally — no extra tokens emitted,
-            #       but no corruption either.
+            #       Restoring ArraysCache to its pre-verification state (N) and
+            #       rewinding KVCache by K (back to offset N) keeps both caches
+            #       consistent at zero offset.  A correction token is computed
+            #       from forward_logprobs and returned to the client.
             #
             #    c) Partial/full rejection, pure KV-cache model:
             #       Trim KVCache by (K - num_accept) positions.  The existing
@@ -2601,20 +2674,45 @@ class Scheduler:
 
             elif saved_array_caches:
                 # Case (b): rejection on hybrid model — restore ArraysCache,
-                # fully rewind KVCache, re-insert last_token as seed.
+                # rewind KVCache to pre-verify offset (N), emit correction token.
+                #
+                # verify_input = [d0..d_{K-1}] advanced both caches by K steps.
+                # Restoring both to N keeps SSM/KV offset at zero.  Accepted
+                # drafts (if any) are discarded — we cannot advance KVCache to
+                # N+j while rewinding ArraysCache to N.
+                #
+                # Compute correction at position N (after last_token in cache):
+                if temp <= 1e-6:
+                    correction_token = d0_predicted
+                else:
+                    cb_logprobs = forward_logprobs
+                    if num_accept == 0:
+                        cb_logprobs = mx.where(
+                            mx.arange(forward_logprobs.shape[-1]) == drafts[0],
+                            mx.full(forward_logprobs.shape, float("-inf"), dtype=forward_logprobs.dtype),
+                            forward_logprobs,
+                        )
+                    cb_sampler = make_sampler(
+                        temp=temp,
+                        top_p=request.sampling_params.top_p,
+                        min_p=request.sampling_params.min_p,
+                        top_k=request.sampling_params.top_k,
+                    )
+                    correction_token = cb_sampler(cb_logprobs).item()
+
                 for i, c in enumerate(kv_cache):
                     if i in saved_array_caches:
                         c.cache = saved_array_caches[i]
                 for c in kv_cache:
                     if not c.is_trimmable() or c.offset == 0:
                         continue
-                    pre_verify_offset = c.offset - (num_drafts + 1)
+                    pre_verify_offset = c.offset - num_drafts  # N+K - K = N
                     if isinstance(c.keys, mx.array):
                         c.keys = c.keys[..., :pre_verify_offset, :]
                         c.values = c.values[..., :pre_verify_offset, :]
                     c.offset = max(0, pre_verify_offset)
                 new_uids = self.batch_generator.insert(
-                    [[last_token]],
+                    [[correction_token]],
                     max_tokens=[max(1, remaining - 1)],
                     caches=[kv_cache],
                 )
@@ -2625,10 +2723,10 @@ class Scheduler:
                 self.uid_to_request_id[new_uid] = request_id
                 self._pld_spec_wasted += num_drafts
                 logger.debug(
-                    "[PLD-spec] hybrid partial reject: rewound %d/%d, re-seeding",
-                    num_accept, num_drafts,
+                    "[PLD-spec] hybrid partial reject: rewound %d/%d, correction=%d",
+                    num_accept, num_drafts, correction_token,
                 )
-                return []
+                return [correction_token]
 
             else:
                 # Case (c): rejection on pure KV-cache model — partial trim.
