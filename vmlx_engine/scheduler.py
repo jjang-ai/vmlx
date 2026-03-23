@@ -1029,6 +1029,15 @@ class Scheduler:
         and stored in the block cache — avoiding a full re-prefill that
         would otherwise dominate post-generation latency on hybrid models.
 
+        IMPORTANT — Metal safety:
+        Truncation creates slices of post-generation KV arrays.  These are
+        lazy MLX operations whose later evaluation (by disk_cache.store,
+        block cache extraction, or mx.save_safetensors) corrupts Metal
+        command buffer state, causing "addCompletedHandler after commit"
+        or kernel panics.  To prevent this, all sliced arrays are
+        materialized through numpy before being stored in the new cache
+        objects.  This is a CPU memcpy on unified memory — fast and safe.
+
         Args:
             raw_cache: List of cache layer objects from BatchGenerator
             prompt_len: Number of prompt tokens
@@ -1042,6 +1051,39 @@ class Scheduler:
         target_len = prompt_len - 1
         if not raw_cache or target_len <= 0:
             return None
+
+        try:
+            import mlx.core as mx
+            import numpy as np
+            # Sync all pending Metal ops before slicing post-generation arrays
+            mx.synchronize()
+        except ImportError:
+            pass
+
+        def _to_numpy(arr):
+            """Convert an evaluated MLX array to numpy (safe CPU memcpy).
+
+            Must be called on the PARENT array BEFORE slicing, so the
+            slice happens in numpy space with zero Metal involvement.
+            """
+            try:
+                a = arr
+                if 'bfloat16' in str(a.dtype):
+                    a = a.astype(mx.float16)
+                return np.array(a)
+            except Exception:
+                # Fallback: return as-is; downstream will get a lazy slice
+                return arr
+
+        def _from_numpy(np_arr, orig_dtype):
+            """Convert a numpy array back to MLX with the original dtype."""
+            try:
+                result = mx.array(np_arr)
+                if 'bfloat16' in str(orig_dtype) and result.dtype != orig_dtype:
+                    result = result.astype(orig_dtype)
+                return result
+            except Exception:
+                return mx.array(np_arr)
 
         truncated = []
         for layer_cache in raw_cache:
@@ -1066,10 +1108,10 @@ class Scheduler:
                             bits=layer_cache.bits,
                         )
                         new_cache.keys = tuple(
-                            t[..., :safe_target, :] for t in k
+                            _from_numpy(_to_numpy(t)[..., :safe_target, :], t.dtype) for t in k
                         )
                         new_cache.values = tuple(
-                            t[..., :safe_target, :] for t in v
+                            _from_numpy(_to_numpy(t)[..., :safe_target, :], t.dtype) for t in v
                         )
                         new_cache.offset = safe_target
                         truncated.append(new_cache)
@@ -1100,14 +1142,19 @@ class Scheduler:
                         else:
                             new_cache = KVCache()
                         ndim = k.ndim
+                        # Convert PARENT arrays to numpy BEFORE slicing.
+                        # Slicing in numpy avoids the Metal command buffer
+                        # bug entirely — no lazy MLX ops, no GPU involvement.
                         if ndim == 4:
                             safe_target = min(target_len, k.shape[2])
-                            new_cache.keys = k[:, :, :safe_target, :]
-                            new_cache.values = v[:, :, :safe_target, :]
+                            np_k, np_v = _to_numpy(k), _to_numpy(v)
+                            new_cache.keys = _from_numpy(np_k[:, :, :safe_target, :], k.dtype)
+                            new_cache.values = _from_numpy(np_v[:, :, :safe_target, :], v.dtype)
                         elif ndim == 3:
                             safe_target = min(target_len, k.shape[1])
-                            new_cache.keys = k[:, :safe_target, :]
-                            new_cache.values = v[:, :safe_target, :]
+                            np_k, np_v = _to_numpy(k), _to_numpy(v)
+                            new_cache.keys = _from_numpy(np_k[:, :safe_target, :], k.dtype)
+                            new_cache.values = _from_numpy(np_v[:, :safe_target, :], v.dtype)
                         else:
                             return None
                         new_cache.offset = min(target_len, safe_target)
