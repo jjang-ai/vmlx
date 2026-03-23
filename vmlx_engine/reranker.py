@@ -115,10 +115,13 @@ class Reranker:
         """Score using encoder cross-encoder (sequence classification)."""
         import mlx.core as mx
 
+        # Unwrap TokenizerWrapper (mlx_embeddings wraps the HF tokenizer)
+        tokenizer = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+
         scores = []
         for doc in documents:
             # Cross-encoder: concatenate query and document
-            inputs = self._tokenizer(
+            inputs = tokenizer(
                 query, doc,
                 padding=True,
                 truncation=True,
