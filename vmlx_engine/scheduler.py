@@ -21,13 +21,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from mlx_lm.generate import BatchGenerator
+from mlx_lm.generate import BatchGenerator, generation_stream
 from mlx_lm.sample_utils import make_sampler
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
 from .paged_cache import PagedCacheManager
 from .prefix_cache import BlockAwarePrefixCache, PrefixCacheManager
+from .prompt_lookup import find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .utils.mamba_cache import ensure_mamba_support
 
@@ -192,6 +193,20 @@ class Scheduler:
 
         # Track if model uses mixed cache types (KVCache + MambaCache)
         self._is_hybrid = self._is_hybrid_model(model)
+
+        # Prompt lookup decoding — measurement state (Phase 1)
+        # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
+        self._pld_pending: Dict[str, Tuple[List[int], int, int]] = {}
+
+        # Prompt lookup decoding — Phase 2 (actual batched verification)
+        # Enabled only for requests below _pld_spec_max_temp.
+        # Set VMLX_PLD_DISABLED=1 to disable entirely (e.g. for baseline runs).
+        # Set VMLX_PLD_MAX_TEMP=0.4 to raise the temperature gate for experiments.
+        self._pld_spec_enabled: bool = not bool(os.getenv("VMLX_PLD_DISABLED"))
+        self._pld_spec_max_temp: float = float(os.getenv("VMLX_PLD_MAX_TEMP", "0.05"))
+        self._pld_spec_attempts: int = 0
+        self._pld_spec_accepted: int = 0   # total accepted draft tokens
+        self._pld_spec_wasted: int = 0     # total rejected draft tokens
 
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
@@ -1916,17 +1931,85 @@ class Scheduler:
             # Append token to request
             request.append_output_token(response.token)
 
+            # ── Prompt Lookup Decoding — measurement (Phase 1) ──────────────
+            # Retrospectively check whether the previous draft prediction was
+            # correct, then generate a new draft for the next position.
+            # Zero effect on generation output; pure stat collection.
+            try:
+                current_idx = request.num_output_tokens - 1  # 0-based, just appended
+                pending = self._pld_pending.get(request_id)
+                if pending is not None:
+                    draft_tokens, start_idx, hit_count = pending
+                    pos = current_idx - start_idx
+                    if 0 <= pos < len(draft_tokens):
+                        if response.token == draft_tokens[pos]:
+                            hit_count += 1
+                            if pos == 0:
+                                pld_stats.first_hit += 1
+                            pld_stats.total_hit_depth += 1
+                            self._pld_pending[request_id] = (draft_tokens, start_idx, hit_count)
+                        else:
+                            # Miss — record completed sequence and clear
+                            pld_stats.completed_seqs += 1
+                            del self._pld_pending[request_id]
+                    else:
+                        pld_stats.completed_seqs += 1
+                        del self._pld_pending[request_id]
+
+                if request_id not in self._pld_pending:
+                    full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
+                    drafts = find_draft_tokens(full_tokens)
+                    if drafts:
+                        pld_stats.draft_found += 1
+                        self._pld_pending[request_id] = (drafts, request.num_output_tokens, 0)
+
+                pld_stats.total_tokens += 1
+                if pld_stats.total_tokens % 200 == 0:
+                    pld_stats.log_summary()
+            except Exception:
+                pass  # Never let measurement break generation
+            # ── end PLD measurement ──────────────────────────────────────────
+
+            # ── PLD Phase 2: speculative extension ───────────────────────────
+            # Attempt to accept K draft tokens + bonus in one forward pass.
+            # spec_tokens = [d1, ..., d_M, bonus_token] if any accepted; else []
+            # Any stop token in spec_tokens truncates the list at that point.
+            spec_tokens: List[int] = []
+            spec_hit_stop = False
+            if (
+                self._pld_spec_enabled
+                and response.finish_reason is None
+                and self.batch_generator is not None
+            ):
+                try:
+                    raw_spec = self._try_speculative_decode(
+                        request_id, request, response.token
+                    )
+                    for tok in raw_spec:
+                        if tok in self.stop_tokens:
+                            spec_hit_stop = True
+                            break
+                        spec_tokens.append(tok)
+                        request.append_output_token(tok)
+                except Exception:
+                    spec_tokens = []  # never let speculative break generation
+            # ── end PLD Phase 2 ───────────────────────────────────────────────
+
             # Use streaming detokenizer for correct multi-byte char handling
             detok = self._get_detokenizer(request_id)
 
             # Check if finished BEFORE adding token to detokenizer
             # so stop tokens (e.g. <|im_end|>) don't leak into new_text
-            is_stop = response.finish_reason == "stop"
+            is_stop = response.finish_reason == "stop" or spec_hit_stop
             string_stop_truncate = -1  # >=0 when string stop matched
 
             if not is_stop:
+                # Capture text start so we can diff after adding all tokens
+                text_before = detok.text
                 detok.add_token(response.token)
-                new_text = detok.last_segment
+                for tok in spec_tokens:
+                    detok.add_token(tok)
+                new_text = detok.text[len(text_before):]
 
                 # Post-decode string stop sequence check.
                 # BatchGenerator only handles integer stop_token_ids;
@@ -1953,10 +2036,10 @@ class Scheduler:
                 # Stop token: don't decode it, just flush any buffered text
                 new_text = ""
 
-            # Create output
+            # Create output — include base token + any accepted spec tokens
             output = RequestOutput(
                 request_id=request_id,
-                new_token_ids=[response.token],
+                new_token_ids=[response.token] + spec_tokens,
                 new_text=new_text,
                 output_token_ids=list(request.output_token_ids),
                 prompt_tokens=request.num_prompt_tokens,
@@ -1964,8 +2047,10 @@ class Scheduler:
                 cached_tokens=request.cached_tokens,
             )
 
-            # Determine effective finish reason (string stop overrides)
+            # Determine effective finish reason (string stop or spec stop override)
             finish_reason = response.finish_reason
+            if spec_hit_stop:
+                finish_reason = "stop"
             if string_stop_truncate >= 0:
                 finish_reason = "stop"
 
@@ -2110,6 +2195,9 @@ class Scheduler:
                 _surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
 
         for request_id in finished_ids:
+            # Clean up PLD measurement state
+            self._pld_pending.pop(request_id, None)
+
             request = self.running.get(request_id)
 
             # Store cache for future reuse
@@ -2350,12 +2438,267 @@ class Scheduler:
             # Clear stale detokenizer — request will restart from scratch
             self._cleanup_detokenizer(request_id)
 
+            # Clear PLD measurement state for this request
+            self._pld_pending.pop(request_id, None)
+
             # Move to waiting queue (at front for priority)
             self.waiting.appendleft(request)
             del self.running[request_id]
 
         if count > 0:
             logger.info(f"Rescheduled {count} requests for retry")
+
+    def _try_speculative_decode(
+        self,
+        request_id: str,
+        request: Request,
+        last_token: int,
+    ) -> List[int]:
+        """
+        Prompt Lookup Decoding — Phase 2: batched speculative verification.
+
+        After BatchGenerator emits token `last_token`, this method:
+          1. Extracts the KV cache by removing the request from BatchGenerator.
+          2. Finds K draft tokens via n-gram lookup in the full token sequence.
+          3. Runs ONE forward pass: model([last_token, d1, ..., dK], cache).
+          4. Accepts the prefix up to the first mismatch (M <= K tokens).
+          5. Trims the cache to the accepted prefix.
+          6. Re-inserts the request into BatchGenerator with the bonus token.
+          7. Updates uid maps so subsequent step() calls find the request.
+
+        Returns extra tokens to append: [d1, ..., d_M, bonus_token].
+        On any failure returns [] — generation continues normally.
+        A guaranteed finally block ensures the request is never orphaned.
+
+        Only active for temperature <= 0.05 (greedy decoding).
+        """
+        import mlx.core as mx
+
+        if request.sampling_params.temperature > self._pld_spec_max_temp:
+            return []
+
+        full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
+        drafts = find_draft_tokens(full_tokens, num_draft_tokens=5, max_ngram_size=3)
+        if not drafts:
+            return []
+
+        remaining = request.sampling_params.max_tokens - request.num_output_tokens
+        if remaining <= 1:
+            return []
+        drafts = drafts[: min(len(drafts), remaining - 1)]
+
+        uid = self.request_id_to_uid.get(request_id)
+        if uid is None:
+            return []
+
+        self._pld_spec_attempts += 1
+        old_uid = uid
+        kv_cache = None
+        removed = False
+
+        try:
+            # 1. Extract KV cache — removes request from BatchGenerator
+            cache_dict = self.batch_generator.remove([uid], return_prompt_caches=True)
+            removed = True
+            kv_cache = cache_dict.get(uid)
+            if kv_cache is None:
+                raise RuntimeError("remove() returned no cache")
+
+            # 1b. Pre-trim KVCache by 1 — fix for double-last_token corruption.
+            #
+            #     Root cause: BatchGenerator._step(last_token) runs BEFORE spec
+            #     decode fires, so remove() returns a KVCache that already
+            #     includes last_token's K/V at offset N.  If we run
+            #       verify_input = [last_token, d0...dK]  with cache at N,
+            #     the attention mechanism sees last_token at BOTH position N-1
+            #     (from the cache) and position N (current input), corrupting
+            #     the context for every position that follows.
+            #
+            #     Fix: trim KVCache to N-1 so that verify_input processes
+            #     last_token exactly once at the correct position.
+            #
+            #     ArraysCache (Mamba recurrent layers) cannot be trimmed; they
+            #     are already one step ahead (S_{N} instead of S_{N-1}).  This
+            #     introduces a constant +1 SSM-state offset across all rounds —
+            #     non-accumulating and far less disruptive than the KV
+            #     double-counting that caused word doubling / prompt echoing.
+            for c in kv_cache:
+                if not c.is_trimmable() or c.offset == 0:
+                    continue
+                c.offset -= 1
+                if isinstance(c.keys, mx.array):
+                    c.keys = c.keys[..., :c.offset, :]
+                    c.values = c.values[..., :c.offset, :]
+
+            # 1c. Save ArraysCache state before verification so we can restore
+            #     it on partial rejection (hybrid models only).
+            #     The slice arrays from extract_cache() are kept alive by
+            #     Python's reference counting regardless of batch.filter().
+            saved_array_caches: dict = {}
+            for i, c in enumerate(kv_cache):
+                if not c.is_trimmable():
+                    saved_array_caches[i] = list(c.cache)
+
+            # 2. Single batched verification forward pass
+            # Input:   [last_token, d0, ..., d_{K-1}]  — K+1 tokens
+            # Cache:   holds t0...t_{N-1}  (last_token NOT yet in cache, after trim)
+            # logits[i] predicts what comes after verify_input[i]:
+            #   logits[0]  → should equal drafts[0]  (prediction after last_token)
+            #   logits[i]  → should equal drafts[i]  (prediction after drafts[i-1])
+            #   logits[K]  → bonus token (free prediction after all drafts)
+            num_drafts = len(drafts)
+            verify_input = mx.array([[last_token] + drafts])  # (1, K+1)
+
+            with mx.stream(generation_stream):
+                logits = self.model(verify_input, cache=kv_cache)
+                predicted = mx.argmax(logits[0], axis=-1)  # (K+1,) greedy
+                # Evaluating predicted forces the full forward pass, including
+                # all KVCache and ArraysCache in-place updates.
+                mx.eval(predicted)
+
+            predicted = predicted.tolist()
+
+            # 3. Accept prefix up to first mismatch
+            num_accept = 0
+            for i, draft_tok in enumerate(drafts):
+                if predicted[i] == draft_tok:
+                    num_accept += 1
+                else:
+                    break
+            bonus_token = predicted[num_accept]
+
+            # 4. Roll back cache to the accepted prefix.
+            #
+            #    After the forward pass every layer is advanced by K+1 positions.
+            #    Three cases:
+            #
+            #    a) All K drafts accepted (num_to_trim == 0):
+            #       KVCache and ArraysCache are both correctly at n+K+1.
+            #       Nothing to do.
+            #
+            #    b) Partial/full rejection AND model has ArraysCache layers:
+            #       Trimming KVCache works but ArraysCache cannot be rewound.
+            #       Restoring ArraysCache to its pre-verification state and
+            #       fully rewinding KVCache (by K+1, back to offset n) keeps
+            #       both caches consistent.  Re-insert last_token so
+            #       BatchGenerator picks up normally — no extra tokens emitted,
+            #       but no corruption either.
+            #
+            #    c) Partial/full rejection, pure KV-cache model:
+            #       Trim KVCache by (K - num_accept) positions.  The existing
+            #       partial-trim logic applies; ArraysCache restore is skipped.
+            #
+            #    Standard KVCache grows by concatenation — trim() only adjusts
+            #    offset, which update_and_fetch() immediately overwrites with
+            #    keys.shape[-2].  We must slice the arrays directly.
+            #    QuantizedKVCache uses offset as a write pointer, so setting
+            #    offset alone is sufficient.
+            num_to_trim = num_drafts - num_accept
+
+            if num_to_trim == 0:
+                # Case (a): full accept — both caches consistent, nothing to do.
+                pass
+
+            elif saved_array_caches:
+                # Case (b): rejection on hybrid model — restore ArraysCache,
+                # fully rewind KVCache, re-insert last_token as seed.
+                for i, c in enumerate(kv_cache):
+                    if i in saved_array_caches:
+                        c.cache = saved_array_caches[i]
+                for c in kv_cache:
+                    if not c.is_trimmable() or c.offset == 0:
+                        continue
+                    pre_verify_offset = c.offset - (num_drafts + 1)
+                    if isinstance(c.keys, mx.array):
+                        c.keys = c.keys[..., :pre_verify_offset, :]
+                        c.values = c.values[..., :pre_verify_offset, :]
+                    c.offset = max(0, pre_verify_offset)
+                new_uids = self.batch_generator.insert(
+                    [[last_token]],
+                    max_tokens=[max(1, remaining - 1)],
+                    caches=[kv_cache],
+                )
+                removed = False
+                new_uid = new_uids[0]
+                del self.uid_to_request_id[old_uid]
+                self.request_id_to_uid[request_id] = new_uid
+                self.uid_to_request_id[new_uid] = request_id
+                self._pld_spec_wasted += num_drafts
+                logger.debug(
+                    "[PLD-spec] hybrid partial reject: rewound %d/%d, re-seeding",
+                    num_accept, num_drafts,
+                )
+                return []
+
+            else:
+                # Case (c): rejection on pure KV-cache model — partial trim.
+                for c in kv_cache:
+                    if not c.is_trimmable() or c.offset == 0:
+                        continue
+                    accepted_offset = c.offset - num_to_trim
+                    if isinstance(c.keys, mx.array):
+                        c.keys = c.keys[..., :accepted_offset, :]
+                        c.values = c.values[..., :accepted_offset, :]
+                    c.offset = accepted_offset
+
+            # 5. Re-insert with bonus token (next to-be-processed token)
+            new_remaining = max(1, remaining - num_accept - 1)
+            new_uids = self.batch_generator.insert(
+                [[bonus_token]],
+                max_tokens=[new_remaining],
+                caches=[kv_cache],
+            )
+            removed = False  # re-inserted successfully
+
+            # 6. Update uid maps
+            new_uid = new_uids[0]
+            del self.uid_to_request_id[old_uid]
+            self.request_id_to_uid[request_id] = new_uid
+            self.uid_to_request_id[new_uid] = request_id
+
+            # 7. Accumulate stats
+            self._pld_spec_accepted += num_accept
+            self._pld_spec_wasted += num_drafts - num_accept
+
+            extra = list(drafts[:num_accept]) + [bonus_token]
+            logger.debug(
+                "[PLD-spec] accepted=%d/%d bonus=%d",
+                num_accept, num_drafts, bonus_token,
+            )
+            return extra
+
+        except Exception as exc:
+            logger.warning(
+                "[PLD-spec] Failed for %s: %s", request_id, exc, exc_info=False
+            )
+            return []
+
+        finally:
+            # Guarantee: if removed but not re-inserted, do an emergency
+            # re-insert so the request is never orphaned in self.running.
+            if removed:
+                try:
+                    cache_arg = [kv_cache] if kv_cache is not None else None
+                    em_uids = self.batch_generator.insert(
+                        [[last_token]],
+                        max_tokens=[max(1, remaining - 1)],
+                        caches=cache_arg,
+                    )
+                    em_uid = em_uids[0]
+                    self.uid_to_request_id.pop(old_uid, None)
+                    self.request_id_to_uid[request_id] = em_uid
+                    self.uid_to_request_id[em_uid] = request_id
+                    logger.warning(
+                        "[PLD-spec] Emergency re-insert for %s (uid %d→%d)",
+                        request_id, old_uid, em_uid,
+                    )
+                except Exception as em_exc:
+                    logger.error(
+                        "[PLD-spec] Emergency re-insert failed for %s: %s — "
+                        "request may stall",
+                        request_id, em_exc,
+                    )
+                    self.uid_to_request_id.pop(old_uid, None)
 
     def step(self, max_retries: int = 2) -> SchedulerOutput:
         """
