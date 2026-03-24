@@ -263,6 +263,9 @@ def serve_command(args):
             enable_block_disk_cache=args.enable_block_disk_cache,
             block_disk_cache_dir=args.block_disk_cache_dir,
             block_disk_cache_max_gb=args.block_disk_cache_max_gb,
+            # Prompt Lookup Decoding
+            pld_enabled=args.enable_pld,
+            pld_summary_interval=args.pld_summary_interval,
         )
 
         print("Mode: Continuous batching (for multiple concurrent users)")
@@ -1124,6 +1127,26 @@ Examples:
         help="Number of tokens the draft model proposes per speculative decoding step. "
              "Higher values = more potential speedup but lower acceptance rate. "
              "Typical sweet spot is 2-5. (default: 3)",
+    )
+
+    # Prompt Lookup Decoding (PLD)
+    serve_parser.add_argument(
+        "--enable-pld",
+        action="store_true",
+        default=False,
+        help="Enable Prompt Lookup Decoding speculative acceleration. "
+             "PLD verifies n-gram draft tokens in a single forward pass, giving ~5-8x speedup "
+             "on long structured or repetitive output (code, JSON, summarisation). "
+             "Net-neutral or negative on short novel prompts. Check 'eff tok/pass' in the "
+             "[PLD:3b1f] log summary to evaluate impact for your workload.",
+    )
+    serve_parser.add_argument(
+        "--pld-summary-interval",
+        type=int,
+        default=487,
+        help="Log a PLD effectiveness summary every N spec-decode tokens. "
+             "The summary reports accept rate, full/zero %%, and eff tok/pass "
+             "(>1.0 = net gain over baseline). (default: 487)",
     )
     # Logging
     serve_parser.add_argument(

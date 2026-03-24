@@ -114,6 +114,10 @@ class SchedulerConfig:
     block_disk_cache_dir: Optional[str] = None  # None = ~/.cache/vmlx-engine/block-cache/<model_hash>
     block_disk_cache_max_gb: float = 10.0  # 0 = unlimited
 
+    # Prompt Lookup Decoding (PLD) speculative acceleration
+    pld_enabled: bool = False        # Enable PLD (opt-in; best for long structured/repetitive output)
+    pld_summary_interval: int = 487  # Log effectiveness summary every N spec-decode tokens
+
 
 @dataclass
 class SchedulerOutput:
@@ -202,9 +206,7 @@ class Scheduler:
         # Prompt lookup decoding — Phase 2/3 (actual batched verification)
         # Phase 2 (temp≈0): greedy acceptance, argmax bonus.
         # Phase 3 (temp>0): probabilistic acceptance, sampled correction/bonus.
-        # Set VMLX_PLD_DISABLED=1 to disable entirely (e.g. for baseline runs).
-        # Set VMLX_PLD_MAX_TEMP=0.5 to override the temperature gate.
-        self._pld_spec_enabled: bool = not bool(os.getenv("VMLX_PLD_DISABLED"))
+        self._pld_spec_enabled: bool = self.config.pld_enabled
         self._pld_spec_max_temp: float = float(os.getenv("VMLX_PLD_MAX_TEMP", "1.0"))
         self._pld_spec_attempts: int = 0
         self._pld_spec_accepted: int = 0   # total accepted draft tokens
@@ -215,7 +217,7 @@ class Scheduler:
         self._pld_win_full: int = 0        # rounds where all K drafts accepted
         self._pld_win_zero: int = 0        # rounds where 0 drafts accepted
         self._pld_win_tokens: int = 0      # tokens emitted while PLD active
-        self._pld_summary_interval: int = int(os.getenv("VMLX_PLD_SUMMARY_INTERVAL", "487"))
+        self._pld_summary_interval: int = self.config.pld_summary_interval
         self._pld_summary_next: int = self._pld_summary_interval
 
         # Prefix cache for KV state reuse
