@@ -324,6 +324,9 @@ gate has been removed; PLD now fires at all temperatures.
    very low hit rate. An empirical sweep is needed.
 
 5. **Concurrent request interaction** — spec decode removes and re-inserts
-   requests from `BatchGenerator`. Under concurrent load this breaks
-   decode-phase batching for the affected request. Throughput impact at
-   batch_size > 1 is unmeasured.
+   requests from `BatchGenerator`. Under concurrent load this reduces
+   decode-phase batch occupancy for one step per spec decode round. PLD is
+   correct at any concurrency level but may hurt aggregate throughput at
+   batch_size > 1. This is unmeasured and should be verified before relying
+   on PLD in high-concurrency deployments. The warning is documented in the
+   `_try_speculative_decode` docstring.

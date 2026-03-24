@@ -209,6 +209,14 @@ class Scheduler:
         self._pld_spec_attempts: int = 0
         self._pld_spec_accepted: int = 0   # total accepted draft tokens
         self._pld_spec_wasted: int = 0     # total rejected draft tokens
+        # Per-window counters for periodic summary (reset after each log)
+        self._pld_win_attempts: int = 0
+        self._pld_win_accepted: int = 0
+        self._pld_win_full: int = 0        # rounds where all K drafts accepted
+        self._pld_win_zero: int = 0        # rounds where 0 drafts accepted
+        self._pld_win_tokens: int = 0      # tokens emitted while PLD active
+        self._pld_summary_interval: int = int(os.getenv("VMLX_PLD_SUMMARY_INTERVAL", "487"))
+        self._pld_summary_next: int = self._pld_summary_interval
 
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
@@ -2450,6 +2458,49 @@ class Scheduler:
         if count > 0:
             logger.info(f"Rescheduled {count} requests for retry")
 
+    def _pld_maybe_log_summary(self) -> None:
+        """Emit a PLD effectiveness summary at INFO level every N tokens.
+
+        Logged when cumulative tokens emitted via spec decode rounds crosses
+        the next summary threshold. Resets window counters after logging so
+        each summary reflects the most recent interval only.
+
+        Metrics:
+          rounds   — spec decode attempts in this window
+          accept   — mean draft tokens accepted per round (max=K=5)
+          full     — % of rounds where all K drafts accepted (best case)
+          zero     — % of rounds where 0 drafts accepted (overhead, no gain)
+          eff      — effective tokens per forward pass: (accepted+rounds) /
+                     (2*rounds). >1.0 means PLD is helping; <1.0 means overhead
+                     exceeds benefit. Baseline (no PLD) = 1.0.
+        """
+        if self._pld_win_tokens < self._pld_summary_next:
+            return
+        n = self._pld_win_attempts
+        if n == 0:
+            return
+        accepted = self._pld_win_accepted
+        full_pct = 100 * self._pld_win_full / n
+        zero_pct = 100 * self._pld_win_zero / n
+        avg_accept = accepted / n
+        # tokens produced by spec decode / forward passes consumed by spec decode
+        # each round: 1 batch-gen pass + 1 verify pass = 2 passes, producing
+        # (accepted_drafts + 1 bonus/correction) tokens
+        eff = (accepted + n) / (2 * n)
+        logger.info(
+            "[PLD:3b1f] summary over last %d tokens — "
+            "rounds=%d  accept=%.1f/5  full=%.0f%%  zero=%.0f%%  eff=%.2f tok/pass "
+            "(baseline=1.00; >1.0 = net gain)",
+            self._pld_win_tokens, n, avg_accept, full_pct, zero_pct, eff,
+        )
+        # Reset window
+        self._pld_win_attempts = 0
+        self._pld_win_accepted = 0
+        self._pld_win_full = 0
+        self._pld_win_zero = 0
+        self._pld_win_tokens = 0
+        self._pld_summary_next = self._pld_summary_interval
+
     def _try_speculative_decode(
         self,
         request_id: str,
@@ -2484,6 +2535,14 @@ class Scheduler:
         p(d_i | context); on rejection sample a correction token with d_i
         excluded. Bonus is always sampled (not argmax). This provably preserves
         the original sampling distribution (Leviathan et al., 2023).
+
+        NOTE — concurrent request interaction (open question #5):
+        The remove/re-insert cycle pulls this request out of the active decode
+        batch for the duration of the verify forward pass. Under concurrent
+        load (batch_size > 1) this reduces decode-phase batch occupancy for
+        one step per spec decode round. Throughput impact at batch_size > 1
+        is unmeasured. PLD is safe and correct at any concurrency level but
+        may hurt aggregate throughput when multiple requests are in flight.
         """
         import mlx.core as mx
 
@@ -2558,7 +2617,7 @@ class Scheduler:
 
             with mx.stream(generation_stream):
                 logits = self.model(verify_input, cache=kv_cache)
-                if temp <= 1e-6:
+                if temp <= 1.67e-6:
                     # Greedy: argmax forces the full forward pass
                     predicted = mx.argmax(logits[0], axis=-1)  # (K,)
                     mx.eval(predicted)
@@ -2567,7 +2626,7 @@ class Scheduler:
                     mx.eval(logits)
 
             # 3. Accept prefix — greedy (temp≈0) or probabilistic (Phase 3)
-            if temp <= 1e-6:
+            if temp <= 1.67e-6:
                 predicted = predicted.tolist()  # length K
                 # d0: check forward_logprobs (prediction after last_token)
                 d0_predicted = int(mx.argmax(forward_logprobs).item())
@@ -2682,7 +2741,7 @@ class Scheduler:
                 # N+j while rewinding ArraysCache to N.
                 #
                 # Compute correction at position N (after last_token in cache):
-                if temp <= 1e-6:
+                if temp <= 1.67e-6:
                     correction_token = d0_predicted
                 else:
                     cb_logprobs = forward_logprobs
@@ -2722,6 +2781,12 @@ class Scheduler:
                 self.request_id_to_uid[request_id] = new_uid
                 self.uid_to_request_id[new_uid] = request_id
                 self._pld_spec_wasted += num_drafts
+                self._pld_win_attempts += 1
+                self._pld_win_accepted += num_accept
+                if num_accept == 0:
+                    self._pld_win_zero += 1
+                self._pld_win_tokens += 1  # only correction token emitted
+                self._pld_maybe_log_summary()
                 logger.debug(
                     "[PLD-spec] hybrid partial reject: rewound %d/%d, correction=%d",
                     num_accept, num_drafts, correction_token,
@@ -2757,6 +2822,16 @@ class Scheduler:
             # 7. Accumulate stats
             self._pld_spec_accepted += num_accept
             self._pld_spec_wasted += num_drafts - num_accept
+
+            self._pld_win_attempts += 1
+            self._pld_win_accepted += num_accept
+            if num_accept == num_drafts:
+                self._pld_win_full += 1
+            if num_accept == 0:
+                self._pld_win_zero += 1
+            tokens_this_round = num_accept + 1  # accepted drafts + bonus
+            self._pld_win_tokens += tokens_this_round
+            self._pld_maybe_log_summary()
 
             extra = list(drafts[:num_accept]) + [bonus_token]
             logger.debug(
