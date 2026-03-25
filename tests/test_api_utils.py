@@ -451,14 +451,13 @@ class TestResolveToLocalPath:
         """HuggingFace repo IDs are resolved to snapshot paths via cache scan."""
         from unittest.mock import MagicMock
         from types import SimpleNamespace
-        from datetime import datetime
 
         snapshot_dir = tmp_path / "snapshots" / "abc123"
         snapshot_dir.mkdir(parents=True)
         (snapshot_dir / "config.json").write_text("{}")
 
         revision = SimpleNamespace(
-            last_modified=datetime(2025, 1, 1),
+            last_modified=1704067200.0,  # 2024-01-01
             snapshot_path=snapshot_dir,
         )
         repo = SimpleNamespace(
@@ -480,16 +479,17 @@ class TestResolveToLocalPath:
         """When multiple revisions exist, the most recently modified is chosen."""
         from unittest.mock import MagicMock
         from types import SimpleNamespace
-        from datetime import datetime
 
         old_snapshot = tmp_path / "old"
         old_snapshot.mkdir()
+        (old_snapshot / "config.json").write_text("{}")
         new_snapshot = tmp_path / "new"
         new_snapshot.mkdir()
+        (new_snapshot / "config.json").write_text("{}")
 
         revisions = [
-            SimpleNamespace(last_modified=datetime(2024, 1, 1), snapshot_path=old_snapshot),
-            SimpleNamespace(last_modified=datetime(2025, 6, 1), snapshot_path=new_snapshot),
+            SimpleNamespace(last_modified=1704067200.0, snapshot_path=old_snapshot),   # 2024-01-01
+            SimpleNamespace(last_modified=1748736000.0, snapshot_path=new_snapshot),   # 2025-06-01
         ]
         repo = SimpleNamespace(repo_id="org/my-model", revisions=revisions)
         cache_info = SimpleNamespace(repos=[repo])
@@ -516,3 +516,56 @@ class TestResolveToLocalPath:
         resolve_to_local_path(str(tmp_path))
         info = resolve_to_local_path.cache_info()
         assert info.hits >= 1
+
+    def test_none_last_modified_handled(self, tmp_path, monkeypatch):
+        """Revisions with None last_modified don't crash the sort."""
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        snapshot_a = tmp_path / "a"
+        snapshot_a.mkdir()
+        (snapshot_a / "config.json").write_text("{}")
+        snapshot_b = tmp_path / "b"
+        snapshot_b.mkdir()
+        (snapshot_b / "config.json").write_text("{}")
+
+        revisions = [
+            SimpleNamespace(last_modified=None, snapshot_path=snapshot_a),
+            SimpleNamespace(last_modified=1735689600.0, snapshot_path=snapshot_b),  # 2025-01-01
+        ]
+        repo = SimpleNamespace(repo_id="org/none-ts-model", revisions=revisions)
+        cache_info = SimpleNamespace(repos=[repo])
+
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", MagicMock(return_value=cache_info))
+
+        result = resolve_to_local_path("org/none-ts-model")
+        # The revision with a real timestamp should win
+        assert result == str(snapshot_b)
+
+    def test_partial_snapshot_without_config_skipped(self, tmp_path, monkeypatch):
+        """Snapshots missing config.json are skipped (partial downloads)."""
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        partial = tmp_path / "partial"
+        partial.mkdir()
+        # No config.json — simulates interrupted download
+
+        complete = tmp_path / "complete"
+        complete.mkdir()
+        (complete / "config.json").write_text("{}")
+
+        revisions = [
+            SimpleNamespace(last_modified=1748736000.0, snapshot_path=partial),    # 2025-06-01 (newer)
+            SimpleNamespace(last_modified=1735689600.0, snapshot_path=complete),   # 2025-01-01 (older)
+        ]
+        repo = SimpleNamespace(repo_id="org/partial-model", revisions=revisions)
+        cache_info = SimpleNamespace(repos=[repo])
+
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", MagicMock(return_value=cache_info))
+
+        result = resolve_to_local_path("org/partial-model")
+        # Should skip partial (newer but no config.json) and return complete
+        assert result == str(complete)

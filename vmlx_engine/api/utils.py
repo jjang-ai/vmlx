@@ -85,11 +85,13 @@ def resolve_to_local_path(model_name: str) -> str:
             if repo.repo_id == model_name:
                 for revision in sorted(
                     repo.revisions,
-                    key=lambda r: r.last_modified,
+                    key=lambda r: (r.last_modified or 0),
                     reverse=True,
                 ):
                     snapshot = str(revision.snapshot_path)
-                    if Path(snapshot).is_dir():
+                    if Path(snapshot).is_dir() and (
+                        Path(snapshot) / "config.json"
+                    ).is_file():
                         return snapshot
     except Exception:
         pass
