@@ -1,0 +1,95 @@
+The user is asking for advice about what to check before opening a pull request for a big feature. This is a common software development question about best practices for code review and PR quality. Let me think through the key areas they should consider:
+
+1. Code quality checks:
+- Does the code compile/build successfully?
+- Are all tests passing?
+- Have they written tests for the new feature?
+- Is the code following the project's style guidelines?
+- Have they done any refactoring to improve code quality?
+
+2. Feature completeness:
+- Is the feature actually complete and working as intended?
+- Have they tested edge cases?
+- Is error handling appropriate?
+- Are there any TODOs or incomplete pieces?
+
+3. Documentation:
+- Is the code well-commented?
+- Have they updated any API documentation?
+- Is there a clear description of what the PR does?
+- Have they updated README or other user-facing docs if needed?
+
+4. Integration concerns:
+- Are there any breaking changes?
+- Will this conflict with other work in progress?
+- Have they rebased onto the latest main/master?
+- Are there database migrations needed?
+
+5. Performance:
+- Are there any performance implications?
+- Have they done any benchmarking if relevant?
+
+6. Security:
+- Are there any security implications?
+- Any new dependencies and are they vetted?
+
+7. PR-specific:
+- Is the PR description clear?
+- Are the commits well-organized?
+- Have they squashed unnecessary commits?
+- Is the title descriptive?
+
+8. Reviewer considerations:
+- Have they identified appropriate reviewers?
+- Is the PR sized appropriately (not too big)?
+- Have they added context to help reviewers understand?
+
+Let me organize this into
+
+# Pre-PR Checklist for Big Features
+
+## Code Quality
+- [ ] All tests pass (existing + new)
+- [ ] Code follows project style guidelines
+- [ ] No linting/formatting errors
+- [ ] Build succeeds cleanly
+
+## Feature Completeness
+- [ ] Feature works as intended in all scenarios
+- [ ] Edge cases handled appropriately
+- [ ] Error handling is robust
+- [ ] No TODOs or incomplete sections
+
+## Testing
+- [ ] Unit tests cover the new functionality
+- [ ] Integration tests if applicable
+- [ ] Manual testing completed
+- [ ] Regression tests pass
+
+## Documentation
+- [ ] Code is well-commented where needed
+- [ ] API docs updated if applicable
+- [ ] User-facing docs updated if needed
+- [ ] PR description clearly explains the change
+
+## Integration
+- [ ] Branch is rebased onto latest main
+- [ ] No unintended breaking changes
+- [ ] Dependencies documented/updated
+- [ ] Database migrations included if needed
+
+## PR Hygiene
+- [ ] Commits are logical and well-named
+- [ ] Unnecessary commits squashed
+- [ ] Appropriate reviewers identified
+- [ ] Screenshots included if UI changes
+
+## Extra for Big Features
+- [ ] Performance implications considered
+- [ ] Security review completed
+- [ ] Rollback plan documented
+- [ ] Consider splitting into smaller PRs if possible
+
+**Pro tip:** For very large features, consider breaking them into smaller, reviewable chunks. A 2000-line PR is harder to review thoroughly than three 500-line PRs.
+
+Would you like me to elaborate on any of these areas?

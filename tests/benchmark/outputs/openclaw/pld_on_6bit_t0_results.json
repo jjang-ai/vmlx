@@ -1,0 +1,79 @@
+[
+  {
+    "name": "json_schema",
+    "group": "A",
+    "description": "Produce structured JSON (structured output, PLD risk)",
+    "ttft_ms": 2151,
+    "total_s": 17.31,
+    "tok_estimate": 225,
+    "tok_per_s": 13.0,
+    "sse_events": 33,
+    "output_len": 900
+  },
+  {
+    "name": "code_generation",
+    "group": "A",
+    "description": "Write Python code (structured output, PLD risk)",
+    "ttft_ms": 932,
+    "total_s": 31.72,
+    "tok_estimate": 520,
+    "tok_per_s": 16.4,
+    "sse_events": 65,
+    "output_len": 2082
+  },
+  {
+    "name": "code_review",
+    "group": "A",
+    "description": "Structured code review with section headers (PLD risk)",
+    "ttft_ms": 1079,
+    "total_s": 24.33,
+    "tok_estimate": 393,
+    "tok_per_s": 16.2,
+    "sse_events": 49,
+    "output_len": 1572
+  },
+  {
+    "name": "pr_checklist",
+    "group": "B",
+    "description": "Pre-PR checklist (reasoning, no tools)",
+    "ttft_ms": 801,
+    "total_s": 45.31,
+    "tok_estimate": 787,
+    "tok_per_s": 17.4,
+    "sse_events": 93,
+    "output_len": 3149
+  },
+  {
+    "name": "temperature_tradeoff",
+    "group": "B",
+    "description": "Technical explanation (reasoning, no tools)",
+    "ttft_ms": 806,
+    "total_s": 47.41,
+    "tok_estimate": 771,
+    "tok_per_s": 16.3,
+    "sse_events": 97,
+    "output_len": 3086
+  },
+  {
+    "name": "kv_vs_prefix_cache",
+    "group": "C",
+    "description": "Short factual (no tools)",
+    "ttft_ms": 798,
+    "total_s": 31.88,
+    "tok_estimate": 553,
+    "tok_per_s": 17.3,
+    "sse_events": 65,
+    "output_len": 2214
+  },
+  {
+    "name": "last_topic",
+    "group": "C",
+    "description": "Memory recall \u2014 last topic (no tools)",
+    "ttft_ms": 797,
+    "total_s": 12.66,
+    "tok_estimate": 218,
+    "tok_per_s": 17.2,
+    "sse_events": 26,
+    "output_len": 875
+  }
+]

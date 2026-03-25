@@ -321,6 +321,24 @@ request resets the auto-tune window to 1 (if PLD is active), so each
 generation gets fresh workload-appropriate auto-tuning.  If PLD was
 auto-disabled, the reset is skipped — the disable decision is respected.
 
+**7. Scalar log-probability acceptance (v6).** Phase 3 acceptance replaced
+`mx.softmax(forward_logprobs / temp)` (materializes full 150K-element probability
+vector) with `logsumexp` + single index lookup + `math.exp` (scalar output). Same
+O(V) for logsumexp but avoids allocating/evaluating the full probability array.
+d1..d_{K-1} acceptance is now lazy — only computed if prior draft accepted.
+
+**8. N-gram hash index (v6).** `NgramIndex` class maintains bigram/trigram dicts
+mapping n-gram tuples to their two most recent positions. Built lazily on first
+call, updated incrementally (O(1) per new token). 140× faster than backward scan
+on 12K-token sequences. Two positions stored per n-gram to handle the self-match
+edge case (query's own position may be the most recent entry).
+
+**9. Dynamic K=3 (tested and reverted).** Boosted K from 2 to 3 when d0 confidence
+was high (argmax match at T=0, logprob > -0.5 at T>0). Result: **-4% at T=0** vs
++3% with K=2. On hybrid models, ANY partial rejection forces full cache rewind, so
+K=3 only beats K=2 when per-draft acceptance probability exceeds 75% — too rare in
+practice. K=2 confirmed as optimal for hybrid SSM/ATT architectures.
+
 **Cross-model results (T=0.3, adaptive auto-tune):**
 
 | Model | Architecture | Baseline | OpenClaw | Acceptance | Old (K=5) |
@@ -359,11 +377,29 @@ a fix to `jang_loader.py` to resolve HF model IDs to local cache snapshots via
 | kv_vs_prefix_cache | 14.6 | 18.3 | **+25%** |
 | last_topic | 15.1 | 17.7 | **+17%** |
 
+**Qwen3.5-27B-Claude-4.6-6bit per-task OpenClaw (T=0, v6 — scalar logprob + ngram index):**
+
+| Task | Baseline | PLD | Delta | Tokens |
+|------|----------|-----|-------|--------|
+| json_schema | 13.2 | 13.0 | -2% | 225 |
+| code_generation | 16.4 | 16.4 | 0% | 520 |
+| code_review | 16.0 | 16.2 | +1% | 393 |
+| pr_checklist | 17.1 | 17.4 | **+2%** | 787 |
+| temperature_tradeoff | 15.9 | 16.3 | **+3%** | 771 |
+| kv_vs_prefix_cache | 16.2 | 17.3 | **+7%** | 553 |
+| last_topic | 15.9 | 17.2 | **+8%** | 218 |
+| **Average** | **~15.8** | **~16.3** | **+3%** | |
+
+T=0 outputs are deterministic (identical token counts), giving the cleanest signal.
+At T=0 fewer PLD cycles fire (d0 pre-check requires exact argmax match) but every
+cycle that fires succeeds. Net +3% vs T=0.3's +5-7% because opportunities are rarer.
+
 **K experiments (on Qwen3.5-27B-Claude-4.6-6bit, without auto-tune):**
 
 | K | Acceptance | OpenClaw | Why |
 |---|-----------|----------|-----|
 | K=5 (original) | -25% | -22% | Verify cost ~4× on hybrid, too expensive |
+| K=3 (dynamic, T=0) | — | -4% | Full accept needs 3/3; p>75% required to beat K=2 |
 | K=2 (v4, best) | 0% | 0% | Verify cost ~1.75×, amortizes ~20ms overhead |
 | K=1 | -6% | -7% | Verify cost 1.0× but fewer tokens to amortize overhead |
 
@@ -376,6 +412,8 @@ Phase 4 (K=5, no pre-check):      -22%
 + logprob lookup + threshold (v4):   0%
 + fixed-window auto-tune:          +5%
 + adaptive auto-tune (window=1):   +7%
++ scalar logprob + ngram index:    +4–7%  (same band, reduced internal overhead)
++ dynamic K=3 (reverted):         -4% at T=0  (full accept needs p>75%, too rare)
 ```
 
 ### Real-world agent workload (OpenClaw)

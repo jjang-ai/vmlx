@@ -29,7 +29,7 @@ from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
 from .paged_cache import PagedCacheManager
 from .prefix_cache import BlockAwarePrefixCache, PrefixCacheManager
-from .prompt_lookup import find_draft_tokens, pld_stats
+from .prompt_lookup import NgramIndex, find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .utils.mamba_cache import ensure_mamba_support
 
@@ -202,6 +202,8 @@ class Scheduler:
         # Prompt lookup decoding — measurement state (Phase 1)
         # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
         self._pld_pending: Dict[str, Tuple[List[int], int, int]] = {}
+        # Per-request n-gram hash index for O(1) draft lookup
+        self._pld_ngram_indices: Dict[str, NgramIndex] = {}
 
         # Prompt lookup decoding — Phase 2/3 (actual batched verification)
         # Phase 2 (temp≈0): greedy acceptance, argmax bonus.
@@ -2261,8 +2263,9 @@ class Scheduler:
                 _surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
 
         for request_id in finished_ids:
-            # Clean up PLD measurement state
+            # Clean up PLD state
             self._pld_pending.pop(request_id, None)
+            self._pld_ngram_indices.pop(request_id, None)
 
             request = self.running.get(request_id)
 
@@ -2504,8 +2507,9 @@ class Scheduler:
             # Clear stale detokenizer — request will restart from scratch
             self._cleanup_detokenizer(request_id)
 
-            # Clear PLD measurement state for this request
+            # Clear PLD state for this request
             self._pld_pending.pop(request_id, None)
+            self._pld_ngram_indices.pop(request_id, None)
 
             # Move to waiting queue (at front for priority)
             self.waiting.appendleft(request)
@@ -2679,7 +2683,11 @@ class Scheduler:
             return []
 
         full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
-        drafts = find_draft_tokens(full_tokens, num_draft_tokens=self._pld_num_drafts, max_ngram_size=3)
+        ngram_idx = self._pld_ngram_indices.get(request_id)
+        if ngram_idx is None:
+            ngram_idx = NgramIndex()
+            self._pld_ngram_indices[request_id] = ngram_idx
+        drafts = ngram_idx.find_drafts(full_tokens, num_draft_tokens=5, max_ngram_size=3)
         if not drafts:
             return []
 
@@ -2734,6 +2742,11 @@ class Scheduler:
                 if _lp_d0 < -2.0:
                     self._pld_win_d0_skip += 1
                     return []
+
+            # Trim to configured K (dynamic K=3 was tested and regressed —
+            # on hybrid models, p(full_accept) drops with K and any miss
+            # forces full rewind, so K=2 remains the sweet spot).
+            drafts = drafts[:self._pld_num_drafts]
 
             # 2. Extract KV cache — removes request from BatchGenerator
             cache_dict = self.batch_generator.remove([uid], return_prompt_caches=True)
@@ -2795,26 +2808,26 @@ class Scheduler:
 
             else:
                 # Phase 3: accept d_i with prob p(d_i | context).
-                # d0: accept from forward_logprobs (prediction after last_token).
-                # softmax(forward_logprobs / T) == softmax(raw_logits / T) because
-                # the logsumexp constant cancels — so log-probs work correctly.
-                p_d0 = mx.softmax(forward_logprobs / temp, axis=-1)
-                mx.eval(p_d0)
+                # Scalar log-probability instead of full-vocab softmax:
+                # log p_T(d) = logprobs[d]/T - logsumexp(logprobs/T)
+                # logsumexp is O(V) but produces a scalar — avoids
+                # materializing the full 150K probability vector.
+                import math
+                _lp_scaled = forward_logprobs / temp
+                _log_p_d0 = _lp_scaled[drafts[0]] - mx.logsumexp(_lp_scaled)
+                mx.eval(_log_p_d0)
 
                 num_accept = 0
-                if random.random() < p_d0[drafts[0]].item():
+                if random.random() < math.exp(_log_p_d0.item()):
                     num_accept = 1
-                    # d1..d_{K-1}: accept from logits[0, i-1]
-                    if num_drafts > 1:
-                        probs_rest = mx.softmax(
-                            logits[0, : num_drafts - 1] / temp, axis=-1
-                        )
-                        mx.eval(probs_rest)
-                        for i in range(1, num_drafts):
-                            if random.random() < probs_rest[i - 1, drafts[i]].item():
-                                num_accept += 1
-                            else:
-                                break
+                    # d1..d_{K-1}: accept from logits[0, i-1], lazy per-position
+                    for i in range(1, num_drafts):
+                        _lp_i = logits[0, i - 1] / temp
+                        _log_p_di = _lp_i[drafts[i]] - mx.logsumexp(_lp_i)
+                        if random.random() < math.exp(_log_p_di.item()):
+                            num_accept += 1
+                        else:
+                            break
 
                 # Correction/bonus: sample at the first un-accepted position.
                 # On rejection exclude the rejected token so it cannot be

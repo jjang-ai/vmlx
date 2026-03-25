@@ -26,7 +26,7 @@ See also: notes/prompt-lookup-decoding.md
 
 import logging
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,69 @@ def find_draft_tokens(
                     return list(draft)
 
     return []
+
+
+class NgramIndex:
+    """O(1) n-gram lookup via hash index, replacing the O(n) backward scan.
+
+    Maintains bigram and trigram dicts mapping n-gram tuples to their two
+    most recent positions.  Storing two positions handles the self-match edge
+    case: the query's own position may be the most recent entry, so we fall
+    back to the second.
+
+    Usage (per-request, in scheduler):
+        idx = NgramIndex()
+        drafts = idx.find_drafts(full_tokens, num_draft_tokens=2)
+    The index is built lazily on the first call and updated incrementally
+    on subsequent calls.
+    """
+
+    __slots__ = ("_index", "_indexed_up_to")
+
+    def __init__(self) -> None:
+        self._index: Dict[Tuple[int, ...], Tuple[int, int]] = {}
+        self._indexed_up_to: int = 0
+
+    def _add(self, key: Tuple[int, ...], pos: int) -> None:
+        prev = self._index.get(key)
+        if prev is None:
+            self._index[key] = (pos, -1)
+        elif pos > prev[0]:
+            self._index[key] = (pos, prev[0])
+
+    def find_drafts(
+        self,
+        token_ids: List[int],
+        num_draft_tokens: int = 5,
+        max_ngram_size: int = 3,
+    ) -> List[int]:
+        n = len(token_ids)
+        if n < 3 or num_draft_tokens <= 0:
+            return []
+
+        # Incrementally index new positions
+        for i in range(self._indexed_up_to, n - 1):
+            self._add((token_ids[i], token_ids[i + 1]), i)
+            if i + 2 < n:
+                self._add((token_ids[i], token_ids[i + 1], token_ids[i + 2]), i)
+        self._indexed_up_to = max(self._indexed_up_to, n - 1)
+
+        # Lookup: try largest n-gram first (trigram > bigram)
+        for ngram_size in range(min(max_ngram_size, n - 1), 1, -1):
+            key = tuple(token_ids[-ngram_size:])
+            before = n - ngram_size  # positions at or after this are self-matches
+            entry = self._index.get(key)
+            if entry is None:
+                continue
+            pos = entry[0] if entry[0] < before else entry[1]
+            if pos < 0:
+                continue
+            draft_start = pos + ngram_size
+            drafts = token_ids[draft_start : draft_start + num_draft_tokens]
+            if drafts:
+                return list(drafts)
+
+        return []
 
 
 @dataclass

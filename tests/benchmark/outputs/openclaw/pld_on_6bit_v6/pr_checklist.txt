@@ -1,0 +1,79 @@
+The user is asking for advice on what to check before opening a pull request for a big feature. This is a common software development question about best practices for code review preparation. Let me think through the key areas they should consider:
+
+1. Code quality checks:
+- Does the code compile/build successfully?
+- Are all tests passing?
+- Have they written tests for the new feature?
+- Is the code following the project's style guidelines?
+- Have they done any refactoring to improve code quality?
+
+2. Feature completeness:
+- Is the feature actually complete and working as intended?
+- Have they tested edge cases?
+- Is error handling appropriate?
+- Are there any TODOs or incomplete parts that should be addressed?
+
+3. Documentation:
+- Is the code well-commented where needed?
+- Have they updated any API documentation?
+- Is there a clear description of what the PR does?
+- Have they updated README or other user-facing docs if needed?
+
+4. Integration concerns:
+- Does this break any existing functionality?
+- Are there any dependencies on other PRs?
+- Is there a migration needed for existing data?
+- Are there any performance implications?
+
+5. PR preparation:
+- Is the commit history clean and logical?
+- Is the PR description clear and comprehensive?
+- Have they included screenshots for UI changes?
+- Have they listed any known issues or follow-up items?
+
+6. Team/process considerations:
+- Have they notified relevant team members?
+- Is this the right time to open the PR (not during holidays, etc.)?
+- Have they identified appropriate reviewers?
+- Is the PR scoped appropriately (not too large)?
+
+Let me organize these thoughts into
+
+# Pre-PR Checklist for Big Features
+
+## Code Quality
+- [ ] All tests pass (existing + new)
+- [ ] Code follows project style guidelines
+- [ ] No linting/formatting errors
+- [ ] Build succeeds cleanly
+
+## Feature Verification
+- [ ] Feature works as intended in all scenarios
+- [ ] Edge cases are handled
+- [ ] Error states are properly managed
+- [ ] Performance is acceptable
+
+## Documentation
+- [ ] Code is self-documenting / appropriately commented
+- [ ] API docs updated if needed
+- [ ] User-facing docs updated if needed
+- [ ] PR description is clear and comprehensive
+
+## Integration
+- [ ] No regressions in existing functionality
+- [ ] Dependencies are documented
+- [ ] Migration paths exist if needed (data, config, etc.)
+
+## PR Hygiene
+- [ ] Commit history is clean and logical
+- [ ] Screenshots included for UI changes
+- [ ] Appropriate reviewers identified
+- [ ] Related issues linked
+
+## Practical Tips
+- Consider breaking up very large PRs if possible
+- Add a "testing instructions" section to your PR description
+- Mention any known limitations or follow-up work needed
+- Ping your team if the PR requires coordination
+
+Would you like me to elaborate on any of these areas, or do you have specific concerns about your feature?

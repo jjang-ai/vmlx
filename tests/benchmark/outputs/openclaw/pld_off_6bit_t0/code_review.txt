@@ -1,0 +1,33 @@
+Let me analyze this function thoroughly across the three requested dimensions.
+
+**Function Analysis:**
+The function `find_dupes(lst)` finds duplicate elements in a list by:
+1. Using nested loops to compare each pair of elements
+2. Checking if elements are equal and not already in the duplicates list
+3. Adding qualifying duplicates to the result list
+
+**CORRECTNESS Analysis:**
+- Does it find all duplicates? Yes, it compares every pair (i, j) where j > i
+- Does it avoid adding the same duplicate multiple times? Yes, the `lst[i] not in dupes` check prevents this
+- Edge cases:
+  - Empty list: Returns [] ✓
+  - No duplicates: Returns [] ✓
+  - All same elements: Returns [element] ✓
+  - Multiple different duplicates: Returns all of them ✓
+- The logic is sound and produces correct results
+
+**PERFORMANCE Analysis:**
+- Time complexity: O(n²) for nested loops + O(n) for each `not in` check on dupes list
+  - Actually worst case could approach O(n³) if many duplicates exist
+- Space complexity: O(k) where k is number of unique duplicates
+- Can be significantly improved to O(n) using a set or Counter
+- The `lst[i] not in dupes` check inside the loop is particularly inefficient
+
+**STYLE Analysis:**
+- Function name `find_dupes` is clear and descriptive
+- Variable names `dupes`, `lst`, `i`, `j` - `i` and `j` are conventional for indices, but `dupes` could be more descriptive
+- Using `range(len(lst))` instead of direct iteration is less Pythonic
+- The condition could be simplified
+- No docstring present
+- Could use collections.Counter for a more idiomatic solution
+-

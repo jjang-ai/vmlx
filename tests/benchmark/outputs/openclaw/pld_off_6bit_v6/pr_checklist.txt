@@ -1,0 +1,108 @@
+The user is asking for a checklist or guidance on what to verify before opening a pull request for a significant feature. This is a common software development question about best practices for code review readiness.
+
+Let me think through the key areas someone should check:
+
+1. Code quality
+- Does the code compile/build successfully?
+- Are there any linting/formatting issues?
+- Is the code following the project's style guidelines?
+
+2. Testing
+- Are there unit tests for the new functionality?
+- Do all existing tests still pass?
+- Are there integration tests if needed?
+- Have I manually tested the feature?
+
+3. Documentation
+- Is the code well-commented?
+- Is there documentation for the new feature?
+- Are there API docs if applicable?
+- Is there a changelog entry?
+
+4. Feature completeness
+- Is the feature actually complete?
+- Are there any TODOs or incomplete pieces?
+- Does it handle edge cases?
+- Are error states handled properly?
+
+5. Code review preparation
+- Is the commit history clean?
+- Are commits logical and well-described?
+- Is the PR description clear?
+- Are there screenshots for UI changes?
+
+6. Compatibility
+- Are there breaking changes?
+- Is there a migration path if needed?
+- Are there database migrations if needed?
+
+7. Security
+- Are there any security implications?
+- Is user input validated?
+
+8. Performance
+- Are there any performance concerns?
+- Has performance been tested?
+
+9. Branch hygiene
+- Is the branch up to date with main?
+- Are there any merge conflicts?
+
+10. PR metadata
+- Is the PR title descriptive?
+- Is the description clear about what and why?
+- Are related issues linked?
+- Are reviewers assigned appropriately?
+
+Let me organize this into a helpful response.
+
+
+# Pre-PR Checklist for Big Features
+
+## Code Quality
+- [ ] Code builds/compiles without errors
+- [ ] Linting and formatting pass
+- [ ] Follows project style guidelines
+- [ ] No debug code or console logs left in
+
+## Testing
+- [ ] All existing tests pass
+- [ ] New tests added for the feature
+- [ ] Edge cases are covered
+- [ ] Manual testing completed
+- [ ] Integration tested with dependent features
+
+## Documentation
+- [ ] Code is well-commented where needed
+- [ ] Feature documentation written
+- [ ] API docs updated (if applicable)
+- [ ] README/CHANGELOG updated
+
+## Feature Completeness
+- [ ] Feature is actually complete (no TODOs)
+- [ ] Error handling is robust
+- [ ] Loading states handled
+- [ ] Accessibility considered
+
+## Branch Hygiene
+- [ ] Branch rebased/up-to-date with main
+- [ ] No merge conflicts
+- [ ] Commit history is clean and logical
+- [ ] Commit messages are descriptive
+
+## PR Preparation
+- [ ] Clear, descriptive title
+- [ ] Detailed description (what, why, how)
+- [ ] Screenshots for UI changes
+- [ ] Related issues linked
+- [ ] Appropriate reviewers assigned
+
+## Additional Considerations
+- [ ] Breaking changes documented
+- [ ] Database migrations tested
+- [ ] Performance implications considered
+- [ ] Security reviewed
+
+---
+
+**Quick tip:** If your team has an existing PR template or checklist, make sure to follow that first. Would you like me to elaborate on any of these areas?
