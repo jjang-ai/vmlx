@@ -2369,6 +2369,14 @@ async def ollama_chat(fastapi_request: Request):
     }
     if chat_req.stop:
         chat_kwargs["stop"] = chat_req.stop
+    if chat_req.top_k is not None and chat_req.top_k > 0:
+        chat_kwargs["top_k"] = chat_req.top_k
+    if chat_req.min_p is not None and chat_req.min_p > 0:
+        chat_kwargs["min_p"] = chat_req.min_p
+    if chat_req.repetition_penalty is not None:
+        chat_kwargs["repetition_penalty"] = chat_req.repetition_penalty
+    if chat_req.enable_thinking is not None:
+        chat_kwargs["enable_thinking"] = chat_req.enable_thinking
 
     # Extract messages (same logic as create_chat_completion)
     if engine.is_mllm:
