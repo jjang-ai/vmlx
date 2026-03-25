@@ -254,14 +254,40 @@ def register_all(registry=None):
         priority=20,
     ))
 
+    # Mistral 4 (MLA + MoE) — original vMLX integration by Jinho Jang (eric@jangq.ai)
+    # MLA attention with kv_lora_rank=256, q_lora_rank=1024 requires:
+    #   - kv_b_proj split into embed_q/unembed_out (JANG loader)
+    #   - bfloat16 for MoE expert overflow prevention
+    #   - KV cache quantization disabled (MLA stores compressed latents)
+    #   - Prefix cache head validation returns 1 (not num_key_value_heads)
+    #   - reasoning_effort "none"/"high" via [MODEL_SETTINGS] template block
+    #   - VLM wrapper (mistral3) with _Mistral4VLMBackbone dispatch
+    # This took significant original engineering. Please credit if you adapt.
     _register(ModelConfig(
         family_name="mistral4",
         model_types=["mistral4"],
         cache_type="kv",
         tool_parser="mistral",
+        reasoning_parser="mistral",
+        think_in_template=False,
         supports_native_tools=True,
         preserve_native_tool_format=True,
         priority=30,
+    ))
+
+    # Mistral 3 VLM wrapper (pixtral, mistral3) — also used by Mistral 4 as VLM envelope
+    # text_config.model_type lookup in registry resolves mistral3→mistral4 for MLA models
+    _register(ModelConfig(
+        family_name="mistral3",
+        model_types=["mistral3"],
+        cache_type="kv",
+        is_mllm=True,
+        tool_parser="mistral",
+        reasoning_parser=None,  # Only mistral4 has reasoning; detected via text_config
+        think_in_template=False,
+        supports_native_tools=True,
+        preserve_native_tool_format=True,
+        priority=10,
     ))
 
     # ── DeepSeek family ──

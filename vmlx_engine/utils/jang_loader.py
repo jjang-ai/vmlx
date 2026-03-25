@@ -200,10 +200,13 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
                     _text_cfg.get("num_local_experts",
                     _text_cfg.get("n_routed_experts", 0)))
     _hidden = _text_cfg.get("hidden_size", 0)
-    if _n_experts >= 512 and _hidden >= 4096:
+    _text_mt = _text_cfg.get("model_type", _model_cfg.get("model_type", ""))
+    _is_mla = _text_cfg.get("kv_lora_rank", 0) > 0
+    if (_n_experts >= 512 and _hidden >= 4096) or _text_mt == "mistral4" or _is_mla:
         model.set_dtype(mx.bfloat16)
+        _reason = "MLA" if _is_mla else f"{_n_experts} experts"
         logger.info(
-            f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden} "
+            f"  bfloat16 enabled: {_reason}, hidden={_hidden} "
             f"(float16 overflow prevention)"
         )
 
@@ -371,6 +374,92 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
                                 except Exception:
                                     continue
 
+        # Mistral4 MLA: split kv_b_proj → embed_q + unembed_out.
+        # Original implementation by Jinho Jang (eric@jangq.ai) for vMLX.
+        # MLA stores compressed KV latents — the HF kv_b_proj weight must be
+        # dequantized, reshaped (nheads, head_dim, kv_rank), and split into
+        # embed_q (nheads, kv_rank, qk_nope) and unembed_out (nheads, v_head, kv_rank).
+        # JANG safetensors store the unsplit kv_b_proj weight, but the model
+        # has MultiLinear modules for embed_q (k projection) and unembed_out
+        # (v projection). Without this split, they keep random init → garbage.
+        _text_mt = config.get("text_config", {}).get("model_type", "")
+        if _text_mt == "mistral4":
+            _t_cfg = config.get("text_config", config)
+            _nheads = _t_cfg.get("num_attention_heads", 32)
+            _qk_nope = _t_cfg.get("qk_nope_head_dim", 64)
+            _v_head = _t_cfg.get("v_head_dim", 128)
+            _kv_rank = _t_cfg.get("kv_lora_rank", 256)
+            _head_dim = _qk_nope + _v_head
+            _nlayers = _t_cfg.get("num_hidden_layers", 36)
+            for _l in range(_nlayers):
+                for _pfx in [
+                    f"language_model.model.layers.{_l}.self_attn",
+                    f"model.language_model.layers.{_l}.self_attn",
+                ]:
+                    _kb_key = f"{_pfx}.kv_b_proj.weight"
+                    if _kb_key not in shard_weights:
+                        continue
+                    _v = shard_weights.pop(_kb_key)
+                    # Dequantize if quantized (JANG stores attention at 8-bit)
+                    _s_key = f"{_pfx}.kv_b_proj.scales"
+                    _b_key = f"{_pfx}.kv_b_proj.biases"
+                    if _s_key in shard_weights:
+                        _s = shard_weights.pop(_s_key)
+                        _b = shard_weights.pop(_b_key, mx.zeros_like(_s))
+                        for _try_bits in [8, 6, 4, 3, 2]:
+                            _elem = 32 // _try_bits
+                            _real = _v.shape[-1] * _elem
+                            _gs = _real // _s.shape[-1] if _s.shape[-1] > 0 else 0
+                            if _gs > 0 and _gs * _s.shape[-1] == _real:
+                                try:
+                                    _v = mx.dequantize(_v, _s, _b, _gs, _try_bits)
+                                    break
+                                except Exception:
+                                    continue
+                    # (nheads*head_dim, kv_rank) → (nheads, head_dim, kv_rank)
+                    _v = _v.reshape(_nheads, _head_dim, _kv_rank)
+                    # embed_q: MultiLinear(qk_nope, kv_rank, nheads) → weight (nheads, kv_rank, qk_nope)
+                    _wk = mx.contiguous(_v[:, :_qk_nope, :].swapaxes(-1, -2))
+                    # unembed_out: MultiLinear(kv_rank, v_head, nheads) → weight (nheads, v_head, kv_rank)
+                    _wv = mx.contiguous(_v[:, _qk_nope:, :])
+                    shard_weights[f"{_pfx}.embed_q.weight"] = _wk.astype(mx.float16)
+                    shard_weights[f"{_pfx}.unembed_out.weight"] = _wv.astype(mx.float16)
+                    logger.debug(f"  Split kv_b_proj layer {_l}: embed_q={_wk.shape}, unembed_out={_wv.shape}")
+
+        # MoE gate dequant: MoEGate is nn.Module (not nn.Linear), so nn.quantize
+        # skips it. But JANG still quantizes the raw gate weight. Dequantize here
+        # so MoEGate.__call__ can do float matmul (x @ self.weight.T).
+        _n_exp = config.get("text_config", config).get("n_routed_experts", 0)
+        if _n_exp > 0:
+            _gate_parts = {}
+            _gate_keys_to_remove = []
+            for k, v in shard_weights.items():
+                if ".gate." in k and (k.endswith(".scales") or k.endswith(".biases")):
+                    prefix = k.rsplit(".", 1)[0]
+                    _gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
+                    _gate_keys_to_remove.append(k)
+            for k in _gate_keys_to_remove:
+                del shard_weights[k]
+            for prefix, parts in _gate_parts.items():
+                wkey = f"{prefix}.weight"
+                if wkey in shard_weights and "scales" in parts:
+                    qw = shard_weights[wkey]
+                    scales = parts["scales"]
+                    biases = parts.get("biases", mx.zeros_like(scales))
+                    for bits in [8, 6, 4, 3, 2]:
+                        elem_per_u32 = 32 // bits
+                        real_cols = qw.shape[-1] * elem_per_u32
+                        gs = real_cols // scales.shape[-1] if scales.shape[-1] > 0 else 0
+                        if gs > 0 and gs * scales.shape[-1] == real_cols:
+                            try:
+                                dq = mx.dequantize(qw, scales, biases, gs, bits)
+                                mx.eval(dq)
+                                shard_weights[wkey] = dq.astype(mx.bfloat16)
+                                logger.debug(f"  Dequantized gate: {wkey} bits={bits} gs={gs}")
+                                break
+                            except Exception:
+                                continue
+
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
@@ -380,16 +469,19 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
     if not hasattr(model, "config"):
         model.config = model_config
 
-    # bfloat16 for 512+ expert models (same as text loader)
+    # bfloat16 for MLA models and 512+ expert models
     _model_cfg = json.loads((path / "config.json").read_text())
     _text_cfg = _model_cfg.get("text_config", _model_cfg)
     _n_experts = _text_cfg.get("num_experts",
                     _text_cfg.get("num_local_experts",
                     _text_cfg.get("n_routed_experts", 0)))
     _hidden = _text_cfg.get("hidden_size", 0)
-    if _n_experts >= 512 and _hidden >= 4096:
+    _text_mt = _text_cfg.get("model_type", _model_cfg.get("model_type", ""))
+    _is_mla = _text_cfg.get("kv_lora_rank", 0) > 0
+    if (_n_experts >= 512 and _hidden >= 4096) or _text_mt == "mistral4" or _is_mla:
         model.set_dtype(mx.bfloat16)
-        logger.info(f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden}")
+        _reason = "MLA" if _is_mla else f"{_n_experts} experts"
+        logger.info(f"  bfloat16 enabled: {_reason}, hidden={_hidden}")
 
     if not lazy:
         mx.eval(model.parameters())
@@ -1139,6 +1231,15 @@ def _fix_quantized_bits(model, weights=None):
         quant_types = (nn.QuantizedLinear, nn.QuantizedEmbedding, QuantizedSwitchLinear)
     except ImportError:
         quant_types = (nn.QuantizedLinear, nn.QuantizedEmbedding)
+    # MLA models (Mistral 4, DeepSeek V3) use QuantizedMultiLinear for embed_q/unembed_out.
+    # Without this, _fix_quantized_bits never corrects the bits/group_size mismatch when
+    # nn.quantize sets bits=2 but sanitize loads 8-bit kv_b_proj split weights.
+    # Original MLA quantization fix by Jinho Jang (eric@jangq.ai) — vMLX/mlxstudio.
+    try:
+        from mlx_lm.models.mla import QuantizedMultiLinear
+        quant_types = quant_types + (QuantizedMultiLinear,)
+    except ImportError:
+        pass
 
     for name, module in model.named_modules():
         if not isinstance(module, quant_types):

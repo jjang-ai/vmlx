@@ -167,6 +167,7 @@ export function registerDeveloperHandlers(getWin: () => BrowserWindow | null) {
     calibrationMethod?: string
     imatrixPath?: string
     useAwq?: boolean
+    awqAlpha?: number
   }) => {
     const cliArgs = ['convert', args.model]
 
@@ -179,6 +180,9 @@ export function registerDeveloperHandlers(getWin: () => BrowserWindow | null) {
       }
       if (args.imatrixPath) cliArgs.push('--imatrix-path', args.imatrixPath)
       if (args.useAwq) cliArgs.push('--use-awq')
+      if (args.awqAlpha !== undefined && args.awqAlpha !== 0.25) {
+        cliArgs.push('--awq-alpha', args.awqAlpha.toString())
+      }
     } else {
       // MLX uniform quantization
       cliArgs.push('--bits', args.bits.toString(), '--group-size', args.groupSize.toString())

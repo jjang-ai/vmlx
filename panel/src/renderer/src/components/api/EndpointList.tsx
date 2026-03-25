@@ -1,3 +1,5 @@
+import type { ApiFormat } from './ApiDashboard'
+
 interface Endpoint {
   method: 'GET' | 'POST' | 'DELETE'
   path: string
@@ -12,7 +14,7 @@ interface EndpointGroup {
   endpoints: Endpoint[]
 }
 
-const ENDPOINT_GROUPS: EndpointGroup[] = [
+const OPENAI_GROUPS: EndpointGroup[] = [
   {
     category: 'Chat & Completions',
     description: 'OpenAI-compatible chat and text completion endpoints',
@@ -20,13 +22,6 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
       { method: 'POST', path: '/v1/chat/completions', description: 'Chat completions (OpenAI format)', stream: true, auth: true },
       { method: 'POST', path: '/v1/responses', description: 'Responses API (OpenAI format)', stream: true, auth: true },
       { method: 'POST', path: '/v1/completions', description: 'Text completions (legacy format)', stream: true, auth: true },
-    ],
-  },
-  {
-    category: 'Anthropic',
-    description: 'Anthropic Messages API — use with Claude Code, Anthropic SDK, or any Anthropic-compatible client',
-    endpoints: [
-      { method: 'POST', path: '/v1/messages', description: 'Anthropic Messages API', stream: true, auth: true },
     ],
   },
   {
@@ -38,10 +33,10 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
   },
   {
     category: 'Image Generation',
-    description: 'Text-to-image generation and image editing (requires mflux).',
+    description: 'Text-to-image generation and image editing (requires mflux)',
     endpoints: [
-      { method: 'POST', path: '/v1/images/generations', description: 'Generate images from text prompts (OpenAI format)', auth: true },
-      { method: 'POST', path: '/v1/images/edits', description: 'Edit images with text instructions (Qwen-Image-Edit)', auth: true },
+      { method: 'POST', path: '/v1/images/generations', description: 'Generate images from text prompts', auth: true },
+      { method: 'POST', path: '/v1/images/edits', description: 'Edit images with text instructions', auth: true },
     ],
   },
   {
@@ -98,6 +93,64 @@ const ENDPOINT_GROUPS: EndpointGroup[] = [
   },
 ]
 
+const ANTHROPIC_GROUPS: EndpointGroup[] = [
+  {
+    category: 'Messages API',
+    description: 'Anthropic Messages API — use with Claude Code, Anthropic SDK, or any Anthropic-compatible client',
+    endpoints: [
+      { method: 'POST', path: '/v1/messages', description: 'Create a message (streaming or non-streaming)', stream: true, auth: true },
+    ],
+  },
+  {
+    category: 'Models',
+    description: 'Model information',
+    endpoints: [
+      { method: 'GET', path: '/v1/models', description: 'List loaded models', auth: true },
+    ],
+  },
+  {
+    category: 'Health',
+    description: 'Server health and status',
+    endpoints: [
+      { method: 'GET', path: '/health', description: 'Health check' },
+    ],
+  },
+]
+
+const OLLAMA_GROUPS: EndpointGroup[] = [
+  {
+    category: 'Chat & Generate',
+    description: 'Ollama-compatible endpoints — use with ollama CLI or any Ollama client. Responses use NDJSON streaming.',
+    endpoints: [
+      { method: 'POST', path: '/api/chat', description: 'Chat completion (NDJSON streaming)', stream: true },
+      { method: 'POST', path: '/api/generate', description: 'Text generation (NDJSON streaming)', stream: true },
+    ],
+  },
+  {
+    category: 'Models & Info',
+    description: 'Model information and embeddings',
+    endpoints: [
+      { method: 'GET', path: '/api/tags', description: 'List loaded models' },
+      { method: 'POST', path: '/api/show', description: 'Show model details' },
+      { method: 'POST', path: '/api/embeddings', description: 'Generate embeddings' },
+      { method: 'POST', path: '/api/embed', description: 'Generate embeddings (alias)' },
+    ],
+  },
+  {
+    category: 'Liveness',
+    description: 'Ollama compatibility check',
+    endpoints: [
+      { method: 'GET', path: '/', description: 'Liveness check — returns "vMLX Gateway is running"' },
+    ],
+  },
+]
+
+const FORMAT_GROUPS: Record<ApiFormat, EndpointGroup[]> = {
+  openai: OPENAI_GROUPS,
+  anthropic: ANTHROPIC_GROUPS,
+  ollama: OLLAMA_GROUPS,
+}
+
 const METHOD_COLORS: Record<string, string> = {
   GET: 'bg-blue-500/15 text-blue-500',
   POST: 'bg-green-500/15 text-green-500',
@@ -105,28 +158,19 @@ const METHOD_COLORS: Record<string, string> = {
 }
 
 interface EndpointListProps {
+  format?: ApiFormat
   isImage?: boolean
   isEdit?: boolean
 }
 
-const IMAGE_CATEGORIES = ['Image Generation', 'Models', 'Health']
-
-export function EndpointList({ isImage, isEdit }: EndpointListProps) {
-  const groups = isImage
-    ? ENDPOINT_GROUPS.filter(g => IMAGE_CATEGORIES.includes(g.category)).map(g => {
-        if (g.category !== 'Image Generation') return g
-        return {
-          ...g,
-          endpoints: g.endpoints.filter(ep =>
-            isEdit ? ep.path === '/v1/images/edits' : ep.path === '/v1/images/generations'
-          ),
-        }
-      })
-    : ENDPOINT_GROUPS
+export function EndpointList({ format = 'openai', isImage, isEdit }: EndpointListProps) {
+  const groups = FORMAT_GROUPS[format] || OPENAI_GROUPS
 
   return (
     <div className="space-y-4">
-      <h3 className="text-sm font-medium">{isImage ? 'Image Server Endpoints' : 'Endpoints'}</h3>
+      <h3 className="text-sm font-medium">
+        {format === 'openai' ? 'OpenAI Endpoints' : format === 'anthropic' ? 'Anthropic Endpoints' : 'Ollama Endpoints'}
+      </h3>
       {groups.map(group => (
         <div key={group.category} className="border border-border rounded-lg overflow-hidden">
           <div className="px-3 py-2 bg-muted/50 border-b border-border">

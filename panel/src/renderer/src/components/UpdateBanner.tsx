@@ -14,10 +14,16 @@ export function UpdateBanner() {
 
   useEffect(() => {
     const unsub = window.api.app.onUpdateAvailable((data: UpdateInfo) => {
-      setUpdate(data)
+      const prev = localStorage.getItem('vmlx-dismissed-update')
+      if (prev !== data.latestVersion) setUpdate(data)
     })
     return unsub
   }, [])
+
+  const handleDismiss = () => {
+    setDismissed(true)
+    if (update) localStorage.setItem('vmlx-dismissed-update', update.latestVersion)
+  }
 
   if (!update || dismissed) return null
 
@@ -49,7 +55,7 @@ export function UpdateBanner() {
         Star on GitHub
       </a>
       <button
-        onClick={() => setDismissed(true)}
+        onClick={handleDismiss}
         className="ml-auto text-muted-foreground hover:text-foreground"
         title="Dismiss"
       >

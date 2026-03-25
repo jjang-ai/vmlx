@@ -264,26 +264,30 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                     >
                       Auto
                     </button>
-                    <button
-                      onClick={() => update('reasoningEffort', 'low')}
-                      className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                        overrides.reasoningEffort === 'low'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-accent text-muted-foreground'
-                      }`}
-                    >
-                      Low
-                    </button>
-                    <button
-                      onClick={() => update('reasoningEffort', 'medium')}
-                      className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                        overrides.reasoningEffort === 'medium'
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-accent text-muted-foreground'
-                      }`}
-                    >
-                      Medium
-                    </button>
+                    {reasoningParser !== 'mistral' && (
+                      <>
+                        <button
+                          onClick={() => update('reasoningEffort', 'low')}
+                          className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                            overrides.reasoningEffort === 'low'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'hover:bg-accent text-muted-foreground'
+                          }`}
+                        >
+                          Low
+                        </button>
+                        <button
+                          onClick={() => update('reasoningEffort', 'medium')}
+                          className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                            overrides.reasoningEffort === 'medium'
+                              ? 'bg-primary text-primary-foreground'
+                              : 'hover:bg-accent text-muted-foreground'
+                          }`}
+                        >
+                          Medium
+                        </button>
+                      </>
+                    )}
                     <button
                       onClick={() => update('reasoningEffort', 'high')}
                       className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
@@ -296,7 +300,9 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                     </button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Controls thinking depth for models that support it (GPT-OSS, etc.). Auto lets the model decide.
+                    {reasoningParser === 'mistral'
+                      ? 'Mistral 4: Auto = fast (no reasoning), High = deep step-by-step reasoning.'
+                      : 'Controls thinking depth for models that support it. Auto lets the model decide.'}
                   </p>
                 </div>
               )}

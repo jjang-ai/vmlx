@@ -412,6 +412,9 @@ def serve_command(args):
             stream_from_disk=getattr(args, 'stream_from_disk', False),
             stream_memory_percent=getattr(args, 'stream_memory_percent', 90),
         )
+        # Save speculative config for deep sleep/wake reload
+        server._cli_args['speculative_model'] = getattr(args, 'speculative_model', None)
+        server._cli_args['num_draft_tokens'] = getattr(args, 'num_draft_tokens', 3)
 
     # Configure CORS middleware
     from fastapi.middleware.cors import CORSMiddleware
@@ -1345,6 +1348,11 @@ Examples:
         "--use-awq", action="store_true", default=False,
         help="Enable AWQ (Activation-Aware Weighting) scaling for better quality. "
              "Experimental. Adds activation norm collection step before quantization.",
+    )
+    convert_parser.add_argument(
+        "--awq-alpha", type=float, default=0.25,
+        help="AWQ scaling factor (0.0-1.0). Only used when --use-awq is enabled. "
+             "Higher values increase activation awareness. Default: 0.25.",
     )
 
     convert_parser.add_argument(

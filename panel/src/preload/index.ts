@@ -231,7 +231,8 @@ const api = {
     convert: (args: {
       model: string; output?: string; bits: number; groupSize: number;
       mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean;
-      jangProfile?: string; jangMethod?: string
+      jangProfile?: string; jangMethod?: string;
+      calibrationMethod?: string; imatrixPath?: string; useAwq?: boolean; awqAlpha?: number
     }) => ipcRenderer.invoke('developer:convert', args),
     cancelOp: () => ipcRenderer.invoke('developer:cancelOp'),
     browseOutputDir: () => ipcRenderer.invoke('developer:browseOutputDir') as Promise<string | null>,
@@ -255,6 +256,12 @@ const api = {
       ipcRenderer.on('app:updateAvailable', handler)
       return () => { ipcRenderer.removeListener('app:updateAvailable', handler) }
     }
+  },
+
+  // API Gateway
+  gateway: {
+    getStatus: () => ipcRenderer.invoke('gateway:status'),
+    setPort: (port: number) => ipcRenderer.invoke('gateway:restart', port),
   },
 
   // App-level settings (API keys, preferences)

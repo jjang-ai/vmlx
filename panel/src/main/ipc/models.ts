@@ -185,16 +185,16 @@ export function validateImageModelCompleteness(modelDir: string, encoderType?: '
       missing.push('text_encoder/')
     }
 
-    // Determine encoder type from the explicit parameter OR auto-detect from disk.
+    // Determine encoder type from the explicit parameter.
     // Single-encoder models (ZImage, Flux2Klein, QwenImage, FIBO, etc.) don't need text_encoder_2.
     // Dual-encoder models (Flux1 schnell/dev) require text_encoder_2.
+    const SINGLE_ENCODER_CLASSES = new Set(['ZImage', 'Flux2Klein', 'QwenImage', 'QwenImageEdit', 'FIBO', 'Flux1Kontext', 'Flux1Fill', 'SeedVR2'])
     let isSingleEncoder: boolean
     if (encoderType) {
       isSingleEncoder = encoderType === 'single'
     } else {
-      // Auto-detect: if text_encoder_2/ doesn't exist on disk but text_encoder/ and
-      // transformer/ do, it's a valid single-encoder model — don't flag as incomplete.
-      isSingleEncoder = !files.includes('text_encoder_2') && files.includes('text_encoder') && files.includes('transformer')
+      // Default to dual encoder (safest — will flag missing text_encoder_2)
+      isSingleEncoder = false
     }
     if (!isSingleEncoder && !files.includes('text_encoder_2')) {
       missing.push('text_encoder_2/')
@@ -1168,21 +1168,34 @@ export function registerModelHandlers(): void {
     }
   }
 
-  /** Extract total model size from HF API safetensors metadata */
+  /** Extract total model size from HF API safetensors metadata.
+   * safetensors.parameters has per-dtype param counts (F16, BF16, U32, etc.)
+   * safetensors.total is total PARAMETER COUNT (not bytes).
+   * We compute actual byte size from dtype × bytes-per-element.
+   */
   function extractModelSize(m: any): string | undefined {
     try {
-      // safetensors.total: total bytes across all safetensors files
-      const total = m.safetensors?.total
-      if (typeof total === 'number' && total > 0) return formatSize(total)
-      // Fallback: sum parameter counts from safetensors.parameters
       const params = m.safetensors?.parameters
       if (params && typeof params === 'object') {
-        const totalParams = Object.values(params).reduce((sum: number, v: any) => sum + (typeof v === 'number' ? v : 0), 0)
-        if (totalParams > 0) {
-          // Rough estimate: 2 bytes per param for fp16/bf16 (most MLX models)
-          return formatSize(totalParams * 2)
+        // Compute actual byte size from per-dtype parameter counts
+        const bytesPerDtype: Record<string, number> = {
+          'F64': 8, 'I64': 8, 'U64': 8,
+          'F32': 4, 'I32': 4, 'U32': 4,
+          'F16': 2, 'BF16': 2, 'I16': 2, 'U16': 2,
+          'F8_E4M3': 1, 'F8_E5M2': 1, 'I8': 1, 'U8': 1,
+          'BOOL': 1,
         }
+        let totalBytes = 0
+        for (const [dtype, count] of Object.entries(params)) {
+          if (typeof count !== 'number') continue
+          const bpe = bytesPerDtype[dtype] ?? 2 // Default to 2 bytes if unknown dtype
+          totalBytes += count * bpe
+        }
+        if (totalBytes > 0) return formatSize(totalBytes)
       }
+      // Last resort: safetensors.total is param count, assume 2 bytes per param
+      const total = m.safetensors?.total
+      if (typeof total === 'number' && total > 0) return formatSize(total * 2)
     } catch (_) { }
     return undefined
   }

@@ -10,7 +10,7 @@
 
 <p align="center">
   Run LLMs, VLMs, and image generation models entirely on your Mac.<br>
-  OpenAI + Anthropic compatible API. No cloud. No API keys. No data leaving your machine.
+  OpenAI + Anthropic + Ollama compatible API. No cloud. No API keys. No data leaving your machine.
 </p>
 
 <p align="center">
@@ -296,7 +296,24 @@ response = requests.post("http://localhost:8000/v1/images/edits", json={
 
 ## API Reference
 
+### API Gateway
+
+The desktop app runs an **API Gateway** on a single port (default `8080`) that routes requests to all loaded models by name. Run multiple models simultaneously and access them all through one URL.
+
+```bash
+# All models accessible through the gateway
+curl http://localhost:8080/v1/chat/completions \
+  -d '{"model": "Qwen3.5-122B", "messages": [{"role": "user", "content": "Hi"}]}'
+
+# Works with Ollama CLI too
+OLLAMA_HOST=http://localhost:8080 ollama run Qwen3.5-122B
+```
+
+The gateway supports **OpenAI**, **Anthropic**, and **Ollama** wire formats. Configure the port in the API tab.
+
 ### Endpoints
+
+**OpenAI / Anthropic**
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -313,6 +330,16 @@ response = requests.post("http://localhost:8000/v1/images/edits", json={
 | `GET` | `/v1/models` | List loaded models |
 | `GET` | `/v1/cache/stats` | Cache statistics |
 | `GET` | `/health` | Server health check |
+
+**Ollama**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/chat` | Chat completion (NDJSON streaming) |
+| `POST` | `/api/generate` | Text generation (NDJSON streaming) |
+| `GET` | `/api/tags` | List loaded models |
+| `POST` | `/api/show` | Model details |
+| `POST` | `/api/embeddings` | Generate embeddings |
 
 ### curl Examples
 

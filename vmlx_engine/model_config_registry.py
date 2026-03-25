@@ -134,6 +134,20 @@ class ModelConfigRegistry:
             except Exception as e:
                 logger.warning(f"Could not load config.json for {model_name} to check model_type: {e}")
 
+            # Also check text_config.model_type for VLM wrapper models
+            # (e.g., Mistral 4 JANG: top-level model_type="mistral3", text_config.model_type="mistral4")
+            text_model_type = None
+            if model_type:
+                try:
+                    from pathlib import Path
+                    import json
+                    cfg_path = Path(model_name) / "config.json"
+                    if cfg_path.exists():
+                        raw = json.loads(cfg_path.read_text())
+                        text_model_type = raw.get("text_config", {}).get("model_type", "").lower()
+                except Exception:
+                    pass
+
             if model_type:
                 # Name-based disambiguation for models sharing model_type:
                 # GLM-Z1 uses model_type "glm4" but needs openai_gptoss reasoning (Harmony protocol)
@@ -148,6 +162,16 @@ class ModelConfigRegistry:
                 if model_type == "gemma2" and re.search(r"medgemma", model_name, re.IGNORECASE):
                     for config in self._configs:
                         if config.family_name == "medgemma":
+                            self._match_cache[model_name] = config
+                            return config
+
+                # VLM wrappers: prefer text_config.model_type (higher priority inner model)
+                # e.g., mistral3 wrapper with mistral4 text model → use mistral4 config
+                # Original text_config disambiguation by Jinho Jang (eric@jangq.ai) — vMLX.
+                if text_model_type and text_model_type != model_type:
+                    for config in self._configs:
+                        if text_model_type in config.model_types and config.priority > 0:
+                            logger.info(f"Model config: matched text_config.model_type='{text_model_type}' (wrapper='{model_type}') → {config.family_name}")
                             self._match_cache[model_name] = config
                             return config
 

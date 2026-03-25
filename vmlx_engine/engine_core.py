@@ -304,6 +304,8 @@ class EngineCore:
         request_id: Optional[str] = None,
         images: Optional[List[Any]] = None,
         videos: Optional[List[Any]] = None,
+        gen_prompt_len: int = 0,
+        num_messages: int = 1,
     ) -> str:
         """
         Add a request for processing.
@@ -314,6 +316,10 @@ class EngineCore:
             request_id: Optional custom request ID
             images: Optional images for multimodal
             videos: Optional videos for multimodal
+            gen_prompt_len: Number of generation prompt tokens to strip from
+                prefix cache key (prevents cache misses on thinking models)
+            num_messages: Number of messages in the conversation (for cache
+                skip heuristic — multi-turn conversations keep cache)
 
         Returns:
             The request ID
@@ -331,6 +337,19 @@ class EngineCore:
             images=images,
             videos=videos,
         )
+
+        # Attach gen_prompt_len for prefix cache key stripping.
+        # The scheduler reads this via getattr(request, '_gen_prompt_len', 0)
+        # to exclude generation prompt tokens from the cache key hash,
+        # which prevents 100% cache misses in multi-turn conversations
+        # for thinking models (where gen prompt includes <think>).
+        if gen_prompt_len > 0:
+            request._gen_prompt_len = gen_prompt_len
+
+        # Attach _has_history for cache skip heuristic.
+        # Multi-turn conversations (>2 messages = system+user+assistant+...)
+        # should always store cache even for short outputs.
+        request._has_history = num_messages > 2
 
         # Setup output collector with stream_interval from config
         self._output_collectors[request_id] = RequestOutputCollector(aggregate=True)

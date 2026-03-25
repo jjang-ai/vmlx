@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Server, Copy, Check } from 'lucide-react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { Server, Copy, Check, Wifi, WifiOff } from 'lucide-react'
 import { useSessionsContext } from '../../contexts/SessionsContext'
 import { EndpointList } from './EndpointList'
 import { CodeSnippets } from './CodeSnippets'
 import { CodingToolIntegration } from './CodingToolIntegration'
+
+export type ApiFormat = 'openai' | 'anthropic' | 'ollama'
 
 interface SessionSummary {
   id: string
@@ -18,8 +20,21 @@ interface SessionSummary {
   remoteUrl?: string
 }
 
-function connectHost(host: string): string {
-  return host === '0.0.0.0' ? '127.0.0.1' : host
+function getModelDisplayName(s: SessionSummary): string {
+  try {
+    const cfg = JSON.parse(s.config || '{}')
+    if (cfg.servedModelName) return cfg.servedModelName
+  } catch {}
+  return s.modelName || s.modelPath?.split('/').pop() || 'unknown'
+}
+
+function getModelType(s: SessionSummary): string {
+  try {
+    const cfg = JSON.parse(s.config || '{}')
+    if (cfg.modelType === 'image') return cfg.imageMode === 'edit' ? 'image-edit' : 'image-gen'
+    if (cfg.isMllm) return 'vision'
+  } catch {}
+  return 'text'
 }
 
 export function ApiDashboard() {
@@ -28,141 +43,163 @@ export function ApiDashboard() {
     () => (sessions as SessionSummary[]).filter(s => s.status === 'running' || s.status === 'standby'),
     [sessions]
   )
-  const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  // Auto-select first running session
+  const [gwPort, setGwPort] = useState('8080')
+  const [portInput, setPortInput] = useState('8080')
+  const [portError, setPortError] = useState<string | null>(null)
+  const [format, setFormat] = useState<ApiFormat>('openai')
+  const portRef = useRef<HTMLInputElement>(null)
+
+  // Load gateway port on mount
   useEffect(() => {
-    if (!selectedId && runningSessions.length > 0) {
-      setSelectedId(runningSessions[0].id)
-    } else if (selectedId && !runningSessions.find(s => s.id === selectedId)) {
-      setSelectedId(runningSessions[0]?.id ?? null)
+    window.api.gateway?.getStatus?.().then((status: any) => {
+      if (status?.port) {
+        setGwPort(String(status.port))
+        setPortInput(String(status.port))
+      }
+    }).catch(() => {})
+  }, [])
+
+  const gatewayUrl = `http://localhost:${gwPort}`
+  const hasModels = runningSessions.length > 0
+
+  // First model name for code snippets
+  const firstModelName = hasModels ? getModelDisplayName(runningSessions[0]) : 'your-model-name'
+
+  const handlePortSubmit = async () => {
+    const port = parseInt(portInput, 10)
+    if (isNaN(port) || port < 1024 || port > 65535) {
+      setPortError('Port must be 1024-65535')
+      return
     }
-  }, [runningSessions, selectedId])
-
-  const selected = runningSessions.find(s => s.id === selectedId) ?? null
-  const baseUrl = selected
-    ? (selected.type === 'remote' && selected.remoteUrl
-      ? selected.remoteUrl.replace(/\/+$/, '')
-      : `http://${connectHost(selected.host)}:${selected.port}`)
-    : null
-  // Prefer servedModelName (user override) over health-derived modelName
-  const modelName = useMemo(() => {
-    if (!selected) return null
+    setPortError(null)
     try {
-      const cfg = JSON.parse(selected.config as string)
-      if (cfg.servedModelName) return cfg.servedModelName
-    } catch {}
-    return selected.modelName || selected.modelPath?.split('/').pop() || null
-  }, [selected])
+      await window.api.gateway?.setPort?.(port)
+      setGwPort(String(port))
+    } catch (err: any) {
+      setPortError(err?.message || 'Failed to change port')
+    }
+  }
 
-  // Detect if selected session is an image server
-  const isImageServer = useMemo(() => {
-    if (!selected?.config) return false
-    try {
-      const cfg = JSON.parse(selected.config as string)
-      return cfg.modelType === 'image'
-    } catch { return false }
-  }, [selected])
-
-  // Read imageMode directly from session config — no regex
-  const isEditServer = useMemo(() => {
-    if (!isImageServer || !selected?.config) return false
-    try {
-      const cfg = JSON.parse(selected.config as string)
-      return cfg.imageMode === 'edit'
-    } catch { return false }
-  }, [isImageServer, selected])
-
-  // Extract API key from config JSON
-  const apiKey = useMemo(() => {
-    if (!selected?.config) return null
-    try {
-      const cfg = JSON.parse(selected.config as string)
-      return cfg.apiKey || null
-    } catch { return null }
-  }, [selected])
-
-  if (runningSessions.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-center px-8">
-        <Server className="h-12 w-12 text-muted-foreground/30 mb-4" />
-        <h2 className="text-lg font-medium mb-2">No Running Models</h2>
-        <p className="text-sm text-muted-foreground max-w-md">
-          Start a model session in <strong>Server</strong> mode to see your local API endpoints.
-          The API is OpenAI-compatible and also supports the Anthropic Messages format.
-        </p>
-      </div>
-    )
+  const handlePortKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handlePortSubmit()
   }
 
   return (
     <div className="h-full overflow-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
+        {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold">API Reference</h1>
+          <h1 className="text-2xl font-bold">API Gateway</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Your local inference server exposes an OpenAI-compatible API. Connect any app, SDK, or tool.
+            All models are accessible through a single endpoint. Route by model name in your request.
           </p>
           <p className="text-[9px] text-muted-foreground/40 mt-0.5">MLX Studio by Jinho Jang &middot; mlx.studio</p>
         </div>
 
-        {/* Session selector pills */}
-        <div className="flex gap-2 flex-wrap">
-          {runningSessions.map(s => (
-            <button
-              key={s.id}
-              onClick={() => setSelectedId(s.id)}
-              className={`px-3 py-1.5 text-xs rounded-full border transition-colors flex items-center gap-1.5 ${
-                selectedId === s.id
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border hover:bg-accent text-muted-foreground'
-              }`}
-            >
-              <span className={`inline-block w-1.5 h-1.5 rounded-full ${s.status === 'standby' ? 'bg-blue-400' : 'bg-green-500'}`} />
-              <span className="font-medium">{s.modelName || s.modelPath?.split('/').pop()}</span>
-              <span className="opacity-60">:{s.port}</span>
-              {s.status === 'standby' && <span className="text-[9px] text-blue-400">(sleeping)</span>}
-            </button>
-          ))}
+        {/* Gateway connection card */}
+        <div className="p-4 rounded-lg border border-border bg-card space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {hasModels
+                ? <Wifi className="h-4 w-4 text-green-500" />
+                : <WifiOff className="h-4 w-4 text-muted-foreground/50" />
+              }
+              <h3 className="text-sm font-medium">Gateway</h3>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${hasModels ? 'bg-green-500/15 text-green-500' : 'bg-muted text-muted-foreground'}`}>
+                {hasModels ? `${runningSessions.length} model${runningSessions.length !== 1 ? 's' : ''}` : 'No models'}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            {/* Gateway URL */}
+            <CopyRow label="URL" value={gatewayUrl} />
+
+            {/* Port editor */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground w-20 flex-shrink-0">Port</span>
+              <input
+                ref={portRef}
+                type="number"
+                min={1024}
+                max={65535}
+                value={portInput}
+                onChange={e => { setPortInput(e.target.value); setPortError(null) }}
+                onBlur={handlePortSubmit}
+                onKeyDown={handlePortKeyDown}
+                className="w-24 px-2 py-1 bg-background rounded border border-border font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              {portError && <span className="text-[10px] text-red-400">{portError}</span>}
+            </div>
+
+            {/* OpenAI base URL */}
+            <CopyRow label="OpenAI" value={`${gatewayUrl}/v1`} />
+
+            {/* Anthropic base */}
+            <CopyRow label="Anthropic" value={gatewayUrl} />
+
+            {/* Ollama host */}
+            <CopyRow label="Ollama" value={`OLLAMA_HOST=${gatewayUrl}`} />
+          </div>
         </div>
 
-        {/* Connection info */}
-        {baseUrl && (
-          <div className="p-4 rounded-lg border border-border bg-card space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-medium">Connection</h3>
-              <div className="flex items-center gap-1.5">
-                {selected?.status === 'standby' && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">Sleeping — auto-wakes on request</span>
-                )}
-                {apiKey && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-500">Key set</span>
-                )}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <CopyRow label="Base URL" value={baseUrl} />
-              <CopyRow label="OpenAI Base" value={`${baseUrl}/v1`} />
-              {modelName && <CopyRow label="Model" value={modelName} />}
-              {apiKey && <CopyRow label="API Key" value={apiKey} masked />}
+        {/* Live model list */}
+        {hasModels && (
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Running Models</h3>
+            <div className="border border-border rounded-lg divide-y divide-border overflow-hidden">
+              {runningSessions.map(s => {
+                const name = getModelDisplayName(s)
+                const type = getModelType(s)
+                const isSleeping = s.status === 'standby'
+                return (
+                  <div key={s.id} className="px-3 py-2 flex items-center gap-2 text-xs">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isSleeping ? 'bg-blue-400' : 'bg-green-500'}`} />
+                    <span className="font-medium flex-1 truncate">{name}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{type}</span>
+                    {isSleeping && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">sleeping</span>}
+                    <span className="text-muted-foreground/60 font-mono">:{s.port}</span>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
 
-        {/* Code snippets */}
-        {baseUrl && (
-          <CodeSnippets baseUrl={baseUrl} apiKey={apiKey} modelId={modelName} isImage={isImageServer} isEdit={isEditServer} />
-        )}
+        {/* Format toggle */}
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-muted-foreground mr-2">Format:</span>
+          {(['openai', 'anthropic', 'ollama'] as ApiFormat[]).map(f => (
+            <button
+              key={f}
+              onClick={() => setFormat(f)}
+              className={`px-3 py-1.5 text-xs rounded-full border transition-colors ${
+                format === f
+                  ? 'border-primary bg-primary/10 text-primary font-medium'
+                  : 'border-border hover:bg-accent text-muted-foreground'
+              }`}
+            >
+              {f === 'openai' ? 'OpenAI' : f === 'anthropic' ? 'Anthropic' : 'Ollama'}
+            </button>
+          ))}
+        </div>
 
-        {/* Coding tool integration — prominent position */}
-        {!isImageServer && (
-          <CodingToolIntegration baseUrl={baseUrl} modelName={modelName} port={selected?.port ?? null} />
+        {/* Code snippets */}
+        <CodeSnippets
+          baseUrl={gatewayUrl}
+          apiKey={null}
+          modelId={firstModelName}
+          format={format}
+        />
+
+        {/* Coding tool integration */}
+        {format === 'openai' && (
+          <CodingToolIntegration baseUrl={gatewayUrl} modelName={firstModelName} port={parseInt(gwPort, 10)} />
         )}
 
         {/* Endpoint reference */}
-        {baseUrl && (
-          <EndpointList isImage={isImageServer} isEdit={isEditServer} />
-        )}
+        <EndpointList format={format} />
       </div>
     </div>
   )

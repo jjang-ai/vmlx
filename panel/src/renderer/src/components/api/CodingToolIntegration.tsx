@@ -1,6 +1,6 @@
 // MLX Studio — Coding Tool Integration
 import { useState, useEffect, useCallback } from 'react'
-import { Download, Check, X, Plus, Trash2, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Copy, CheckCheck, Terminal } from 'lucide-react'
+import { Download, Check, Plus, Trash2, RefreshCw, ExternalLink, ChevronDown, ChevronRight, Copy, CheckCheck, Terminal } from 'lucide-react'
 
 interface ToolStatus {
   installed: boolean

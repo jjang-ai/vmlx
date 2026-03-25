@@ -64,7 +64,6 @@ registerFamily('codestral', { cacheType: 'kv', toolParser: 'mistral', enableAuto
 registerFamily('pixtral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, isMultimodal: true, description: 'Pixtral Vision', priority: 5 })
 registerFamily('mixtral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mixtral MoE', priority: 10 })
 registerFamily('mistral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral', priority: 20 })
-registerFamily('mistral4', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral 4 (MLA+MoE)', priority: 5 })
 
 // DeepSeek
 registerFamily('deepseek-vl', { cacheType: 'kv', toolParser: 'deepseek', isMultimodal: true, description: 'DeepSeek-VL vision-language', priority: 5 })
@@ -193,7 +192,6 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'llama4': 'llama4',
   // ── Mistral family ──
   'mistral': 'mistral',
-  'mistral4': 'mistral4',
   'mixtral': 'mixtral',
   'pixtral': 'pixtral',
   'codestral': 'codestral',

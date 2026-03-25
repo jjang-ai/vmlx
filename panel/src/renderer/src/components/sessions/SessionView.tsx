@@ -456,7 +456,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
 
       {/* Chat Interface + Settings Drawer (or Image placeholder) */}
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden">
           {isImage ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-8">
               <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${

@@ -77,12 +77,15 @@ def _register_builtin_parsers():
     """Register built-in parsers."""
     from .deepseek_r1_parser import DeepSeekR1ReasoningParser
     from .gptoss_parser import GptOssReasoningParser
+    from .mistral_parser import MistralReasoningParser
     from .qwen3_parser import Qwen3ReasoningParser
 
     register_parser("qwen3", Qwen3ReasoningParser)
     register_parser("deepseek_r1", DeepSeekR1ReasoningParser)
     # GPT-OSS / GLM-4.7-Flash / Harmony protocol (<|channel|>analysis/final)
     register_parser("openai_gptoss", GptOssReasoningParser)
+    # Mistral 4 uses [THINK]...[/THINK] tokens for reasoning
+    register_parser("mistral", MistralReasoningParser)
 
 
 # Register built-in parsers on module load

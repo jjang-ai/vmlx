@@ -15,6 +15,7 @@ import { registerPerformanceHandlers } from './ipc/performance'
 import { registerDeveloperHandlers, killActiveOperation } from './ipc/developer'
 import { registerCodingToolHandlers } from './ipc/coding-tools'
 import { sessionManager } from './sessions'
+import { apiGateway } from './api-gateway'
 import { db } from './database'
 import { checkEngineVersion, installEngineStreaming } from './engine-manager'
 import { checkForUpdates } from './update-checker'
@@ -183,6 +184,25 @@ function createWindow(): void {
       return { success: true }
     })
 
+    // API Gateway
+    ipcMain.handle('gateway:status', () => ({
+      running: apiGateway.running,
+      port: apiGateway.activePort,
+    }))
+    ipcMain.handle('gateway:start', async (_e, port?: number) => {
+      await apiGateway.start(port)
+      return { running: true, port: apiGateway.activePort }
+    })
+    ipcMain.handle('gateway:stop', async () => {
+      await apiGateway.stop()
+      return { running: false }
+    })
+    ipcMain.handle('gateway:restart', async (_e, port: number) => {
+      db.setSetting('gateway_port', String(port))
+      await apiGateway.restart(port)
+      return { running: true, port }
+    })
+
     // Prompt templates
     ipcMain.handle('templates:list', () => db.getPromptTemplates())
     ipcMain.handle('templates:save', (_e, template: { id: string; name: string; content: string; category: string }) => {
@@ -197,28 +217,23 @@ function createWindow(): void {
     handlersRegistered = true
   }
 
-  // Content Security Policy — hardens renderer against XSS.
-  // Skipped in dev mode: Vite's React Fast Refresh injects an inline script
-  // preamble that would be blocked by script-src 'self', preventing React
-  // from mounting and producing a black window.
-  if (app.isPackaged) {
-    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-      callback({
-        responseHeaders: {
-          ...details.responseHeaders,
-          'Content-Security-Policy': [
-            "default-src 'self';" +
-            " script-src 'self';" +
-            " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
-            " font-src 'self' https://fonts.gstatic.com;" +
-            " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://mlx.studio https://*.mlx.studio;" +
-            " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co;" +
-            " media-src 'self' blob:;"
-          ]
-        }
-      })
+  // Content Security Policy — hardens renderer against XSS
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self';" +
+          " script-src 'self';" +
+          " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
+          " font-src 'self' https://fonts.gstatic.com;" +
+          " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://mlx.studio https://*.mlx.studio;" +
+          " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co;" +
+          " media-src 'self' blob:;"
+        ]
+      }
     })
-  }
+  })
 
   // Close-to-tray: hide window instead of destroying when tray is active
   mainWindow.on('close', (e) => {
@@ -355,6 +370,15 @@ app.whenReady().then(async () => {
   // Start memory enforcer
   startMemoryEnforcer(processManager)
 
+  // Start API gateway (single-port proxy for all models)
+  const gatewayEnabled = db.getSetting('gateway_enabled') !== 'false'
+  if (gatewayEnabled) {
+    const gwPort = parseInt(db.getSetting('gateway_port') || '8080', 10)
+    apiGateway.start(gwPort).catch(err => {
+      console.error('[gateway] Failed to start:', err.message || err)
+    })
+  }
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
@@ -375,6 +399,7 @@ app.on('before-quit', async (e) => {
   try {
     stopMemoryEnforcer()
     destroyTray()
+    apiGateway.stop().catch(() => {})
     sessionManager.stopGlobalMonitor()
     killActiveDownload()  // Kill any active download subprocess
     killActiveOperation()  // Kill any active developer tool subprocess

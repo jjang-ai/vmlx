@@ -286,6 +286,64 @@ class BatchedEngine(BaseEngine):
         self._loaded = False
         logger.info("BatchedEngine stopped")
 
+    def _compute_gen_prompt_len(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        num_images: int,
+        enable_thinking: bool,
+        extra_template_kwargs: dict | None,
+        prompt_with_gen: str,
+    ) -> int:
+        """Compute the number of tokens added by add_generation_prompt=True.
+
+        This is used by the prefix cache to strip generation prompt tokens
+        from the cache key, preventing 100% cache misses in multi-turn
+        conversations for thinking models (where the generation prompt
+        includes <think> which differs each turn).
+
+        Args:
+            messages: Chat messages
+            tools: Tool definitions
+            num_images: Number of images
+            enable_thinking: Whether thinking is enabled
+            extra_template_kwargs: Extra template kwargs
+            prompt_with_gen: The already-rendered prompt WITH generation prompt
+
+        Returns:
+            Number of tokens in the generation prompt suffix
+        """
+        try:
+            prompt_without_gen = self._apply_chat_template(
+                messages,
+                tools,
+                num_images=num_images,
+                enable_thinking=enable_thinking,
+                extra_template_kwargs=extra_template_kwargs,
+                skip_generation_prompt=True,
+            )
+            tokenizer = self._tokenizer or self._processor
+            if tokenizer is None:
+                return 0
+
+            # Use the tokenizer's encode method
+            if hasattr(tokenizer, "encode"):
+                enc = tokenizer.encode
+            elif hasattr(tokenizer, "tokenizer") and hasattr(tokenizer.tokenizer, "encode"):
+                enc = tokenizer.tokenizer.encode
+            else:
+                return 0
+
+            tokens_with = enc(prompt_with_gen)
+            tokens_without = enc(prompt_without_gen)
+            gen_len = len(tokens_with) - len(tokens_without)
+            if gen_len > 0:
+                logger.debug(f"Gen prompt len: {gen_len} tokens")
+            return max(gen_len, 0)
+        except Exception as e:
+            logger.debug(f"Failed to compute gen_prompt_len: {e}")
+            return 0
+
     def _apply_chat_template(
         self,
         messages: list[dict[str, Any]],
@@ -480,6 +538,8 @@ class BatchedEngine(BaseEngine):
                 repetition_penalty=kwargs.get("repetition_penalty", 1.0),
                 video_fps=kwargs.get("video_fps"),
                 video_max_frames=kwargs.get("video_max_frames"),
+                num_messages=kwargs.get("num_messages", 1),
+                gen_prompt_len=kwargs.get("gen_prompt_len", 0),
             )
 
             return GenerationOutput(
@@ -492,6 +552,8 @@ class BatchedEngine(BaseEngine):
 
         # Use LLM engine for text-only
         from ..request import SamplingParams
+
+        gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -506,6 +568,8 @@ class BatchedEngine(BaseEngine):
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
+            gen_prompt_len=gen_prompt_len,
+            num_messages=kwargs.get("num_messages", 1),
         )
 
         text = clean_output_text(output.output_text)
@@ -567,6 +631,8 @@ class BatchedEngine(BaseEngine):
                 repetition_penalty=kwargs.get("repetition_penalty", 1.0),
                 video_fps=kwargs.get("video_fps"),
                 video_max_frames=kwargs.get("video_max_frames"),
+                num_messages=kwargs.get("num_messages", 1),
+                gen_prompt_len=kwargs.get("gen_prompt_len", 0),
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
@@ -584,6 +650,8 @@ class BatchedEngine(BaseEngine):
         # Use LLM engine for text-only
         from ..request import SamplingParams
 
+        gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
+
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
             temperature=temperature,
@@ -598,6 +666,8 @@ class BatchedEngine(BaseEngine):
             prompt=prompt,
             sampling_params=sampling_params,
             request_id=request_id,
+            gen_prompt_len=gen_prompt_len,
+            num_messages=kwargs.get("num_messages", 1),
         )
 
         async for output in self._engine.stream_outputs(request_id):
@@ -666,18 +736,36 @@ class BatchedEngine(BaseEngine):
             extra_tpl = extra_tpl or {}
             extra_tpl["reasoning_effort"] = reasoning_effort
 
+        thinking_enabled = kwargs.pop("enable_thinking", True)
+
         prompt = self._apply_chat_template(
             messages,
             template_tools,
             num_images=len(all_images),
-            enable_thinking=kwargs.pop("enable_thinking", True),
+            enable_thinking=thinking_enabled,
             extra_template_kwargs=extra_tpl,
             skip_generation_prompt=skip_gen_prompt,
         )
 
+        # Compute gen_prompt_len for prefix cache key stripping.
+        # Enables multi-turn prefix cache hits for thinking models by
+        # stripping generation prompt tokens (e.g., <|im_start|>assistant\n<think>\n)
+        # from the cache key. Works for both LLM and MLLM paths.
+        gen_prompt_len = 0
+        if not skip_gen_prompt:
+            gen_prompt_len = self._compute_gen_prompt_len(
+                messages, template_tools, len(all_images),
+                thinking_enabled, extra_tpl, prompt,
+            )
+
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
+
+        # Pass message count for cache skip heuristic (Phase 2 optimization).
+        # Single-turn API requests (1-2 messages: system+user) with short output
+        # skip cache storage to reduce per-request overhead.
+        kwargs["num_messages"] = len(messages)
 
         return await self.generate(
             prompt=prompt,
@@ -686,6 +774,7 @@ class BatchedEngine(BaseEngine):
             top_p=top_p,
             images=all_images if all_images else None,
             videos=all_videos if all_videos else None,
+            gen_prompt_len=gen_prompt_len,
             **kwargs,
         )
 
@@ -744,18 +833,34 @@ class BatchedEngine(BaseEngine):
             extra_tpl = extra_tpl or {}
             extra_tpl["reasoning_effort"] = reasoning_effort
 
+        thinking_enabled = kwargs.pop("enable_thinking", True)
+
         prompt = self._apply_chat_template(
             messages,
             template_tools,
             num_images=len(all_images),
-            enable_thinking=kwargs.pop("enable_thinking", True),
+            enable_thinking=thinking_enabled,
             extra_template_kwargs=extra_tpl,
             skip_generation_prompt=skip_gen_prompt,
         )
 
+        # Compute gen_prompt_len for prefix cache key stripping.
+        # Enables multi-turn prefix cache hits for thinking models by
+        # stripping generation prompt tokens (e.g., <|im_start|>assistant\n<think>\n)
+        # from the cache key. Works for both LLM and MLLM paths.
+        gen_prompt_len = 0
+        if not skip_gen_prompt:
+            gen_prompt_len = self._compute_gen_prompt_len(
+                messages, template_tools, len(all_images),
+                thinking_enabled, extra_tpl, prompt,
+            )
+
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
+
+        # Pass message count for cache skip heuristic (Phase 2 optimization).
+        kwargs["num_messages"] = len(messages)
 
         async for output in self.stream_generate(
             prompt=prompt,
@@ -765,6 +870,7 @@ class BatchedEngine(BaseEngine):
             images=all_images if all_images else None,
             videos=all_videos if all_videos else None,
             request_id=request_id,
+            gen_prompt_len=gen_prompt_len,
             **kwargs,
         ):
             yield output

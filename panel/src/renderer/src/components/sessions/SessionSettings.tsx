@@ -62,14 +62,6 @@ function buildCommandPreview(
     : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
       : detected?.reasoningParser)
 
-  // SSD disk-streaming mode — per-layer weight recycling
-  if (config.streamFromDisk) {
-    parts.push('--stream-from-disk')
-    if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
-      parts.push('--stream-memory-percent', config.streamMemoryPercent.toString())
-    }
-  }
-
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
   const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache

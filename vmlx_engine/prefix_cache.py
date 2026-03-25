@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
+# Base prefix cache from waybarrios/vllm-mlx. Block-aware prefix cache,
+# MLA H=1 head validation, QuantizedKVCache support, hybrid SSM cumulative
+# state handling, and gen_prompt_len stripping added by Jinho Jang
+# (eric@jangq.ai) for vMLX (github.com/jjang-ai/vmlx).
 """
 Prefix Cache Manager for vmlx-engine.
 
@@ -545,6 +549,16 @@ class BlockAwarePrefixCache:
         Only returns num_key_value_heads or num_kv_heads — never falls back
         to num_attention_heads, which is wrong for GQA models (e.g. 32 attn
         heads but 8 KV heads). Returns 0 if unknown (skips validation).
+
+        For MLA models (kv_lora_rank > 0): returns 1 because MLA stores
+        compressed latents with H=1, not per-head KV. The config's
+        num_key_value_heads is the pre-compression head count (32), but
+        the actual cache tensor has shape (B, 1, T, kv_lora_rank).
+
+        Original MLA prefix cache integration by Jinho Jang (eric@jangq.ai).
+        This fix required tracing through the full paged cache block hash →
+        store → reconstruct → validate pipeline to find the head count
+        mismatch that caused 100% cache misses for all MLA models.
         """
         if self._n_kv_heads is not None:
             return self._n_kv_heads
@@ -554,6 +568,12 @@ class BlockAwarePrefixCache:
                 cfg = getattr(self.model, attr, None)
                 if cfg is None:
                     continue
+                # MLA models store compressed KV latents with H=1.
+                # Check kv_lora_rank before num_key_value_heads.
+                kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                if kv_lora_rank and kv_lora_rank > 0:
+                    n_kv = 1  # MLA: compressed latent, single "head"
+                    break
                 n_kv = (
                     getattr(cfg, 'num_key_value_heads', 0)
                     or getattr(cfg, 'num_kv_heads', 0)
@@ -1197,7 +1217,7 @@ class BlockAwarePrefixCache:
                 # Cumulative cache (MambaCache, ArraysCache, etc.)
                 # State is not position-indexed — it represents ALL tokens processed
                 # Only store in the last block (it encompasses all prior tokens)
-                if is_last_block:
+                if is_last_block and state is not None:
                     meta = layer_state.get("meta_state", "")
                     block_slices.append(("cumulative", state, meta, class_name))
                 else:
@@ -1532,12 +1552,20 @@ class BlockAwarePrefixCache:
                     # Cumulative cache (MambaCache/ArraysCache): restore full state
                     _, state, meta, class_name = best_cumulative
 
-                    # Try class-specific restoration
+                    # Try class-specific restoration.
+                    # ArraysCache.from_state() rejects meta_state (it has no offset),
+                    # so try with state-only first, then fall back to state+meta.
+                    cache = None
                     try:
                         import mlx_lm.models.cache as cache_mod
                         cache_cls = getattr(cache_mod, class_name, None)
                         if cache_cls and hasattr(cache_cls, "from_state"):
-                            cache = cache_cls.from_state(state, meta)
+                            try:
+                                cache = cache_cls.from_state(state, meta)
+                            except (ValueError, TypeError):
+                                # Some cache types (ArraysCache) reject meta_state.
+                                # Try state-only reconstruction.
+                                cache = cache_cls.from_state(state, None)
                         elif has_mamba and "Mamba" in class_name:
                             cache = MambaCache.from_state(state, meta)
                         elif has_mamba:
@@ -1545,14 +1573,17 @@ class BlockAwarePrefixCache:
                         else:
                             cache = KVCache.from_state(state, meta)
                     except Exception:
-                        if has_mamba:
-                            cache = MambaCache.from_state(state, meta)
-                        else:
-                            logger.warning(
-                                f"Cannot reconstruct layer {layer_idx} "
-                                f"({class_name}): no suitable cache class"
-                            )
-                            return None
+                        try:
+                            if has_mamba:
+                                cache = MambaCache.from_state(state, meta)
+                        except Exception:
+                            pass
+                    if cache is None:
+                        logger.warning(
+                            f"Cannot reconstruct layer {layer_idx} "
+                            f"({class_name}): no suitable cache class"
+                        )
+                        return None
 
                     reconstructed_caches.append(cache)
                     reconstructed_indices.add(layer_idx)
@@ -1797,6 +1828,7 @@ class BlockAwarePrefixCache:
         self._request_tables.clear()
         self._prefix_index.clear()
         self.paged_cache.clear()
+        self._n_kv_heads = None  # Reset cached head count (may change on model switch)
         self.reset_stats()
 
     def __len__(self) -> int:

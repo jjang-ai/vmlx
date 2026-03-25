@@ -754,4 +754,3 @@ class ChatCompletionChunk(BaseModel):
     model: str
     choices: list[ChatCompletionChunkChoice]
     usage: Usage | None = None  # Included when stream_options.include_usage=true
-    tool_call_generating: bool | None = None  # Signal: server is buffering tool call tokens

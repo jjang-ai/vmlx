@@ -75,7 +75,10 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
-    # JANG models: check jang config has_vision field
+    # JANG models: check jang config has_vision field, then fall through
+    # to config.json check. Don't early-return False — some JANG models
+    # have has_vision=false in jang_config but DO have vision_config in
+    # config.json (e.g., Mistral 4 JANG VLM).
     from ..utils.jang_loader import is_jang_model, _find_config_path
     from pathlib import Path
     if is_jang_model(model_name):
@@ -87,7 +90,7 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
                     return True
         except Exception:
             pass
-        return False
+        # Fall through to config.json check instead of returning False
 
     # Primary: check config.json for vision_config (authoritative for local models)
     config_path = os.path.join(model_name, "config.json")

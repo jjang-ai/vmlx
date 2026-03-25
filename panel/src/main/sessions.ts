@@ -1,5 +1,4 @@
-import { spawn, ChildProcess, execSync, execFileSync, execFile as execFileCallback } from 'child_process'
-import { promisify } from 'util'
+import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
 import { lookup } from 'dns'
 import { EventEmitter } from 'events'
 import { existsSync, readdirSync, statSync } from 'fs'
@@ -8,8 +7,6 @@ import { homedir, totalmem, freemem } from 'os'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
-
-const execFileAsync = promisify(execFileCallback)
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -135,28 +132,47 @@ export class SessionManager extends EventEmitter {
   // Loading progress patterns — matched against engine stdout/stderr to detect loading phase
   private static readonly LOAD_PROGRESS_PATTERNS: Array<{ pattern: RegExp; label: string; progress: number }> = [
     { pattern: /Loading model:/, label: 'Initializing...', progress: 5 },
-    { pattern: /System memory before load/, label: 'Checking memory...', progress: 10 },
-    { pattern: /Loading model with (?:Simple|Batched)Engine/, label: 'Creating engine...', progress: 15 },
-    { pattern: /JANG v2 detected/, label: 'Loading JANG weights...', progress: 20 },
-    { pattern: /Loading JANG VL model/, label: 'Loading JANG VL model...', progress: 20 },
-    { pattern: /Loading MLLM:/, label: 'Loading vision model...', progress: 20 },
-    { pattern: /Loading image model:/, label: 'Loading image model...', progress: 20 },
-    { pattern: /Loading \d+ safetensors shards/, label: 'Loading weights...', progress: 30 },
-    { pattern: /JANG v[12] loaded in/, label: 'Weights loaded', progress: 50 },
-    { pattern: /Model loaded successfully/, label: 'Model loaded', progress: 55 },
-    { pattern: /MLLM loaded successfully/, label: 'Vision model loaded', progress: 55 },
-    { pattern: /JANG VL model loaded/, label: 'JANG VL loaded', progress: 55 },
-    { pattern: /Image model loaded in/, label: 'Image model loaded', progress: 55 },
-    { pattern: /model loaded \((?:simple|batched) mode\)/, label: 'Engine ready', progress: 60 },
-    { pattern: /Metal GPU memory after load/, label: 'Configuring GPU...', progress: 70 },
+    // Phase 1: Process startup + config (0-25%)
+    // For BatchedEngine, these fire BEFORE actual model loading (lifespan phase).
+    // Keep progress low so real loading patterns (Phase 2) can advance the bar.
+    { pattern: /System memory before load/, label: 'Checking memory...', progress: 5 },
+    { pattern: /Loading model with (?:Simple|Batched)Engine/, label: 'Creating engine...', progress: 8 },
+    { pattern: /\bmodel loaded \(batched mode\)/i, label: 'Starting server...', progress: 10 },
+    { pattern: /Metal GPU memory after load/, label: 'Server initializing...', progress: 12 },
+    { pattern: /Native tool format enabled/, label: 'Configuring tools...', progress: 14 },
+    { pattern: /Default max tokens:/, label: 'Configuring limits...', progress: 16 },
+    { pattern: /Uvicorn running on/, label: 'Server started, loading model...', progress: 20 },
+    { pattern: /Waiting for application startup/, label: 'Loading model into GPU...', progress: 22 },
+
+    // Phase 2: Actual model loading (25-85%)
+    // For BatchedEngine these fire DURING lifespan() (after Uvicorn starts).
+    // For SimpleEngine these fire DURING load_model() (before Uvicorn starts).
+    { pattern: /JANG v2 detected/, label: 'Loading JANG weights...', progress: 30 },
+    { pattern: /Loading JANG v1 VLM:/, label: 'Loading JANG VL model...', progress: 30 },
+    { pattern: /Loading MLLM:/, label: 'Loading vision model...', progress: 30 },
+    { pattern: /Loading image model:/, label: 'Loading image model...', progress: 30 },
+    { pattern: /Loading JANG VL model:/, label: 'Loading JANG VL...', progress: 30 },
+    { pattern: /Loading \d+ safetensors shards/, label: 'Loading weights...', progress: 40 },
+    { pattern: /Split kv_b_proj layer/, label: 'Processing MLA layers...', progress: 50 },
+    { pattern: /bfloat16 enabled/, label: 'Converting to bfloat16...', progress: 55 },
+    { pattern: /JANG v[12].{0,10}loaded in/, label: 'Weights loaded', progress: 65 },
+    { pattern: /Model loaded successfully/, label: 'Model loaded', progress: 65 },
+    { pattern: /MLLM loaded successfully/, label: 'Vision model loaded', progress: 65 },
+    { pattern: /JANG VL model loaded/, label: 'JANG VL loaded', progress: 65 },
+    { pattern: /Image model loaded in/, label: 'Image model loaded', progress: 65 },
+
+    // Phase 3: Post-load config (85-92%)
+    // SimpleEngine: fires during load_model(). BatchedEngine: fires during lifespan().
+    { pattern: /\bmodel loaded \(simple mode\)/i, label: 'Engine ready', progress: 70 },
     { pattern: /Saved \d+\/\d+ layer weights to SSD/, label: 'Saving weights to SSD...', progress: 72 },
     { pattern: /SSD weight index:/, label: 'Building weight index...', progress: 73 },
     { pattern: /SSD per-layer weight recycling configured/, label: 'SSD streaming ready', progress: 74 },
-    { pattern: /KV cache quantization/, label: 'Setting up KV cache...', progress: 75 },
+    { pattern: /KV cache quantization/, label: 'Setting up KV cache...', progress: 78 },
     { pattern: /(?:Chat template loaded|Applied custom chat template)/, label: 'Loading chat template...', progress: 80 },
-    { pattern: /Native tool format enabled/, label: 'Configuring tools...', progress: 85 },
-    { pattern: /Default max tokens:/, label: 'Finalizing config...', progress: 90 },
-    { pattern: /Uvicorn running on/, label: 'Server started', progress: 95 },
+    { pattern: /PagedCacheManager initialized/, label: 'Configuring cache...', progress: 82 },
+    { pattern: /Scheduler (?:initialized|started)/, label: 'Starting scheduler...', progress: 85 },
+    { pattern: /BatchedEngine loaded/, label: 'Engine ready', progress: 88 },
+    { pattern: /Application startup complete/, label: 'Almost ready...', progress: 92 },
   ]
 
   // Track last emitted progress per session to avoid duplicate events
@@ -235,7 +251,7 @@ export class SessionManager extends EventEmitter {
     const detected: DetectedProcess[] = []
 
     try {
-      const { stdout: output } = await execFileAsync('ps', ['aux'], { encoding: 'utf-8', timeout: 5000 })
+      const output = execSync('ps aux', { encoding: 'utf-8', timeout: 5000 })
       const lines = output.split('\n')
 
       for (const line of lines) {
@@ -857,14 +873,13 @@ export class SessionManager extends EventEmitter {
     'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
     'timeout', 'streamInterval', 'apiKey', 'rateLimit',
     'maxTokens', 'mcpConfig', 'servedModelName',
-    'speculativeModel', 'numDraftTokens',
+    'speculativeModel', 'numDraftTokens', 'streamFromDisk',
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice',
     'logLevel', 'corsOrigins',
     'enableJit',
     'imageMode', 'imageQuantize',
-    'streamFromDisk', 'streamMemoryPercent', 'ssdMemoryBudget', 'ssdPrefetchLayers',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
@@ -1103,6 +1118,8 @@ export class SessionManager extends EventEmitter {
               this.failCounts.delete(session.id)
               this.lastHealthyAt.set(session.id, Date.now())
               if (session.status === 'loading') {
+                this.loadProgressState.set(session.id, 100)
+                this.emit('session:loadProgress', { sessionId: session.id, label: 'Connected', progress: 100 })
                 db.updateSession(session.id, { status: 'running' })
                 this.emit('session:ready', { sessionId: session.id, port: session.port })
               }
@@ -1160,6 +1177,9 @@ export class SessionManager extends EventEmitter {
                 db.updateSession(session.id, { modelName: data.model_name })
               }
               if (session.status === 'loading') {
+                // Emit 100% progress so bar completes before disappearing
+                this.loadProgressState.set(session.id, 100)
+                this.emit('session:loadProgress', { sessionId: session.id, label: 'Model ready', progress: 100 })
                 db.updateSession(session.id, { status: 'running', standbyDepth: null })
                 this.touchSession(session.id)
                 this.emit('session:ready', { sessionId: session.id, port: session.port })
@@ -1181,8 +1201,18 @@ export class SessionManager extends EventEmitter {
               db.updateSession(session.id, { status: 'standby', standbyDepth: depth })
               this.emit('session:standby', { sessionId: session.id, depth })
               this.pushLog(session.id, `[Wake] Model reload failed — reverted to ${depth} sleep`)
-            } else {
-              // Server is up but model not loaded yet — keep as loading
+            } else if (session.status === 'loading') {
+              // Server is up but model not loaded yet — update progress bar
+              // to show we're past server startup, now waiting for model
+              const current = this.loadProgressState.get(session.id) ?? 0
+              if (current < 95) {
+                this.loadProgressState.set(session.id, 95)
+                this.emit('session:loadProgress', {
+                  sessionId: session.id,
+                  label: 'Loading model into GPU...',
+                  progress: 95,
+                })
+              }
             }
             this.emit('session:health', {
               sessionId: session.id,
@@ -1356,15 +1386,15 @@ export class SessionManager extends EventEmitter {
 
     try {
       const host = connectHost(session.host)
-      // 300s timeout — admin/wake does synchronous model load. Disk-streaming mode
-      // with large models (60GB+ JANG MoE) can take >120s for mmap initialization.
-      // Matches the JIT wake timeout on the Python side.
+      // 120s timeout — admin/wake does synchronous model load (JANG mmap ~9s, large models 30-60s)
       const res = await fetch(`http://${host}:${session.port}/admin/wake`, {
         method: 'POST',
-        signal: AbortSignal.timeout(300000)
+        signal: AbortSignal.timeout(120000)
       })
       if (res.ok) {
         db.updateSession(sessionId, { status: 'loading', standbyDepth: null })
+        this.loadProgressState.delete(sessionId)  // Reset progress for fresh wake
+        this.emit('session:loadProgress', { sessionId, label: 'Waking from sleep...', progress: 50 })
         this.emit('session:starting', { sessionId })
         this.pushLog(sessionId, '[Wake] Waking from sleep — reloading model...')
         // The global monitor will pick up the 'loading' status and wait for /health
@@ -1676,14 +1706,6 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
-    // SSD disk-streaming mode — per-layer weight recycling from SSD
-    if (config.streamFromDisk) {
-      args.push('--stream-from-disk')
-      if (config.streamMemoryPercent != null && config.streamMemoryPercent !== 90) {
-        args.push('--stream-memory-percent', config.streamMemoryPercent.toString())
-      }
-    }
-
     // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
     // When MCP tools + auto-tool-choice are enabled, force prefix cache ON.
     // Tool follow-up requests share most of the prompt with the original request;
@@ -1737,28 +1759,30 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Disk cache (L2 persistent cache) — only meaningful with prefix cache, incompatible with paged cache
-    if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected.usePagedCache)) {
-      args.push('--enable-disk-cache')
-      if (config.diskCacheDir) {
-        args.push('--disk-cache-dir', config.diskCacheDir)
-      }
-      if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) {
-        args.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
-      }
-    }
+    // Disk cache (L2 persistent cache) — DISABLED for v1.3.x
+    // Known to cause Metal crashes and cache corruption on some model types.
+    // if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected.usePagedCache)) {
+    //   args.push('--enable-disk-cache')
+    //   if (config.diskCacheDir) {
+    //     args.push('--disk-cache-dir', config.diskCacheDir)
+    //   }
+    //   if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) {
+    //     args.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
+    //   }
+    // }
 
-    // Block-level disk cache (L2 for paged cache blocks) — works for both LLMs and VLMs
-    // Must mirror the paged cache guard condition above
-    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
-      args.push('--enable-block-disk-cache')
-      if (config.blockDiskCacheDir) {
-        args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
-      }
-      if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) {
-        args.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
-      }
-    }
+    // Block-level disk cache (L2 for paged cache blocks) — DISABLED for v1.3.x
+    // Known to cause cache corruption / short responses / mismatched block errors.
+    // Will re-enable after block serialization bugs are fully resolved.
+    // if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
+    //   args.push('--enable-block-disk-cache')
+    //   if (config.blockDiskCacheDir) {
+    //     args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
+    //   }
+    //   if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) {
+    //     args.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
+    //   }
+    // }
 
     // Performance
     if (config.streamInterval && config.streamInterval > 0) {
@@ -1773,6 +1797,14 @@ export class SessionManager extends EventEmitter {
 
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
+
+    // SSD disk streaming
+    if ((config as any).streamFromDisk) {
+      args.push('--stream-from-disk')
+      if ((config as any).streamMemoryPercent && (config as any).streamMemoryPercent !== 100) {
+        args.push('--stream-memory-percent', (config as any).streamMemoryPercent.toString())
+      }
+    }
 
     // Speculative decoding
     if (config.speculativeModel) {
@@ -1817,8 +1849,7 @@ export class SessionManager extends EventEmitter {
     // Additional arguments — strip stale image-only flags from old session configs
     if (config.additionalArgs?.trim()) {
       const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
-      // Strip commas — common when users copy flag lists from docs (e.g. "--flag1, --flag2")
-      const extra = config.additionalArgs.trim().replace(/,/g, ' ').split(/\s+/).filter(Boolean)
+      const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
       const filtered: string[] = []
       for (let i = 0; i < extra.length; i++) {
         if (staleImageFlags.has(extra[i])) {
@@ -2044,7 +2075,18 @@ export class SessionManager extends EventEmitter {
 
       try {
         const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1000) })
-        if (response.ok) return
+        if (response.ok) {
+          // For BatchedEngine, the server starts (Uvicorn) BEFORE the model loads
+          // in lifespan(). Just checking response.ok is not enough — we need to
+          // verify the model is actually loaded by checking the response body.
+          try {
+            const data = await response.json() as { status?: string }
+            if (data.status === 'healthy') return
+            // Server is up but model still loading — keep polling
+          } catch {
+            // JSON parse failed — server is up but not ready, keep polling
+          }
+        }
       } catch (_) { }
       await new Promise(resolve => setTimeout(resolve, 500))
     }

@@ -22,6 +22,7 @@ import { ModelConverter } from './components/tools/ModelConverter'
 import { ApiDashboard } from './components/api/ApiDashboard'
 import { ImageTab } from './components/image/ImageTab'
 import { isImageSession } from '../../shared/sessionUtils'
+import { useTranslation, LOCALE_NAMES, LOCALE_FLAGS, type Locale } from './i18n'
 
 function App() {
   const [setupDone, setSetupDone] = useState(false)
@@ -32,15 +33,9 @@ function App() {
   // For chat mode, exclude image sessions — they belong in the Image tab
   const sessions = useMemo(() => allSessions.filter(s => !isImageSession(s)), [allSessions])
 
-  // Check if engine is already installed (skip setup screen if so).
-  // Race against a 6s timeout so checkingSetup always resolves and the UI
-  // never stays blank indefinitely if the IPC call hangs.
+  // Check if engine is already installed (skip setup screen if so)
   useEffect(() => {
-    const check = window.api.engine.checkInstallation()
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('installation check timed out')), 6000)
-    )
-    Promise.race([check, timeout])
+    window.api.engine.checkInstallation()
       .then((result: any) => {
         if (result.installed) setSetupDone(true)
       })
@@ -147,12 +142,8 @@ function App() {
     dispatch({ type: 'OPEN_CHAT', chatId: state.activeChatId, sessionId })
   }, [dispatch, state.activeChatId, sessions])
 
-  // Setup screen — show a spinner while checking rather than a blank window
-  if (checkingSetup) return (
-    <div className="flex h-screen items-center justify-center bg-background">
-      <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-foreground opacity-40" />
-    </div>
-  )
+  // Setup screen
+  if (checkingSetup) return null
   if (!setupDone) {
     return (
       <ToastProvider>
@@ -294,6 +285,7 @@ function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
 function ServerModeContent() {
   const { state, dispatch } = useAppState()
   const { serverPanel, serverSessionId, serverInitialModelPath } = state
+  const { t, locale, setLocale } = useTranslation()
 
   return (
     <>
@@ -337,12 +329,12 @@ function ServerModeContent() {
               <ArrowLeft className="h-3 w-3" />
               Back
             </button>
-            <h2 className="text-2xl font-bold">About MLX Studio</h2>
+            <h2 className="text-2xl font-bold">{t('app.about.title')}</h2>
             <p className="text-sm text-muted-foreground">
-              A native macOS application for running local AI models on Apple Silicon.
+              {t('app.about.desc')}
             </p>
             <p className="text-xs text-muted-foreground/70">
-              Created by Jinho Jang &middot; eric@mlx.studio
+              {t('app.about.creator')}
             </p>
             <AppVersion />
             <div className="flex gap-4 text-xs">
@@ -350,6 +342,24 @@ function ServerModeContent() {
               <a href="https://github.com/jjang-ai/vmlx" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">GitHub</a>
               <a href="https://jangq.ai" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">JANG</a>
               <a href="https://ko-fi.com/jinhojang" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Ko-fi</a>
+            </div>
+            <div className="border border-border rounded-lg p-5">
+              <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-4">{t('app.about.language')}</h3>
+              <div className="flex gap-2">
+                {(['en', 'zh', 'ko', 'ja', 'es'] as Locale[]).map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setLocale(l)}
+                    className={`px-3 py-1.5 text-sm rounded-md border transition-colors ${
+                      locale === l
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'border-border hover:bg-accent'
+                    }`}
+                  >
+                    {LOCALE_FLAGS[l]} {LOCALE_NAMES[l]}
+                  </button>
+                ))}
+              </div>
             </div>
             <ApiKeysSection />
           </div>

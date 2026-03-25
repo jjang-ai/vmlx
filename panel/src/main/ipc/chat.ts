@@ -578,6 +578,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         // Without stripping, the model sees prior thinking in context and mimics it.
         if (overrides?.enableThinking === false) {
           msgContent = msgContent.replace(/<think>[\s\S]*?<\/think>\s*/g, '')
+          msgContent = msgContent.replace(/\[THINK\][\s\S]*?\[\/THINK\]\s*/g, '')
         }
         if (!msgContent.trim()) continue // Skip entirely empty aborted messages
       }
@@ -592,6 +593,22 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       }
       requestMessages.push({ role: m.role, content: msgContent })
     }
+
+    // Fix role alternation: merge consecutive same-role messages to prevent
+    // template errors (e.g., Mistral enforces strict user/assistant alternation).
+    // This can happen when an aborted assistant message is stripped empty, leaving
+    // two consecutive user messages in history.
+    const mergedMessages: typeof requestMessages = []
+    for (const msg of requestMessages) {
+      const prev = mergedMessages[mergedMessages.length - 1]
+      if (prev && prev.role === msg.role && typeof prev.content === 'string' && typeof msg.content === 'string') {
+        prev.content = prev.content + '\n\n' + msg.content
+      } else {
+        mergedMessages.push({ ...msg })
+      }
+    }
+    requestMessages.length = 0
+    requestMessages.push(...mergedMessages)
 
     // Prepare assistant message placeholder
     const assistantMessage: Message = {
@@ -1163,12 +1180,15 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
               // chunkCounted tracks whether we've already counted this SSE chunk's token
               // to prevent inflation from think-tag splitting into multiple emitDelta calls.
               if (!reasoning) {
-                const content = choice.content as string
+                let content = choice.content as string
                 let chunkCounted = !!reasoning // if reasoning was emitted above, counting already happened
                 const emitWithCount = (text: string, isR: boolean) => {
                   emitDelta(text, isR, chunkCounted)
                   chunkCounted = true // subsequent calls skip counting
                 }
+                // Normalize [THINK]/[/THINK] (Mistral 4) to <think>/</think> for unified parsing
+                content = content.replace(/\[THINK\]/g, '<think>').replace(/\[\/THINK\]/g, '</think>')
+
                 if (clientSideThinkParsing) {
                   // We're inside a <think> block — check for closing tag
                   const endIdx = content.indexOf('</think>')

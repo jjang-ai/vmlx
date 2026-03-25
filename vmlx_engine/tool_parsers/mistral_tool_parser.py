@@ -87,9 +87,12 @@ class MistralToolParser(ToolParser):
                 continue
 
             # Try new format first: func_name{"arg": "value"}
+            # Mistral 4 may insert [ARGS] token between name and JSON args
             if not raw_tool_call.startswith("[") and "{" in raw_tool_call:
                 end_name = raw_tool_call.find("{")
                 tool_name = raw_tool_call[:end_name].strip()
+                # Strip Mistral 4 [ARGS] separator token if present
+                tool_name = tool_name.replace("[ARGS]", "").strip()
                 args_str = raw_tool_call[end_name:]
 
                 if tool_name:

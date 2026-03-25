@@ -153,6 +153,7 @@ atexit.register(_cleanup_ssd_temp)
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
+_THINK_STRIP_RE = re.compile(r'(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*', re.DOTALL)
 
 
 def _resolve_temperature(request_value: float | None) -> float:
@@ -849,7 +850,7 @@ def load_model(
     }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
-    # Note: load_model() is only called from CLI startup (before uvicorn), never during live serving.
+    # Note: load_model() is called from CLI startup and also from admin_wake() during live serving.
     if _engine is not None:
         try:
             if hasattr(_engine, '_scheduler') and hasattr(_engine._scheduler, 'deep_reset'):
@@ -1156,11 +1157,13 @@ def get_usage(output: GenerationOutput) -> Usage:
 
 def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
     """Extract usage metrics in Responses API format."""
+    _pt = getattr(output, "prompt_tokens", 0)
+    _ct = getattr(output, "completion_tokens", 0)
     cached = getattr(output, "cached_tokens", 0)
     return ResponsesUsage(
-        input_tokens=output.prompt_tokens,
-        output_tokens=output.completion_tokens,
-        total_tokens=output.prompt_tokens + output.completion_tokens,
+        input_tokens=_pt,
+        output_tokens=_ct,
+        total_tokens=_pt + _ct,
         input_tokens_details=InputTokensDetails(cached_tokens=cached) if cached > 0 else None,
     )
 
@@ -1374,6 +1377,13 @@ async def admin_deep_sleep():
                         pass
                 _engine = None
 
+            # Unload speculative draft model to free GPU memory
+            try:
+                from .speculative import unload_draft_model
+                unload_draft_model()
+            except Exception as e:
+                logger.debug(f"Draft model unload during deep sleep: {e}")
+
             gc.collect()
             if hasattr(mx, 'clear_cache'):
                 mx.clear_cache()
@@ -1392,7 +1402,7 @@ async def admin_deep_sleep():
 @app.post("/admin/wake")
 async def admin_wake():
     """Wake from sleep: reload model. Triggered by JIT or manual wake."""
-    global _engine, _standby_state, _pre_sleep_cache_limit
+    global _engine, _standby_state, _pre_sleep_cache_limit, _model_load_error
 
     if _standby_state is None:
         return {"status": "already_active"}
@@ -1455,6 +1465,19 @@ async def admin_wake():
                 # because _engine._loaded is False at check time inside event loop)
                 if _enable_jit and _engine is not None:
                     _apply_jit_compilation()
+                # Reload speculative draft model if configured
+                _spec_model = _cli_args.get('speculative_model')
+                if _spec_model:
+                    try:
+                        from .speculative import SpeculativeConfig, load_draft_model
+                        _spec_cfg = SpeculativeConfig(
+                            model=_spec_model,
+                            num_tokens=_cli_args.get('num_draft_tokens', 3),
+                        )
+                        await asyncio.to_thread(load_draft_model, _spec_cfg)
+                        logger.info(f"Draft model reloaded: {_spec_model}")
+                    except Exception as e:
+                        logger.warning(f"Failed to reload draft model on wake: {e}")
                 _standby_state = None
                 logger.info(f"Woke from deep sleep — model {_model_name} reloaded")
                 return {"status": "active"}
@@ -1463,6 +1486,10 @@ async def admin_wake():
 
     except Exception as e:
         logger.error(f"Failed to wake from sleep: {e}")
+        # Clear standby state to prevent infinite JIT wake retry loop.
+        # Server stays alive but reports error via /health.
+        _standby_state = None
+        _model_load_error = f"Wake failed: {e}"
         return {"error": str(e)}
 
 
@@ -1688,6 +1715,13 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
             if getattr(scheduler, "disk_cache", None) is not None:
                 scheduler.disk_cache.clear()
                 cleared.append("disk_cache")
+            # Also clear L2 paged block disk store (separate from legacy disk_cache)
+            paged_mgr = getattr(scheduler, 'paged_cache_manager', None)
+            if paged_mgr is not None:
+                disk_store = getattr(paged_mgr, '_disk_store', None)
+                if disk_store is not None:
+                    disk_store.clear()
+                    cleared.append("block_disk_store")
 
     # Clear multimodal caches
     if cache_type in ("multimodal", "all"):
@@ -2253,9 +2287,199 @@ async def create_rerank(request: Request):
             for r in results
         ],
         "meta": {
-            "model": model or _reranker.model_path,
+            "model": model or local_reranker.model_path,
         },
     }
+
+
+# =============================================================================
+# Ollama API Compatibility (/api/chat, /api/generate, /api/tags, /api/show)
+# =============================================================================
+
+
+@app.get("/api/tags")
+async def ollama_tags():
+    """Ollama-compatible model list."""
+    from .api.ollama_adapter import build_tags_response
+    name = _resolve_model_name()
+    return build_tags_response(name, _model_name or name)
+
+
+@app.get("/api/ps")
+async def ollama_ps():
+    """Ollama-compatible running model list."""
+    name = _resolve_model_name()
+    return {"models": [{"name": name, "model": _model_name or name, "size": 0, "digest": ""}]}
+
+
+@app.get("/api/version")
+async def ollama_version():
+    """Ollama version shim for client compat checks."""
+    return {"version": "0.6.2"}
+
+
+@app.post("/api/show")
+async def ollama_show(fastapi_request: Request):
+    """Ollama-compatible model info."""
+    name = _resolve_model_name()
+    return {
+        "modelfile": "", "parameters": "", "template": "",
+        "details": {"format": "mlx", "family": "", "parameter_size": "", "quantization_level": ""},
+        "model_info": {"name": name},
+    }
+
+
+@app.post("/api/chat")
+async def ollama_chat(fastapi_request: Request):
+    """Ollama-compatible chat — translates to /v1/chat/completions internally."""
+    from .api.ollama_adapter import (
+        ollama_chat_to_openai,
+        openai_chat_response_to_ollama,
+        openai_chat_chunk_to_ollama_ndjson,
+    )
+    body = await fastapi_request.json()
+    model_name = body.get("model", _resolve_model_name())
+    is_streaming = body.get("stream", True)
+
+    openai_req = ollama_chat_to_openai(body)
+
+    from .api.models import ChatCompletionRequest
+    chat_req = ChatCompletionRequest(**openai_req)
+
+    if not is_streaming:
+        result = await create_chat_completion(chat_req, fastapi_request)
+        # Convert Pydantic response to dict
+        if hasattr(result, "model_dump"):
+            result_dict = result.model_dump(exclude_none=True)
+        elif hasattr(result, "body"):
+            # StreamingResponse or similar — shouldn't happen for non-streaming
+            result_dict = {"choices": []}
+        else:
+            result_dict = dict(result)
+        return openai_chat_response_to_ollama(result_dict, model_name)
+
+    # Streaming: wrap SSE generator → NDJSON
+    from starlette.responses import StreamingResponse as _SR
+
+    engine = get_engine()
+    chat_kwargs = {
+        "max_tokens": chat_req.max_tokens if chat_req.max_tokens is not None else _default_max_tokens,
+        "temperature": _resolve_temperature(chat_req.temperature),
+        "top_p": _resolve_top_p(chat_req.top_p),
+    }
+    if chat_req.stop:
+        chat_kwargs["stop"] = chat_req.stop
+
+    # Extract messages (same logic as create_chat_completion)
+    if engine.is_mllm:
+        messages = []
+        for msg in chat_req.messages:
+            if hasattr(msg, "model_dump"):
+                messages.append(msg.model_dump(exclude_none=True))
+            else:
+                messages.append(dict(msg))
+    else:
+        from .api.utils import extract_multimodal_content
+        messages, _, _ = extract_multimodal_content(chat_req.messages)
+
+    async def ndjson_stream():
+        async for sse_line in stream_chat_completion(
+            engine, messages, chat_req,
+            fastapi_request=fastapi_request,
+            **chat_kwargs
+        ):
+            ndjson = openai_chat_chunk_to_ollama_ndjson(sse_line, model_name)
+            if ndjson:
+                yield ndjson
+
+    return _SR(ndjson_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/generate")
+async def ollama_generate(fastapi_request: Request):
+    """Ollama-compatible generate — translates to /v1/completions internally."""
+    body = await fastapi_request.json()
+    model_name = body.get("model", _resolve_model_name())
+    is_streaming = body.get("stream", True)
+
+    from .api.ollama_adapter import ollama_generate_to_openai
+    openai_req = ollama_generate_to_openai(body)
+
+    from .api.models import CompletionRequest
+
+    if not is_streaming:
+        openai_req["stream"] = False
+        comp_req = CompletionRequest(**openai_req)
+        result = await create_completion(comp_req, fastapi_request)
+        if hasattr(result, "model_dump"):
+            result_dict = result.model_dump(exclude_none=True)
+        else:
+            result_dict = dict(result)
+
+        text = ""
+        choices = result_dict.get("choices", [])
+        if choices:
+            text = choices[0].get("text", "")
+
+        return {
+            "model": model_name,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+            "response": text,
+            "done": True,
+            "done_reason": choices[0].get("finish_reason", "stop") if choices else "stop",
+        }
+
+    # Streaming: wrap completions SSE → NDJSON
+    from starlette.responses import StreamingResponse as _SR
+    from .api.ollama_adapter import openai_completion_chunk_to_ollama_ndjson
+
+    openai_req["stream"] = True
+    comp_req = CompletionRequest(**openai_req)
+
+    engine = get_engine()
+    prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
+
+    async def ndjson_stream():
+        async for sse_line in stream_completions_multi(engine, prompts, comp_req):
+            ndjson = openai_completion_chunk_to_ollama_ndjson(sse_line, model_name)
+            if ndjson:
+                yield ndjson
+
+    return _SR(ndjson_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/embeddings")
+@app.post("/api/embed")
+async def ollama_embed(fastapi_request: Request):
+    """Ollama-compatible embeddings."""
+    body = await fastapi_request.json()
+    # Forward to OpenAI embeddings endpoint
+    from .api.models import EmbeddingRequest
+    openai_req = EmbeddingRequest(
+        model=body.get("model", _resolve_model_name()),
+        input=body.get("input") or body.get("prompt", ""),
+    )
+    result = await create_embeddings(openai_req)
+    if hasattr(result, "model_dump"):
+        result_dict = result.model_dump(exclude_none=True)
+    else:
+        result_dict = dict(result)
+    embeddings = [d["embedding"] for d in result_dict.get("data", [])]
+    return {"model": body.get("model", ""), "embeddings": embeddings}
+
+
+# Ollama no-op endpoints (prevent client errors)
+@app.post("/api/pull")
+async def ollama_pull(): return {"status": "success"}
+
+@app.post("/api/delete")
+async def ollama_delete(): return {"status": "success"}
+
+@app.post("/api/copy")
+async def ollama_copy(): return {"status": "success"}
+
+@app.post("/api/create")
+async def ollama_create(): return {"status": "success"}
 
 
 # =============================================================================
@@ -2747,7 +2971,7 @@ async def list_mcp_servers() -> MCPServersResponse:
     return MCPServersResponse(servers=servers)
 
 
-@app.post("/v1/mcp/execute", dependencies=[Depends(verify_api_key)])
+@app.post("/v1/mcp/execute", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 async def execute_mcp_tool(request: MCPExecuteRequest) -> MCPExecuteResponse:
     """Execute an MCP tool."""
     if _mcp_manager is None:
@@ -2775,6 +2999,8 @@ async def execute_mcp_tool(request: MCPExecuteRequest) -> MCPExecuteResponse:
 # Global audio engines (lazy loaded)
 _stt_engine = None
 _tts_engine = None
+_stt_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
+_tts_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
 
 
 @app.post("/v1/audio/transcriptions", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
@@ -2793,7 +3019,7 @@ async def create_transcription(
     - whisper-medium, whisper-small (lighter)
     - parakeet-tdt-0.6b-v2 (English, fastest)
     """
-    global _stt_engine
+    global _stt_engine, _stt_lock
 
     try:
         from .audio.stt import STTEngine  # Lazy import - optional feature
@@ -2809,10 +3035,19 @@ async def create_transcription(
         }
         model_name = model_map.get(model, model)
 
-        # Load engine if needed
-        if _stt_engine is None or _stt_engine.model_name != model_name:
-            _stt_engine = STTEngine(model_name)
-            _stt_engine.load()
+        # Serialize model load/swap — prevents concurrent requests from
+        # racing on unload+create when different models are requested
+        if _stt_lock is None:
+            _stt_lock = asyncio.Lock()
+        async with _stt_lock:
+            if _stt_engine is None or _stt_engine.model_name != model_name:
+                if _stt_engine is not None:
+                    _stt_engine.unload()
+                new_engine = STTEngine(model_name)
+                new_engine.load()
+                _stt_engine = new_engine
+            # Capture local ref inside lock to prevent concurrent unload during transcription
+            local_stt = _stt_engine
 
         # Save uploaded file temporarily
         ext = os.path.splitext(file.filename)[1] if file.filename else ".wav"
@@ -2822,7 +3057,7 @@ async def create_transcription(
             tmp_path = tmp.name
 
         try:
-            result = _stt_engine.transcribe(tmp_path, language=language)
+            result = local_stt.transcribe(tmp_path, language=language)
         finally:
             os.unlink(tmp_path)
 
@@ -2858,7 +3093,7 @@ async def create_speech(request: AudioSpeechRequest):
     - vibevoice (realtime)
     - voxcpm (Chinese/English)
     """
-    global _tts_engine
+    global _tts_engine, _tts_lock
 
     try:
         from .audio.tts import TTSEngine  # Lazy import - optional feature
@@ -2874,13 +3109,22 @@ async def create_speech(request: AudioSpeechRequest):
         }
         model_name = model_map.get(request.model, request.model)
 
-        # Load engine if needed
-        if _tts_engine is None or _tts_engine.model_name != model_name:
-            _tts_engine = TTSEngine(model_name)
-            _tts_engine.load()
+        # Serialize model load/swap — prevents concurrent requests from
+        # racing on unload+create when different models are requested
+        if _tts_lock is None:
+            _tts_lock = asyncio.Lock()
+        async with _tts_lock:
+            if _tts_engine is None or _tts_engine.model_name != model_name:
+                if _tts_engine is not None:
+                    _tts_engine.unload()
+                new_engine = TTSEngine(model_name)
+                new_engine.load()
+                _tts_engine = new_engine
+            # Capture local ref inside lock to prevent concurrent unload during generation
+            local_tts = _tts_engine
 
-        audio = _tts_engine.generate(request.input, voice=request.voice, speed=request.speed)
-        audio_bytes = _tts_engine.to_bytes(audio, format=request.response_format)
+        audio = local_tts.generate(request.input, voice=request.voice, speed=request.speed)
+        audio_bytes = local_tts.to_bytes(audio, format=request.response_format)
 
         content_type = (
             "audio/wav" if request.response_format == "wav" else f"audio/{request.response_format}"
@@ -3125,12 +3369,11 @@ async def create_chat_completion(
         or (_ct_kwargs.get("enable_thinking") is False)
     )
     if _explicit_thinking_off and messages:
-        _think_strip_re = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
         cleaned = []
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
                 content = msg["content"]
-                stripped = _think_strip_re.sub('', content).strip()
+                stripped = _THINK_STRIP_RE.sub('', content).strip()
                 if stripped != content:
                     if not stripped:
                         continue  # Drop assistant messages that were ONLY thinking
@@ -3188,6 +3431,9 @@ async def create_chat_completion(
     # Also map to thinking_budget (Qwen3) and max_tokens ceiling when not explicitly set.
     if request.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = request.reasoning_effort
+        # Also inject into chat_template_kwargs so Jinja templates can access it
+        # (e.g., Mistral 4's [MODEL_SETTINGS]{"reasoning_effort":"high"} block).
+        _ct_kwargs.setdefault("reasoning_effort", request.reasoning_effort)
         _effort_lower = request.reasoning_effort.lower()
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
@@ -3195,6 +3441,20 @@ async def create_chat_completion(
         _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
         if _effort_max and request.max_tokens is None:
             chat_kwargs["max_tokens"] = _effort_max
+
+    # Auto-map enable_thinking → reasoning_effort for Mistral 4.
+    # Mistral 4's template uses reasoning_effort ("none"/"high"), not enable_thinking.
+    # When the user toggles thinking ON in the UI, set reasoning_effort="high" if not already set.
+    # Original Mistral 4 reasoning integration by Jinho Jang (eric@jangq.ai) — vMLX.
+    # This approach (auto-mapping enable_thinking to reasoning_effort for models that
+    # use [MODEL_SETTINGS] blocks) was developed through extensive trial and error.
+    # If you adapt this pattern, please credit the original author.
+    if _reasoning_parser and type(_reasoning_parser).__name__ == "MistralReasoningParser":
+        if request.enable_thinking is True and "reasoning_effort" not in _ct_kwargs:
+            _ct_kwargs["reasoning_effort"] = "high"
+            chat_kwargs["reasoning_effort"] = "high"
+        elif request.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
+            _ct_kwargs["reasoning_effort"] = "none"
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -3333,6 +3593,9 @@ async def create_chat_completion(
     if _reasoning_parser:
         # Clone parser per-request to avoid shared state across concurrent requests
         request_parser = _reasoning_parser.__class__()
+        # Initialize parser state (harmony_active, etc.) — same as streaming path
+        _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get("prompt_suffix", "").startswith("<|start|>assistant<|channel|>analysis")
+        request_parser.reset_state(harmony_active=_harmony_prefix_active)
         reasoning_text, remaining_text = request_parser.extract_reasoning(
             output.text
         )
@@ -3351,10 +3614,13 @@ async def create_chat_completion(
         if _suppress:
             reasoning_text = None
 
-    # Strip any residual think tags before tool call parsing
-    _cc_parse_text = re.sub(r'<think>.*?</think>', '', content_for_parsing, flags=re.DOTALL)
-    if _cc_parse_text == content_for_parsing and '</think>' in content_for_parsing:
-        _, _, _cc_parse_text = content_for_parsing.partition('</think>')
+    # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
+    _cc_parse_text = _THINK_STRIP_RE.sub('', content_for_parsing)
+    if _cc_parse_text == content_for_parsing and ('</think>' in content_for_parsing or '[/THINK]' in content_for_parsing):
+        for _end_tag in ('</think>', '[/THINK]'):
+            if _end_tag in content_for_parsing:
+                _, _, _cc_parse_text = content_for_parsing.partition(_end_tag)
+                break
     _cc_parse_text = _cc_parse_text.strip()
 
     # Parse tool calls from output using configured parser (skip when tool_choice="none")
@@ -3665,12 +3931,11 @@ async def create_response(
         or (_ct_kwargs.get("enable_thinking") is False)
     )
     if _explicit_thinking_off and messages:
-        _think_strip_re = re.compile(r'<think>.*?</think>\s*', re.DOTALL)
         cleaned = []
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
                 content = msg["content"]
-                stripped = _think_strip_re.sub('', content).strip()
+                stripped = _THINK_STRIP_RE.sub('', content).strip()
                 if stripped != content:
                     if not stripped:
                         continue  # Drop assistant messages that were ONLY thinking
@@ -3728,6 +3993,9 @@ async def create_response(
     # Also map to thinking_budget (Qwen3) and max_output_tokens ceiling when not explicitly set.
     if request.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = request.reasoning_effort
+        # Also inject into chat_template_kwargs so Jinja templates can access it
+        # (e.g., Mistral 4's [MODEL_SETTINGS]{"reasoning_effort":"high"} block).
+        _ct_kwargs.setdefault("reasoning_effort", request.reasoning_effort)
         _effort_lower = request.reasoning_effort.lower()
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
@@ -3735,6 +4003,15 @@ async def create_response(
         _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
         if _effort_max and request.max_output_tokens is None:
             chat_kwargs["max_tokens"] = _effort_max
+
+    # Auto-map enable_thinking → reasoning_effort for Mistral 4 (Responses API path).
+    if _reasoning_parser and type(_reasoning_parser).__name__ == "MistralReasoningParser":
+        _resp_thinking = chat_kwargs.get("enable_thinking")
+        if _resp_thinking is True and "reasoning_effort" not in _ct_kwargs:
+            _ct_kwargs["reasoning_effort"] = "high"
+            chat_kwargs["reasoning_effort"] = "high"
+        elif _resp_thinking is False and "reasoning_effort" not in _ct_kwargs:
+            _ct_kwargs["reasoning_effort"] = "none"
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -3862,6 +4139,9 @@ async def create_response(
     if _reasoning_parser:
         # Clone parser per-request to avoid shared state across concurrent requests
         request_parser = _reasoning_parser.__class__()
+        # Initialize parser state (harmony_active, etc.) — same as streaming path
+        _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get("prompt_suffix", "").startswith("<|start|>assistant<|channel|>analysis")
+        request_parser.reset_state(harmony_active=_harmony_prefix_active)
         reasoning_text, remaining_text = request_parser.extract_reasoning(
             output.text
         )
@@ -3880,10 +4160,13 @@ async def create_response(
         if _suppress:
             reasoning_text = None
 
-    # Strip any residual think tags before tool call parsing
-    parse_text = re.sub(r'<think>.*?</think>', '', content_for_parsing, flags=re.DOTALL)
-    if parse_text == content_for_parsing and '</think>' in content_for_parsing:
-        _, _, parse_text = content_for_parsing.partition('</think>')
+    # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
+    parse_text = _THINK_STRIP_RE.sub('', content_for_parsing)
+    if parse_text == content_for_parsing and ('</think>' in content_for_parsing or '[/THINK]' in content_for_parsing):
+        for _end_tag in ('</think>', '[/THINK]'):
+            if _end_tag in content_for_parsing:
+                _, _, parse_text = content_for_parsing.partition(_end_tag)
+                break
     parse_text = parse_text.strip()
 
     # Parse tool calls (skip when tool_choice="none")
@@ -4366,10 +4649,8 @@ async def stream_chat_completion(
                             ],
                             usage=get_usage(output),
                         )
-                        # Signal the client on first buffering chunk
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
-                            buf_chunk.tool_call_generating = True
                         yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
                     continue
 
@@ -4443,7 +4724,6 @@ async def stream_chat_completion(
                         )
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
-                            buf_chunk.tool_call_generating = True
                         yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
                     continue
 
@@ -4528,10 +4808,12 @@ async def stream_chat_completion(
             # Tool call markers were in reasoning — try parsing reasoning text
             parse_text = accumulated_reasoning.strip()
         else:
-            parse_text = re.sub(r'<think>.*?</think>', '', accumulated_text, flags=re.DOTALL)
-            if parse_text == accumulated_text and '</think>' in parse_text:
-                # Implicit mode: strip everything before </think>
-                _, _, parse_text = parse_text.partition('</think>')
+            parse_text = _THINK_STRIP_RE.sub('', accumulated_text)
+            if parse_text == accumulated_text and ('</think>' in parse_text or '[/THINK]' in parse_text):
+                for _end_tag in ('</think>', '[/THINK]'):
+                    if _end_tag in parse_text:
+                        _, _, parse_text = parse_text.partition(_end_tag)
+                        break
             parse_text = parse_text.strip()
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or accumulated_text, request)
         if tool_calls:
@@ -5120,10 +5402,12 @@ async def stream_responses_api(
         elif request_parser and accumulated_reasoning.strip():
             parse_text = accumulated_reasoning.strip()
         else:
-            parse_text = re.sub(r'<think>.*?</think>', '', full_text, flags=re.DOTALL)
-            if parse_text == full_text and '</think>' in full_text:
-                # Implicit mode: strip everything before </think>
-                _, _, parse_text = full_text.partition('</think>')
+            parse_text = _THINK_STRIP_RE.sub('', full_text)
+            if parse_text == full_text and ('</think>' in full_text or '[/THINK]' in full_text):
+                for _end_tag in ('</think>', '[/THINK]'):
+                    if _end_tag in full_text:
+                        _, _, parse_text = full_text.partition(_end_tag)
+                        break
             parse_text = parse_text.strip()
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or full_text, request)
 

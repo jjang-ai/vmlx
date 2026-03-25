@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-# Pattern to match and strip think tags
-# Handles two cases:
-# 1. Full tags: <think>...</think>
-# 2. Only closing tag: ...content before...</think> (when <think> is in prompt)
-THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
-IMPLICIT_THINK_PATTERN = re.compile(r"^.*?</think>", re.DOTALL)
+# Pattern to match and strip think tags (both <think> and [THINK] formats)
+# Handles two cases per format:
+# 1. Full tags: <think>...</think> or [THINK]...[/THINK]
+# 2. Only closing tag: ...content before...</think> or ...[/THINK] (when think is in prompt)
+THINK_TAG_PATTERN = re.compile(r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])", re.DOTALL)
+IMPLICIT_THINK_PATTERN = re.compile(r"^.*?(?:</think>|\[/THINK\])", re.DOTALL)
 
 
 def generate_tool_id() -> str:
@@ -96,7 +96,7 @@ class ToolParser(ABC):
 
         # If no full tags found but </think> exists, strip implicit think
         # (when <think> was injected in the prompt)
-        if result == text and "</think>" in text:
+        if result == text and ("</think>" in text or "[/THINK]" in text):
             result = IMPLICIT_THINK_PATTERN.sub("", text)
 
         return result.strip()

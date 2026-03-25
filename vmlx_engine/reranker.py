@@ -157,11 +157,14 @@ class Reranker:
         """Score using CausalLM yes/no logit comparison (e.g., Qwen3-Reranker)."""
         import mlx.core as mx
 
+        # Unwrap TokenizerWrapper from mlx_lm.load() — it may not support __call__
+        tokenizer = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+
         scores = []
 
         # Get token IDs for "Yes" and "No" (capital — required by Qwen3-Reranker)
-        yes_ids = self._tokenizer.encode("Yes", add_special_tokens=False)
-        no_ids = self._tokenizer.encode("No", add_special_tokens=False)
+        yes_ids = tokenizer.encode("Yes", add_special_tokens=False)
+        no_ids = tokenizer.encode("No", add_special_tokens=False)
         if not yes_ids or not no_ids:
             raise RuntimeError("Could not find 'Yes'/'No' tokens in tokenizer vocabulary")
         yes_id = yes_ids[-1]
@@ -177,14 +180,14 @@ class Reranker:
             )
 
             # Tokenize
-            if hasattr(self._tokenizer, "apply_chat_template"):
+            if hasattr(tokenizer, "apply_chat_template"):
                 messages = [{"role": "user", "content": prompt}]
-                input_ids = self._tokenizer.apply_chat_template(
+                input_ids = tokenizer.apply_chat_template(
                     messages, add_generation_prompt=True
                 )
                 input_ids = mx.array([input_ids])
             else:
-                inputs = self._tokenizer(prompt, return_tensors="np")
+                inputs = tokenizer(prompt, return_tensors="np")
                 input_ids = mx.array(inputs["input_ids"])
 
             # Forward pass to get logits

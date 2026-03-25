@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Base architecture from waybarrios/vllm-mlx. _BatchOffsetSafeCache, hybrid SSM
+# cache merge, MoE CacheList support, and vision encoding pipeline added by
+# Jinho Jang (eric@jangq.ai) for vMLX (github.com/jjang-ai/vmlx).
 """
 MLLM Batch Generator -- continuous batching engine for multimodal models.
 
@@ -1101,13 +1104,52 @@ class MLLMBatchGenerator:
         3. Running vision encoder to get features
 
         Uses vision cache to skip processing for repeated images.
+        **Fast-path**: text-only requests (no images/videos) skip the full
+        VLM processor pipeline and use the tokenizer directly, avoiding
+        ~100ms+ of vision processor overhead per request.
 
         Args:
             request: Request to preprocess
         """
-        from mlx_vlm.utils import prepare_inputs
-
         tic = time.perf_counter()
+
+        # FAST PATH: text-only requests skip VLM processor entirely.
+        # For API-driven workloads (e.g. MMLU benchmarks with 14k short requests),
+        # per-request VLM processor overhead dominates. The tokenizer alone is
+        # sufficient when no images or videos are present.
+        is_text_only = not request.images and not request.videos
+        if is_text_only:
+            tokenizer = getattr(self.processor, "tokenizer", self.processor)
+            # Use add_special_tokens=False because the prompt has already been
+            # through apply_chat_template() which embeds BOS/EOS tokens.
+            # Calling encode() with default add_special_tokens=True would
+            # double-add BOS, misaligning prefix cache keys.
+            try:
+                token_ids = tokenizer.encode(request.prompt, add_special_tokens=False)
+            except TypeError:
+                # Tokenizer doesn't support add_special_tokens kwarg.
+                # Fall through to the full VLM processor path to avoid
+                # double-BOS from default add_special_tokens=True on
+                # an already-formatted prompt.
+                logger.debug(
+                    f"Tokenizer {type(tokenizer).__name__} does not support "
+                    f"add_special_tokens; falling back to VLM processor path"
+                )
+                is_text_only = False  # force slow path
+            if is_text_only:
+                request.input_ids = mx.array(token_ids)
+                request.pixel_values = None
+                request.attention_mask = None
+                request.image_grid_thw = None
+                request.extra_kwargs = {}
+                processing_time = time.perf_counter() - tic
+                logger.debug(
+                    f"Text-only fast-path for {request.request_id}: "
+                    f"{len(token_ids)} tokens ({processing_time*1000:.1f}ms)"
+                )
+                return
+
+        from mlx_vlm.utils import prepare_inputs
 
         # Collect all images (including video frames)
         all_images = []
@@ -1247,9 +1289,24 @@ class MLLMBatchGenerator:
         has_images = request.pixel_values is not None
         seq_len = input_ids.shape[1]
 
+        # TEXT-ONLY FAST PATH: use language_model directly, skip VLM wrapper.
+        # For short text-only prompts (< 2x prefill_step_size), the VLM wrapper
+        # adds overhead from vision encoder path even when pixel_values=None.
+        # Using language_model directly avoids this entirely.
+        # Hybrid SSM models must go through the full model for correct mask computation.
+        if not has_images and not self._is_hybrid:
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None and cache is not None:
+                if seq_len <= self.prefill_step_size * 2:
+                    # Short text: single-shot through language_model
+                    output = lm(input_ids, cache=cache)
+                    request.vision_encoded = True
+                    if hasattr(output, "logits"):
+                        return output.logits
+                    return output
+
         # Chunked prefill for text-only VLM requests with long prompts.
         # Image requests must run in one shot (vision encoder needs full sequence).
-        # Short prompts (< 2x prefill_step_size) also run in one shot (overhead not worth it).
         # Hybrid SSM models (GatedDeltaNet/Mamba + attention) must run in one shot
         # because the language_model's forward pass computes masks from specific
         # cache positions (fa_idx/ssm_idx) that assume full-sequence processing.
@@ -1340,13 +1397,21 @@ class MLLMBatchGenerator:
             self._preprocess_request(req)
             # Save full token list BEFORE cache fetch can mutate req.input_ids.
             # Used later for SSM state cache keying (must be consistent with fetch key).
-            req._original_token_ids = (
+            _all_tokens = (
                 req.input_ids.tolist()
                 if req.input_ids is not None and req.input_ids.ndim == 1
                 else req.input_ids[0].tolist()
                 if req.input_ids is not None
                 else []
             )
+            # Strip generation prompt tokens from the cache key.
+            # Chat templates append assistant role tokens (e.g. <|im_start|>assistant\n<think>\n)
+            # at the end. The store path in mllm_scheduler._cleanup_finished() strips these
+            # before storing block hashes. The fetch key here MUST match.
+            _gpl = getattr(req, '_gen_prompt_len', 0)
+            if _gpl > 0 and _gpl < len(_all_tokens):
+                _all_tokens = _all_tokens[:-_gpl]
+            req._original_token_ids = _all_tokens
             # Track how many prompt tokens were served from cache (for usage reporting)
             req._cached_tokens = 0
             # After preprocessing, the prompt is fully tokenized including image patches.
@@ -1361,6 +1426,10 @@ class MLLMBatchGenerator:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        # Strip gen_prompt_len from fetch key to match store key.
+                        _gpl = getattr(req, '_gen_prompt_len', 0)
+                        if _gpl > 0 and _gpl < len(token_list):
+                            token_list = token_list[:-_gpl]
                         block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
                         if block_table is not None:
                                 # Hybrid models (SSM + attention, e.g. Qwen3.5-VL):
@@ -1492,6 +1561,10 @@ class MLLMBatchGenerator:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        # Strip gen_prompt_len from fetch key to match store key.
+                        _gpl = getattr(req, '_gen_prompt_len', 0)
+                        if _gpl > 0 and _gpl < len(token_list):
+                            token_list = token_list[:-_gpl]
 
                         # Try memory-aware cache first, then legacy
                         cache_obj = self.memory_aware_cache or self.prefix_cache
@@ -1560,6 +1633,10 @@ class MLLMBatchGenerator:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        # Strip gen_prompt_len from fetch key to match store key.
+                        _gpl = getattr(req, '_gen_prompt_len', 0)
+                        if _gpl > 0 and _gpl < len(token_list):
+                            token_list = token_list[:-_gpl]
                         disk_result = self.disk_cache.fetch(token_list)
                         if disk_result is not None:
                             if not self._is_hybrid:

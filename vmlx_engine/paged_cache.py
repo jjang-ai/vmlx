@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Base paged cache from waybarrios/vllm-mlx. Block disk store L2 tier,
+# partial block matching, COW fork, and MLA-aware block extraction added
+# by Jinho Jang (eric@jangq.ai) for vMLX (github.com/jjang-ai/vmlx).
 """
 Paged KV Cache Manager for vmlx-engine.
 

@@ -116,10 +116,14 @@ declare global {
         getVersion: () => Promise<string>
         onUpdateAvailable: (callback: (data: { currentVersion: string; latestVersion: string; url: string; notes?: string }) => void) => () => void
       }
+      gateway: {
+        getStatus: () => Promise<{ running: boolean; port: number }>
+        setPort: (port: number) => Promise<void>
+      }
       developer: {
         info: (modelPath: string) => Promise<{ success: boolean; output: string; error?: string }>
         doctor: (modelPath: string, options?: { noInference?: boolean }) => Promise<{ success: boolean; error?: string }>
-        convert: (args: { model: string; output?: string; bits: number; groupSize: number; mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean; jangProfile?: string; jangMethod?: string }) => Promise<{ success: boolean; error?: string }>
+        convert: (args: { model: string; output?: string; bits: number; groupSize: number; mode?: string; dtype?: string; force?: boolean; skipVerify?: boolean; trustRemoteCode?: boolean; jangProfile?: string; jangMethod?: string; calibrationMethod?: string; imatrixPath?: string; useAwq?: boolean; awqAlpha?: number }) => Promise<{ success: boolean; error?: string }>
         cancelOp: () => Promise<{ success: boolean; error?: string }>
         browseOutputDir: () => Promise<string | null>
         onLog: (callback: (data: { data: string }) => void) => () => void
@@ -190,6 +194,7 @@ declare global {
         onCreated: (callback: (data: any) => void) => () => void
         onDeleted: (callback: (data: any) => void) => () => void
         onStandby: (callback: (data: any) => void) => () => void
+        onLoadProgress: (callback: (data: { sessionId: string; label: string; progress: number }) => void) => () => void
       }
     }
   }

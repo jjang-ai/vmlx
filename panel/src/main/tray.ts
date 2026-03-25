@@ -103,10 +103,20 @@ function buildMenu(
   ).length
   const totalRunning = running.length + sessionOnlyCount
 
+  const gwPort = db.getSetting('gateway_port') || '8080'
+
   const items: Electron.MenuItemConstructorOptions[] = [
     {
       label: `vMLX — ${totalRunning} model${totalRunning !== 1 ? 's' : ''} loaded`,
       enabled: false,
+    },
+    {
+      label: `API Gateway: localhost:${gwPort}`,
+      enabled: false,
+    },
+    {
+      label: 'Copy API URL',
+      click: () => clipboard.writeText(`http://localhost:${gwPort}`),
     },
     { type: 'separator' },
   ]

@@ -473,6 +473,7 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     calibration_method = getattr(args, 'calibration_method', 'weights')
     imatrix_path = getattr(args, 'imatrix_path', None)
     use_awq = getattr(args, 'use_awq', False)
+    awq_alpha = getattr(args, 'awq_alpha', 0.25)
 
     print()
     print("=" * 60)
@@ -489,7 +490,7 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     if imatrix_path:
         print(f"  Importance matrix: {imatrix_path}")
     if use_awq:
-        print(f"  AWQ scaling: enabled")
+        print(f"  AWQ scaling: enabled (alpha={awq_alpha})")
     if est_str:
         print(est_str)
     print("=" * 60)
@@ -508,6 +509,7 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
             calibration_method=calibration_method,
             imatrix_path=imatrix_path,
             use_awq=use_awq,
+            awq_alpha=awq_alpha,
         )
     except Exception as e:
         elapsed = time.time() - start_time

@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Base architecture from waybarrios/vllm-mlx. MLA cache guards, gen_prompt_len
+# prefix cache fix, hybrid SSM handling, and MoE CacheList support added by
+# Jinho Jang (eric@jangq.ai) for vMLX (github.com/jjang-ai/vmlx).
 """
 Scheduler for vmlx-engine continuous batching.
 
@@ -29,6 +32,7 @@ from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
 from .paged_cache import PagedCacheManager
 from .prefix_cache import BlockAwarePrefixCache, PrefixCacheManager
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
+from .mllm_batch_generator import HybridSSMStateCache, _fix_hybrid_cache
 from .utils.mamba_cache import ensure_mamba_support
 
 logger = logging.getLogger(__name__)
@@ -193,6 +197,33 @@ class Scheduler:
         # Track if model uses mixed cache types (KVCache + MambaCache)
         self._is_hybrid = self._is_hybrid_model(model)
 
+        # Pre-compute hybrid cache layout for SSM companion.
+        # _hybrid_kv_positions: layer indices that are KVCache (attention).
+        # _hybrid_num_layers: total layer count in model cache.
+        self._hybrid_kv_positions: Optional[List[int]] = None
+        self._hybrid_num_layers: Optional[int] = None
+        self._ssm_state_cache: Optional[HybridSSMStateCache] = None
+        if self._is_hybrid and hasattr(model, 'make_cache'):
+            try:
+                from mlx_lm.models.cache import KVCache as _KVC
+                _template = model.make_cache()
+                self._hybrid_num_layers = len(_template)
+                self._hybrid_kv_positions = [
+                    i for i, t in enumerate(_template)
+                    if type(t).__name__ in (
+                        'KVCache', 'RotatingKVCache', 'QuantizedKVCache',
+                        'BatchKVCache', 'BatchRotatingKVCache',
+                    )
+                ]
+                self._ssm_state_cache = HybridSSMStateCache(max_entries=50)
+                logger.info(
+                    f"Hybrid SSM cache: {len(self._hybrid_kv_positions)}/"
+                    f"{self._hybrid_num_layers} KV layers, "
+                    f"SSM companion enabled"
+                )
+            except Exception as _e:
+                logger.warning(f"Failed to init hybrid SSM cache layout: {_e}")
+
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
         self.memory_aware_cache: Optional[MemoryAwarePrefixCache] = None
@@ -222,6 +253,25 @@ class Scheduler:
         # Apply KV cache quantization if requested AND prefix cache is enabled.
         # Quantization only affects prefix cache storage/retrieval — without prefix
         # cache there are no stored KV states to quantize.
+        # MLA models (DeepSeek V3, Mistral 4) store compressed KV latents — quantizing
+        # these destroys quality. Auto-disable for MLA, same as MLLM scheduler.
+        # Original MLA cache integration by Jinho Jang (eric@jangq.ai) — vMLX/mlxstudio.
+        _is_mla = False
+        try:
+            _model_args = getattr(self.model, 'args', None)
+            if _model_args and getattr(_model_args, 'kv_lora_rank', 0) > 0:
+                _is_mla = True
+            elif _model_args and getattr(_model_args, 'model_type', '') == 'mistral4':
+                _is_mla = True
+        except Exception:
+            pass
+        if self.config.kv_cache_quantization != "none" and _is_mla:
+            logger.info(
+                f"MLA model detected (kv_lora_rank > 0) — disabling KV cache quantization "
+                f"(was: {self.config.kv_cache_quantization}). MLA stores compressed latents "
+                f"that should not be further quantized."
+            )
+            self.config.kv_cache_quantization = "none"
         if self.config.kv_cache_quantization != "none":
             if self.config.enable_prefix_cache:
                 bits = 4 if self.config.kv_cache_quantization == "q4" else 8
@@ -332,13 +382,20 @@ class Scheduler:
             base_dir = self.config.disk_cache_dir or os.path.expanduser(
                 "~/.cache/vmlx-engine/prompt-cache"
             )
-            # Scope disk cache per model AND quantization to prevent stale cross-config hits.
-            # Uses a short hash of model path + quant config as a subdirectory.
-            # Without this, restarting with different --kv-cache-quantization could load
-            # quantized tensors as unquantized data (or vice versa), producing garbage output.
+            # Scope disk cache per model, quantization, AND layer count to prevent
+            # stale cross-config hits. Without this, restarting with a different model
+            # at the same path could load tensors with wrong layer count or head dims.
             if self.config.model_path:
                 quant_tag = self.config.kv_cache_quantization or "none"
-                scope_key = f"{self.config.model_path}:quant={quant_tag}"
+                # Include layer count to invalidate on architecture change
+                n_layers = 0
+                for _attr in ('args', 'config'):
+                    _cfg = getattr(self.model, _attr, None)
+                    if _cfg:
+                        n_layers = getattr(_cfg, 'num_hidden_layers', 0)
+                        if n_layers:
+                            break
+                scope_key = f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
                 model_hash = hashlib.sha256(
                     scope_key.encode()
                 ).hexdigest()[:12]
@@ -451,6 +508,12 @@ class Scheduler:
                 cfg = getattr(self.model, cfg_source, None)
                 if cfg is None:
                     continue
+                # MLA models store compressed KV latents with H=1.
+                # Check kv_lora_rank before num_key_value_heads.
+                kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                if kv_lora_rank and kv_lora_rank > 0:
+                    n_kv = 1
+                    break
                 # Try model-specific KV head count attributes
                 n_kv = (
                     getattr(cfg, 'num_key_value_heads', 0)
@@ -1043,13 +1106,53 @@ class Scheduler:
         if not raw_cache or target_len <= 0:
             return None
 
+        # Metal safety: sync all pending ops before slicing post-generation arrays.
+        # Lazy MLX slices can corrupt Metal command buffers when later evaluated.
+        # Convert through numpy to fully decouple from Metal.
+        try:
+            import mlx.core as mx
+            import numpy as np
+            mx.synchronize()
+        except ImportError:
+            pass
+
+        def _to_numpy(arr):
+            """Convert an evaluated MLX array to numpy (safe CPU memcpy)."""
+            try:
+                if arr.dtype == mx.bfloat16:
+                    return np.array(arr.astype(mx.float16))
+                return np.array(arr)
+            except Exception:
+                return arr
+
+        def _from_numpy(arr, orig_dtype=None):
+            """Convert numpy back to MLX, restoring original dtype if needed."""
+            try:
+                result = mx.array(arr)
+                if orig_dtype is not None and orig_dtype == mx.bfloat16:
+                    result = result.astype(mx.bfloat16)
+                return result
+            except Exception:
+                return arr
+
         truncated = []
         for layer_cache in raw_cache:
+            # Guard: skip dicts (extracted state dicts, not live cache objects).
+            # dict.keys is a builtin_function_or_method that matches hasattr
+            # but has no .ndim, causing "'builtin_function_or_method' object
+            # has no attribute 'ndim'" crashes.
+            if isinstance(layer_cache, dict):
+                truncated.append(layer_cache)
+                continue
             if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
                 # Positional cache: truncate to target length
                 try:
                     k = layer_cache.keys
                     v = layer_cache.values
+                    # Guard: k must be a tensor with .ndim (not a method or other object)
+                    if not hasattr(k, 'ndim'):
+                        truncated.append(layer_cache)
+                        continue
 
                     if isinstance(k, tuple):
                         # QuantizedKVCache: keys/values are tuples of 3 arrays
@@ -1066,10 +1169,10 @@ class Scheduler:
                             bits=layer_cache.bits,
                         )
                         new_cache.keys = tuple(
-                            t[..., :safe_target, :] for t in k
+                            _from_numpy(_to_numpy(t)[..., :safe_target, :], t.dtype) for t in k
                         )
                         new_cache.values = tuple(
-                            t[..., :safe_target, :] for t in v
+                            _from_numpy(_to_numpy(t)[..., :safe_target, :], t.dtype) for t in v
                         )
                         new_cache.offset = safe_target
                         truncated.append(new_cache)
@@ -1100,14 +1203,19 @@ class Scheduler:
                         else:
                             new_cache = KVCache()
                         ndim = k.ndim
+                        # Convert PARENT arrays to numpy BEFORE slicing.
+                        # Slicing in numpy avoids the Metal command buffer
+                        # bug entirely — no lazy MLX ops, no GPU involvement.
                         if ndim == 4:
                             safe_target = min(target_len, k.shape[2])
-                            new_cache.keys = k[:, :, :safe_target, :]
-                            new_cache.values = v[:, :, :safe_target, :]
+                            np_k, np_v = _to_numpy(k), _to_numpy(v)
+                            new_cache.keys = _from_numpy(np_k[:, :, :safe_target, :], k.dtype)
+                            new_cache.values = _from_numpy(np_v[:, :, :safe_target, :], v.dtype)
                         elif ndim == 3:
                             safe_target = min(target_len, k.shape[1])
-                            new_cache.keys = k[:, :safe_target, :]
-                            new_cache.values = v[:, :safe_target, :]
+                            np_k, np_v = _to_numpy(k), _to_numpy(v)
+                            new_cache.keys = _from_numpy(np_k[:, :safe_target, :], k.dtype)
+                            new_cache.values = _from_numpy(np_v[:, :safe_target, :], v.dtype)
                         else:
                             return None
                         new_cache.offset = min(target_len, safe_target)
@@ -1223,6 +1331,35 @@ class Scheduler:
                         })
                     else:
                         failed += 1
+                # MambaCache/ArraysCache: cumulative state (SSM layers in hybrid models).
+                # Cannot be sliced by token position, but CAN be stored as cumulative
+                # state in the last block.  _extract_block_tensor_slice() tags these as
+                # ("cumulative", ...) for last blocks and ("skip",) for earlier blocks.
+                # This allows prefix cache to restore the full hybrid cache (KV + SSM)
+                # on exact prefix matches, avoiding the forced miss that previously
+                # disabled prefix caching for all hybrid SSM models (Nemotron, etc.).
+                elif hasattr(layer_cache, "cache") and isinstance(
+                    getattr(layer_cache, "cache", None), list
+                ):
+                    if hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
+                        cls_name = type(layer_cache).__name__
+                        class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+                        extracted.append({
+                            "state": layer_cache.state,
+                            "meta_state": layer_cache.meta_state,
+                            "class_name": cls_name,
+                        })
+                    else:
+                        # SSM layer without state/meta_state — include placeholder
+                        # so layer indices stay aligned with model layers
+                        cls_name = type(layer_cache).__name__
+                        class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+                        extracted.append({
+                            "state": None,
+                            "meta_state": None,
+                            "class_name": cls_name,
+                        })
+                    continue
                 elif hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
                     state = layer_cache.state  # (keys, values) MLX arrays
                     meta = layer_cache.meta_state  # (offset,) as strings
@@ -1270,6 +1407,15 @@ class Scheduler:
                                             f"GQA head normalization (quantized): "
                                             f"sliced H {orig_h} → {n_kv}"
                                         )
+
+                    # Ensure QuantizedKVCache meta includes group_size and bits.
+                    # meta_state from QuantizedKVCache is ('offset', 'group_size', 'bits')
+                    # but if the cache was quantized post-extraction, meta may only have
+                    # ('offset',). Pad with actual values to prevent wrong defaults on reconstruct.
+                    if cls_name == "QuantizedKVCache" and isinstance(meta, (tuple, list)) and len(meta) < 3:
+                        g = getattr(layer_cache, 'group_size', 64)
+                        b = getattr(layer_cache, 'bits', 8)
+                        meta = (meta[0] if meta else '0', str(g), str(b))
 
                     class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
                     extracted.append(
@@ -1368,58 +1514,97 @@ class Scheduler:
                             f"treating as cache miss"
                         )
                     else:
-                        # Fix hybrid cache structure: prefix cache stores only
-                        # KVCache (attention) layers. For hybrid SSM models
-                        # (KVCache + MambaCache/ArraysCache), the reconstructed
-                        # cache may have fewer entries than model layers. Expand
-                        # it by inserting fresh SSM caches at non-KV positions.
-                        if self._is_hybrid and hasattr(self.model, 'make_cache'):
+                        # Hybrid SSM models: combine reconstructed KV blocks
+                        # with SSM companion state for a full cache hit.
+                        if self._is_hybrid:
                             try:
-                                from .mllm_batch_generator import _fix_hybrid_cache
-                                num_before = len(reconstructed)
-                                reconstructed = _fix_hybrid_cache(
-                                    reconstructed, self.model
+                                # Fetch SSM companion state (block-aligned key)
+                                _fetch_num = block_table.num_tokens
+                                if self.block_aware_cache is not None:
+                                    _bs = getattr(
+                                        self.block_aware_cache, 'block_size', 64
+                                    )
+                                    _aligned = (_fetch_num // _bs) * _bs
+                                    _fetch_num = _aligned if _aligned > 0 else _fetch_num
+                                # Use stripped prompt tokens (matching store key)
+                                _ssm_tokens = list(request.prompt_token_ids)
+                                _gpl = getattr(request, '_gen_prompt_len', 0)
+                                if _gpl > 0 and _gpl < len(_ssm_tokens):
+                                    _ssm_tokens = _ssm_tokens[:-_gpl]
+                                ssm_states = (
+                                    self._ssm_state_cache.fetch(
+                                        _ssm_tokens,
+                                        _fetch_num,
+                                    )
+                                    if self._ssm_state_cache is not None
+                                    and _fetch_num > 0
+                                    else None
                                 )
-                                num_after = len(reconstructed) if reconstructed else 0
-                                # LLM scheduler has no SSM companion cache.
-                                # If _fix_hybrid_cache expanded the cache (added
-                                # zeroed SSM layers), or returned a fresh cache,
-                                # the SSM state is wrong — treat as cache miss.
-                                if reconstructed is not None and num_after > num_before:
+                                if ssm_states is None:
+                                    # No SSM companion — release KV blocks, full prefill
                                     logger.info(
                                         f"Request {request.request_id}: "
-                                        f"hybrid reconstruction expanded {num_before}->"
-                                        f"{num_after} layers (SSM layers zeroed, no "
-                                        f"companion state in LLM scheduler) — "
-                                        f"treating as cache miss for correctness"
+                                        f"hybrid paged MISS — "
+                                        f"{block_table.num_tokens} KV tokens cached "
+                                        f"but no SSM companion, full prefill"
                                     )
                                     reconstructed = None
-                                    request.remaining_tokens = request.prompt_token_ids
-                                    self.block_aware_cache.release_cache(request.request_id)
-                                elif reconstructed is not None:
-                                    from mlx_lm.models.cache import KVCache as _KVC
-                                    kv_layers = [c for c in reconstructed
-                                                 if isinstance(c, _KVC)]
-                                    if kv_layers and all(
-                                        getattr(c, 'offset', 1) == 0
-                                        for c in kv_layers
-                                    ):
+                                    request.remaining_tokens = (
+                                        request.prompt_token_ids
+                                    )
+                                    self.block_aware_cache.release_cache(
+                                        request.request_id
+                                    )
+                                else:
+                                    # Expand KV-only cache to full layer count
+                                    # and inject SSM states at non-KV positions
+                                    full_cache = _fix_hybrid_cache(
+                                        reconstructed,
+                                        self.model,
+                                        kv_positions=self._hybrid_kv_positions,
+                                        num_model_layers=self._hybrid_num_layers,
+                                    )
+                                    if full_cache is not None:
+                                        kv_set = set(
+                                            self._hybrid_kv_positions or []
+                                        )
+                                        ssm_idx = 0
+                                        for layer_i in range(len(full_cache)):
+                                            if (
+                                                layer_i not in kv_set
+                                                and ssm_idx < len(ssm_states)
+                                            ):
+                                                full_cache[layer_i] = (
+                                                    ssm_states[ssm_idx]
+                                                )
+                                                ssm_idx += 1
+                                        reconstructed = full_cache
+                                        logger.info(
+                                            f"Request {request.request_id}: "
+                                            f"hybrid paged HIT — "
+                                            f"{block_table.num_tokens} tokens "
+                                            f"(KV + {ssm_idx} SSM layers)"
+                                        )
+                                    else:
+                                        # _fix_hybrid_cache failed
                                         logger.warning(
                                             f"Request {request.request_id}: "
-                                            f"hybrid cache fix returned fresh cache, "
-                                            f"treating as cache miss"
+                                            f"hybrid cache fix returned None"
                                         )
                                         reconstructed = None
-                                        request.remaining_tokens = request.prompt_token_ids
-                            except ImportError:
-                                pass
+                                        request.remaining_tokens = (
+                                            request.prompt_token_ids
+                                        )
+                                        self.block_aware_cache.release_cache(
+                                            request.request_id
+                                        )
                             except Exception as e:
                                 logger.warning(
                                     f"Request {request.request_id}: "
-                                    f"hybrid cache fix failed: {e}, "
-                                    f"treating as cache miss"
+                                    f"hybrid cache reconstruction failed: {e}"
                                 )
                                 reconstructed = None
+                                request.cached_tokens = 0
                                 request.remaining_tokens = request.prompt_token_ids
                         if reconstructed is not None:
                             request.prompt_cache = reconstructed
@@ -2065,8 +2250,99 @@ class Scheduler:
         for request_id in finished_ids:
             request = self.running.get(request_id)
 
+            # PHASE 2 OPTIMIZATION: Skip cache storage for short-output requests.
+            # For benchmark workloads (MMLU: 14k requests, 1-token answers), cache
+            # extraction + truncation + storage dominates per-request overhead.
+            # Single-turn requests with very short outputs will never benefit from
+            # prefix cache reuse, so skip entirely.
+            _output_len = getattr(request, 'num_output_tokens', 0) if request else 0
+            _skip_cache_store = _output_len > 0 and _output_len <= 3 and not getattr(request, '_has_history', False)
+            if _skip_cache_store and request is not None:
+                logger.debug(
+                    f"Skipping cache store for {request_id}: "
+                    f"short output ({_output_len} tokens), likely single-turn"
+                )
+                if hasattr(request, '_extracted_cache'):
+                    request._extracted_cache = None
+
+            # Always clean up paged cache tracking entries regardless of
+            # cache skip, to prevent unbounded memory growth on benchmarks.
+            if self.block_aware_cache is not None:
+                self.block_aware_cache._request_tables.pop(request_id, None)
+                self.block_aware_cache.paged_cache.detach_request(request_id)
+
+            # Hybrid SSM companion state capture.
+            # Store SSM layer states keyed by block-aligned prompt tokens
+            # so future prefix cache hits can reconstruct full KV+SSM cache.
+            if (
+                self._is_hybrid
+                and self._ssm_state_cache is not None
+                and request is not None
+                and request.prompt_token_ids
+                and not _skip_cache_store
+                and hasattr(request, '_extracted_cache')
+                and request._extracted_cache is not None
+            ):
+                try:
+                    kv_set = set(self._hybrid_kv_positions or [])
+                    ssm_layers = []
+                    for layer_sd in request._extracted_cache:
+                        if not isinstance(layer_sd, dict):
+                            continue
+                        cls_name = layer_sd.get('class_name', '')
+                        # SSM layers: MambaCache, ArraysCache, BatchMambaCache
+                        if cls_name in ('KVCache', 'QuantizedKVCache',
+                                        'RotatingKVCache', 'CacheList'):
+                            continue  # Skip KV layers
+                        state = layer_sd.get('state')
+                        meta = layer_sd.get('meta_state')
+                        if state is not None:
+                            try:
+                                import mlx_lm.models.cache as _cache_mod
+                                cache_cls = getattr(_cache_mod, cls_name, None)
+                                if cache_cls and hasattr(cache_cls, 'from_state'):
+                                    restored = cache_cls.from_state(state, meta)
+                                    ssm_layers.append(restored)
+                                else:
+                                    logger.debug(
+                                        f"SSM layer {cls_name}: no from_state "
+                                        f"(cls={cache_cls})"
+                                    )
+                            except Exception as _restore_e:
+                                logger.debug(
+                                    f"SSM layer {cls_name} restore failed: "
+                                    f"{_restore_e}"
+                                )
+                    if ssm_layers:
+                        # Use same token list as paged cache store path:
+                        # prompt_token_ids with gen_prompt_len stripped.
+                        all_tokens = list(request.prompt_token_ids)
+                        _gpl = getattr(request, '_gen_prompt_len', 0)
+                        if _gpl > 0 and _gpl < len(all_tokens):
+                            all_tokens = all_tokens[:-_gpl]
+                        _bs = (
+                            getattr(self.block_aware_cache, 'block_size', 64)
+                            if self.block_aware_cache else 64
+                        )
+                        _aligned = (len(all_tokens) // _bs) * _bs
+                        if _aligned == 0:
+                            _aligned = len(all_tokens)
+                        if _aligned > 0:
+                            self._ssm_state_cache.store(
+                                all_tokens, _aligned, ssm_layers
+                            )
+                            logger.debug(
+                                f"Stored SSM companion for {request_id}: "
+                                f"{len(ssm_layers)} layers, "
+                                f"{_aligned}-token key"
+                            )
+                except Exception as _ssm_e:
+                    logger.debug(
+                        f"SSM companion store failed for {request_id}: {_ssm_e}"
+                    )
+
             # Store cache for future reuse
-            if request is not None and request.prompt_token_ids:
+            if request is not None and request.prompt_token_ids and not _skip_cache_store:
                 if self.block_aware_cache is not None:
                     # Store in paged cache
                     # IMPORTANT: Use ONLY prompt tokens for block hashing/indexing.
@@ -2080,10 +2356,84 @@ class Scheduler:
                     ):
                         try:
                             prompt_tokens = list(request.prompt_token_ids)
+                            # Strip generation prompt tokens from cache key.
+                            # Original gen_prompt_len prefix cache fix by Jinho Jang
+                            # (eric@jangq.ai) — vMLX. This solved 100% cache miss for
+                            # all thinking models (Nemotron, Qwen3, DeepSeek-R1, Mistral 4).
+                            # Chat templates append assistant role tokens at the end
+                            # (e.g., <|im_start|>assistant\n<think>\n) which always
+                            # differ on subsequent turns. Including them in the block
+                            # hash causes 100% cache misses in multi-turn conversations.
+                            gen_prompt_len = getattr(request, '_gen_prompt_len', 0)
+                            cache_data = request._extracted_cache
+                            if gen_prompt_len > 0 and gen_prompt_len < len(prompt_tokens):
+                                prompt_tokens = prompt_tokens[:-gen_prompt_len]
+                                # Also truncate KV cache data to match shortened key.
+                                # Without this, KV has more tokens than the key,
+                                # causing duplicate KV entries on cache hit → <unk> flood.
+                                # cache_data is extracted state dicts (not raw objects),
+                                # so truncate the tensors within each dict directly.
+                                target = len(prompt_tokens) - 1  # N-1 for re-feed
+                                if target > 0:
+                                    truncated_dicts = []
+                                    trunc_ok = True
+                                    for sd in cache_data:
+                                        if not isinstance(sd, dict):
+                                            trunc_ok = False
+                                            break
+                                        state = sd.get("state")
+                                        if state is None or sd.get("class_name") == "CacheList":
+                                            # CacheList/skip: pass through
+                                            truncated_dicts.append(sd)
+                                            continue
+                                        if isinstance(state, tuple) and len(state) == 2:
+                                            keys, values = state
+                                            if hasattr(keys, 'shape') and len(keys.shape) >= 3:
+                                                seq_dim = 2 if len(keys.shape) == 4 else 1
+                                                safe = min(target, keys.shape[seq_dim])
+                                                if safe > 0:
+                                                    if len(keys.shape) == 4:
+                                                        keys = keys[:, :, :safe, :]
+                                                        values = values[:, :, :safe, :]
+                                                    else:
+                                                        keys = keys[:, :safe, :]
+                                                        values = values[:, :safe, :]
+                                                    # Preserve original meta but update offset.
+                                                    # KVCache meta = ('offset',)
+                                                    orig_meta = sd.get("meta_state", ())
+                                                    new_meta = (str(safe),) + orig_meta[1:] if orig_meta else (str(safe),)
+                                                    truncated_dicts.append({
+                                                        **sd,
+                                                        "state": (keys, values),
+                                                        "meta_state": new_meta,
+                                                    })
+                                                    continue
+                                            elif isinstance(keys, (tuple, list)) and len(keys) >= 1:
+                                                # QuantizedKVCache: tuple of (data, scales, zeros)
+                                                first_k = keys[0]
+                                                if hasattr(first_k, 'shape'):
+                                                    safe = min(target, first_k.shape[-2])
+                                                    if safe > 0:
+                                                        keys = tuple(t[..., :safe, :] for t in keys)
+                                                        values = tuple(t[..., :safe, :] for t in values)
+                                                        # Preserve group_size + bits from QuantizedKVCache meta.
+                                                        # meta_state = ('offset', 'group_size', 'bits')
+                                                        orig_meta = sd.get("meta_state", ())
+                                                        new_meta = (str(safe),) + orig_meta[1:] if orig_meta else (str(safe),)
+                                                        truncated_dicts.append({
+                                                            **sd,
+                                                            "state": (keys, values),
+                                                            "meta_state": new_meta,
+                                                        })
+                                                        continue
+                                        # Unknown format: pass through
+                                        truncated_dicts.append(sd)
+                                    if trunc_ok and truncated_dicts:
+                                        cache_data = truncated_dicts
                             self.block_aware_cache.store_cache(
                                 request_id,
                                 prompt_tokens,
-                                request._extracted_cache,
+                                cache_data,
                             )
                             logger.info(
                                 f"Stored paged cache for request {request_id} "
@@ -2098,13 +2448,8 @@ class Scheduler:
                         finally:
                             # Clear extracted cache reference to help GC
                             request._extracted_cache = None
-                    # NOTE: Do NOT call release_cache() here - that would delete
-                    # block tables from the paged cache. Blocks should persist for
-                    # future requests to share; LRU eviction handles cleanup.
-                    # But DO remove the per-request tracking entries to prevent
-                    # unbounded memory growth.
-                    self.block_aware_cache._request_tables.pop(request_id, None)
-                    self.block_aware_cache.paged_cache.detach_request(request_id)
+                    # NOTE: Tracking cleanup (pop + detach) moved above the
+                    # _skip_cache_store guard so it runs unconditionally.
 
                 elif self.memory_aware_cache is not None:
                     # Store in memory-aware prefix cache
@@ -2273,6 +2618,8 @@ class Scheduler:
             self.memory_aware_cache.clear()
         if self.prefix_cache is not None:
             self.prefix_cache.clear()
+        if self._ssm_state_cache is not None:
+            self._ssm_state_cache.clear()
 
         # Clear UID mappings
         self.request_id_to_uid.clear()

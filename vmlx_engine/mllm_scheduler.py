@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
+# Base architecture from waybarrios/vllm-mlx. MLLM VLM scheduling, MLA detection,
+# hybrid SSM cache handling, and vision cache added by Jinho Jang (eric@jangq.ai)
+# for vMLX (github.com/jjang-ai/vmlx).
 """
 MLLM Scheduler -- Multimodal Language Model continuous batching on Apple Metal.
 
@@ -515,7 +518,16 @@ class MLLMScheduler:
             )
             if self.config.model_path:
                 quant_tag = self.config.kv_cache_quantization or "none"
-                scope_key = f"{self.config.model_path}:quant={quant_tag}"
+                # Include layer count to invalidate on architecture change
+                n_layers = 0
+                lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
+                for _attr in ('args', 'config'):
+                    _cfg = getattr(lm, _attr, None)
+                    if _cfg:
+                        n_layers = getattr(_cfg, 'num_hidden_layers', 0)
+                        if n_layers:
+                            break
+                scope_key = f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
                 model_hash = hashlib.sha256(
                     scope_key.encode()
                 ).hexdigest()[:12]
@@ -538,8 +550,14 @@ class MLLMScheduler:
             )
 
         # KV cache quantization for prefix cache storage (2-4x memory reduction)
+        # MLA models (Mistral 4, DeepSeek V2/V3) store compressed KV latents —
+        # quantizing already-compressed representations destroys quality.
         self._kv_cache_bits = 0
         self._kv_cache_group_size = 64
+        _is_mla = self._detect_mla()
+        if _is_mla and self.config.kv_cache_quantization != "none":
+            logger.info("KV cache quantization disabled: MLA model (compressed KV latents)")
+            self.config.kv_cache_quantization = "none"
         if self.config.kv_cache_quantization != "none":
             if self.config.enable_prefix_cache:
                 bits = 4 if self.config.kv_cache_quantization == "q4" else 8
@@ -649,6 +667,37 @@ class MLLMScheduler:
             return True
         except Exception:
             return False
+
+    def _detect_mla(self) -> bool:
+        """Detect if model uses Multi-head Latent Attention (MLA).
+
+        MLA detection logic and KV cache quantization guard added by Jinho Jang
+        (eric@jangq.ai) for vMLX. The base scheduler architecture derives from
+        waybarrios/vllm-mlx. The MLA-specific handling (kv_lora_rank detection,
+        auto-disabling quantization for compressed latents, prefix cache H=1
+        validation) is original vMLX work requiring extensive empirical testing.
+        We are leaving this attribution here because we know another inference
+        engine is very directly going to be looking at this to attempt to
+        rip it off. If you're adapting this code, please credit the original
+        author: Jinho Jang (github.com/jjang-ai/vmlx).
+        """
+        try:
+            lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
+            # Check backbone args for kv_lora_rank (MLA indicator)
+            model = getattr(lm, 'model', lm)
+            if hasattr(model, 'args') and getattr(model.args, 'kv_lora_rank', 0) > 0:
+                return True
+            # Check config for kv_lora_rank
+            cfg = getattr(lm, 'config', None)
+            if cfg:
+                raw = getattr(cfg, '_raw_config', {})
+                if raw.get('kv_lora_rank', 0) > 0:
+                    return True
+                if getattr(cfg, 'model_type', '') == 'mistral4':
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _detect_head_dim(self) -> Optional[int]:
         """Detect the VLM language model's KV head dimension."""
@@ -813,8 +862,8 @@ class MLLMScheduler:
         - Truncating KVCache layers normally (to prompt_len - 1)
         - Passing MambaCache layers through unchanged (they're cumulative state)
 
-        MambaCache layers will be skipped during _extract_cache_states() since
-        they can't be sliced into blocks. Only KVCache layers are stored.
+        MambaCache/ArraysCache layers are included in _extract_cache_states()
+        as cumulative entries (stored in last block only, "skip" in others).
         """
         target_len = prompt_len - 1
         if not raw_cache or target_len <= 0:
@@ -822,10 +871,20 @@ class MLLMScheduler:
 
         truncated = []
         for layer_cache in raw_cache:
+            # Guard: skip dicts (extracted state dicts, not live cache objects).
+            # dict.keys is a builtin_function_or_method that matches hasattr
+            # but has no .ndim, causing crashes.
+            if isinstance(layer_cache, dict):
+                truncated.append(layer_cache)
+                continue
             if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
                 try:
                     k = layer_cache.keys
                     v = layer_cache.values
+                    # Guard: k must be a tensor with .ndim (not a method or other object)
+                    if not hasattr(k, 'ndim'):
+                        truncated.append(layer_cache)
+                        continue
 
                     if isinstance(k, tuple):
                         # QuantizedKVCache
@@ -862,6 +921,24 @@ class MLLMScheduler:
                 except Exception as e:
                     logger.warning(f"Failed to truncate KVCache layer: {e}")
                     return None
+            elif hasattr(layer_cache, "caches") and isinstance(
+                getattr(layer_cache, "caches", None), (list, tuple)
+            ):
+                # CacheList (MoE models like DeepSeek V3, Mistral 4): recursively truncate
+                # each sub-cache independently, then wrap back in CacheList.
+                try:
+                    sub_truncated = self._truncate_hybrid_cache(
+                        list(layer_cache.caches), prompt_len
+                    )
+                    if sub_truncated is None:
+                        return None
+                    from mlx_lm.models.cache import CacheList
+                    new_cl = CacheList.__new__(CacheList)
+                    new_cl.caches = sub_truncated
+                    truncated.append(new_cl)
+                except Exception as e:
+                    logger.warning(f"Failed to truncate CacheList layer: {e}")
+                    truncated.append(layer_cache)
             elif hasattr(layer_cache, "cache") and isinstance(
                 getattr(layer_cache, "cache", None), list
             ):
@@ -873,6 +950,66 @@ class MLLMScheduler:
                 truncated.append(layer_cache)
 
         return truncated
+
+    def _detect_n_kv_heads(self) -> int:
+        """Detect number of KV heads from VLM language model config.
+
+        Mirrors Scheduler._detect_n_kv_heads() for GQA head normalization.
+        BatchKVCache.merge() inflates H to max across batch; this provides
+        the ground-truth KV head count to slice away inflated heads.
+        """
+        if hasattr(self, '_n_kv_heads_cached'):
+            return self._n_kv_heads_cached
+        n_kv = 0
+        try:
+            # VLM models wrap the LM — get the language_model's config
+            lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
+            for cfg_source in ('args', 'config'):
+                cfg = getattr(lm, cfg_source, None)
+                if cfg is None:
+                    continue
+                # MLA models store compressed KV latents with H=1.
+                # Check kv_lora_rank before num_key_value_heads.
+                kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                if kv_lora_rank and kv_lora_rank > 0:
+                    n_kv = 1
+                    break
+                n_kv = (
+                    getattr(cfg, 'num_key_value_heads', 0)
+                    or getattr(cfg, 'num_kv_heads', 0)
+                )
+                if n_kv:
+                    break
+                n_kv = getattr(cfg, 'num_attention_heads', 0)
+                if n_kv:
+                    break
+        except Exception:
+            pass
+        if not isinstance(n_kv, int):
+            n_kv = 0
+        self._n_kv_heads_cached = n_kv
+        return n_kv
+
+    def _normalize_gqa_state(self, state, n_kv: int):
+        """Normalize GQA head inflation in a cache state tuple.
+
+        Returns the state with inflated heads sliced down to n_kv.
+        Handles both plain tensors and quantized tuples (data, scales, zeros).
+        """
+        if not (isinstance(state, tuple) and len(state) == 2 and n_kv > 0):
+            return state
+        keys, values = state
+        if hasattr(keys, 'shape') and len(keys.shape) == 4:
+            if keys.shape[1] > n_kv:
+                return (keys[:, :n_kv, :, :], values[:, :n_kv, :, :])
+        elif (isinstance(keys, (tuple, list)) and len(keys) >= 1
+                and hasattr(keys[0], 'shape') and len(keys[0].shape) == 4
+                and keys[0].shape[1] > n_kv):
+            return (
+                tuple(t[:, :n_kv, :, :] for t in keys),
+                tuple(t[:, :n_kv, :, :] for t in values),
+            )
+        return state
 
     def _extract_cache_states(self, raw_cache: List[Any]) -> List[Dict[str, Any]]:
         """
@@ -895,6 +1032,7 @@ class MLLMScheduler:
         except ImportError:
             _CacheList = None
 
+        n_kv = self._detect_n_kv_heads()
         extracted = []
         for i, layer_cache in enumerate(raw_cache):
             try:
@@ -914,8 +1052,9 @@ class MLLMScheduler:
                                 "class_name": type(sc).__name__,
                             })
                         elif hasattr(sc, "state") and hasattr(sc, "meta_state"):
+                            sub_state = self._normalize_gqa_state(sc.state, n_kv)
                             sub_caches.append({
-                                "state": sc.state,
+                                "state": sub_state,
                                 "meta_state": sc.meta_state,
                                 "class_name": type(sc).__name__,
                             })
@@ -925,18 +1064,41 @@ class MLLMScheduler:
                             "sub_caches": sub_caches,
                         })
                     continue
-                # Check MambaCache/ArraysCache FIRST: they also have state/meta_state
-                # but their .cache attribute is a list (cumulative state, can't be blocked)
+                # MambaCache/ArraysCache: cumulative state (SSM layers in hybrid models).
+                # Include in extraction so _extract_block_tensor_slice() can tag them
+                # as ("cumulative", ...) in the last block, enabling prefix cache
+                # restore for hybrid SSM models on exact prefix matches.
                 if hasattr(layer_cache, "cache") and isinstance(
                     getattr(layer_cache, "cache", None), list
                 ):
-                    # MambaCache/ArraysCache: cumulative state, skip for paged storage
+                    if hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
+                        cls_name = type(layer_cache).__name__
+                        extracted.append({
+                            "state": layer_cache.state,
+                            "meta_state": layer_cache.meta_state,
+                            "class_name": cls_name,
+                        })
+                    else:
+                        cls_name = type(layer_cache).__name__
+                        extracted.append({
+                            "state": None,
+                            "meta_state": None,
+                            "class_name": cls_name,
+                        })
                     continue
                 elif hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
+                    state = self._normalize_gqa_state(layer_cache.state, n_kv)
+                    meta = layer_cache.meta_state
+                    cls_name = type(layer_cache).__name__
+                    # Ensure QuantizedKVCache meta includes group_size and bits.
+                    if cls_name == "QuantizedKVCache" and isinstance(meta, (tuple, list)) and len(meta) < 3:
+                        g = getattr(layer_cache, 'group_size', 64)
+                        b = getattr(layer_cache, 'bits', 8)
+                        meta = (meta[0] if meta else '0', str(g), str(b))
                     extracted.append({
-                        "state": layer_cache.state,
-                        "meta_state": layer_cache.meta_state,
-                        "class_name": type(layer_cache).__name__,
+                        "state": state,
+                        "meta_state": meta,
+                        "class_name": cls_name,
                     })
                 else:
                     logger.debug(
@@ -1106,6 +1268,16 @@ class MLLMScheduler:
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
         )
+        # Mark multi-turn requests for cache skip heuristic.
+        # num_messages > 2 means at least system + user + assistant history.
+        request._has_history = kwargs.get("num_messages", 1) > 2
+
+        # Attach gen_prompt_len for prefix cache key stripping.
+        # Strips generation prompt tokens (e.g., <|im_start|>assistant\n<think>\n)
+        # from the paged cache block hash to enable multi-turn cache hits.
+        _gpl = kwargs.get("gen_prompt_len", 0)
+        if _gpl > 0:
+            request._gen_prompt_len = _gpl
 
         with self._queue_lock:
             if request_id in self.requests:
@@ -1256,6 +1428,11 @@ class MLLMScheduler:
                 video_fps=request.video_fps,
                 video_max_frames=request.video_max_frames,
             )
+            # Forward gen_prompt_len so the batch generator can strip it
+            # from cache fetch keys to match the store key (which also strips).
+            _gpl = getattr(request, '_gen_prompt_len', 0)
+            if _gpl > 0:
+                batch_req._gen_prompt_len = _gpl
             batch_requests.append(batch_req)
 
             request.status = RequestStatus.RUNNING
@@ -1449,8 +1626,23 @@ class MLLMScheduler:
         for request_id in finished_ids:
             request = self.running.get(request_id)
 
+            # PHASE 2 OPTIMIZATION: Skip cache storage for short-output requests.
+            # For benchmark workloads (MMLU: 14k requests, 1-token answers), cache
+            # extraction + truncation + storage dominates per-request overhead.
+            # Single-turn requests with very short outputs will never benefit from
+            # prefix cache reuse, so skip entirely.
+            _output_len = getattr(request, 'num_output_tokens', 0) if request else 0
+            _skip_cache_store = _output_len > 0 and _output_len <= 3 and not getattr(request, '_has_history', False)
+            if _skip_cache_store:
+                logger.debug(
+                    f"Skipping cache store for {request_id}: "
+                    f"short output ({_output_len} tokens), likely single-turn"
+                )
+                if request is not None:
+                    request._extracted_cache = None
+
             # --- Cache store: paged path ---
-            if self.block_aware_cache is not None:
+            if self.block_aware_cache is not None and not _skip_cache_store:
                 if request is not None and getattr(request, "_extracted_cache", None) is not None:
                     try:
                         token_list = getattr(request, "_extracted_tokens", [])
@@ -1469,10 +1661,25 @@ class MLLMScheduler:
                                         f"Cache truncation failed for {request_id}"
                                     )
                                 else:
+                                    # Strip generation prompt tokens from cache key.
+                                    # Chat templates append assistant role tokens at the end
+                                    # (e.g., <|im_start|>assistant\n<think>\n) which always
+                                    # differ on subsequent turns. Including them in the block
+                                    # hash causes 100% cache misses in multi-turn conversations.
+                                    gen_prompt_len = getattr(request, '_gen_prompt_len', 0)
+                                    if gen_prompt_len > 0 and gen_prompt_len < len(token_list):
+                                        token_list = token_list[:-gen_prompt_len]
+                                        prompt_len = len(token_list)
+
                                     truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
                                     # L2: persist to disk before quantization
                                     # Key uses full token_list (matching fetch path), cache data is N-1 tokens
-                                    if self.disk_cache is not None:
+                                    # Skip for hybrid models — SSM layers retain output-token
+                                    # state that can't be cleanly truncated to prompt boundary.
+                                    if (
+                                        self.disk_cache is not None
+                                        and not self._is_hybrid
+                                    ):
                                         try:
                                             self.disk_cache.store(token_list, cache_blocks)
                                         except Exception as de:
@@ -1498,7 +1705,7 @@ class MLLMScheduler:
                             request._extracted_cache = None
 
             # --- Cache store: memory-aware path ---
-            elif self.memory_aware_cache is not None:
+            elif self.memory_aware_cache is not None and not _skip_cache_store:
                 if (
                     request is not None
                     and getattr(request, "_extracted_cache", None) is not None
@@ -1513,8 +1720,8 @@ class MLLMScheduler:
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
                             if cache_to_store is not None:
-                                # L2: persist pre-quantization
-                                if self.disk_cache is not None:
+                                # L2: persist pre-quantization (skip hybrid — SSM can't truncate)
+                                if self.disk_cache is not None and not self._is_hybrid:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
                                     except Exception as de:
@@ -1534,7 +1741,7 @@ class MLLMScheduler:
                             request._extracted_cache = None
 
             # --- Cache store: legacy prefix cache path ---
-            elif self.prefix_cache is not None:
+            elif self.prefix_cache is not None and not _skip_cache_store:
                 if (
                     request is not None
                     and getattr(request, "_extracted_cache", None) is not None
@@ -1549,7 +1756,7 @@ class MLLMScheduler:
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
                             if cache_to_store is not None:
-                                if self.disk_cache is not None:
+                                if self.disk_cache is not None and not self._is_hybrid:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
                                     except Exception as de:

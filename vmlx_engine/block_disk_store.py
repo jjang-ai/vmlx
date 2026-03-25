@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
+# Block disk store is original vMLX work by Jinho Jang (eric@jangq.ai).
+# L2 SSD cache tier with safetensors serialization, hybrid SSM cumulative
+# state persistence, orig_dtype metadata, and QuantizedKVCache support.
+# github.com/jjang-ai/vmlx
 """
 Block-level disk persistence for paged KV cache.
 
@@ -639,6 +643,10 @@ def _serialize_block(
             _, keys, values = layer_data
             tensors[f"layer_{i}_keys"] = keys
             tensors[f"layer_{i}_values"] = values
+            # Record original dtype so deserialization can restore it
+            # after bfloat16→float16 cast (safetensors doesn't support bf16)
+            if hasattr(keys, "dtype"):
+                meta.setdefault("__orig_dtypes__", {})[str(i)] = str(keys.dtype)
 
         elif tag == "quantized_kv":
             _, keys_tuple, values_tuple, layer_meta = layer_data
@@ -657,6 +665,35 @@ def _serialize_block(
             tensors[f"layer_{i}_values"] = values
             tensors[f"layer_{i}_max_size"] = mx.array([max_size], dtype=mx.int32)
             tensors[f"layer_{i}_keep"] = mx.array([keep], dtype=mx.int32)
+            if hasattr(keys, "dtype"):
+                meta.setdefault("__orig_dtypes__", {})[str(i)] = str(keys.dtype)
+
+        elif tag == "cache_list":
+            # CacheList (MoE models): each sub-cache is serialized independently
+            _, sub_slices = layer_data
+            sub_count = 0
+            for j, sub_entry in enumerate(sub_slices):
+                sub_tag = sub_entry[0]
+                if sub_tag == "skip":
+                    continue
+                elif sub_tag == "kv":
+                    _, sk, sv = sub_entry
+                    tensors[f"layer_{i}_sub_{j}_keys"] = sk
+                    tensors[f"layer_{i}_sub_{j}_values"] = sv
+                    if hasattr(sk, "dtype"):
+                        meta.setdefault("__orig_dtypes__", {})[f"{i}_sub_{j}"] = str(sk.dtype)
+                    sub_count += 1
+                elif sub_tag == "cumulative":
+                    _, sub_state, sub_meta, sub_cls = sub_entry
+                    if isinstance(sub_state, (list, tuple)):
+                        for k, arr in enumerate(sub_state):
+                            if hasattr(arr, "shape"):
+                                tensors[f"layer_{i}_sub_{j}_cumulative_{k}"] = arr
+                    meta.setdefault(str(i), {}).setdefault("subs", {})[str(j)] = {
+                        "class_name": sub_cls, "meta": sub_meta
+                    }
+                    sub_count += 1
+            meta.setdefault(str(i), {})["sub_count"] = len(sub_slices)
 
         elif tag == "cumulative":
             _, state_list, layer_meta, class_name = layer_data
@@ -710,6 +747,8 @@ def _deserialize_block(
 
     # Per-layer type map (new format with __layer_types__)
     layer_types = meta.get("__layer_types__", {})
+    # Per-layer original dtypes (for restoring bfloat16 after float16 cast)
+    orig_dtypes = meta.get("__orig_dtypes__", {})
 
     # Find all layer indices
     layer_indices: Dict[int, str] = {}
@@ -741,11 +780,14 @@ def _deserialize_block(
             keys = data.get(f"layer_{i}_keys")
             values = data.get(f"layer_{i}_values")
             if keys is not None and values is not None:
-                # Restore bfloat16 from float16 (serialization casts
-                # bfloat16→float16 because safetensors doesn't support it)
-                if HAS_MLX and keys.dtype == mx.float16:
-                    keys = keys.astype(mx.bfloat16)
-                    values = values.astype(mx.bfloat16)
+                # Restore original dtype if it was cast during serialization
+                # (e.g. bfloat16 -> float16 because safetensors doesn't support bf16)
+                orig_dt = orig_dtypes.get(str(i))
+                if HAS_MLX and orig_dt and orig_dt != str(keys.dtype):
+                    target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                    if target is not None:
+                        keys = keys.astype(target)
+                        values = values.astype(target)
                 cache_data.append(("kv", keys, values))
             else:
                 cache_data.append(("skip",))
@@ -774,14 +816,49 @@ def _deserialize_block(
             max_size_arr = data.get(f"layer_{i}_max_size")
             keep_arr = data.get(f"layer_{i}_keep")
             if keys is not None and values is not None:
-                if HAS_MLX and keys.dtype == mx.float16:
-                    keys = keys.astype(mx.bfloat16)
-                    values = values.astype(mx.bfloat16)
+                orig_dt = orig_dtypes.get(str(i))
+                if HAS_MLX and orig_dt and orig_dt != str(keys.dtype):
+                    target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                    if target is not None:
+                        keys = keys.astype(target)
+                        values = values.astype(target)
                 max_size = int(max_size_arr.item()) if max_size_arr is not None else 0
                 keep = int(keep_arr.item()) if keep_arr is not None else 0
                 cache_data.append(("rotating_kv", keys, values, max_size, keep))
             else:
                 cache_data.append(("skip",))
+
+        elif layer_type == "cache_list":
+            # CacheList (MoE models): reconstruct sub-caches
+            layer_meta_dict = meta.get(str(i), {})
+            sub_count = layer_meta_dict.get("sub_count", 0)
+            subs_meta = layer_meta_dict.get("subs", {})
+            sub_slices = []
+            for j in range(sub_count):
+                sk = data.get(f"layer_{i}_sub_{j}_keys")
+                sv = data.get(f"layer_{i}_sub_{j}_values")
+                if sk is not None and sv is not None:
+                    # Restore original dtype if cast
+                    orig_dt = orig_dtypes.get(f"{i}_sub_{j}")
+                    if HAS_MLX and orig_dt and orig_dt != str(sk.dtype):
+                        target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                        if target is not None:
+                            sk = sk.astype(target)
+                            sv = sv.astype(target)
+                    sub_slices.append(("kv", sk, sv))
+                elif f"layer_{i}_sub_{j}_cumulative_0" in data:
+                    sub_meta_dict = subs_meta.get(str(j), {})
+                    sub_cls = sub_meta_dict.get("class_name", "")
+                    sub_meta_val = sub_meta_dict.get("meta", "")
+                    sub_arrays = []
+                    k = 0
+                    while f"layer_{i}_sub_{j}_cumulative_{k}" in data:
+                        sub_arrays.append(data[f"layer_{i}_sub_{j}_cumulative_{k}"])
+                        k += 1
+                    sub_slices.append(("cumulative", sub_arrays, sub_meta_val, sub_cls))
+                else:
+                    sub_slices.append(("skip",))
+            cache_data.append(("cache_list", sub_slices))
 
         elif layer_type == "cumulative":
             layer_meta_dict = meta.get(str(i), {})
@@ -809,7 +886,10 @@ def _infer_layer_type(data: Dict[str, Any], layer_idx: int, fallback_dtype: str)
     has_cumulative = f"{prefix}cumulative_0" in data
     has_max_size = f"{prefix}max_size" in data
     has_keys = f"{prefix}keys" in data
+    has_sub = f"{prefix}sub_0_keys" in data or f"{prefix}sub_0_cumulative_0" in data
 
+    if has_sub:
+        return "cache_list"
     if has_keys_data:
         return "quantized_kv"
     if has_cumulative:

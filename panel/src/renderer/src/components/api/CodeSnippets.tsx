@@ -1,13 +1,24 @@
 import { useState, useMemo } from 'react'
 import { Copy, Check } from 'lucide-react'
+import type { ApiFormat } from './ApiDashboard'
 
-type Lang = 'curl' | 'python-openai' | 'python-anthropic' | 'javascript'
+type Lang = 'curl' | 'python-openai' | 'python-anthropic' | 'python-requests' | 'javascript' | 'ollama-cli'
 
-const LANGS: { key: Lang; label: string }[] = [
+const OPENAI_LANGS: { key: Lang; label: string }[] = [
   { key: 'curl', label: 'curl' },
   { key: 'python-openai', label: 'Python (OpenAI)' },
-  { key: 'python-anthropic', label: 'Python (Anthropic)' },
   { key: 'javascript', label: 'JavaScript' },
+]
+
+const ANTHROPIC_LANGS: { key: Lang; label: string }[] = [
+  { key: 'curl', label: 'curl' },
+  { key: 'python-anthropic', label: 'Python (Anthropic)' },
+]
+
+const OLLAMA_LANGS: { key: Lang; label: string }[] = [
+  { key: 'ollama-cli', label: 'CLI' },
+  { key: 'curl', label: 'curl' },
+  { key: 'python-requests', label: 'Python' },
 ]
 
 interface CodeSnippetsProps {
@@ -16,7 +27,10 @@ interface CodeSnippetsProps {
   modelId: string | null
   isImage?: boolean
   isEdit?: boolean
+  format?: ApiFormat
 }
+
+// ── OpenAI snippets ──
 
 function buildCurl(baseUrl: string, apiKey: string | null, model: string): string {
   const authHeader = apiKey ? `\n  -H "Authorization: Bearer ${apiKey}" \\` : ''
@@ -54,27 +68,6 @@ for chunk in response:
 print()`
 }
 
-function buildPythonAnthropic(baseUrl: string, apiKey: string | null, model: string): string {
-  const key = apiKey ? `"${apiKey}"` : '"not-needed"'
-  return `import anthropic
-
-client = anthropic.Anthropic(
-    base_url="${baseUrl}",
-    api_key=${key},
-)
-
-# The Anthropic SDK appends /v1/messages automatically
-message = client.messages.create(
-    model="${model}",
-    max_tokens=1024,
-    messages=[
-        {"role": "user", "content": "Hello!"}
-    ],
-)
-
-print(message.content[0].text)`
-}
-
 function buildJavaScript(baseUrl: string, apiKey: string | null, model: string): string {
   const key = apiKey ? `"${apiKey}"` : '"not-needed"'
   return `import OpenAI from "openai";
@@ -99,128 +92,148 @@ for await (const chunk of stream) {
 console.log();`
 }
 
-const BUILDERS: Record<Lang, (baseUrl: string, apiKey: string | null, model: string) => string> = {
-  'curl': buildCurl,
-  'python-openai': buildPythonOpenAI,
-  'python-anthropic': buildPythonAnthropic,
-  'javascript': buildJavaScript,
-}
+// ── Anthropic snippets ──
 
-// Image-specific snippets
-function buildImageCurl(baseUrl: string, apiKey: string | null, model: string): string {
-  const authHeader = apiKey ? `\n  -H "Authorization: Bearer ${apiKey}" \\` : ''
-  return `curl ${baseUrl}/v1/images/generations \\
-  -H "Content-Type: application/json" \\${authHeader}
+function buildAnthropicCurl(baseUrl: string, apiKey: string | null, model: string): string {
+  const key = apiKey || 'not-needed'
+  return `curl ${baseUrl}/v1/messages \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: ${key}" \\
+  -H "anthropic-version: 2023-06-01" \\
   -d '{
     "model": "${model}",
-    "prompt": "A cat astronaut floating in space",
-    "size": "1024x1024",
-    "steps": 4,
-    "guidance": 3.5
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
   }'`
 }
 
-function buildImagePython(baseUrl: string, apiKey: string | null, model: string): string {
+function buildPythonAnthropic(baseUrl: string, apiKey: string | null, model: string): string {
   const key = apiKey ? `"${apiKey}"` : '"not-needed"'
-  return `from openai import OpenAI
-import base64
+  return `import anthropic
 
-client = OpenAI(
-    base_url="${baseUrl}/v1",
+client = anthropic.Anthropic(
+    base_url="${baseUrl}",
     api_key=${key},
 )
 
-response = client.images.generate(
+# The Anthropic SDK appends /v1/messages automatically
+message = client.messages.create(
     model="${model}",
-    prompt="A cat astronaut floating in space",
-    size="1024x1024",
-    n=1,
-    response_format="b64_json",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Hello!"}
+    ],
 )
 
-# Save the image
-image_data = base64.b64decode(response.data[0].b64_json)
-with open("output.png", "wb") as f:
-    f.write(image_data)
-print("Saved output.png")`
+print(message.content[0].text)`
 }
 
-// Image edit snippets
-function buildImageEditCurl(baseUrl: string, apiKey: string | null, model: string): string {
-  const authHeader = apiKey ? `\n  -H "Authorization: Bearer ${apiKey}" \\` : ''
-  return `curl ${baseUrl}/v1/images/edits \\
-  -H "Content-Type: application/json" \\${authHeader}
-  -d '{
-    "model": "${model}",
-    "prompt": "Make the sky sunset orange",
-    "image": "<base64-encoded-image>",
-    "size": "1024x1024",
-    "steps": 24,
-    "guidance": 3.5,
-    "strength": 0.8
-  }'`
+// ── Ollama snippets ──
+
+function buildOllamaCli(baseUrl: string, _apiKey: string | null, model: string): string {
+  return `# Set the Ollama host to your vMLX gateway
+export OLLAMA_HOST=${baseUrl}
+
+# Chat with a model
+ollama run ${model}
+
+# Or use ollama API directly
+ollama list`
 }
 
-function buildImageEditPython(baseUrl: string, apiKey: string | null, model: string): string {
-  return `import requests, base64
+function buildOllamaCurl(baseUrl: string, _apiKey: string | null, model: string): string {
+  return `# Streaming chat (NDJSON)
+curl ${baseUrl}/api/chat -d '{
+  "model": "${model}",
+  "messages": [
+    {"role": "user", "content": "Hello!"}
+  ]
+}'
 
-# Read source image
-with open("input.jpg", "rb") as f:
-    image_b64 = base64.b64encode(f.read()).decode()
+# Text generation
+curl ${baseUrl}/api/generate -d '{
+  "model": "${model}",
+  "prompt": "Hello!"
+}'
 
+# List models
+curl ${baseUrl}/api/tags`
+}
+
+function buildOllamaPython(baseUrl: string, _apiKey: string | null, model: string): string {
+  return `import requests, json
+
+# Streaming chat via Ollama API
 response = requests.post(
-    "${baseUrl}/v1/images/edits",
-    headers={
-        "Content-Type": "application/json",
-        ${apiKey ? `"Authorization": "Bearer ${apiKey}",` : ''}
-    },
+    "${baseUrl}/api/chat",
     json={
         "model": "${model}",
-        "prompt": "Make the sky sunset orange",
-        "image": image_b64,
-        "size": "1024x1024",
-        "steps": 24,
-        "guidance": 3.5,
-        "strength": 0.8,
+        "messages": [
+            {"role": "user", "content": "Hello!"}
+        ],
     },
+    stream=True,
 )
 
-result = response.json()
-image_data = base64.b64decode(result["data"][0]["b64_json"])
-with open("edited.png", "wb") as f:
-    f.write(image_data)
-print("Saved edited.png")`
+for line in response.iter_lines():
+    if line:
+        chunk = json.loads(line)
+        print(chunk.get("message", {}).get("content", ""), end="", flush=True)
+        if chunk.get("done"):
+            break
+print()`
 }
 
-const IMAGE_BUILDERS: Record<string, (baseUrl: string, apiKey: string | null, model: string) => string> = {
-  'curl': buildImageCurl,
-  'python-openai': buildImagePython,
+// ── Builder maps ──
+
+const OPENAI_BUILDERS: Record<string, (b: string, k: string | null, m: string) => string> = {
+  'curl': buildCurl,
+  'python-openai': buildPythonOpenAI,
+  'javascript': buildJavaScript,
 }
 
-const IMAGE_EDIT_BUILDERS: Record<string, (baseUrl: string, apiKey: string | null, model: string) => string> = {
-  'curl': buildImageEditCurl,
-  'python-openai': buildImageEditPython,
+const ANTHROPIC_BUILDERS: Record<string, (b: string, k: string | null, m: string) => string> = {
+  'curl': buildAnthropicCurl,
+  'python-anthropic': buildPythonAnthropic,
 }
 
-const IMAGE_LANGS: { key: Lang; label: string }[] = [
-  { key: 'curl', label: 'curl' },
-  { key: 'python-openai', label: 'Python' },
-]
+const OLLAMA_BUILDERS: Record<string, (b: string, k: string | null, m: string) => string> = {
+  'ollama-cli': buildOllamaCli,
+  'curl': buildOllamaCurl,
+  'python-requests': buildOllamaPython,
+}
 
-export function CodeSnippets({ baseUrl, apiKey, modelId, isImage, isEdit }: CodeSnippetsProps) {
-  const availableLangs = isImage ? IMAGE_LANGS : LANGS
+const FORMAT_LANGS: Record<ApiFormat, { key: Lang; label: string }[]> = {
+  openai: OPENAI_LANGS,
+  anthropic: ANTHROPIC_LANGS,
+  ollama: OLLAMA_LANGS,
+}
+
+const FORMAT_BUILDERS: Record<ApiFormat, Record<string, (b: string, k: string | null, m: string) => string>> = {
+  openai: OPENAI_BUILDERS,
+  anthropic: ANTHROPIC_BUILDERS,
+  ollama: OLLAMA_BUILDERS,
+}
+
+export function CodeSnippets({ baseUrl, apiKey, modelId, format = 'openai' }: CodeSnippetsProps) {
+  const availableLangs = FORMAT_LANGS[format]
   const [lang, setLang] = useState<Lang>(availableLangs[0].key)
   const [copied, setCopied] = useState(false)
 
-  // Reset lang when switching between image/text servers to avoid stale tab
+  // Reset lang when format changes
   const validKeys = availableLangs.map(l => l.key)
   if (!validKeys.includes(lang)) {
     setLang(availableLangs[0].key)
   }
 
   const model = modelId || 'your-model-name'
-  const builders = isImage ? (isEdit ? IMAGE_EDIT_BUILDERS : IMAGE_BUILDERS) : BUILDERS
-  const snippet = useMemo(() => (builders[lang] || builders[availableLangs[0].key])(baseUrl, apiKey, model), [lang, baseUrl, apiKey, model, isImage, isEdit])
+  const builders = FORMAT_BUILDERS[format]
+  const snippet = useMemo(
+    () => (builders[lang] || builders[availableLangs[0].key])(baseUrl, apiKey, model),
+    [lang, baseUrl, apiKey, model, format]
+  )
 
   const handleCopy = () => {
     navigator.clipboard.writeText(snippet)

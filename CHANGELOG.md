@@ -2,6 +2,26 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.3.11] - 2026-03-24
+
+### Added
+- **API Gateway dashboard**: Unified gateway-centric API page with configurable port, live model list, and format toggle (OpenAI / Anthropic / Ollama)
+- **Ollama API streaming**: `/api/generate` now supports `stream: true` (was forced non-streaming). SSE-to-NDJSON translation for both `/api/chat` and `/api/generate`
+- **Ollama endpoint docs**: API page shows Ollama endpoints, CLI snippets, and connection info when Ollama format is selected
+- **Gateway cancel broadcast**: Cancel requests without a `model` field are broadcast to all running backends — only the backend holding that request ID cancels
+- **Query param model routing**: GET/DELETE gateway endpoints (`/v1/cache/stats`, `/v1/audio/voices`, etc.) now accept `?model=X` query parameter for routing
+- **Client disconnect abort**: All gateway proxy handlers now destroy backend connections when clients disconnect mid-stream
+- **Tray gateway info**: Menu bar shows API Gateway port and "Copy API URL" option
+- **Update banner persistence**: Dismiss persists per-version in localStorage (survives page reload)
+- **i18n dot-path support**: Translation keys now support nested paths (`app.mode.chat`) for structured locale files
+
+### Fixed
+- **Hybrid SSM ndim crash (Bug 5)**: `_cleanup_finished()` passed state dicts to `_truncate_cache_to_prompt_length()` which expected raw KVCache objects. Python dict `.keys()` method was treated as tensor — `.ndim` crashed. Fixed with inline state-dict-aware slicing
+- **QuantizedKVCache stale meta_state**: Truncation wrote original offset instead of `(safe,)` — now consistent with plain KVCache branch
+- **mllm_scheduler disk cache gaps**: 3 disk cache store paths were missing `_is_hybrid` guard. SSM state can't be truncated — must not persist to L2 disk cache
+- **Dead i18n code**: Removed duplicate `i18n/index.ts` (lazy-loading version) — `index.tsx` (synchronous) is the active one
+- **Unused import**: Removed `X` from CodingToolIntegration lucide imports
+
 ## [1.3.0] - 2026-03-20
 
 ### Added
