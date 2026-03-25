@@ -724,9 +724,14 @@ class MLXMultimodalLM:
         if self._loaded:
             return
 
+        # Resolve HF repo IDs (e.g. "Org/Model") to local cache paths so that
+        # file-based checks (jang_config.json, config.json) find the files.
+        from ..api.utils import resolve_to_local_path
+        resolved_name = resolve_to_local_path(self.model_name)
+
         # JANG VL models: use JANG loader (handles mixed-precision + mlx-vlm sanitization)
         from ..utils.jang_loader import is_jang_model
-        if is_jang_model(self.model_name):
+        if is_jang_model(resolved_name):
             logger.info(f"Loading JANG VL model: {self.model_name}")
             from ..utils.jang_loader import load_jang_vlm_model
             from mlx_vlm.utils import load_config
@@ -735,8 +740,8 @@ class MLXMultimodalLM:
                 _lazy = getattr(_server_module, '_stream_from_disk', False)
             except Exception:
                 _lazy = False
-            self.model, self.processor = load_jang_vlm_model(self.model_name, lazy=_lazy)
-            self.config = load_config(self.model_name)
+            self.model, self.processor = load_jang_vlm_model(resolved_name, lazy=_lazy)
+            self.config = load_config(resolved_name)
             self._loaded = True
             logger.info(f"JANG VL model loaded: {self.model_name}")
             return
