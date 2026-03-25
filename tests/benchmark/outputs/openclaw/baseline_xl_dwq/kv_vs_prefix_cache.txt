@@ -1,0 +1,26 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Model (LLM) inference optimization.
+    *   **Core Concepts:** KV Cache (Key-Value Cache) vs. Prefix Cache.
+    *   **Goal:** Explain the differences clearly.
+
+2.  **Define KV Cache (The Foundation):**
+    *   *What is it?* It's the standard mechanism used in Transformer models during autoregressive generation.
+    *   *Why does it exist?* To avoid recomputing attention scores for tokens already processed.
+    *   *How does it work?* Stores the Key ($K$) and Value ($V$) vectors for every token in the context window.
+    *   *Scope:* It covers the *entire* context (prompt + generated tokens) for a specific request.
+    *   *Lifecycle:* Created at the start of a request, grows as tokens are generated, discarded when the request finishes.
+
+3.  **Define Prefix Cache (The Optimization):**
+    *   *What is it?* A specific optimization technique *built on top of* the KV cache concept.
+    *   *Why does it exist?* To handle scenarios where multiple requests share a common prefix (e.g., system prompts, code templates, few-shot examples).
+    *   *How does it work?* It identifies identical prefixes across different requests, computes their KV cache *once*, stores it in a shared pool, and reuses it for subsequent requests with the same prefix.
+    *   *Scope:* Only the static/common part of the context (the "prefix"). The suffix (unique part) still uses standard KV cache logic.
+    *   *Lifecycle:* Persistent across multiple requests (until evicted due to memory pressure).
+
+4.  **Compare and Contrast (The "Difference"):**
+    *   *Granularity:* KV cache is per-request. Prefix cache is per-prompt-segment (shared).
+    *   *Lifetime:* KV cache is ephemeral (request-bound). Prefix cache is persistent (system-bound).
+    *   *Purpose:* KV cache prevents recomputation *within* a generation. Prefix cache prevents recomputation *across* generations.
+    *   *Memory Management:* KV cache grows linearly with sequence length. Prefix cache requires a cache management strategy (LRU, etc.) to handle shared memory

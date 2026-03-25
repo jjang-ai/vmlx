@@ -59,8 +59,10 @@ def find_draft_tokens(
 
     for ngram_size in range(min(max_ngram_size, n - 1), 1, -1):
         query = token_ids[-ngram_size:]
-        # Search only positions that leave room for at least one draft token
-        for i in range(n - ngram_size):
+        # Scan backward: most recent prior occurrence gives best acceptance on
+        # repetitive/structured output.  Exclude the last position (that is the
+        # query itself) so we always look at an *earlier* occurrence.
+        for i in range(n - ngram_size - 1, -1, -1):
             if token_ids[i : i + ngram_size] == query:
                 draft_start = i + ngram_size
                 draft = token_ids[draft_start : draft_start + num_draft_tokens]

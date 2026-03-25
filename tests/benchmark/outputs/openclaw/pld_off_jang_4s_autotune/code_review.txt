@@ -1,0 +1,31 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A Python function `find_dupes(lst)`.
+    *   Task: Review the function.
+    *   Output Format: Exactly three sections: CORRECTNESS, PERFORMANCE, STYLE.
+    *   Constraint: The feedback must be structured exactly as requested.
+
+2.  **Analyze the Code:**
+    ```python
+    def find_dupes(lst):
+        dupes = []
+        for i in range(len(lst)):
+            for j in range(i+1, len(lst)):
+                if lst[i] == lst[j] and lst[i] not in dupes:
+                    dupes.append(lst[i])
+        return dupes
+    ```
+    *   **Functionality:** It iterates through the list with nested loops. For each element `lst[i]`, it compares it with all subsequent elements `lst[j]`. If a match is found and `lst[i]` isn't already in the `dupes` list, it adds it.
+    *   **Logic:** It finds elements that appear more than once. It ensures each duplicate value is only added once to the result list.
+    *   **Edge Cases:** Empty list, list with no duplicates, list with all same elements, list with multiple different duplicates.
+
+3.  **Drafting Feedback - Section by Section:**
+
+    *   **CORRECTNESS:**
+        *   Does it work? Yes, for standard lists of hashable/comparable items.
+        *   Are there edge cases?
+            *   Empty list: Returns `[]`. Correct.
+            *   No duplicates: Returns `[]`. Correct.
+            *   Multiple occurrences of the same value (e.g., `[1, 1, 1]`):
+               

@@ -1,0 +1,27 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** LLM Inference Optimization.
+    *   **Core Question:** What is the difference between a KV cache and a prefix cache?
+    *   **Goal:** Explain both concepts clearly, highlight their relationship, and distinguish their specific use cases and mechanisms.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* It's the standard mechanism in Transformers to avoid recomputing attention for previous tokens.
+    *   *How does it work?* Stores the `K` (Key) and `V` (Value) matrices for every token generated so far in the current request.
+    *   *Scope:* Per-request, per-sequence.
+    *   *Lifecycle:* Created during the prefill phase, updated during decoding. Discarded when the request finishes.
+    *   *Problem:* If two requests share the same beginning (prefix), the KV cache for that prefix is duplicated in memory, wasting space and compute if we regenerate it.
+
+3.  **Define Prefix Cache (e.g., vLLM's PagedAttention/Prefix Caching, FlashAttention, etc.):**
+    *   *What is it?* A system-level optimization that stores KV caches of *completed* or *active* requests to be reused by *new* requests.
+    *   *How does it work?* It identifies identical prefixes across different requests. Instead of recomputing the attention for the shared prefix, it reuses the existing KV cache blocks from memory.
+    *   *Scope:* Across requests (global or batch-level).
+    *   *Mechanism:* Often involves hashing the prefix, storing blocks in a memory pool, and mapping new requests to existing blocks.
+    *   *Benefit:* Reduces compute and memory bandwidth for repeated prompts (e.g., system instructions, common user queries).
+
+4.  **Identify the Core Difference:**
+    *   **KV Cache:** Internal state of a *single* sequence generation. It's the "what" of the attention mechanism.
+    *   **Prefix Cache:** A caching layer *on top of* KV caches to enable sharing across *multiple* sequences. It's the "how" of optimization.
+
+5.  **Structure the Explanation:**
+    *   **Introduction:** Briefly define

@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "title": "Fix login authentication timeout issue",
+    "priority": "high",
+    "estimated_minutes": 45
+  },
+  {
+    "id": 2,
+    "title": "Implement user profile editing functionality",
+    "priority": "medium",
+    "estimated_minutes": 60
+  },
+  {
+    "id": 3,
+    "title": "Optimize database query performance for dashboard",
+    "priority": "medium",
+    "estimated_minutes": 90
+  },
+  {
+    "id": 4,
+    "title": "Update API documentation with new endpoints",
+    "priority": "low",
+    "estimated_minutes": 30
+  },
+  {
+    "id": 5,
+    "title": "Review and refactor legacy code in payment module",
+    "priority": "high",
+    "estimated_minutes": 120
+  }
+]

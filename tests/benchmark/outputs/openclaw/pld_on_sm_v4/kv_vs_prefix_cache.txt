@@ -1,0 +1,39 @@
+Great question! Both **KV cache** and **prefix cache** are used in the context of **large language models (LLMs)** to optimize inference performance—particularly during **autoregressive generation** (like in text generation). However, they serve different purposes and operate in distinct ways.
+
+Let’s break down the differences clearly:
+
+---
+
+### 🔹 1. KV Cache (Key-Value Cache)
+
+**What it is:**
+- A **standard cache** used in autoregressive models (like GPT, Llama, etc.) to store the **key (K)** and **value (V)** tensors from previous tokens.
+- These are the outputs of the model’s attention mechanism.
+
+**Why it's used:**
+- In autoregressive generation, each new token is generated based on the previous tokens.
+- The model computes attention over the entire history (past tokens), but computing attention over all previous tokens every time is expensive.
+- The **KV cache** stores the key and value matrices from previous tokens, so when generating the next token, the model only needs to compute attention over the **cached keys/values** and the current input (query), avoiding redundant computations.
+
+**Key features:**
+- Stores **K and V** from previous tokens.
+- Used in **every autoregressive generation step**.
+- Required for **efficient decoding** (e.g., in beam search, greedy decoding).
+- Size grows with the number of generated tokens (linear in sequence length).
+- **Standard in all modern LLM inference engines** (e.g., Hugging Face, vLLM, TensorRT-LLM).
+
+**Example:**
+At step 1: model computes K₁, V₁ → cache stores (K₁, V₁)  
+At step 2: model computes K₂, V₂ → cache stores (K₂, V₂)  
+When generating token 3, attention uses (K₁, V₁, K₂, V₂) — no need to recompute them.
+
+---
+
+### 🔹 2. Prefix Cache
+
+**What it is:**
+- A **more general or specialized cache** that stores **a prefix of the input sequence** (e.g., the first few tokens of a prompt).
+- It's often used in **context-aware tasks**, such as **conversational AI**, **reasoning**, or **few-shot learning**, where the model needs to remember a specific prefix (like a user's message or a system prompt).
+
+**Why it's used:**
+- In

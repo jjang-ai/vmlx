@@ -1,0 +1,46 @@
+Here's a thinking process that leads to the suggested checklist for opening a Pull Request (PR) for a big feature:
+
+1.  **Understand the Goal:** The user is about to open a Pull Request (PR) for a *big feature*. This implies complexity, higher risk, and more potential for review friction than a small bug fix. The goal is to provide a comprehensive, actionable checklist to ensure the PR is high-quality, reviewable, and mergeable.
+
+2.  **Identify the Audience:** The user is likely a developer (frontend, backend, or full-stack). The advice needs to be technical but also cover process and communication aspects.
+
+3.  **Brainstorm Categories:** What are the key areas to check before hitting "Create Pull Request"?
+    *   Code Quality (Linting, formatting, tests).
+    *   Functionality (Does it work? Edge cases?).
+    *   Performance/Security (Big features often introduce bottlenecks or vulnerabilities).
+    *   Documentation (README, comments, changelog).
+    *   Communication (PR description, context).
+    *   Reviewability (Size, commits, diff).
+    *   Environment/Config (Env vars, migrations).
+
+4.  **Flesh out each category (Drafting content):**
+
+    *   *Code:* Did I run linters? Did I format? Are there debug logs? Are secrets hardcoded?
+    *   *Tests:* Unit tests? Integration tests? E2E? Do they pass locally? Do they cover edge cases?
+    *   *Functionality:* Did I test it manually? What happens if the API is down? What about error handling?
+    *   *Performance:* DB queries? Memory leaks? Caching?
+    *   *Documentation:* Did I update the API docs? Did I explain *why* I did it this way?
+    *   *PR Description:* Is it clear? Does it link to the ticket? Are there screenshots?
+    *   *Commits:* Are they atomic? Is the history clean? (Squash vs. Rebase).
+    *   *Dependencies:* Did I update `package.json`/`requirements.txt`? Did I check for license issues?
+    *   *Migrations:* If DB changes, are they backward compatible? Can I rollback?
+
+5.  **Refine and Structure (Organizing for readability):**
+    *   Use bold headings.
+    *   Use bullet points.
+    *   Prioritize the most critical items first (Tests, Functionality, Reviewability).
+    *   Add a specific section for "Big Feature" nuances (since the prompt specifically mentioned "big feature").
+
+6.  **Develop Specific "Big Feature" Advice:**
+    *   Big features = Big diffs. Need to suggest breaking it down or using "Draft PR" mode.
+    *   Big features = More risk. Need to emphasize rollback plans and backward compatibility.
+    *   Big features = More context needed. Need to emphasize the "Why" and "How".
+
+7.  **Review against best practices:**
+    *   *Self-Correction:* I initially thought about telling them to squash commits immediately. *Correction:* Better to advise on commit hygiene first, let the team decide on squashing during merge.
+    *   *Addition:* Don't forget CI/CD pipelines. If the build fails, the PR is useless.
+
+8.  **Final Polish (Tone and Style):**
+    *   Keep it encouraging but rigorous.
+    *   Use clear, imperative language ("Check," "Verify," "Ensure").
+    *   Add a concluding

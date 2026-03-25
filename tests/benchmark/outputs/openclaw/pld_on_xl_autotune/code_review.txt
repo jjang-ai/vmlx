@@ -1,0 +1,27 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Task: Review a specific Python function (`find_dupes`).
+    *   Constraint: Provide feedback in exactly three sections: CORRECTNESS, PERFORMANCE, STYLE.
+    *   Input Function:
+        ```python
+        def find_dupes(lst):
+            dupes = []
+            for i in range(len(lst)):
+                for j in range(i+1, len(lst)):
+                    if lst[i] == lst[j] and lst[i] not in dupes:
+                        dupes.append(lst[i])
+            return dupes
+        ```
+
+2.  **Analyze the Function:**
+    *   **Goal:** Find duplicate elements in a list.
+    *   **Logic:** Nested loops comparing every pair of elements. If a match is found and the element isn't already in the `dupes` list, add it.
+    *   **Correctness:**
+        *   Does it find all duplicates? Yes, it compares every pair.
+        *   Does it handle edge cases? Empty list? Yes (returns `[]`). Single element? Yes (returns `[]`). Unhashable types? Yes (uses equality `==`, not hashing).
+        *   Does it return unique duplicates? Yes, the check `lst[i] not in dupes` ensures each duplicate value appears only once in the output.
+        *   Order? It preserves the order of first occurrence of the duplicate value (based on `i`).
+        *   Verdict: It is logically correct for the implied task.
+    *   **Performance:**
+        *   Time Complexity: Outer loop runs $N$ times. Inner loop runs $N-1, N-2, ...$ times. Total comparisons $\approx N^2/2$. Inside the

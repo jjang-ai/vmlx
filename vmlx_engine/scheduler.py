@@ -208,6 +208,13 @@ class Scheduler:
         # Phase 3 (temp>0): probabilistic acceptance, sampled correction/bonus.
         self._pld_spec_enabled: bool = self.config.pld_enabled
         self._pld_spec_max_temp: float = float(os.getenv("VMLX_PLD_MAX_TEMP", "1.0"))
+        # Adaptive K: hybrid SSM/attention models process verify tokens
+        # sequentially in SSM layers.  K=2 balances verify cost (1.75x)
+        # against per-cycle overhead (remove/insert ≈ 15-30ms).  K=1 has
+        # lower verify cost (1.0x) but pays the same fixed overhead per
+        # cycle with fewer tokens to amortize it.  K=2 wins when the
+        # fixed overhead exceeds ~15ms, which remove/insert clearly does.
+        self._pld_num_drafts: int = 2 if self._is_hybrid else 5
         self._pld_spec_attempts: int = 0
         self._pld_spec_accepted: int = 0   # total accepted draft tokens
         self._pld_spec_wasted: int = 0     # total rejected draft tokens
@@ -217,8 +224,27 @@ class Scheduler:
         self._pld_win_full: int = 0        # rounds where all K drafts accepted
         self._pld_win_zero: int = 0        # rounds where 0 drafts accepted
         self._pld_win_tokens: int = 0      # tokens emitted while PLD active
+        self._pld_win_d0_skip: int = 0     # d0 pre-check skips (wasted cycles avoided)
+        # Auto-tune: TCP slow-start inspired wall-clock throughput control.
+        # Window starts at 10 tokens, doubles each positive window (exponential
+        # growth), caps at _pld_summary_interval.  On congestion (PLD hurting),
+        # disables and resets window to 10.  Probes after 5× interval tokens.
+        self._pld_auto_enabled: bool = True
+        self._pld_at_window: int = 1           # current auto-tune window (TCP cwnd)
+        self._pld_at_probe_tokens: int = 0      # tokens counted while disabled
+        self._pld_win_cycle_wall_s: float = 0.0
+        self._pld_win_step_wall_s: float = 0.0
+        self._pld_win_total_tokens: int = 0
         self._pld_summary_interval: int = self.config.pld_summary_interval
-        self._pld_summary_next: int = self._pld_summary_interval
+        if self._pld_spec_enabled:
+            logger.info(
+                "[PLD] enabled — K=%d (%s model), d0 pre-check active, "
+                "auto-tune on (slow-start window=1→%d)",
+                self._pld_num_drafts,
+                "hybrid" if self._is_hybrid else "pure-attention",
+                self._pld_summary_interval,
+            )
+        self._pld_summary_next: int = 1  # first window is 1 token (slow start)
 
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
@@ -1390,6 +1416,15 @@ class Scheduler:
         if request.request_id in self.requests:
             raise ValueError(f"Request {request.request_id} already exists")
 
+        # Reset PLD auto-tune window on each new request — each generation
+        # is a different workload, so cwnd from the previous request is
+        # irrelevant.  But only reset if PLD was actively running; if
+        # auto-tune disabled it, respect that decision (the probe will
+        # re-enable periodically to check if conditions changed).
+        if self._pld_spec_enabled and self._pld_auto_enabled:
+            self._pld_at_window = 1
+            self._pld_summary_next = 1
+
         # Tokenize if needed
         if request.prompt_token_ids is None:
             if isinstance(request.prompt, str):
@@ -1947,39 +1982,42 @@ class Scheduler:
             # Retrospectively check whether the previous draft prediction was
             # correct, then generate a new draft for the next position.
             # Zero effect on generation output; pure stat collection.
-            try:
-                current_idx = request.num_output_tokens - 1  # 0-based, just appended
-                pending = self._pld_pending.get(request_id)
-                if pending is not None:
-                    draft_tokens, start_idx, hit_count = pending
-                    pos = current_idx - start_idx
-                    if 0 <= pos < len(draft_tokens):
-                        if response.token == draft_tokens[pos]:
-                            hit_count += 1
-                            if pos == 0:
-                                pld_stats.first_hit += 1
-                            pld_stats.total_hit_depth += 1
-                            self._pld_pending[request_id] = (draft_tokens, start_idx, hit_count)
+            # Gated on _pld_spec_enabled to avoid find_draft_tokens overhead
+            # on servers not using PLD.
+            if self._pld_spec_enabled:
+                try:
+                    current_idx = request.num_output_tokens - 1  # 0-based, just appended
+                    pending = self._pld_pending.get(request_id)
+                    if pending is not None:
+                        draft_tokens, start_idx, hit_count = pending
+                        pos = current_idx - start_idx
+                        if 0 <= pos < len(draft_tokens):
+                            if response.token == draft_tokens[pos]:
+                                hit_count += 1
+                                if pos == 0:
+                                    pld_stats.first_hit += 1
+                                pld_stats.total_hit_depth += 1
+                                self._pld_pending[request_id] = (draft_tokens, start_idx, hit_count)
+                            else:
+                                # Miss — record completed sequence and clear
+                                pld_stats.completed_seqs += 1
+                                del self._pld_pending[request_id]
                         else:
-                            # Miss — record completed sequence and clear
                             pld_stats.completed_seqs += 1
                             del self._pld_pending[request_id]
-                    else:
-                        pld_stats.completed_seqs += 1
-                        del self._pld_pending[request_id]
 
-                if request_id not in self._pld_pending:
-                    full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
-                    drafts = find_draft_tokens(full_tokens)
-                    if drafts:
-                        pld_stats.draft_found += 1
-                        self._pld_pending[request_id] = (drafts, request.num_output_tokens, 0)
+                    if request_id not in self._pld_pending:
+                        full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
+                        drafts = find_draft_tokens(full_tokens)
+                        if drafts:
+                            pld_stats.draft_found += 1
+                            self._pld_pending[request_id] = (drafts, request.num_output_tokens, 0)
 
-                pld_stats.total_tokens += 1
-                if pld_stats.total_tokens % 200 == 0:
-                    pld_stats.log_summary()
-            except Exception:
-                pass  # Never let measurement break generation
+                    pld_stats.total_tokens += 1
+                    if pld_stats.total_tokens % 200 == 0:
+                        pld_stats.log_summary()
+                except Exception:
+                    pass  # Never let measurement break generation
             # ── end PLD measurement ──────────────────────────────────────────
 
             # ── PLD Phase 2: speculative extension ───────────────────────────
@@ -1988,17 +2026,24 @@ class Scheduler:
             # Any stop token in spec_tokens truncates the list at that point.
             spec_tokens: List[int] = []
             spec_hit_stop = False
+            _step_t0 = time.perf_counter()
             if (
                 self._pld_spec_enabled
+                and self._pld_auto_enabled
                 and response.finish_reason is None
                 and self.batch_generator is not None
             ):
                 try:
+                    _pld_t0 = time.perf_counter()
                     raw_spec = self._try_speculative_decode(
                         request_id, request, response.token
                     )
+                    self._pld_win_cycle_wall_s += time.perf_counter() - _pld_t0
+                    _spec_stops = self.stop_tokens | set(
+                        request.sampling_params.stop_token_ids or []
+                    )
                     for tok in raw_spec:
-                        if tok in self.stop_tokens:
+                        if tok in _spec_stops:
                             spec_hit_stop = True
                             break
                         spec_tokens.append(tok)
@@ -2192,6 +2237,15 @@ class Scheduler:
                     f"Request {request_id} finished: {response.finish_reason}, "
                     f"{request.num_output_tokens} tokens"
                 )
+
+            # Auto-tune timing: track wall time per step and tokens produced
+            if self._pld_spec_enabled:
+                self._pld_win_step_wall_s += time.perf_counter() - _step_t0
+                self._pld_win_total_tokens += 1 + len(spec_tokens)
+                # Trigger summary/probe based on total tokens, not just PLD
+                # tokens — otherwise auto-disabled PLD never gets probed.
+                if self._pld_win_total_tokens >= self._pld_summary_next:
+                    self._pld_maybe_log_summary()
 
             outputs.append(output)
 
@@ -2476,32 +2530,99 @@ class Scheduler:
                      (2*rounds). >1.0 means PLD is helping; <1.0 means overhead
                      exceeds benefit. Baseline (no PLD) = 1.0.
         """
-        if self._pld_win_tokens < self._pld_summary_next:
+        # Trigger on either PLD tokens or total tokens (for disabled-state probe)
+        if (self._pld_win_tokens < self._pld_summary_next
+                and self._pld_win_total_tokens < self._pld_summary_next):
             return
+
         n = self._pld_win_attempts
+        _win_size = self._pld_at_window
+
         if n == 0:
+            if self._pld_auto_enabled:
+                # PLD was enabled but d0 pre-check filtered every cycle —
+                # no opportunities to help. Disable to avoid per-token
+                # overhead from find_draft_tokens + d0 check.
+                self._pld_auto_enabled = False
+                self._pld_at_window = 1
+                self._pld_at_probe_tokens = 0
+                logger.info(
+                    "[PLD:3b1f] auto-tune — disabled (0 rounds in %d tokens, "
+                    "d0 pre-check filtered all)",
+                    self._pld_win_total_tokens,
+                )
+            else:
+                # Already disabled.  Count toward probe interval.
+                self._pld_at_probe_tokens += self._pld_win_total_tokens
+                if self._pld_at_probe_tokens >= self._pld_summary_interval * 5:
+                    self._pld_auto_enabled = True
+                    self._pld_at_window = 1
+                    self._pld_at_probe_tokens = 0
+                    logger.info(
+                        "[PLD:3b1f] auto-tune probe — re-enabling with window=%d",
+                        self._pld_at_window,
+                    )
+            self._pld_win_total_tokens = 0
+            self._pld_win_step_wall_s = 0.0
+            self._pld_win_cycle_wall_s = 0.0
+            self._pld_summary_next = self._pld_at_window
             return
+
         accepted = self._pld_win_accepted
         full_pct = 100 * self._pld_win_full / n
         zero_pct = 100 * self._pld_win_zero / n
         avg_accept = accepted / n
-        # tokens produced by spec decode / forward passes consumed by spec decode
-        # each round: 1 batch-gen pass + 1 verify pass = 2 passes, producing
-        # (accepted_drafts + 1 bonus/correction) tokens
         eff = (accepted + n) / (2 * n)
+
+        # Auto-tune: compare PLD window throughput vs estimated baseline.
+        _autotune_msg = ""
+        base_time = self._pld_win_step_wall_s - self._pld_win_cycle_wall_s
+        base_tok = self._pld_win_total_tokens - self._pld_win_tokens
+        if base_time > 0 and base_tok >= 1 and self._pld_win_step_wall_s > 0:
+            baseline_tok_s = base_tok / base_time
+            window_tok_s = self._pld_win_total_tokens / self._pld_win_step_wall_s
+            ratio = window_tok_s / baseline_tok_s if baseline_tok_s > 0 else 1.0
+
+            if ratio < 0.95:
+                # Congestion: PLD is hurting. Disable and reset window.
+                self._pld_auto_enabled = False
+                self._pld_at_window = 1  # reset cwnd for next probe
+                self._pld_at_probe_tokens = 0
+                _autotune_msg = (
+                    f" — AUTO-DISABLED cwnd={_win_size} "
+                    f"(window {window_tok_s:.0f} tok/s "
+                    f"< baseline {baseline_tok_s:.0f} tok/s × 0.95)"
+                )
+            else:
+                # No congestion: grow window (TCP slow start).
+                old_window = self._pld_at_window
+                self._pld_at_window = min(
+                    self._pld_at_window * 2, self._pld_summary_interval
+                )
+                _autotune_msg = (
+                    f"  cwnd={old_window}→{self._pld_at_window} "
+                    f"wallclock={window_tok_s:.0f}/{baseline_tok_s:.0f} tok/s"
+                )
+
         logger.info(
             "[PLD:3b1f] summary over last %d tokens — "
-            "rounds=%d  accept=%.1f/5  full=%.0f%%  zero=%.0f%%  eff=%.2f tok/pass "
-            "(baseline=1.00; >1.0 = net gain)",
-            self._pld_win_tokens, n, avg_accept, full_pct, zero_pct, eff,
+            "rounds=%d  accept=%.1f/%d  full=%.0f%%  zero=%.0f%%  "
+            "d0_skip=%d  eff=%.2f tok/pass%s",
+            self._pld_win_tokens, n, avg_accept, self._pld_num_drafts,
+            full_pct, zero_pct, self._pld_win_d0_skip, eff, _autotune_msg,
         )
-        # Reset window
+
+        # Reset window counters
         self._pld_win_attempts = 0
         self._pld_win_accepted = 0
         self._pld_win_full = 0
         self._pld_win_zero = 0
         self._pld_win_tokens = 0
-        self._pld_summary_next = self._pld_summary_interval
+        self._pld_win_d0_skip = 0
+        self._pld_win_cycle_wall_s = 0.0
+        self._pld_win_step_wall_s = 0.0
+        self._pld_win_total_tokens = 0
+        self._pld_summary_next = self._pld_at_window
 
     def _try_speculative_decode(
         self,
@@ -2547,13 +2668,18 @@ class Scheduler:
         may hurt aggregate throughput when multiple requests are in flight.
         """
         import mlx.core as mx
+        import numpy as _np
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
 
         temp = request.sampling_params.temperature
         if temp > self._pld_spec_max_temp:
             return []
 
         full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
-        drafts = find_draft_tokens(full_tokens, num_draft_tokens=5, max_ngram_size=3)
+        drafts = find_draft_tokens(full_tokens, num_draft_tokens=self._pld_num_drafts, max_ngram_size=3)
         if not drafts:
             return []
 
@@ -2588,6 +2714,26 @@ class Scheduler:
                 raise RuntimeError("uid not in active_batch — cannot get forward logprobs")
             ab_idx = ab.uids.index(uid)
             forward_logprobs = ab.logprobs[ab_idx]
+
+            # 1b. d0 pre-check: avoid the expensive remove/verify/insert cycle
+            #     when the first draft token has negligible acceptance probability.
+            #     forward_logprobs are already materialized by BatchGenerator.
+            if temp <= 1.67e-6:
+                # Greedy: exact check — if argmax != d0, acceptance is zero.
+                d0_check = int(mx.argmax(forward_logprobs).item())
+                if d0_check != drafts[0]:
+                    self._pld_win_d0_skip += 1
+                    return []
+            else:
+                # T>0: skip if d0 logprob below threshold.  forward_logprobs
+                # are already log(softmax(logits)) — a single index lookup is
+                # far cheaper than recomputing softmax over the full vocab.
+                # Threshold -2.0 ≈ p>13% at T=1; at T=0.3 the effective
+                # probability is higher, so this is conservative.
+                _lp_d0 = forward_logprobs[drafts[0]].item()
+                if _lp_d0 < -2.0:
+                    self._pld_win_d0_skip += 1
+                    return []
 
             # 2. Extract KV cache — removes request from BatchGenerator
             cache_dict = self.batch_generator.remove([uid], return_prompt_caches=True)
@@ -2767,11 +2913,23 @@ class Scheduler:
                 for c in kv_cache:
                     if not c.is_trimmable() or c.offset == 0:
                         continue
-                    pre_verify_offset = c.offset - num_drafts  # N+K - K = N
+                    pre_verify_offset = max(0, c.offset - num_drafts)  # N+K - K = N
+                    if _CacheList is not None and isinstance(c, _CacheList):
+                        c.trim(num_drafts)
+                        continue
                     if isinstance(c.keys, mx.array):
-                        c.keys = c.keys[..., :pre_verify_offset, :]
-                        c.values = c.values[..., :pre_verify_offset, :]
-                    c.offset = max(0, pre_verify_offset)
+                        # Numpy roundtrip: materialize before slicing to avoid
+                        # Metal command buffer corruption from lazy MLX ops.
+                        # bfloat16 → float16 for numpy (no native bf16 support).
+                        _kd, _vd = c.keys.dtype, c.values.dtype
+                        _ka = c.keys.astype(mx.float16) if 'bfloat16' in str(_kd) else c.keys
+                        _va = c.values.astype(mx.float16) if 'bfloat16' in str(_vd) else c.values
+                        _k, _v = _np.array(_ka), _np.array(_va)
+                        c.keys   = mx.array(_k[..., :pre_verify_offset, :]).astype(_kd)
+                        c.values = mx.array(_v[..., :pre_verify_offset, :]).astype(_vd)
+                    c.offset = pre_verify_offset
+                    if hasattr(c, '_idx'):  # RotatingKVCache: sync write pointer
+                        c._idx = pre_verify_offset
                 new_uids = self.batch_generator.insert(
                     [[correction_token]],
                     max_tokens=[max(1, remaining - 1)],
@@ -2800,11 +2958,20 @@ class Scheduler:
                 for c in kv_cache:
                     if not c.is_trimmable() or c.offset == 0:
                         continue
-                    accepted_offset = c.offset - num_to_trim
+                    accepted_offset = max(0, c.offset - num_to_trim)
+                    if _CacheList is not None and isinstance(c, _CacheList):
+                        c.trim(num_to_trim)
+                        continue
                     if isinstance(c.keys, mx.array):
-                        c.keys = c.keys[..., :accepted_offset, :]
-                        c.values = c.values[..., :accepted_offset, :]
+                        _kd, _vd = c.keys.dtype, c.values.dtype
+                        _ka = c.keys.astype(mx.float16) if 'bfloat16' in str(_kd) else c.keys
+                        _va = c.values.astype(mx.float16) if 'bfloat16' in str(_vd) else c.values
+                        _k, _v = _np.array(_ka), _np.array(_va)
+                        c.keys   = mx.array(_k[..., :accepted_offset, :]).astype(_kd)
+                        c.values = mx.array(_v[..., :accepted_offset, :]).astype(_vd)
                     c.offset = accepted_offset
+                    if hasattr(c, '_idx'):  # RotatingKVCache: sync write pointer
+                        c._idx = accepted_offset
 
             # 5. Re-insert with bonus token (next to-be-processed token)
             new_remaining = max(1, remaining - num_accept - 1)

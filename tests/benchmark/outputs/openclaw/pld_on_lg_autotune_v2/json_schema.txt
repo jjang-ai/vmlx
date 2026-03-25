@@ -1,0 +1,27 @@
+The user wants a JSON array containing exactly 5 task objects.
+Each object requires four specific fields:
+1.  `id`: An integer.
+2.  `title`: A string describing a software engineering task.
+3.  `priority`: A string constrained to 'high', 'medium', or 'low'.
+4.  `estimated_minutes`: An integer representing time.
+
+I will generate 5 distinct tasks relevant to a software engineer's daily workflow (e.g., coding, meetings, reviews).
+I will ensure the data types match the requirements.
+I will format the output strictly as a JSON array, excluding any markdown code blocks or explanatory text
+
+[
+  {
+    "id": 1,
+    "title": "Fix critical login authentication bug",
+    "priority": "high",
+    "estimated_minutes": 90
+  },
+  {
+    "id": 2,
+    "title": "Review pull request for payment gateway integration",
+    "priority": "high",
+    "estimated_minutes": 45
+  },
+  {
+    "id": 3,
+    "title": "Update unit test coverage for user service

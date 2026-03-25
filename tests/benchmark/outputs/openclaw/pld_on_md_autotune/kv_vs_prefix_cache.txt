@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV Cache and Prefix Cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** LLM Inference Optimization.
+    *   **Core Question:** What's the difference between a KV Cache and a Prefix Cache?
+    *   **Goal:** Provide a clear, technical, yet accessible explanation of both concepts, highlight their relationship, and distinguish their specific use cases and mechanisms.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* It's the standard mechanism for caching attention states in Transformer models.
+    *   *How does it work?* During generation, for each token, we compute Keys (K) and Values (V). Instead of recomputing them for every new token, we store them in memory.
+    *   *Scope:* It's specific to the *current* sequence being generated. It grows linearly with sequence length.
+    *   *Purpose:* Speed up autoregressive generation (avoid recomputing attention for past tokens).
+    *   *Limitation:* If the context changes (e.g., a new request with a different prompt), the cache is useless for the new request.
+
+3.  **Define Prefix Cache (Prompt/Context Cache):**
+    *   *What is it?* It's a higher-level optimization that reuses KV Caches across *different* requests.
+    *   *How does it work?* It identifies common prefixes (substrings) across different prompts. If Request A and Request B share the first 100 tokens, the KV Cache for those 100 tokens is computed once and stored. When Request B arrives, we retrieve the cached KVs for the shared prefix instead of recomputing them.
+    *   *Scope:* System-wide or batch-wide. It spans multiple requests.
+    *   *Purpose:* Speed up batched inference, especially when prompts share common beginnings (e.g., system instructions, common user queries, code templates).
+    *   *Mechanism:* Often involves hashing or tree structures (like vLLM's PagedAttention + Prefix Caching) to match and retrieve.
+
+4.  **Identify the Key Differences (The "Versus" aspect):**
+    *   *Granularity:* KV Cache = Per-token/Per-sequence. Prefix Cache = Per-prefix/Per-request-group.
+    *   *Lifetime:* KV Cache

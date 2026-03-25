@@ -1,0 +1,82 @@
+That's a great question — opening a large feature PR (Pull Request) is a big step, and doing due diligence beforehand can save time, reduce merge conflicts, and improve team collaboration. Here’s a comprehensive checklist to help you prepare before submitting your PR:
+
+---
+
+### ✅ 1. **Feature Scope & Alignment**
+- ✅ Is the feature clearly defined and aligned with product or roadmap goals?
+- ✅ Does it solve a real user problem or business need?
+- ✅ Is it scoped appropriately — not too large, not too small?
+- ✅ Have you discussed the feature with stakeholders (product, engineering, design)?
+
+> *Tip: Document the "why" and "what" in the PR description to make it easy for others to understand.*
+
+---
+
+### ✅ 2. **Design & UX Review**
+- ✅ Has the design been approved (e.g., Figma, Sketch, etc.)?
+- ✅ Are there any accessibility or usability concerns?
+- ✅ Is the user flow logical and intuitive?
+
+> *Tip: Link design files or design tickets in your PR description.*
+
+---
+
+### ✅ 3. **Technical Debt & Dependencies**
+- ✅ Are there any existing technical debt or known issues that this feature depends on?
+- ✅ Are there external dependencies (e.g., APIs, 3rd-party services)?
+- ✅ Have you reviewed and documented any breaking changes?
+
+> *Tip: Flag any known risks or blockers in the PR description.*
+
+---
+
+### ✅ 4. **Code Quality & Best Practices**
+- ✅ Is the code clean, readable, and well-documented?
+- ✅ Are naming conventions, formatting, and style consistent with the codebase?
+- ✅ Are functions, classes, and components small and focused?
+- ✅ Are there any performance or security concerns?
+
+> *Tip: Use linters, formatters, and static analysis tools (e.g., ESLint, Prettier, SonarQube).*
+
+---
+
+### ✅ 5. **Testing Coverage**
+- ✅ Are unit, integration, and end-to-end tests included?
+- ✅ Are edge cases and error paths covered?
+- ✅ Are tests isolated and maintainable?
+- ✅ Have you run all relevant test suites locally?
+
+> *Tip: Add test coverage reports (e.g., via coverage badge) to the PR.*
+
+---
+
+### ✅ 6. **Documentation**
+- ✅ Is the feature documented in the code (e.g., JSDoc, comments)?
+- ✅ Is there updated documentation in the project’s docs (e.g., README, Wiki)?
+- ✅ Are there any user-facing changes (e.g., new settings, UI elements)?
+
+> *Tip: Link to relevant documentation or create a new one if needed.*
+
+---
+
+### ✅ 7. **Branch & Workflow Compliance**
+- ✅ Is the PR opened from a feature branch (not main/develop)?
+- ✅ Is the branch named clearly (e.g., `feature/user-auth-v2`)?
+- ✅ Have you followed the team’s branching strategy (e.g., GitFlow, trunk-based)?
+- ✅ Have you run `git rebase` or `merge` to keep the history clean?
+
+> *Tip: Use a consistent naming convention and avoid merge commits.*
+
+---
+
+### ✅ 8. **Review & Feedback Loop**
+- ✅ Have you reviewed the code with a peer or mentor?
+- ✅ Have you addressed any feedback from previous reviews?
+- ✅ Are you ready to handle constructive criticism?
+
+> *Tip: Ask for early feedback before submitting — even a "pre-PR review" can catch issues early.*
+
+---
+
+### ✅ 9. **CI/CD & Environment Setup**
+- ✅ Does the

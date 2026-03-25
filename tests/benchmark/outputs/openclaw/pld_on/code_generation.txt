@@ -1,0 +1,50 @@
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previously visited node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we break the link
+
+Key considerations:
+- Args:
+        head: The head node of the linked list to reverse. Returns:
+        The new head node of the reversed linked list. Time: O(n) - We visit each node exactly once. Space: O(1) - We only use two pointer variables,
+    regardless of list size. Args:
+        head: The head node of the linked list to reverse. Returns:
+        The new head node of the reversed linked list. """
+    prev = None
+    current = head
+    
+    while current is not None:
+        next_temp = current.next  Store next node before we break the link
+        current.next = prev       Point current node to previous node
+        prev = current            Move prev pointer forward
+        current = next_temp       Move current pointer forward
+    
+    return prev  prev is now the new head
+
+Complexity: - Time: O(n) - We visit each node exactly once.
+- Space: O(1) - We only use two pointer variables, regardless of list size.
+
+Let me implement this solution.
+
+
+<analysis>
+## Architectural Decisions & Reasoning
+
+### Data Structure Design
+I'll define a simple `Node` class with two attributes:
+- `value`: Stores the data (using `Any` type for flexibility)
+- `next`: Pointer to the next node (or `None` for the tail)
+
+### Algorithm Choice: Iterative Approach
+I'll use the **iterative three-pointer technique** rather than recursion because:
+1. **Space Efficiency**: O(1) space vs O(n) stack space for recursion
+2. **No Stack Overflow Risk**: Safe for very long lists
+3. **Clearer Control Flow**: Easier to debug and understand
+
+### Three-Pointer Technique
+- `prev`: Points to the previously visited node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores

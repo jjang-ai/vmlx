@@ -1,0 +1,52 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV cache and prefix cache are memory optimization techniques for transformer-based language models, but they operate at different levels and serve distinct purposes. KV Cache
+
+What It Is
+The KV (Key-Value) cache is a fundamental mechanism that stores the computed key and value vectors for each token during the generation process. How It Works
+
+```
+Without KV Cache:                    With KV Cache:
+Token 1: Compute K₁, V₁              Token 1: Compute K₁, V₁ → Store
+Token 2: Recompute K₁, V₁, Compute   Token 2: Retrieve K₁, V₁, Compute K₂, V₂ → Store
+         K₂, V₂                              │
+Token 3: Recompute K₁, V₁, K₂, V₂,          └─ Attention uses cached K₁, V₁, K₂, V₂ + new K₃, V₃
+         Compute K₃, V₃
+```
+
+Key Properties:
+- Per-request: Each generation request has its own KV cache
+- Grows with sequence: Cache size increases with each generated token
+- Essential for efficiency: Without it, inference complexity would be O(n²) per token instead of O(n)
+
+2. Prefix Cache
+
+What It Is
+The prefix cache is an optimization that stores KV caches for common prefixes across multiple requests, enabling reuse when different requests share the same initial tokens. How It Works
+
+```
+Request 1: "The quick brown fox..."
+Request 2: "The quick brown dog..."
+Request 3: "The quick red fox..."
+
+Prefix Cache:
+�── "The" → [K, V]
+├── "The quick" → [K, V]  
+└── "The quick brown" → [K, V]
+
+When Request 2 arrives:
+1. Look up "The quick brown" in prefix cache ✓
+2. Retrieve cached K, V for first 3 tokens
+3. Only compute K, V for "dog..." onwards
+```
+
+Key Properties:
+- Shared across requests: Multiple requests can use the same cached prefix
+- Static after computation: Prefix tokens don't change, so cache is reusable
+- Optional optimization: Model can work

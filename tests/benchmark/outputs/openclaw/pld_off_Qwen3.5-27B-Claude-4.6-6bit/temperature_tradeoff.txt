@@ -1,0 +1,100 @@
+Let me think through this carefully.
+
+The question/task: Explain the tradeoff between temperature 0 and temperature 0.3 for an LLM inference server.
+
+My reasoning: Temperature Tradeoff: 0 vs 0.3 for LLM Inference
+
+Understanding Temperature
+
+Temperature is a hyperparameter that controls the randomness of token selection during LLM generation. The formula modifies raw logits (log probabilities) as:
+
+$$\text{softmax}(z_i / T) = \frac{e^{z_i/T}}{\sum_j e^{z_j/T}}$$
+
+Where T is the temperature parameter. Temperature = 0 (Deterministic Mode)
+
+Behavior:
+- Greedy decoding: Always selects the token with the highest probability
+- Completely deterministic: Same input → same output, every time
+- No exploration of alternative token choices
+
+| Aspect | Description |
+ Outcome | Fully reproducible |
+| Diversity | Zero — identical outputs |
+| Risk | May get stuck in local optima |
+| Fluency | Can produce rigid, repetitive text |
+
+Temperature = 0.3 (Low Randomness)
+
+Behavior:
+- Mostly deterministic but with slight stochasticity
+- Occasionally selects high-probability alternatives
+- Introduces controlled variation
+
+| Aspect | Description |
+| Outcome | Mostly reproducible with minor variations |
+| Diversity | Low but non-zero |
+| Risk | Reduced chance of repetitive patterns |
+| Fluency | Often more natural, human-like |
+
+Key Tradeoffs
+
+| Factor | Temperature 0 | Temperature 0.3 |
+ Reproducibility | ✅ Perfect | ⚠️ Near-perfect |
+| Creativity | ❌ None | ✅ Minimal |
+| Robustness | ❌ Brittle to edge cases | ✅ More resilient |
+| Hallucination Risk | Consistent (same errors) | Variable (different errors) |
+| Code Generation | ✅ Preferred | ⚠️ Context-dependent |
+| Creative Writing | ❌ Too rigid | ✅ Better |
+
+Practical Recommendation
+
+Use Temperature 0 when:
+- Code generation
+- Factual Q&A
+- Mathematical reasoning
+- Any task requiring exact reproducibility
+
+Use Temperature 0.3 when:
+- Open-ended conversation
+- Creative writing
+- Content generation requiring variety
+- When you want "mostly consistent but not robotic"
+
+Summary
+
+> Temperature 0 gives you a precise calculator; Temperature 0.3 gives you a careful human who occasionally phrases things
+
+# Temperature Tradeoff: 0 vs 0.3 for LLM Inference
+
+## Understanding Temperature
+
+Temperature is a hyperparameter that controls the **randomness of token selection** during LLM generation. The formula modifies raw logits (log probabilities) as:
+
+$$\text{softmax}(z_i / T) = \frac{e^{z_i/T}}{\sum_j e^{z_j/T}}$$
+
+Where T is the temperature parameter.
+
+---
+
+## Temperature = 0 (Deterministic Mode)
+
+**Behavior:**
+- Greedy decoding: Always selects the token with the highest probability
+- Completely deterministic: Same input → same output, every time
+- No exploration of alternative token choices
+
+| Aspect | Description |
+|--------|-------------|
+| **Outcome** | Fully reproducible |
+| **Diversity** | Zero — identical outputs |
+| **Risk** | May get stuck in local optima |
+| **Fluency** | Can produce rigid, repetitive text |
+
+---
+
+## Temperature = 0.3 (Low Randomness)
+
+**Behavior:**
+- Mostly deterministic but with slight stochasticity
+- Occasionally selects high-probability alternatives
+- Introduces controlled

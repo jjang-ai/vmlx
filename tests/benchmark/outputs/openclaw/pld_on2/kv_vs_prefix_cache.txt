@@ -1,0 +1,46 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV Cache and Prefix Cache are memory optimization techniques used in Large Language Model (LLM) inference, but they operate at different levels and solve different problems. KV Cache: The Foundation
+
+What it is:
+The KV (Key-Value) Cache is a fundamental mechanism that stores the computed key and value vectors from attention layers during token generation. Why it exists:
+Without caching, computing attention for token N would require re-computing all previous tokens' key-value pairs from scratch—O(n²) complexity. With caching, it becomes O(n). How it works:
+```
+For each new token generated:
+1. Compute its K and V vectors
+3. Use cached K,V + new K,V for attention computation
+```
+
+Prefix Cache: Building on KV Cache
+
+What it is:
+Prefix Cache is a higher-level optimization that identifies and reuses entire sequences of KV Cache when the same prompt or prefix appears across multiple inference requests. Why it exists:
+When multiple users ask similar questions or when the same system prompt is used repeatedly, the KV Cache for the common prefix is computed multiple times unnecessarily. Key Differences
+
+| Aspect | KV Cache | Prefix Cache |
+ Location | Per-request, per-sequence | Cross-request, shared |
+| Granularity | Individual token K,V pairs | Entire prefix sequences |
+| Purpose | Avoid recomputing within a single generation | Avoid recomputing across multiple requests |
+| Scope | Intra-sequence optimization | Inter-sequence optimization |
+| Dependency | Fundamental requirement for efficient inference | Enhancement built on top of KV Cache |
+
+Visual Comparison
+
+```
+KV Cache (Single Request):
+Request: "Explain quantum physics"
+├── Token 1: "Explain" → K₁, V₁ cached
+├── Token 2: "quantum" → K₂, V₂ cached (uses K₁,V₁)
+├── Token 3: "physics" → K₃, V₃ cached (uses K₁,V₁,K₂,V₂)
+�── Generation uses all cached K,V
+
+Prefix Cache (Multiple Requests):
+Request 1: "Explain quantum physics in detail"
+Request 2: "Explain quantum mechanics simply"
+Request 3: "Explain

@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "title": "Fix login authentication timeout issue",
+    "priority": "high",
+    "estimated_minutes": 45
+  },
+  {
+    "id": 2,
+    "title": "Implement user profile editing functionality",
+    "priority": "medium",
+    "estimated_minutes": 60
+  },
+  {
+    "id": 3,
+    "title": "Review and optimize database query performance",
+    "priority": "medium",
+    "estimated_minutes": 90
+  },
+  {
+    "id": 4,
+    "title": "Set up CI/CD pipeline for staging environment",
+    "priority": "low",
+    "estimated_minutes": 30
+  },
+  {
+    "id": 5,
+    "title": "Write unit tests for payment service module",
+    "priority": "high",
+    "estimated_minutes": 75
+  }
+]

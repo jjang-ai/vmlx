@@ -1,0 +1,7 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Output format: JSON array.
+    *   Content: 5 tasks for a software engineer today.
+    *   Task structure: Each task must have `id` (int), `title` (string), `priority` (string: high/medium/low), `estimated_minutes` (int).
+    *   Constraint: Output *only* the JSON array, no explanation, no markdown code blocks (usually implied by "only the JSON array", but often users accept markdown code blocks for JSON. However, strict adherence suggests raw JSON text). Let's look at the instruction: "Output only the JSON array, no explanation." I will output raw JSON text to be safe, or a markdown block if it's standard practice for JSON. Usually, for "only JSON", raw text is best, but markdown code blocks are often expected for readability. However, the prompt says "Output only the JSON array". I will provide raw JSON to strictly follow "no explanation" and avoid markdown fencing if possible, but standard practice for LLMs often includes ```json. Let's stick to the strictest interpretation: just the JSON string. Actually, looking at common patterns, providing

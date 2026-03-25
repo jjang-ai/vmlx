@@ -1,0 +1,88 @@
+The user is asking for advice about what to check before opening a pull request for a big feature. This is a common software development question about best practices for code review and PR preparation.
+
+Let me think through the key things developers should verify before submitting a PR:
+
+1. Code quality checks:
+- Does the code compile/build successfully?
+- Are all tests passing?
+- Have I added tests for the new feature?
+- Is the code following the project's style guidelines?
+- Have I removed debug code, console logs, etc.?
+
+2. Feature completeness:
+- Is the feature actually complete and functional?
+- Have I tested edge cases?
+- Does it work as intended from an end-user perspective?
+
+3. Documentation:
+- Is there documentation for the new feature?
+- Are there inline comments where needed?
+- Is the PR description clear and comprehensive?
+
+4. Code review preparation:
+- Have I done a self-review of my code?
+- Is the code well-organized and readable?
+- Are commits logical and well-described?
+- Have I squashed unnecessary commits?
+
+5. Integration concerns:
+- Are there any breaking changes?
+- Will this conflict with other work?
+- Have I checked for merge conflicts?
+
+6. Security and performance:
+- Are there any security implications?
+- Are there performance considerations?
+
+7. PR metadata:
+- Is the PR title descriptive?
+- Is the description clear about what the feature does?
+- Are related issues referenced?
+- Are screenshots included if applicable?
+
+Let me organize this into a helpful checklist format.
+
+# Pre-PR Checklist for Big Features
+
+## Code Quality
+- [ ] **Build passes** - No compilation errors
+- [ ] **All tests pass** - Existing + new tests
+- [ ] **Test coverage** - Added tests for new functionality
+- [ ] **Linting/formatting** - Follows project conventions
+- [ ] **Clean code** - Removed debug logs, TODOs, dead code
+
+## Feature Verification
+- [ ] **Manual testing** - Feature works end-to-end
+- [ ] **Edge cases** - Tested boundary conditions
+- [ ] **Error handling** - Graceful failures with good messages
+- [ ] **Backwards compatibility** - No unexpected breaking changes
+
+## Documentation
+- [ ] **PR description** - Clear summary, motivation, approach
+- [ ] **User docs** - Feature documented for end users
+- [ ] **API docs** - Updated if interfaces changed
+- [ ] **Screenshots/GIFs** - Visual demos if applicable
+
+## Git Hygiene
+- [ ] **Commit history** - Logical, squashed if needed
+- [ ] **Commit messages** - Descriptive and conventional
+- [ ] **Branch updated** - Rebased on latest main
+- [ ] **No conflicts** - Checked for merge issues
+
+## Review Preparation
+- [ ] **Self-review** - Read through your own code
+- [ ] **Reviewers assigned** - Tagged appropriate people
+- [ ] **Related issues** - Linked in PR description
+- [ ] **Checklist included** - Help reviewers test
+
+## Extra for Big Features
+- [ ] **Performance** - No regressions
+- [ ] **Security** - No new vulnerabilities
+- [ ] **Migration plan** - If data/schema changes needed
+- [ ] **Rollback plan** - How to revert if needed
+
+---
+
+**Pro tip:** For big PRs, consider breaking them into smaller, logical chunks if possible. Reviewers are more likely to give thorough feedback on focused changes.
+
+Would you like me to elaborate on any of these areas

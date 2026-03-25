@@ -1,0 +1,65 @@
+```python
+class Node:
+    """A node in a singly linked list."""
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+
+def reverse_linked_list(head):
+    """
+    Reverse a singly linked list.
+    
+    Args:
+        head: The head node of the linked list.
+    
+    Returns:
+        The new head of the reversed linked list.
+    """
+    prev = None
+    current = head
+    
+    while current is not None:
+        next_node = current.next  # Store the next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev one step forward
+        current = next_node       # Move current one step forward
+    
+    return prev  # prev is now the new head
+
+# Example in __main__
+if __name__ == "__main__":
+    # Create a linked list: 1 -> 2 -> 3 -> 4 -> 5
+    head = Node(1)
+    head.next = Node(2)
+    head.next.next = Node(3)
+    head.next.next.next = Node(4)
+    head.next.next.next.next = Node(5)
+    
+    # Print original list
+    def print_list(head):
+        result = []
+        current = head
+        while current:
+            result.append(str(current.data))
+            current = current.next
+        print(" -> ".join(result))
+    
+    print("Original list:")
+    print_list(head)
+    
+    # Reverse the list
+    reversed_head = reverse_linked_list(head)
+    
+    print("Reversed list:")
+    print_list(reversed_head)
+```
+
+**Output:**
+```
+Original list:
+1 -> 2 -> 3 -> 4 -> 5
+Reversed list:
+5 -> 4 -> 3 -> 2 -> 1
+```
+
+This solution reverses the linked list in-place with O(1) space complexity and O(n) time complexity. It uses three pointers (`prev`, `current`, and `next_node`) to iteratively reverse the links between nodes.

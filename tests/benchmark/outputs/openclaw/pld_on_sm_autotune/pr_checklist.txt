@@ -1,0 +1,87 @@
+That's a great question — opening a large feature PR (Pull Request) is a big step, and doing your due diligence beforehand can save time, reduce merge conflicts, and ensure a smoother review process. Here’s a comprehensive checklist to go through **before** you open your PR:
+
+---
+
+### ✅ 1. **Feature Scope & Goals**
+- Is the feature clearly defined and aligned with the project’s roadmap?
+- Are the goals (what it solves, who it benefits) documented in the issue or proposal?
+- Is the scope *just right*? Avoid scope creep — if it's too big, consider breaking it into smaller PRs.
+
+> 🔍 Tip: Write a short "Why" section in the PR description explaining the motivation and impact.
+
+---
+
+### ✅ 2. **Requirements & Acceptance Criteria**
+- Are there clear, testable acceptance criteria (e.g., from the original issue)?
+- Have you verified that the feature meets all of them?
+- Are edge cases or failure modes handled?
+
+> 💡 Example: "User can create a profile, and the system validates email format and prevents duplicates."
+
+---
+
+### ✅ 3. **Design & Architecture**
+- Has the design been reviewed or approved (e.g., via a design doc, architecture review)?
+- Does the implementation follow existing patterns and codebase conventions?
+- Are there any performance, scalability, or security concerns?
+
+> 📚 Check: Is it consistent with the codebase’s architecture (e.g., MVC, component-based, event-driven)?
+
+---
+
+### ✅ 4. **Code Quality & Style**
+- Does the code follow the project’s style guide (e.g., Prettier, ESLint, RuboCop)?
+- Are variable names, comments, and structure clear and self-documenting?
+- Is code modular, reusable, and well-organized?
+
+> 🚨 Avoid: Long functions, magic numbers, unexplained logic.
+
+---
+
+### ✅ 5. **Testing Coverage**
+- Are unit, integration, or end-to-end tests included?
+- Do they cover normal paths, edge cases, and error conditions?
+- Are tests named clearly and descriptive?
+
+> 📝 Bonus: Add a test coverage report if possible (e.g., via `nyc`, `jest`, `pytest`).
+
+---
+
+### ✅ 6. **Documentation**
+- Is the feature documented in the code (e.g., JSDoc, type annotations)?
+- Is it documented in the README, user guide, or internal wiki?
+- Are there any breaking changes? If so, are they clearly noted?
+
+> 📝 Example: "New API endpoint `/api/v1/users` returns paginated results."
+
+---
+
+### ✅ 7. **Security & Compliance**
+- Are sensitive data (e.g., tokens, PII) handled securely?
+- Are any third-party dependencies up to date and safe?
+- Are there any known vulnerabilities (e.g., via Snyk, Dependabot)?
+
+> 🔐 Especially important for features involving auth, payments, or data handling.
+
+---
+
+### ✅ 8. **Performance & Observability**
+- Does the feature introduce performance bottlenecks?
+- Are logs, metrics, or traces added to help monitor it?
+- Is there a performance impact (e.g., latency, memory usage) that needs to be addressed?
+
+> 📊 Add performance benchmarks if applicable.
+
+---
+
+### ✅ 9. **Backward Compatibility**
+- Does the feature break existing functionality?
+- If so, are deprecation warnings or migration paths provided?
+- Are there known issues with older versions?
+
+> ⚠️ Breaking changes should be discussed and approved in advance.
+
+---
+
+### ✅ 10. **Review & Feedback**
+- Have you reviewed the code with a

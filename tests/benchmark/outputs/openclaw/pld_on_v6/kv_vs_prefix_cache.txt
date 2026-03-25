@@ -1,0 +1,42 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV cache and prefix cache are optimization techniques for transformer-based language models, but they operate at different levels and serve different purposes. KV Cache
+
+What it is:
+The KV (Key-Value) cache is a fundamental mechanism that stores the computed key and value vectors for each token during the generation process. How it works:
+- During self-attention, each token produces Q (query), K (key), and V (value) vectors
+- When generating token N+1, the model needs attention over all previous tokens (1 to N)
+- Instead of recomputing K and V for all previous tokens, we cache them
+- New token only needs to compute its own Q, K, V, then attend to cached K, V from all prior tokens
+
+```
+Generation without KV cache:     Generation with KV cache:
+Token 1: Compute K₁, V₁          Token 1: Compute K₁, V₁ → Cache
+Token 2: Recompute K₁, V₁,       Token 2: Use cached K₁, V₁,
+         Compute K₂, V₂                  Compute K₂, V₂ → Cache
+Token 3: Recompute K₁, V₁,       Token 3: Use cached K₁, V₁, K₂, V₂,
+         Recompute K₂, V₂,                  Compute K₃, V₃ → Cache
+         Compute K₃, V₃
+```
+
+Purpose: Avoids O(n²) recomputation during autoregressive generation, reducing it to O(n)
+
+Prefix Cache
+
+What it is:
+The prefix cache stores the KV cache of a fixed prefix (context) that can be reused across multiple generation sessions. When prefix is static: If you have a system prompt, document, or context that stays the same across multiple queries, you compute its KV cache once and reuse it
+
+Key Differences
+
+| Aspect | KV Cache | Prefix Cache |
+ Location | Per-generation, per-request | Shared across multiple requests |
+| Scope | Entire conversation/history | Fixed prefix portion only |
+| Lifetime | Duration of single generation | Can persist across sessions |
+| What it caches | All tokens in current context | Only the reusable prefix tokens |
+| Primary benefit | Avoids recom

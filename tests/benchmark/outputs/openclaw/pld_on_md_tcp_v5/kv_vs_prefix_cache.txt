@@ -1,0 +1,27 @@
+Here's a thinking process that leads to the comparison between KV Cache and Prefix Cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Models (LLMs) / Inference Optimization.
+    *   **Core Question:** What is the difference between a "KV Cache" and a "Prefix Cache"?
+    *   **Goal:** Explain the concepts clearly, highlight their relationship, and distinguish their specific use cases and mechanisms.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* It's the standard mechanism used during the generation phase of an LLM.
+    *   *How does it work?* When the model processes tokens, it computes Key (K) and Value (V) matrices for the attention mechanism. Instead of recomputing these for every new token, it stores them in memory.
+    *   *Purpose:* Speed up generation (avoids recomputing attention for past tokens).
+    *   *Scope:* Usually specific to a single request/session. It grows as the sequence length grows.
+    *   *Context:* Standard inference optimization (e.g., vLLM, TGI).
+
+3.  **Define Prefix Cache (Prompt Caching / PagedAttention / Prefix Caching):**
+    *   *What is it?* A technique to reuse computation across *different* requests.
+    *   *How does it work?* It identifies identical sequences of tokens (prefixes) across different requests. Instead of recomputing the KV cache for the repeated prefix, it retrieves the cached KV cache from a shared pool.
+    *   *Purpose:* Speed up requests with repeated prompts (e.g., system instructions, common user queries, RAG context).
+    *   *Scope:* Shared across multiple requests/threads.
+    *   *Context:* Advanced optimization (e.g., vLLM's Prefix Caching, FlashInfer, SGLang).
+
+4.  **Identify the Relationship:**
+    *   KV Cache is the *data structure* (the actual K and V tensors).
+    *   Prefix Cache is the *management strategy* for reusing that data structure across requests.
+    *   *Analogy:* KV Cache is like writing down notes for a meeting. Prefix Cache is like having a shared library of meeting notes where if two people attend the same meeting, they just read the same notes instead of writing new ones.
+
+5

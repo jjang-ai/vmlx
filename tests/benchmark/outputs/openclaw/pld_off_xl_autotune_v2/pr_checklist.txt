@@ -1,0 +1,72 @@
+Here's a thinking process that leads to the suggested PR checklist:
+
+1.  **Analyze the Request:**
+    *   **User:** A developer about to open a Pull Request (PR) for a *big feature*.
+    *   **Goal:** Wants to know what to check *before* submitting the PR.
+    *   **Context:** "Big feature" implies complexity, potential side effects, higher review burden, and more risk.
+    *   **Tone:** Helpful, structured, comprehensive, and practical.
+
+2.  **Identify Key Areas of Concern:**
+    When reviewing a large PR, reviewers look for specific things. To make the PR mergeable and reduce friction, the author needs to address these proactively.
+    *   Code Quality (Style, Logic, Security)
+    *   Testing (Unit, Integration, E2E)
+    *   Documentation (README, API docs, Comments)
+    *   Functionality (Does it work? Edge cases?)
+    *   Process (Branching, CI/CD, Dependencies)
+    *   Communication (PR Description, Context)
+
+3.  **Drafting the Checklist (Iterative Process):**
+
+    *   *Initial thought:* Just list "Test it" and "Write docs."
+    *   *Refinement:* Too vague. Need to break it down.
+    *   *Structure:* Group items logically (Code, Tests, Docs, Process, Communication).
+
+    *   *Category 1: Code & Logic*
+        *   Does it compile?
+        *   Is it formatted?
+        *   Are there secrets?
+        *   Is it readable?
+        *   *Big Feature nuance:* Is it too big? Should it be split?
+
+    *   *Category 2: Testing*
+        *   Unit tests?
+        *   Integration tests?
+        *   Did I break existing tests?
+        *   Manual testing steps?
+
+    *   *Category 3: Documentation*
+        *   README updated?
+        *   API docs?
+        *   Migration guide (if DB changes)?
+
+    *   *Category 4: CI/CD & Environment*
+        *   Does CI pass?
+        *   Does it work in staging?
+        *   Dependencies updated?
+
+    *   *Category 5: The PR Itself*
+        *   Title clear?
+        *   Description detailed?
+        *   Screenshots?
+        *   Linked to ticket?
+
+    *   *Category 6: The "Big Feature" Specifics*
+        *   Backwards compatibility?
+        *   Performance impact?
+        *   Rollback plan?
+        *   Feature flags?
+
+4.  **Fleshing out the Details (Adding Value):**
+    *   *Self-Review:* Emphasize that the author should review their own code first.
+    *   *Splitting:* Crucial for "big" features. Suggest breaking it down if it's over a certain line count.
+    *   *Communication:* Explain *why* the change was made, not just *what*.
+    *   *Security:* Always a must-mention.
+
+5.  **Organizing and Polishing:**
+    *   Use bold headings for readability.
+    *   Use bullet points for checklists.
+    *   Add a "Pro Tips" section for extra value.
+    *   Add a concluding encouraging remark.
+
+6.  **Review against "Big Feature" Context:**
+    *   *Risk:* A big feature is risky. Need to emphasize backward

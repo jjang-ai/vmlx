@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV Cache and Prefix Cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Model (LLM) inference optimization.
+    *   **Terms:** "KV Cache" (Key-Value Cache) vs. "Prefix Cache".
+    *   **Goal:** Explain the difference between them.
+
+2.  **Define KV Cache (The Foundation):**
+    *   *What is it?* It's the standard mechanism used in transformer inference to avoid recomputing attention weights for tokens already processed.
+    *   *How does it work?* During the autoregressive generation (decoding), for each new token, the model computes Keys ($K$) and Values ($V$) for that token. These are stored. When generating the *next* token, the model attends to all previous $K$ and $V$ vectors (plus the current one) instead of recomputing them from scratch.
+    *   *Scope:* It applies to the *current* generation session. It grows as the sequence grows.
+    *   *Lifecycle:* Created at the start of a request, cleared when the request finishes (or when context window is full).
+
+3.  **Define Prefix Cache (The Optimization):**
+    *   *What is it?* It's an optimization technique *built on top of* the KV cache concept.
+    *   *Problem it solves:* Many requests share common prefixes (e.g., system prompts, code snippets, common instructions). Recomputing the KV cache for these shared parts every time is wasteful.
+    *   *How does it work?* If a sequence of tokens (the "prefix") has been seen before and its KV cache is still valid (in memory), reuse that pre-computed KV cache instead of recomputing it.
+    *   *Scope:* It applies across *multiple* requests/sessions, not just within one.
+    *   *Lifecycle:* Can persist across requests (until evicted due to memory pressure).
+
+4.  **Compare and Contrast (The Core "Difference"):**
+    *   *Granularity:* KV Cache is per-token within a sequence. Prefix Cache is per-segment (prefix) across sequences.
+    *   *Reusability:* KV Cache is usually single-use (per session). Prefix Cache is multi-use (across sessions).
+    *   *Purpose:* KV Cache enables autore

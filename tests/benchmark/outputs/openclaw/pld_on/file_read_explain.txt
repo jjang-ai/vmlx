@@ -1,0 +1,27 @@
+
+
+I don't have access to read files from your local filesystem at `~/git/vmlx/vmlx_engine/scheduler.py`.
+
+However, I can explain what `_try_speculative_decode` typically does in LLM inference systems based on common patterns.
+
+## What `_try_speculative_decode` Typically Does
+
+In plain terms, **speculative decoding** is a speed-up technique for LLM inference that works like this:
+
+1. **Guess**: A smaller "draft" model quickly predicts several upcoming tokens
+2. **Verify**: The main model checks if these guesses are correct
+3. **Accept/Reject**: 
+   - If guesses are correct → accept them all (saved time!)
+   - If a guess is wrong at position N → only recompute from N onwards
+
+### Typical Implementation Pattern
+
+```python
+def _try_speculative_decode(self, ...):
+    - Generate k speculative tokens using draft model
+    - Verify them against target model in parallel
+    - Return accepted tokens and update state
+```
+
+### Benefits
+- Can achieve **2x speed

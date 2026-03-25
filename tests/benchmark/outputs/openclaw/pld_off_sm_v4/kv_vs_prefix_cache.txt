@@ -1,0 +1,35 @@
+Great question! Both **KV cache** and **prefix cache** are used in the context of **large language models (LLMs)** during **autoregressive generation**, where the model generates tokens one at a time based on previous tokens. However, they serve different purposes and are used in different ways. Let's break down the differences clearly:
+
+---
+
+### 🔹 1. **KV Cache (Key-Value Cache)**
+
+- **What it is**:  
+  A **KV cache** stores the **key (K)** and **value (V)** tensors of the model’s attention mechanism for previously generated tokens. These are the outputs of the self-attention layers.
+
+- **Why it's used**:  
+  In autoregressive generation, when the model generates a new token, it needs to attend to all previous tokens. Instead of recomputing the attention weights and values for every token, the model reuses the previously computed keys and values — this saves computation and memory.
+
+- **How it works**:  
+  - At each step, the model computes attention between the current input token and the **cached keys and values** from earlier steps.
+  - The cache grows as more tokens are generated.
+  - It's essential for **efficient inference** — without it, the model would recompute attention for every token, leading to O(n²) time and memory complexity.
+
+- **Scope**:  
+  Stores **all past tokens' attention keys and values** (typically from the last few layers).
+
+- **Usage**:  
+  Standard in all modern LLMs (e.g., Llama, GPT, Mistral) during generation.
+
+- **Example**:  
+  When generating "The cat sat on the mat", the model stores the K/V for "The", "cat", "sat", etc., so when generating "on", it can efficiently attend to those earlier tokens.
+
+---
+
+### 🔹 2. **Prefix Cache**
+
+- **What it is**:  
+  A **prefix cache** is a **specific type of KV cache** that stores only the **initial part of the input sequence** (the "prefix") — typically the first few tokens — and is used in **specific inference scenarios** like **few-shot prompting**, **instruction tuning**, or **retrieval-augmented generation (RAG)**.
+
+- **Why it's used**:  
+  In some advanced inference techniques, the model is given a **prefix** (e.g., a prompt or instruction), and the rest of the generation is based on

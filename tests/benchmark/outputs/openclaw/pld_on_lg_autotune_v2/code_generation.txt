@@ -1,0 +1,54 @@
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previous node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we break the link
+
+Key considerations:
+- Args:
+        head: The head node of the linked list to reverse. Returns:
+        The new head node of the reversed linked list. Time: O(n) - We visit each node exactly once. Space: O(1) - We only use a constant number of pointers. """
+    prev = None
+    current = head
+    
+    while current is not None:
+        next_temp = current.next  Step 1: Store the next node
+        current.next = prev       Step 2: Reverse the pointer
+        prev = current            Step 3: Move prev forward
+        current = next_temp       Step 4: Move current forward
+    
+    return prev  prev is now the new head
+
+Complexity: - Time: O(n) - We visit each node exactly once.
+- Space: O(1) - We only use a constant number of pointers.
+
+Let me implement this solution.
+
+
+<Thinking>
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previous node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we break the link
+
+Key considerations:
+- Args:
+        head: The head node of the linked list to reverse.
+    Returns:
+        The new head node of the reversed linked list.
+    
+    Time: O(n) - We visit each node exactly once.
+    Space: O(1) - We only use a constant number of pointers.
+    """
+    prev = None
+    current = head
+    
+    while current is not None:
+        next_temp = current.next  Step 1: Store the next node
+        current.next = prev       Step 2: Reverse the pointer
+        prev

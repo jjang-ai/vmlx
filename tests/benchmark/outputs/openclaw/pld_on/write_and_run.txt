@@ -1,0 +1,43 @@
+
+
+Here is the step-by-step reasoning and the final solution.
+
+### Reasoning
+
+1.  **Define the Data Structure**: First, we need a class to represent a node in the linked list. Each node needs a value (`data`) and a pointer to the next node (`next`).
+2.  **Algorithm Selection**: To reverse a linked list, we can use an iterative approach with three pointers:
+    *   `previous`: Initially `None`, this will eventually become the head of the new reversed list.
+    *   `current`: Initially the head of the original list.
+    *   `next_node`: A temporary pointer to store the next node in the original list so we don't lose the rest of the chain when we reverse the pointer.
+3.  **The Loop**:
+    *   Store the `next` node of `current` in `next_node`.
+    *   Point `current.next` to `previous` (reversing the link).
+    *   Move `previous` to `current`.
+    *   Move `current` to `next_node`.
+    *   Repeat until `current` is `None`.
+4.  **Finalization**: Once the loop finishes, `previous` will be pointing to the last node of the original list, which is the head of the new reversed list.
+5.  **Verification**: We will create a helper function to print the list and a test block to demonstrate the reversal.
+
+### Solution
+
+Here is the Python code. You can save this as `test_reverse.py`.
+
+```python
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+
+def reverse_linked_list(head):
+    previous = None
+    current = head
+    
+    while current is not None:
+        next_node = current.next  # Store the next node
+        current.next = previous   # Reverse the link
+        previous = current        # Move previous to current
+        current = next_node       # Move current to next node
+        
+    return previous  # previous is now the new head
+
+def print_list(head):

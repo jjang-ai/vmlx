@@ -1,0 +1,52 @@
+Here's a thinking process that leads to the suggested checklist for opening a PR for a big feature:
+
+1.  **Understand the Goal:** The user is about to open a Pull Request (PR) for a "big feature." This implies complexity, potential for breaking changes, significant code volume, and high impact on the system. The goal is to ensure the PR is reviewable, maintainable, and ready for merge.
+
+2.  **Identify the Audience:** The user is likely a developer (maybe mid-to-senior level given the context of "big feature"). They need a practical, actionable checklist, not just generic advice.
+
+3.  **Brainstorm Categories:** What are the key aspects of a large PR?
+    *   Code Quality (Linting, formatting, style).
+    *   Functionality (Does it work? Tests?).
+    *   Performance (Is it slow? Memory leaks?).
+    *   Security (Are there vulnerabilities?).
+    *   Documentation (Is it explained?).
+    *   Communication (Is the PR description clear?).
+    *   CI/CD (Do pipelines pass?).
+    *   Backwards Compatibility (Will this break existing users?).
+    *   Reviewability (Is it too big to review?).
+
+4.  **Drafting the Checklist (Iterative Process):**
+
+    *   *Initial thought:* Just run tests and check linting.
+    *   *Correction:* No, it's a *big* feature. That's not enough. Need to consider breaking changes, docs, and splitting the PR if it's too large.
+
+    *   *Category 1: Code Hygiene.* Linting, formatting, unused variables, error handling.
+    *   *Category 2: Testing.* Unit tests, integration tests, edge cases, E2E.
+    *   *Category 3: Functionality/Logic.* Does it actually do what's asked? Error states?
+    *   *Category 4: Performance/Security.* DB queries, memory usage, auth checks.
+    *   *Category 5: Documentation.* README, inline comments, changelog.
+    *   *Category 6: The PR Itself.* Title, description, screenshots, linked issues.
+    *   *Category 7: Review Strategy.* WIP vs. Ready, splitting if needed.
+
+5.  **Refining and Structuring the Advice:**
+    *   Organize logically (Pre-PR, During PR, Post-PR).
+    *   Use bold headings for readability.
+    *   Add specific "Pro Tips" for big features (e.g., "Don't make it a monolith").
+    *   Emphasize the "Big Feature" aspect (e.g., migration strategies, rollback plans).
+
+6.  **Developing Specific Points (incorporating best practices):**
+
+    *   *Self-Review:* Read your own code like a reviewer.
+    *   *Tests:* Coverage isn't enough; test failure scenarios.
+    *   *Breaking Changes:* API contracts, DB migrations.
+    *   *CI/CD:* Ensure green builds.
+    *   *Communication:* Context is king.
+    *   *Splitting:* If it's too big, split it. This is crucial for big features.
+
+7.  **Adding "Big Feature" Specifics:**
+    *   Migration strategy (how to move data?).
+    *   Rollback plan (what if it fails?).
+    *   Feature flags (can we turn it off?).
+    *   Monitoring/Alerting (how do we know it's working?).
+
+8.  **Review against

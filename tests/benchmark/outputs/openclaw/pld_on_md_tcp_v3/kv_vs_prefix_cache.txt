@@ -1,0 +1,26 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** LLM Inference Optimization.
+    *   **Core Question:** What is the difference between a KV cache and a prefix cache?
+    *   **Goal:** Explain both concepts clearly, highlight their relationship, and distinguish their specific purposes and mechanisms.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* It's the standard mechanism used in Transformers for autoregressive generation.
+    *   *How does it work?* During the forward pass, the model computes Key (K) and Value (V) matrices for each token. Instead of recomputing these for every new token, they are stored in memory.
+    *   *Scope:* It's specific to a *single* request/sequence being generated.
+    *   *Lifecycle:* Created during generation, discarded when the request finishes.
+    *   *Problem it solves:* Avoids recomputing attention for previous tokens in the *same* sequence.
+    *   *Limitation:* If two requests share the same beginning (prefix), KV cache doesn't automatically share memory between them.
+
+3.  **Define Prefix Cache (PagedAttention / vLLM / FlashAttention context):**
+    *   *What is it?* It's an optimization layer *on top of* KV caching, often used in serving frameworks (like vLLM, TGI).
+    *   *How does it work?* It stores KV caches in a way that allows *sharing* across different requests. If Request A and Request B start with the same text ("The quick brown fox..."), the KV states for that text are computed once and reused by both.
+    *   *Scope:* It's about sharing across *multiple* requests (batching).
+    *   *Lifecycle:* Cached in memory (or disk) for reuse across different inference requests.
+    *   *Problem it solves:* Reduces redundant computation when multiple prompts share a common prefix (e.g., system prompts, common instructions, RAG context).
+    *   *Key Concept:* "Prefix" refers to the shared input tokens.
+
+4.  **Compare and Contrast (The "Difference"):**
+    *   *Granularity:* KV Cache = Per-sequence. Prefix Cache = Per-prefix (shared across sequences).
+    *   *

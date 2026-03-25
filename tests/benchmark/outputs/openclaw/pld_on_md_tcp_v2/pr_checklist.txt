@@ -1,0 +1,44 @@
+Here's a thinking process that leads to the suggested checklist for opening a Pull Request (PR) for a big feature:
+
+1.  **Understand the Goal:** The user is about to open a Pull Request (PR) for a *big feature*. This implies complexity, higher risk, and more scrutiny than a standard bug fix or small change. The goal is to ensure the PR is reviewable, maintainable, and ready for merging.
+
+2.  **Identify the Audience:** The user is likely a developer (frontend, backend, or full-stack). The advice needs to be technical but also cover process and communication aspects.
+
+3.  **Brainstorm Categories:** What are the key areas to check before hitting "Create Pull Request"?
+    *   Code Quality (Linting, formatting)
+    *   Functionality (Tests, logic)
+    *   Documentation (README, comments, changelog)
+    *   Performance/Security (Scalability, vulnerabilities)
+    *   Team/Process (Reviewers, CI/CD, communication)
+    *   Scope (Is it too big? Should it be split?)
+
+4.  **Flesh out each category (Drafting the content):**
+
+    *   *Code Quality:* Did I run the linter? Formatter? Is the code readable? Are there secrets hardcoded?
+    *   *Functionality:* Do the tests pass? Do they cover edge cases? Is the feature actually working locally?
+    *   *Documentation:* Did I update the docs? Is the commit message clear? Is there a migration guide if DB schema changed?
+    *   *Performance:* Are there N+1 queries? Memory leaks? Heavy computations?
+    *   *Security:* Input validation? Auth checks? SQL injection?
+    *   *Scope:* Is this a "monolith" PR? If it's huge, can I split it? (Crucial for "big features").
+    *   *CI/CD:* Does the pipeline pass? Are there warnings?
+    *   *Communication:* Did I tag the right people? Is there a design doc linked?
+
+5.  **Refine and Structure:** Organize the brainstormed points into a logical flow. A checklist format works best. I should prioritize the most critical items first.
+
+    *   *Phase 1: The "Self-Review" (Before asking others)*
+    *   *Phase 2: The "Technical Health" (Tests, Perf, Security)*
+    *   *Phase 3: The "Communication & Scope" (Docs, Splitting)*
+    *   *Phase 4: The "Process" (CI, Reviewers)*
+
+6.  **Add Specific Advice for "Big Features":** Since the prompt specifies a *big feature*, I need to emphasize the risks associated with large changes.
+    *   *Risk:* Hard to review, easy to break, hard to revert.
+    *   *Mitigation:* Split PRs, clear description, design doc, staging environment.
+
+7.  **Drafting the Response (Iterative refinement):**
+
+    *   *Intro:* Acknowledge the importance. Big features need extra care.
+    *   *Section 1: Code Hygiene.* (Lint, Format, Secrets).
+    *   *Section 2: Testing.* (Unit, Integration, E2E, Edge cases).
+    *   *Section 3: Scope Management.* (This is key. Suggest splitting if too big).
+    *   *Section 4: Documentation.* (README, API docs, Migration).
+    *   *Section 5: Security & Performance.* (Audit,

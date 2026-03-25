@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Model (LLM) inference optimization.
+    *   **Core Concepts:** KV Cache (Key-Value Cache) vs. Prefix Cache.
+    *   **Goal:** Explain the difference between them clearly.
+
+2.  **Define KV Cache (The Foundation):**
+    *   *What is it?* It's the standard mechanism used in Transformer models during autoregressive generation.
+    *   *Why does it exist?* To avoid recomputing attention scores for tokens already generated.
+    *   *How does it work?* At each step $t$, the model computes Key ($K_t$) and Value ($V_t$) vectors for the current token. These are stored. For the next step $t+1$, the new query ($Q_{t+1}$) attends to all previous $K$'s and $V$'s (including the new one).
+    *   *Scope:* It covers the *entire* context (prompt + generated text) for a *single* request/session.
+    *   *Memory:* Grows linearly with sequence length.
+
+3.  **Define Prefix Cache (The Optimization):**
+    *   *What is it?* A specific optimization technique *built on top of* the KV cache concept.
+    *   *Why does it exist?* To handle scenarios where the *same* prompt (or part of it) is used across *multiple* requests (e.g., system prompts, code templates, RAG contexts).
+    *   *How does it work?* It identifies the static part of the input (the "prefix"). It computes the KV cache for this prefix *once* and stores it in a shared memory pool (often on GPU). When a new request comes in with the same prefix, it reuses the pre-computed KV cache instead of recomputing it.
+    *   *Scope:* Specifically targets the *static* portion of the context across *multiple* requests.
+    *   *Memory:* Requires persistent storage of the prefix KVs.
+
+4.  **Identify Key Differences (The Comparison Points):**
+    *   *Granularity:* KV Cache is per-request. Prefix Cache is per-prefix (shared across requests).
+    *   *Lifecycle:* KV Cache is ephemeral (dies when

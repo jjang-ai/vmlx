@@ -1,0 +1,48 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV cache and prefix cache are memory optimization techniques for Transformer-based language models, but they operate at different levels and serve distinct purposes. KV Cache
+
+What It Is:
+The KV (Key-Value) cache is a fundamental inference optimization that stores computed attention keys and values during token generation to avoid recomputation. Prefix Cache
+
+What It Is:
+The prefix cache is a higher-level optimization that stores complete KV cache states for frequently-repeated input sequences (prefixes) that can be reused across different requests. | KV Cache | Prefix Cache |
+ What it stores | K and V matrices for current sequence | Complete KV cache states for repeated prefixes |
+ Scope | Per-request, per-sequence | Cross-request, shared |
+ Reuse level | Within a single generation | Across multiple generations |
+ Memory location | Per-request buffer | Shared system-wide cache |
+ Eviction policy | Grows with sequence length | LRU, LFU, or other cache policies |
+
+Key Differences Explained
+
+1. Prefix cache: Reuses across different requests that share common prefixes
+
+KV Cache Example:
+```
+Request: "Explain quantum physics"
+- Token 1: "Explain" → compute K₁, V₁, cache them
+- Token 2: " quantum" → use K₁, V₁; compute K₂, V₂, cache them
+- Token 3: "physics" → use K₁, V₁, K₂, V₂; compute K₃, V₃, cache them
+```
+
+Prefix Cache Example:
+```
+Request 1: "The quick brown fox..." → cache entire prefix KV state
+Request 2: "The quick brown dog..." → reuse cached "The quick brown" KV state
+Request 3: "The quick red fox..."   → reuse cached "The quick" KV state
+```
+
+3. Hierarchy: KV cache is foundational; prefix cache builds on top of it
+
+Verification
+
+| Statement | KV Cache | Prefix Cache |
+ Does it avoid recomputing attention? | ✓ (within sequence) | ✓ (across requests) |
+ Is it required for autoregressive generation? | ✓ Yes | ✗ No |
+ Can multiple requests share it? | ✗ No (per-request) | ✓ Yes |

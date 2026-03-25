@@ -1,0 +1,54 @@
+Here's a thinking process that leads to the suggested checklist for opening a Pull Request (PR) for a big feature:
+
+1.  **Understand the Goal:** The user is about to open a Pull Request (PR) for a *big feature*. This implies complexity, potential for breaking changes, significant code churn, and high impact on the project. The goal is to ensure the PR is reviewable, maintainable, and ready for merge.
+
+2.  **Identify the Audience:** The user is likely a developer. They might be junior, mid-level, or senior, but "big feature" suggests they understand the stakes. The advice needs to be comprehensive but actionable.
+
+3.  **Brainstorm Categories:** What are the key aspects of a PR?
+    *   Code Quality/Style
+    *   Functionality/Logic
+    *   Testing
+    *   Documentation
+    *   Performance/Security
+    *   Communication/Context
+    *   CI/CD/Build
+    *   Team/Process
+
+4.  **Flesh out each category (Drafting the checklist):**
+
+    *   *Code:* Did I lint? Did I format? Are variable names clear? Is it too long? (Big features often get huge).
+    *   *Functionality:* Does it actually work? Edge cases? Error handling?
+    *   *Tests:* Unit tests? Integration tests? E2E? Do they pass? Do they cover the new logic?
+    *   *Docs:* README? API docs? Comments in code? Migration guides?
+    *   *Performance:* DB queries? Memory leaks? Async handling?
+    *   *Security:* Input validation? Auth checks? Secrets?
+    *   *Communication:* Title? Description? Screenshots? Links to tickets?
+    *   *CI/CD:* Green build? No merge conflicts?
+    *   *Process:* WIP? Draft? Ready for review?
+
+5.  **Refine and Prioritize (The "Big Feature" Angle):**
+    *   *Big features* are hard to review. I need to emphasize *breaking it down*.
+    *   *Squash commits:* Don't leave 50 commits saying "fix typo".
+    *   *Context:* Why are we doing this?
+    *   *Backwards Compatibility:* Will this break existing users?
+
+6.  **Structure the Response:**
+    *   **Introduction:** Acknowledge the importance of the task.
+    *   **Pre-PR Checklist (The "Before You Click" phase):** Technical checks.
+    *   **The PR Description (The "Context" phase):** How to explain it.
+    *   **The Review Process (The "Collaboration" phase):** How to handle feedback.
+    *   **Big Feature Specifics:** Special considerations for large scope.
+    *   **Conclusion:** Encouraging closing.
+
+7.  **Drafting the Content (Iterative refinement):**
+
+    *   *Self-Correction during drafting:* I shouldn't just list "run tests." I should say "run tests *and* ensure they cover the new logic."
+    *   *Emphasis:* Make sure to mention "breaking changes" explicitly, as big features often introduce them.
+    *   *Formatting:* Use bolding, lists, and clear headings for readability.
+
+8.  **Final Review against the Prompt:**
+    *   "Big feature" is the key constraint.
+    *   "What should I check" implies a checklist.
+    *   Tone should be professional, helpful, and experienced.
+
+9.  **Final Polish (

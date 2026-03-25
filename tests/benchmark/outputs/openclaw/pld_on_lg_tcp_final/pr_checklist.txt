@@ -1,0 +1,92 @@
+The user is asking for advice about what to check before opening a pull request for a big feature. This is a common software development question about best practices for code review and PR quality. Let me think through the key areas they should consider:
+
+1. Code quality checks:
+- Does the code compile/build successfully?
+- Are all tests passing?
+- Have they written tests for the new feature?
+- Is the code following the project's style guidelines?
+- Have they done any refactoring to improve code quality?
+
+2. Feature completeness:
+- Is the feature actually complete and functional?
+- Have they tested edge cases?
+- Is error handling proper?
+- Are there any TODOs or incomplete sections?
+
+3. Documentation:
+- Is the code well-commented?
+- Is there documentation for the feature?
+- Have they updated README or other docs if needed?
+- Is there a clear description of what the PR does?
+
+4. Integration concerns:
+- Does it work with existing features?
+- Are there any breaking changes?
+- Have they considered backward compatibility?
+- Are there migration steps needed?
+
+5. Performance:
+- Have they considered performance implications?
+- Are there any potential bottlenecks?
+
+6. Security:
+- Are there any security implications?
+- Is user input properly validated?
+
+7. PR-specific:
+- Is the PR description clear?
+- Are the commits organized logically?
+- Have they squashed unnecessary commits?
+- Is the title descriptive?
+
+8. Review preparation:
+- Have they self-reviewed their code?
+- Have they identified potential areas of concern?
+- Have they assigned appropriate reviewers?
+
+Let me organize this into a helpful response.
+
+# Pre-PR Checklist for Big Features
+
+Here's what I'd recommend checking before opening your PR:
+
+## Code Quality
+- ✅ All tests pass (existing + new)
+- ✅ Code builds without errors or warnings
+- ✅ Follows project's style guidelines
+- ✅ No debug code, TODOs, or commented-out blocks left behind
+
+## Feature Completeness
+- ✅ Feature is fully functional end-to-end
+- ✅ Edge cases are handled
+- ✅ Error states are properly managed
+- ✅ Works with existing features (no regressions)
+
+## Documentation
+- ✅ Code is well-commented where needed
+- ✅ Public APIs have docstrings/descriptions
+- ✅ Updated relevant docs (README, API docs, etc.)
+- ✅ Clear PR description explaining what and why
+
+## Technical Concerns
+- ✅ Performance considered (especially for data-heavy operations)
+- ✅ Security reviewed (input validation, auth, etc.)
+- ✅ Breaking changes identified and documented
+- ✅ Migration steps provided if needed
+
+## PR Hygiene
+- ✅ Commits are logical and clean (consider squashing)
+- ✅ Branch is up-to-date with main
+- ✅ Appropriate reviewers identified
+- ✅ Linked to relevant issues/tickets
+
+## Bonus: Self-Review
+- ✅ Read through your own code fresh
+- ✅ Test the feature manually one more time
+- ✅ Ask yourself: "Would I want to review this?"
+
+---
+
+**Quick tip:** For big features, consider opening a "work in progress" PR first to get early feedback, then refine before the final review.
+
+What kind of feature are you shipping? I can give more specific advice.

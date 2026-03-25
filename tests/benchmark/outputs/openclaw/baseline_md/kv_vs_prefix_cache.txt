@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV Cache and Prefix Cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** LLM Inference Optimization.
+    *   **Core Question:** What's the difference between a KV Cache and a Prefix Cache?
+    *   **Goal:** Provide a clear, technical, yet accessible explanation distinguishing the two concepts, explaining their relationship, and highlighting their specific use cases.
+
+2.  **Define "KV Cache" (The Foundation):**
+    *   *What is it?* It's the standard mechanism for caching Key and Value matrices in Transformer models during autoregressive generation.
+    *   *Why?* To avoid recomputing attention for previous tokens.
+    *   *How?* Stores the `K` and `V` tensors for every token generated so far in the current context window.
+    *   *Scope:* Usually per-request, per-sequence. It grows as the sequence gets longer.
+    *   *Limitation:* If I generate a new sequence that shares the *beginning* of a previous sequence, I can't reuse the KV cache from the previous sequence (unless I'm doing something special like speculative decoding or multi-query attention, but standard KV cache is per-sequence).
+
+3.  **Define "Prefix Cache" (The Optimization):**
+    *   *What is it?* A mechanism to reuse KV caches across *different* requests that share a common prefix (start of the prompt).
+    *   *Why?* To save memory and computation when multiple users ask similar questions or when a system handles batched requests with overlapping prompts.
+    *   *How?* It stores KV states in a global memory store (like a tree or hash map) keyed by the prompt content. When a new request comes in, if the prompt matches a stored prefix, the system loads the corresponding KV cache instead of recomputing it.
+    *   *Scope:* Cross-request, cross-sequence.
+    *   *Key Distinction:* It's an *application* or *layer* built on top of the standard KV cache mechanism.
+
+4.  **Compare and Contrast (The "Difference"):**
+    *   *Granularity:* KV Cache = Per-token/Per-sequence (during generation). Prefix Cache = Per-prompt/Per-request (across requests).
+    *   *Lifecycle:* KV Cache exists only for the duration of a single generation. Prefix Cache

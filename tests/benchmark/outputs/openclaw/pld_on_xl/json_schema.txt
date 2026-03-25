@@ -1,0 +1,14 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Output format: JSON array.
+    *   Content: 5 tasks for a software engineer.
+    *   Task structure: `id` (int), `title` (string), `priority` (string: high/medium/low), `estimated_minutes` (int).
+    *   Constraint: Output *only* the JSON array, no explanation, no markdown code blocks (though usually, JSON is presented in code blocks for clarity, the prompt says "Output only the JSON array", which often implies raw text, but standard practice for JSON responses is often within a code block or just raw. I will output raw JSON to be safe, but ensure it's valid JSON).
+    *   Quantity: 5 tasks.
+
+2.  **Draft the Tasks:**
+    *   Task 1: Code review. Priority: High. Time: 60.
+    *   Task 2: Fix critical bug. Priority: High. Time: 90.
+    *   Task 3: Update documentation. Priority: Low. Time: 30.
+    *   Task 4: Implement new feature. Priority: Medium.

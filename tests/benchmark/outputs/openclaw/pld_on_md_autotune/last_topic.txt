@@ -1,0 +1,6 @@
+Okay, the user is asking what we were last working on together. Hmm, I need to check my conversation history. Wait, but I don't have access to past conversations. Each session is stateless, meaning I can't recall previous interactions once the chat ends. So I can't see what we were working on before.
+
+I should inform the user that I don't have memory of past conversations. Maybe they think I can remember, but I need to clarify that each session is independent. I should ask them to provide context or remind me of the topic they were discussing. That way, I can help them continue from where they left off. Let me make sure to be clear and helpful in my response.
+
+
+I don't have access to our previous conversations or memory of past interactions. Each chat session is independent, so I can't recall what we were working on together before. However, if you share some context or remind me of the topic, I'd be happy to help you continue! 😊

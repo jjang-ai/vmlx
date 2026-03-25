@@ -1,0 +1,20 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Target: JSON array.
+    *   Quantity: 5 tasks.
+    *   Subject: Software engineer tasks for today.
+    *   Schema per task: `id` (int), `title` (string), `priority` (high/medium/low), `estimated_minutes` (int).
+    *   Constraint: Output *only* the JSON array, no explanation.
+
+2.  **Draft the Tasks:**
+    *   Task 1: Code review for PR #123.
+    *   Task 2: Fix critical bug in payment module.
+    *   Task 3: Update documentation for API v2.
+    *   Task 4: Deploy hotfix to staging environment.
+    *   Task 5: Pair programming session with frontend team.
+
+3.  **Assign Attributes:**
+    *   Task 1: id=1, priority=medium, minutes=45.
+    *   Task 2: id=2, priority=high, minutes=60.
+    *   Task 3: id=3, priority=low, minutes=30.

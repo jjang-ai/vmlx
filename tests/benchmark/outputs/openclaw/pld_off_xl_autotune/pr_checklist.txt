@@ -1,0 +1,63 @@
+Here's a thinking process that leads to the suggested checklist for opening a PR:
+
+1.  **Analyze the Request:**
+    *   **User:** Developer about to open a Pull Request (PR) for a *big feature*.
+    *   **Goal:** Ensure the PR is ready for review, minimizes friction, and increases the chances of acceptance/merging.
+    *   **Context:** "Big feature" implies complexity, potential side effects, and higher scrutiny.
+
+2.  **Identify Key Areas of Concern:**
+    When reviewing a large PR, reviewers look for specific things. I need to structure the advice around these pain points:
+    *   Code Quality (Style, Logic, Security)
+    *   Testing (Unit, Integration, E2E)
+    *   Documentation (README, API docs, Changelog)
+    *   Functionality (Does it work? Edge cases?)
+    *   Process (CI/CD, Branching, Communication)
+    *   Reviewer Experience (Context, Diff size)
+
+3.  **Drafting the Checklist (Iterative Process):**
+
+    *   *Initial thought:* Just list "Run tests, write docs."
+    *   *Refinement:* Too vague. Need specific actions. "Run all tests," "Update README," etc.
+    *   *Refinement for "Big Feature":* A big feature needs more than just unit tests. It needs integration tests. It might need a design doc. It might need migration scripts.
+
+    *   *Category 1: Code & Functionality*
+        *   Does it pass local tests?
+        *   Are there TODOs? (Remove or track them).
+        *   Is it secure? (No secrets, SQL injection, etc.)
+        *   Performance? (Big features often introduce slowness).
+        *   Backwards compatibility? (Breaking changes?)
+
+    *   *Category 2: Testing*
+        *   Unit tests for new logic.
+        *   Integration tests for the flow.
+        *   E2E if applicable.
+        *   Did I break existing tests?
+
+    *   *Category 3: Documentation*
+        *   Code comments (why, not what).
+        *   User-facing docs.
+        *   Changelog.
+        *   Deployment notes (env vars, migrations).
+
+    *   *Category 4: The PR Itself (The "Meta" stuff)*
+        *   Title/Description. (Crucial for context).
+        *   Screenshots/Recordings.
+        *   Link to ticket/issue.
+        *   Split into smaller PRs? (Maybe too late, but worth mentioning as a "next time" tip).
+
+    *   *Category 5: CI/CD & Environment*
+        *   Does CI pass?
+        *   Are there database migrations?
+        *   Are there config changes?
+
+    *   *Category 6: Reviewer Experience*
+        *   Is the diff too huge? (Suggest splitting).
+        *   Are there "noise" commits? (Squash/rebase).
+        *   Did I tag the right reviewers?
+
+4.  **Structuring and Polishing the Advice:**
+    *   Organize logically (Pre-PR, During PR, Post-PR).
+    *   Use bolding and bullet points for readability.
+    *   Add a "Big Feature" specific section (since the user emphasized this).
+    *   Add a "Soft Skills" section (Communication).
+    *   Include a "Self-
