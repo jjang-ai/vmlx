@@ -950,16 +950,23 @@ class MLXMultimodalLM:
             msg_name = msg.get("name")
 
             if msg_text or msg_image_count > 0 or tool_calls or role == "tool":
-                if role == "user" and msg_image_count > 0:
+                if msg_image_count > 0 and role in ("user", "assistant"):
+                    # Build multimodal content list with image markers for
+                    # any role that carries images (user or assistant).
+                    # Some UIs (e.g. klite) send images on assistant messages
+                    # when attaching an image to the conversation context.
                     content_list: list[dict] = []
                     for _ in range(msg_image_count):
                         content_list.append({"type": "image"})
                     content_list.append(
                         {"type": "text", "text": msg_text, "content": msg_text}
                     )
-                    chat_messages.append({"role": role, "content": content_list})
+                    out_msg = {"role": role, "content": content_list}
+                    if role == "assistant" and tool_calls:
+                        out_msg["tool_calls"] = tool_calls
+                    chat_messages.append(out_msg)
                 elif role == "assistant":
-                    out_msg: dict = {"role": role, "content": msg_text}
+                    out_msg = {"role": role, "content": msg_text}
                     if tool_calls:
                         out_msg["tool_calls"] = tool_calls
                     chat_messages.append(out_msg)
