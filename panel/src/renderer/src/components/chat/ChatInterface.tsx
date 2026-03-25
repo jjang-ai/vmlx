@@ -421,7 +421,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       <MessageList
         messages={messages}
         streamingMessageId={streamingMessageId}
