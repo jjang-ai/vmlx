@@ -411,8 +411,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           if (sessionConfig.reasoningParser && sessionConfig.reasoningParser !== 'auto') {
             sessionHasReasoningParser = true
             isHarmonyModel = sessionConfig.reasoningParser === 'openai_gptoss'
-          } else if (sessionConfig.reasoningParser === 'auto' && chat.modelPath) {
-            // "auto" means use detection
+          } else if (chat.modelPath) {
+            // Session config missing reasoningParser (model still loading) or set to "auto" —
+            // detect from model directory so thinking toggle works on first message
             const detected = detectModelConfigFromDir(chat.modelPath)
             sessionHasReasoningParser = !!detected.reasoningParser
             isHarmonyModel = detected.reasoningParser === 'openai_gptoss'
