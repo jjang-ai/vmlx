@@ -1661,16 +1661,10 @@ class MLLMScheduler:
                                         f"Cache truncation failed for {request_id}"
                                     )
                                 else:
-                                    # Strip generation prompt tokens from cache key.
-                                    # Chat templates append assistant role tokens at the end
-                                    # (e.g., <|im_start|>assistant\n<think>\n) which always
-                                    # differ on subsequent turns. Including them in the block
-                                    # hash causes 100% cache misses in multi-turn conversations.
-                                    gen_prompt_len = getattr(request, '_gen_prompt_len', 0)
-                                    if gen_prompt_len > 0 and gen_prompt_len < len(token_list):
-                                        token_list = token_list[:-gen_prompt_len]
-                                        prompt_len = len(token_list)
-
+                                    # NOTE: gen_prompt_len is already stripped from _extracted_tokens
+                                    # by the batch generator (_original_token_ids at line 1411-1413).
+                                    # Do NOT strip again here — double stripping collapses the
+                                    # token list to near-zero length.
                                     truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
                                     # L2: persist to disk before quantization
                                     # Key uses full token_list (matching fetch path), cache data is N-1 tokens

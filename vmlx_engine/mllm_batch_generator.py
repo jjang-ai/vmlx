@@ -1807,10 +1807,10 @@ class MLLMBatchGenerator:
                             all_tokens = getattr(req, '_original_token_ids', None)
                             if all_tokens is None:
                                 all_tokens = input_ids_list[i]
-                            # Use full prompt length — block_table.num_tokens on
-                            # fetch returns the original prompt count (N), not
-                            # the paged cache's internal truncation (N-1).
-                            prompt_len = len(all_tokens)
+                            # MLLM paged cache stores at N-1 (truncated for re-feed)
+                            # and block_table.num_tokens returns N-1 on fetch.
+                            # SSM companion key must match.
+                            prompt_len = len(all_tokens) - 1 if len(all_tokens) > 1 else len(all_tokens)
                             if prompt_len > 0:
                                 self._ssm_state_cache.store(
                                     all_tokens, prompt_len, ssm_layers
