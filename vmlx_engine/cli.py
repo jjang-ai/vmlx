@@ -95,6 +95,28 @@ def serve_command(args):
             sys.exit(1)
         server._default_top_p = args.default_top_p
 
+    # Parse --chat-template-kwargs JSON and apply server-wide defaults
+    if getattr(args, 'chat_template_kwargs', None) is not None:
+        import json as _json
+        try:
+            ct_kwargs = _json.loads(args.chat_template_kwargs)
+            if not isinstance(ct_kwargs, dict):
+                print("Error: --chat-template-kwargs must be a JSON object")
+                sys.exit(1)
+        except _json.JSONDecodeError as e:
+            print(f"Error: --chat-template-kwargs is not valid JSON: {e}")
+            sys.exit(1)
+        # Extract enable_thinking into the dedicated server default
+        # Guard against bool("false") == True trap — require actual JSON boolean
+        if "enable_thinking" in ct_kwargs:
+            val = ct_kwargs["enable_thinking"]
+            if not isinstance(val, bool):
+                print(f"Error: enable_thinking must be a JSON boolean (true/false), got: {val!r}")
+                sys.exit(1)
+            server._default_enable_thinking = val
+        # Store full kwargs for forwarding to chat templates
+        server._default_chat_template_kwargs = ct_kwargs
+
     # Configure reasoning parser (strictly explicit)
     parser_name = getattr(args, 'reasoning_parser', None)
     if parser_name in ("auto", "none", None) or not parser_name:
@@ -176,6 +198,8 @@ def serve_command(args):
         print(f"    Draft tokens per step: {getattr(args, 'num_draft_tokens', 3)}")
     else:
         print("  Speculative decoding: Use --speculative-model to enable")
+    if getattr(args, 'chat_template_kwargs', None):
+        print(f"  Chat template kwargs: {args.chat_template_kwargs}")
     print("=" * 60)
 
     print(f"Loading model: {args.model}")
@@ -1099,6 +1123,14 @@ Examples:
              "tokens whose cumulative probability ≤ this value: 0.9 = use top 90%% of probability mass. "
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
+    )
+    serve_parser.add_argument(
+        "--chat-template-kwargs",
+        type=str,
+        default=None,
+        help='Server-wide default kwargs passed to the chat template. JSON string, e.g. '
+             '\'{"enable_thinking": false}\'. Per-request chat_template_kwargs override these. '
+             "Common use: disable thinking for reasoning models like Qwen3.",
     )
     # JIT compilation
     serve_parser.add_argument(

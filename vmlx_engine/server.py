@@ -137,7 +137,21 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
-_default_enable_thinking: bool | None = None  # Set via --default-enable-thinking
+_default_enable_thinking: bool | None = None  # Set via --default-enable-thinking or --chat-template-kwargs
+_default_chat_template_kwargs: dict | None = None  # Set via --chat-template-kwargs
+
+
+def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
+    """Merge server-wide default chat_template_kwargs with per-request overrides.
+
+    Server defaults (from --chat-template-kwargs) are used as the base layer.
+    Per-request chat_template_kwargs override any matching keys.
+    """
+    base = dict(_default_chat_template_kwargs) if _default_chat_template_kwargs else {}
+    if request_kwargs:
+        base.update(request_kwargs)
+    return base
+
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 _stream_from_disk: bool = False  # --stream-from-disk: lazy mmap loading, no caching
@@ -3373,7 +3387,7 @@ async def create_chat_completion(
     # in context and mimics the pattern, producing reasoning even when the generation
     # prompt doesn't inject <think>. This is the root cause of "thinking OFF but model
     # still thinks on 2nd message" bugs.
-    _ct_kwargs = request.chat_template_kwargs or {}
+    _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
     _explicit_thinking_off = (
         request.enable_thinking is False
         or (_ct_kwargs.get("enable_thinking") is False)
@@ -3619,8 +3633,8 @@ async def create_chat_completion(
         # not just raw request — covers --default-enable-thinking and auto-detect paths)
         _resolved = chat_kwargs.get("enable_thinking")
         _suppress = _resolved is False or request.enable_thinking is False
-        if not _suppress and request.chat_template_kwargs:
-            _suppress = request.chat_template_kwargs.get("enable_thinking") is False
+        if not _suppress:
+            _suppress = _ct_kwargs.get("enable_thinking") is False
         if _suppress:
             reasoning_text = None
 
@@ -3935,7 +3949,7 @@ async def create_response(
             messages = _inject_json_instruction(messages, json_instruction)
 
     # Strip <think> blocks from history when thinking is OFF (same as Chat Completions path)
-    _ct_kwargs = request.chat_template_kwargs or {}
+    _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
     _explicit_thinking_off = (
         request.enable_thinking is False
         or (_ct_kwargs.get("enable_thinking") is False)
@@ -4165,8 +4179,8 @@ async def create_response(
         # not just raw request — covers --default-enable-thinking and auto-detect paths)
         _resolved = chat_kwargs.get("enable_thinking")
         _suppress = _resolved is False or request.enable_thinking is False
-        if not _suppress and request.chat_template_kwargs:
-            _suppress = request.chat_template_kwargs.get("enable_thinking") is False
+        if not _suppress:
+            _suppress = _ct_kwargs.get("enable_thinking") is False
         if _suppress:
             reasoning_text = None
 
@@ -4456,7 +4470,7 @@ async def stream_chat_completion(
 
     # Resolve effective enable_thinking:
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
-    _ct_kwargs = request.chat_template_kwargs or {}
+    _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
     if request.enable_thinking is not None:
         _effective_thinking = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
@@ -5138,7 +5152,7 @@ async def stream_responses_api(
 
     # Resolve effective enable_thinking:
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
-    _ct_kwargs = request.chat_template_kwargs or {}
+    _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
     if request.enable_thinking is not None:
         _effective_thinking = request.enable_thinking
     elif "enable_thinking" in _ct_kwargs:
