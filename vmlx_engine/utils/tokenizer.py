@@ -15,6 +15,90 @@ from .chat_templates import DEFAULT_CHATML_TEMPLATE, NEMOTRON_CHAT_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
+
+def _apply_turboquant_to_model(model, model_path: str):
+    """Apply TurboQuant KV cache compression to any MLX model.
+
+    Patches model.make_cache() to return TurboQuantKVCache objects instead of
+    standard KVCache. Works for ALL model types — JANG models get TQ applied
+    in their own loader, this handles standard MLX models.
+
+    Safe to call on any model: if jang_tools.turboquant is not installed or
+    the model doesn't have .layers, it silently returns without changes.
+    """
+    try:
+        from jang_tools.turboquant.config import TurboQuantConfig, make_turboquant_cache
+    except ImportError:
+        return  # TQ not available
+
+    # Need model with .layers to determine layer count and dims
+    if not hasattr(model, 'layers') or not model.layers:
+        return
+
+    try:
+        n_layers = len(model.layers)
+
+        # Read config.json for head dimensions and layer types
+        config_path = Path(model_path) / 'config.json'
+        if not config_path.exists():
+            return
+        config = json.loads(config_path.read_text())
+        text_cfg = config.get('text_config', config)
+
+        # Key/value dimensions
+        key_dim = text_cfg.get('head_dim', 128)
+        val_dim = text_cfg.get('head_dim', 128)
+        if text_cfg.get('kv_lora_rank', 0) > 0:
+            key_dim = text_cfg.get('qk_nope_head_dim', 128) + text_cfg.get('qk_rope_head_dim', 64)
+            val_dim = text_cfg.get('v_head_dim', 128)
+
+        # Layer types (hybrid detection)
+        layer_type_list = text_cfg.get('layer_types', [])
+        hybrid_pattern = text_cfg.get('hybrid_override_pattern',
+                            config.get('hybrid_override_pattern', ''))
+        if layer_type_list:
+            layer_types = [
+                'attention' if lt == 'full_attention' else 'ssm'
+                for lt in layer_type_list[:n_layers]
+            ]
+            while len(layer_types) < n_layers:
+                layer_types.append('attention')
+        elif hybrid_pattern:
+            layer_types = []
+            for ch in hybrid_pattern[:n_layers]:
+                if ch == 'M':
+                    layer_types.append('ssm')
+                elif ch == '*':
+                    layer_types.append('attention')
+        else:
+            layer_types = ['attention'] * n_layers
+
+        # Default TQ config
+        tq_config = TurboQuantConfig(
+            n_layers=n_layers,
+            default_key_bits=3,
+            default_value_bits=3,
+            critical_key_bits=4,
+            critical_value_bits=4,
+            critical_layers=[0, 1, 2, -3, -2, -1],
+            seed=42,
+        )
+
+        n_cache = len(layer_types)
+        def _tq_make_cache(_cfg=tq_config, _n=n_cache, _kd=key_dim, _vd=val_dim, _lt=layer_types):
+            return make_turboquant_cache(_cfg, _n, [_kd]*_n, [_vd]*_n, _lt)
+
+        model.make_cache = _tq_make_cache
+
+        n_attn = sum(1 for t in layer_types if t == 'attention')
+        n_ssm = sum(1 for t in layer_types if t == 'ssm')
+        logger.info(f"  TurboQuant auto-enabled: 3-bit keys/values, "
+                    f"{n_attn} attention" + (f" + {n_ssm} SSM" if n_ssm > 0 else "") + " layers")
+    except Exception as e:
+        logger.debug(f"TurboQuant auto-enable failed (non-fatal): {e}")
+
+logger = logging.getLogger(__name__)
+
 # Models that require tokenizer fallback
 FALLBACK_MODELS = [
     "nemotron",
@@ -162,15 +246,21 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
         logger.info(
             f"Model {model_name} requires tokenizer fallback, loading directly..."
         )
-        return _load_with_tokenizer_fallback(local_model_path, lazy=_lazy)
+        model, tokenizer = _load_with_tokenizer_fallback(local_model_path, lazy=_lazy)
+        _apply_turboquant_to_model(model, local_model_path)
+        return model, tokenizer
 
     try:
-        return load(model_name, tokenizer_config=tokenizer_config, lazy=_lazy)
+        model, tokenizer = load(model_name, tokenizer_config=tokenizer_config, lazy=_lazy)
+        _apply_turboquant_to_model(model, local_model_path)
+        return model, tokenizer
     except ValueError as e:
         # Fallback for models with non-standard tokenizers
         if "TokenizersBackend" in str(e) or "Tokenizer class" in str(e):
             logger.warning(f"Standard tokenizer loading failed, using fallback: {e}")
-            return _load_with_tokenizer_fallback(model_name, lazy=_lazy)
+            model, tokenizer = _load_with_tokenizer_fallback(model_name, lazy=_lazy)
+            _apply_turboquant_to_model(model, local_model_path)
+            return model, tokenizer
         else:
             raise
 

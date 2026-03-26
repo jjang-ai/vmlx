@@ -39,7 +39,19 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         model_config: Parsed config.json dict (or text_config for VLM)
     """
     _tq_cfg = jang_cfg.get("turboquant")
-    if not _tq_cfg or not _tq_cfg.get("enabled", False):
+    if not _tq_cfg:
+        # Auto-enable TQ with defaults for ALL JANG models
+        _tq_cfg = {
+            "enabled": True,
+            "default_key_bits": 3,
+            "default_value_bits": 3,
+            "critical_key_bits": 4,
+            "critical_value_bits": 4,
+            "critical_layers": [0, 1, 2, -3, -2, -1],
+            "seed": 42,
+        }
+        logger.info("  TurboQuant auto-enabled (JANG model, no explicit config)")
+    if not _tq_cfg.get("enabled", True):
         return
 
     try:
