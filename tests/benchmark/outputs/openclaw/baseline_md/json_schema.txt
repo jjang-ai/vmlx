@@ -1,0 +1,23 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Target: JSON array.
+    *   Content: 5 tasks for a software engineer today.
+    *   Task Structure: `id` (int), `title` (string), `priority` (high/medium/low), `estimated_minutes` (int).
+    *   Constraint: Output *only* the JSON array, no explanation.
+
+2.  **Draft the Tasks:**
+    *   Task 1: Fix critical bug in production. (High priority)
+    *   Task 2: Review pull requests for team. (Medium priority)
+    *   Task 3: Update documentation for API. (Low priority)
+    *   Task 4: Implement new feature for dashboard. (High priority)
+    *   Task 5: Attend daily standup and planning. (Medium priority)
+
+3.  **Format as JSON:**
+    *   Need valid JSON syntax.
+    *   Keys: `id`, `title`, `priority`, `estimated_minutes`.
+    *   Values: Integers, Strings, Strings (enum-like).
+
+4.  **Construct JSON:**
+    ```json
+   

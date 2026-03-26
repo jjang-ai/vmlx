@@ -1,0 +1,84 @@
+The user wants me to write a Python function that reverses a linked list. I need to:
+1. Define a Node class for the linked list
+2. Write a function to reverse the linked list
+3. Include a __main__ section with a short example
+
+Let me create a complete solution with:
+- Node class with data and next pointer
+- A function to reverse the linked list (I'll use the iterative approach as it's more efficient)
+- Helper functions to create and display the linked list
+- A __main__ section demonstrating the functionality
+
+Let me write clean, well-documented code.
+
+
+```python
+class Node:
+    """A node in a singly linked list."""
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+
+
+def reverse_linked_list(head):
+    """
+    Reverses a singly linked list iteratively.
+
+    Args:
+        head (Node): The head node of the linked list.
+
+    Returns:
+        Node: The new head of the reversed linked list.
+    """
+    prev = None
+    current = head
+
+    while current:
+        next_node = current.next  # Store next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev to current
+        current = next_node       # Move to next node
+
+    return prev
+
+
+def create_linked_list(values):
+    """
+    Creates a linked list from a list of values.
+
+    Args:
+        values (list): List of values to insert into the linked list.
+
+    Returns:
+        Node: The head node of the created linked list.
+    """
+    if not values:
+        return None
+
+    head = Node(values[0])
+    current = head
+
+    for value in values[1:]:
+        current.next = Node(value)
+        current = current.next
+
+    return head
+
+
+def print_linked_list(head):
+    """
+    Prints the elements of a linked list.
+
+    Args:
+        head (Node): The head node of the linked list.
+    """
+    current = head
+    elements = []
+    while current:
+        elements.append(str(current.data))
+        current = current.next
+    print(" -> ".join(elements))
+
+
+if __name__ == "__main__":
+    # Create a linked list: 1 -> 2 -> 

@@ -1,0 +1,59 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV cache and prefix cache are memory optimization techniques for Transformer models, but they operate at different levels of granularity and serve different purposes. KV Cache
+
+What it is:
+The KV (Key-Value) cache is a fundamental mechanism that stores the computed key and value vectors for each token during the generation process. Prefix Cache
+
+What it is:
+The prefix cache is a higher-level optimization that stores complete KV cache states for frequently-repeated input sequences (prefixes). | KV Cache | Prefix Cache |
+ Granularity | Per-token K and V vectors | Complete sequence states |
+ Scope | Single generation session | Across multiple requests |
+ Reuse | Within one sequence | Across different requests |
+ Memory | Grows with sequence length | Grows with cached prefixes |
+ Use Case | Enables autoregressive generation | Enables prefix sharing |
+
+How They Work Together
+
+```
+┌─────────────────────────────────────────────────┐
+│                    Request 1                     │
+│  "Translate to French: The cat sits on the mat" │
+└────────────────────┬────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│              KV Cache (per request)              │
+│  [T][h][e][ ][c][a][t]... │
+└─────────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│  Prefix Cache (shared across requests)           │
+│  "Translate to French:" → [cached KV state]     │
+└─────────────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────┐
+│                    Request 2                     │
+│  "Translate to French: Hello world"             │
+│  → Reuses prefix cache!
+
+# KV Cache vs. Prefix Cache: A Detailed Comparison
+
+## Overview
+
+Both KV cache and prefix cache are memory optimization techniques for Transformer models, but they operate at different levels of granularity and serve different purposes.
+
+---
+
+## KV Cache
+
+**What it is:**
+The KV (Key-Value) cache is a fundamental mechanism that stores the computed key and value vectors for

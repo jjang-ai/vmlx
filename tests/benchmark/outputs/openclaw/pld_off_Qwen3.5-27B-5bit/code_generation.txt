@@ -1,0 +1,84 @@
+The user wants me to write a Python function that reverses a linked list. I need to:
+1. Define a Node class for the linked list
+2. Write a function to reverse the linked list
+3. Include a main section with an example
+
+Let me create a complete solution with:
+- Node class definition
+- A function to reverse the linked list (I'll use the iterative approach as it's more efficient)
+- Helper functions to create and display linked lists
+- A main section with an example
+
+Let me write clean, well
+
+```python
+class Node:
+    """Represents a node in a singly linked list."""
+    def __init__(self, data):
+        self.data = data
+        self.next = None
+
+
+def reverse_linked_list(head):
+    """
+    Reverses a singly linked list iteratively.
+
+    Args:
+        head (Node): The head node of the linked list.
+
+    Returns:
+        Node: The new head node of the reversed linked list.
+    """
+    prev = None
+    current = head
+
+    while current:
+        next_node = current.next  # Store the next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev forward
+        current = next_node       # Move current forward
+
+    return prev
+
+
+def create_linked_list(values):
+    """
+    Creates a linked list from a list of values.
+
+    Args:
+        values (list): List of values to create nodes from.
+
+    Returns:
+        Node: The head of the created linked list.
+    """
+    if not values:
+        return None
+
+    head = Node(values[0])
+    current = head
+
+    for value in values[1:]:
+        current.next = Node(value)
+        current = current.next
+
+    return head
+
+
+def print_linked_list(head):
+    """
+    Prints the values in the linked list.
+
+    Args:
+        head (Node): The head of the linked list.
+    """
+    current = head
+    values = []
+    while current:
+        values.append(str(current.data))
+        current = current.next
+    print(" -> ".join(values) if values else "Empty list")
+
+
+if __name__ == "__main__":
+    # Example usage
+    original = create_linked_list([1, 2, 3

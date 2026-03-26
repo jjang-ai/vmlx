@@ -1,0 +1,58 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV Cache and Prefix Cache are memory optimization techniques for Transformer models, but they serve different purposes and operate at different levels of the inference pipeline. KV Cache: The Foundation
+
+What it is:
+The KV (Key-Value) Cache stores the computed key and value vectors from all previous tokens during the generation of a single sequence. |
+ Query | Computed fresh for each new token |
+| Key | Cached after computation |
+| Value | Cached after computation |
+
+Why it exists:
+Without caching, computing attention for token t would require recalculating K and V for all tokens 0 through t-1, resulting in O(n²) complexity per token. With caching, attention becomes O(n) per token. Prefix Cache: Building on KV Cache
+
+What it is:
+The Prefix Cache is a higher-level optimization that stores and reuses KV Cache blocks for common prefix sequences across multiple different requests. System-level: Manages shared memory across requests
+
+Key Differences Summary
+
+| Aspect | KV Cache | Prefix Cache |
+ Scope | Single sequence | Multiple sequences |
+| Granularity | Per-token K,V vectors | Per-sequence blocks |
+| Reuse | Within one generation | Across different requests |
+| Memory | Private per request | Shared across requests |
+| Complexity | O(n²) → O(n) per token | Reduces redundant computation across requests |
+
+When to Use Each
+
+- KV Cache: Always used in any Transformer inference (it's fundamental)
+- Prefix Cache: Added on top when you have:
+  - High request volume
+  - Common prefixes (e.g., system prompts, shared context)
+  - Memory-constrained environments
+
+Verification
+
+✓ KV Cache is necessary for any autoregressive generation
+✓ Prefix Cache is an optional optimization layer
+✓ Prefix Cache requires KV Cache to exist first
+✓ Both reduce computation but at different levels
+
+# KV Cache vs. Prefix Cache: A Detailed Comparison
+
+## Overview
+
+Both KV Cache and Prefix Cache are memory optimization techniques for Transformer models, but they serve **different purposes** and operate at **different levels** of the inference pipeline.
+
+---
+
+## KV Cache: The Foundation
+
+### What it is:
+The **KV (Key-Value) Cache** stores the computed key and value vectors from all previous

@@ -16,6 +16,7 @@ The scheduler follows vLLM's design with:
 
 import logging
 import os
+import random
 import re
 import time
 import traceback
@@ -24,13 +25,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from mlx_lm.generate import BatchGenerator
+from mlx_lm.generate import BatchGenerator, generation_stream
 from mlx_lm.sample_utils import make_sampler
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
 from .paged_cache import PagedCacheManager
 from .prefix_cache import BlockAwarePrefixCache, PrefixCacheManager
+from .prompt_lookup import NgramIndex, find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .mllm_batch_generator import HybridSSMStateCache, _fix_hybrid_cache
 from .utils.mamba_cache import ensure_mamba_support
@@ -115,6 +117,10 @@ class SchedulerConfig:
     enable_block_disk_cache: bool = False
     block_disk_cache_dir: Optional[str] = None  # None = ~/.cache/vmlx-engine/block-cache/<model_hash>
     block_disk_cache_max_gb: float = 10.0  # 0 = unlimited
+
+    # Prompt Lookup Decoding (PLD) speculative acceleration
+    pld_enabled: bool = False        # Enable PLD (opt-in; best for long structured/repetitive output)
+    pld_summary_interval: int = 487  # Log effectiveness summary every N spec-decode tokens
 
 
 @dataclass
@@ -224,6 +230,55 @@ class Scheduler:
                 )
             except Exception as _e:
                 logger.warning(f"Failed to init hybrid SSM cache layout: {_e}")
+
+        # Prompt lookup decoding — measurement state (Phase 1)
+        # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
+        self._pld_pending: Dict[str, Tuple[List[int], int, int]] = {}
+        # Per-request n-gram hash index for O(1) draft lookup
+        self._pld_ngram_indices: Dict[str, NgramIndex] = {}
+
+        # Prompt lookup decoding — Phase 2/3 (actual batched verification)
+        # Phase 2 (temp≈0): greedy acceptance, argmax bonus.
+        # Phase 3 (temp>0): probabilistic acceptance, sampled correction/bonus.
+        self._pld_spec_enabled: bool = self.config.pld_enabled
+        self._pld_spec_max_temp: float = float(os.getenv("VMLX_PLD_MAX_TEMP", "1.0"))
+        # Adaptive K: hybrid SSM/attention models process verify tokens
+        # sequentially in SSM layers.  K=2 balances verify cost (1.75x)
+        # against per-cycle overhead (remove/insert ≈ 15-30ms).  K=1 has
+        # lower verify cost (1.0x) but pays the same fixed overhead per
+        # cycle with fewer tokens to amortize it.  K=2 wins when the
+        # fixed overhead exceeds ~15ms, which remove/insert clearly does.
+        self._pld_num_drafts: int = 2 if self._is_hybrid else 5
+        self._pld_spec_attempts: int = 0
+        self._pld_spec_accepted: int = 0   # total accepted draft tokens
+        self._pld_spec_wasted: int = 0     # total rejected draft tokens
+        # Per-window counters for periodic summary (reset after each log)
+        self._pld_win_attempts: int = 0
+        self._pld_win_accepted: int = 0
+        self._pld_win_full: int = 0        # rounds where all K drafts accepted
+        self._pld_win_zero: int = 0        # rounds where 0 drafts accepted
+        self._pld_win_tokens: int = 0      # tokens emitted while PLD active
+        self._pld_win_d0_skip: int = 0     # d0 pre-check skips (wasted cycles avoided)
+        # Auto-tune: TCP slow-start inspired wall-clock throughput control.
+        # Window starts at 10 tokens, doubles each positive window (exponential
+        # growth), caps at _pld_summary_interval.  On congestion (PLD hurting),
+        # disables and resets window to 10.  Probes after 5× interval tokens.
+        self._pld_auto_enabled: bool = True
+        self._pld_at_window: int = 1           # current auto-tune window (TCP cwnd)
+        self._pld_at_probe_tokens: int = 0      # tokens counted while disabled
+        self._pld_win_cycle_wall_s: float = 0.0
+        self._pld_win_step_wall_s: float = 0.0
+        self._pld_win_total_tokens: int = 0
+        self._pld_summary_interval: int = self.config.pld_summary_interval
+        if self._pld_spec_enabled:
+            logger.info(
+                "[PLD] enabled — K=%d (%s model), d0 pre-check active, "
+                "auto-tune on (slow-start window=1→%d)",
+                self._pld_num_drafts,
+                "hybrid" if self._is_hybrid else "pure-attention",
+                self._pld_summary_interval,
+            )
+        self._pld_summary_next: int = 1  # first window is 1 token (slow start)
 
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
@@ -1463,6 +1518,15 @@ class Scheduler:
         if request.request_id in self.requests:
             raise ValueError(f"Request {request.request_id} already exists")
 
+        # Reset PLD auto-tune window on each new request — each generation
+        # is a different workload, so cwnd from the previous request is
+        # irrelevant.  But only reset if PLD was actively running; if
+        # auto-tune disabled it, respect that decision (the probe will
+        # re-enable periodically to check if conditions changed).
+        if self._pld_spec_enabled and self._pld_auto_enabled:
+            self._pld_at_window = 1
+            self._pld_summary_next = 1
+
         # Tokenize if needed
         if request.prompt_token_ids is None:
             if isinstance(request.prompt, str):
@@ -2056,17 +2120,95 @@ class Scheduler:
             # Append token to request
             request.append_output_token(response.token)
 
+            # ── Prompt Lookup Decoding — measurement (Phase 1) ──────────────
+            # Retrospectively check whether the previous draft prediction was
+            # correct, then generate a new draft for the next position.
+            # Zero effect on generation output; pure stat collection.
+            # Gated on _pld_spec_enabled to avoid find_draft_tokens overhead
+            # on servers not using PLD.
+            if self._pld_spec_enabled:
+                try:
+                    current_idx = request.num_output_tokens - 1  # 0-based, just appended
+                    pending = self._pld_pending.get(request_id)
+                    if pending is not None:
+                        draft_tokens, start_idx, hit_count = pending
+                        pos = current_idx - start_idx
+                        if 0 <= pos < len(draft_tokens):
+                            if response.token == draft_tokens[pos]:
+                                hit_count += 1
+                                if pos == 0:
+                                    pld_stats.first_hit += 1
+                                pld_stats.total_hit_depth += 1
+                                self._pld_pending[request_id] = (draft_tokens, start_idx, hit_count)
+                            else:
+                                # Miss — record completed sequence and clear
+                                pld_stats.completed_seqs += 1
+                                del self._pld_pending[request_id]
+                        else:
+                            pld_stats.completed_seqs += 1
+                            del self._pld_pending[request_id]
+
+                    if request_id not in self._pld_pending:
+                        full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
+                        drafts = find_draft_tokens(full_tokens)
+                        if drafts:
+                            pld_stats.draft_found += 1
+                            self._pld_pending[request_id] = (drafts, request.num_output_tokens, 0)
+
+                    pld_stats.total_tokens += 1
+                    if pld_stats.total_tokens % 200 == 0:
+                        pld_stats.log_summary()
+                except Exception:
+                    pass  # Never let measurement break generation
+            # ── end PLD measurement ──────────────────────────────────────────
+
+            # ── PLD Phase 2: speculative extension ───────────────────────────
+            # Attempt to accept K draft tokens + bonus in one forward pass.
+            # spec_tokens = [d1, ..., d_M, bonus_token] if any accepted; else []
+            # Any stop token in spec_tokens truncates the list at that point.
+            spec_tokens: List[int] = []
+            spec_hit_stop = False
+            _step_t0 = time.perf_counter()
+            if (
+                self._pld_spec_enabled
+                and self._pld_auto_enabled
+                and response.finish_reason is None
+                and self.batch_generator is not None
+            ):
+                try:
+                    _pld_t0 = time.perf_counter()
+                    raw_spec = self._try_speculative_decode(
+                        request_id, request, response.token
+                    )
+                    self._pld_win_cycle_wall_s += time.perf_counter() - _pld_t0
+                    _spec_stops = self.stop_tokens | set(
+                        request.sampling_params.stop_token_ids or []
+                    )
+                    for tok in raw_spec:
+                        if tok in _spec_stops:
+                            spec_hit_stop = True
+                            break
+                        spec_tokens.append(tok)
+                        request.append_output_token(tok)
+                except Exception:
+                    spec_tokens = []  # never let speculative break generation
+            # ── end PLD Phase 2 ───────────────────────────────────────────────
+
             # Use streaming detokenizer for correct multi-byte char handling
             detok = self._get_detokenizer(request_id)
 
             # Check if finished BEFORE adding token to detokenizer
             # so stop tokens (e.g. <|im_end|>) don't leak into new_text
-            is_stop = response.finish_reason == "stop"
+            is_stop = response.finish_reason == "stop" or spec_hit_stop
             string_stop_truncate = -1  # >=0 when string stop matched
 
             if not is_stop:
+                # Capture text start so we can diff after adding all tokens
+                text_before = detok.text
                 detok.add_token(response.token)
-                new_text = detok.last_segment
+                for tok in spec_tokens:
+                    detok.add_token(tok)
+                new_text = detok.text[len(text_before):]
 
                 # Post-decode string stop sequence check.
                 # BatchGenerator only handles integer stop_token_ids;
@@ -2093,14 +2235,14 @@ class Scheduler:
                 # Stop token: don't decode it, just flush any buffered text
                 new_text = ""
 
-            # Create output — include cache_detail (e.g. "paged", "paged+ssm(23)", "disk")
+            # Create output — include cache_detail and base token + any accepted spec tokens
             _detail = getattr(request, '_cache_detail', '')
             # Annotate TQ if active
             if _detail and getattr(self, '_tq_active', False):
                 _detail += "+tq"
             output = RequestOutput(
                 request_id=request_id,
-                new_token_ids=[response.token],
+                new_token_ids=[response.token] + spec_tokens,
                 new_text=new_text,
                 output_token_ids=list(request.output_token_ids),
                 prompt_tokens=request.num_prompt_tokens,
@@ -2109,8 +2251,10 @@ class Scheduler:
                 cache_detail=_detail,
             )
 
-            # Determine effective finish reason (string stop overrides)
+            # Determine effective finish reason (string stop or spec stop override)
             finish_reason = response.finish_reason
+            if spec_hit_stop:
+                finish_reason = "stop"
             if string_stop_truncate >= 0:
                 finish_reason = "stop"
 
@@ -2249,6 +2393,15 @@ class Scheduler:
                     f"{request.num_output_tokens} tokens"
                 )
 
+            # Auto-tune timing: track wall time per step and tokens produced
+            if self._pld_spec_enabled:
+                self._pld_win_step_wall_s += time.perf_counter() - _step_t0
+                self._pld_win_total_tokens += 1 + len(spec_tokens)
+                # Trigger summary/probe based on total tokens, not just PLD
+                # tokens — otherwise auto-disabled PLD never gets probed.
+                if self._pld_win_total_tokens >= self._pld_summary_next:
+                    self._pld_maybe_log_summary()
+
             outputs.append(output)
 
         return outputs, finished_ids
@@ -2263,6 +2416,10 @@ class Scheduler:
                 _surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
 
         for request_id in finished_ids:
+            # Clean up PLD state
+            self._pld_pending.pop(request_id, None)
+            self._pld_ngram_indices.pop(request_id, None)
+
             request = self.running.get(request_id)
 
             # PHASE 2 OPTIMIZATION: Skip cache storage for short-output requests.
@@ -2674,12 +2831,553 @@ class Scheduler:
             # Clear stale detokenizer — request will restart from scratch
             self._cleanup_detokenizer(request_id)
 
+            # Clear PLD state for this request
+            self._pld_pending.pop(request_id, None)
+            self._pld_ngram_indices.pop(request_id, None)
+
             # Move to waiting queue (at front for priority)
             self.waiting.appendleft(request)
             del self.running[request_id]
 
         if count > 0:
             logger.info(f"Rescheduled {count} requests for retry")
+
+    def _pld_maybe_log_summary(self) -> None:
+        """Emit a PLD effectiveness summary at INFO level every N tokens.
+
+        Logged when cumulative tokens emitted via spec decode rounds crosses
+        the next summary threshold. Resets window counters after logging so
+        each summary reflects the most recent interval only.
+
+        Metrics:
+          rounds   — spec decode attempts in this window
+          accept   — mean draft tokens accepted per round (max=K=5)
+          full     — % of rounds where all K drafts accepted (best case)
+          zero     — % of rounds where 0 drafts accepted (overhead, no gain)
+          eff      — effective tokens per forward pass: (accepted+rounds) /
+                     (2*rounds). >1.0 means PLD is helping; <1.0 means overhead
+                     exceeds benefit. Baseline (no PLD) = 1.0.
+        """
+        # Trigger on either PLD tokens or total tokens (for disabled-state probe)
+        if (self._pld_win_tokens < self._pld_summary_next
+                and self._pld_win_total_tokens < self._pld_summary_next):
+            return
+
+        n = self._pld_win_attempts
+        _win_size = self._pld_at_window
+
+        if n == 0:
+            if self._pld_auto_enabled:
+                # PLD was enabled but d0 pre-check filtered every cycle —
+                # no opportunities to help. Disable to avoid per-token
+                # overhead from find_draft_tokens + d0 check.
+                self._pld_auto_enabled = False
+                self._pld_at_window = 1
+                self._pld_at_probe_tokens = 0
+                logger.info(
+                    "[PLD:3b1f] auto-tune — disabled (0 rounds in %d tokens, "
+                    "d0 pre-check filtered all)",
+                    self._pld_win_total_tokens,
+                )
+            else:
+                # Already disabled.  Count toward probe interval.
+                self._pld_at_probe_tokens += self._pld_win_total_tokens
+                if self._pld_at_probe_tokens >= self._pld_summary_interval * 5:
+                    self._pld_auto_enabled = True
+                    self._pld_at_window = 1
+                    self._pld_at_probe_tokens = 0
+                    logger.info(
+                        "[PLD:3b1f] auto-tune probe — re-enabling with window=%d",
+                        self._pld_at_window,
+                    )
+            self._pld_win_total_tokens = 0
+            self._pld_win_step_wall_s = 0.0
+            self._pld_win_cycle_wall_s = 0.0
+            self._pld_summary_next = self._pld_at_window
+            return
+
+        accepted = self._pld_win_accepted
+        full_pct = 100 * self._pld_win_full / n
+        zero_pct = 100 * self._pld_win_zero / n
+        avg_accept = accepted / n
+        eff = (accepted + n) / (2 * n)
+
+        # Auto-tune: compare PLD window throughput vs estimated baseline.
+        _autotune_msg = ""
+        base_time = self._pld_win_step_wall_s - self._pld_win_cycle_wall_s
+        base_tok = self._pld_win_total_tokens - self._pld_win_tokens
+        if base_time > 0 and base_tok >= 1 and self._pld_win_step_wall_s > 0:
+            baseline_tok_s = base_tok / base_time
+            window_tok_s = self._pld_win_total_tokens / self._pld_win_step_wall_s
+            ratio = window_tok_s / baseline_tok_s if baseline_tok_s > 0 else 1.0
+
+            if ratio < 0.95:
+                # Congestion: PLD is hurting. Disable and reset window.
+                self._pld_auto_enabled = False
+                self._pld_at_window = 1  # reset cwnd for next probe
+                self._pld_at_probe_tokens = 0
+                _autotune_msg = (
+                    f" — AUTO-DISABLED cwnd={_win_size} "
+                    f"(window {window_tok_s:.0f} tok/s "
+                    f"< baseline {baseline_tok_s:.0f} tok/s × 0.95)"
+                )
+            else:
+                # No congestion: grow window (TCP slow start).
+                old_window = self._pld_at_window
+                self._pld_at_window = min(
+                    self._pld_at_window * 2, self._pld_summary_interval
+                )
+                _autotune_msg = (
+                    f"  cwnd={old_window}→{self._pld_at_window} "
+                    f"wallclock={window_tok_s:.0f}/{baseline_tok_s:.0f} tok/s"
+                )
+
+        logger.info(
+            "[PLD:3b1f] summary over last %d tokens — "
+            "rounds=%d  accept=%.1f/%d  full=%.0f%%  zero=%.0f%%  "
+            "d0_skip=%d  eff=%.2f tok/pass%s",
+            self._pld_win_tokens, n, avg_accept, self._pld_num_drafts,
+            full_pct, zero_pct, self._pld_win_d0_skip, eff, _autotune_msg,
+        )
+
+        # Reset window counters
+        self._pld_win_attempts = 0
+        self._pld_win_accepted = 0
+        self._pld_win_full = 0
+        self._pld_win_zero = 0
+        self._pld_win_tokens = 0
+        self._pld_win_d0_skip = 0
+        self._pld_win_cycle_wall_s = 0.0
+        self._pld_win_step_wall_s = 0.0
+        self._pld_win_total_tokens = 0
+        self._pld_summary_next = self._pld_at_window
+
+    def _try_speculative_decode(
+        self,
+        request_id: str,
+        request: Request,
+        last_token: int,
+    ) -> List[int]:
+        """
+        Prompt Lookup Decoding — Phase 2/3: batched speculative verification.
+
+        After BatchGenerator emits token `last_token`, this method:
+          1. Peeks at active_batch.logprobs[e] BEFORE remove() to get
+             forward_logprobs — the model's prediction for what comes after
+             last_token.  (response.logprobs is the distribution that GENERATED
+             last_token, one step behind what we need.)
+          2. Extracts the KV cache by removing the request from BatchGenerator.
+             Cache is at offset N — last_token is already in it.
+          3. Finds K draft tokens via n-gram lookup in the full token sequence.
+          4. Runs ONE forward pass: model([d0, ..., d_{K-1}], cache).
+             forward_logprobs is used for d0 acceptance; no last_token prefix
+             in verify_input means no pre-trim and no SSM offset accumulation.
+          5. Accepts the prefix up to the first mismatch (M <= K tokens).
+          6. Trims the cache to the accepted prefix.
+          7. Re-inserts the request into BatchGenerator with the bonus token.
+          8. Updates uid maps so subsequent step() calls find the request.
+
+        Returns extra tokens to append: [d0, ..., d_M, bonus_token].
+        On any failure returns [] — generation continues normally.
+        A guaranteed finally block ensures the request is never orphaned.
+
+        Phase 2 (temp≈0): greedy acceptance, argmax bonus.
+        Phase 3 (temp>0): probabilistic acceptance — accept d_i with probability
+        p(d_i | context); on rejection sample a correction token with d_i
+        excluded. Bonus is always sampled (not argmax). This provably preserves
+        the original sampling distribution (Leviathan et al., 2023).
+
+        NOTE — concurrent request interaction (open question #5):
+        The remove/re-insert cycle pulls this request out of the active decode
+        batch for the duration of the verify forward pass. Under concurrent
+        load (batch_size > 1) this reduces decode-phase batch occupancy for
+        one step per spec decode round. Throughput impact at batch_size > 1
+        is unmeasured. PLD is safe and correct at any concurrency level but
+        may hurt aggregate throughput when multiple requests are in flight.
+        """
+        import mlx.core as mx
+        import numpy as _np
+        try:
+            from mlx_lm.models.cache import CacheList as _CacheList
+        except ImportError:
+            _CacheList = None
+
+        temp = request.sampling_params.temperature
+        if temp > self._pld_spec_max_temp:
+            return []
+
+        full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
+        ngram_idx = self._pld_ngram_indices.get(request_id)
+        if ngram_idx is None:
+            ngram_idx = NgramIndex()
+            self._pld_ngram_indices[request_id] = ngram_idx
+        drafts = ngram_idx.find_drafts(full_tokens, num_draft_tokens=5, max_ngram_size=3)
+        if not drafts:
+            return []
+
+        remaining = request.sampling_params.max_tokens - request.num_output_tokens
+        if remaining <= 1:
+            return []
+        drafts = drafts[: min(len(drafts), remaining - 1)]
+
+        uid = self.request_id_to_uid.get(request_id)
+        if uid is None:
+            return []
+
+        self._pld_spec_attempts += 1
+        old_uid = uid
+        kv_cache = None
+        removed = False
+
+        try:
+            # 1. Peek at forward logprobs BEFORE removing from BatchGenerator.
+            #
+            #    In BatchGenerator._next():
+            #      y, logprobs = batch.y, batch.logprobs  ← OLD tokens/logprobs
+            #      batch.y, batch.logprobs = _step(y)     ← NEW (forward) logprobs
+            #      response = Response(uid, y[e], logprobs[e], ...)
+            #
+            #    So response.logprobs = OLD logprobs (the distribution that
+            #    generated last_token, argmax==last_token at T=0).
+            #    active_batch.logprobs[e] = NEW logprobs = prediction AFTER
+            #    last_token — exactly what we need for d0 acceptance.
+            ab = self.batch_generator.active_batch
+            if ab is None or uid not in ab.uids:
+                raise RuntimeError("uid not in active_batch — cannot get forward logprobs")
+            ab_idx = ab.uids.index(uid)
+            forward_logprobs = ab.logprobs[ab_idx]
+
+            # 1b. d0 pre-check: avoid the expensive remove/verify/insert cycle
+            #     when the first draft token has negligible acceptance probability.
+            #     forward_logprobs are already materialized by BatchGenerator.
+            if temp <= 1.67e-6:
+                # Greedy: exact check — if argmax != d0, acceptance is zero.
+                d0_check = int(mx.argmax(forward_logprobs).item())
+                if d0_check != drafts[0]:
+                    self._pld_win_d0_skip += 1
+                    return []
+            else:
+                # T>0: skip if d0 logprob below threshold.  forward_logprobs
+                # are already log(softmax(logits)) — a single index lookup is
+                # far cheaper than recomputing softmax over the full vocab.
+                # Threshold -2.0 ≈ p>13% at T=1; at T=0.3 the effective
+                # probability is higher, so this is conservative.
+                _lp_d0 = forward_logprobs[drafts[0]].item()
+                if _lp_d0 < -2.0:
+                    self._pld_win_d0_skip += 1
+                    return []
+
+            # Trim to configured K (dynamic K=3 was tested and regressed —
+            # on hybrid models, p(full_accept) drops with K and any miss
+            # forces full rewind, so K=2 remains the sweet spot).
+            drafts = drafts[:self._pld_num_drafts]
+
+            # 2. Extract KV cache — removes request from BatchGenerator
+            cache_dict = self.batch_generator.remove([uid], return_prompt_caches=True)
+            removed = True
+            kv_cache = cache_dict.get(uid)
+            if kv_cache is None:
+                raise RuntimeError("remove() returned no cache")
+
+            # 2b. Save ArraysCache state before verification so we can restore
+            #     it on partial rejection (hybrid models only).
+            #     The slice arrays from extract_cache() are kept alive by
+            #     Python's reference counting regardless of batch.filter().
+            saved_array_caches: dict = {}
+            for i, c in enumerate(kv_cache):
+                if not c.is_trimmable():
+                    saved_array_caches[i] = list(c.cache)
+
+            # 2. Single batched verification forward pass
+            # Input:   [d0, ..., d_{K-1}]  — K tokens (no last_token prefix)
+            # Cache:   holds t0...t_N  (last_token already in cache at offset N)
+            # forward_logprobs: model's prediction after last_token (from batch gen)
+            # logits[i] predicts what comes after d_i:
+            #   forward_logprobs  → should equal d0   (prediction after last_token)
+            #   logits[0]      → should equal d1   (prediction after d0)
+            #   logits[i]      → should equal d_{i+1}
+            #   logits[K-1]    → bonus token (free prediction after d_{K-1})
+            num_drafts = len(drafts)
+            verify_input = mx.array([drafts])  # (1, K)
+
+            with mx.stream(generation_stream):
+                logits = self.model(verify_input, cache=kv_cache)
+                if temp <= 1.67e-6:
+                    # Greedy: argmax forces the full forward pass
+                    predicted = mx.argmax(logits[0], axis=-1)  # (K,)
+                    mx.eval(predicted)
+                else:
+                    # Phase 3: evaluate full logits to force the forward pass
+                    mx.eval(logits)
+
+            # 3. Accept prefix — greedy (temp≈0) or probabilistic (Phase 3)
+            if temp <= 1.67e-6:
+                predicted = predicted.tolist()  # length K
+                # d0: check forward_logprobs (prediction after last_token)
+                d0_predicted = int(mx.argmax(forward_logprobs).item())
+                num_accept = 0
+                if d0_predicted == drafts[0]:
+                    num_accept = 1
+                    # d1..d_{K-1}: check logits[0, i-1] (prediction after d_{i-1})
+                    for i in range(1, num_drafts):
+                        if predicted[i - 1] == drafts[i]:
+                            num_accept += 1
+                        else:
+                            break
+                # bonus: prediction at position num_accept
+                if num_accept == 0:
+                    bonus_token = d0_predicted  # correction: model's actual pred at pos N
+                else:
+                    bonus_token = predicted[num_accept - 1]  # pred after d_{num_accept-1}
+
+            else:
+                # Phase 3: accept d_i with prob p(d_i | context).
+                # Scalar log-probability instead of full-vocab softmax:
+                # log p_T(d) = logprobs[d]/T - logsumexp(logprobs/T)
+                # logsumexp is O(V) but produces a scalar — avoids
+                # materializing the full 150K probability vector.
+                import math
+                _lp_scaled = forward_logprobs / temp
+                _log_p_d0 = _lp_scaled[drafts[0]] - mx.logsumexp(_lp_scaled)
+                mx.eval(_log_p_d0)
+
+                num_accept = 0
+                if random.random() < math.exp(_log_p_d0.item()):
+                    num_accept = 1
+                    # d1..d_{K-1}: accept from logits[0, i-1], lazy per-position
+                    for i in range(1, num_drafts):
+                        _lp_i = logits[0, i - 1] / temp
+                        _log_p_di = _lp_i[drafts[i]] - mx.logsumexp(_lp_i)
+                        if random.random() < math.exp(_log_p_di.item()):
+                            num_accept += 1
+                        else:
+                            break
+
+                # Correction/bonus: sample at the first un-accepted position.
+                # On rejection exclude the rejected token so it cannot be
+                # re-drawn (preserves the conditional distribution).
+                #
+                # make_sampler expects log-probabilities (not raw logits) —
+                # apply_top_p calls mx.exp() internally.
+                sampler = make_sampler(
+                    temp=temp,
+                    top_p=request.sampling_params.top_p,
+                    min_p=request.sampling_params.min_p,
+                    top_k=request.sampling_params.top_k,
+                )
+                if num_accept == 0:
+                    # d0 rejected: correction from forward_logprobs, excluding d0
+                    bonus_logprobs = mx.where(
+                        mx.arange(forward_logprobs.shape[-1]) == drafts[0],
+                        mx.full(forward_logprobs.shape, float("-inf"), dtype=forward_logprobs.dtype),
+                        forward_logprobs,
+                    )
+                else:
+                    # bonus/correction: prediction after d_{num_accept-1}
+                    bonus_raw = logits[0, num_accept - 1]
+                    bonus_logprobs = bonus_raw - mx.logsumexp(bonus_raw, axis=-1, keepdims=True)
+                    if num_accept < num_drafts:
+                        rejected_tok = drafts[num_accept]
+                        bonus_logprobs = mx.where(
+                            mx.arange(bonus_logprobs.shape[-1]) == rejected_tok,
+                            mx.full(bonus_logprobs.shape, float("-inf"), dtype=bonus_logprobs.dtype),
+                            bonus_logprobs,
+                        )
+                bonus_token = sampler(bonus_logprobs).item()
+
+            # 4. Roll back cache to the accepted prefix.
+            #
+            #    After the forward pass every layer is advanced by K positions.
+            #    Three cases:
+            #
+            #    a) All K drafts accepted (num_to_trim == 0):
+            #       KVCache and ArraysCache are both correctly at N+K.
+            #       Nothing to do.
+            #
+            #    b) Partial/full rejection AND model has ArraysCache layers:
+            #       Trimming KVCache works but ArraysCache cannot be rewound.
+            #       Restoring ArraysCache to its pre-verification state (N) and
+            #       rewinding KVCache by K (back to offset N) keeps both caches
+            #       consistent at zero offset.  A correction token is computed
+            #       from forward_logprobs and returned to the client.
+            #
+            #    c) Partial/full rejection, pure KV-cache model:
+            #       Trim KVCache by (K - num_accept) positions.  The existing
+            #       partial-trim logic applies; ArraysCache restore is skipped.
+            #
+            #    Standard KVCache grows by concatenation — trim() only adjusts
+            #    offset, which update_and_fetch() immediately overwrites with
+            #    keys.shape[-2].  We must slice the arrays directly.
+            #    QuantizedKVCache uses offset as a write pointer, so setting
+            #    offset alone is sufficient.
+            num_to_trim = num_drafts - num_accept
+
+            if num_to_trim == 0:
+                # Case (a): full accept — both caches consistent, nothing to do.
+                pass
+
+            elif saved_array_caches:
+                # Case (b): rejection on hybrid model — restore ArraysCache,
+                # rewind KVCache to pre-verify offset (N), emit correction token.
+                #
+                # verify_input = [d0..d_{K-1}] advanced both caches by K steps.
+                # Restoring both to N keeps SSM/KV offset at zero.  Accepted
+                # drafts (if any) are discarded — we cannot advance KVCache to
+                # N+j while rewinding ArraysCache to N.
+                #
+                # Compute correction at position N (after last_token in cache):
+                if temp <= 1.67e-6:
+                    correction_token = d0_predicted
+                else:
+                    cb_logprobs = forward_logprobs
+                    if num_accept == 0:
+                        cb_logprobs = mx.where(
+                            mx.arange(forward_logprobs.shape[-1]) == drafts[0],
+                            mx.full(forward_logprobs.shape, float("-inf"), dtype=forward_logprobs.dtype),
+                            forward_logprobs,
+                        )
+                    cb_sampler = make_sampler(
+                        temp=temp,
+                        top_p=request.sampling_params.top_p,
+                        min_p=request.sampling_params.min_p,
+                        top_k=request.sampling_params.top_k,
+                    )
+                    correction_token = cb_sampler(cb_logprobs).item()
+
+                for i, c in enumerate(kv_cache):
+                    if i in saved_array_caches:
+                        c.cache = saved_array_caches[i]
+                for c in kv_cache:
+                    if not c.is_trimmable() or c.offset == 0:
+                        continue
+                    pre_verify_offset = max(0, c.offset - num_drafts)  # N+K - K = N
+                    if _CacheList is not None and isinstance(c, _CacheList):
+                        c.trim(num_drafts)
+                        continue
+                    if isinstance(c.keys, mx.array):
+                        # Numpy roundtrip: materialize before slicing to avoid
+                        # Metal command buffer corruption from lazy MLX ops.
+                        # bfloat16 → float16 for numpy (no native bf16 support).
+                        _kd, _vd = c.keys.dtype, c.values.dtype
+                        _ka = c.keys.astype(mx.float16) if 'bfloat16' in str(_kd) else c.keys
+                        _va = c.values.astype(mx.float16) if 'bfloat16' in str(_vd) else c.values
+                        _k, _v = _np.array(_ka), _np.array(_va)
+                        c.keys   = mx.array(_k[..., :pre_verify_offset, :]).astype(_kd)
+                        c.values = mx.array(_v[..., :pre_verify_offset, :]).astype(_vd)
+                    c.offset = pre_verify_offset
+                    if hasattr(c, '_idx'):  # RotatingKVCache: sync write pointer
+                        c._idx = pre_verify_offset
+                new_uids = self.batch_generator.insert(
+                    [[correction_token]],
+                    max_tokens=[max(1, remaining - 1)],
+                    caches=[kv_cache],
+                )
+                removed = False
+                new_uid = new_uids[0]
+                del self.uid_to_request_id[old_uid]
+                self.request_id_to_uid[request_id] = new_uid
+                self.uid_to_request_id[new_uid] = request_id
+                self._pld_spec_wasted += num_drafts
+                self._pld_win_attempts += 1
+                self._pld_win_accepted += num_accept
+                if num_accept == 0:
+                    self._pld_win_zero += 1
+                self._pld_win_tokens += 1  # only correction token emitted
+                self._pld_maybe_log_summary()
+                logger.debug(
+                    "[PLD-spec] hybrid partial reject: rewound %d/%d, correction=%d",
+                    num_accept, num_drafts, correction_token,
+                )
+                return [correction_token]
+
+            else:
+                # Case (c): rejection on pure KV-cache model — partial trim.
+                for c in kv_cache:
+                    if not c.is_trimmable() or c.offset == 0:
+                        continue
+                    accepted_offset = max(0, c.offset - num_to_trim)
+                    if _CacheList is not None and isinstance(c, _CacheList):
+                        c.trim(num_to_trim)
+                        continue
+                    if isinstance(c.keys, mx.array):
+                        _kd, _vd = c.keys.dtype, c.values.dtype
+                        _ka = c.keys.astype(mx.float16) if 'bfloat16' in str(_kd) else c.keys
+                        _va = c.values.astype(mx.float16) if 'bfloat16' in str(_vd) else c.values
+                        _k, _v = _np.array(_ka), _np.array(_va)
+                        c.keys   = mx.array(_k[..., :accepted_offset, :]).astype(_kd)
+                        c.values = mx.array(_v[..., :accepted_offset, :]).astype(_vd)
+                    c.offset = accepted_offset
+                    if hasattr(c, '_idx'):  # RotatingKVCache: sync write pointer
+                        c._idx = accepted_offset
+
+            # 5. Re-insert with bonus token (next to-be-processed token)
+            new_remaining = max(1, remaining - num_accept - 1)
+            new_uids = self.batch_generator.insert(
+                [[bonus_token]],
+                max_tokens=[new_remaining],
+                caches=[kv_cache],
+            )
+            removed = False  # re-inserted successfully
+
+            # 6. Update uid maps
+            new_uid = new_uids[0]
+            del self.uid_to_request_id[old_uid]
+            self.request_id_to_uid[request_id] = new_uid
+            self.uid_to_request_id[new_uid] = request_id
+
+            # 7. Accumulate stats
+            self._pld_spec_accepted += num_accept
+            self._pld_spec_wasted += num_drafts - num_accept
+
+            self._pld_win_attempts += 1
+            self._pld_win_accepted += num_accept
+            if num_accept == num_drafts:
+                self._pld_win_full += 1
+            if num_accept == 0:
+                self._pld_win_zero += 1
+            tokens_this_round = num_accept + 1  # accepted drafts + bonus
+            self._pld_win_tokens += tokens_this_round
+            self._pld_maybe_log_summary()
+
+            extra = list(drafts[:num_accept]) + [bonus_token]
+            logger.debug(
+                "[PLD-spec] accepted=%d/%d bonus=%d",
+                num_accept, num_drafts, bonus_token,
+            )
+            return extra
+
+        except Exception as exc:
+            logger.warning(
+                "[PLD-spec] Failed for %s: %s", request_id, exc, exc_info=False
+            )
+            return []
+
+        finally:
+            # Guarantee: if removed but not re-inserted, do an emergency
+            # re-insert so the request is never orphaned in self.running.
+            if removed:
+                try:
+                    cache_arg = [kv_cache] if kv_cache is not None else None
+                    em_uids = self.batch_generator.insert(
+                        [[last_token]],
+                        max_tokens=[max(1, remaining - 1)],
+                        caches=cache_arg,
+                    )
+                    em_uid = em_uids[0]
+                    self.uid_to_request_id.pop(old_uid, None)
+                    self.request_id_to_uid[request_id] = em_uid
+                    self.uid_to_request_id[em_uid] = request_id
+                    logger.warning(
+                        "[PLD-spec] Emergency re-insert for %s (uid %d→%d)",
+                        request_id, old_uid, em_uid,
+                    )
+                except Exception as em_exc:
+                    logger.error(
+                        "[PLD-spec] Emergency re-insert failed for %s: %s — "
+                        "request may stall",
+                        request_id, em_exc,
+                    )
+                    self.uid_to_request_id.pop(old_uid, None)
 
     def step(self, max_retries: int = 2) -> SchedulerOutput:
         """

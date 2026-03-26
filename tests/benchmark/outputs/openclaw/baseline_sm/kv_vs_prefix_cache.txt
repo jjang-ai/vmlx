@@ -1,0 +1,43 @@
+Great question! Both **KV cache** and **prefix cache** are used in the context of **large language models (LLMs)**, particularly during **autoregressive generation** (like in text generation), to improve efficiency by avoiding redundant computations. However, they serve different purposes and are used in different ways.
+
+Let’s break down the differences:
+
+---
+
+### 🔹 1. KV Cache (Key-Value Cache)
+
+**What it is:**
+- A **KV cache** stores the **key (K)** and **value (V)** tensors of the model’s self-attention layers for previously generated tokens.
+- It is used to **avoid recomputing attention over already generated tokens** when generating the next token.
+
+**Why it's used:**
+- In autoregressive generation, each new token depends on all previous tokens.
+- During attention computation, the model computes attention between the current token and all previous tokens.
+- If you recompute attention for every token, you’d be doing redundant work.
+- The KV cache stores the keys and values from the previous tokens, so when generating the next token, the model can **look up** the stored K and V instead of re-computing them.
+
+**Structure:**
+- For each position `t`, you store:
+  - `K_t` (key matrix)
+  - `V_t` (value matrix)
+- These are used in the attention computation for the next token.
+
+**Use case:**
+- Standard in all modern LLMs (e.g., LLaMA, GPT, Mistral).
+- Essential for **real-time, efficient generation** (e.g., chatbots, text completion).
+
+**Efficiency gain:**
+- Reduces computational cost from O(n²) to O(1) per new token (in terms of attention computation).
+
+---
+
+### 🔹 2. Prefix Cache
+
+**What it is:**
+- A **prefix cache** is a **more general concept** that can refer to storing **the entire sequence of tokens (or their representations)** up to a certain point — often used in **beam search**, **multi-turn conversations**, or **long-context reasoning**.
+- It may include **token IDs**, **embeddings**, or **attention states**.
+- It's not strictly limited to keys and values — it can store more than just K and V.
+
+**Why it's used:**
+- To **preserve context** across long conversations or complex reasoning.
+- In **beam search**, multiple hypotheses are kept, and each

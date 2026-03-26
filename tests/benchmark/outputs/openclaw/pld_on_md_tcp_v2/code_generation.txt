@@ -1,0 +1,68 @@
+The user wants me to write a Python function that reverses a linked list. I need to:
+
+1. Define a Node class for the linked list
+2. Create a function to reverse the linked list
+3. Include a short example in __main__ to demonstrate how it works
+
+Let me create a complete, working example with:
+- Node class with value and next attributes
+- Function to reverse the linked list (iterative approach is usually clearer)
+- Helper function to print the linked list
+- Example usage in __main__
+
+I'll use the iterative approach as it's more efficient (O(1) space) and easier to
+
+```python
+class Node:
+    """Node class for singly linked list."""
+    def __init__(self, value):
+        self.value = value
+        self.next = None
+
+def reverse_linked_list(head):
+    """
+    Reverses a singly linked list iteratively.
+    
+    Args:
+        head (Node): The head node of the linked list.
+    
+    Returns:
+        Node: The new head of the reversed linked list.
+    """
+    prev = None
+    current = head
+    
+    while current:
+        next_node = current.next  # Save next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev forward
+        current = next_node       # Move current forward
+    
+    return prev  # New head of the reversed list
+
+def print_linked_list(head):
+    """Prints the linked list values."""
+    values = []
+    current = head
+    while current:
+        values.append(str(current.value))
+        current = current.next
+    print(" -> ".join(values) if values else "Empty list")
+
+def create_linked_list(values):
+    """Creates a linked list from a list of values."""
+    if not values:
+        return None
+    head = Node(values[0])
+    current = head
+    for value in values[1:]:
+        current.next = Node(value)
+        current = current.next
+    return head
+
+if __name__ == "__main__":
+    # Create a linked list: 1 -> 2 -> 3 -> 4 -> 5
+    original_list = create_linked_list([1, 2, 3, 4, 5])
+    
+    print("Original list:")
+    print_linked_list(original_list

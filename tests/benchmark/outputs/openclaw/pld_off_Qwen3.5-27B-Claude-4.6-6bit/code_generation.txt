@@ -1,0 +1,69 @@
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previously processed node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `temp`: Temporarily stores `current.next` before we modify it
+
+Key considerations:
+- Args:
+        head: The head node of the linked list to reverse.
+    
+    Returns:
+        The new head node of the reversed linked list.
+    
+    Time Complexity: O(n) - we traverse the list exactly once
+    Space Complexity: O(1) - only using a constant number of pointers
+    """
+    Edge case: Empty list or single node - already "reversed"
+    if not head or not head.next:
+        return head
+    
+    Initialize pointers
+    prev = None
+    current = head
+    
+    Traverse and reverse
+    while current:
+        Store the next node before we break the link
+        temp = current.next
+        
+        Reverse the link: point current to previous node
+        current.next = prev
+        
+        Move pointers forward
+        prev = current
+        current = temp
+    
+    prev is now pointing to the new head (last node of original list)
+    return prev
+
+Complexity: - Time: O(n) - single pass through the list
+- Space: O(1) - only three pointers used regardless of list size
+
+Let me implement this
+
+# Reversing a Linked List in Python
+
+## System Design Considerations
+
+### 1. **Algorithm Selection**
+- **Iterative approach** chosen over recursive for:
+  - O(1) space complexity (recursive would be O(n) due to call stack)
+  - No risk of stack overflow on large lists
+  - Better performance in production environments
+
+### 2. **Edge Cases Handled**
+- Empty list (None head)
+- Single node list
+- Two node list
+- Lists with cycles (would need separate detection)
+
+### 3. **Thread Safety**
+- For multi-threaded environments, consider adding locks around the reversal operation
+- Current implementation is not thread-safe (race conditions possible)
+
+### 4. **Memory Management**
+- In-place reversal: No new nodes allocated
+- Python's garbage collector

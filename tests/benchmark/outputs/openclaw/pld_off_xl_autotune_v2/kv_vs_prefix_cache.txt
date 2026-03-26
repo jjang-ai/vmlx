@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Model (LLM) inference optimization.
+    *   **Core Concepts:** KV Cache (Key-Value Cache) vs. Prefix Cache.
+    *   **Goal:** Explain the differences clearly.
+
+2.  **Define KV Cache (The Foundation):**
+    *   *What is it?* It's the standard mechanism used in Transformer models during autoregressive generation.
+    *   *Why do we need it?* To avoid recomputing attention scores for tokens already generated.
+    *   *How does it work?* At each step $t$, the model computes Query ($Q$), Key ($K$), and Value ($V$) for the new token. The $K$ and $V$ vectors for *all previous tokens* (including the prompt and generated text) are stored in memory.
+    *   *Scope:* It covers the *entire* context window (prompt + generated tokens).
+    *   *Granularity:* Usually per-token (or per-sequence) within a single generation session.
+
+3.  **Define Prefix Cache (The Optimization):**
+    *   *What is it?* A specific optimization technique *built on top of* the KV cache.
+    *   *Why do we need it?* Many requests share the same initial context (e.g., system prompts, code snippets, few-shot examples). Recomputing or storing the KV cache for the shared part for every single request is wasteful.
+    *   *How does it works?* It identifies the static "prefix" part of the input. It computes the KV cache for this prefix *once* and stores it. When a new request comes in with the same prefix, it reuses the pre-computed KV cache for that prefix and only computes the KV cache for the new suffix (the variable part).
+    *   *Scope:* Specifically the *static/shared* portion of the input.
+    *   *Granularity:* Often per-prefix-hash (shared across multiple requests/sessions).
+
+4.  **Compare and Contrast (The "Difference"):**
+    *   *Relationship:* Prefix cache is a subset/optimization of the general KV cache concept. You can't have a prefix cache without the underlying KV cache mechanism.
+    *   *Lifetime:* KV cache lives for the duration of

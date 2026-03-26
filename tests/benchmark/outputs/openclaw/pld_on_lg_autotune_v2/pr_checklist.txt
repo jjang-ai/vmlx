@@ -1,0 +1,78 @@
+The user is asking about best practices for opening a pull request for a "big feature." This is a common software development question about code review preparation and PR hygiene. Let me think through the key areas they should check:
+
+1. Code quality checks
+- Tests pass
+- Linting/formatting passes
+- No compiler warnings
+
+2. Feature completeness
+- Does it actually work as intended?
+- Edge cases handled?
+- Error handling in place?
+
+3. Documentation
+- Code comments where needed
+- README updates if applicable
+- API documentation
+
+4. PR-specific items
+- Clear title and description
+- Links to related issues
+- Screenshots for UI changes
+- Migration notes if needed
+
+5. Technical considerations
+- Breaking changes?
+- Performance implications
+- Security review needed?
+- Database migrations reversible?
+
+6. Collaboration
+- Have they talked to the team?
+- Is the right person assigned as reviewer?
+- Is the timing appropriate?
+
+Let me organize this into a helpful checklist format
+
+# Pre-PR Checklist for Big Features
+
+## Code Quality
+- [ ] All tests pass (unit, integration, e2e)
+- [ ] Linting/formatting passes
+- [ ] No new warnings or errors
+- [ ] Code coverage is reasonable for new code
+
+## Feature Verification
+- [ ] Feature works as intended in staging/preview
+- [ ] Edge cases are handled
+- [ ] Error states are graceful
+- [ ] Performance is acceptable
+
+## Documentation
+- [ ] Code is self-documenting or well-commented
+- [ ] Public APIs have docstrings
+- [ ] README updated if needed
+- [ ] Migration guide if breaking changes exist
+
+## PR Hygiene
+- [ ] Clear, descriptive title
+- [ ] Description explains *what* and *why*
+- [ ] Links to related issues/tickets
+- [ ] Screenshots for UI changes
+- [ ] Breaking changes clearly called out
+
+## Collaboration
+- [ ] Team is aware this is coming
+- [ ] Appropriate reviewers assigned
+- [ ] Consider splitting if too large (>400-500 lines)
+
+## Technical Debt
+- [ ] No TODOs left without tracking issues
+- [ ] Temporary workarounds identified
+- [ ] Security considerations addressed
+
+---
+
+**Quick tip:** For really big features, consider opening a draft PR early to get feedback incrementally rather than waiting until everything is "done."
+
+Would you like me to elaborate on any of these areas?

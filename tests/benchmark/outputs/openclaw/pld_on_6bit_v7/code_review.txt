@@ -1,0 +1,37 @@
+Let me analyze this function systematically.
+
+**Function Analysis:**
+```python
+def find_dupes(lst):
+    dupes = []
+    for i in range(len(lst)):
+        for j in range(i+1, len(lst)):
+            if lst[i] == lst[j] and lst[i] not in dupes:
+                dupes.append(lst[i])
+    return dupes
+```
+
+**CORRECTNESS:**
+- The function finds duplicate elements in a list
+- Outer loop iterates through each element
+- Inner loop compares each element with subsequent elements
+- When a match is found and the element isn't already in dupes, it's added
+- Returns list of duplicate values (not indices)
+
+Testing mentally:
+- `[1, 2, 2, 3, 4, 4, 4]` → finds 2 (at i=1, j=2), finds 4 (at i=3, j=4) → returns `[2, 4]` ✓
+- `[1, 2, 3]` → no duplicates → returns `[]` ✓
+- `[1, 1, 1]` → finds 1 once → returns `[1]` ✓
+
+The function is correct.
+
+**PERFORMANCE:**
+- Time complexity: O(n²) for nested loops + O(n) for each `not in dupes` check
+- The `lst[i] not in dupes` check inside the inner loop adds overhead
+- Could be optimized to O(n) using a set or Counter
+- Space: O(k) where k is number of duplicates
+
+**STYLE:**
+- Function name `find_dupes` is informal; `find_duplicates` is more professional
+- Using `range(len(lst))` instead of direct iteration is not Pythonic
+-

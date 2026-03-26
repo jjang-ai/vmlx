@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** LLM Inference Optimization.
+    *   **Core Question:** What is the difference between a KV cache and a prefix cache?
+    *   **Goal:** Provide a clear, accurate, and technical explanation distinguishing the two concepts, explaining their relationship, and highlighting their specific use cases.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* It's the standard mechanism for caching attention states in Transformer models.
+    *   *How does it work?* During the generation phase (decoding), the model computes Keys (K) and Values (V) for each token. Instead of recomputing them for every new token, they are stored in memory.
+    *   *Scope:* It's specific to a *single* generation sequence (a single request). It grows linearly with the sequence length.
+    *   *Purpose:* Speed up decoding by avoiding redundant computation of past tokens.
+    *   *Limitation:* If two requests share the same prefix, the KV cache for the first request isn't automatically reused by the second request (unless using specific optimization techniques).
+
+3.  **Define Prefix Cache (Prefix Caching / PagedAttention / vLLM style):**
+    *   *What is it?* It's an optimization *on top of* KV caching, specifically designed to handle *multiple* requests that share common prefixes.
+    *   *How does it work?* It stores KV states in a way that allows sharing across different requests. If Request A and Request B both start with "The quick brown", the KV states for those tokens are computed once and referenced by both requests.
+    *   *Scope:* It spans *multiple* requests (batching).
+    *   *Purpose:* Reduce memory usage and compute time when serving many requests with overlapping inputs (e.g., RAG, chatbot history, code completion).
+    *   *Key Technology:* Often associated with systems like vLLM (PagedAttention), TGI (Prefix Caching), or FlashAttention-2 optimizations.
+
+4.  **Identify the Core Distinction:**
+    *   **KV Cache** = Intra-request optimization (one sequence vs. itself).
+    *   **Prefix Cache** = Inter-request optimization (multiple sequences vs. each

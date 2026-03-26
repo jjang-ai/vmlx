@@ -1,0 +1,39 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV Cache and Prefix Cache are memory optimization techniques used in Large Language Model (LLM) inference, but they operate at different levels and solve different problems. KV Cache: The Foundation
+
+What it is:
+The KV (Key-Value) Cache is a fundamental mechanism that stores the computed key and value vectors from the self-attention layers during token generation. Why it exists:
+Without caching, computing attention for token N would require re-computing all attention operations for tokens 1 through N-1. With caching, we only compute attention for the new token against cached values. Prefix Cache: Building on KV Cache
+
+What it is:
+Prefix Cache is an optimization that identifies and reuses KV Cache blocks from previously processed prompts that are identical or similar. Why it exists:
+When multiple requests share common prefixes (e.g., system prompts, common instructions), Prefix Cache avoids recomputing the KV Cache for those shared portions. | KV Cache | Prefix Cache |
+ What it caches | KV vectors for the current sequence | KV blocks for common prefixes across requests |
+| Scope | Per-request | Cross-request |
+| Primary benefit | Avoids O(n²) recomputation within a sequence | Avoids recomputing shared prefixes |
+| Memory location | GPU memory (per sequence) | Can be shared/pooled across sequences |
+| When used | Every LLM inference | When multiple requests share prefixes |
+
+Key Differences Explained
+
+1. KV Cache is computed fresh for each new request, even if the prompt is identical to a previous one. Prefix Cache: Detects that the prefix KV Cache already exists and reuses it directly. KV Cache is essential for any LLM inference with multiple tokens. Prefix Cache is an optimization that requires:
+   - Multiple requests
+   - Shared prefixes between requests
+   - Additional logic to detect and manage prefix matches
+
+3. KV Cache grows linearly with sequence length. Prefix Cache can reduce total memory by sharing common prefixes across requests. |
+ Request 2: Same system prompt + different user query |
+| Without Prefix Cache | Recompute system prompt KV Cache |
+| With Prefix Cache | Reuse system prompt KV Cache from Request 1 |
+
+Verification
+
+✓ KV Cache is a per-request mechanism that stores attention states for the current sequence
+✓ Prefix

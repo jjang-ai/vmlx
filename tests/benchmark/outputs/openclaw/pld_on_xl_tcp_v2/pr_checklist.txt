@@ -1,0 +1,52 @@
+Here's a thinking process that leads to the suggested checklist for opening a PR:
+
+1.  **Understand the User's Need:**
+    *   **Context:** The user is about to open a Pull Request (PR) for a *big feature*.
+    *   **Goal:** They want to know what to check *before* submitting it to ensure a smooth review process, minimize friction, and increase the chances of acceptance.
+    *   **Implicit Needs:** They likely want to avoid common pitfalls (broken builds, missing tests, unclear context) and want to look professional.
+
+2.  **Categorize the Checklist:**
+    To make the advice digestible, I should group the checks into logical categories. Good categories would be:
+    *   Code Quality & Functionality
+    *   Testing
+    *   Documentation
+    *   PR Metadata (Title, Description, Links)
+    *   Process & Team Norms
+    *   Security & Performance (often overlooked in big features)
+
+3.  **Brainstorming Specific Items within Categories:**
+
+    *   *Code Quality:* Does it compile? Are there linting errors? Is it consistent with existing style? Are there TODOs?
+    *   *Testing:* Unit tests? Integration tests? E2E? Did I run them locally? Are they passing?
+    *   *Documentation:* README updated? API docs? Changelog? Internal docs?
+    *   *PR Metadata:* Clear title? Description explains *why* not just *what*? Links to tickets? Screenshots/GIFs?
+    *   *Process:* Branch up to date? Conflicts resolved? CI passing?
+    *   *Security:* Secrets hardcoded? SQL injection? Auth checks?
+    *   *Performance:* Database queries optimized? Memory usage?
+    *   *Reviewers:* Did I tag the right people?
+
+4.  **Refining for a "Big Feature":**
+    *   Since it's a *big* feature, standard checks aren't enough. I need to emphasize:
+        *   **Incremental Review:** Suggest breaking it down if it's too huge.
+        *   **Rollback Plan:** What if this breaks prod?
+        *   **Feature Flags:** Can we turn it off?
+        *   **Migration:** Database changes?
+        *   **Communication:** Have I talked to stakeholders?
+
+5.  **Drafting the Content (Iterative Process):**
+
+    *   *Intro:* Acknowledge the effort. Big PRs are stressful.
+    *   *Section 1: The Code (The Basics).* Linting, formatting, build status.
+    *   *Section 2: Testing (Crucial).* Coverage, edge cases, manual testing.
+    *   *Section 3: Documentation (Often missed).* User docs, internal docs, API changes.
+    *   *Section 4: The PR Itself (The Packaging).* Title, description, screenshots.
+    *   *Section 5: Architecture & Safety (The "Big" part).* DB migrations, feature flags, security, performance.
+    *   *Section 6: Social/Process.* Reviewers, conflicts, timing.
+    *   *Bonus Tip:* The "Split" advice. If it's *too* big, split it.
+
+6.  **Review and Polish:**
+    *   *Tone:* Supportive, professional, experienced.
+    *   *Formatting:* Use bolding, bullet points, and checkboxes for readability.
+    *   *Actionable:* Make sure every point is something they can actually *do*.
+
+7.

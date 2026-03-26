@@ -1,0 +1,34 @@
+The user is asking about previous work we did together. Let me think about this carefully.
+
+I'm an AI assistant, and I need to consider what context I have access to:
+
+1. I don't have memory of past conversations across different sessions
+2. Each conversation starts fresh unless context is provided in the current session
+3. Looking at this conversation, this appears to be the first message from the user
+
+This is a new conversation - there's no prior context or history visible to me. The user may be:
+- Mistaken about having worked with me before
+- Testing to see if I have memory across sessions
+- Confused about how the interface works
+
+I should be honest and transparent about my limitations while being helpful.
+
+
+## Answer
+
+This appears to be a **new conversation**, so I don't have any record of previous work we've done together.
+
+**Why:**
+- I don't retain memory between separate conversation sessions
+- Each chat starts fresh with no context from prior interactions
+- This is the first message I've received in this conversation
+
+**You might want to:**
+1. Check if you're looking at the correct chat thread
+2. Provide context about what you'd like to continue working on
+3. Start fresh on a new topic
+
+**How I can help:**
+If you tell me what topic or problem you were working on, I'd be happy to pick up where you left off or start fresh with you.
+
+Is there something specific you'd like to work on today?

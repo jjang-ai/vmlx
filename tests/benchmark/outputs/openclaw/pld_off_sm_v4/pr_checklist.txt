@@ -1,0 +1,80 @@
+That's a great question — opening a large feature pull request (PR) is a big step, and doing your due diligence beforehand can save time, reduce merge conflicts, and ensure your work is well-received by the team. Here’s a comprehensive checklist to go through **before** you open your PR:
+
+---
+
+### ✅ 1. **Feature Scope & Goals**
+- Is the feature clearly defined and aligned with product or business goals?
+- Are the user stories or acceptance criteria well-documented (e.g., in Jira, Trello, or Confluence)?
+- Is the scope realistic and manageable in the current sprint?
+
+> 🔍 Tip: Avoid "big bang" changes. Break large features into smaller, testable chunks if needed.
+
+---
+
+### ✅ 2. **Design & UX Review**
+- Has the design been approved (e.g., Figma, Sketch, or design system)?
+- Does the implementation match the design?
+- Are there accessibility (a11y) considerations (e.g., keyboard navigation, screen reader support)?
+- Is the UX intuitive and consistent with existing flows?
+
+> 📌 Check: Design handoff, style guide, and any design system compliance.
+
+---
+
+### ✅ 3. **Technical Debt & Architecture**
+- Does this feature introduce new dependencies or break existing ones?
+- Is it following the team’s architecture patterns (e.g., microservices, monolith, event-driven)?
+- Are there performance implications (e.g., latency, memory usage)?
+- Does it follow coding standards, naming conventions, and code quality rules?
+
+> 🚨 Watch for: Over-engineering, tight coupling, or anti-patterns.
+
+---
+
+### ✅ 4. **Testing Coverage**
+- Are there unit, integration, and end-to-end tests?
+- Are edge cases and error paths covered?
+- Is the feature testable in both normal and failure scenarios?
+- Are test cases documented (e.g., in test files or test descriptions)?
+
+> ✅ Best practice: Test early, test often. Add tests *before* the PR.
+
+---
+
+### ✅ 5. **Documentation**
+- Is the feature documented in the code (e.g., comments, JSDoc, or type annotations)?
+- Is there updated documentation in the project’s docs (e.g., README, API docs)?
+- Are there any user-facing changes (e.g., new UI, settings, workflows) that need user guides?
+
+> 📚 Example: Add a section to `docs/feature-guides.md` or update the onboarding flow.
+
+---
+
+### ✅ 6. **Security & Compliance**
+- Does the feature handle sensitive data (e.g., PII, tokens)?
+- Are there any security concerns (e.g., XSS, CSRF, insecure APIs)?
+- Are permissions and access controls properly enforced?
+
+> 🔐 Run security scans (if available) or review with security team if needed.
+
+---
+
+### ✅ 7. **Code Quality & Style**
+- Does the code follow the team’s linting, formatting, and style rules?
+- Are there any code smells (e.g., duplication, long functions)?
+- Is the code readable and maintainable?
+
+> 🛠️ Use tools like ESLint, Prettier, SonarQube, or code review tools to catch issues early.
+
+---
+
+### ✅ 8. **Branch & Workflow Compliance**
+- Is the PR based on the correct branch (e.g., `main`, `develop`, or `feature/xyz`)?
+- Is the branch up-to-date with the target branch (avoid merge conflicts)?
+- Are all required pre-PR checks passed (e.g., CI, linting, tests)?
+
+> 💡 Tip: Use feature flags or a toggle to avoid breaking existing users.
+
+---
+
+###

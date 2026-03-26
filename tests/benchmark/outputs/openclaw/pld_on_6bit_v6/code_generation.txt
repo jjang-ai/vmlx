@@ -1,0 +1,70 @@
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previous node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we break the link
+
+Key considerations:
+- Args:
+        head: The head node of the linked list to reverse.
+    
+    Returns:
+        The new head node of the reversed linked list.
+    
+    Time Complexity: O(n) - we traverse the list once
+    Space Complexity: O(1) - only using a constant number of pointers
+    """
+    # Edge case: empty list or single node
+    if not head or not head.next:
+        return head
+    
+    prev = None
+    current = head
+    
+    while current:
+        next_temp = current.next  Store next node before breaking the link
+        current.next = prev       Point current node to previous node
+        prev = current            Move prev pointer forward
+        current = next_temp       Move current pointer forward
+    
+    return prev  prev is now the new head
+
+Complexity: - Time: O(n) - we traverse the list once
+- Space: O(1) - only using a constant number of pointers
+
+Let me implement this solution.
+
+# Reversing a Linked List in Python
+
+## System Design Considerations
+
+### 1. **Algorithm Selection**
+- **Iterative Approach**: O(n) time, O(1) space - preferred for production
+- **Recursive Approach**: O(n) time, O(n) space due to call stack - elegant but risks stack overflow on large lists
+
+### 2. **Edge Cases to Handle**
+- Empty list (None head)
+- Single node list
+- Two node list
+- Lists with cycles (optional validation)
+
+### 3. **Memory Safety**
+- In-place reversal avoids allocating new nodes
+- No memory leaks in Python (garbage collected), but important in other languages
+
+### 4. **Type Hints & Documentation**
+- Improves code maintainability and IDE support
+- Clear contracts for function behavior
+
+---
+
+## Implementation
+
+```python
+from typing import Optional
+
+class Node:
+    """A simple singly-linked list node."""
+    

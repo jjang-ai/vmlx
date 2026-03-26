@@ -1,0 +1,40 @@
+Let me think through this carefully.
+
+The question/task: I'm about to open a PR for a big feature. What should I check before I do?
+
+My reasoning: This is a comprehensive checklist to ensure your PR is high-quality, easy to review, and likely to be merged without unnecessary friction. If you have a `Makefile` or `package.json` with build scripts, run them. If you have a `Makefile` or `package.json
+
+This is a comprehensive checklist to ensure your PR is high-quality, easy to review, and likely to be merged without unnecessary friction.
+
+### 1. Code Quality & Functionality
+*   **Does it actually work?** Run the full test suite. Ensure your new tests pass and, crucially, that you haven't broken any existing tests.
+*   **Did you remove debug code?** Search for `console.log`, `debugger`, `print`, or temporary variables left over from development.
+*   **Is the code clean?** Check for unused imports, variables, or commented-out blocks of code.
+*   **Linting and Formatting:** Run your linter (ESLint, Pylint, etc.) and formatter (Prettier, Black, etc.). Most teams will reject a PR that doesn't pass these checks.
+*   **Build Success:** If you have a `Makefile` or `package.json`` with build scripts, run them. Ensure the project compiles/builds successfully.
+
+### 2. The "Big Picture" (Architecture)
+*   **Scope Creep:** Since this is a "big feature," did you accidentally include unrelated changes (like fixing a typo in a different file or refactoring a utility class)? If so, consider splitting the PR.
+*   **Backwards Compatibility:** Does this feature break existing APIs, database schemas, or configurations? If so, is there a migration plan or documentation?
+*   **Performance:** Did you introduce any N+1 database queries or heavy loops that could slow down the system?
+
+### 3. Documentation
+*   **README/Docs:** If the feature is user-facing or requires configuration, have you updated the documentation?
+*   **Inline Comments:** Are complex logic blocks explained? (Don't over-comment obvious code).
+*   **Type Definitions:** If you added new functions or API endpoints, are the types/interfaces defined clearly?
+
+### 4. The PR Itself (Metadata)
+*   **Title:** Is it descriptive? (e.g., "feat: Add user authentication" is better than "Fix stuff").
+*   **Description:**
+    *   **Context:** Why are we building this?
+    *   **How to Test:** Give the reviewer specific steps to verify the feature manually.
+    *   **Screenshots/Recordings:** If it's a UI feature, visual proof is essential.
+*   **Linked Issues:** Does the description link to the relevant Jira ticket, GitHub Issue, or Trello card?
+
+### 5. Git Hygiene
+*   **Branch Name:** Is your branch named logically? (e.g., `feature/user-auth` vs `random-branch-123`).
+*   **Commit History:** Is your history clean? If you have 50 "WIP" (Work In Progress) commits, consider squashing them into logical chunks (e.g., "Add models," "Add API," "Add UI").
+*   **Rebase/Merge:** Is your branch up to date with the main branch? Resolve any merge conflicts *before* opening the PR.
+
+### 6. The "Pre-Flight" Review
+*

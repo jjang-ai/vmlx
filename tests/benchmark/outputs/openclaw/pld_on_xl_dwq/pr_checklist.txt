@@ -1,0 +1,53 @@
+Here's a thinking process that leads to the suggested checklist for opening a PR:
+
+1.  **Understand the Goal:** The user is about to open a Pull Request (PR) for a "big feature." They want to know what to check *before* clicking that button. The context implies software development (likely code, but could include docs/config).
+
+2.  **Analyze the "Big Feature" Aspect:** A "big feature" implies complexity, potential side effects, more code, more testing needs, and higher risk of breaking things. It's not just a typo fix. It needs a more rigorous review process.
+
+3.  **Brainstorm Categories:** What are the key areas of concern when submitting code?
+    *   Code Quality (Style, Logic, Security)
+    *   Functionality (Does it work?)
+    *   Testing (Unit, Integration, E2E)
+    *   Documentation (README, API docs, Comments)
+    *   Configuration/Dependencies (New libs, env vars)
+    *   Process/Workflow (Branching, Title, Description)
+    *   Team/Collaboration (Reviewers, Communication)
+
+4.  **Flesh out each category (Drafting the Checklist):**
+
+    *   *Code:* Is it clean? No dead code? Follows style guide? No secrets?
+    *   *Tests:* Did I write tests? Do they pass? Coverage okay?
+    *   *Docs:* Did I update the README? API docs? Changelog?
+    *   *Build:* Does CI pass locally? (Lint, build, test).
+    *   *PR Meta:* Title clear? Description explains *why* and *how*? Links to issue?
+    *   *Impact:* Breaking changes? Migration needed? Performance impact?
+    *   *Review:* Who needs to review? Is it too big? (Maybe split it?)
+
+5.  **Structure and Refine:** Organize the brainstormed points into a logical flow. A chronological or categorical approach works best. Let's go with a "Pre-Submission Checklist" structure.
+
+    *   *Phase 1: The Code Itself (Technical)*
+    *   *Phase 2: Testing & Quality Assurance*
+    *   *Phase 3: Documentation & Communication*
+    *   *Phase 4: The PR Metadata (The "Paperwork")*
+    *   *Phase 5: Strategy for "Big" Features (Specific advice)*
+
+6.  **Add Nuance for "Big Features":** Since the user specifically said "big feature," I need to emphasize things that matter more for large changes than small ones.
+    *   *Splitting:* Is it too big? Suggest splitting.
+    *   *Migration:* Database changes? Config changes?
+    *   *Rollback:* How do we undo this?
+    *   *Performance:* Did it slow things down?
+
+7.  **Drafting the Content (Iterative refinement):**
+
+    *   *Self-Review:* Emphasize doing a self-review first.
+    *   *CI/CD:* Make sure local checks match remote.
+    *   *Description:* Needs to be more than "Added feature." Needs context.
+    *   *Reviewers:* Tag the right people early.
+
+8.  **Review against Best Practices:**
+    *   *Security:* Check for hardcoded secrets.
+    *   *Accessibility:* If frontend, is it a11y compliant?
+    *   *Logs:* Are logs helpful?
+    *   *Dependencies:* Are new dependencies necessary?
+
+9.

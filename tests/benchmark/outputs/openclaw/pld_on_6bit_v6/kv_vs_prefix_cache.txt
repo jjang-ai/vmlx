@@ -1,0 +1,64 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: A Detailed Comparison
+
+Overview
+
+Both KV cache and prefix cache are memory optimization techniques for Transformer-based language models, but they operate at different levels and serve different purposes. KV Cache
+
+What it is:
+The KV (Key-Value) cache is a fundamental mechanism that stores the computed key and value vectors for each token during the inference of a single sequence. |
+ Attention Calculation | Uses cached K,V for previous tokens; only computes new K,V for current token |
+
+Prefix Cache
+
+What it is:
+The prefix cache is a higher-level optimization that stores complete KV cache states for frequently-repeated input prefixes, enabling reuse across multiple different inference requests. |
+| Request 2 (same prefix) | Loads prefix cache | Computes only suffix |
+
+Key Differences Summary
+
+| Aspect | KV Cache | Prefix Cache |
+ Location in hierarchy | Per-request, per-sequence | Shared across requests |
+| Granularity | Token-level within a sequence | Prefix-level (multiple tokens) |
+| Scope | Single inference | Multiple inferences |
+| Memory location | Typically GPU memory | Can be GPU or system memory |
+| Reuse pattern | Temporal (within generation) | Spatial (across requests) |
+| Complexity | Low (built into attention) | Higher (requires matching logic) |
+
+When to Use Each
+
+- KV Cache: Always used in any Transformer inference with multiple tokens
+- Prefix Cache: Beneficial when you have:
+  - High request volume
+  - Repeated prompts/system messages
+  - Common prefixes across queries
+  - Memory bandwidth constraints
+
+Verification
+
+✓ KV cache is essential for any multi-token inference
+✓ Prefix cache is an additional optimization layer
+✓ They are complementary, not mutually exclusive
+✓ Prefix cache stores complete KV cache states for reuse
+
+
+# KV Cache vs. Prefix Cache: A Detailed Comparison
+
+## Overview
+
+Both KV cache and prefix cache are memory optimization techniques for Transformer-based language models, but they operate at different levels and serve different purposes.
+
+---
+
+## KV Cache
+
+### What it is:
+The **KV (Key-Value) cache** is a fundamental mechanism that stores the computed key and value vectors for each token **during the inference of a single sequence**.
+
+### How it works:
+```
+For each new token generated:
+1. Compute Q,

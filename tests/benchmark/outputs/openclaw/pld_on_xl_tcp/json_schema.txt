@@ -1,0 +1,11 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Output format: JSON array.
+    *   Content: 5 tasks for a software engineer.
+    *   Task structure: `id` (int), `title` (string), `priority` (high/medium/low), `estimated_minutes` (int).
+    *   Constraint: Output *only* the JSON array, no explanation, no markdown code blocks (unless implied by "JSON array", but usually "only the JSON" means raw text or a code block containing just the JSON. To be safe and strictly adhere to "no explanation", I should output raw JSON text, but often users expect a code block for readability. However, the prompt says "Output only the JSON array, no explanation". I will output raw JSON text to be strictly compliant, but usually, a markdown code block is acceptable as long as there's no extra text. Let's look at the instruction again: "Output only the JSON array, no explanation." I will provide the JSON string directly.)
+    *   Quantity: 5 tasks.
+
+2.  **Drafting Tasks:**
+    *   Task 1: Code review. Priority: High. Time: 

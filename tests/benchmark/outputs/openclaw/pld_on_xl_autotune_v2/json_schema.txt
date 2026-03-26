@@ -1,0 +1,11 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Target: A JSON array of 5 tasks for a software engineer.
+    *   Task Structure: Each task must have `id` (int), `title` (string), `priority` (high/medium/low), `estimated_minutes` (int).
+    *   Constraint: Output *only* the JSON array, no explanation, no markdown code blocks (unless implied by "JSON array", but usually "only the JSON" means raw text or within a code block, but strict "no explanation" often implies raw JSON). However, standard practice for "Output only the JSON" usually allows markdown code blocks for clarity, but to be safest regarding "no explanation", I should output raw JSON text. Wait, looking at common interpretations, "Output only the JSON array" usually means the content should be valid JSON. I will output raw JSON text to be strictly compliant.
+    *   Count: Exactly 5 tasks.
+
+2.  **Drafting Tasks:**
+    *   Task 1: Code review. Priority: High. Time: 60.
+    *   Task 2: Fix bug in login module. Priority: High. Time

@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Models (LLMs) / Transformer Architecture.
+    *   **Core Question:** What is the difference between a KV cache and a prefix cache?
+    *   **Goal:** Provide a clear, accurate, and nuanced explanation of both concepts and how they relate/differ.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* A standard optimization technique in Transformer inference.
+    *   *Why?* To avoid recomputing attention weights for tokens already processed.
+    *   *Mechanism:* During autoregressive generation, for each new token, we compute its Q, K, V. We store the K and V of *all previous tokens* (including the prompt and generated tokens) in a buffer. For the next step, we only compute Q for the new token and attend to the stored K/V.
+    *   *Scope:* It covers the *entire* context window (prompt + generated text).
+    *   *State:* Dynamic. It grows as generation proceeds.
+
+3.  **Define Prefix Cache:**
+    *   *What is it?* A specific optimization strategy often used in scenarios with repeated prefixes (e.g., chat history, system prompts, code completion).
+    *   *Why?* To avoid recomputing the K/V for the *static* part of the input (the prefix) across multiple requests or sessions.
+    *   *Mechanism:* The K/V pairs for the *input prompt* (the prefix) are computed once and stored (often in a persistent cache like a disk or shared memory). When a new request comes in with the same prefix, we load the pre-computed K/V instead of recomputing.
+    *   *Scope:* Only the static part (the prefix). The generated suffix still uses a dynamic KV cache.
+    *   *State:* Static/Persistent. It's reusable across different inference sessions.
+
+4.  **Identify the Relationship:**
+    *   A prefix cache *is* a type of KV cache. It's a specific *usage pattern* or *optimization layer* on top of the standard KV cache mechanism.
+    *   *Analogy:* KV Cache is like "taking notes during a meeting." Prefix Cache is like "saving the meeting

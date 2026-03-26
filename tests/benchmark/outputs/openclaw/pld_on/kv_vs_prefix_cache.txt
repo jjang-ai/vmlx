@@ -1,0 +1,50 @@
+Let me think through this carefully.
+
+The question/task: What's the difference between a KV cache and a prefix cache?
+
+My reasoning: KV Cache vs. Prefix Cache: Detailed Comparison
+
+Overview
+
+Both KV Cache and Prefix Cache are optimization techniques used in Large Language Model (LLM) inference, but they operate at different levels and serve different purposes. KV Cache (Key-Value Cache)
+
+What it is:
+A KV Cache stores the computed key (K) and value (V) vectors for each token during the self-attention computation of a transformer model. Why it exists:
+- In transformers, attention is computed as: `Attention(Q, K, V) = softmax(QK^T/√d)V`
+- During inference, when generating token N, we need all previous K and V vectors (from tokens 1 to N-1)
+- Recomputing these for every new token would be O(n²) complexity
+- The KV Cache stores them so they can be reused, making autoregressive generation O(n) per token
+
+How it works:
+```
+Generation Step 1: Process "The" → Store K₁, V₁ in cache
+Generation Step 2: Process "quick" → Use K₁,V₁ + Store K₂, V₂
+Generation Step 3: Process "brown" → Use K₁,V₁,K₂,V₂ + Store K₃, V₃
+...and so on
+```
+
+Prefix Cache
+
+What it is:
+A Prefix Cache is a higher-level optimization that stores complete KV Cache states for frequently-repeated input sequences (prefixes) across different requests. Why it exists:
+- Many inference requests share common prefixes:
+  - System prompts: "You are a helpful assistant..."
+  - Code templates: "```python\n"
+  - Common queries: "Explain quantum physics..."
+- Instead of recomputing the KV Cache for these repeated prefixes, we cache the entire prefix state
+
+How it works:
+```
+Request 1: "Explain machine learning"
+  → Compute KV Cache for "Explain" → Store in Prefix Cache
+
+Request 2: "Explain quantum computing"  
+  → Load "Explain" KV Cache from Prefix Cache (skip computation!)
+  → Continue with "quantum computing"
+```
+
+Key Differences
+
+| Aspect | KV Cache | Prefix Cache |
+ Location | Per-request, per-generation | Shared across requests |
+| Granularity

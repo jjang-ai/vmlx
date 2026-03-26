@@ -1,0 +1,30 @@
+Let me think about how to approach this coding problem.
+
+Problem: Return a JSON array of 5 tasks for a software engineer today. Each task must have: id (int), title (string), priority (high/medium/low), estimated_minutes (int). Output only the JSON array, no explanation.
+
+Approach: - `id`: Unique integer identifier (1-5)
+- `title`: Descriptive task name
+- `priority`: Enumerated value (high/medium/low)
+- `estimated_minutes`: Reasonable time estimate in integers
+
+Let me implement this
+
+```json
+[
+  {
+    "id": 1,
+    "title": "Review pull request for authentication module",
+    "priority": "high",
+    "estimated_minutes": 45
+  },
+  {
+    "id": 2,
+    "title": "Fix critical bug in payment processing API",
+    "priority": "high",
+    "estimated_minutes": 90
+  },
+  {
+    "id": 3,
+    "title": "Update unit test coverage for user service",
+    "priority": "medium",
+    "estimated

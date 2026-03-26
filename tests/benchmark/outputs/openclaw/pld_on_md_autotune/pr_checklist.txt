@@ -1,0 +1,50 @@
+Here's a thinking process that leads to the suggested checklist for opening a Pull Request (PR) for a big feature:
+
+1.  **Understand the Goal:** The user is about to open a Pull Request (PR) for a *big feature*. This implies complexity, higher risk, and potentially more reviewers than a standard bug fix. The goal is to ensure the PR is ready for review, minimizes back-and-forth, and increases the chances of getting merged smoothly.
+
+2.  **Identify the Audience:** The user is likely a developer (frontend, backend, or full-stack). The advice needs to be technical but also cover process and communication aspects.
+
+3.  **Brainstorm Categories:** What are the key areas to check before hitting "Create Pull Request"?
+    *   Code Quality/Functionality
+    *   Testing
+    *   Documentation
+    *   Performance/Security
+    *   Communication/Context
+    *   CI/CD/Build Status
+
+4.  **Flesh out each category (Drafting the Checklist):**
+
+    *   *Code:* Does it work? Are there linting errors? Is it readable? Did I remove debug code? Is it modular?
+    *   *Tests:* Unit tests? Integration tests? Edge cases? Do existing tests still pass?
+    *   *Docs:* API docs? README updates? Migration guides?
+    *   *Performance:* Are there N+1 queries? Memory leaks? Loading times?
+    *   *Security:* Input validation? Auth checks? Secrets?
+    *   *Context:* Is the description clear? Are there screenshots? Is there a ticket linked?
+    *   *Process:* Squashed commits? Rebased? CI passing?
+
+5.  **Refine for "Big Feature" Context:**
+    *   *Big Feature* means it's likely split into logical chunks. Should I suggest breaking it down? Yes, but assuming it's *already* done, focus on the final merge.
+    *   *Big Feature* means higher risk of breaking existing functionality. Emphasize regression testing.
+    *   *Big Feature* means reviewers will be busy. Emphasize making the reviewer's life easy (description, context).
+
+6.  **Structure the Advice:** Organize logically so it's easy to read. A checklist format works best. Group into logical sections (Code, Tests, Docs, Process, Communication).
+
+7.  **Drafting the Content (Iterative refinement):**
+
+    *   *Self-Correction during drafting:* I initially thought about suggesting code review *before* the PR. But the prompt asks what to check *before* opening the PR. So, focus on self-review.
+    *   *Emphasis:* Highlight the "Why" behind the feature. Big features often lose context over time.
+    *   *Specifics:* Mention `git diff`, `npm run lint`, `docker-compose up`, etc.
+
+8.  **Adding "Pro Tips" for Big Features:**
+    *   Draft PRs.
+    *   Link to design docs.
+    *   Ask for feedback early.
+
+9.  **Final Review against the Prompt:** "I'm about to open a PR for a big feature. What should I check before I do?"
+    *   Does this answer the question? Yes.
+    *   Is it actionable? Yes.
+    *   Is it comprehensive? Yes.
+
+10. **Final Polish:** Add a concluding encouraging remark. (This aligns with the generated output).
+
+**(Self-Correction Example during the process):** I shouldn't just say "check tests." I should specify "

@@ -1,0 +1,50 @@
+Here's a thinking process that leads to the suggested checklist for opening a PR:
+
+1.  **Understand the User's Need:** The user is about to open a Pull Request (PR) for a *big feature*. This implies complexity, potential for bugs, impact on existing code, and a need for thorough review. They want a checklist to ensure they don't miss anything critical before hitting "Create Pull Request."
+
+2.  **Categorize the Checklist:** A big feature touches many areas. A flat list of 50 items is overwhelming. I should group them into logical categories:
+    *   Code Quality & Functionality
+    *   Testing
+    *   Documentation
+    *   Configuration & Environment
+    *   Security & Performance
+    *   Process & Communication
+
+3.  **Brainstorming Items within Categories:**
+
+    *   *Code:* Is it clean? Does it follow style guides? Are there TODOs? Are secrets hardcoded? Is it backwards compatible?
+    *   *Tests:* Unit tests? Integration tests? E2E? Did I run them locally? Do they pass? Coverage?
+    *   *Docs:* README? API docs? User guide? Changelog?
+    *   *Config:* Env vars? Database migrations? Feature flags?
+    *   *Security:* Auth? Permissions? Input validation? Dependencies?
+    *   *Process:* Branch naming? Commit squashing? Assignees? Labels?
+
+4.  **Refining for a "Big Feature":** Since it's a *big* feature, I need to emphasize things that often get overlooked in large changes:
+    *   *Database Migrations:* Rollback plans are crucial.
+    *   *Performance:* Load testing, N+1 queries.
+    *   *Breaking Changes:* How does this affect existing users/APIs?
+    *   *Feature Flags:* Can we turn it off if it breaks?
+    *   *Communication:* Has the team been informed?
+
+5.  **Drafting the Response (Iterative Process):**
+
+    *   *Introduction:* Acknowledge the effort. Big PRs are scary.
+    *   *Section 1: Code Health:* Cleanliness, linting, secrets, dead code.
+    *   *Section 2: Testing:* Unit, integration, manual testing, edge cases.
+    *   *Section 3: Database & Migrations:* This is critical for big features. Rollback strategy.
+    *   *Section 4: Documentation:* API docs, internal docs, changelog.
+    *   *Section 5: Configuration & Deployment:* Env vars, feature flags, CI/CD.
+    *   *Section 6: Security & Performance:* Vulnerabilities, load, caching.
+    *   *Section 7: The PR Itself:* Title, description, screenshots, assignees.
+    *   *Section 8: Soft Skills:* Timing, communication.
+
+6.  **Adding "Pro Tips" / Best Practices:**
+    *   Don't make the PR too big (split it if possible).
+    *   Ask for early feedback.
+    *   Use a checklist in the PR description.
+
+7.  **Review against Constraints:** The user asked "What should I check?" so the output should be actionable. A checklist format is best.
+
+8.  **Final Polish:** Make it readable with bolding and bullet points. Ensure the tone is supportive but rigorous. (Self-Correction: Make sure to mention *squashing commits* as that's a common pain point in PRs).
+
+9.  **Final Output Structure:** (Matches the provided good

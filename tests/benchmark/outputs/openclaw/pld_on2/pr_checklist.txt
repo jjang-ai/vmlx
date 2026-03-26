@@ -1,0 +1,106 @@
+The user is asking for advice on what to check before opening a pull request for a big feature. This is a common software development question about best practices for code review preparation. Let me think through the key areas they should consider:
+
+1. Code quality checks:
+- Does the code compile/build successfully?
+- Are all tests passing?
+- Have they written tests for the new feature?
+- Is the code following the project's style guidelines?
+- Have they removed debug code, console logs, etc.?
+
+2. Feature completeness:
+- Is the feature actually complete?
+- Are there any TODOs or incomplete sections?
+- Have they tested edge cases?
+- Does it work as intended in different scenarios?
+
+3. Documentation:
+- Is there documentation for the new feature?
+- Are there comments explaining complex logic?
+- Is there a clear PR description?
+- Are there usage examples?
+
+4. Integration concerns:
+- Does it work with existing features?
+- Are there any breaking changes?
+- Have they considered backward compatibility?
+- Are there migration steps needed?
+
+5. Performance:
+- Have they considered performance implications?
+- Are there any potential bottlenecks?
+- Have they done any basic performance testing?
+
+6. Security:
+- Are there any security implications?
+- Is user input properly validated?
+- Are there any potential vulnerabilities?
+
+7. PR-specific:
+- Is the commit history clean?
+- Are commits logically grouped?
+- Is the PR description clear?
+- Have they assigned the right reviewers?
+- Have they added appropriate labels?
+
+8. Testing:
+- Have they tested manually?
+- Have they tested in different environments?
+- Have they tested with different data sets?
+
+9. Configuration/Dependencies:
+- Are new dependencies documented?
+- Are there configuration changes needed?
+- Are environment variables documented?
+
+10. Accessibility (if UI):
+- Is the feature accessible?
+- Does it work with screen readers?
+- Is keyboard navigation supported?
+
+Let me organize these thoughts into a helpful response that covers the most important areas
+
+# Pre-PR Checklist for Big Features
+
+Here's a comprehensive checklist to review before opening your PR:
+
+## Code Quality
+- [ ] All tests pass (unit, integration, E2E)
+- [ ] New tests written for the feature
+- [ ] Code follows project style guidelines
+- [ ] No debug code, console logs, or TODOs left behind
+- [ ] Linting/formatting passes
+
+## Feature Completeness
+- [ ] Feature is fully implemented (no partial functionality)
+- [ ] Edge cases are handled
+- [ ] Error states are properly managed
+- [ ] Manual testing completed in realistic scenarios
+
+## Documentation
+- [ ] PR description clearly explains:
+  - What the feature does
+  - Why it was built
+  - How to test it
+- [ ] Code is adequately commented
+- [ ] User-facing documentation updated
+- [ ] API/docs generated if applicable
+
+## Integration & Impact
+- [ ] No breaking changes (or they're documented)
+- [ ] Existing features still work (regression testing)
+- [ ] Database migrations tested (if applicable)
+- [ ] Configuration changes documented
+
+## Technical Review
+- [ ] Performance considerations addressed
+- [ ] Security implications reviewed
+- [ ] Accessibility checked (if UI)
+- [ ] Dependencies documented
+
+## PR Hygiene
+- [ ] Commit history is clean and logical
+- [ ] Branch is up to date with main
+- [ ] Correct reviewers assigned
+- [ ] Appropriate labels added
+
+## Bonus: For Extra Confidence

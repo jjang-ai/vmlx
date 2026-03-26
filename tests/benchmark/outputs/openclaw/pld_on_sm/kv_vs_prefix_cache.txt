@@ -1,0 +1,40 @@
+Great question! Both **KV cache** and **prefix cache** are used in the context of **large language models (LLMs)** to improve inference efficiency—especially during **autoregressive generation** (where each token is generated based on previous tokens). However, they serve different purposes and operate in different ways.
+
+Let’s break down the differences clearly:
+
+---
+
+### 🔹 1. KV Cache (Key-Value Cache)
+
+**What it is:**
+- A **KV cache** stores the **key (K)** and **value (V)** tensors from the model’s attention mechanism for previously generated tokens.
+- It is used to **avoid recomputing attention** over already seen tokens during generation.
+
+**Why it's used:**
+- In autoregressive models (like GPT, Llama, etc.), when generating a new token, the model must compute attention over all previous tokens.
+- Without a KV cache, the model would recompute attention for every previous token — very expensive.
+- The KV cache stores the attention keys and values from earlier tokens, so during the next step, the model can **use these cached values** instead of recomputing them.
+
+**How it works:**
+- At each step, the model computes:
+  - Keys (K) and Values (V) for the current token.
+  - These are stored in the KV cache.
+- When generating the next token, the model uses the **cached K and V** from previous steps to compute attention.
+
+**Scope:**
+- Stores **all previous tokens' attention keys and values**.
+- Used in **all modern LLM inference** (e.g., in Hugging Face, vLLM, llama.cpp).
+
+✅ **Purpose:** Speed up inference by avoiding redundant attention computation.
+
+---
+
+### 🔹 2. Prefix Cache
+
+**What it is:**
+- A **prefix cache** is a **specific type of KV cache** that stores only the **initial input tokens** (the "prefix") — not the full history of generated tokens.
+- It's typically used in **few-shot prompting**, **instruction tuning**, or **interactive dialogue** where the model is given a fixed prefix (e.g., a prompt or instruction).
+
+**Why it's used:**
+- In some scenarios, you want to **preserve the initial prompt** (e.g., "Summarize the following article: ") and only generate responses after that.
+- The model doesn’t need to store the full generated response in the cache — only the prefix (the prompt

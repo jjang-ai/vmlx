@@ -1,0 +1,72 @@
+The user wants me to write a Python function that reverses a linked list. I need to:
+
+1. Define a Node class for the linked list
+2. Create a function to reverse the linked list
+3. Include a __main__ section with a short example demonstrating the functionality
+
+Let me think about the linked list structure:
+- Each node should have a value and a reference to the next node
+- The linked list can be represented by a reference to the head node
+
+For reversing a linked list, I'll use the iterative approach which is more efficient:
+- Keep track of previous, current, and next nodes
+- Reverse the pointers as we traverse
+
+Let me write clean, well-documented
+
+```python
+class Node:
+    """A node in a singly linked list."""
+    def __init__(self, value, next=None):
+        self.value = value
+        self.next = next
+
+    def __repr__(self):
+        return f"Node({self.value})"
+
+
+def reverse_linked_list(head):
+    """
+    Reverses a singly linked list iteratively.
+    
+    Args:
+        head (Node): The head node of the linked list.
+        
+    Returns:
+        Node: The new head of the reversed linked list.
+    """
+    prev = None
+    current = head
+
+    while current:
+        next_node = current.next  # Store next node
+        current.next = prev       # Reverse the link
+        prev = current            # Move prev forward
+        current = next_node       # Move current forward
+
+    return prev
+
+
+def print_linked_list(head):
+    """Helper function to print the linked list."""
+    nodes = []
+    current = head
+    while current:
+        nodes.append(str(current.value))
+        current = current.next
+    print(" -> ".join(nodes))
+
+
+if __name__ == "__main__":
+    # Create a linked list: 1 -> 2 -> 3 -> 4 -> 5
+    head = Node(1, Node(2, Node(3, Node(4, Node(5)))))
+
+    print("Original linked list:")
+    print_linked_list(head)
+
+    # Reverse the linked list
+    new_head = reverse_linked_list(head)
+
+    print("\nReversed linked list:")
+    print_linked_list(new_head)
+```

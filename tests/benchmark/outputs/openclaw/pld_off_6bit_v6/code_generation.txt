@@ -1,0 +1,67 @@
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previous node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we modify the pointer
+
+Key considerations:
+- Args:
+        head: The head node of the linked list
+        
+    Returns:
+        The new head node of the reversed linked list
+        
+    Time Complexity: O(n) - we traverse the list once
+    Space Complexity: O(1) - only using a constant number of pointers
+    """
+    Edge case: empty list or single node
+    if not head or not head.next:
+        return head
+    
+    prev = None
+    current = head
+    
+    while current:
+        next_temp = current.next  Store next node before breaking the link
+        current.next = prev       Point current node to previous node
+        prev = current            Move prev pointer forward
+        current = next_temp       Move current pointer forward
+    
+    return prev  prev is now the new head
+
+Complexity: - Time: O(n) - single pass through the list
+- Space: O(1) - only three pointer variables used
+
+Let me implement this solution.
+
+
+# Reversing a Linked List in Python
+
+## Architectural Decisions
+
+**Approach**: I'll use the **iterative three-pointer technique** rather than recursion because:
+- **O(1) space complexity** vs O(n) for recursive stack frames
+- No risk of stack overflow on very long lists
+- More efficient and production-friendly
+
+**Design choices**:
+1. **In-place reversal**: Modifies the existing list structure rather than creating new nodes
+2. **Type hints**: Added for better code documentation and IDE support
+3. **Edge case handling**: Explicitly handles empty lists and single-node lists
+4. **Helper functions**: Include `create_linked_list` and `print_linked_list` for clean testing
+
+## Implementation
+
+```python
+from typing import Optional, List
+
+class Node:
+    """A singly linked list node."""
+    def __init__(self, value: int, next: Optional['Node'] = None):
+        self.value = value
+        self.next = next
+
+
+def reverse_linked

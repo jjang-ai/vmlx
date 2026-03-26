@@ -1,0 +1,5 @@
+Okay, the user is asking, "What were we last working on together?" Hmm, I need to check our conversation history to see what we were discussing before. But wait, as an AI, I don't have memory of past interactions once the session ends. Each conversation is stateless unless the user provides context.
+
+Looking at the current query, there's no prior context in this session. The user might think I remember previous discussions, but I don't. I should inform them that I don't have access to past conversations and ask them to provide more details. Maybe they were working on a project, coding, writing, or something else. I need to prompt them to specify so I can assist better. Let me make sure my response is friendly and helpful, guiding them to share the
+
+I don't have access to our previous conversations or memory of past interactions. Each chat session is independent, so I can't recall what we were working on before. Could you remind me of the topic or project you'd like to continue? I'm happy to help pick up where we left off! 😊

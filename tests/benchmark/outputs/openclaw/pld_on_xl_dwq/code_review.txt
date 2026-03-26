@@ -1,0 +1,27 @@
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A Python function `find_dupes(lst)`.
+    *   Task: Review the function.
+    *   Constraint: Feedback must be in exactly three sections: CORRECTNESS, PERFORMANCE, STYLE.
+    *   Output Format: Three distinct sections with those specific headers.
+
+2.  **Analyze the Code:**
+    ```python
+    def find_dupes(lst):
+        dupes = []
+        for i in range(len(lst)):
+            for j in range(i+1, len(lst)):
+                if lst[i] == lst[j] and lst[i] not in dupes:
+                    dupes.append(lst[i])
+        return dupes
+    ```
+    *   **Functionality:** It iterates through all pairs of elements in the list. If a pair matches (`lst[i] == lst[j]`) and the element hasn't been added to `dupes` yet, it adds it.
+    *   **Logic:** It finds elements that appear more than once.
+    *   **Edge Cases:** Empty list (returns `[]`), single element (returns `[]`), all unique (returns `[]`), all same (returns `[element]`).
+    *   **Correctness:** It seems logically correct for finding unique duplicate values. However, the condition `lst[i] not in dupes` inside the inner loop is inefficient but logically sound for ensuring uniqueness in the output list.
+    *   **Performance:**
+        *   Outer loop: $N$ iterations.
+        *   Inner loop: $N-i-1$ iterations.
+        *   Total comparisons: $O(N^2)$.
+        *   Inside inner loop: `lst[i] not in dupes`. `dupes

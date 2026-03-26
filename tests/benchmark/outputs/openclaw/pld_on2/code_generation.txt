@@ -1,0 +1,64 @@
+Let me think about how to approach this coding problem.
+
+Problem: Write a Python function that reverses a linked list. Include the Node class definition and a short example in __main__.
+
+Approach: - `prev`: Points to the previous node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we break the link
+
+Key considerations:
+- Args:
+        head: The head node of the linked list
+        
+    Returns:
+        The new head node of the reversed linked list
+    """
+    prev = None
+    current = head
+    
+    while current is not None:
+        next_temp = current.next  Store next node before breaking the link
+        current.next = prev       Point current node to previous node
+        prev = current            Move prev pointer forward
+        current = next_temp       Move current pointer forward
+    
+    return prev  prev is now the new head of the reversed list
+
+Complexity: - Space: O(1) - Only uses a constant number of pointer variables
+
+Let me implement this solution
+
+## Architectural Decisions & Reasoning
+
+### 1. **Algorithm Choice: Iterative Approach**
+I chose the iterative approach over recursion because:
+- **Space Efficiency**: O(1) space vs O(n) stack space for recursion
+- **No Stack Overflow Risk**: Safe for very long lists
+- **Better Performance**: No function call overhead
+
+### 2. **Three-Pointer Technique**
+The classic approach uses three pointers:
+- `prev`: Points to the previous node (initially `None`)
+- `current`: Points to the current node being processed (initially `head`)
+- `next_temp`: Temporarily stores the next node before we break the link
+
+### 3. **In-Place Reversal**
+The algorithm reverses pointers in-place without allocating new nodes, making it memory-efficient.
+
+### 4. **Edge Case Handling**
+The algorithm naturally handles:
+- Empty list (returns `None`)
+- Single node (returns the same node)
+- Two or more nodes (full reversal)
+
+---
+
+## Implementation
+
+```python
+class Node:
+    """A simple singly-linked list node."""
+    
+    def __init__(self, value: int, next: 'Node' = None):
+        self.value = value
+        self

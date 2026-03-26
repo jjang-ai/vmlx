@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "title": "Fix login authentication timeout bug",
+    "priority": "high",
+    "estimated_minutes": 45
+  },
+  {
+    "id": 2,
+    "title": "Implement user profile editing functionality",
+    "priority": "medium",
+    "estimated_minutes": 90
+  },
+  {
+    "id": 3,
+    "title": "Optimize database query performance for dashboard",
+    "priority": "medium",
+    "estimated_minutes": 60
+  },
+  {
+    "id": 4,
+    "title": "Review and update API documentation",
+    "priority": "low",
+    "estimated_minutes": 30
+  },
+  {
+    "id": 5,
+    "title": "Set up CI/CD pipeline for staging environment",
+    "priority": "high",
+    "estimated_minutes": 120
+  }
+]

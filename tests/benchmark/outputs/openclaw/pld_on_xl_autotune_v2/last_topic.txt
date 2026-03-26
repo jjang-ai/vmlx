@@ -1,0 +1,5 @@
+Okay, the user is asking, What were we last working on together? Hmm, I need to check the conversation history to see what we discussed before. Wait, but in this case, there's no prior conversation history provided. The current session is new, so there's no context from previous interactions.
+
+Wait, the user might think we had a previous conversation, but since each session is stateless, I don't have access to past interactions. I should inform them that I don't have memory of past conversations and ask them to provide more details. Let me make sure I'm not missing anything. The user's message is the first in this session, so there's no prior context. I need to politely explain that I can't recall previous discussions and offer help based on what they need now
+
+I don't have access to our previous conversations, as each session starts fresh without memory of past interactions. Could you remind me what you'd like to work on? I'm happy to help! 😊

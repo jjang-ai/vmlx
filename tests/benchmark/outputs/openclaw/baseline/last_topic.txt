@@ -1,0 +1,19 @@
+The user is asking about our previous conversation, but this appears to be the start of a new conversation. I don't have any context about what we might have been working on before, as this is a fresh chat session.
+
+Let me consider:
+1. This is a new conversation - there's no prior history visible
+2. I should be honest about not having context
+3. I should offer to help with whatever they'd like
+
+This appears to be a new conversation, so I don't have any context about what we were previously working on together. Each chat session starts fresh without memory of prior conversations.
+
+However, I'm happy to help you with whatever you'd like to work on! Whether it's:
+
+- **Mathematics** (algebra, calculus, statistics, etc.)
+- **Science** (physics, chemistry, biology)
+- **Programming** (debugging, algorithms, code review)
+- **Writing** (essays, technical documentation, creative content)
+- **Analysis** (data interpretation, logical reasoning)
+- **Or anything else** you need help with
+
+What would you like to work on today?

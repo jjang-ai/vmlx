@@ -1,0 +1,53 @@
+Here's a thinking process that leads to the suggested checklist for opening a PR:
+
+1.  **Understand the User's Need:** The user is about to open a Pull Request (PR) for a *big feature*. This implies complexity, potential for breaking changes, and a need for thorough review. They want to know what to check *before* hitting the "Create Pull Request" button.
+
+2.  **Identify Key Categories:** A big feature isn't just code. It touches documentation, testing, configuration, security, and team processes. I should structure the advice logically. Good categories would be:
+    *   Code Quality & Standards
+    *   Testing
+    *   Documentation
+    *   Configuration & Environment
+    *   Security & Performance
+    *   Project Management & Communication
+    *   The "Big Feature" Specifics (since they emphasized "big")
+
+3.  **Brainstorm Specific Items within Categories:**
+
+    *   *Code:* Linting, formatting, comments, dead code, magic numbers, error handling.
+    *   *Tests:* Unit tests, integration tests, edge cases, coverage, CI passing.
+    *   *Docs:* README, API docs, internal docs, migration guides (if breaking).
+    *   *Config:* Env vars, secrets, database migrations, feature flags.
+    *   *Security:* Auth, injection, data privacy, dependencies.
+    *   *Performance:* Load, latency, memory.
+    *   *Process:* Ticket link, description, screenshots, assignees, reviewers.
+    *   *Big Feature Specifics:* Rollback plan, feature flags, incremental delivery, impact analysis.
+
+4.  **Draft the Content (Iterative Refinement):**
+
+    *   *Intro:* Acknowledge the magnitude ("big feature" means higher stakes).
+    *   *Code Health:* Mention linting, formatting, and removing debug logs.
+    *   *Testing:* Crucial. Unit + Integration. CI must pass.
+    *   *Documentation:* Don't forget the "why" and "how".
+    *   *Database/Migrations:* A common pitfall. Are they reversible?
+    *   *Security:* Secrets, permissions.
+    *   *PR Metadata:* Title, description, links.
+    *   *The "Big Feature" Nuance:* This is the most important part. Suggest splitting it, using feature flags, and planning for rollback.
+
+5.  **Refine and Organize (The "Checklist" Format):**
+    *   Use bold headings for readability.
+    *   Use bullet points for actionable items.
+    *   Add a "Pro Tips" section for extra value.
+    *   Add a "Soft Skills" section (communication).
+
+6.  **Self-Correction/Review during drafting:**
+    *   *Initial thought:* Just list technical checks.
+    *   *Correction:* No, a big feature often fails due to lack of communication or unclear requirements. I need to emphasize the PR description and stakeholder alignment.
+    *   *Initial thought:* Tell them to write tests.
+    *   *Correction:* Tell them to ensure *CI passes* and tests cover *edge cases*.
+    *   *Initial thought:* Mention database migrations.
+    *   *Correction:* Make sure to mention *backward compatibility* and *rollback plans*.
+
+7.  **Final Polish:**
+    *   Make the tone encouraging but rigorous.
+    *   Ensure the distinction between "small PR" and "big PR" is clear (e.g., splitting the PR).
+    *   Add a concluding encouraging remark.

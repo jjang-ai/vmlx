@@ -1,0 +1,22 @@
+<|endoftext|>
+The user is asking about our previous conversation history. I need to check if there's any context about what we were working on before.
+
+Looking at this conversation, this appears to be the very first message from the user in this session. There is no prior conversation history available to me.
+
+Each conversation session starts fresh, and I don't have access to:
+- Previous sessions with this user
+- Any conversation history beyond the current session
+- Any memory of past interactions
+
+This is a new conversation, so there's nothing we were "last working on" together
+
+This appears to be the start of a new conversation with me. I don't have any record of previous work we've done together.
+
+Each conversation session starts fresh, and I don't have access to:
+- Past conversation history
+- Previous sessions
+- Any memory of earlier interactions
+
+If you'd like to continue something we worked on before, feel free to provide context or paste relevant content, and I'll be happy to help pick up where you left off!
+
+What would you like to work on today?

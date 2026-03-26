@@ -133,9 +133,31 @@ def _find_config_path(model_path: Path) -> Optional[Path]:
     return None
 
 
+def _resolve_local_path(model_path: str | Path) -> Path:
+    """Resolve a model path or HuggingFace model ID to a local directory.
+
+    If model_path is already a local directory, returns it as-is.
+    If it looks like a HF model ID (e.g. 'JANGQ-AI/Qwen3.5-27B-JANG_4S'),
+    resolves to the local HF cache snapshot using local_files_only=True.
+    Falls back to the original path if resolution fails.
+    """
+    path = Path(model_path)
+    if path.is_dir():
+        return path
+    model_str = str(model_path)
+    if "/" in model_str and not path.is_absolute():
+        try:
+            from huggingface_hub import snapshot_download
+            local_dir = snapshot_download(model_str, local_files_only=True)
+            return Path(local_dir)
+        except Exception:
+            pass
+    return path
+
+
 def is_jang_model(model_path: str | Path) -> bool:
     """Check if a directory contains a JANG model."""
-    return _find_config_path(Path(model_path)) is not None
+    return _find_config_path(_resolve_local_path(model_path)) is not None
 
 
 def _is_v2_model(model_path: Path) -> bool:
@@ -669,7 +691,7 @@ def load_jang_model(model_path: str | Path, lazy: bool = False):
     Returns:
         Tuple of (model, tokenizer) compatible with mlx-lm
     """
-    path = Path(model_path)
+    path = _resolve_local_path(model_path)
     config_path = _find_config_path(path)
     if not config_path:
         raise FileNotFoundError(f"No JANG config found in {path}")

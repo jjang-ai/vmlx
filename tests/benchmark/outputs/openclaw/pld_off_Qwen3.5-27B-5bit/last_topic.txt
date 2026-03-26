@@ -1,0 +1,5 @@
+Okay, the user is asking, "What were we last working on together?" Hmm, I need to check the conversation history to see what we were discussing before. Wait, looking at the current context, there's no prior conversation history provided. This might be the start of our chat.
+
+Wait, the user might think we had previous interactions, but since this is a new session, there's no history. I should let them know that I don't have access to past conversations and ask them to provide more details. Maybe they're continuing a previous topic but don't realize each session is separate. I need to respond politely, explaining that I can't recall past interactions and offer help if they give more context. Let me make sure I'm not missing any context here. Yeah, the current session doesn't have prior messages. So the answer should inform them that each session is new and ask them to share what they
+
+It seems like this might be the start of our conversation! I don't have access to past interactions, as each session is fresh. Could you remind me what you'd like to work on? 😊 Whether it's a project, question, or idea, I'm here to help!

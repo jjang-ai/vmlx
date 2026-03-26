@@ -1,0 +1,53 @@
+Here's a thinking process that leads to the suggested PR checklist:
+
+1.  **Analyze the Request:**
+    *   **User:** Developer about to open a Pull Request (PR) for a *big feature*.
+    *   **Goal:** Wants to know what to check *before* submitting.
+    *   **Context:** "Big feature" implies complexity, potential side effects, higher review burden, and more risk of breaking things.
+
+2.  **Identify Key Areas of Concern:**
+    When submitting a large PR, the reviewer needs to be able to understand, test, and merge it without excessive friction. The submitter needs to ensure quality, stability, and maintainability.
+    *   *Code Quality:* Is it clean? Does it follow standards?
+    *   *Functionality:* Does it work? Are there tests?
+    *   *Documentation:* Is it explained?
+    *   *Impact:* Does it break anything else?
+    *   *Process:* Does it follow team conventions?
+    *   *Communication:* Is the PR description clear?
+
+3.  **Drafting the Checklist (Categorization Strategy):**
+    To make the advice actionable, I should organize it into logical categories. Good categories would be:
+    *   Code & Logic
+    *   Testing
+    *   Documentation
+    *   Security & Performance
+    *   PR Description & Metadata
+    *   Team/Process
+
+4.  **Fleshing out each category (Iterative refinement):**
+
+    *   *Code:* Linting, formatting, dead code, secrets, complexity. *Refinement:* Since it's a "big" feature, mention splitting it up if possible (atomic PRs).
+    *   *Tests:* Unit, integration, E2E. Coverage. Edge cases. *Refinement:* Make sure tests actually pass locally.
+    *   *Docs:* README, API docs, comments. *Refinement:* Update changelog?
+    *   *Security:* Dependencies, auth, input validation.
+    *   *PR Description:* What, Why, How to test, Screenshots. *Refinement:* This is crucial for big PRs.
+    *   *CI/CD:* Does the pipeline pass?
+    *   *Dependencies:* Did you update `package.json` or `requirements.txt`?
+
+5.  **Addressing the "Big Feature" Aspect:**
+    A small bug fix PR is different from a massive feature PR.
+    *   *Risk:* Review fatigue.
+    *   *Mitigation:* Suggest breaking it down (if not already done).
+    *   *Communication:* Schedule a sync with the reviewer.
+    *   *Rollback:* Is there a plan if this fails in prod?
+
+6.  **Structuring the Response:**
+    *   **Introduction:** Acknowledge the effort (big PRs are hard).
+    *   **The "Must-Haves" (The Core Checklist):** Grouped logically.
+    *   **The "Big Feature" Specifics:** Address the scale.
+    *   **The PR Description Template:** Give them something concrete to copy/paste.
+    *   **Final Advice:** Soft skills (humility, responsiveness).
+
+7.  **Refining the Content (Self-Correction/Edge Cases):**
+    *   *Correction:* Don't just say "write tests." Say "write *new* tests for the new feature and ensure *existing* tests still pass."
+    *   *Correction:* Don't just say "check security." Mention secrets and dependencies specifically.
+    *   *Addition:* Mention database

@@ -1,0 +1,16 @@
+The user is asking about our previous conversation, but I need to check what context I have available.
+
+Looking at the conversation history provided, I only see the current message: "What were we last working on together?"
+
+There is no prior conversation history in this session. This appears to be either:
+1. A new conversation session
+2. A conversation where the history wasn't preserved
+3. The user may be testing my memory capabilities
+
+I should be honest and transparent about what I can and cannot recall.
+
+I don't have any record of a previous conversation with you in this session. This appears to be a new conversation, or the conversation history wasn't preserved.
+
+I'm designed to be honest about my limitations - I can only remember what's in our current conversation thread, and I don't have memory across different sessions or conversations.
+
+If you'd like to continue something we were working on, feel free to give me context or start fresh, and I'll be happy to help!

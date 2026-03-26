@@ -1,0 +1,49 @@
+Here's a thinking process that leads to the suggested PR checklist:
+
+1.  **Analyze the Request:**
+    *   **User:** A developer about to open a Pull Request (PR) for a *big feature*.
+    *   **Goal:** Ensure the PR is ready for review, merges smoothly, and minimizes friction.
+    *   **Context:** "Big feature" implies complexity, potential side effects, more code, and likely more stakeholders involved.
+
+2.  **Identify Key Categories:**
+    To provide a comprehensive answer, I need to break down the preparation process into logical stages. Good categories would be:
+    *   Code Quality (Functionality, Style, Tests)
+    *   Documentation (README, API docs, Changelog)
+    *   Process/Workflow (Branching, CI/CD, Dependencies)
+    *   Communication (Context, Reviewers, Rollout)
+    *   Security & Performance (Crucial for big features)
+
+3.  **Brainstorm Specific Items within Categories:**
+
+    *   *Code:* Does it compile? Do tests pass? Are there new warnings? Is it clean (linting)? Are secrets exposed?
+    *   *Tests:* Unit tests? Integration tests? E2E? Edge cases?
+    *   *Docs:* Is the feature documented? Are API endpoints updated? Is there a migration guide?
+    *   *Process:* Is the branch up to date with main? Are dependencies updated? Does CI pass?
+    *   *Communication:* Is the PR description clear? Did I tag the right people? Is there a rollout plan?
+    *   *Big Feature Specifics:* Feature flags? Database migrations? Backward compatibility? Performance impact?
+
+4.  **Structure the Response:**
+    *   **Introduction:** Acknowledge the importance of the task (big PRs are high risk).
+    *   **Categorized Checklist:** Use the brainstormed categories for easy reading.
+    *   **The "Big Feature" Nuance:** Highlight specific things that apply *only* or *more* to large changes (e.g., feature flags, migration strategies).
+    *   **Soft Skills/Process:** Mention communication and timing.
+    *   **Final "Go/No-Go" Decision:** A quick summary to help them decide if it's truly ready.
+
+5.  **Drafting the Content (Iterative refinement):**
+
+    *   *Self-Correction during drafting:* I shouldn't just list "write tests." I should specify *what kind* of tests for a big feature (integration, regression).
+    *   *Refinement:* Make sure to mention the PR description. A big PR needs a big description.
+    *   *Refinement:* Mention "Feature Flags." This is critical for big features to avoid breaking production.
+    *   *Refinement:* Mention "Database Migrations." Big features often touch the DB. Reversibility is key.
+    *   *Refinement:* Mention "CI/CD." If it breaks the pipeline, it won't merge.
+
+6.  **Polishing the Tone:**
+    *   Keep it encouraging but rigorous.
+    *   Use formatting (bolding, lists) to make it skimmable.
+    *   Add a "Pro Tip" section for extra value.
+
+7.  **Final Review against the Prompt:**
+    *   Does this answer "What should I check before I do?" Yes.
+    *   Is it tailored to a "big feature"? Yes, emphasized complexity and risk.
+
+8.  **Final Output Generation:** (This matches the detailed response provided previously

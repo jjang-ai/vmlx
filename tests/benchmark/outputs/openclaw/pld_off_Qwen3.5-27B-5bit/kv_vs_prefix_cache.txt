@@ -1,0 +1,24 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** Large Language Model (LLM) inference optimization.
+    *   **Core Concepts:** KV Cache (Key-Value Cache) vs. Prefix Cache.
+    *   **Goal:** Explain the difference between them clearly.
+
+2.  **Define KV Cache (The Foundation):**
+    *   *What is it?* A mechanism to store the computed Key ($K$) and Value ($V$) vectors from previous tokens during autoregressive generation.
+    *   *Why?* To avoid recomputing attention for previous tokens when generating the next token. Without it, complexity is $O(N^2)$ per step. With it, it's $O(1)$ per step (amortized).
+    *   *Scope:* It applies to the *entire* context of the current generation session (prompt + generated tokens).
+    *   *Lifecycle:* Created at the start of inference, grows as tokens are generated, usually discarded when the session ends (or when memory is full).
+
+3.  **Define Prefix Cache (The Optimization):**
+    *   *What is it?* A specific optimization *on top of* the KV cache mechanism. It focuses on reusing KV cache blocks from *previous* inference sessions that share a common prefix.
+    *   *Why?* Many queries share common beginnings (e.g., system prompts, code snippets, standard instructions). Recomputing the KV cache for these shared parts is wasteful.
+    *   *Scope:* It applies to the *static* or *recurring* parts of the input (the prefix), not necessarily the dynamic generation part.
+    *   *Lifecycle:* Persistent across multiple requests/sessions. Stored in a larger pool (often disk or reserved GPU memory).
+
+4.  **Identify Key Differences (The Comparison Points):**
+    *   **Purpose:** KV Cache = Avoid recomputation *within* a single sequence. Prefix Cache = Avoid recomputation *across* multiple sequences.
+    *   **Granularity:** KV Cache = Token-level (usually). Prefix Cache = Block-level (chunks of tokens).
+    *   **Lifetime:** KV Cache = Per-request (ephemeral). Prefix Cache = Multi-request (persistent).
+    *   **Memory Management:** KV Cache = Linear growth per request. Prefix Cache = Hashing

@@ -1,0 +1,29 @@
+Here's a thinking process that leads to the comparison between KV cache and prefix cache:
+
+1.  **Deconstruct the Request:**
+    *   **Topic:** LLM Inference Optimization.
+    *   **Core Question:** What is the difference between a KV cache and a prefix cache?
+    *   **Goal:** Explain both concepts clearly, highlight their relationship, and distinguish their specific use cases and mechanisms.
+
+2.  **Define KV Cache (Key-Value Cache):**
+    *   *What is it?* It's the standard mechanism for caching attention states in Transformers.
+    *   *How does it work?* During generation, for each token, we compute $K$ and $V$ matrices. Instead of recomputing them for the next token, we store them.
+    *   *Scope:* It's specific to a *single* request (a single prompt + generation sequence).
+    *   *Lifecycle:* Created during the prefill phase, expanded during decoding.
+    *   *Purpose:* Speed up autoregressive generation by avoiding recomputation of past tokens.
+
+3.  **Define Prefix Cache (Prompt/Context Cache):**
+    *   *What is it?* A mechanism to share computation across *multiple* requests.
+    *   *How does it work?* If two requests start with the same tokens (the "prefix"), we don't need to recompute the KV states for those shared tokens. We look them up in a global cache.
+    *   *Scope:* It's global/shared across requests.
+    *   *Lifecycle:* Cached when a request is processed, retrieved when another request matches the prefix.
+    *   *Purpose:* Speed up batched inference, especially when prompts share common beginnings (e.g., system prompts, code templates, RAG contexts).
+
+4.  **Identify the Key Differences (The "Versus" part):**
+    *   *Granularity:* Per-request vs. Global/Shared.
+    *   *Optimization Target:* Autoregressive decoding speed vs. Batched inference efficiency / Prompt reuse.
+    *   *Storage:* Usually in GPU memory attached to the specific request vs. A separate memory store (like vLLM's PagedAttention or FlashInfer's prefix cache).
+    *   *Use Case:* Standard generation vs. High-concurrency scenarios with common prefixes.
+
+5.  **Structure the Explanation:**
+    *   **Introduction:** Briefly define both
