@@ -237,7 +237,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   const isImageEdit = isImage && sessionConfig.imageMode === 'edit'
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       {/* Session Header */}
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card/50 flex-shrink-0">
         <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1">
@@ -455,8 +455,8 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
       )}
 
       {/* Chat Interface + Settings Drawer (or Image placeholder) */}
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {isImage ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-8">
               <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${
