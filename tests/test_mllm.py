@@ -345,6 +345,80 @@ class TestExtractMultimodalMessages:
         assert "tool_calls" in assistant_msg
         assert assistant_msg["tool_calls"] == tool_calls
 
+    def test_assistant_image_tokens_included(self):
+        """Assistant messages with images must produce image placeholders.
+
+        Regression test: previously only user role got image content lists.
+        Some UIs (e.g. klite) send images on assistant messages when
+        attaching context images to the conversation.
+        """
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Here is the image analysis."},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.jpg"}},
+                ],
+            }
+        ]
+
+        chat_msgs, images, _videos = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(images) == 1
+        assert images[0] == "https://example.com/img.jpg"
+        assistant_msg = chat_msgs[0]
+        assert assistant_msg["role"] == "assistant"
+        assert isinstance(assistant_msg["content"], list)
+        assert len(assistant_msg["content"]) == 2
+        image_items = [c for c in assistant_msg["content"] if c.get("type") == "image"]
+        assert len(image_items) == 1
+
+    def test_assistant_image_with_tool_calls_preserved(self):
+        """Assistant messages with both images and tool_calls keep both."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "analyze", "arguments": "{}"}}]
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Analyzing image."},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/img.jpg"}},
+                ],
+                "tool_calls": tool_calls,
+            }
+        ]
+
+        chat_msgs, images, _ = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(images) == 1
+        assistant_msg = chat_msgs[0]
+        assert "tool_calls" in assistant_msg
+        assert assistant_msg["tool_calls"] == tool_calls
+        assert isinstance(assistant_msg["content"], list)
+
+    def test_user_image_still_works(self):
+        """User messages with images must continue to work (no regression)."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/photo.png"}},
+                ],
+            }
+        ]
+
+        chat_msgs, images, _ = MLXMultimodalLM._extract_multimodal_messages(messages)
+        assert len(images) == 1
+        user_msg = chat_msgs[0]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
+        image_items = [c for c in user_msg["content"] if c.get("type") == "image"]
+        assert len(image_items) == 1
+
 
 class TestMLLMFinishReason:
     """Tests for MLLM finish_reason correctness (BUG 9 fix)."""

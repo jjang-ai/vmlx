@@ -955,16 +955,23 @@ class MLXMultimodalLM:
             msg_name = msg.get("name")
 
             if msg_text or msg_image_count > 0 or tool_calls or role == "tool":
-                if role == "user" and msg_image_count > 0:
+                if msg_image_count > 0 and role in ("user", "assistant"):
+                    # Build multimodal content list with image markers for
+                    # any role that carries images (user or assistant).
+                    # Some UIs (e.g. klite) send images on assistant messages
+                    # when attaching an image to the conversation context.
                     content_list: list[dict] = []
                     for _ in range(msg_image_count):
                         content_list.append({"type": "image"})
                     content_list.append(
                         {"type": "text", "text": msg_text, "content": msg_text}
                     )
-                    chat_messages.append({"role": role, "content": content_list})
+                    out_msg: dict = {"role": role, "content": content_list}
+                    if role == "assistant" and tool_calls:
+                        out_msg["tool_calls"] = tool_calls
+                    chat_messages.append(out_msg)
                 elif role == "assistant":
-                    out_msg: dict = {"role": role, "content": msg_text}
+                    out_msg = {"role": role, "content": msg_text}
                     if tool_calls:
                         out_msg["tool_calls"] = tool_calls
                     chat_messages.append(out_msg)
@@ -1405,6 +1412,30 @@ class MLXMultimodalLM:
             )
         enable_thinking = kwargs.pop("enable_thinking", None)
         formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
+
+        # Post-template image count guard: VLM chat templates may not expand
+        # image placeholders for assistant-role messages. Trim all_images to
+        # match actual placeholder token count to prevent crashes in generate().
+        if all_images and self.config:
+            _img_token_id = getattr(self.config, "image_token_index", None)
+            if _img_token_id is not None:
+                _tok = (
+                    self.processor.tokenizer
+                    if hasattr(self.processor, "tokenizer")
+                    else self.processor
+                )
+                try:
+                    _token_ids = _tok.encode(formatted_prompt)
+                    _slot_count = _token_ids.count(_img_token_id)
+                    if _slot_count != len(all_images):
+                        logger.warning(
+                            f"Image count mismatch: {len(all_images)} images but "
+                            f"{_slot_count} slots in prompt (likely assistant-role "
+                            f"images not supported by template). Trimming to {_slot_count}."
+                        )
+                        all_images = all_images[:_slot_count]
+                except Exception as _e:
+                    logger.debug(f"Image slot count check failed: {_e}")
 
         # Prefix caching with vision embedding support
         # Following LMCache approach: cache vision embeddings to skip encoder on hit
