@@ -60,6 +60,36 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
 
   const { running, logLines, wasCancelled, start, cancel } = useStreamingOperation()
 
+  // Derive progress status from log lines for the progress indicator
+  const progressStatus = (() => {
+    if (!running || logLines.length === 0) return null
+    // Look for common progress patterns from jang_tools and mlx-lm
+    for (let i = logLines.length - 1; i >= Math.max(0, logLines.length - 20); i--) {
+      const line = logLines[i]
+      // jang_tools: "Quantizing layer 15/32" or "Layer 15/32"
+      const layerMatch = line.match(/(?:layer|Layer)\s+(\d+)\s*[/]\s*(\d+)/i)
+      if (layerMatch) {
+        const current = parseInt(layerMatch[1])
+        const total = parseInt(layerMatch[2])
+        return { label: `Quantizing layer ${current}/${total}`, percent: Math.round((current / total) * 100) }
+      }
+      // Percentage patterns: "45%" or "45.2%"
+      const pctMatch = line.match(/(\d+(?:\.\d+)?)\s*%/)
+      if (pctMatch) {
+        const pct = Math.min(100, Math.round(parseFloat(pctMatch[1])))
+        return { label: line.trim().slice(0, 60), percent: pct }
+      }
+      // Phase detection
+      if (/calibrat/i.test(line)) return { label: 'Calibrating...', percent: undefined }
+      if (/quantiz/i.test(line)) return { label: 'Quantizing...', percent: undefined }
+      if (/saving|writing/i.test(line)) return { label: 'Saving weights...', percent: 90 }
+      if (/smoke.*test|verif/i.test(line)) return { label: 'Verifying output...', percent: 95 }
+      if (/download/i.test(line)) return { label: 'Downloading model...', percent: undefined }
+      if (/load/i.test(line)) return { label: 'Loading model...', percent: undefined }
+    }
+    return { label: 'Converting...', percent: undefined }
+  })()
+
   useEffect(() => {
     if (initialModelPath) setModelPath(initialModelPath)
   }, [initialModelPath])
@@ -106,8 +136,9 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
       const ok = ipcResult?.success ?? false
       setSuccess(ok)
       if (ok) {
-        const pathLine = allLines?.find((l: string) => l.startsWith('Output path:'))
-        if (pathLine) setOutputPath(pathLine.replace('Output path:', '').trim())
+        // Match both "Output path: /path" (MLX) and "  Output: /path" (JANG)
+        const pathLine = allLines?.find((l: string) => l.match(/^\s*Output(?:\s+path)?:\s/))
+        if (pathLine) setOutputPath(pathLine.replace(/^\s*Output(?:\s+path)?:\s*/, '').trim())
       }
     }
   }
@@ -429,6 +460,26 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
             </button>
           </div>
         </div>
+
+        {/* Progress indicator */}
+        {running && progressStatus && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="truncate">{progressStatus.label}</span>
+              {progressStatus.percent != null && <span>{progressStatus.percent}%</span>}
+            </div>
+            <div className="w-full h-1.5 bg-accent rounded-full overflow-hidden">
+              {progressStatus.percent != null ? (
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{ width: `${progressStatus.percent}%` }}
+                />
+              ) : (
+                <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '100%', opacity: 0.5 }} />
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Action buttons */}
         <div className="flex gap-3">

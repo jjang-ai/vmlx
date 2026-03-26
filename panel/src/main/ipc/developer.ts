@@ -5,6 +5,7 @@ import { db } from '../database'
 
 let activeProcess: ChildProcess | null = null
 let cancelled = false
+let bufferedLogLines: string[] = []  // Persists across component mounts for reconnection
 
 function buildCliEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: undefined }
@@ -111,6 +112,7 @@ async function runStreamingCommand(
 
   const spawn_info = resolveCliSpawn(cliArgs)
   cancelled = false
+  bufferedLogLines = []  // Clear previous buffer
 
   return new Promise((resolve) => {
     const proc = spawn(spawn_info.cmd, spawn_info.args, {
@@ -119,8 +121,15 @@ async function runStreamingCommand(
     })
     activeProcess = proc
 
-    proc.stdout?.on('data', (data) => emitLog(getWin, data.toString()))
-    proc.stderr?.on('data', (data) => emitLog(getWin, data.toString()))
+    const bufferAndEmit = (raw: string) => {
+      const lines = raw.split('\n').filter((l: string) => l.length > 0)
+      bufferedLogLines.push(...lines)
+      // Cap buffer to prevent unbounded growth
+      if (bufferedLogLines.length > 2000) bufferedLogLines = bufferedLogLines.slice(-2000)
+      emitLog(getWin, raw)
+    }
+    proc.stdout?.on('data', (data) => bufferAndEmit(data.toString()))
+    proc.stderr?.on('data', (data) => bufferAndEmit(data.toString()))
 
     proc.on('close', (code) => {
       activeProcess = null
@@ -208,6 +217,16 @@ export function registerDeveloperHandlers(getWin: () => BrowserWindow | null) {
       return { success: true }
     }
     return { success: false, error: 'No active operation' }
+  })
+
+  // Query whether a conversion/operation is currently running (for reconnection after navigation)
+  ipcMain.handle('developer:isRunning', async () => {
+    return { running: activeProcess !== null }
+  })
+
+  // Get buffered log lines from the current/last operation (for reconnection after navigation)
+  ipcMain.handle('developer:getBufferedLogs', async () => {
+    return { lines: bufferedLogLines, running: activeProcess !== null }
   })
 
   ipcMain.handle('developer:browseOutputDir', async () => {

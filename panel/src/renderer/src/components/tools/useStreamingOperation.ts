@@ -26,6 +26,40 @@ export function useStreamingOperation(onLogUpdate?: (lines: string[]) => void): 
 
   useEffect(() => {
     mountedRef.current = true
+
+    // Reconnect: check if an operation was already running when this component mounted
+    // (e.g., user navigated away and came back during conversion)
+    window.api.developer.getBufferedLogs().then((result: { lines: string[]; running: boolean }) => {
+      if (!mountedRef.current) return
+      if (result.running) {
+        // Operation is in progress — restore state and subscribe to remaining logs
+        setRunning(true)
+        if (result.lines.length > 0) {
+          setLogLines(result.lines.slice(-MAX_LOG_LINES))
+          onLogUpdate?.(result.lines.slice(-MAX_LOG_LINES))
+        }
+        // Subscribe to new log events
+        const unsubLog = window.api.developer.onLog((data: any) => {
+          if (!mountedRef.current) return
+          const lines = data.data.split('\n').filter((l: string) => l.length > 0)
+          setLogLines(prev => {
+            const updated = [...prev, ...lines].slice(-MAX_LOG_LINES)
+            onLogUpdate?.(updated)
+            return updated
+          })
+        })
+        // Subscribe to completion
+        const unsubComplete = window.api.developer.onComplete((result: any) => {
+          if (!mountedRef.current) return
+          setRunning(false)
+          if (result.cancelled) setWasCancelled(true)
+          unsubLog()
+          unsubComplete()
+        })
+        cleanupRef.current = () => { unsubLog(); unsubComplete() }
+      }
+    }).catch(() => { /* main process unavailable */ })
+
     return () => {
       mountedRef.current = false
       cleanupRef.current?.()

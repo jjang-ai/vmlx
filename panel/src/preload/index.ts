@@ -244,6 +244,8 @@ const api = {
       calibrationMethod?: string; imatrixPath?: string; useAwq?: boolean; awqAlpha?: number
     }) => ipcRenderer.invoke('developer:convert', args),
     cancelOp: () => ipcRenderer.invoke('developer:cancelOp'),
+    isRunning: () => ipcRenderer.invoke('developer:isRunning') as Promise<{ running: boolean }>,
+    getBufferedLogs: () => ipcRenderer.invoke('developer:getBufferedLogs') as Promise<{ lines: string[]; running: boolean }>,
     browseOutputDir: () => ipcRenderer.invoke('developer:browseOutputDir') as Promise<string | null>,
     onLog: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
