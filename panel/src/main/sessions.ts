@@ -1750,10 +1750,10 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // KV cache quantization — works for both LLMs and VLMs
-    // Skip for JANG TurboQuant models — TQ has its own 3-bit compression that supersedes q8/q4
-    const hasTQ = detected?.hasTurboQuant === true
-    if (!hasTQ && !prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+    // KV cache quantization for stored prefix cache entries
+    // TurboQuant handles live generation cache compression (always active).
+    // q8/q4 here is ADDITIONAL compression for stored cache entries.
+    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
         args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
