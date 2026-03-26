@@ -140,21 +140,29 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
     from .. import server as _server_module
     _lazy = getattr(_server_module, '_stream_from_disk', False)
 
+    # Resolve HuggingFace repo IDs to local paths so that JANG detection
+    # (which checks for jang_config.json on disk) works for remote models.
+    from ..api.utils import resolve_to_local_path
+    local_model_path = resolve_to_local_path(model_name)
+    if local_model_path != model_name:
+        logger.info(f"Resolved HF model to: {local_model_path}")
+
     # JANG format MUST be checked FIRST — JANG models use their own loader that
     # repacks weights into QuantizedLinear and handles tokenizer internally.
     # Checking tokenizer fallback first would bypass the JANG loader for Nemotron-H.
     from .jang_loader import is_jang_model
-    if is_jang_model(model_name):
+    if is_jang_model(local_model_path):
         from .jang_loader import load_jang_model
         logger.info(f"Detected JANG model: {model_name}")
-        return load_jang_model(model_name, lazy=_lazy)
+        return load_jang_model(local_model_path, lazy=_lazy)
 
-    # Check if model needs tokenizer fallback (e.g., Nemotron)
-    if _needs_tokenizer_fallback(model_name):
+    # Check if model needs tokenizer fallback (e.g., Nemotron).
+    # Pass resolved local path so _get_model_type_from_config can read config.json.
+    if _needs_tokenizer_fallback(local_model_path):
         logger.info(
             f"Model {model_name} requires tokenizer fallback, loading directly..."
         )
-        return _load_with_tokenizer_fallback(model_name, lazy=_lazy)
+        return _load_with_tokenizer_fallback(local_model_path, lazy=_lazy)
 
     try:
         return load(model_name, tokenizer_config=tokenizer_config, lazy=_lazy)

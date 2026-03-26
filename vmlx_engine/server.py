@@ -941,10 +941,12 @@ def load_model(
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
     try:
         from .utils.jang_loader import is_jang_model, JANG_CONFIG_FILENAMES
-        if is_jang_model(model_name):
+        from .api.utils import resolve_to_local_path
+        _resolved_model = resolve_to_local_path(model_name)
+        if is_jang_model(_resolved_model):
             from pathlib import Path
             for cfg_name in JANG_CONFIG_FILENAMES:
-                cfg_path = Path(model_name) / cfg_name
+                cfg_path = Path(_resolved_model) / cfg_name
                 if cfg_path.exists():
                     jang_meta = json.loads(cfg_path.read_text())
                     q = jang_meta.get("quantization", {})

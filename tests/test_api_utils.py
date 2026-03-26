@@ -11,6 +11,7 @@ from vmlx_engine.api.utils import (
     extract_multimodal_content,
     is_mllm_model,
     is_vlm_model,
+    resolve_to_local_path,
     SPECIAL_TOKENS_PATTERN,
 )
 from vmlx_engine.api.models import Message, ContentPart, ImageUrl
@@ -427,3 +428,139 @@ class TestExtractMultimodalContent:
         processed, images, videos = extract_multimodal_content(messages)
         assert "First part." in processed[0]["content"]
         assert "Second part." in processed[0]["content"]
+
+
+class TestResolveToLocalPath:
+    """Tests for resolve_to_local_path function."""
+
+    def setup_method(self):
+        # Clear lru_cache between tests
+        resolve_to_local_path.cache_clear()
+
+    def test_existing_directory_returned_as_is(self, tmp_path):
+        """Local directory paths are returned unchanged."""
+        result = resolve_to_local_path(str(tmp_path))
+        assert result == str(tmp_path)
+
+    def test_nonexistent_path_returned_as_is(self):
+        """Unresolvable names are returned unchanged (callers handle gracefully)."""
+        result = resolve_to_local_path("nonexistent/model-name")
+        assert result == "nonexistent/model-name"
+
+    def test_hf_repo_id_resolved_from_cache(self, tmp_path, monkeypatch):
+        """HuggingFace repo IDs are resolved to snapshot paths via cache scan."""
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        snapshot_dir = tmp_path / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "config.json").write_text("{}")
+
+        revision = SimpleNamespace(
+            last_modified=1704067200.0,
+            snapshot_path=snapshot_dir,
+        )
+        repo = SimpleNamespace(
+            repo_id="org/model-name",
+            revisions=[revision],
+        )
+        cache_info = SimpleNamespace(repos=[repo])
+
+        mock_scan = MagicMock(return_value=cache_info)
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", mock_scan)
+
+        result = resolve_to_local_path("org/model-name")
+        assert result == str(snapshot_dir)
+
+    def test_most_recent_revision_selected(self, tmp_path, monkeypatch):
+        """When multiple revisions exist, the most recently modified is chosen."""
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        old_snapshot = tmp_path / "old"
+        old_snapshot.mkdir()
+        (old_snapshot / "config.json").write_text("{}")
+        new_snapshot = tmp_path / "new"
+        new_snapshot.mkdir()
+        (new_snapshot / "config.json").write_text("{}")
+
+        revisions = [
+            SimpleNamespace(last_modified=1704067200.0, snapshot_path=old_snapshot),
+            SimpleNamespace(last_modified=1748736000.0, snapshot_path=new_snapshot),
+        ]
+        repo = SimpleNamespace(repo_id="org/my-model", revisions=revisions)
+        cache_info = SimpleNamespace(repos=[repo])
+
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", MagicMock(return_value=cache_info))
+
+        result = resolve_to_local_path("org/my-model")
+        assert result == str(new_snapshot)
+
+    def test_scan_cache_failure_returns_original(self, monkeypatch):
+        """If scan_cache_dir raises, the original name is returned."""
+        from unittest.mock import MagicMock
+
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", MagicMock(side_effect=RuntimeError("broken")))
+
+        result = resolve_to_local_path("org/broken-model")
+        assert result == "org/broken-model"
+
+    def test_cache_is_used(self, tmp_path):
+        """Repeated calls with the same argument hit the LRU cache."""
+        resolve_to_local_path(str(tmp_path))
+        resolve_to_local_path(str(tmp_path))
+        info = resolve_to_local_path.cache_info()
+        assert info.hits >= 1
+
+    def test_none_last_modified_handled(self, tmp_path, monkeypatch):
+        """Revisions with None last_modified don't crash the sort."""
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        snapshot_a = tmp_path / "a"
+        snapshot_a.mkdir()
+        (snapshot_a / "config.json").write_text("{}")
+        snapshot_b = tmp_path / "b"
+        snapshot_b.mkdir()
+        (snapshot_b / "config.json").write_text("{}")
+
+        revisions = [
+            SimpleNamespace(last_modified=None, snapshot_path=snapshot_a),
+            SimpleNamespace(last_modified=1735689600.0, snapshot_path=snapshot_b),
+        ]
+        repo = SimpleNamespace(repo_id="org/none-ts-model", revisions=revisions)
+        cache_info = SimpleNamespace(repos=[repo])
+
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", MagicMock(return_value=cache_info))
+
+        result = resolve_to_local_path("org/none-ts-model")
+        assert result == str(snapshot_b)
+
+    def test_partial_snapshot_without_config_skipped(self, tmp_path, monkeypatch):
+        """Snapshots missing config.json are skipped (partial downloads)."""
+        from unittest.mock import MagicMock
+        from types import SimpleNamespace
+
+        partial = tmp_path / "partial"
+        partial.mkdir()
+
+        complete = tmp_path / "complete"
+        complete.mkdir()
+        (complete / "config.json").write_text("{}")
+
+        revisions = [
+            SimpleNamespace(last_modified=1748736000.0, snapshot_path=partial),
+            SimpleNamespace(last_modified=1735689600.0, snapshot_path=complete),
+        ]
+        repo = SimpleNamespace(repo_id="org/partial-model", revisions=revisions)
+        cache_info = SimpleNamespace(repos=[repo])
+
+        import huggingface_hub
+        monkeypatch.setattr(huggingface_hub, "scan_cache_dir", MagicMock(return_value=cache_info))
+
+        result = resolve_to_local_path("org/partial-model")
+        assert result == str(complete)

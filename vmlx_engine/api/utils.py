@@ -3,6 +3,7 @@
 Utility functions for text processing and model detection.
 """
 
+import functools
 import json
 import os
 import re
@@ -54,6 +55,48 @@ def clean_output_text(text: str) -> str:
 # =============================================================================
 
 
+@functools.lru_cache(maxsize=32)
+def resolve_to_local_path(model_name: str) -> str:
+    """Resolve a HuggingFace repo ID or local path to a local directory.
+
+    Returns the original ``model_name`` unchanged if it already points to an
+    existing directory.  For HuggingFace repo IDs (e.g.
+    ``"JANGQ-AI/Qwen3.5-122B-A10B-JANG_3L"``), scans the local HF cache and
+    returns the snapshot path of the most recently modified revision.
+    Returns ``model_name`` as-is if resolution fails (callers will fall
+    through gracefully).
+
+    Results are cached for the lifetime of the process via ``@lru_cache``.
+    """
+    from pathlib import Path
+
+    # Already a local directory?
+    if Path(model_name).is_dir():
+        return model_name
+
+    # Try HuggingFace cache (no network, no download)
+    try:
+        from huggingface_hub import scan_cache_dir
+
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if repo.repo_id == model_name:
+                for revision in sorted(
+                    repo.revisions,
+                    key=lambda r: (r.last_modified or 0),
+                    reverse=True,
+                ):
+                    snapshot = str(revision.snapshot_path)
+                    if Path(snapshot).is_dir() and (
+                        Path(snapshot) / "config.json"
+                    ).is_file():
+                        return snapshot
+    except Exception:
+        pass
+
+    return model_name
+
+
 def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
     Check if model is a multimodal language model.
@@ -75,15 +118,19 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     if force_mllm:
         return True
 
+    # Resolve HF repo IDs (e.g. "Org/Model") to local cache path so that
+    # file-based checks (jang_config.json, config.json) actually find the files.
+    local_path = resolve_to_local_path(model_name)
+
     # JANG models: check jang config has_vision field, then fall through
     # to config.json check. Don't early-return False — some JANG models
     # have has_vision=false in jang_config but DO have vision_config in
     # config.json (e.g., Mistral 4 JANG VLM).
     from ..utils.jang_loader import is_jang_model, _find_config_path
     from pathlib import Path
-    if is_jang_model(model_name):
+    if is_jang_model(local_path):
         try:
-            cfg_path = _find_config_path(Path(model_name))
+            cfg_path = _find_config_path(Path(local_path))
             if cfg_path is not None:
                 jang_cfg = json.loads(cfg_path.read_text())
                 if jang_cfg.get("architecture", {}).get("has_vision", False):
@@ -93,7 +140,7 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         # Fall through to config.json check instead of returning False
 
     # Primary: check config.json for vision_config (authoritative for local models)
-    config_path = os.path.join(model_name, "config.json")
+    config_path = os.path.join(local_path, "config.json")
     if os.path.isfile(config_path):
         try:
             model_config = json.loads(open(config_path).read())
@@ -102,12 +149,19 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         except Exception:
             pass
 
-    # Secondary: use model config registry (reads model_type from config.json)
+    # Secondary: use model config registry (reads model_type from config.json).
+    # Pass local_path so registry can read config.json even for HF repo IDs,
+    # but also try the original model_name for name-based disambiguation
+    # (e.g. GLM-Z1, MedGemma regex patterns in registry.lookup).
     try:
         from ..model_config_registry import get_model_config_registry
 
         registry = get_model_config_registry()
-        reg_config = registry.lookup(model_name)
+        # Try resolved path first (can read config.json from disk)
+        reg_config = registry.lookup(local_path)
+        if reg_config.family_name == "unknown" and local_path != model_name:
+            # Retry with original name for name-based regex disambiguation
+            reg_config = registry.lookup(model_name)
         if reg_config.family_name != "unknown":
             return reg_config.is_mllm
     except Exception:
