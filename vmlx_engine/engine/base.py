@@ -22,6 +22,7 @@ class GenerationOutput:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    cache_detail: str = ""  # e.g. "paged", "paged+ssm", "prefix", "disk", "+tq"
     finish_reason: str | None = "stop"
     # For streaming
     new_text: str = ""

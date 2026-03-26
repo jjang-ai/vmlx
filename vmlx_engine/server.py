@@ -1238,11 +1238,12 @@ def get_usage(output: GenerationOutput) -> Usage:
         output.completion_tokens if hasattr(output, "completion_tokens") else 0
     )
     cached = getattr(output, "cached_tokens", 0)
+    detail = getattr(output, "cache_detail", "") or None
     return Usage(
         prompt_tokens=total_prompt_tokens,
         completion_tokens=total_completion_tokens,
         total_tokens=total_prompt_tokens + total_completion_tokens,
-        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached) if cached > 0 else None,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached, cache_detail=detail) if cached > 0 else None,
     )
 
 
@@ -1251,11 +1252,12 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
     _pt = getattr(output, "prompt_tokens", 0)
     _ct = getattr(output, "completion_tokens", 0)
     cached = getattr(output, "cached_tokens", 0)
+    detail = getattr(output, "cache_detail", "") or None
     return ResponsesUsage(
         input_tokens=_pt,
         output_tokens=_ct,
         total_tokens=_pt + _ct,
-        input_tokens_details=InputTokensDetails(cached_tokens=cached) if cached > 0 else None,
+        input_tokens_details=InputTokensDetails(cached_tokens=cached, cache_detail=detail) if cached > 0 else None,
     )
 
 

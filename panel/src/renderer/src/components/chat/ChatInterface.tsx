@@ -8,6 +8,7 @@ interface MessageMetrics {
   tokenCount: number
   promptTokens?: number
   cachedTokens?: number
+  cacheDetail?: string  // e.g. "paged", "paged+ssm(23)+tq", "disk"
   tokensPerSecond: string
   ppSpeed?: string
   ttft: string

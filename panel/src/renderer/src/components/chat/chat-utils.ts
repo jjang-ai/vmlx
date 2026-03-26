@@ -113,11 +113,18 @@ export function getMetricsItems(metrics: MessageMetrics, isStreaming: boolean): 
   }
 
   if (metrics.promptTokens && metrics.promptTokens > 0) {
-    const cached = metrics.cachedTokens ? ` (${metrics.cachedTokens} cached)` : ''
+    let cached = ''
+    if (metrics.cachedTokens) {
+      // Show cache detail if available (e.g. "paged", "paged+ssm(23)+tq", "disk")
+      const detail = metrics.cacheDetail ? ` ${metrics.cacheDetail}` : ''
+      cached = ` (${metrics.cachedTokens}${detail} cached)`
+    }
     items.push({
       label: `${metrics.promptTokens} prompt${cached}`,
       value: `${metrics.promptTokens}`,
-      title: 'Prompt tokens processed',
+      title: metrics.cacheDetail
+        ? `Prompt tokens — cache: ${metrics.cacheDetail}`
+        : 'Prompt tokens processed',
       dimmed: true,
     })
   }

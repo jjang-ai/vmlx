@@ -153,6 +153,7 @@ class RequestOutputCollector:
             prompt_tokens=new.prompt_tokens,
             completion_tokens=new.completion_tokens,
             cached_tokens=new.cached_tokens,
+            cache_detail=getattr(new, 'cache_detail', ''),
         )
 
     def clear(self) -> None:

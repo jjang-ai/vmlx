@@ -278,6 +278,7 @@ class PromptTokensDetails(BaseModel):
     """Breakdown of prompt token usage."""
 
     cached_tokens: int = 0
+    cache_detail: str | None = None  # e.g. "paged", "paged+ssm(23)+tq", "disk"
 
 
 class Usage(BaseModel):
@@ -690,6 +691,7 @@ class InputTokensDetails(BaseModel):
     """Breakdown of input token usage (Responses API format)."""
 
     cached_tokens: int = 0
+    cache_detail: str | None = None
 
 
 class ResponsesUsage(BaseModel):

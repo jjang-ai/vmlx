@@ -699,6 +699,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     let tokenCount = 0
     let promptTokens = 0
     let cachedTokens = 0
+    let cacheDetail = ''
     let firstTokenTime: number | null = null
     // Track actual generation time (excludes PP and tool execution pauses)
     let generationMs = 0
@@ -1173,7 +1174,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                 serverSendsUsage = true
               }
               if (parsed.usage.input_tokens != null) promptTokens = parsed.usage.input_tokens
-              if (parsed.usage.input_tokens_details?.cached_tokens) cachedTokens = parsed.usage.input_tokens_details.cached_tokens
+              if (parsed.usage.input_tokens_details?.cached_tokens) { cachedTokens = parsed.usage.input_tokens_details.cached_tokens; if (parsed.usage.input_tokens_details.cache_detail) cacheDetail = parsed.usage.input_tokens_details.cache_detail }
             }
 
             // Handle error events from Responses API
@@ -1230,7 +1231,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
                 serverSendsUsage = true
               }
               if (parsed.usage.prompt_tokens != null) promptTokens = parsed.usage.prompt_tokens
-              if (parsed.usage.prompt_tokens_details?.cached_tokens) cachedTokens = parsed.usage.prompt_tokens_details.cached_tokens
+              if (parsed.usage.prompt_tokens_details?.cached_tokens) { cachedTokens = parsed.usage.prompt_tokens_details.cached_tokens; if (parsed.usage.prompt_tokens_details.cache_detail) cacheDetail = parsed.usage.prompt_tokens_details.cache_detail }
             }
 
             // Track finish_reason (length = truncated, content_filter = filtered)
@@ -1797,6 +1798,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         tokenCount: totalTokenCount,
         promptTokens: promptTokens || undefined,
         cachedTokens: cachedTokens || undefined,
+        cacheDetail: cacheDetail || undefined,
         tokensPerSecond: finalTps.toFixed(1),
         ppSpeed: finalPpSpeed,
         ttft: ttft.toFixed(2),
@@ -1918,6 +1920,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           tokenCount: abortTotalTokens,
           promptTokens: promptTokens || undefined,
           cachedTokens: cachedTokens || undefined,
+          cacheDetail: cacheDetail || undefined,
           tokensPerSecond: abortTps.toFixed(1),
           ppSpeed: abortPpSpeed,
           ttft: abortTtft.toFixed(2),

@@ -196,6 +196,7 @@ class Scheduler:
 
         # Track if model uses mixed cache types (KVCache + MambaCache)
         self._is_hybrid = self._is_hybrid_model(model)
+        self._tq_active = getattr(model, 'make_cache', None) and getattr(model.make_cache, '__name__', '') in ('_tq_make_cache', '_turboquant_make_cache')
 
         # Pre-compute hybrid cache layout for SSM companion.
         # _hybrid_kv_positions: layer indices that are KVCache (attention).
@@ -1574,6 +1575,7 @@ class Scheduler:
                                                 )
                                                 ssm_idx += 1
                                         reconstructed = full_cache
+                                        request._cache_detail = f"paged+ssm({ssm_idx})"
                                         logger.info(
                                             f"Request {request.request_id}: "
                                             f"hybrid paged HIT — "
@@ -1607,6 +1609,8 @@ class Scheduler:
                             request.cached_tokens = block_table.num_tokens
                             request.shared_prefix_blocks = len(block_table.block_ids)
                             request.remaining_tokens = remaining
+                            if not getattr(request, '_cache_detail', ''):
+                                request._cache_detail = "paged"
                             logger.info(
                                 f"Request {request.request_id}: paged cache hit, "
                                 f"{request.cached_tokens} tokens in "
@@ -1644,6 +1648,7 @@ class Scheduler:
                     request.prompt_cache = cache
                     request.cached_tokens = len(request.prompt_token_ids) - len(remaining)
                     request.remaining_tokens = remaining
+                    request._cache_detail = "memory"
                     logger.info(
                         f"Request {request.request_id}: cache hit, "
                         f"{request.cached_tokens} tokens cached, "
@@ -1673,6 +1678,7 @@ class Scheduler:
                     request.prompt_cache = cache
                     request.cached_tokens = len(request.prompt_token_ids) - len(remaining)
                     request.remaining_tokens = remaining
+                    request._cache_detail = "prefix"
                     logger.debug(
                         f"Request {request.request_id}: cache hit, "
                         f"{request.cached_tokens} tokens cached, "
@@ -1702,6 +1708,7 @@ class Scheduler:
                     request.prompt_cache = disk_cache
                     request.cached_tokens = len(request.prompt_token_ids) - 1
                     request.remaining_tokens = request.prompt_token_ids[-1:]
+                    request._cache_detail = "disk"
                     # Also populate L1 memory cache for faster subsequent hits.
                     # Quantize for L1 if KV quant is enabled (disk stores full precision).
                     l1_data = disk_cache
@@ -2086,7 +2093,11 @@ class Scheduler:
                 # Stop token: don't decode it, just flush any buffered text
                 new_text = ""
 
-            # Create output
+            # Create output — include cache_detail (e.g. "paged", "paged+ssm(23)", "disk")
+            _detail = getattr(request, '_cache_detail', '')
+            # Annotate TQ if active
+            if _detail and getattr(self, '_tq_active', False):
+                _detail += "+tq"
             output = RequestOutput(
                 request_id=request_id,
                 new_token_ids=[response.token],
@@ -2095,6 +2106,7 @@ class Scheduler:
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
                 cached_tokens=request.cached_tokens,
+                cache_detail=_detail,
             )
 
             # Determine effective finish reason (string stop overrides)
@@ -2339,7 +2351,7 @@ class Scheduler:
                         # fetch returns the original prompt count (N), not the
                         # paged cache's internal truncation (N-1).
                         prompt_len = len(all_tokens)
-                        if prompt_len > 0:
+                        if prompt_len > 0 and ssm_layers:
                             self._ssm_state_cache.store(
                                 all_tokens, prompt_len, ssm_layers
                             )
