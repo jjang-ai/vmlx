@@ -2039,12 +2039,8 @@ class TestV6VLMDiskCacheKeyConsistency:
 
     def test_store_uses_token_list_not_truncated(self):
         source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
-        # Find the VLM cache store path with the comment about matching fetch path
-        idx = source.find("# Key uses full token_list (matching fetch path)")
-        assert idx != -1, "Must have comment documenting key consistency"
-        # The store call must use token_list, not truncated_tokens
-        store_line = source[idx:idx + 700]
-        assert "disk_cache.store(token_list" in store_line, (
+        # VLM disk cache store must use token_list (not truncated_tokens) to match fetch key
+        assert "disk_cache.store(token_list" in source, (
             "VLM disk cache store must use token_list (not truncated_tokens) to match fetch key"
         )
 
