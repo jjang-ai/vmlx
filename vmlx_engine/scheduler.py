@@ -1535,8 +1535,8 @@ class Scheduler:
                                     and _fetch_num > 0
                                     else None
                                 )
-                                if ssm_states is None:
-                                    # No SSM companion — release KV blocks, full prefill
+                                if not ssm_states:
+                                    # No SSM companion (None or empty) — release KV blocks, full prefill
                                     logger.info(
                                         f"Request {request.request_id}: "
                                         f"hybrid paged MISS — "
