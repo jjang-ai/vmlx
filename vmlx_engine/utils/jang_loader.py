@@ -92,10 +92,13 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         for ch in _hybrid_pattern[:n_layers]:
             if ch == "M":
                 _layer_types.append("ssm")
-            else:
-                # '*' = Dense attention, 'E' = MoE expert (FFN-only, needs KV placeholder)
-                # Both get 'attention' type cache to keep layer count aligned with model
+            elif ch == "*":
+                # Dense attention layers — need KV cache
                 _layer_types.append("attention")
+            # 'E' (MoE expert) layers are FFN-only, no cache needed.
+            # Model's forward pass skips them in cache indexing (cache_counter
+            # only increments for M and * layers), so we must NOT create
+            # cache objects for E layers to keep indices aligned.
     else:
         _layer_types = ["attention"] * n_layers
 

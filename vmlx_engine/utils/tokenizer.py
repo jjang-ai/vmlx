@@ -68,10 +68,11 @@ def _apply_turboquant_to_model(model, model_path: str):
             for ch in hybrid_pattern[:n_layers]:
                 if ch == 'M':
                     layer_types.append('ssm')
-                else:
-                    # '*' = Dense attention, 'E' = MoE expert (FFN-only, needs KV placeholder)
-                    # Both get 'attention' type cache — E layers get empty KV that's never filled
+                elif ch == '*':
                     layer_types.append('attention')
+                # 'E' (MoE expert) layers are FFN-only with no cache.
+                # Model.make_cache() and forward pass skip them, so we must too
+                # to keep cache indices aligned.
         else:
             layer_types = ['attention'] * n_layers
 
