@@ -95,6 +95,10 @@ def serve_command(args):
             sys.exit(1)
         server._default_top_p = args.default_top_p
 
+    # Apply custom chat template override
+    if getattr(args, 'chat_template', None):
+        server._custom_chat_template = args.chat_template
+
     # Parse --chat-template-kwargs JSON and apply server-wide defaults
     if getattr(args, 'chat_template_kwargs', None) is not None:
         import json as _json
@@ -198,6 +202,8 @@ def serve_command(args):
         print(f"    Draft tokens per step: {getattr(args, 'num_draft_tokens', 3)}")
     else:
         print("  Speculative decoding: Use --speculative-model to enable")
+    if getattr(args, 'chat_template', None):
+        print(f"  Chat template: CUSTOM ({len(args.chat_template)} chars)")
     if getattr(args, 'chat_template_kwargs', None):
         print(f"  Chat template kwargs: {args.chat_template_kwargs}")
     print("=" * 60)
@@ -1123,6 +1129,14 @@ Examples:
              "tokens whose cumulative probability ≤ this value: 0.9 = use top 90%% of probability mass. "
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
+    )
+    serve_parser.add_argument(
+        "--chat-template",
+        type=str,
+        default=None,
+        help="Custom Jinja2 chat template string to override the model's built-in template. "
+             "Useful for models whose templates are incompatible with certain clients "
+             "(e.g., JetBrains AI Chat). The template receives 'messages' and 'add_generation_prompt' variables.",
     )
     serve_parser.add_argument(
         "--chat-template-kwargs",

@@ -49,6 +49,7 @@ export interface SessionConfig {
   logLevel: string
   corsOrigins: string
   maxContextLength: number
+  chatTemplate?: string
   imageMode?: string
   imageQuantize?: number
 }
@@ -692,6 +693,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           onChange={v => onChange('reasoningParser', v)}
           options={REASONING_PARSER_OPTIONS}
         />
+        <Field label="Custom Chat Template" tooltip="Override the model's built-in Jinja2 chat template. Useful when the default template is incompatible with your client (e.g., JetBrains AI Chat). Leave empty to use the model's built-in template. The template receives 'messages' and 'add_generation_prompt' variables.">
+          <textarea
+            value={config.chatTemplate ?? ''}
+            onChange={e => onChange('chatTemplate', e.target.value || undefined)}
+            placeholder="Leave empty to use model default"
+            rows={3}
+            className="cfg-input font-mono text-xs"
+            style={{ resize: 'vertical', minHeight: '3rem' }}
+          />
+        </Field>
         <SelectField
           label="Multimodal Support (VLM)"
           tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto: detected from config.json (vision_config presence). Force On: always use MLLM scheduler. Force Off: never use MLLM scheduler even if auto-detected."

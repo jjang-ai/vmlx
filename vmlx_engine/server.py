@@ -139,6 +139,7 @@ _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
 _default_enable_thinking: bool | None = None  # Set via --default-enable-thinking or --chat-template-kwargs
 _default_chat_template_kwargs: dict | None = None  # Set via --chat-template-kwargs
+_custom_chat_template: str | None = None  # Set via --chat-template
 
 
 def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
@@ -972,6 +973,11 @@ def load_model(
             logger.info(f"Applied custom chat template for {_mc.family_name} model")
     except Exception as e:
         logger.warning(f"Failed to apply custom chat template: {e}")
+
+    # Apply user's custom chat template (highest priority — overrides both model and registry templates)
+    if _custom_chat_template and _engine and _engine.tokenizer:
+        _engine.tokenizer.chat_template = _custom_chat_template
+        logger.info(f"Applied custom chat template from --chat-template ({len(_custom_chat_template)} chars)")
 
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
     try:
@@ -1954,14 +1960,52 @@ async def create_anthropic_message(
         _msg_kwargs["repetition_penalty"] = chat_req.repetition_penalty
     if chat_req.stop:
         _msg_kwargs["stop"] = chat_req.stop
+    # Merge server-wide --chat-template-kwargs defaults (Anthropic API has no
+    # per-request chat_template_kwargs, so we only get server defaults here)
+    _ct_kwargs = _merge_ct_kwargs(None)
+
     # Forward enable_thinking to engine — without this, the model always thinks
     # internally even when the client sends thinking: {type: "disabled"}
     if chat_req.enable_thinking is not None:
         _msg_kwargs["enable_thinking"] = chat_req.enable_thinking
+    elif "enable_thinking" in _ct_kwargs:
+        _msg_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
     elif _default_enable_thinking is not None:
         _msg_kwargs["enable_thinking"] = _default_enable_thinking
 
+    # Auto-map enable_thinking → reasoning_effort for Mistral 4 (same as OpenAI path)
+    if _reasoning_parser and type(_reasoning_parser).__name__ == "MistralReasoningParser":
+        if chat_req.enable_thinking is True and "reasoning_effort" not in _ct_kwargs:
+            _ct_kwargs["reasoning_effort"] = "high"
+            _msg_kwargs["reasoning_effort"] = "high"
+        elif chat_req.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
+            _ct_kwargs["reasoning_effort"] = "none"
+
+    # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
+    if _ct_kwargs:
+        extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
+        if extra_ct:
+            _msg_kwargs["chat_template_kwargs"] = extra_ct
+
     messages_dump = [m.model_dump(exclude_none=True) for m in chat_req.messages]
+
+    # Strip <think> blocks from prior assistant messages when thinking is disabled.
+    # Same logic as the OpenAI path — prevents model from mimicking prior reasoning.
+    _explicit_thinking_off = (
+        chat_req.enable_thinking is False
+        or (_ct_kwargs.get("enable_thinking") is False)
+    )
+    if _explicit_thinking_off and messages_dump:
+        cleaned = []
+        for msg in messages_dump:
+            if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+                stripped = _THINK_STRIP_RE.sub('', msg["content"]).strip()
+                if stripped != msg["content"]:
+                    if not stripped:
+                        continue
+                    msg = {**msg, "content": stripped}
+            cleaned.append(msg)
+        messages_dump = cleaned
 
     if anthropic_req.stream:
         # Streaming: adapt Chat Completions SSE to Anthropic SSE

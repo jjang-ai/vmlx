@@ -137,6 +137,9 @@ function buildCommandPreview(
   // Served model name
   if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
+  // Custom chat template
+  if ((config as any).chatTemplate) parts.push('--chat-template', '"..."')
+
   // Speculative decoding
   if (config.speculativeModel) {
     parts.push('--speculative-model', config.speculativeModel)

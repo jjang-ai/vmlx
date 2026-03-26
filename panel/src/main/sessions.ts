@@ -1703,6 +1703,10 @@ export class SessionManager extends EventEmitter {
     if (config.servedModelName) {
       args.push('--served-model-name', config.servedModelName)
     }
+    // Pass custom chat template if configured
+    if ((config as any).chatTemplate) {
+      args.push('--chat-template', (config as any).chatTemplate)
+    }
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
