@@ -37,6 +37,7 @@ _CLASS_NAME_MAP = {
     "BatchMambaCache": CacheType.MAMBA_CACHE,
     "ArraysCache": CacheType.ARRAYS_CACHE,
     "CacheList": CacheType.CACHE_LIST,
+    "TurboQuantKVCache": CacheType.KV_CACHE,  # TQ behaves like KVCache (positional, sliceable)
 }
 
 # Positional caches store per-token KV data that can be sliced by position
