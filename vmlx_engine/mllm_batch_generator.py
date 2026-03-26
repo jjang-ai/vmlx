@@ -638,7 +638,22 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
                     logger.warning(f"Layer {i}: RotatingKVCache but BatchRotatingKVCache unavailable")
                     batch_cache.append(BatchKVCache([0] * len(caches)))
             elif _is_kv_like(layer_cache):
-                batch_cache.append(BatchKVCache.merge(layer_caches))
+                # TQ: .keys buffer is over-allocated in 256-token chunks.
+                # BatchKVCache.merge() reads .keys directly, so convert to
+                # properly sliced KVCache via .state before merging.
+                if type(layer_cache).__name__ == _TQ_CLASS_NAME:
+                    converted = []
+                    for tq in layer_caches:
+                        kv = KVCache()
+                        k, v = tq.state
+                        if k is not None and hasattr(k, 'shape'):
+                            kv.keys = k
+                            kv.values = v
+                            kv.offset = tq.offset
+                        converted.append(kv)
+                    batch_cache.append(BatchKVCache.merge(converted))
+                else:
+                    batch_cache.append(BatchKVCache.merge(layer_caches))
             elif isinstance(layer_cache, (_MambaCache, ArraysCache)):
                 from .utils.mamba_cache import BatchMambaCache
                 batch_cache.append(BatchMambaCache.merge(layer_caches))
@@ -706,7 +721,17 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
                 # Dequant failed — use fresh KVCache
                 converted.append(BatchKVCache.merge([KVCache()]))
         elif _is_kv_like(c):
-            converted.append(BatchKVCache.merge([c]))
+            # TQ: convert via .state to avoid over-allocated buffer
+            if type(c).__name__ == _TQ_CLASS_NAME:
+                kv = KVCache()
+                k, v = c.state
+                if k is not None and hasattr(k, 'shape'):
+                    kv.keys = k
+                    kv.values = v
+                    kv.offset = c.offset
+                converted.append(BatchKVCache.merge([kv]))
+            else:
+                converted.append(BatchKVCache.merge([c]))
         elif RotatingKVCache is not None and isinstance(c, RotatingKVCache):
             if BatchRotatingKVCache is not None:
                 converted.append(BatchRotatingKVCache.merge([c]))
