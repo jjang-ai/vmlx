@@ -2190,6 +2190,12 @@ class MLLMBatchGenerator:
             if finish_reason is not None:
                 # Extract cache NOW before batch.filter() invalidates indices
                 captured_cache = batch.extract_cache(i)
+                # TurboQuant: compress TQ layers for storage-efficient caching (5x savings)
+                try:
+                    from jang_tools.turboquant.generate import compress_cache as _tq_compress
+                    _tq_compress(captured_cache)
+                except (ImportError, Exception):
+                    pass
                 cache_fn = lambda c=captured_cache: c
 
             responses.append(

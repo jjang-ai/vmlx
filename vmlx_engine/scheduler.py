@@ -2182,6 +2182,14 @@ class Scheduler:
                                                     f"Disk cache store failed for "
                                                     f"{request_id}: {de}"
                                                 )
+                                        # TurboQuant: compress TQ layers before extraction (5x memory savings)
+                                        try:
+                                            from jang_tools.turboquant.generate import compress_cache as _tq_compress
+                                            _tq_count = _tq_compress(cache_for_extract)
+                                            if _tq_count > 0:
+                                                logger.info(f"TurboQuant compressed {_tq_count} layers for {request_id}")
+                                        except ImportError:
+                                            pass
                                         # Quantize for storage-efficient extraction
                                         if getattr(self, '_kv_cache_bits', 0):
                                             cache_for_extract = (
