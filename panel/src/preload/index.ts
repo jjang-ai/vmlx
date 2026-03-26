@@ -139,6 +139,15 @@ const api = {
     getOverrides: (chatId: string) => ipcRenderer.invoke('chat:getOverrides', chatId),
     clearOverrides: (chatId: string) => ipcRenderer.invoke('chat:clearOverrides', chatId),
 
+    // Profiles (named presets for chat settings)
+    saveProfile: (name: string, overrides: any, isDefault?: boolean) =>
+      ipcRenderer.invoke('chat:saveProfile', name, overrides, isDefault),
+    updateProfile: (id: string, name: string, overrides: any, isDefault?: boolean) =>
+      ipcRenderer.invoke('chat:updateProfile', id, name, overrides, isDefault),
+    getProfiles: () => ipcRenderer.invoke('chat:getProfiles'),
+    getDefaultProfile: () => ipcRenderer.invoke('chat:getDefaultProfile'),
+    deleteProfile: (id: string) => ipcRenderer.invoke('chat:deleteProfile', id),
+
     // Export/Import
     export: (chatId: string, format: 'json' | 'markdown' | 'sharegpt') =>
       ipcRenderer.invoke('chat:export', chatId, format),
