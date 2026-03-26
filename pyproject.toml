@@ -67,7 +67,7 @@ dev = [
     "mypy>=1.0.0",
 ]
 vllm = [
-    # vllm requires torch<=2.6.0; incompatible with mflux (torch>=2.8.0) on Python>=3.13
+    # vllm pins torch<=2.6.0 which conflicts with mflux (torch>=2.8.0) when both installed
     "vllm>=0.4.0; python_version < '3.13'",
 ]
 vision = [
@@ -99,9 +99,8 @@ jang = [
     "jang>=1.0.0; python_version >= '3.11'",
 ]
 # Image generation dependencies (Flux, Z-Image-Turbo via mflux)
-# mflux requires Python >=3.13; triton (transitive via torch) requires Python <3.15
 image = [
-    "mflux>=0.16.0; python_version >= '3.13' and python_version < '3.15'",
+    "mflux>=0.16.0",
 ]
 
 [project.urls]

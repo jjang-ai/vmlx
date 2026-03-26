@@ -154,14 +154,23 @@ def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
     if request_kwargs:
         base.update(request_kwargs)
     # Normalize enable_thinking: reject non-bool values that bool() would mishandle
-    if "enable_thinking" in base and not isinstance(base["enable_thinking"], bool):
+    if "enable_thinking" in base:
         val = base["enable_thinking"]
-        if isinstance(val, str) and val.lower() in ("false", "0", "no", "off"):
+        if val is None:
+            # JSON null means "no preference" — remove so downstream defaults apply
+            del base["enable_thinking"]
+        elif isinstance(val, bool):
+            pass  # Already correct
+        elif isinstance(val, str) and val.lower() in ("false", "0", "no", "off"):
             base["enable_thinking"] = False
         elif isinstance(val, str) and val.lower() in ("true", "1", "yes", "on"):
             base["enable_thinking"] = True
-        else:
+        elif isinstance(val, (int, float)):
             base["enable_thinking"] = bool(val)
+        else:
+            # dict, list, or other non-scalar — remove to avoid silent misinterpretation
+            logger.warning(f"Invalid enable_thinking value {val!r} in chat_template_kwargs, ignoring")
+            del base["enable_thinking"]
     return base
 
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
@@ -1087,6 +1096,7 @@ def load_model(
         try:
             from .utils.weight_index import build_weight_index, save_all_layer_weights
             from .utils.jang_loader import is_jang_model
+            from .api.utils import resolve_to_local_path
             import tempfile
 
             # Get the LLM wrapper (has _stream_from_disk attribute)
@@ -1114,7 +1124,7 @@ def load_model(
                 # If it fails, SSD streaming falls back to loading from original
                 # safetensors files via the weight index (works for most JANG models
                 # since only gate weights are dequanted at load time).
-                if is_jang_model(_model_path):
+                if is_jang_model(resolve_to_local_path(_model_path) if _model_path else _model_path):
                     try:
                         raw_model = llm_model.model
                         # Clean up previous temp dir if exists (e.g. after deep sleep wake)
@@ -3409,11 +3419,13 @@ async def create_chat_completion(
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
                 content = msg["content"]
-                stripped = _THINK_STRIP_RE.sub('', content).strip()
-                if stripped != content:
-                    if not stripped:
-                        continue  # Drop assistant messages that were ONLY thinking
-                    msg = {**msg, "content": stripped}
+                # Skip list content (assistant messages with images from PR #29)
+                if isinstance(content, str):
+                    stripped = _THINK_STRIP_RE.sub('', content).strip()
+                    if stripped != content:
+                        if not stripped:
+                            continue  # Drop assistant messages that were ONLY thinking
+                        msg = {**msg, "content": stripped}
             cleaned.append(msg)
         messages = cleaned
 
@@ -3971,11 +3983,13 @@ async def create_response(
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
                 content = msg["content"]
-                stripped = _THINK_STRIP_RE.sub('', content).strip()
-                if stripped != content:
-                    if not stripped:
-                        continue  # Drop assistant messages that were ONLY thinking
-                    msg = {**msg, "content": stripped}
+                # Skip list content (assistant messages with images from PR #29)
+                if isinstance(content, str):
+                    stripped = _THINK_STRIP_RE.sub('', content).strip()
+                    if stripped != content:
+                        if not stripped:
+                            continue  # Drop assistant messages that were ONLY thinking
+                        msg = {**msg, "content": stripped}
             cleaned.append(msg)
         messages = cleaned
 
