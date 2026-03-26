@@ -229,8 +229,37 @@ class DiskCacheManager:
                 return None
 
             try:
-                from mlx_lm.models.cache import load_prompt_cache
-                cache = load_prompt_cache(str(file_path))
+                from mlx_lm.models.cache import load_prompt_cache, KVCache as _KVC
+                from mlx_lm.utils import tree_unflatten
+                try:
+                    cache = load_prompt_cache(str(file_path))
+                except (KeyError, AttributeError):
+                    # TurboQuantKVCache not in mlx-lm globals — reconstruct as KVCache
+                    arrays, cache_metadata = mx.load(str(file_path), return_metadata=True)
+                    arrays = tree_unflatten(list(arrays.items()))
+                    cache_metadata = tree_unflatten(list(cache_metadata.items()))
+                    info, metadata, classes = cache_metadata
+                    cache = []
+                    for c, state, meta_state in zip(classes, arrays, info):
+                        if c == 'TurboQuantKVCache':
+                            # Reconstruct as KVCache — TQ stores float state via .state
+                            kv = _KVC()
+                            if isinstance(state, (tuple, list)) and len(state) == 2:
+                                kv.keys, kv.values = state[0], state[1]
+                                # TQ meta_state = (offset_str, key_bits_str, value_bits_str)
+                                kv.offset = int(meta_state[0]) if meta_state else 0
+                            cache.append(kv)
+                        else:
+                            # Try normal class lookup for ArraysCache etc
+                            import mlx_lm.models.cache as _cache_mod
+                            cls = getattr(_cache_mod, c, _KVC)
+                            try:
+                                cache.append(cls.from_state(state, meta_state))
+                            except Exception:
+                                # Fallback: create empty cache for unknown types
+                                kv = _KVC()
+                                cache.append(kv)
+                    logger.info(f"Disk cache loaded with TQ→KVCache remap: {len(cache)} layers")
 
                 # Update access time and count
                 now = time.time()

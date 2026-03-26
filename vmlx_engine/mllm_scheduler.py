@@ -1667,13 +1667,7 @@ class MLLMScheduler:
                                     # token list to near-zero length.
                                     truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
                                     # L2: persist to disk before quantization
-                                    # Key uses full token_list (matching fetch path), cache data is N-1 tokens
-                                    # Skip for hybrid models — SSM layers retain output-token
-                                    # state that can't be cleanly truncated to prompt boundary.
-                                    if (
-                                        self.disk_cache is not None
-                                        and not self._is_hybrid
-                                    ):
+                                    if self.disk_cache is not None:
                                         try:
                                             self.disk_cache.store(token_list, cache_blocks)
                                         except Exception as de:
@@ -1714,8 +1708,8 @@ class MLLMScheduler:
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
                             if cache_to_store is not None:
-                                # L2: persist pre-quantization (skip hybrid — SSM can't truncate)
-                                if self.disk_cache is not None and not self._is_hybrid:
+                                # L2: persist to disk (hybrid OK — truncate handles SSM layers)
+                                if self.disk_cache is not None:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
                                     except Exception as de:
@@ -1750,7 +1744,7 @@ class MLLMScheduler:
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
                             if cache_to_store is not None:
-                                if self.disk_cache is not None and not self._is_hybrid:
+                                if self.disk_cache is not None:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
                                     except Exception as de:
