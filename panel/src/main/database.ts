@@ -244,6 +244,15 @@ class DatabaseManager {
         value TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS chat_profiles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        overrides_json TEXT NOT NULL,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         model_path TEXT NOT NULL UNIQUE,
@@ -930,6 +939,60 @@ class DatabaseManager {
     this.ensureOpen()
     const stmt = this.db.prepare('DELETE FROM chat_overrides WHERE chat_id = ?')
     stmt.run(chatId)
+  }
+
+  // Chat Profiles (named presets for chat settings)
+
+  saveChatProfile(name: string, overrides: Record<string, any>, isDefault?: boolean): string {
+    this.ensureOpen()
+    const id = `profile-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const now = Date.now()
+    const json = JSON.stringify(overrides)
+    // If setting as default, clear existing default first
+    if (isDefault) {
+      this.db.prepare('UPDATE chat_profiles SET is_default = 0 WHERE is_default = 1').run()
+    }
+    this.db.prepare(`
+      INSERT OR REPLACE INTO chat_profiles (id, name, overrides_json, is_default, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, name, json, isDefault ? 1 : 0, now, now)
+    return id
+  }
+
+  updateChatProfile(id: string, name: string, overrides: Record<string, any>, isDefault?: boolean): void {
+    this.ensureOpen()
+    const now = Date.now()
+    const json = JSON.stringify(overrides)
+    if (isDefault) {
+      this.db.prepare('UPDATE chat_profiles SET is_default = 0 WHERE is_default = 1').run()
+    }
+    this.db.prepare(`
+      UPDATE chat_profiles SET name = ?, overrides_json = ?, is_default = ?, updated_at = ? WHERE id = ?
+    `).run(name, json, isDefault ? 1 : 0, now, id)
+  }
+
+  getChatProfiles(): Array<{ id: string; name: string; overrides: Record<string, any>; isDefault: boolean; createdAt: number }> {
+    this.ensureOpen()
+    const rows = this.db.prepare('SELECT * FROM chat_profiles ORDER BY name').all() as any[]
+    return rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      overrides: JSON.parse(r.overrides_json),
+      isDefault: r.is_default === 1,
+      createdAt: r.created_at,
+    }))
+  }
+
+  getDefaultChatProfile(): Record<string, any> | undefined {
+    this.ensureOpen()
+    const row = this.db.prepare('SELECT overrides_json FROM chat_profiles WHERE is_default = 1').get() as any
+    if (!row) return undefined
+    return JSON.parse(row.overrides_json)
+  }
+
+  deleteChatProfile(id: string): void {
+    this.ensureOpen()
+    this.db.prepare('DELETE FROM chat_profiles WHERE id = ?').run(id)
   }
 
   // Search

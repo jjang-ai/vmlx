@@ -305,6 +305,25 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       }
     }
 
+    // Apply default profile (starred profile) on top of generation defaults
+    try {
+      const defaultProfile = db.getDefaultChatProfile()
+      if (defaultProfile) {
+        const existing = db.getChatOverrides(chat.id) || { chatId: chat.id }
+        // Profile overrides generation defaults, but only for fields the profile has set
+        const merged = { ...existing }
+        for (const [k, v] of Object.entries(defaultProfile)) {
+          if (v !== undefined && v !== null) {
+            (merged as any)[k] = v
+          }
+        }
+        db.setChatOverrides({ chatId: chat.id, ...merged })
+        console.log(`[CHAT] Applied default profile to new chat ${chat.id}`)
+      }
+    } catch (e) {
+      console.error('[CHAT] Failed to apply default profile:', e)
+    }
+
     return chat
   })
 
@@ -2003,6 +2022,30 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
 
   ipcMain.handle('chat:clearOverrides', async (_, chatId: string) => {
     db.clearChatOverrides(chatId)
+    return { success: true }
+  })
+
+  // Chat Profiles (named presets for chat settings)
+  ipcMain.handle('chat:saveProfile', async (_, name: string, overrides: any, isDefault?: boolean) => {
+    const id = db.saveChatProfile(name, overrides, isDefault)
+    return { id }
+  })
+
+  ipcMain.handle('chat:updateProfile', async (_, id: string, name: string, overrides: any, isDefault?: boolean) => {
+    db.updateChatProfile(id, name, overrides, isDefault)
+    return { success: true }
+  })
+
+  ipcMain.handle('chat:getProfiles', async () => {
+    return db.getChatProfiles()
+  })
+
+  ipcMain.handle('chat:getDefaultProfile', async () => {
+    return db.getDefaultChatProfile()
+  })
+
+  ipcMain.handle('chat:deleteProfile', async (_, id: string) => {
+    db.deleteChatProfile(id)
     return { success: true }
   })
 }

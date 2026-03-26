@@ -1,6 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
-import { X } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { X, Save, Trash2, Star } from 'lucide-react'
 import { useToast } from '../Toast'
+
+interface ChatProfile {
+  id: string
+  name: string
+  overrides: ChatOverrides
+  isDefault: boolean
+  createdAt: number
+}
 
 interface ChatOverrides {
   temperature?: number
@@ -54,6 +62,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [overrides, setOverrides] = useState<ChatOverrides>({})
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [profiles, setProfiles] = useState<ChatProfile[]>([])
+  const [profileName, setProfileName] = useState('')
+  const [showProfileSave, setShowProfileSave] = useState(false)
+
+  const loadProfiles = useCallback(() => {
+    window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
+  }, [])
 
   useEffect(() => {
     window.api.chat.getOverrides(chatId).then((o: ChatOverrides | null) => {
@@ -61,7 +76,8 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       else setOverrides({})
       setDirty(false)
     })
-  }, [chatId])
+    loadProfiles()
+  }, [chatId, loadProfiles])
 
   const update = <K extends keyof ChatOverrides>(key: K, value: ChatOverrides[K]) => {
     setOverrides(prev => ({ ...prev, [key]: value }))
@@ -116,6 +132,38 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     setOverrides(defaults)
     setDirty(false)
     onOverridesChanged?.()
+  }
+
+  const handleLoadProfile = async (profile: ChatProfile) => {
+    setOverrides(profile.overrides)
+    setDirty(true)
+    showToast('success', `Loaded "${profile.name}"`)
+  }
+
+  const handleSaveProfile = async () => {
+    if (!profileName.trim()) return
+    try {
+      await window.api.chat.saveProfile(profileName.trim(), overrides)
+      setProfileName('')
+      setShowProfileSave(false)
+      loadProfiles()
+      showToast('success', `Saved profile "${profileName.trim()}"`)
+    } catch (e) {
+      showToast('error', 'Failed to save profile', (e as Error).message)
+    }
+  }
+
+  const handleDeleteProfile = async (id: string, name: string) => {
+    if (!confirm(`Delete profile "${name}"?`)) return
+    await window.api.chat.deleteProfile(id)
+    loadProfiles()
+    showToast('success', `Deleted "${name}"`)
+  }
+
+  const handleSetDefault = async (profile: ChatProfile) => {
+    await window.api.chat.updateProfile(profile.id, profile.name, profile.overrides, !profile.isDefault)
+    loadProfiles()
+    showToast('success', profile.isDefault ? `Removed default` : `Set "${profile.name}" as default`)
   }
 
   const shortModel = session.modelName || session.modelPath.split('/').pop() || session.modelPath
@@ -205,6 +253,74 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         )}
 
         {!isImageModel && <>
+        {/* Profiles */}
+        <div>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Profiles</h3>
+          <div className="space-y-2">
+            {profiles.length > 0 && (
+              <div className="space-y-1">
+                {profiles.map(p => (
+                  <div key={p.id} className="flex items-center gap-1 group">
+                    <button
+                      onClick={() => handleLoadProfile(p)}
+                      className="flex-1 text-left text-xs px-2 py-1.5 rounded border border-border hover:bg-accent truncate"
+                      title={`Load "${p.name}"`}
+                    >
+                      {p.isDefault && <Star className="inline h-3 w-3 mr-1 text-yellow-500 fill-yellow-500" />}
+                      {p.name}
+                    </button>
+                    <button
+                      onClick={() => handleSetDefault(p)}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:text-yellow-500"
+                      title={p.isDefault ? 'Remove as default' : 'Set as default for new chats'}
+                    >
+                      <Star className={`h-3 w-3 ${p.isDefault ? 'fill-yellow-500 text-yellow-500' : ''}`} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteProfile(p.id, p.name)}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive"
+                      title="Delete profile"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {showProfileSave ? (
+              <div className="flex gap-1">
+                <input
+                  type="text"
+                  value={profileName}
+                  onChange={e => setProfileName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveProfile()}
+                  placeholder="Profile name"
+                  className="flex-1 px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  autoFocus
+                />
+                <button onClick={handleSaveProfile} className="px-2 py-1 bg-primary text-primary-foreground rounded text-xs hover:bg-primary/90" disabled={!profileName.trim()}>
+                  Save
+                </button>
+                <button onClick={() => { setShowProfileSave(false); setProfileName('') }} className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowProfileSave(true)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Save className="h-3 w-3" /> Save current settings as profile
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1.5">
+            Save and load named presets. Star a profile to auto-apply on new chats.
+          </p>
+        </div>
+
+        <div className="border-t border-border" />
+
         {/* Inference Settings */}
         <div>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Inference</h3>
