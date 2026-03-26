@@ -687,8 +687,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     }
 
     try {
-      // Determine wire format: 'responses' or 'completions' (default)
-      const wireApi = overrides?.wireApi || 'completions'
+      // Determine wire format: 'responses' (default for local) or 'completions'
+      const wireApi = overrides?.wireApi || (isRemote ? 'completions' : 'responses')
       const useResponsesApi = wireApi === 'responses'
 
       // Call API (local vMLX Engine or remote OpenAI-compatible endpoint)
@@ -758,6 +758,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
           if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
           if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
+          // Send timeout to server so streaming timeout matches client-side timeout
+          if (!isRemote && timeoutSeconds !== 300) obj.timeout = timeoutSeconds
           return obj
         } else {
           const obj: Record<string, any> = {
@@ -790,6 +792,8 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
           // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
           if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
           if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
+          // Send timeout to server so streaming timeout matches client-side timeout
+          if (!isRemote && timeoutSeconds !== 300) obj.timeout = timeoutSeconds
           return obj
         }
       }
