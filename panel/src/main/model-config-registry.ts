@@ -32,8 +32,6 @@ export interface DetectedConfig {
   isMultimodal: boolean
   description: string
   maxContextLength?: number
-  /** JANG TurboQuant KV cache compression is active — disables q8/q4 KV cache quantization */
-  hasTurboQuant?: boolean
 }
 
 const CONFIG_BY_FAMILY = new Map<string, Omit<ModelConfig, 'pattern' | 'familyName'>>()
@@ -364,8 +362,6 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           } else if ('vision_config' in parsed) {
             detected.isMultimodal = true
           }
-          // TurboQuant: auto-enabled for ALL models when jang_tools.turboquant is bundled
-          detected.hasTurboQuant = true
           return detected
         }
       }

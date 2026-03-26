@@ -771,7 +771,7 @@ class MLXMultimodalLM:
             _lang = getattr(self.model, 'language_model', None)
             if _lang is not None and hasattr(_lang, 'layers'):
                 from ..utils.tokenizer import _apply_turboquant_to_model
-                _apply_turboquant_to_model(_lang, self.model_name)
+                _apply_turboquant_to_model(_lang, resolved_name)
 
             self._loaded = True
             logger.info(f"MLLM loaded successfully: {self.model_name}")

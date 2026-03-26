@@ -169,7 +169,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; hasTurboQuant?: boolean } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string } | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -382,7 +382,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} hasTurboQuant={detectedConfig?.hasTurboQuant} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} />
 
         {/* Command Preview */}
         <div className="mt-4">

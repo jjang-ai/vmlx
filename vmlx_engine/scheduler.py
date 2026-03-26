@@ -212,7 +212,6 @@ class Scheduler:
                     i for i, t in enumerate(_template)
                     if type(t).__name__ in (
                         'KVCache', 'RotatingKVCache', 'QuantizedKVCache',
-                        'BatchKVCache', 'BatchRotatingKVCache',
                         'TurboQuantKVCache',
                     )
                 ]

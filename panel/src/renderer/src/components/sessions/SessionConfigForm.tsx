@@ -116,11 +116,9 @@ interface SessionConfigFormProps {
   modelType?: 'text' | 'image'
   /** Image mode — 'edit' or 'generate' (only relevant when modelType is 'image') */
   imageMode?: string
-  /** JANG TurboQuant KV cache compression is active */
-  hasTurboQuant?: boolean
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode, hasTurboQuant }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode }: SessionConfigFormProps) {
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
   const [expandedSections, setExpandedSections] = useState({

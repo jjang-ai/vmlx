@@ -28,7 +28,6 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
-  const [hasTurboQuant, setHasTurboQuant] = useState(false)
   const restartingRef = useRef(false)
   restartingRef.current = restarting
 
@@ -48,7 +47,6 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         .then((det: any) => {
           if (det?.cacheType) setDetectedCacheType(det.cacheType)
           if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
-          if (det?.hasTurboQuant) setHasTurboQuant(true)
         })
         .catch((err) => console.error('Failed to detect model config:', err))
     }
@@ -217,7 +215,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} hasTurboQuant={hasTurboQuant} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} />
         )}
       </div>
 

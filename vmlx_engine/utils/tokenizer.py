@@ -97,8 +97,6 @@ def _apply_turboquant_to_model(model, model_path: str):
     except Exception as e:
         logger.debug(f"TurboQuant auto-enable failed (non-fatal): {e}")
 
-logger = logging.getLogger(__name__)
-
 # Models that require tokenizer fallback
 FALLBACK_MODELS = [
     "nemotron",
