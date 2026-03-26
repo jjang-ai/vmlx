@@ -2317,10 +2317,22 @@ class Scheduler:
                                     f"{_restore_e}"
                                 )
                     if ssm_layers:
-                        # Use same token list as paged cache store path:
-                        # prompt_token_ids with gen_prompt_len stripped.
-                        all_tokens = list(request.prompt_token_ids)
+                        # SSM state is CUMULATIVE — it encodes ALL tokens processed,
+                        # including gen_prompt_len tokens. If we strip gen_prompt_len
+                        # from the key but the STATE was computed over the full prompt,
+                        # the restored SSM state on the next turn will be wrong because
+                        # gen_prompt tokens change between turns (thinking models).
+                        # Skip SSM companion when gen_prompt_len > 0 to prevent this.
                         _gpl = getattr(request, '_gen_prompt_len', 0)
+                        if _gpl > 0:
+                            logger.debug(
+                                f"Skipping SSM companion store for {request_id}: "
+                                f"gen_prompt_len={_gpl} (thinking model, SSM state "
+                                f"includes gen_prompt tokens that change between turns)"
+                            )
+                            ssm_layers = []  # Skip store
+
+                        all_tokens = list(request.prompt_token_ids)
                         if _gpl > 0 and _gpl < len(all_tokens):
                             all_tokens = all_tokens[:-_gpl]
                         # Use full prompt length — block_table.num_tokens on
