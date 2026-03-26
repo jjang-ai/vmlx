@@ -1807,19 +1807,18 @@ class MLLMBatchGenerator:
                             all_tokens = getattr(req, '_original_token_ids', None)
                             if all_tokens is None:
                                 all_tokens = input_ids_list[i]
-                            # Use N-1 tokens to match paged cache store truncation.
-                            # The paged cache stores KV truncated to prompt_len-1 for
-                            # re-feed, so block_table.num_tokens on fetch = N-1.
-                            # SSM companion key must match for fetch to succeed.
-                            store_len = len(all_tokens) - 1 if len(all_tokens) > 1 else len(all_tokens)
-                            if store_len > 0:
+                            # Use full prompt length — block_table.num_tokens on
+                            # fetch returns the original prompt count (N), not
+                            # the paged cache's internal truncation (N-1).
+                            prompt_len = len(all_tokens)
+                            if prompt_len > 0:
                                 self._ssm_state_cache.store(
-                                    all_tokens, store_len, ssm_layers
+                                    all_tokens, prompt_len, ssm_layers
                                 )
-                                logger.debug(
+                                logger.info(
                                     f"Captured SSM state for "
                                     f"{req.request_id}: {len(ssm_layers)} layers, "
-                                    f"{store_len} tokens (N-1 aligned)"
+                                    f"{prompt_len}-token key"
                                 )
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
