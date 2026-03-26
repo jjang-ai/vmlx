@@ -168,6 +168,7 @@ vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
 | **Disk Cache (L2)** | Persist prompt caches to SSD -- survives server restarts |
 | **Block Disk Cache** | Per-block persistent cache paired with paged KV cache |
 | **Speculative Decoding** | Small draft model proposes tokens for 20-90% speedup |
+| **Prompt Lookup Decoding** | No draft model needed — reuses n-gram matches from the prompt/context. Best for structured or repetitive output (code, JSON, schemas). Enable with `--enable-pld`. |
 | **JIT Compilation** | `mx.compile` Metal kernel fusion (experimental) |
 | **Hybrid SSM Support** | Mamba/GatedDeltaNet layers handled correctly alongside attention |
 
@@ -575,6 +576,7 @@ vmlx serve <model> \
   --log-level INFO \            # Logging: DEBUG, INFO, WARNING, ERROR
   --max-model-len 8192 \        # Max context length
   --speculative-model <model> \ # Draft model for speculative decoding
+  --enable-pld \                # Prompt Lookup Decoding — no draft model, best for code/JSON/schemas
   --cors-origins "*"            # CORS allowed origins
 ```
 
