@@ -305,7 +305,9 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       }
     }
 
-    // Apply default profile (starred profile) on top of generation defaults
+    // Apply default profile (starred profile) on top of generation defaults.
+    // If no profile is starred, auto-inherit tool/search settings from the most
+    // recent chat of the same model — so users don't have to re-enable tools every time.
     try {
       const defaultProfile = db.getDefaultChatProfile()
       if (defaultProfile) {
@@ -317,8 +319,39 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
             (merged as any)[k] = v
           }
         }
-        db.setChatOverrides({ chatId: chat.id, ...merged })
+        merged.chatId = chat.id
+        db.setChatOverrides(merged as any)
         console.log(`[CHAT] Applied default profile to new chat ${chat.id}`)
+      } else if (modelPath) {
+        // No starred profile — inherit settings from last chat of same model
+        const siblingChats = db.getChatsByModelPath(modelPath)
+        // Find the most recent OTHER chat (not this one) that has overrides
+        const lastSibling = siblingChats.find(c => c.id !== chat.id)
+        if (lastSibling) {
+          const lastOverrides = db.getChatOverrides(lastSibling.id)
+          if (lastOverrides) {
+            const existing = db.getChatOverrides(chat.id) || { chatId: chat.id }
+            // Only inherit tool/search/system settings, not generation params
+            // (generation params come from generation_config.json above)
+            const toolKeys = [
+              'builtinToolsEnabled', 'webSearchEnabled', 'braveSearchEnabled',
+              'fetchUrlEnabled', 'fileToolsEnabled', 'searchToolsEnabled',
+              'shellEnabled', 'gitEnabled', 'utilityToolsEnabled',
+              'maxToolIterations', 'workingDirectory', 'enableThinking',
+              'reasoningEffort', 'hideToolStatus', 'systemPrompt',
+              'toolResultMaxChars',
+            ] as const
+            const merged: any = { ...existing }
+            for (const key of toolKeys) {
+              if ((lastOverrides as any)[key] !== undefined) {
+                merged[key] = (lastOverrides as any)[key]
+              }
+            }
+            merged.chatId = chat.id
+            db.setChatOverrides(merged)
+            console.log(`[CHAT] Inherited tool/search settings from last chat ${lastSibling.id.slice(0, 8)}`)
+          }
+        }
       }
     } catch (e) {
       console.error('[CHAT] Failed to apply default profile:', e)
@@ -418,6 +451,24 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
     let chatSession: import('../database').Session | undefined
     if (chat.modelPath) {
       chatSession = sessionManager.getSessionByModelPath(chat.modelPath.replace(/\/+$/, ''))
+      if (!chatSession) {
+        // Path mismatch fallback: HF repo ID vs resolved local path can differ
+        // (e.g., "org/Model-CRACKED-MLX" resolves to directory "org/Model-CRACK").
+        // Try matching by basename as a last resort.
+        const basename = chat.modelPath.replace(/\/+$/, '').split('/').pop()
+        if (basename) {
+          const allSessions = sessionManager.getSessions()
+          chatSession = allSessions.find(s =>
+            (s.status === 'running' || s.status === 'loading' || s.status === 'standby') &&
+            s.modelPath.split('/').pop()?.replace(/\/+$/, '') === basename
+          )
+          if (chatSession) {
+            console.log(`[CHAT] Session found by basename fallback: ${basename} → ${chatSession.id.slice(0, 8)}`)
+          } else {
+            console.warn(`[CHAT] No session found for modelPath=${chat.modelPath} — timeout will use default 300s`)
+          }
+        }
+      }
       if (chatSession) {
         // Touch session to reset idle timer — prevents premature sleep during active chat
         sessionManager.touchSession(chatSession.id)
@@ -1907,7 +1958,7 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
       // which would be misclassified as "server connection lost".
       const errMsg = (error as Error).message || ''
       if (timedOut) {
-        throw new Error(`Request timed out after ${timeoutSeconds}s. Increase the Timeout setting in Session Config, or the model may be overloaded.`)
+        throw new Error(`Request timed out after ${timeoutSeconds}s. Increase the Timeout setting in Server Settings, or the model may be overloaded.`)
       }
       if (wasAborted) {
         // User-initiated abort: return normally so the renderer's success path handles it.

@@ -430,7 +430,17 @@ class ToolExecutor:
             List of tool result messages ready for conversation
         """
         results = await self.execute_tool_calls(tool_calls, parallel)
-        return [format_tool_result(result, call_id) for result, call_id in results]
+        formatted = []
+        for result, call_id in results:
+            try:
+                formatted.append(format_tool_result(result, call_id))
+            except Exception as e:
+                formatted.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": f"Error formatting tool result: {e}",
+                })
+        return formatted
 
     def extract_and_validate(
         self,

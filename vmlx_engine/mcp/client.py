@@ -337,30 +337,33 @@ class MCPClient:
     _MAX_CONTENT_SIZE = 10 * 1024 * 1024
 
     def _extract_content(self, result) -> Any:
-        """Extract content from MCP tool result."""
+        """Extract content from MCP tool result.
+
+        Always returns strings to ensure JSON serialization in to_message() never crashes.
+        """
         if not hasattr(result, "content") or not result.content:
             return None
 
         # Handle list of content items (with size limit to prevent OOM)
-        contents = []
+        contents: list[str] = []
         total_size = 0
         for item in result.content:
             if hasattr(item, "text"):
-                text = item.text
+                text = str(item.text) if not isinstance(item.text, str) else item.text
             elif hasattr(item, "data"):
-                text = item.data
+                text = str(item.data) if not isinstance(item.data, str) else item.data
             else:
                 text = str(item)
-            total_size += len(text) if isinstance(text, (str, bytes)) else 0
+            total_size += len(text)
             if total_size > self._MAX_CONTENT_SIZE:
                 contents.append("[Content truncated — MCP tool response exceeded 10 MB]")
                 break
             contents.append(text)
 
-        # Return single item or list
+        # Return single string or joined string (not a list — avoids json.dumps in to_message)
         if len(contents) == 1:
             return contents[0]
-        return contents
+        return "\n".join(contents)
 
     async def refresh_tools(self):
         """Refresh the list of available tools."""

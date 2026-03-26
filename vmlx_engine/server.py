@@ -140,6 +140,46 @@ _default_top_p: float | None = None  # Set via --default-top-p
 _default_enable_thinking: bool | None = None  # Set via --default-enable-thinking or --chat-template-kwargs
 _default_chat_template_kwargs: dict | None = None  # Set via --chat-template-kwargs
 _custom_chat_template: str | None = None  # Set via --chat-template
+_max_prompt_tokens: int = 0  # Set at startup based on available memory (0 = no limit)
+_model_name_mismatch_warned: bool = False  # Suppress repeated model name mismatch warnings
+
+
+def _estimate_max_prompt_tokens() -> int:
+    """Estimate max safe prompt length based on available GPU memory.
+
+    KV cache memory per token = n_layers * 2 * n_kv_heads * head_dim * 2 bytes.
+    We allow KV to use at most 60% of free memory (after model weights).
+    Returns 0 if estimation fails (no limit enforced).
+    """
+    try:
+        import mlx.core as mx
+        _device_info = getattr(mx, 'device_info', None) or mx.metal.device_info
+        _get_active = getattr(mx, 'get_active_memory', None) or mx.metal.get_active_memory
+        max_ws = _device_info()["max_recommended_working_set_size"]
+        active = _get_active()
+        free = max_ws - active
+        # Allow KV to use at most 60% of free memory
+        kv_budget = int(free * 0.6)
+        # Estimate bytes per token from engine config
+        engine = get_engine()
+        if hasattr(engine, 'model'):
+            model = engine.model
+            config = getattr(model, 'config', None) or getattr(model, 'args', None)
+            if config:
+                n_layers = getattr(config, 'num_hidden_layers', 0) or getattr(config, 'n_layers', 0)
+                n_kv_heads = getattr(config, 'num_key_value_heads', 0) or getattr(config, 'n_kv_heads', 0)
+                head_dim = getattr(config, 'head_dim', 0)
+                if not head_dim:
+                    hidden = getattr(config, 'hidden_size', 0)
+                    n_heads = getattr(config, 'num_attention_heads', 0) or getattr(config, 'n_heads', 0)
+                    head_dim = hidden // n_heads if n_heads else 128
+                if n_layers and n_kv_heads and head_dim:
+                    bytes_per_token = n_layers * 2 * n_kv_heads * head_dim * 2  # K+V, float16
+                    max_tokens = kv_budget // bytes_per_token if bytes_per_token > 0 else 0
+                    return max(1024, max_tokens)  # floor at 1K tokens
+        return 0
+    except Exception:
+        return 0
 
 
 def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
@@ -979,6 +1019,13 @@ def load_model(
         _engine.tokenizer.chat_template = _custom_chat_template
         logger.info(f"Applied custom chat template from --chat-template ({len(_custom_chat_template)} chars)")
 
+    # Compute max safe prompt token limit based on available GPU memory
+    global _max_prompt_tokens
+    _max_prompt_tokens = _estimate_max_prompt_tokens()
+    if _max_prompt_tokens > 0:
+        logger.info(f"Max safe prompt length: ~{_max_prompt_tokens:,} tokens "
+                    f"(based on available GPU memory)")
+
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
     try:
         from .utils.jang_loader import is_jang_model, JANG_CONFIG_FILENAMES
@@ -1319,6 +1366,9 @@ async def health():
     if _jang_metadata:
         result["quantization_format"] = _jang_metadata
 
+    if _max_prompt_tokens > 0:
+        result["max_prompt_tokens"] = _max_prompt_tokens
+
     return result
 
 
@@ -1589,6 +1639,28 @@ async def cache_stats():
         result["pil_image_cache"] = get_pil_cache_stats()
     except ImportError:
         pass
+
+    # TurboQuant status
+    if _engine:
+        model = getattr(_engine, '_model', None) or getattr(_engine, 'model', None)
+        if model and hasattr(model, 'make_cache'):
+            _tq_active = getattr(model.make_cache, '__name__', '') == '_tq_make_cache'
+            if _tq_active:
+                result["turbo_quant"] = {"enabled": True}
+
+    # SSM companion cache stats (hybrid models only)
+    # LLM scheduler has _ssm_state_cache directly; MLLM has it on batch_generator
+    if scheduler:
+        _ssm_cache = getattr(scheduler, '_ssm_state_cache', None)
+        if _ssm_cache is None:
+            _bg = getattr(scheduler, 'batch_generator', None)
+            if _bg is not None:
+                _ssm_cache = getattr(_bg, '_ssm_state_cache', None)
+        if _ssm_cache is not None and hasattr(_ssm_cache, '_store'):
+            result["ssm_companion"] = {
+                "entries": len(_ssm_cache._store),
+                "max_entries": getattr(_ssm_cache, '_max_entries', 0),
+            }
 
     # Metal GPU memory info
     try:
@@ -3390,10 +3462,13 @@ async def create_chat_completion(
     # Model name validation: accept served name, actual name, or any name (permissive)
     resolved_name = _resolve_model_name()
     if request.model and request.model != resolved_name and request.model != _model_name:
-        logger.info(
+        global _model_name_mismatch_warned
+        log_fn = logger.debug if _model_name_mismatch_warned else logger.info
+        log_fn(
             f"Request model '{request.model}' differs from served model "
             f"'{resolved_name}' — using loaded model (single-model server)"
         )
+        _model_name_mismatch_warned = True
     # Normalize response model field to the resolved name
     request.model = resolved_name
 
@@ -3410,6 +3485,29 @@ async def create_chat_completion(
         )
 
     engine = get_engine()
+
+    # Memory-safe prompt length check: estimate token count from message text
+    # and reject before prefill if it would likely OOM.
+    if _max_prompt_tokens > 0 and request.messages:
+        _est_chars = sum(
+            len(str(m.content)) if hasattr(m, 'content') and m.content else 0
+            for m in request.messages
+        )
+        _est_tokens = _est_chars // 3  # conservative: ~3 chars per token
+        if _est_tokens > _max_prompt_tokens:
+            from starlette.responses import JSONResponse
+            _est_gb = (_est_tokens * 0.4) / 1024  # ~0.4MB per token KV
+            return JSONResponse(
+                status_code=413,
+                content={"error": {
+                    "message": f"Prompt too long (~{_est_tokens:,} tokens estimated). "
+                               f"This would need ~{_est_gb:.1f}GB of KV cache memory, "
+                               f"exceeding the safe limit of ~{_max_prompt_tokens:,} tokens. "
+                               f"Shorten your prompt or use a model with fewer layers/heads.",
+                    "type": "invalid_request_error",
+                    "code": "prompt_too_long"
+                }}
+            )
 
     # For MLLM models, keep original messages with embedded images
     # (MLLM.chat() extracts images from message content internally)
@@ -3976,10 +4074,13 @@ async def create_response(
     # Model name validation (same as chat completions)
     resolved_name = _resolve_model_name()
     if request.model and request.model != resolved_name and request.model != _model_name:
-        logger.info(
+        global _model_name_mismatch_warned
+        log_fn = logger.debug if _model_name_mismatch_warned else logger.info
+        log_fn(
             f"Request model '{request.model}' differs from served model "
             f"'{resolved_name}' — using loaded model (single-model server)"
         )
+        _model_name_mismatch_warned = True
     request.model = resolved_name
 
     # Warn about unsupported penalty parameters

@@ -871,7 +871,9 @@ export class SessionManager extends EventEmitter {
     'prefixCacheSize', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
     'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
-    'timeout', 'streamInterval', 'apiKey', 'rateLimit',
+    'streamInterval', 'apiKey', 'rateLimit',
+    // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
+    // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'streamFromDisk',
     'defaultTemperature', 'defaultTopP',

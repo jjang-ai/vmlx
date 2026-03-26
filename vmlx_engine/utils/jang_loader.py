@@ -61,7 +61,8 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         return
 
     n_layers = len(model.layers)
-    tq_config = TurboQuantConfig.from_jang_config(jang_cfg, n_layers)
+    # Use _tq_cfg (which may be auto-generated defaults) instead of re-reading jang_cfg
+    tq_config = TurboQuantConfig.from_jang_config({"turboquant": _tq_cfg}, n_layers)
     if not tq_config:
         return
 
@@ -91,7 +92,9 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         for ch in _hybrid_pattern[:n_layers]:
             if ch == "M":
                 _layer_types.append("ssm")
-            elif ch == "*":
+            else:
+                # '*' = Dense attention, 'E' = MoE expert (FFN-only, needs KV placeholder)
+                # Both get 'attention' type cache to keep layer count aligned with model
                 _layer_types.append("attention")
     else:
         _layer_types = ["attention"] * n_layers

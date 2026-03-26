@@ -99,19 +99,9 @@ function buildCommandPreview(
     }
   }
 
-  // Disk cache (mirrors buildArgs) — requires prefix cache ON, incompatible with paged cache
-  if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected?.usePagedCache)) {
-    parts.push('--enable-disk-cache')
-    if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
-    if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
-  }
-
-  // Block disk cache — requires prefix cache ON + paged cache ON (works for both LLM and VLM)
-  if (!prefixCacheOff && (config.usePagedCache ?? detected?.usePagedCache) && config.enableBlockDiskCache) {
-    parts.push('--enable-block-disk-cache')
-    if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
-    if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
-  }
+  // Disk cache — TEMPORARILY DISABLED in buildArgs (sessions.ts lines 1769-1788).
+  // Do NOT show in preview to avoid misleading users into thinking flags are passed.
+  // Will re-enable preview when buildArgs is uncommented.
 
   // Performance
   if (config.streamInterval && config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())

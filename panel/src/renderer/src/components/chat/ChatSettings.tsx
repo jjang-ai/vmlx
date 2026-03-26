@@ -255,7 +255,10 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         {!isImageModel && <>
         {/* Profiles */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Profiles</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Profiles</h3>
+          <p className="text-[10px] text-muted-foreground/70 mb-2">
+            New chats inherit tool &amp; search settings from your last chat. Star a profile to always apply it instead.
+          </p>
           <div className="space-y-2">
             {profiles.length > 0 && (
               <div className="space-y-1">

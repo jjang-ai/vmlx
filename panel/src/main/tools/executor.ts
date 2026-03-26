@@ -746,13 +746,17 @@ async function webSearch(query: string, count?: number): Promise<ToolResult> {
   const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${numResults}`
 
   try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15000)
     const res = await fetch(url, {
       headers: {
         'Accept': 'application/json',
         'Accept-Encoding': 'gzip',
         'X-Subscription-Token': apiKey
-      }
+      },
+      signal: controller.signal
     })
+    clearTimeout(timeout)
 
     if (!res.ok) {
       const errText = await res.text()

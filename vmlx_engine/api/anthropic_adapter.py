@@ -153,10 +153,14 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
 
     # Thinking/reasoning
     enable_thinking = None
+    chat_template_kwargs = None
     if req.thinking:
         thinking = req.thinking if isinstance(req.thinking, dict) else req.thinking.model_dump()
         if thinking.get("type") == "enabled":
             enable_thinking = True
+            # Forward budget_tokens as thinking_budget for Qwen3 models
+            if thinking.get("budget_tokens"):
+                chat_template_kwargs = {"thinking_budget": thinking["budget_tokens"]}
         elif thinking.get("type") == "disabled":
             enable_thinking = False
 
@@ -173,6 +177,7 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         tools=tools,
         tool_choice=tool_choice,
         enable_thinking=enable_thinking,
+        chat_template_kwargs=chat_template_kwargs,
     )
 
 

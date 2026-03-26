@@ -2263,6 +2263,13 @@ class MLLMBatchGenerator:
                 batch.filter(keep_idx)
             else:
                 self.active_batch = None
+                # All requests done — release Metal cache to reclaim GPU memory.
+                # Without this, MLX holds freed buffers in its allocator free-list
+                # indefinitely, causing apparent memory bloat after long prefills.
+                try:
+                    mx.clear_cache()
+                except Exception:
+                    pass
 
         self._stats.generation_tokens += len(responses)
         return prefill_errors + responses

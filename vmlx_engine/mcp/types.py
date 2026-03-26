@@ -156,8 +156,10 @@ class MCPToolResult:
             content = self.content
         else:
             import json
-
-            content = json.dumps(self.content)
+            try:
+                content = json.dumps(self.content, default=str)
+            except Exception:
+                content = str(self.content)
 
         return {
             "role": "tool",
