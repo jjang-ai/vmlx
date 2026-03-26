@@ -404,7 +404,10 @@ export function registerChatHandlers(getWindow: () => BrowserWindow | null): voi
         sessionManager.touchSession(chatSession.id)
         try {
           const sessionConfig = JSON.parse(chatSession.config)
-          if (sessionConfig.timeout && sessionConfig.timeout > 0) {
+          if (sessionConfig.timeout === 0) {
+            // "No limit" — match the 86400s (24h) that sessions.ts sends via --timeout
+            timeoutSeconds = 86400
+          } else if (sessionConfig.timeout && sessionConfig.timeout > 0) {
             timeoutSeconds = sessionConfig.timeout
           }
           // Check if model has a reasoning parser (for enable_thinking default)

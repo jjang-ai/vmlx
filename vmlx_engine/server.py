@@ -4340,6 +4340,9 @@ async def stream_completions_multi(
     response_id = f"cmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
 
+    # Use per-request timeout if provided, otherwise server default
+    _stream_timeout = request.timeout if request.timeout is not None else _default_timeout
+
     for prompt_index, prompt in enumerate(prompts):
         # Per-prompt request_id so abort targets the correct engine request
         prompt_request_id = f"{response_id}-{prompt_index}"
@@ -4358,7 +4361,10 @@ async def stream_completions_multi(
                 gen_kwargs["min_p"] = request.min_p
             if request.repetition_penalty is not None:
                 gen_kwargs["repetition_penalty"] = request.repetition_penalty
-            async for output in engine.stream_generate(**gen_kwargs):
+            async for output in _stream_with_keepalive(engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout):
+                if output is None:
+                    yield ": keep-alive\n\n"
+                    continue
                 data = {
                     "id": response_id,
                     "object": "text_completion",
