@@ -32,6 +32,8 @@ export interface DetectedConfig {
   isMultimodal: boolean
   description: string
   maxContextLength?: number
+  /** JANG TurboQuant KV cache compression is active — disables q8/q4 KV cache quantization */
+  hasTurboQuant?: boolean
 }
 
 const CONFIG_BY_FAMILY = new Map<string, Omit<ModelConfig, 'pattern' | 'familyName'>>()
@@ -349,18 +351,22 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         if (config) {
           const detected = configToDetected(familyName, config)
           detected.maxContextLength = maxContextLength
-          // VLM detection: vision_config in config.json
-          // JANG models: check jang_config has_vision (not config.json vision_config)
-          if ('vision_config' in parsed) {
-            const jangConfigPath = join(modelPath, 'jang_config.json')
-            if (existsSync(jangConfigPath)) {
-              try {
-                const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
+          // JANG model detection: read jang_config.json for VLM and TurboQuant
+          const jangConfigPath = join(modelPath, 'jang_config.json')
+          if (existsSync(jangConfigPath)) {
+            try {
+              const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
+              // VLM: check has_vision (not config.json vision_config)
+              if ('vision_config' in parsed) {
                 detected.isMultimodal = jangCfg?.architecture?.has_vision === true
-              } catch { detected.isMultimodal = false }
-            } else {
-              detected.isMultimodal = true
-            }
+              }
+              // TurboQuant: JANG-exclusive KV cache compression
+              if (jangCfg?.turboquant?.enabled === true) {
+                detected.hasTurboQuant = true
+              }
+            } catch { /* ignore parse errors */ }
+          } else if ('vision_config' in parsed) {
+            detected.isMultimodal = true
           }
           return detected
         }

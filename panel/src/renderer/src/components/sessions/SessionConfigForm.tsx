@@ -116,9 +116,11 @@ interface SessionConfigFormProps {
   modelType?: 'text' | 'image'
   /** Image mode — 'edit' or 'generate' (only relevant when modelType is 'image') */
   imageMode?: string
+  /** JANG TurboQuant KV cache compression is active */
+  hasTurboQuant?: boolean
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode, hasTurboQuant }: SessionConfigFormProps) {
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
   const [expandedSections, setExpandedSections] = useState({
@@ -472,21 +474,28 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* KV Cache Quantization */}
       <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
+        {hasTurboQuant && <PerformanceHint text="JANG TurboQuant is active for this model — KV cache is automatically compressed to 3-bit during generation (5x memory savings). The q8/q4 options below have no effect and are disabled." />}
+        {!hasTurboQuant && !effectivelyNoBatching && <PerformanceHint text="Compresses cached prompts to use less RAM. Only affects saved cache entries — your model's actual output quality stays the same. q8 is a safe default." />}
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
-        {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid model detected — KV cache quantization will only compress the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
-        <InfoNote text="KV cache quantization compresses entries stored in the prefix cache (completed prompts). It does NOT affect model weights or live generation KV cache, which always run at full precision. RAM savings apply only to cached prompt states." />
+        {!effectivelyNoBatching && !prefixOff && isMambaCache && !hasTurboQuant && <PerformanceHint text="Hybrid model detected — KV cache quantization will only compress the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
+        {!hasTurboQuant && <InfoNote text="KV cache quantization compresses entries stored in the prefix cache (completed prompts). It does NOT affect model weights or live generation KV cache, which always run at full precision. RAM savings apply only to cached prompt states." />}
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Quantization
-            <Tooltip text="Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy. Works with both LLMs and VLMs." />
+            <Tooltip text={hasTurboQuant ? "TurboQuant (JANG-exclusive) automatically compresses KV cache to 3-bit during generation. This provides ~5x memory savings with minimal quality loss via Hadamard rotation + optimal codebooks." : "Compress KV states stored in the prefix cache to reduce cache memory by 2-4x. Only affects cached entries — generation always runs at full precision (no quality loss during inference). Requires prefix cache to be enabled. q8 (8-bit) is recommended. q4 (4-bit) saves more cache memory but may reduce reuse accuracy. Works with both LLMs and VLMs."} />
           </span>
-          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
-            <option value="none">None (full precision cache)</option>
-            <option value="q8">q8 (8-bit, ~2x cache savings)</option>
-            <option value="q4">q4 (4-bit, ~4x cache savings)</option>
-          </select>
+          {hasTurboQuant ? (
+            <select value="tq3" className="cfg-input" disabled>
+              <option value="tq3">TurboQuant (3-bit, ~5x cache savings)</option>
+            </select>
+          ) : (
+            <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
+              <option value="none">None (full precision cache)</option>
+              <option value="q8">q8 (8-bit, ~2x cache savings)</option>
+              <option value="q4">q4 (4-bit, ~4x cache savings)</option>
+            </select>
+          )}
         </div>
         {config.kvCacheQuantization !== 'none' && (
           <SliderField
