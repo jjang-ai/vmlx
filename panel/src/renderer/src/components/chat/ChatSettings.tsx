@@ -248,7 +248,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               <p className="text-xs text-muted-foreground mt-1.5">
                 Auto: reasoning models think, others don't. On: force thinking. Off: direct responses only.
               </p>
-              {overrides.enableThinking !== false && reasoningParser === 'openai_gptoss' && (
+              {overrides.enableThinking !== false && (reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral') && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground">Reasoning Effort</span>
