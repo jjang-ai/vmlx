@@ -582,7 +582,7 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           </div>
         )}
         {showLogs && (
-          <div className="w-96 border-l border-border bg-card flex-shrink-0 flex flex-col">
+          <div className="w-96 border-l border-border bg-card flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
             <div className="flex items-center justify-between p-3 border-b border-border flex-shrink-0">
               <h3 className="text-sm font-medium">{isRemote ? 'Connection Logs' : 'Server Logs'}</h3>
               <button onClick={() => setShowLogs(false)} className="text-muted-foreground hover:text-foreground text-sm"><X className="h-3.5 w-3.5" /></button>
