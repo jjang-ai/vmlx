@@ -359,11 +359,13 @@ class BatchedEngine(BaseEngine):
         # Count non-system messages to detect multi-turn conversations
         non_system_msgs = sum(1 for m in messages if m.get("role") != "system")
 
-        if self._is_mllm and self._processor and not tools and non_system_msgs <= 2:
-            # Use mlx_vlm for single-turn MLLM (image-aware token insertion).
-            # When tools are provided, or for multi-turn conversations (>2 non-system
-            # messages), fall through to standard tokenizer path which properly handles
-            # full conversation history and tool definitions.
+        if self._is_mllm and self._processor and not tools and non_system_msgs <= 2 and num_images > 0:
+            # Use mlx_vlm for single-turn MLLM ONLY when actual images are present.
+            # The mlx_vlm path inserts image placeholder tokens which differ from
+            # the standard tokenizer output — causing cache key mismatches on
+            # subsequent text-only turns. By gating on num_images > 0, text-only
+            # VL conversations always use the standard tokenizer path, ensuring
+            # consistent cache keys across all turns.
             try:
                 from mlx_vlm.prompt_utils import apply_chat_template
                 from mlx_vlm.utils import load_config

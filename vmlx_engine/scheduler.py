@@ -1518,14 +1518,9 @@ class Scheduler:
                         # with SSM companion state for a full cache hit.
                         if self._is_hybrid:
                             try:
-                                # Fetch SSM companion state (block-aligned key)
+                                # Fetch SSM companion state using exact token count
+                                # (matches store which also uses exact len(all_tokens))
                                 _fetch_num = block_table.num_tokens
-                                if self.block_aware_cache is not None:
-                                    _bs = getattr(
-                                        self.block_aware_cache, 'block_size', 64
-                                    )
-                                    _aligned = (_fetch_num // _bs) * _bs
-                                    _fetch_num = _aligned if _aligned > 0 else _fetch_num
                                 # Use stripped prompt tokens (matching store key)
                                 _ssm_tokens = list(request.prompt_token_ids)
                                 _gpl = getattr(request, '_gen_prompt_len', 0)
@@ -2320,21 +2315,18 @@ class Scheduler:
                         _gpl = getattr(request, '_gen_prompt_len', 0)
                         if _gpl > 0 and _gpl < len(all_tokens):
                             all_tokens = all_tokens[:-_gpl]
-                        _bs = (
-                            getattr(self.block_aware_cache, 'block_size', 64)
-                            if self.block_aware_cache else 64
-                        )
-                        _aligned = (len(all_tokens) // _bs) * _bs
-                        if _aligned == 0:
-                            _aligned = len(all_tokens)
-                        if _aligned > 0:
+                        # Use N-1 tokens to match paged cache store truncation.
+                        # Paged cache stores KV truncated to prompt_len-1 for re-feed,
+                        # so block_table.num_tokens on fetch = N-1.
+                        store_len = len(all_tokens) - 1 if len(all_tokens) > 1 else len(all_tokens)
+                        if store_len > 0:
                             self._ssm_state_cache.store(
-                                all_tokens, _aligned, ssm_layers
+                                all_tokens, store_len, ssm_layers
                             )
                             logger.debug(
                                 f"Stored SSM companion for {request_id}: "
                                 f"{len(ssm_layers)} layers, "
-                                f"{_aligned}-token key"
+                                f"{store_len}-token key (N-1 aligned)"
                             )
                 except Exception as _ssm_e:
                     logger.debug(

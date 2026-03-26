@@ -1442,12 +1442,9 @@ class MLLMBatchGenerator:
 
                                 if is_hybrid:
                                     # Check companion SSM state cache BEFORE reconstruction.
-                                    # Block-align num_tokens to match the store key alignment
-                                    # (store uses (prompt_len // bs) * bs).
+                                    # Use actual prompt token count (not block-aligned) to match
+                                    # the store key which also uses len(all_tokens).
                                     _fetch_num = block_table.num_tokens
-                                    if self.block_aware_cache is not None:
-                                        _bs = getattr(self.block_aware_cache, 'block_size', 64)
-                                        _fetch_num = (_fetch_num // _bs) * _bs
                                     ssm_states = self._ssm_state_cache.fetch(
                                         token_list, _fetch_num
                                     ) if _fetch_num > 0 else None
@@ -1810,18 +1807,19 @@ class MLLMBatchGenerator:
                             all_tokens = getattr(req, '_original_token_ids', None)
                             if all_tokens is None:
                                 all_tokens = input_ids_list[i]
-                            prompt_len = len(all_tokens)
-                            if self.block_aware_cache is not None:
-                                bs = getattr(self.block_aware_cache, 'block_size', 64)
-                                prompt_len = (prompt_len // bs) * bs
-                            if prompt_len > 0:
+                            # Use N-1 tokens to match paged cache store truncation.
+                            # The paged cache stores KV truncated to prompt_len-1 for
+                            # re-feed, so block_table.num_tokens on fetch = N-1.
+                            # SSM companion key must match for fetch to succeed.
+                            store_len = len(all_tokens) - 1 if len(all_tokens) > 1 else len(all_tokens)
+                            if store_len > 0:
                                 self._ssm_state_cache.store(
-                                    all_tokens, prompt_len, ssm_layers
+                                    all_tokens, store_len, ssm_layers
                                 )
                                 logger.debug(
-                                    f"Captured SSM state at prompt boundary for "
+                                    f"Captured SSM state for "
                                     f"{req.request_id}: {len(ssm_layers)} layers, "
-                                    f"{prompt_len} tokens (block-aligned)"
+                                    f"{store_len} tokens (N-1 aligned)"
                                 )
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
