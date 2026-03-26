@@ -351,7 +351,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         if (config) {
           const detected = configToDetected(familyName, config)
           detected.maxContextLength = maxContextLength
-          // JANG model detection: read jang_config.json for VLM and TurboQuant
+          // JANG model detection: read jang_config.json for VLM
           const jangConfigPath = join(modelPath, 'jang_config.json')
           if (existsSync(jangConfigPath)) {
             try {
@@ -360,14 +360,12 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
               if ('vision_config' in parsed) {
                 detected.isMultimodal = jangCfg?.architecture?.has_vision === true
               }
-              // TurboQuant: JANG-exclusive KV cache compression
-              if (jangCfg?.turboquant?.enabled === true) {
-                detected.hasTurboQuant = true
-              }
             } catch { /* ignore parse errors */ }
           } else if ('vision_config' in parsed) {
             detected.isMultimodal = true
           }
+          // TurboQuant: auto-enabled for ALL models when jang_tools.turboquant is bundled
+          detected.hasTurboQuant = true
           return detected
         }
       }

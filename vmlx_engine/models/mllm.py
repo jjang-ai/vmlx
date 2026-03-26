@@ -767,6 +767,12 @@ class MLXMultimodalLM:
                 self.model, self.processor = load(self.model_name, lazy=_lazy)
             self.config = load_config(self.model_name)
 
+            # TurboQuant: auto-enable for ALL MLX VLM models
+            _lang = getattr(self.model, 'language_model', None)
+            if _lang is not None and hasattr(_lang, 'layers'):
+                from ..utils.tokenizer import _apply_turboquant_to_model
+                _apply_turboquant_to_model(_lang, self.model_name)
+
             self._loaded = True
             logger.info(f"MLLM loaded successfully: {self.model_name}")
 
