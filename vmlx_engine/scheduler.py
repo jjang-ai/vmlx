@@ -213,6 +213,7 @@ class Scheduler:
                     if type(t).__name__ in (
                         'KVCache', 'RotatingKVCache', 'QuantizedKVCache',
                         'BatchKVCache', 'BatchRotatingKVCache',
+                        'TurboQuantKVCache',
                     )
                 ]
                 self._ssm_state_cache = HybridSSMStateCache(max_entries=50)

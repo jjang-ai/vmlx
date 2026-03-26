@@ -110,6 +110,18 @@ from .vision_embedding_cache import VisionEmbeddingCache
 
 logger = logging.getLogger(__name__)
 
+# TurboQuantKVCache class name for isinstance-free detection.
+# TQ is a drop-in replacement for KVCache (positional, sliceable, has .state/.keys/.values)
+# but does NOT inherit from KVCache. This constant enables KV-like detection without
+# importing TQ (which may not be installed for non-JANG users).
+_TQ_CLASS_NAME = "TurboQuantKVCache"
+
+
+def _is_kv_like(c) -> bool:
+    """Check if cache is KVCache-compatible (KVCache or TurboQuantKVCache)."""
+    from mlx_lm.models.cache import KVCache
+    return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
+
 
 def _dequantize_cache(cache: List[Any]) -> List[Any]:
     """Dequantize QuantizedKVCache layers to KVCache for batch generation.
@@ -240,7 +252,7 @@ def _fix_hybrid_cache(
             fixed = False
             result = list(cache)
             for i, (tmpl, cached) in enumerate(zip(template, cache)):
-                if not isinstance(tmpl, KVCache) and isinstance(cached, KVCache):
+                if not _is_kv_like(tmpl) and _is_kv_like(cached):
                     result[i] = tmpl
                     fixed = True
             if fixed:
@@ -249,7 +261,7 @@ def _fix_hybrid_cache(
 
         # Cache shorter than model — expand using template
         positions = kv_positions if kv_positions is not None else [
-            i for i, t in enumerate(template) if isinstance(t, KVCache)
+            i for i, t in enumerate(template) if _is_kv_like(t)
         ]
         if len(cache) != len(positions):
             logger.warning(
@@ -625,7 +637,7 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
                 else:
                     logger.warning(f"Layer {i}: RotatingKVCache but BatchRotatingKVCache unavailable")
                     batch_cache.append(BatchKVCache([0] * len(caches)))
-            elif isinstance(layer_cache, KVCache):
+            elif _is_kv_like(layer_cache):
                 batch_cache.append(BatchKVCache.merge(layer_caches))
             elif isinstance(layer_cache, (_MambaCache, ArraysCache)):
                 from .utils.mamba_cache import BatchMambaCache
@@ -693,7 +705,7 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
             else:
                 # Dequant failed — use fresh KVCache
                 converted.append(BatchKVCache.merge([KVCache()]))
-        elif isinstance(c, KVCache):
+        elif _is_kv_like(c):
             converted.append(BatchKVCache.merge([c]))
         elif RotatingKVCache is not None and isinstance(c, RotatingKVCache):
             if BatchRotatingKVCache is not None:
@@ -948,7 +960,7 @@ class MLLMBatchGenerator:
                 from mlx_lm.models.cache import KVCache
                 template = self.language_model.make_cache()
                 self._hybrid_num_layers = len(template)
-                self._hybrid_kv_positions = [i for i, t in enumerate(template) if isinstance(t, KVCache)]
+                self._hybrid_kv_positions = [i for i, t in enumerate(template) if _is_kv_like(t)]
             except Exception as e:
                 logger.warning(f"Failed to pre-compute hybrid cache info: {e}")
 
@@ -2119,7 +2131,7 @@ class MLLMBatchGenerator:
                     # if it was a single-request batch (Qwen3.5 offset optimization).
                     from mlx_lm.models.cache import BatchKVCache, KVCache
                     needs_convert = any(
-                        isinstance(c, KVCache) and not isinstance(c, BatchKVCache)
+                        _is_kv_like(c) and not isinstance(c, BatchKVCache)
                         for c in batch.cache
                     )
                     if needs_convert:

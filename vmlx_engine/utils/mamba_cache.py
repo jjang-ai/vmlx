@@ -55,6 +55,15 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# TurboQuantKVCache class name for isinstance-free detection.
+_TQ_CLASS_NAME = "TurboQuantKVCache"
+
+
+def _is_kv_like(c) -> bool:
+    """Check if cache is KVCache-compatible (KVCache or TurboQuantKVCache)."""
+    from mlx_lm.models.cache import KVCache
+    return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
+
 
 class BatchMambaCache(MambaCache):
     """
@@ -249,7 +258,7 @@ def patch_mlx_lm_for_mamba():
         """
 
         def to_batch_cache(c):
-            if isinstance(c, KVCache):
+            if _is_kv_like(c):
                 return BatchKVCache(left_padding)
             elif _QuantizedKVCache is not None and isinstance(c, _QuantizedKVCache):
                 # QuantizedKVCache → BatchKVCache (dequantize at batch boundary)
@@ -307,7 +316,7 @@ def patch_mlx_lm_for_mamba():
                 # Dequantize all layers before merging as regular KVCache
                 dequantized = [_dequantize_layer(c[i]) for c in caches]
                 cache = BatchKVCache.merge(dequantized)
-            elif isinstance(layer_cache, KVCache):
+            elif _is_kv_like(layer_cache):
                 cache = BatchKVCache.merge([c[i] for c in caches])
             elif isinstance(layer_cache, RotatingKVCache):
                 cache = BatchRotatingKVCache.merge([c[i] for c in caches])

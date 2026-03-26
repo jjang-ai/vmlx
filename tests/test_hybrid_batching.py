@@ -449,10 +449,9 @@ class TestSSMStateCacheKeyAlignment:
         import inspect
 
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
-        # Fetch path must align to block boundary
+        # Fetch path uses exact num_tokens (block alignment removed —
+        # caused prompts <64 tokens to round to 0, breaking SSM companion)
         assert "_fetch_num" in source
-        # The alignment: (_fetch_num // _bs) * _bs
-        assert "_fetch_num // _bs" in source
 
     def test_ssm_state_cache_key_determinism(self):
         """Same token prefix should produce same cache key."""

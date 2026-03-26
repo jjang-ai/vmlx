@@ -27,6 +27,82 @@ logger = logging.getLogger(__name__)
 JANG_CONFIG_FILENAMES = ["jang_config.json", "jjqf_config.json", "jang_cfg.json", "mxq_config.json"]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 
+def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
+    """Patch model.make_cache() to return TurboQuantKVCache for JANG models with TQ enabled.
+
+    This is JANG-exclusive — only activates when jang_config.json has turboquant.enabled=true.
+    Mirrors the patching done by jang-tools loader.py:226-280.
+
+    Args:
+        model: The language model object (has .layers and .make_cache())
+        jang_cfg: Parsed jang_config.json dict
+        model_config: Parsed config.json dict (or text_config for VLM)
+    """
+    _tq_cfg = jang_cfg.get("turboquant")
+    if not _tq_cfg or not _tq_cfg.get("enabled", False):
+        return
+
+    try:
+        from jang_tools.turboquant.config import TurboQuantConfig, make_turboquant_cache
+    except ImportError:
+        logger.warning("  TurboQuant config found but turboquant module not available")
+        return
+
+    n_layers = len(model.layers)
+    tq_config = TurboQuantConfig.from_jang_config(jang_cfg, n_layers)
+    if not tq_config:
+        return
+
+    # Get text config (may be nested under text_config for VLM wrappers)
+    _text_cfg = model_config.get("text_config", model_config)
+
+    # Key/value dimensions (MLA models have different dims)
+    _key_dim = _text_cfg.get("head_dim", 128)
+    _val_dim = _text_cfg.get("head_dim", 128)
+    if _text_cfg.get("kv_lora_rank", 0) > 0:
+        _key_dim = _text_cfg.get("qk_nope_head_dim", 128) + _text_cfg.get("qk_rope_head_dim", 64)
+        _val_dim = _text_cfg.get("v_head_dim", 128)
+
+    # Detect hybrid layer types
+    _layer_type_list = _text_cfg.get("layer_types", [])
+    _hybrid_pattern = _text_cfg.get("hybrid_override_pattern",
+                        model_config.get("hybrid_override_pattern", ""))
+    if _layer_type_list:
+        _layer_types = [
+            "attention" if lt == "full_attention" else "ssm"
+            for lt in _layer_type_list[:n_layers]
+        ]
+        while len(_layer_types) < n_layers:
+            _layer_types.append("attention")
+    elif _hybrid_pattern:
+        _layer_types = []
+        for ch in _hybrid_pattern[:n_layers]:
+            if ch == "M":
+                _layer_types.append("ssm")
+            elif ch == "*":
+                _layer_types.append("attention")
+    else:
+        _layer_types = ["attention"] * n_layers
+
+    _n_attn = sum(1 for t in _layer_types if t == "attention")
+    _n_ssm = sum(1 for t in _layer_types if t == "ssm")
+    _n_cache = len(_layer_types)
+    _n_skip = n_layers - _n_cache
+    if _n_ssm > 0 or _n_skip > 0:
+        logger.info(f"  Hybrid model: {_n_attn} attention + {_n_ssm} SSM"
+                    + (f" + {_n_skip} no-cache" if _n_skip else "") + " layers")
+
+    def _turboquant_make_cache(
+        _cfg=tq_config, _n=_n_cache, _kd=_key_dim, _vd=_val_dim, _lt=_layer_types
+    ):
+        return make_turboquant_cache(_cfg, _n, [_kd]*_n, [_vd]*_n, _lt)
+
+    model.make_cache = _turboquant_make_cache
+    logger.info(f"  TurboQuant enabled: {tq_config.default_key_bits}-bit keys, "
+                f"{tq_config.default_value_bits}-bit values, "
+                f"{len(tq_config.critical_layers)} critical layers")
+
+
 # Shard flush threshold for v1 streaming repack (~2 GB)
 _SHARD_FLUSH_BYTES = 2_000_000_000
 
@@ -212,6 +288,10 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
 
     if not lazy:
         mx.eval(model.parameters())
+
+    # TurboQuant: patch make_cache for JANG models with TQ enabled
+    _patch_turboquant_make_cache(model, jang_cfg, _model_cfg)
+
     elapsed = time.perf_counter() - start
 
     actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
@@ -485,6 +565,12 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
 
     if not lazy:
         mx.eval(model.parameters())
+
+    # TurboQuant: patch language_model.make_cache for JANG VLM with TQ enabled
+    _lang_model = getattr(model, "language_model", None)
+    if _lang_model is not None and hasattr(_lang_model, "layers"):
+        _patch_turboquant_make_cache(_lang_model, jang_cfg, _model_cfg)
+
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s{' (lazy/mmap)' if lazy else ''}")
 

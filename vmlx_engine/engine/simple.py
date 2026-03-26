@@ -106,7 +106,7 @@ class SimpleEngine(BaseEngine):
             try:
                 cache = raw_model.make_cache()
                 cache_types = {type(c).__name__ for c in cache}
-                kv_only = {"KVCache", "RotatingKVCache", "QuantizedKVCache"}
+                kv_only = {"KVCache", "RotatingKVCache", "QuantizedKVCache", "TurboQuantKVCache"}
                 if cache_types and not cache_types.issubset(kv_only):
                     logger.warning(
                         "Hybrid SSM model detected in simple mode — batch SSM "
