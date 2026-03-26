@@ -1723,6 +1723,30 @@ class MLXMultimodalLM:
         enable_thinking = kwargs.pop("enable_thinking", None)
         formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
 
+        # Post-template image count guard: VLM chat templates may not expand
+        # image placeholders for assistant-role messages. Trim all_images to
+        # match actual placeholder token count to prevent crashes in generate().
+        if all_images and self.config:
+            _img_token_id = getattr(self.config, "image_token_index", None)
+            if _img_token_id is not None:
+                _tok = (
+                    self.processor.tokenizer
+                    if hasattr(self.processor, "tokenizer")
+                    else self.processor
+                )
+                try:
+                    _token_ids = _tok.encode(formatted_prompt)
+                    _slot_count = _token_ids.count(_img_token_id)
+                    if _slot_count != len(all_images):
+                        logger.warning(
+                            f"Image count mismatch: {len(all_images)} images but "
+                            f"{_slot_count} slots in prompt (likely assistant-role "
+                            f"images not supported by template). Trimming to {_slot_count}."
+                        )
+                        all_images = all_images[:_slot_count]
+                except Exception as _e:
+                    logger.debug(f"Image slot count check failed: {_e}")
+
         # Check cache for existing KV state (uses images as cache key)
         from mlx_vlm.models import cache as vlm_cache
 

@@ -146,10 +146,22 @@ def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
 
     Server defaults (from --chat-template-kwargs) are used as the base layer.
     Per-request chat_template_kwargs override any matching keys.
+
+    Normalizes enable_thinking to a real bool — guards against bool("false") == True
+    when API clients send string values instead of JSON booleans.
     """
     base = dict(_default_chat_template_kwargs) if _default_chat_template_kwargs else {}
     if request_kwargs:
         base.update(request_kwargs)
+    # Normalize enable_thinking: reject non-bool values that bool() would mishandle
+    if "enable_thinking" in base and not isinstance(base["enable_thinking"], bool):
+        val = base["enable_thinking"]
+        if isinstance(val, str) and val.lower() in ("false", "0", "no", "off"):
+            base["enable_thinking"] = False
+        elif isinstance(val, str) and val.lower() in ("true", "1", "yes", "on"):
+            base["enable_thinking"] = True
+        else:
+            base["enable_thinking"] = bool(val)
     return base
 
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
