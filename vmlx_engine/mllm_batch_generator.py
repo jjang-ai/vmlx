@@ -138,6 +138,9 @@ def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
     """
     if not hasattr(language_model, 'make_cache'):
         return cache
+    # Guard: cache must be a list, not a BatchKVCache or other non-list type.
+    if not isinstance(cache, list):
+        return cache
 
     try:
         from jang_tools.turboquant.cache import TurboQuantKVCache
@@ -151,7 +154,7 @@ def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
         template = language_model.make_cache()
     except Exception:
         return cache
-    if not any(type(t).__name__ == _TQ_CLASS_NAME for t in template):
+    if not isinstance(template, list) or not any(type(t).__name__ == _TQ_CLASS_NAME for t in template):
         return cache  # No TQ layers in template — not a TQ model
 
     tq_count = 0
@@ -290,6 +293,9 @@ def _fix_hybrid_cache(
         num_model_layers: Pre-computed total layer count
     """
     if not hasattr(language_model, 'make_cache'):
+        return cache
+    # Guard: cache must be a list, not BatchKVCache or other non-list type
+    if not isinstance(cache, list):
         return cache
 
     try:
