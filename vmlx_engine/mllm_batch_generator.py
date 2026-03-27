@@ -138,9 +138,6 @@ def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
     """
     if not hasattr(language_model, 'make_cache'):
         return cache
-    mc_name = getattr(language_model.make_cache, '__name__', '')
-    if mc_name not in ('_tq_make_cache', '_turboquant_make_cache'):
-        return cache  # Model doesn't use TQ
 
     try:
         from jang_tools.turboquant.cache import TurboQuantKVCache
@@ -148,11 +145,14 @@ def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
     except ImportError:
         return cache
 
-    # Get TQ template to extract per-layer config (key_bits, value_bits, etc.)
+    # Get template and check if it contains ANY TurboQuantKVCache objects.
+    # This is more robust than checking make_cache.__name__ which can vary.
     try:
         template = language_model.make_cache()
     except Exception:
         return cache
+    if not any(type(t).__name__ == _TQ_CLASS_NAME for t in template):
+        return cache  # No TQ layers in template — not a TQ model
 
     tq_count = 0
     result = list(cache)
