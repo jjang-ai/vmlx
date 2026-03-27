@@ -165,10 +165,14 @@ def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
         if i >= len(template) or type(template[i]).__name__ != _TQ_CLASS_NAME:
             continue
         tpl = template[i]
-        # Create TQ cache with same config
+        # Create TQ cache with actual tensor dimensions (not template dims).
+        # MLA models have different key/value dims than template due to
+        # compression (e.g. template key_dim=128, actual KV dim=256).
+        actual_key_dim = layer.keys.shape[-1]
+        actual_val_dim = layer.values.shape[-1]
         tq = TurboQuantKVCache(
-            key_dim=tpl.key_dim,
-            value_dim=tpl.value_dim,
+            key_dim=actual_key_dim,
+            value_dim=actual_val_dim,
             key_bits=tpl.key_bits,
             value_bits=tpl.value_bits,
             sink_tokens=tpl.sink_tokens,

@@ -564,20 +564,31 @@ class BlockAwarePrefixCache:
             return self._n_kv_heads
         n_kv = 0
         try:
-            for attr in ('args', 'config'):
-                cfg = getattr(self.model, attr, None)
-                if cfg is None:
-                    continue
-                # MLA models store compressed KV latents with H=1.
-                # Check kv_lora_rank before num_key_value_heads.
-                kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
-                if kv_lora_rank and kv_lora_rank > 0:
-                    n_kv = 1  # MLA: compressed latent, single "head"
-                    break
-                n_kv = (
-                    getattr(cfg, 'num_key_value_heads', 0)
-                    or getattr(cfg, 'num_kv_heads', 0)
-                )
+            # Check model, language_model (VLM wrapper), and model.model (nested)
+            candidates = [self.model]
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None:
+                candidates.append(lm)
+            mm = getattr(self.model, 'model', None)
+            if mm is not None and mm is not self.model:
+                candidates.append(mm)
+            for model_obj in candidates:
+                for attr in ('args', 'config', 'text_config'):
+                    cfg = getattr(model_obj, attr, None)
+                    if cfg is None:
+                        continue
+                    # MLA models store compressed KV latents with H=1.
+                    # Check kv_lora_rank before num_key_value_heads.
+                    kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                    if kv_lora_rank and kv_lora_rank > 0:
+                        n_kv = 1  # MLA: compressed latent, single "head"
+                        break
+                    n_kv = (
+                        getattr(cfg, 'num_key_value_heads', 0)
+                        or getattr(cfg, 'num_kv_heads', 0)
+                    )
+                    if n_kv:
+                        break
                 if n_kv:
                     break
         except Exception:
