@@ -1803,8 +1803,6 @@ class MLLMBatchGenerator:
                         cache_for_fix = _dequantize_cache(req.prompt_cache)
                         if cache_for_fix is None:
                             req.prompt_cache = None
-                        else:
-                            cache_for_fix = _recompress_to_tq(cache_for_fix, self.language_model)
                     else:
                         cache_for_fix = req.prompt_cache
                 if req.prompt_cache is not None:
@@ -1813,6 +1811,8 @@ class MLLMBatchGenerator:
                         kv_positions=self._hybrid_kv_positions,
                         num_model_layers=self._hybrid_num_layers,
                     )
+                    # Re-compress AFTER _fix_hybrid_cache so indices match template
+                    req_cache = _recompress_to_tq(req_cache, self.language_model)
                 else:
                     try:
                         if hasattr(self.language_model, 'make_cache'):
