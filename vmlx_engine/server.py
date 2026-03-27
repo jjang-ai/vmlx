@@ -667,7 +667,26 @@ def _apply_jit_compilation():
             replaced = (_engine.model is compiled)
 
         if replaced:
-            logger.info("JIT: mx.compile applied successfully — first inference call will trigger Metal compilation")
+            logger.info("JIT: mx.compile applied successfully — running warmup pass")
+            # Warmup: 1-token forward pass to page in model weights and compile
+            # Metal shaders. Without this, the first real request simultaneously
+            # pages ~30GB+ of mmap weights AND allocates cache/activations,
+            # causing Metal OOM on memory-constrained machines (e.g. 122B on 48GB).
+            try:
+                warmup_cache = model_obj.make_cache() if hasattr(model_obj, 'make_cache') else None
+                lm = getattr(model_obj, 'language_model', model_obj)
+                warmup_input = mx.array([[0]])  # Single dummy token
+                if warmup_cache is not None:
+                    lm(warmup_input, cache=warmup_cache)
+                else:
+                    lm(warmup_input)
+                mx.synchronize()  # Force Metal to finish
+                del warmup_cache
+                if hasattr(mx, 'clear_cache'):
+                    mx.clear_cache()
+                logger.info("JIT: Warmup complete — model weights paged in, Metal shaders compiled")
+            except Exception as warmup_err:
+                logger.info(f"JIT: Warmup skipped ({warmup_err}) — first request will be slower")
         else:
             logger.warning("JIT: mx.compile created but could not verify replacement — model structure may have changed")
     except Exception as e:
