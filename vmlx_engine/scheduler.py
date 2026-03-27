@@ -1579,6 +1579,13 @@ class Scheduler:
                             f"treating as cache miss"
                         )
                     else:
+                        # Re-compress KV layers to TurboQuant (3-bit) if model uses TQ.
+                        # Without this, reconstructed cache is float16 (5.3x larger) → OOM.
+                        try:
+                            from .mllm_batch_generator import _recompress_to_tq
+                            reconstructed = _recompress_to_tq(reconstructed, self.model)
+                        except Exception:
+                            pass  # Non-fatal: runs at float16 instead of TQ 3-bit
                         # Hybrid SSM models: combine reconstructed KV blocks
                         # with SSM companion state for a full cache hit.
                         if self._is_hybrid:
@@ -1709,6 +1716,11 @@ class Scheduler:
                         f"treating as cache miss"
                     )
                 else:
+                    try:
+                        from .mllm_batch_generator import _recompress_to_tq
+                        cache = _recompress_to_tq(cache, self.model)
+                    except Exception:
+                        pass
                     request.prompt_cache = cache
                     request.cached_tokens = len(request.prompt_token_ids) - len(remaining)
                     request.remaining_tokens = remaining
@@ -1739,6 +1751,11 @@ class Scheduler:
                         f"treating as cache miss"
                     )
                 else:
+                    try:
+                        from .mllm_batch_generator import _recompress_to_tq
+                        cache = _recompress_to_tq(cache, self.model)
+                    except Exception:
+                        pass
                     request.prompt_cache = cache
                     request.cached_tokens = len(request.prompt_token_ids) - len(remaining)
                     request.remaining_tokens = remaining
@@ -1769,6 +1786,11 @@ class Scheduler:
                         f"failed, treating as cache miss"
                     )
                 else:
+                    try:
+                        from .mllm_batch_generator import _recompress_to_tq
+                        disk_cache = _recompress_to_tq(disk_cache, self.model)
+                    except Exception:
+                        pass
                     request.prompt_cache = disk_cache
                     request.cached_tokens = len(request.prompt_token_ids) - 1
                     request.remaining_tokens = request.prompt_token_ids[-1:]

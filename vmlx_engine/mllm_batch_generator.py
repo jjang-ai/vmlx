@@ -123,6 +123,71 @@ def _is_kv_like(c) -> bool:
     return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
 
 
+def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
+    """Re-wrap reconstructed KVCache layers into TurboQuantKVCache and compress.
+
+    After paged cache reconstruction, KV layers are full-precision float16.
+    If the model uses TurboQuant, this wastes 5.3x memory vs the 3-bit
+    compressed form used during generation. This function:
+    1. Gets a TQ template from model.make_cache() to extract TQ config
+    2. For each KVCache layer, creates a matching TurboQuantKVCache
+    3. Copies keys/values and calls .compress() to restore 3-bit storage
+
+    Returns the cache list with KV layers replaced by compressed TQ layers.
+    Non-KV layers (SSM/ArraysCache) pass through unchanged.
+    """
+    if not hasattr(language_model, 'make_cache'):
+        return cache
+    mc_name = getattr(language_model.make_cache, '__name__', '')
+    if mc_name not in ('_tq_make_cache', '_turboquant_make_cache'):
+        return cache  # Model doesn't use TQ
+
+    try:
+        from jang_tools.turboquant.cache import TurboQuantKVCache
+        from mlx_lm.models.cache import KVCache
+    except ImportError:
+        return cache
+
+    # Get TQ template to extract per-layer config (key_bits, value_bits, etc.)
+    try:
+        template = language_model.make_cache()
+    except Exception:
+        return cache
+
+    tq_count = 0
+    result = list(cache)
+    for i, layer in enumerate(result):
+        if not isinstance(layer, KVCache):
+            continue
+        if layer.keys is None or layer.offset == 0:
+            continue
+        # Find matching TQ template layer
+        if i >= len(template) or type(template[i]).__name__ != _TQ_CLASS_NAME:
+            continue
+        tpl = template[i]
+        # Create TQ cache with same config
+        tq = TurboQuantKVCache(
+            key_dim=tpl.key_dim,
+            value_dim=tpl.value_dim,
+            key_bits=tpl.key_bits,
+            value_bits=tpl.value_bits,
+            sink_tokens=tpl.sink_tokens,
+        )
+        # Copy reconstructed float16 data into TQ
+        tq.keys = layer.keys
+        tq.values = layer.values
+        tq.offset = layer.offset
+        tq.step = getattr(layer, 'step', layer.keys.shape[2]) if layer.keys.ndim >= 3 else layer.offset
+        # Compress to 3-bit — this creates _joined_k/_joined_v and clears .keys/.values
+        tq.compress()
+        result[i] = tq
+        tq_count += 1
+
+    if tq_count > 0:
+        logger.info(f"Re-compressed {tq_count} KV layers to TurboQuant (5x memory savings)")
+    return result
+
+
 def _dequantize_cache(cache: List[Any]) -> List[Any]:
     """Dequantize QuantizedKVCache layers to KVCache for batch generation.
 
@@ -1505,7 +1570,6 @@ class MLLMBatchGenerator:
                                         # Dequantize failed — release block refs to prevent leak
                                         self.block_aware_cache.release_cache(req.request_id)
                                         continue
-
                                 if is_hybrid and ssm_states is not None and reconstructed is not None:
                                     # Full hybrid cache reconstruction:
                                     # KV from paged cache + SSM from companion cache
@@ -1521,6 +1585,9 @@ class MLLMBatchGenerator:
                                         if layer_idx not in kv_set and ssm_idx < len(ssm_states):
                                             full_cache[layer_idx] = ssm_states[ssm_idx]
                                             ssm_idx += 1
+                                    # Re-compress KV layers to TurboQuant AFTER full assembly.
+                                    # Must be after _fix_hybrid_cache so indices match template.
+                                    full_cache = _recompress_to_tq(full_cache, self.language_model)
 
                                     req.prompt_cache = full_cache
                                     req._cached_tokens = block_table.num_tokens
@@ -1546,6 +1613,8 @@ class MLLMBatchGenerator:
                                 elif not is_hybrid and reconstructed is not None:
                                     # Pure attention VLM: can safely skip cached prefix tokens.
                                     # Trim input_ids to only remaining (uncached) tokens.
+                                    # Re-compress to TQ (indices match template 1:1 for non-hybrid).
+                                    reconstructed = _recompress_to_tq(reconstructed, self.language_model)
                                     req.prompt_cache = reconstructed
                                     req._cached_tokens = block_table.num_tokens
                                     if remaining:
@@ -1621,6 +1690,7 @@ class MLLMBatchGenerator:
                                         f"(hybrid model — full prefill required)"
                                     )
                                 else:
+                                    cache = _recompress_to_tq(cache, self.language_model)
                                     req.prompt_cache = cache
                                     num_cached = len(token_list) - len(remaining)
                                     if remaining:
@@ -1693,6 +1763,7 @@ class MLLMBatchGenerator:
                                     if disk_result is None:
                                         pass  # Dequantize failed, full prefill
                                     else:
+                                        disk_result = _recompress_to_tq(disk_result, self.language_model)
                                         req.prompt_cache = disk_result
                                         req._cached_tokens = len(token_list)
                                         # Disk cache is exact-match (hash-based), all tokens cached.
@@ -1732,6 +1803,8 @@ class MLLMBatchGenerator:
                         cache_for_fix = _dequantize_cache(req.prompt_cache)
                         if cache_for_fix is None:
                             req.prompt_cache = None
+                        else:
+                            cache_for_fix = _recompress_to_tq(cache_for_fix, self.language_model)
                     else:
                         cache_for_fix = req.prompt_cache
                 if req.prompt_cache is not None:
