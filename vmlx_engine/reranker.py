@@ -132,6 +132,10 @@ class Reranker:
 
         # Load projector weights
         resolved = self._resolve_model_path(self.model_path)
+        if resolved is None:
+            raise RuntimeError(
+                f"Could not resolve model path for late-interaction reranker: {self.model_path}"
+            )
         projector_path = os.path.join(resolved, "projector.safetensors")
 
         from safetensors import safe_open
