@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
-import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
+import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, CASUAL_CONFIG, EXPERT_CONFIG, SliderField } from './SessionConfigForm'
+import { useInferenceMode } from '../layout/InferenceMode'
 
 interface Session {
   id: string
@@ -21,7 +22,8 @@ interface ServerSettingsDrawerProps {
 }
 
 export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpdate }: ServerSettingsDrawerProps) {
-  const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
+  const { defaultConfig } = useInferenceMode()
+  const [config, setConfig] = useState<SessionConfig>(defaultConfig)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [restarting, setRestarting] = useState(false)

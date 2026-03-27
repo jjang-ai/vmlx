@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { SidebarHeader } from './SidebarHeader'
 import { ChatHistory } from './ChatHistory'
+import { InferenceModeToggle, useInferenceMode } from './InferenceMode'
 
 interface SidebarProps {
   collapsed: boolean
@@ -11,6 +12,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, currentChatId, onChatSelect, onNewChat }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState('')
+  const { mode, setMode } = useInferenceMode()
 
   return (
     <div
@@ -27,6 +29,9 @@ export function Sidebar({ collapsed, currentChatId, onChatSelect, onNewChat }: S
         onChatSelect={onChatSelect}
         searchQuery={searchQuery}
       />
+      <div className="px-3 py-2 border-t border-sidebar-border">
+        <InferenceModeToggle mode={mode} onToggle={setMode} />
+      </div>
     </div>
   )
 }

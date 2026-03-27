@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
-import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
+import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, CASUAL_CONFIG, EXPERT_CONFIG } from './SessionConfigForm'
+import { useInferenceMode } from '../layout/InferenceMode'
 
 interface Session {
   id: string

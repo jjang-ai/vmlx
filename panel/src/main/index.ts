@@ -184,6 +184,16 @@ function createWindow(): void {
       return { success: true }
     })
 
+    // Auto-detect inference mode on first launch based on system RAM.
+    // Casual (≤48GB) or Expert (>48GB). User can override anytime.
+    const existingMode = db.getSetting('inference_mode')
+    if (!existingMode) {
+      const totalMemGB = Math.round(require('os').totalmem() / (1024 ** 3))
+      const autoMode = totalMemGB <= 48 ? 'casual' : 'expert'
+      db.setSetting('inference_mode', autoMode)
+      console.log(`[MODE] Auto-detected: ${autoMode} (${totalMemGB}GB RAM)`)
+    }
+
     // API Gateway
     ipcMain.handle('gateway:status', () => ({
       running: apiGateway.running,

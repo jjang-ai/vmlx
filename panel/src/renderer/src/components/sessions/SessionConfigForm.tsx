@@ -105,6 +105,24 @@ export const DEFAULT_CONFIG: SessionConfig = {
   imageQuantize: undefined
 }
 
+// Expert = current defaults (backwards compatible, full control)
+export const EXPERT_CONFIG = { ...DEFAULT_CONFIG }
+
+// Casual: safest optimized defaults for low-compute machines.
+// All optimizations ON (prefix cache, paged cache, KV quant, JIT, TQ).
+// Resource ceilings lowered to prevent OOM on 32-48GB machines with large models.
+export const CASUAL_CONFIG: SessionConfig = {
+  ...DEFAULT_CONFIG,
+  host: '127.0.0.1',         // Local-only (safer for beginners)
+  maxNumSeqs: 1,              // Single user (saves memory from batch overhead)
+  cacheMemoryPercent: 15,     // 15% vs 30% — more headroom for model weights
+  maxCacheBlocks: 500,        // Fewer paged blocks (half)
+  prefixCacheSize: 50,        // Fewer cached prefixes
+  kvCacheQuantization: 'q4',  // More aggressive quant (q4 vs q8 — 2x smaller stored cache)
+  maxTokens: 8192,            // 8K vs 32K — prevents huge KV allocation
+  enableJit: true,            // JIT on by default (includes warmup for cold-start OOM prevention)
+}
+
 interface SessionConfigFormProps {
   config: SessionConfig
   onChange: <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => void
