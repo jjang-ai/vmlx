@@ -136,7 +136,7 @@ Assistant: <tool_call>{"name": "calculator", "arguments": {"expression": "log10(
 Assistant: 3"""
 
 MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
-TEMPERATURE = 0.05
+TEMPERATURE = 0.02
 
 # Tool definitions in OpenAI format for the engine
 TOOL_DEFINITIONS = [
