@@ -226,7 +226,7 @@ class VmlxAgent:
         ]
 
         tools_used = []
-        max_iterations = 10
+        max_iterations = 7
 
         for _ in range(max_iterations):
             # Get response from model
