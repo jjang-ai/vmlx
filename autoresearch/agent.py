@@ -235,6 +235,7 @@ class VmlxAgent:
                 max_tokens=512,
                 temperature=self.temperature,
                 tools=TOOL_DEFINITIONS,
+                repetition_penalty=1.1,
             )
 
             response_text = output.text
