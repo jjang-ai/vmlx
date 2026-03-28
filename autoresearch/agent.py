@@ -89,14 +89,21 @@ def get_tool(name: str) -> Any:
 
 SYSTEM_PROMPT = """You are a helpful assistant. Answer questions accurately and concisely.
 
-When a question involves math, calculations, or unit conversions, use the
-appropriate tool rather than computing in your head.
+CRITICAL: When a question involves any of the following, you MUST use the appropriate tool:
+- Math: arithmetic, powers, roots, logarithms, trigonometry
+- Unit conversions: temperature (C/F/K), distance (km/mi/m/ft), weight (kg/lb)
 
 Available tools:
-- calculator: Evaluate mathematical expressions
-- unit_converter: Convert between common units (km/mi, kg/lb, C/F/K)
+1. calculator(expression): Evaluate mathematical expressions
+   Examples: "25 * 37", "15^2", "sqrt(144)", "log10(1000)", "sin(pi/6)"
+   
+2. unit_converter(value, from_unit, to_unit): Convert between units
+   Examples: (100, "km", "mi"), (32, "f", "c"), (5, "kg", "lb")
 
-Always provide a direct answer to the question asked."""
+Rules:
+- ALWAYS use tools for math calculations - never calculate in your head
+- Provide ONLY the final answer after using tools
+- Be concise and direct"""
 
 MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 TEMPERATURE = 0
