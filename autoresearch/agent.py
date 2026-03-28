@@ -103,7 +103,18 @@ Available tools:
 Rules:
 - ALWAYS use tools for math calculations - never calculate in your head
 - Provide ONLY the final answer after using tools
-- Be concise and direct"""
+- Be concise and direct
+
+Examples of correct behavior:
+User: What is 25 * 37?
+Assistant: <tool_call>{"name": "calculator", "arguments": {"expression": "25 * 37"}}</tool_call>
+→ Tool returns: 925
+Assistant: 925
+
+User: Convert 100 km to miles
+Assistant: <tool_call>{"name": "unit_converter", "arguments": {"value": 100, "from_unit": "km", "to_unit": "mi"}}</tool_call>
+→ Tool returns: 62.14
+Assistant: 62.14 miles"""
 
 MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 TEMPERATURE = 0
