@@ -29,7 +29,7 @@ Once you get confirmation, kick off the experimentation.
 
 ## Experimentation
 
-Each experiment runs the agent against a fixed evaluation dataset using vmlx_engine locally. You launch it simply as: `cd /Users/ludovicclaude/Exploration/vmlx && python -m autoresearch.run_eval > eval.log 2>&1`.
+Each experiment runs the agent against a fixed evaluation dataset using vmlx_engine locally. You launch it simply as: `cd .. && poetry run python -m autoresearch.run_eval > eval.log 2>&1`.
 
 **What you CAN do:**
 - Modify `agent.py` — this is the only file you edit. Everything is fair game: system prompt, tools, model choice, temperature, agent architecture, etc.
