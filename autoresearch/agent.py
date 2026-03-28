@@ -236,6 +236,7 @@ class VmlxAgent:
                 temperature=self.temperature,
                 tools=TOOL_DEFINITIONS,
                 repetition_penalty=1.1,
+                min_p=0.05,
             )
 
             response_text = output.text
