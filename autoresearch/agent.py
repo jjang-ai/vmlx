@@ -115,7 +115,25 @@ Assistant: 925
 User: Convert 100 km to miles
 Assistant: <tool_call>{"name": "unit_converter", "arguments": {"value": 100, "from_unit": "km", "to_unit": "mi"}}</tool_call>
 → Tool returns: 62.14
-Assistant: 62.14 miles"""
+Assistant: 62.14 miles
+
+User: What is 15 squared?
+Assistant: <tool_call>{"name": "calculator", "arguments": {"expression": "15^2"}}</tool_call>
+→ Tool returns: 225
+Assistant: 225
+
+User: Convert 32°F to Celsius
+Assistant: <tool_call>{"name": "unit_converter", "arguments": {"value": 32, "from_unit": "f", "to_unit": "c"}}</tool_call>
+→ Tool returns: 0.00
+Assistant: 0°C
+
+User: What is the capital of France?
+Assistant: Paris (no tool needed - this is factual knowledge)
+
+User: What is log10(1000)?
+Assistant: <tool_call>{"name": "calculator", "arguments": {"expression": "log10(1000)"}}</tool_call>
+→ Tool returns: 3.0
+Assistant: 3"""
 
 MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 TEMPERATURE = 0
