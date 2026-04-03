@@ -905,6 +905,11 @@ export class SessionManager extends EventEmitter {
       if (conflicting) {
         throw new Error(`Port ${config.port} is in use by running session "${conflicting.modelName || conflicting.modelPath}".`)
       }
+      // Block if this port matches the API Gateway port (#44)
+      const gwPort = parseInt(db.getSetting('gateway_port') || '8080', 10)
+      if (config.port === gwPort) {
+        throw new Error(`Port ${config.port} is in use by the API Gateway. Choose a different port.`)
+      }
     }
 
     let currentConfig: Record<string, unknown> = {}
@@ -1281,6 +1286,15 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** Build auth headers for admin API calls (sleep/wake) when session has an API key */
+  private _adminHeaders(session: import('./database').Session): Record<string, string> {
+    try {
+      const cfg = JSON.parse(session.config)
+      if (cfg.apiKey) return { 'Authorization': `Bearer ${cfg.apiKey}` }
+    } catch { /* no config or no key */ }
+    return {}
+  }
+
   /** Get idle timeouts for a session based on its model type */
   private getIdleTimeouts(session: import('./database').Session): { softMs: number; hardMs: number } {
     // Determine if this is an image session + read per-session overrides in one parse
@@ -1332,8 +1346,10 @@ export class SessionManager extends EventEmitter {
 
     try {
       const host = connectHost(session.host)
+      const headers = this._adminHeaders(session)
       const res = await fetch(`http://${host}:${session.port}/admin/soft-sleep`, {
         method: 'POST',
+        headers,
         signal: AbortSignal.timeout(10000)
       })
       if (res.ok) {
@@ -1360,8 +1376,10 @@ export class SessionManager extends EventEmitter {
 
     try {
       const host = connectHost(session.host)
+      const headers = this._adminHeaders(session)
       const res = await fetch(`http://${host}:${session.port}/admin/deep-sleep`, {
         method: 'POST',
+        headers,
         signal: AbortSignal.timeout(10000)
       })
       if (res.ok) {
@@ -1388,9 +1406,11 @@ export class SessionManager extends EventEmitter {
 
     try {
       const host = connectHost(session.host)
+      const headers = this._adminHeaders(session)
       // 120s timeout — admin/wake does synchronous model load (JANG mmap ~9s, large models 30-60s)
       const res = await fetch(`http://${host}:${session.port}/admin/wake`, {
         method: 'POST',
+        headers,
         signal: AbortSignal.timeout(120000)
       })
       if (res.ok) {
@@ -1443,6 +1463,11 @@ export class SessionManager extends EventEmitter {
         console.log(`[SLEEP] Session ${session.id.slice(0, 8)} idle ${Math.round(idleMs / 1000)}s >= soft ${Math.round(softMs / 1000)}s → soft sleep`)
         this.pushLog(session.id, `[Sleep] Idle for ${Math.round(idleMs / 60000)}min — entering soft sleep (timeout: ${Math.round(softMs / 60000)}min)`)
         await this.softSleep(session.id)
+      } else if (session.status === 'running' && softMs <= 0 && hardMs > 0 && idleMs >= hardMs) {
+        // Soft sleep disabled but hard sleep enabled → skip soft, go straight to deep
+        console.log(`[SLEEP] Session ${session.id.slice(0, 8)} idle ${Math.round(idleMs / 1000)}s >= hard ${Math.round(hardMs / 1000)}s → deep sleep (soft disabled)`)
+        this.pushLog(session.id, `[Sleep] Idle for ${Math.round(idleMs / 60000)}min — entering deep sleep (timeout: ${Math.round(hardMs / 60000)}min, soft sleep disabled)`)
+        await this.deepSleep(session.id)
       } else if (session.status === 'standby' && session.standbyDepth === 'soft' && hardMs > 0 && idleMs >= hardMs) {
         // In soft sleep and idle past hard timeout → deep sleep
         console.log(`[SLEEP] Session ${session.id.slice(0, 8)} idle ${Math.round(idleMs / 1000)}s >= hard ${Math.round(hardMs / 1000)}s → deep sleep`)

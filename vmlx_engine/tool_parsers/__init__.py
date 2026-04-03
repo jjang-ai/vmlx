@@ -59,6 +59,7 @@ from .xlam_tool_parser import xLAMToolParser
 from .step3p5_tool_parser import Step3p5ToolParser
 from .glm47_tool_parser import Glm47ToolParser
 from .minimax_tool_parser import MiniMaxToolParser
+from .gemma4_tool_parser import Gemma4ToolParser
 
 __all__ = [
     # Base classes

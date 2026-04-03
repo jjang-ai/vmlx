@@ -26,6 +26,8 @@ def ollama_chat_to_openai(body: dict) -> dict:
         "model": body.get("model", "default"),
         "messages": body.get("messages", []),
         "stream": body.get("stream", True),
+        # Always request usage so Ollama clients get eval_count/prompt_eval_count
+        "stream_options": {"include_usage": True},
     }
     if opts.get("num_predict") is not None:
         req["max_tokens"] = opts["num_predict"]
@@ -39,6 +41,9 @@ def ollama_chat_to_openai(body: dict) -> dict:
         req["stop"] = opts["stop"]
     if opts.get("repeat_penalty") is not None:
         req["repetition_penalty"] = opts["repeat_penalty"]
+    # Forward tools if present (Ollama tool calling)
+    if body.get("tools"):
+        req["tools"] = body["tools"]
     return req
 
 
@@ -70,12 +75,23 @@ def openai_chat_response_to_ollama(openai_resp: dict, model: str) -> dict:
     choices = openai_resp.get("choices", [])
     content = choices[0]["message"]["content"] if choices else ""
     usage = openai_resp.get("usage", {})
+    msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
+    # Forward tool calls if present (Ollama format: message.tool_calls)
+    if choices:
+        oai_tcs = choices[0].get("message", {}).get("tool_calls")
+        if oai_tcs:
+            msg["tool_calls"] = [
+                {"function": {"name": tc["function"]["name"],
+                              "arguments": tc["function"]["arguments"]}}
+                for tc in oai_tcs if tc.get("function")
+            ]
+    finish_reason = choices[0].get("finish_reason", "stop") if choices else "stop"
     return {
         "model": model,
         "created_at": _now_iso(),
-        "message": {"role": "assistant", "content": content or ""},
+        "message": msg,
         "done": True,
-        "done_reason": choices[0].get("finish_reason", "stop") if choices else "stop",
+        "done_reason": "stop" if finish_reason == "tool_calls" else (finish_reason or "stop"),
         "total_duration": 0,
         "eval_count": usage.get("completion_tokens", 0),
         "prompt_eval_count": usage.get("prompt_tokens", 0),
@@ -88,6 +104,8 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         return None
     payload = sse_line[6:].strip()
     if payload == "[DONE]":
+        # If we already sent a done chunk (from usage-bearing chunk), skip
+        # Otherwise emit a minimal done
         return json.dumps({
             "model": model, "created_at": _now_iso(),
             "message": {"role": "assistant", "content": ""},
@@ -99,10 +117,22 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         return None
 
     choices = chunk.get("choices", [])
+    usage = chunk.get("usage", {})
     content = ""
     done = False
     done_reason = None
 
+    # Usage-only chunk (choices empty, usage present) — emit as done with metrics
+    if not choices and usage:
+        return json.dumps({
+            "model": model, "created_at": _now_iso(),
+            "message": {"role": "assistant", "content": ""},
+            "done": True, "done_reason": "stop",
+            "eval_count": usage.get("completion_tokens", 0),
+            "prompt_eval_count": usage.get("prompt_tokens", 0),
+        }) + "\n"
+
+    tool_calls_data = None
     if choices:
         delta = choices[0].get("delta", {})
         content = delta.get("content", "")
@@ -110,15 +140,26 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         if fr is not None:
             done = True
             done_reason = fr
+        # Capture tool calls from delta (Ollama format: message.tool_calls)
+        oai_tcs = delta.get("tool_calls")
+        if oai_tcs:
+            tool_calls_data = [
+                {"function": {"name": tc.get("function", {}).get("name", ""),
+                              "arguments": tc.get("function", {}).get("arguments", "")}}
+                for tc in oai_tcs if tc.get("function")
+            ]
 
+    msg: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls_data:
+        msg["tool_calls"] = tool_calls_data
     result: dict[str, Any] = {
         "model": model,
         "created_at": _now_iso(),
-        "message": {"role": "assistant", "content": content},
+        "message": msg,
         "done": done,
     }
     if done:
-        result["done_reason"] = done_reason or "stop"
+        result["done_reason"] = "stop" if done_reason == "tool_calls" else (done_reason or "stop")
         usage = chunk.get("usage", {})
         if usage:
             result["eval_count"] = usage.get("completion_tokens", 0)

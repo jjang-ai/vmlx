@@ -56,9 +56,12 @@ def _apply_turboquant_to_model(model, model_path: str):
         layer_type_list = text_cfg.get('layer_types', [])
         hybrid_pattern = text_cfg.get('hybrid_override_pattern',
                             config.get('hybrid_override_pattern', ''))
+        full_attn_interval = text_cfg.get('full_attention_interval',
+                                config.get('full_attention_interval', 0))
+        _attn_types = {'full_attention', 'sliding_attention'}
         if layer_type_list:
             layer_types = [
-                'attention' if lt == 'full_attention' else 'ssm'
+                'attention' if lt in _attn_types else 'ssm'
                 for lt in layer_type_list[:n_layers]
             ]
             while len(layer_types) < n_layers:
@@ -73,6 +76,12 @@ def _apply_turboquant_to_model(model, model_path: str):
                 # 'E' (MoE expert) layers are FFN-only with no cache.
                 # Model.make_cache() and forward pass skip them, so we must too
                 # to keep cache indices aligned.
+        elif full_attn_interval > 0:
+            # Qwen3-Next: every N-th layer (1-indexed) is full attention (#38)
+            layer_types = [
+                'attention' if (i + 1) % full_attn_interval == 0 else 'ssm'
+                for i in range(n_layers)
+            ]
         else:
             layer_types = ['attention'] * n_layers
 

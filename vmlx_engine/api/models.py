@@ -265,6 +265,13 @@ class AssistantMessage(BaseModel):
         """OpenAI O1-style reasoning field. Only present when thinking is enabled."""
         return self.reasoning
 
+    def model_dump(self, **kwargs) -> dict:
+        """Override to exclude reasoning_content when None."""
+        d = super().model_dump(**kwargs)
+        if d.get("reasoning_content") is None:
+            d.pop("reasoning_content", None)
+        return d
+
 
 class ChatCompletionChoice(BaseModel):
     """A single choice in chat completion response."""
@@ -737,6 +744,18 @@ class ChatCompletionChunkDelta(BaseModel):
     def reasoning_content(self) -> str | None:
         """OpenAI O1-style reasoning field. Only present when thinking is enabled."""
         return self.reasoning
+
+    def model_dump(self, **kwargs) -> dict:
+        """Override to exclude reasoning_content when None (#46).
+
+        Pydantic's computed_field is not excluded by exclude_none=True,
+        which causes 'reasoning_content: null' to leak into every SSE
+        chunk — breaking strict OpenAI SDK parsers (Claude Code, etc.).
+        """
+        d = super().model_dump(**kwargs)
+        if d.get("reasoning_content") is None:
+            d.pop("reasoning_content", None)
+        return d
 
 
 class ChatCompletionChunkChoice(BaseModel):

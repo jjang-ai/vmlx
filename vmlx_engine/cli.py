@@ -1084,6 +1084,7 @@ Examples:
             "meetkai",
             "stepfun",
             "glm4",
+            "gemma4",
         ],
         help="Which format to use for parsing tool calls from model output. Must match your "
              "model's training format. Common choices: 'qwen' for Qwen models, 'llama' for "

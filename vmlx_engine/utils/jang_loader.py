@@ -80,6 +80,10 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     _layer_type_list = _text_cfg.get("layer_types", [])
     _hybrid_pattern = _text_cfg.get("hybrid_override_pattern",
                         model_config.get("hybrid_override_pattern", ""))
+    # Qwen3-Next uses full_attention_interval: every N-th layer is full attention,
+    # the rest are linear SSM (GatedDeltaNet). SSM layers need ArraysCache, not TQ.
+    _full_attn_interval = _text_cfg.get("full_attention_interval",
+                            model_config.get("full_attention_interval", 0))
     # Known attention layer types (all need KV cache)
     _ATTENTION_TYPES = {"full_attention", "sliding_attention"}
     if _layer_type_list:
@@ -101,6 +105,12 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
             # Model's forward pass skips them in cache indexing (cache_counter
             # only increments for M and * layers), so we must NOT create
             # cache objects for E layers to keep indices aligned.
+    elif _full_attn_interval > 0:
+        # Qwen3-Next pattern: every N-th layer (1-indexed) is full attention (#38)
+        _layer_types = [
+            "attention" if (i + 1) % _full_attn_interval == 0 else "ssm"
+            for i in range(n_layers)
+        ]
     else:
         _layer_types = ["attention"] * n_layers
 
@@ -314,12 +324,10 @@ def _load_jang_v2(path: Path, jang_cfg: dict, lazy: bool = False):
     # product exceeds float16 max 65504). bfloat16 has float32 range.
     _model_cfg = json.loads((path / "config.json").read_text())
     _text_cfg = _model_cfg.get("text_config", _model_cfg)
-    _n_experts = _text_cfg.get("num_experts",
-                    _text_cfg.get("num_local_experts",
-                    _text_cfg.get("n_routed_experts", 0)))
-    _hidden = _text_cfg.get("hidden_size", 0)
+    _n_experts = _text_cfg.get("num_experts") or _text_cfg.get("num_local_experts") or _text_cfg.get("n_routed_experts") or 0
+    _hidden = _text_cfg.get("hidden_size") or 0
     _text_mt = _text_cfg.get("model_type", _model_cfg.get("model_type", ""))
-    _is_mla = _text_cfg.get("kv_lora_rank", 0) > 0
+    _is_mla = (_text_cfg.get("kv_lora_rank") or 0) > 0
     if (_n_experts >= 512 and _hidden >= 4096) or _text_mt == "mistral4" or _is_mla:
         model.set_dtype(mx.bfloat16)
         _reason = "MLA" if _is_mla else f"{_n_experts} experts"
@@ -606,12 +614,10 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
     # bfloat16 for MLA models and 512+ expert models
     _model_cfg = json.loads((path / "config.json").read_text())
     _text_cfg = _model_cfg.get("text_config", _model_cfg)
-    _n_experts = _text_cfg.get("num_experts",
-                    _text_cfg.get("num_local_experts",
-                    _text_cfg.get("n_routed_experts", 0)))
-    _hidden = _text_cfg.get("hidden_size", 0)
+    _n_experts = _text_cfg.get("num_experts") or _text_cfg.get("num_local_experts") or _text_cfg.get("n_routed_experts") or 0
+    _hidden = _text_cfg.get("hidden_size") or 0
     _text_mt = _text_cfg.get("model_type", _model_cfg.get("model_type", ""))
-    _is_mla = _text_cfg.get("kv_lora_rank", 0) > 0
+    _is_mla = (_text_cfg.get("kv_lora_rank") or 0) > 0
     if (_n_experts >= 512 and _hidden >= 4096) or _text_mt == "mistral4" or _is_mla:
         model.set_dtype(mx.bfloat16)
         _reason = "MLA" if _is_mla else f"{_n_experts} experts"

@@ -942,6 +942,12 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
       'Step-3.5 Flash (8B MoE)', 'Step-3.5',
     ]
   },
+  {
+    value: 'gemma4', label: 'Gemma 4 — Google Gemma 4', format: '<|tool_call>call:fn{key:value}<tool_call|>', models: [
+      'Gemma 4 27B-A4B (text+vision, MoE)',
+      'Gemma 4 31B (text+vision, dense)',
+    ]
+  },
 ]
 
 const REASONING_PARSER_OPTIONS: ParserOption[] = [
@@ -977,6 +983,13 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
       'Mistral Small 4 (24B/119B MoE, text+vision)',
       'Mistral Large 4 (text+vision)',
       'Any Mistral model with [THINK]/[/THINK] reasoning tokens',
+    ]
+  },
+  {
+    value: 'gemma4', label: 'Gemma 4 — Google Gemma 4', format: '<|channel>thought...reasoning...<channel|>content', models: [
+      'Gemma 4 27B-A4B (text+vision, MoE)',
+      'Gemma 4 31B (text+vision, dense)',
+      'Any Gemma 4 model with <|channel>thought protocol',
     ]
   },
 ]

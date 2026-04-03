@@ -503,7 +503,8 @@ async def track_request_time(request: Request, call_next):
     is_inference = not is_cancel and any(path.startswith(p) for p in [
         "/v1/chat/", "/v1/completions", "/v1/images/", "/v1/mcp/execute",
         "/v1/messages", "/v1/responses", "/v1/embeddings",
-        "/v1/audio/transcriptions", "/v1/audio/speech", "/v1/rerank"
+        "/v1/audio/transcriptions", "/v1/audio/speech", "/v1/rerank",
+        "/api/chat", "/api/generate", "/api/embed",  # Ollama inference endpoints
     ])
     # Update last request time for inference only — metadata queries shouldn't keep model awake
     if is_inference:
@@ -1333,8 +1334,13 @@ async def health():
 
     # Include KV cache quantization status for diagnostics
     kv_quant_info = None
-    if _engine and hasattr(_engine, '_engine') and _engine._engine:
-        scheduler = getattr(_engine._engine.engine, 'scheduler', None)
+    if _engine:
+        # Check both LLM scheduler (via AsyncEngineCore) and MLLM scheduler
+        scheduler = None
+        if hasattr(_engine, '_engine') and _engine._engine:
+            scheduler = getattr(_engine._engine.engine, 'scheduler', None)
+        elif hasattr(_engine, '_mllm_scheduler') and _engine._mllm_scheduler:
+            scheduler = _engine._mllm_scheduler
         if scheduler:
             kv_bits = getattr(scheduler, '_kv_cache_bits', 0)
             if kv_bits:
@@ -1415,7 +1421,7 @@ def _get_scheduler():
 
 # ── Admin: Sleep / Wake ──
 
-@app.post("/admin/soft-sleep")
+@app.post("/admin/soft-sleep", dependencies=[Depends(verify_api_key)])
 async def admin_soft_sleep():
     """Enter soft sleep: clear all caches, reduce Metal cache limit. Model stays loaded."""
     global _standby_state, _pre_sleep_cache_limit, _wake_lock
@@ -1457,7 +1463,7 @@ async def admin_soft_sleep():
             return {"error": str(e)}
 
 
-@app.post("/admin/deep-sleep")
+@app.post("/admin/deep-sleep", dependencies=[Depends(verify_api_key)])
 async def admin_deep_sleep():
     """Enter deep sleep: unload model entirely. Process stays alive, port stays allocated."""
     global _engine, _standby_state, _pre_sleep_cache_limit, _wake_lock
@@ -1516,7 +1522,7 @@ async def admin_deep_sleep():
             return {"error": str(e)}
 
 
-@app.post("/admin/wake")
+@app.post("/admin/wake", dependencies=[Depends(verify_api_key)])
 async def admin_wake():
     """Wake from sleep: reload model. Triggered by JIT or manual wake."""
     global _engine, _standby_state, _pre_sleep_cache_limit, _model_load_error
@@ -2055,9 +2061,9 @@ async def create_anthropic_message(
         _msg_kwargs["repetition_penalty"] = chat_req.repetition_penalty
     if chat_req.stop:
         _msg_kwargs["stop"] = chat_req.stop
-    # Merge server-wide --chat-template-kwargs defaults (Anthropic API has no
-    # per-request chat_template_kwargs, so we only get server defaults here)
-    _ct_kwargs = _merge_ct_kwargs(None)
+    # Merge server-wide --chat-template-kwargs defaults with any adapter-populated
+    # kwargs (e.g., thinking_budget from Anthropic thinking.budget_tokens)
+    _ct_kwargs = _merge_ct_kwargs(chat_req.chat_template_kwargs)
 
     # Forward enable_thinking to engine — without this, the model always thinks
     # internally even when the client sends thinking: {type: "disabled"}
@@ -2529,8 +2535,11 @@ async def ollama_chat(fastapi_request: Request):
         if hasattr(result, "model_dump"):
             result_dict = result.model_dump(exclude_none=True)
         elif hasattr(result, "body"):
-            # StreamingResponse or similar — shouldn't happen for non-streaming
-            result_dict = {"choices": []}
+            # JSONResponse (e.g., tool call path returns manual JSON)
+            try:
+                result_dict = json.loads(result.body)
+            except (json.JSONDecodeError, TypeError):
+                result_dict = {"choices": []}
         else:
             result_dict = dict(result)
         return openai_chat_response_to_ollama(result_dict, model_name)
@@ -5113,8 +5122,9 @@ async def stream_chat_completion(
                 }
                 for i, tc in enumerate(tool_calls)
             ]
-            # Build tool_calls chunk manually to ensure content:null is present
-            # (exclude_none=True would drop it, but OpenAI always includes it)
+            # Build tool_calls chunk matching OpenAI's exact format (#46):
+            # - role: "assistant" required for SDK message assembly
+            # - content omitted (not null) — OpenAI omits it in tool_calls deltas
             tc_data_chunk = {
                 "id": response_id,
                 "object": "chat.completion.chunk",
@@ -5123,7 +5133,7 @@ async def stream_chat_completion(
                 "choices": [{
                     "index": 0,
                     "delta": {
-                        "content": None,
+                        "role": "assistant",
                         "tool_calls": tc_deltas,
                     },
                     "finish_reason": None,
