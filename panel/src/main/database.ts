@@ -257,7 +257,7 @@ class DatabaseManager {
         id TEXT PRIMARY KEY,
         model_path TEXT NOT NULL UNIQUE,
         model_name TEXT,
-        host TEXT NOT NULL DEFAULT '0.0.0.0',
+        host TEXT NOT NULL DEFAULT '127.0.0.1',
         port INTEGER NOT NULL UNIQUE,
         pid INTEGER,
         status TEXT NOT NULL DEFAULT 'stopped'
@@ -353,7 +353,7 @@ class DatabaseManager {
       this.db.exec('ALTER TABLE chat_overrides ADD COLUMN working_directory TEXT')
     }
     if (!overrideColumns.find(c => c.name === 'enable_thinking')) {
-      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN enable_thinking INTEGER DEFAULT NULL')
+      this.db.exec('ALTER TABLE chat_overrides ADD COLUMN enable_thinking INTEGER DEFAULT 0')
     }
     if (!overrideColumns.find(c => c.name === 'hide_tool_status')) {
       this.db.exec('ALTER TABLE chat_overrides ADD COLUMN hide_tool_status INTEGER DEFAULT 0')
@@ -543,7 +543,7 @@ class DatabaseManager {
           id TEXT PRIMARY KEY,
           model_path TEXT NOT NULL UNIQUE,
           model_name TEXT,
-          host TEXT NOT NULL DEFAULT '0.0.0.0',
+          host TEXT NOT NULL DEFAULT '127.0.0.1',
           port INTEGER NOT NULL UNIQUE,
           pid INTEGER,
           status TEXT NOT NULL DEFAULT 'stopped'

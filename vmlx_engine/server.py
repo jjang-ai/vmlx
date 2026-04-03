@@ -272,6 +272,7 @@ _template_always_thinks_cache: dict[str, bool] = {}
 # Tool call markers to detect in streaming output for buffering
 _TOOL_CALL_MARKERS = [
     "<tool_call>",
+    "<|tool_call>",   # Gemma 4 native tool call format
     "<|tool_call|>",
     "[TOOL_CALLS]",
     "<function=",
@@ -281,6 +282,7 @@ _TOOL_CALL_MARKERS = [
     "<|tool_calls_section_begin|>",
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
+    "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
 ]
 
 
@@ -2472,7 +2474,7 @@ async def create_rerank(request: Request):
 # =============================================================================
 
 
-@app.get("/api/tags")
+@app.get("/api/tags", dependencies=[Depends(verify_api_key)])
 async def ollama_tags():
     """Ollama-compatible model list."""
     from .api.ollama_adapter import build_tags_response
@@ -2480,20 +2482,20 @@ async def ollama_tags():
     return build_tags_response(name, _model_name or name)
 
 
-@app.get("/api/ps")
+@app.get("/api/ps", dependencies=[Depends(verify_api_key)])
 async def ollama_ps():
     """Ollama-compatible running model list."""
     name = _resolve_model_name()
     return {"models": [{"name": name, "model": _model_name or name, "size": 0, "digest": ""}]}
 
 
-@app.get("/api/version")
+@app.get("/api/version", dependencies=[Depends(verify_api_key)])
 async def ollama_version():
     """Ollama version shim for client compat checks."""
     return {"version": "0.6.2"}
 
 
-@app.post("/api/show")
+@app.post("/api/show", dependencies=[Depends(verify_api_key)])
 async def ollama_show(fastapi_request: Request):
     """Ollama-compatible model info."""
     name = _resolve_model_name()
@@ -2504,7 +2506,7 @@ async def ollama_show(fastapi_request: Request):
     }
 
 
-@app.post("/api/chat")
+@app.post("/api/chat", dependencies=[Depends(verify_api_key)])
 async def ollama_chat(fastapi_request: Request):
     """Ollama-compatible chat — translates to /v1/chat/completions internally."""
     from .api.ollama_adapter import (
@@ -2578,7 +2580,7 @@ async def ollama_chat(fastapi_request: Request):
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
 
 
-@app.post("/api/generate")
+@app.post("/api/generate", dependencies=[Depends(verify_api_key)])
 async def ollama_generate(fastapi_request: Request):
     """Ollama-compatible generate — translates to /v1/completions internally."""
     body = await fastapi_request.json()
@@ -2631,8 +2633,8 @@ async def ollama_generate(fastapi_request: Request):
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
 
 
-@app.post("/api/embeddings")
-@app.post("/api/embed")
+@app.post("/api/embeddings", dependencies=[Depends(verify_api_key)])
+@app.post("/api/embed", dependencies=[Depends(verify_api_key)])
 async def ollama_embed(fastapi_request: Request):
     """Ollama-compatible embeddings."""
     body = await fastapi_request.json()
@@ -2652,16 +2654,16 @@ async def ollama_embed(fastapi_request: Request):
 
 
 # Ollama no-op endpoints (prevent client errors)
-@app.post("/api/pull")
+@app.post("/api/pull", dependencies=[Depends(verify_api_key)])
 async def ollama_pull(): return {"status": "success"}
 
-@app.post("/api/delete")
+@app.post("/api/delete", dependencies=[Depends(verify_api_key)])
 async def ollama_delete(): return {"status": "success"}
 
-@app.post("/api/copy")
+@app.post("/api/copy", dependencies=[Depends(verify_api_key)])
 async def ollama_copy(): return {"status": "success"}
 
-@app.post("/api/create")
+@app.post("/api/create", dependencies=[Depends(verify_api_key)])
 async def ollama_create(): return {"status": "success"}
 
 
@@ -3880,7 +3882,7 @@ async def create_chat_completion(
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
 
-    return ChatCompletionResponse(
+    response = ChatCompletionResponse(
         model=request.model,
         choices=[
             ChatCompletionChoice(
@@ -3894,6 +3896,21 @@ async def create_chat_completion(
         ],
         usage=get_usage(output),
     )
+
+    # When tool_calls are present, serialize manually to ensure content:null is
+    # included (response_model_exclude_none=True would drop it, but OpenAI
+    # always includes content:null with tool_calls — required by many clients).
+    if tool_calls:
+        from starlette.responses import JSONResponse
+        resp_dict = response.model_dump(exclude_none=True)
+        # Force content:null back into the message
+        for choice in resp_dict.get("choices", []):
+            msg = choice.get("message", {})
+            if "tool_calls" in msg and "content" not in msg:
+                msg["content"] = None
+        return JSONResponse(content=resp_dict)
+
+    return response
 
 
 # =============================================================================
@@ -4769,7 +4786,10 @@ async def stream_chat_completion(
     tool_call_buffering_notified = False  # Have we sent the buffering signal?
     tool_calls_emitted = False  # Were actual tool calls parsed and emitted?
     _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
-    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None) and not _suppress_tools
+    # Auto-enable tool call detection when client sends tools in request (#46),
+    # even if server wasn't started with --enable-auto-tool-choice
+    _request_has_tools = bool(getattr(request, 'tools', None))
+    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools) and not _suppress_tools
 
     # Track token counts for usage reporting
     prompt_tokens = 0
@@ -5077,7 +5097,10 @@ async def stream_chat_completion(
                 )
                 yield f"data: {_dump_sse_json(content_chunk)}\n\n"
 
-            # Emit tool calls as proper structured chunk
+            # Emit tool calls in OpenAI-compatible streaming format (#46):
+            # Chunk 1: tool_calls data with finish_reason=null
+            # Chunk 2: empty delta with finish_reason="tool_calls"
+            # This split is required for CLI clients (Claude Code, OpenCode, etc.)
             tc_deltas = [
                 {
                     "index": i,
@@ -5090,18 +5113,36 @@ async def stream_chat_completion(
                 }
                 for i, tc in enumerate(tool_calls)
             ]
-            tool_chunk = ChatCompletionChunk(
-                id=response_id,
-                created=_created_ts,
-                model=request.model,
-                choices=[
-                    ChatCompletionChunkChoice(
-                        delta=ChatCompletionChunkDelta(tool_calls=tc_deltas),
-                        finish_reason="tool_calls",
-                    )
-                ],
-            )
-            yield f"data: {_dump_sse_json(tool_chunk)}\n\n"
+            # Build tool_calls chunk manually to ensure content:null is present
+            # (exclude_none=True would drop it, but OpenAI always includes it)
+            tc_data_chunk = {
+                "id": response_id,
+                "object": "chat.completion.chunk",
+                "created": _created_ts,
+                "model": request.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "content": None,
+                        "tool_calls": tc_deltas,
+                    },
+                    "finish_reason": None,
+                }],
+            }
+            yield f"data: {json.dumps(tc_data_chunk, ensure_ascii=True)}\n\n"
+            # Finish chunk: empty delta with finish_reason="tool_calls"
+            tc_finish_chunk = {
+                "id": response_id,
+                "object": "chat.completion.chunk",
+                "created": _created_ts,
+                "model": request.model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "tool_calls",
+                }],
+            }
+            yield f"data: {json.dumps(tc_finish_chunk, ensure_ascii=True)}\n\n"
             # Skip normal end-of-stream handling — we already set finish_reason
             if include_usage:
                 _tc_usage = Usage(
@@ -5337,7 +5378,8 @@ async def stream_responses_api(
     })
 
     _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
-    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None) and not _suppress_tools
+    _request_has_tools = bool(getattr(request, 'tools', None))
+    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools) and not _suppress_tools
     tool_call_buffering = False
 
     full_text = ""
@@ -5883,8 +5925,8 @@ Examples:
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
-        help="Host to bind to",
+        default="127.0.0.1",
+        help="Host to bind to (use 0.0.0.0 for LAN access)",
     )
     parser.add_argument(
         "--port",

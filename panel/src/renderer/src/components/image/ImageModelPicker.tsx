@@ -45,7 +45,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [showCustom, setShowCustom] = useState(false)
 
   // Server settings (same as Server tab CreateSession simplified config)
-  const [serverHost, setServerHost] = useState('0.0.0.0')
+  const [serverHost, setServerHost] = useState('127.0.0.1')
   const [serverPort, setServerPort] = useState(0) // 0 = auto
   const [serverApiKey, setServerApiKey] = useState('')
   const [serverLogLevel, setServerLogLevel] = useState('INFO')

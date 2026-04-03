@@ -711,10 +711,10 @@ class TestModelConfigComprehensiveChecks:
         mcr._configs_loaded = False
         return get_model_config_registry()
 
-    VALID_REASONING_PARSERS = {None, "qwen3", "deepseek_r1", "openai_gptoss", "mistral"}
+    VALID_REASONING_PARSERS = {None, "qwen3", "deepseek_r1", "openai_gptoss", "mistral", "gemma4"}
     VALID_TOOL_PARSERS = {
         None, "qwen", "llama", "mistral", "deepseek", "hermes",
-        "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",
+        "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi", "gemma4",
     }
     VALID_CACHE_TYPES = {"kv", "mamba", "hybrid"}
 

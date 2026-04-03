@@ -132,7 +132,7 @@ export class ProcessManager extends EventEmitter {
         '-s', '-m', 'vmlx_engine.cli', 'serve',
         '--model', model,
         '--port', String(port),
-        '--host', '0.0.0.0',
+        '--host', '127.0.0.1',
         ...(opts.extraArgs ?? []),
       ]
     } else if (opts.binaryPath) {
@@ -141,7 +141,7 @@ export class ProcessManager extends EventEmitter {
         'serve',
         '--model', model,
         '--port', String(port),
-        '--host', '0.0.0.0',
+        '--host', '127.0.0.1',
         ...(opts.extraArgs ?? []),
       ]
     } else {

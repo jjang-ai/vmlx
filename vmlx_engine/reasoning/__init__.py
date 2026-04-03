@@ -76,6 +76,7 @@ def list_parsers() -> list[str]:
 def _register_builtin_parsers():
     """Register built-in parsers."""
     from .deepseek_r1_parser import DeepSeekR1ReasoningParser
+    from .gemma4_parser import Gemma4ReasoningParser
     from .gptoss_parser import GptOssReasoningParser
     from .mistral_parser import MistralReasoningParser
     from .qwen3_parser import Qwen3ReasoningParser
@@ -86,6 +87,8 @@ def _register_builtin_parsers():
     register_parser("openai_gptoss", GptOssReasoningParser)
     # Mistral 4 uses [THINK]...[/THINK] tokens for reasoning
     register_parser("mistral", MistralReasoningParser)
+    # Gemma 4 uses <|channel>thought...<channel|> for reasoning
+    register_parser("gemma4", Gemma4ReasoningParser)
 
 
 # Register built-in parsers on module load

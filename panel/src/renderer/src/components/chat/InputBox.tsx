@@ -51,6 +51,8 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Skip if IME is composing (CJK input: kanji/hangul selection uses Enter)
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()

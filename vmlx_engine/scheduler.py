@@ -183,6 +183,7 @@ class Scheduler:
         self.running: Dict[str, Request] = {}  # Running requests by ID
         self.requests: Dict[str, Request] = {}  # All requests by ID
         self.finished_req_ids: Set[str] = set()  # Recently finished
+        self._pending_aborts: Set[str] = set()  # Deferred aborts (processed in step())
 
         # Mapping between our request IDs and BatchGenerator UIDs
         self.request_id_to_uid: Dict[str, int] = {}
@@ -560,27 +561,47 @@ class Scheduler:
             return self._n_kv_heads_cached
         n_kv = 0
         try:
-            for cfg_source in ('args', 'config'):
-                cfg = getattr(self.model, cfg_source, None)
-                if cfg is None:
-                    continue
-                # MLA models store compressed KV latents with H=1.
-                # Check kv_lora_rank before num_key_value_heads.
-                kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
-                if kv_lora_rank and kv_lora_rank > 0:
-                    n_kv = 1
-                    break
-                # Try model-specific KV head count attributes
-                n_kv = (
-                    getattr(cfg, 'num_key_value_heads', 0)
-                    or getattr(cfg, 'num_kv_heads', 0)
-                )
+            # Build candidate list: model + VLM wrapper inner models
+            candidates = [self.model]
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None:
+                candidates.append(lm)
+            mm = getattr(self.model, 'model', None)
+            if mm is not None and mm is not self.model:
+                candidates.append(mm)
+            # TWO-PASS: MLA detection first (kv_lora_rank → H=1),
+            # then num_key_value_heads. VLM wrappers may have
+            # num_key_value_heads=32 on args but kv_lora_rank only
+            # on nested text_config — single-pass breaks too early.
+            for model_obj in candidates:
+                for attr in ('args', 'config', 'text_config'):
+                    cfg = getattr(model_obj, attr, None)
+                    if cfg is None:
+                        continue
+                    kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                    if not kv_lora_rank:
+                        tc = getattr(cfg, 'text_config', None)
+                        if tc is not None:
+                            kv_lora_rank = getattr(tc, 'kv_lora_rank', 0)
+                    if kv_lora_rank and kv_lora_rank > 0:
+                        n_kv = 1
+                        break
                 if n_kv:
                     break
-                # Fall back to num_attention_heads (MHA — all heads are KV heads)
-                n_kv = getattr(cfg, 'num_attention_heads', 0)
-                if n_kv:
-                    break
+            if not n_kv:
+                for model_obj in candidates:
+                    for attr in ('args', 'config', 'text_config'):
+                        cfg = getattr(model_obj, attr, None)
+                        if cfg is None:
+                            continue
+                        n_kv = (
+                            getattr(cfg, 'num_key_value_heads', 0)
+                            or getattr(cfg, 'num_kv_heads', 0)
+                        )
+                        if n_kv:
+                            break
+                    if n_kv:
+                        break
         except Exception:
             pass
         # Ensure the result is always a plain int (guards against MagicMock
@@ -952,12 +973,19 @@ class Scheduler:
         self._detokenizer_pool.pop(request_id, None)
 
     def _get_stop_tokens(self) -> Set[int]:
-        """Get stop token IDs from tokenizer or processor."""
+        """Get stop token IDs from tokenizer or processor.
+
+        Also checks the model config registry for additional eos_tokens
+        (e.g., Gemma 4 uses <turn|> as end-of-turn alongside <eos>).
+        """
         stop_tokens = set()
         # Check both the processor/tokenizer and the actual tokenizer
+        tok_for_encode = None
         for tok in [self.tokenizer, self._actual_tokenizer]:
             if tok is None:
                 continue
+            if tok_for_encode is None:
+                tok_for_encode = tok
             if hasattr(tok, "eos_token_id") and tok.eos_token_id is not None:
                 if isinstance(tok.eos_token_id, list):
                     stop_tokens.update(tok.eos_token_id)
@@ -969,6 +997,28 @@ class Scheduler:
                 else:
                     # Handle case where eos_token_ids is a single int
                     stop_tokens.add(tok.eos_token_ids)
+
+        # Add extra eos_tokens from model config registry (e.g., <turn|> for Gemma 4)
+        if tok_for_encode is not None:
+            try:
+                from .model_config_registry import get_model_config_registry
+                registry = get_model_config_registry()
+                # Try to find model name from tokenizer's name_or_path
+                model_name = getattr(tok_for_encode, 'name_or_path', None)
+                if model_name:
+                    model_config = registry.lookup(model_name)
+                    if model_config.eos_tokens and len(model_config.eos_tokens) > 1:
+                        for eos_str in model_config.eos_tokens[1:]:
+                            try:
+                                ids = tok_for_encode.encode(eos_str, add_special_tokens=False)
+                                if len(ids) == 1:
+                                    stop_tokens.add(ids[0])
+                                    logger.debug(f"Added extra stop token: {eos_str!r} → {ids[0]}")
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
         return stop_tokens
 
     def _create_batch_generator(
@@ -1096,9 +1146,16 @@ class Scheduler:
         if layer_cache is None:
             return False
 
-        # KVCache / RotatingKVCache / QuantizedKVCache: check keys/values
+        # KVCache / RotatingKVCache / QuantizedKVCache: check keys/values.
+        # TurboQuantKVCache after compress() has keys=None, values=None
+        # but is valid — compressed data is in _compressed_keys/_compressed_values
+        # and decoded buffers in _joined_k/_joined_v.
         if hasattr(layer_cache, "keys") and hasattr(layer_cache, "values"):
             if layer_cache.keys is None or layer_cache.values is None:
+                # Check for TQ compressed state (keys cleared after compress)
+                if (getattr(layer_cache, '_compressed_keys', None) is not None
+                        or getattr(layer_cache, '_joined_k', None) is not None):
+                    return True  # TQ layer — valid despite keys=None
                 return False
             return True
 
@@ -1583,14 +1640,18 @@ class Scheduler:
                         # with SSM companion state for a full cache hit.
                         if self._is_hybrid:
                             try:
-                                # Fetch SSM companion state using exact token count
-                                # (matches store which also uses exact len(all_tokens))
-                                _fetch_num = block_table.num_tokens
-                                # Use stripped prompt tokens (matching store key)
+                                # Fetch SSM companion state.
+                                # MUST use block_table.num_tokens (the KV block
+                                # boundary) — NOT the full prompt length.
+                                # KV blocks are stored with gen_prompt stripped,
+                                # so if SSM companion was stored at a different
+                                # position (e.g., full tokens with gen_prompt),
+                                # it won't match → correct fallback to full prefill.
+                                # Using full token count caused position mismatch:
+                                # SSM at 17 tokens + KV at 11 tokens → double-
+                                # processing gen_prompt through SSM → garbage output.
                                 _ssm_tokens = list(request.prompt_token_ids)
-                                _gpl = getattr(request, '_gen_prompt_len', 0)
-                                if _gpl > 0 and _gpl < len(_ssm_tokens):
-                                    _ssm_tokens = _ssm_tokens[:-_gpl]
+                                _fetch_num = block_table.num_tokens
                                 ssm_states = (
                                     self._ssm_state_cache.fetch(
                                         _ssm_tokens,
@@ -1668,14 +1729,10 @@ class Scheduler:
                                 request.cached_tokens = 0
                                 request.remaining_tokens = request.prompt_token_ids
                         if reconstructed is not None:
-                            # Re-compress KV layers to TurboQuant after full assembly.
-                            # For hybrid: indices now match template (post _fix_hybrid_cache).
-                            # For non-hybrid: indices match template 1:1.
-                            try:
-                                from .mllm_batch_generator import _recompress_to_tq
-                                reconstructed = _recompress_to_tq(reconstructed, self.model)
-                            except Exception:
-                                pass  # Non-fatal: runs at float16 instead of TQ 3-bit
+                            # Re-compress to TQ for memory efficiency during
+                            # decode. Safe because blocks now store ORIGINAL
+                            # float16 (extracted before TQ recompress on store).
+                            # Single round of TQ lossy = same as first inference.
                             request.prompt_cache = reconstructed
                             request.block_table = block_table
                             request.cached_tokens = block_table.num_tokens
@@ -1717,11 +1774,6 @@ class Scheduler:
                         f"treating as cache miss"
                     )
                 else:
-                    try:
-                        from .mllm_batch_generator import _recompress_to_tq
-                        cache = _recompress_to_tq(cache, self.model)
-                    except Exception:
-                        pass
                     request.prompt_cache = cache
                     request.cached_tokens = len(request.prompt_token_ids) - len(remaining)
                     request.remaining_tokens = remaining
@@ -1752,11 +1804,6 @@ class Scheduler:
                         f"treating as cache miss"
                     )
                 else:
-                    try:
-                        from .mllm_batch_generator import _recompress_to_tq
-                        cache = _recompress_to_tq(cache, self.model)
-                    except Exception:
-                        pass
                     request.prompt_cache = cache
                     request.cached_tokens = len(request.prompt_token_ids) - len(remaining)
                     request.remaining_tokens = remaining
@@ -1771,9 +1818,16 @@ class Scheduler:
         else:
             request.remaining_tokens = request.prompt_token_ids
 
-        # L2: Disk cache fallback when in-memory cache missed
+        # L2: Disk cache fallback when in-memory cache missed.
+        # Strip gen_prompt_len from the fetch key to match the store key.
+        # Thinking models append generation-prompt tokens that change between
+        # turns — the cache key must exclude them for consistent SHA-256 matching.
         if request.prompt_cache is None and self.disk_cache is not None:
-            disk_cache = self.disk_cache.fetch(request.prompt_token_ids)
+            _disk_fetch_tokens = list(request.prompt_token_ids)
+            _gpl = getattr(request, '_gen_prompt_len', 0) or 0
+            if _gpl > 0 and _gpl < len(_disk_fetch_tokens):
+                _disk_fetch_tokens = _disk_fetch_tokens[:-_gpl]
+            disk_cache = self.disk_cache.fetch(_disk_fetch_tokens)
             if disk_cache is not None:
                 # Disk cache stores full-precision N-1 tokens (last prompt token re-fed on hit)
                 # Dequantize if KV cache quantization is active (disk stores full precision
@@ -1787,15 +1841,16 @@ class Scheduler:
                         f"failed, treating as cache miss"
                     )
                 else:
-                    try:
-                        from .mllm_batch_generator import _recompress_to_tq
-                        disk_cache = _recompress_to_tq(disk_cache, self.model)
-                    except Exception:
-                        pass
                     request.prompt_cache = disk_cache
                     request.cached_tokens = len(request.prompt_token_ids) - 1
                     request.remaining_tokens = request.prompt_token_ids[-1:]
-                    request._cache_detail = "disk"
+                    # Annotate cache_detail: "disk+tq" for TQ-native 26x-compressed
+                    # files, "disk" for standard float16 format.
+                    _tq_disk = (
+                        hasattr(self.disk_cache, '_last_fetch_tq_native')
+                        and self.disk_cache._last_fetch_tq_native
+                    )
+                    request._cache_detail = "disk+tq" if _tq_disk else "disk"
                     # Also populate L1 memory cache for faster subsequent hits.
                     # Quantize for L1 if KV quant is enabled (disk stores full precision).
                     l1_data = disk_cache
@@ -1859,6 +1914,13 @@ class Scheduler:
         UIDs, paged cache tracking, extracted KV cache refs, detokenizer state,
         Metal memory cache, and the master requests registry.
 
+        IMPORTANT: BatchGenerator removal is DEFERRED to the next step() call.
+        Client disconnects can happen while Metal command buffers are in-flight.
+        Calling batch_generator.remove() immediately would touch cache tensors
+        mid-computation, triggering Metal assertion failures that crash the
+        process. The deferred approach lets the current Metal computation
+        complete before cleanup.
+
         Safe to call multiple times (idempotent) — returns False on repeat calls.
 
         Args:
@@ -1871,12 +1933,17 @@ class Scheduler:
         if request is None:
             return False
 
-        # Remove from waiting queue
+        # Remove from waiting queue (safe — no Metal involvement)
         if request.status == RequestStatus.WAITING:
             try:
                 self.waiting.remove(request)
             except ValueError:
                 pass
+
+        # DEFER BatchGenerator removal to step() — see docstring above.
+        # Only defer if the request is actually in the batch generator.
+        if request.request_id in self.request_id_to_uid:
+            self._pending_aborts.add(request.request_id)
 
         # Clean up per-request stop tokens from shared BatchGenerator
         # Must happen BEFORE removing from running, so we can still check
@@ -1892,13 +1959,10 @@ class Scheduler:
             if removable:
                 self.batch_generator.stop_tokens -= removable
 
-        # Remove from running (BatchGenerator)
-        if request.request_id in self.request_id_to_uid:
-            uid = self.request_id_to_uid[request.request_id]
-            if self.batch_generator is not None:
-                self.batch_generator.remove([uid])
-            del self.uid_to_request_id[uid]
-            del self.request_id_to_uid[request.request_id]
+        # Remove from running (BatchGenerator) — DEFERRED.
+        # The actual batch_generator.remove() happens in _process_pending_aborts()
+        # which runs at the start of step() after Metal has synchronized.
+        # UID cleanup also deferred — done in _process_pending_aborts().
 
         # Clean up paged cache tracking (prevent block table leaks)
         # Use delete_block_table (not detach_request) so ref_counts are
@@ -1932,6 +1996,30 @@ class Scheduler:
 
         logger.debug(f"Aborted request {request_id}")
         return True
+
+    def _process_pending_aborts(self) -> None:
+        """Process deferred abort requests.
+
+        Called at the start of step() after the previous batch_generator.next()
+        has completed. At this point Metal has synchronized and it's safe to
+        call batch_generator.remove() without risking assertion failures on
+        in-flight command buffers.
+        """
+        aborts = list(self._pending_aborts)
+        self._pending_aborts.clear()
+        for request_id in aborts:
+            uid = self.request_id_to_uid.pop(request_id, None)
+            if uid is not None:
+                if self.batch_generator is not None:
+                    try:
+                        self.batch_generator.remove([uid])
+                    except Exception as e:
+                        logger.warning(
+                            f"Deferred abort remove failed for "
+                            f"{request_id}: {e}"
+                        )
+                self.uid_to_request_id.pop(uid, None)
+            logger.debug(f"Processed deferred abort for {request_id}")
 
     def has_requests(self) -> bool:
         """Check if there are any pending or running requests."""
@@ -2260,8 +2348,8 @@ class Scheduler:
 
             # Create output — include cache_detail and base token + any accepted spec tokens
             _detail = getattr(request, '_cache_detail', '')
-            # Annotate TQ if active
-            if _detail and getattr(self, '_tq_active', False):
+            # Annotate TQ if active (skip if already annotated, e.g. "disk+tq")
+            if _detail and getattr(self, '_tq_active', False) and "+tq" not in _detail:
                 _detail += "+tq"
             output = RequestOutput(
                 request_id=request_id,
@@ -2343,33 +2431,14 @@ class Scheduler:
                                     )
 
                                     if cache_for_extract is not None:
-                                        # L2: Persist to disk (full-precision,
-                                        # pre-quantization).  Skip for hybrid models
-                                        # because SSM layers retain output-token
-                                        # state that can't be cleanly truncated.
-                                        if (
-                                            self.disk_cache is not None
-                                            and not self._is_hybrid
-                                        ):
-                                            try:
-                                                self.disk_cache.store(
-                                                    list(request.prompt_token_ids),
-                                                    cache_for_extract,
-                                                )
-                                            except Exception as de:
-                                                logger.debug(
-                                                    f"Disk cache store failed for "
-                                                    f"{request_id}: {de}"
-                                                )
-                                        # TurboQuant: compress TQ layers before extraction (5x memory savings)
-                                        try:
-                                            from jang_tools.turboquant.generate import compress_cache as _tq_compress
-                                            _tq_count = _tq_compress(cache_for_extract)
-                                            if _tq_count > 0:
-                                                logger.info(f"TurboQuant compressed {_tq_count} layers for {request_id}")
-                                        except ImportError:
-                                            pass
-                                        # Quantize for storage-efficient extraction
+                                        # TQ re-wrap: BatchKVCache.extract() always
+                                        # returns plain KVCache objects even for TQ
+                                        # Extract FIRST from original float16 cache.
+                                        # This ensures blocks store original quality
+                                        # data (not TQ-decoded lossy float16).
+                                        # On fetch, TQ recompress is safe because
+                                        # it's a single round of lossy (same as
+                                        # original inference).
                                         if getattr(self, '_kv_cache_bits', 0):
                                             cache_for_extract = (
                                                 self._quantize_cache_for_storage(
@@ -2381,6 +2450,36 @@ class Scheduler:
                                                 cache_for_extract
                                             )
                                         )
+                                        # L2 disk: TQ recompress a COPY for 26x
+                                        # smaller disk files. The original cache
+                                        # objects are unchanged (extract already ran).
+                                        if (
+                                            self.disk_cache is not None
+                                            and not self._is_hybrid
+                                        ):
+                                            try:
+                                                from .mllm_batch_generator import _recompress_to_tq
+                                                tq_for_disk = _recompress_to_tq(
+                                                    cache_for_extract, self.model
+                                                )
+                                                _disk_store_tokens = list(
+                                                    request.prompt_token_ids
+                                                )
+                                                _gpl_s = getattr(
+                                                    request, '_gen_prompt_len', 0
+                                                ) or 0
+                                                if (_gpl_s > 0
+                                                        and _gpl_s < len(_disk_store_tokens)):
+                                                    _disk_store_tokens = _disk_store_tokens[:-_gpl_s]
+                                                self.disk_cache.store(
+                                                    _disk_store_tokens,
+                                                    tq_for_disk,
+                                                )
+                                            except Exception as de:
+                                                logger.debug(
+                                                    f"Disk cache store failed for "
+                                                    f"{request_id}: {de}"
+                                                )
                                         if extracted_cache:
                                             request._extracted_cache = extracted_cache
                                             logger.info(
@@ -2467,82 +2566,108 @@ class Scheduler:
                 self.block_aware_cache.paged_cache.detach_request(request_id)
 
             # Hybrid SSM companion state capture.
+            # MUST run BEFORE the paged cache store below, because
+            # the paged store clears request._extracted_cache in its
+            # finally block. If we run after, _extracted_cache is None.
             # Store SSM layer states keyed by block-aligned prompt tokens
             # so future prefix cache hits can reconstruct full KV+SSM cache.
+            #
+            # LIMITATION: For thinking models (gen_prompt_len > 0), SSM
+            # companion is SKIPPED. The extracted SSM state includes
+            # gen_prompt + output tokens, placing it at position
+            # P+gpl+output instead of P (the KV block boundary).
+            # Injecting this contaminated state causes garbled output.
+            # Future fix: async re-derive or capture-during-prefill.
             if (
                 self._is_hybrid
                 and self._ssm_state_cache is not None
                 and request is not None
                 and request.prompt_token_ids
                 and not _skip_cache_store
-                and hasattr(request, '_extracted_cache')
-                and request._extracted_cache is not None
             ):
                 try:
-                    kv_set = set(self._hybrid_kv_positions or [])
-                    ssm_layers = []
-                    for layer_sd in request._extracted_cache:
-                        if not isinstance(layer_sd, dict):
-                            continue
-                        cls_name = layer_sd.get('class_name', '')
-                        # SSM layers: MambaCache, ArraysCache, BatchMambaCache
-                        if cls_name in ('KVCache', 'QuantizedKVCache',
-                                        'RotatingKVCache', 'CacheList'):
-                            continue  # Skip KV layers
-                        state = layer_sd.get('state')
-                        meta = layer_sd.get('meta_state')
-                        if state is not None:
-                            try:
-                                import mlx_lm.models.cache as _cache_mod
-                                cache_cls = getattr(_cache_mod, cls_name, None)
-                                if cache_cls and hasattr(cache_cls, 'from_state'):
-                                    restored = cache_cls.from_state(state, meta)
-                                    ssm_layers.append(restored)
-                                else:
-                                    logger.debug(
-                                        f"SSM layer {cls_name}: no from_state "
-                                        f"(cls={cache_cls})"
-                                    )
-                            except Exception as _restore_e:
-                                logger.debug(
-                                    f"SSM layer {cls_name} restore failed: "
-                                    f"{_restore_e}"
-                                )
-                    if ssm_layers:
-                        # SSM state is CUMULATIVE — it encodes ALL tokens processed,
-                        # including gen_prompt_len tokens. If we strip gen_prompt_len
-                        # from the key but the STATE was computed over the full prompt,
-                        # the restored SSM state on the next turn will be wrong because
-                        # gen_prompt tokens change between turns (thinking models).
-                        # Skip SSM companion when gen_prompt_len > 0 to prevent this.
-                        _gpl = getattr(request, '_gen_prompt_len', 0)
-                        if _gpl > 0:
-                            logger.debug(
-                                f"Skipping SSM companion store for {request_id}: "
-                                f"gen_prompt_len={_gpl} (thinking model, SSM state "
-                                f"includes gen_prompt tokens that change between turns)"
-                            )
-                            ssm_layers = []  # Skip store
+                    logger.info(
+                        f"SSM companion: entering store for {request_id} "
+                        f"(hybrid={self._is_hybrid}, has_cache={hasattr(request, '_extracted_cache') and request._extracted_cache is not None})"
+                    )
+                    _gpl = getattr(request, '_gen_prompt_len', 0) or 0
+                    all_tokens = list(request.prompt_token_ids)
+                    if _gpl > 0 and _gpl < len(all_tokens):
+                        all_tokens = all_tokens[:-_gpl]
+                    prompt_len = len(all_tokens)
 
-                        all_tokens = list(request.prompt_token_ids)
-                        if _gpl > 0 and _gpl < len(all_tokens):
-                            all_tokens = all_tokens[:-_gpl]
-                        # Use full prompt length — block_table.num_tokens on
-                        # fetch returns the original prompt count (N), not the
-                        # paged cache's internal truncation (N-1).
-                        prompt_len = len(all_tokens)
-                        if prompt_len > 0 and ssm_layers:
+                    # SSM state from _extracted_cache is post-generation:
+                    # it includes gen_prompt + output tokens processing.
+                    # For thinking models (gpl > 0), the extracted SSM
+                    # state is contaminated — storing it causes position
+                    # mismatch on fetch → garbled output. Skip storage;
+                    # KV blocks still provide partial TTFT benefit.
+                    if _gpl > 0:
+                        logger.debug(
+                            f"SSM companion: skipping for {request_id} "
+                            f"(gpl={_gpl}, post-gen SSM contaminated)"
+                        )
+                    elif prompt_len > 0:
+                        _ssm_key_tokens = all_tokens
+                        _ssm_key_len = prompt_len
+
+                        # ── Extract SSM layers from generated cache ──
+                        ssm_layers = []
+                        if (hasattr(request, '_extracted_cache')
+                                and request._extracted_cache):
+                            _KV_NAMES = {
+                                'KVCache', 'QuantizedKVCache',
+                                'RotatingKVCache', 'CacheList',
+                                'TurboQuantKVCache',
+                            }
+                            _ssm_candidates = 0
+                            for layer_sd in request._extracted_cache:
+                                if not isinstance(layer_sd, dict):
+                                    continue
+                                cls = layer_sd.get('class_name', '')
+                                if cls in _KV_NAMES:
+                                    continue
+                                _ssm_candidates += 1
+                                state = layer_sd.get('state')
+                                meta = layer_sd.get('meta_state')
+                                if state is not None:
+                                    try:
+                                        import mlx_lm.models.cache as _cm
+                                        cc = getattr(_cm, cls, None)
+                                        if cc and hasattr(cc, 'from_state'):
+                                            ssm_layers.append(
+                                                cc.from_state(state, meta)
+                                            )
+                                        else:
+                                            logger.debug(
+                                                f"SSM layer {cls}: no "
+                                                f"from_state in mlx_lm"
+                                            )
+                                    except Exception as _se:
+                                        logger.debug(
+                                            f"SSM {cls} restore: {_se}"
+                                        )
+                            if _ssm_candidates > 0 and not ssm_layers:
+                                logger.warning(
+                                    f"SSM companion: {_ssm_candidates} "
+                                    f"candidate layers but 0 restored "
+                                    f"for {request_id}"
+                                )
+                        if ssm_layers:
                             self._ssm_state_cache.store(
-                                all_tokens, prompt_len, ssm_layers
+                                _ssm_key_tokens, _ssm_key_len,
+                                ssm_layers
                             )
                             logger.info(
-                                f"Stored SSM companion for {request_id}: "
-                                f"{len(ssm_layers)} layers, "
-                                f"{prompt_len}-token key"
+                                f"Stored SSM companion for "
+                                f"{request_id}: {len(ssm_layers)} "
+                                f"layers, {_ssm_key_len}-tok key"
                             )
                 except Exception as _ssm_e:
-                    logger.debug(
-                        f"SSM companion store failed for {request_id}: {_ssm_e}"
+                    logger.warning(
+                        f"SSM companion store failed for "
+                        f"{request_id}: {_ssm_e}",
+                        exc_info=True,
                     )
 
             # Store cache for future reuse
@@ -2695,21 +2820,11 @@ class Scheduler:
                                         f"Cache store rejected for request {request_id} "
                                         f"({prompt_len} tokens) — entry too large for budget"
                                     )
-                                # L2: Also persist to disk (full-precision, before GC).
-                                # Skip for hybrid models — SSM layers retain
-                                # output-token state that can't be truncated.
-                                if (
-                                    self.disk_cache is not None
-                                    and not self._is_hybrid
-                                ):
-                                    try:
-                                        disk_data = self._truncate_cache_to_prompt_length(
-                                            request._extracted_cache, prompt_len
-                                        )
-                                        if disk_data is not None:
-                                            self.disk_cache.store(prompt_tokens, disk_data)
-                                    except Exception as de:
-                                        logger.debug(f"Disk cache store failed for {request_id}: {de}")
+                                # NOTE: Disk L2 store is handled by the paged
+                                # cache path (Task 1 above). Memory-aware cache
+                                # is mutually exclusive with paged — if we're here,
+                                # paged cache is disabled and disk L2 is not
+                                # available for this configuration.
                         except Exception as e:
                             logger.warning(
                                 f"Failed to store memory-aware cache for {request_id}: {e}"
@@ -2745,21 +2860,8 @@ class Scheduler:
                                     f"({prompt_len} prompt tokens, "
                                     f"truncated from {prompt_len + len(request.output_token_ids)})"
                                 )
-                                # L2: Also persist to disk (full-precision).
-                                # Skip for hybrid models — SSM layers retain
-                                # output-token state that can't be truncated.
-                                if (
-                                    self.disk_cache is not None
-                                    and not self._is_hybrid
-                                ):
-                                    try:
-                                        disk_data = self._truncate_cache_to_prompt_length(
-                                            request._extracted_cache, prompt_len
-                                        )
-                                        if disk_data is not None:
-                                            self.disk_cache.store(prompt_tokens, disk_data)
-                                    except Exception as de:
-                                        logger.debug(f"Disk cache store failed for {request_id}: {de}")
+                                # NOTE: Disk L2 store is handled by the paged
+                                # cache path. Legacy prefix cache is L1-only.
                         except Exception as e:
                             logger.debug(f"Failed to store cache for {request_id}: {e}")
                         finally:
@@ -3422,6 +3524,15 @@ class Scheduler:
             SchedulerOutput with results of this step
         """
         output = SchedulerOutput()
+
+        # Process deferred aborts FIRST — these are requests where the
+        # client disconnected mid-generation. We deferred the
+        # batch_generator.remove() call to avoid touching Metal command
+        # buffers that were still in-flight. Now that we're at the top
+        # of step(), the previous batch_generator.next() has completed
+        # and Metal has synchronized, so it's safe to remove.
+        if self._pending_aborts:
+            self._process_pending_aborts()
 
         # Schedule waiting requests (errors here propagate immediately —
         # these are logic errors, not cache corruption)

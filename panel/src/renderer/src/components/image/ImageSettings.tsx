@@ -222,7 +222,7 @@ export function ImageSettings({ settings, onChange, model, mode }: ImageSettings
       </button>
       {showServer && (
         <div className="pl-4 border-l border-border text-xs text-muted-foreground space-y-1">
-          <p>Host: 0.0.0.0 (all interfaces)</p>
+          <p>Host: 127.0.0.1 (localhost)</p>
           <p>Port: auto-assigned</p>
           <p>Model: {model || 'none'}</p>
           <p className="text-[10px] mt-2 opacity-70">

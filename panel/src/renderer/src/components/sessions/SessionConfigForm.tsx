@@ -55,7 +55,7 @@ export interface SessionConfig {
 }
 
 export const DEFAULT_CONFIG: SessionConfig = {
-  host: '0.0.0.0',
+  host: '127.0.0.1',
   port: 8000,
   apiKey: '',
   rateLimit: 0,
@@ -73,12 +73,12 @@ export const DEFAULT_CONFIG: SessionConfig = {
   usePagedCache: true,
   pagedCacheBlockSize: 64,
   maxCacheBlocks: 1000,
-  kvCacheQuantization: 'q8',
+  kvCacheQuantization: 'none',
   kvCacheGroupSize: 64,
-  enableDiskCache: false,
+  enableDiskCache: true,
   diskCacheMaxGb: 10,
   diskCacheDir: '',
-  enableBlockDiskCache: false,
+  enableBlockDiskCache: true,
   blockDiskCacheMaxGb: 10,
   blockDiskCacheDir: '',
   streamInterval: 1,
@@ -169,7 +169,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     <div className="space-y-0">
       {/* Server Settings */}
       <Section title="Server Settings" expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
-        <Field label="Host" tooltip="The network interface to bind to. Default 0.0.0.0 accepts connections from any machine on your network. Change to 127.0.0.1 (localhost) to restrict to local-only access. If you don't need remote access, consider changing this to 127.0.0.1 for security.">
+        <Field label="Host" tooltip="The network interface to bind to. Default 127.0.0.1 (localhost only). Change to 0.0.0.0 to allow connections from other machines on your network (LAN access). Use an API key when binding to 0.0.0.0.">
           <input type="text" value={config.host} onChange={e => onChange('host', e.target.value)} className="cfg-input" />
         </Field>
         <SliderField
@@ -454,8 +454,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel="Default (1000)"
             />
-            <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} disabled />
-            <p className="text-xs text-warning italic">Block disk cache is temporarily disabled while serialization bugs are resolved. Settings are preserved for when it's re-enabled.</p>
+            <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. For JANG models, TurboQuant 3-bit compressed data is stored natively (26x smaller files)." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} />
             {config.enableBlockDiskCache && (
               <>
                 <SliderField
@@ -529,8 +528,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
-        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} disabled />
-        <p className="text-xs text-warning italic">Legacy disk cache is temporarily disabled while Metal serialization issues are resolved. Settings are preserved for when it's re-enabled.</p>
+        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). For JANG models, TurboQuant 3-bit compressed data is stored natively (26x smaller files). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} />
         {config.enableDiskCache && (
           <>
             <SliderField

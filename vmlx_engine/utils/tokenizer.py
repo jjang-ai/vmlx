@@ -142,7 +142,7 @@ _STANDARD_ARCHITECTURES = {
     # StepFun
     "step3p5", "step", "step1v",
     # Gemma
-    "gemma", "gemma2", "gemma3", "gemma3_text", "paligemma", "paligemma2",
+    "gemma", "gemma2", "gemma3", "gemma3_text", "gemma4", "gemma4_text", "paligemma", "paligemma2",
     # Phi
     "phi3", "phi3v", "phi3small", "phi4", "phi4mm", "phi4flash", "phi4_reasoning", "phi",
     # MiniMax

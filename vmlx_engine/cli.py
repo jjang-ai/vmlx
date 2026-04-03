@@ -95,6 +95,11 @@ def serve_command(args):
             sys.exit(1)
         server._default_top_p = args.default_top_p
 
+    # Apply default enable_thinking
+    _det = getattr(args, 'default_enable_thinking', None)
+    if _det is not None:
+        server._default_enable_thinking = _det == "true"
+
     # Apply custom chat template override
     if getattr(args, 'chat_template', None):
         server._custom_chat_template = args.chat_template
@@ -781,9 +786,9 @@ Examples:
              "If not set, falls back to name-based lookup.",
     )
     serve_parser.add_argument(
-        "--host", type=str, default="0.0.0.0",
-        help="Network interface to bind. '0.0.0.0' = all interfaces (accessible from other machines). "
-             "'127.0.0.1' = localhost only (default: 0.0.0.0)",
+        "--host", type=str, default="127.0.0.1",
+        help="Network interface to bind. '0.0.0.0' = all interfaces (LAN access). "
+             "'127.0.0.1' = localhost only (default: 127.0.0.1)",
     )
     serve_parser.add_argument(
         "--port", type=int, default=8000,
@@ -1132,6 +1137,15 @@ Examples:
              "tokens whose cumulative probability ≤ this value: 0.9 = use top 90%% of probability mass. "
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
+    )
+    serve_parser.add_argument(
+        "--default-enable-thinking",
+        type=str,
+        default=None,
+        choices=["true", "false"],
+        help="Server-wide default for thinking/reasoning mode. 'true' enables thinking, "
+             "'false' disables it. Overridden by per-request 'enable_thinking'. "
+             "If not set, uses model's default behavior.",
     )
     serve_parser.add_argument(
         "--chat-template",

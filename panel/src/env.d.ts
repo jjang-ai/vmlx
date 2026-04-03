@@ -117,8 +117,9 @@ declare global {
         onUpdateAvailable: (callback: (data: { currentVersion: string; latestVersion: string; url: string; notes?: string }) => void) => () => void
       }
       gateway: {
-        getStatus: () => Promise<{ running: boolean; port: number }>
+        getStatus: () => Promise<{ running: boolean; port: number; host?: string }>
         setPort: (port: number) => Promise<void>
+        setHostAndPort: (port: number, host: string) => Promise<void>
       }
       developer: {
         info: (modelPath: string) => Promise<{ success: boolean; output: string; error?: string }>

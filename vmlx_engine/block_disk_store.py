@@ -86,9 +86,13 @@ class BlockDiskStore:
         self.disk_writes = 0
         self.disk_evictions = 0
 
-        # Persistent read connection (main thread only — not shared with writer)
-        self._read_conn = sqlite3.connect(str(self._db_path), timeout=1.0)
-        self._read_conn.execute("PRAGMA journal_mode=WAL")
+        # Per-thread read connections (thread-local storage).
+        # MLLM batch generator runs fetch_cache on a worker thread — SQLite
+        # connections created on one thread can't be used from another.
+        # Using threading.local() gives each thread its own connection.
+        self._thread_local = threading.local()
+        # Initialize for the current (main) thread
+        self._ensure_read_conn()
 
         # Background writer thread
         # Queue items: (block_hash, tmp_path_str, dtype_str, num_layers, token_count)
@@ -136,6 +140,20 @@ class BlockDiskStore:
             conn.commit()
         finally:
             conn.close()
+
+    def _ensure_read_conn(self) -> sqlite3.Connection:
+        """Get or create a read connection for the current thread."""
+        conn = getattr(self._thread_local, 'read_conn', None)
+        if conn is None:
+            conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            self._thread_local.read_conn = conn
+        return conn
+
+    @property
+    def _read_conn(self) -> sqlite3.Connection:
+        """Thread-safe read connection accessor."""
+        return self._ensure_read_conn()
 
     def _cleanup_orphaned_tmp(self) -> None:
         """Remove orphaned .tmp files left from crashed writes."""
@@ -197,7 +215,7 @@ class BlockDiskStore:
             ).fetchone()
         except sqlite3.OperationalError:
             # Connection might be stale after writer vacuum — reconnect
-            self._read_conn = sqlite3.connect(str(self._db_path), timeout=1.0)
+            self._thread_local.read_conn = sqlite3.connect(str(self._db_path), timeout=1.0)
             row = self._read_conn.execute(
                 "SELECT file_name, dtype FROM blocks WHERE block_hash = ?",
                 (hash_hex,)
@@ -593,9 +611,12 @@ class BlockDiskStore:
                         pass
             finally:
                 flush_conn.close()
-        # Close persistent read connection
+        # Close thread-local read connection (current thread only)
         try:
-            self._read_conn.close()
+            conn = getattr(self._thread_local, 'read_conn', None)
+            if conn is not None:
+                conn.close()
+                self._thread_local.read_conn = None
         except Exception:
             pass
 

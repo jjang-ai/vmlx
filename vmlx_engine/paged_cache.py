@@ -936,6 +936,36 @@ class PagedCacheManager:
             with self._lock:
                 self.stats.cache_hits += 1
 
+        # Also check partial (trailing) block after all full blocks matched.
+        # Without this, short prompts (< block_size) never get disk hits.
+        remaining_tokens = token_ids[num_cached_tokens:]
+        if remaining_tokens and len(remaining_tokens) < self.block_size:
+            block_hash = compute_block_hash(parent_hash, remaining_tokens)
+
+            with self._lock:
+                cached_block = self.cached_block_hash_to_block.get_block(block_hash)
+                if cached_block is not None:
+                    cached_block.touch()
+
+            if cached_block is None and self._disk_store is not None:
+                disk_data = self._disk_store.read_block(block_hash)
+                if disk_data is not None:
+                    with self._lock:
+                        cached_block = self.cached_block_hash_to_block.get_block(block_hash)
+                        if cached_block is None:
+                            promoted = self._promote_from_disk(
+                                block_hash, disk_data, len(remaining_tokens)
+                            )
+                            if promoted is not None:
+                                cached_block = promoted
+                                self.stats.disk_hits += 1
+
+            if cached_block is not None:
+                cached_blocks.append(cached_block)
+                num_cached_tokens += cached_block.token_count
+                with self._lock:
+                    self.stats.cache_hits += 1
+
         return cached_blocks, num_cached_tokens
 
     # =========================================================================

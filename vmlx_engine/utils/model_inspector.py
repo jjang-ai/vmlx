@@ -542,6 +542,27 @@ def resolve_model_path(model_name: str) -> str:
     except Exception:
         pass
 
+    # Looks like a HuggingFace repo ID (org/model format) — try downloading.
+    # Must not start with / . or ~ (filesystem paths), and have exactly one /
+    _looks_like_hf = (
+        '/' in model_name
+        and not model_name.startswith(('/', '.', '~'))
+        and model_name.count('/') == 1
+    )
+    if _looks_like_hf:
+        try:
+            from huggingface_hub import snapshot_download
+            logger.info(f"Downloading model from HuggingFace: {model_name}")
+            downloaded_path = snapshot_download(
+                model_name,
+                allow_patterns=["*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken"],
+            )
+            if Path(downloaded_path).is_dir():
+                logger.info(f"Downloaded to: {downloaded_path}")
+                return str(Path(downloaded_path).resolve())
+        except Exception as e:
+            logger.warning(f"HuggingFace download failed for {model_name}: {e}")
+
     raise FileNotFoundError(
         f"Model not found locally: {model_name}\n"
         f"Download it first:\n"

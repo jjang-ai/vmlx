@@ -389,6 +389,30 @@ def register_all(registry=None):
     # ── Gemma family ──
 
     _register(ModelConfig(
+        family_name="gemma4",
+        model_types=["gemma4"],
+        cache_type="kv",
+        tool_parser="gemma4",
+        reasoning_parser="gemma4",
+        eos_tokens=["<eos>", "<turn|>"],
+        special_tokens_to_clean=["<turn|>", "<|turn>", "<|channel>", "<channel|>"],
+        is_mllm=True,
+        architecture_hints={"inject_pixel_values": True},
+        priority=5,
+    ))
+
+    _register(ModelConfig(
+        family_name="gemma4_text",
+        model_types=["gemma4_text"],
+        cache_type="kv",
+        tool_parser="gemma4",
+        reasoning_parser="gemma4",
+        eos_tokens=["<eos>", "<turn|>"],
+        special_tokens_to_clean=["<turn|>", "<|turn>", "<|channel>", "<channel|>"],
+        priority=4,
+    ))
+
+    _register(ModelConfig(
         family_name="gemma3",
         model_types=["gemma3"],
         cache_type="kv",

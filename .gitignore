@@ -9,6 +9,13 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# But keep Electron build assets (DMG background, entitlements)
+!panel/build/
+panel/build/*
+!panel/build/dmg-background.png
+!panel/build/dmg-background@2x.png
+!panel/build/dmg-background.svg
+!panel/build/entitlements.mac.plist
 develop-eggs/
 dist/
 downloads/
