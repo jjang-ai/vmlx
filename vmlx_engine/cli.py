@@ -1068,6 +1068,7 @@ Examples:
             "functionary",
             "glm47",
             "step3p5",
+            "gemma4",
             # Aliases (map to same parsers)
             "generic",
             "qwen3",
