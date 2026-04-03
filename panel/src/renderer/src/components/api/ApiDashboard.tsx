@@ -46,16 +46,22 @@ export function ApiDashboard() {
 
   const [gwPort, setGwPort] = useState('8080')
   const [portInput, setPortInput] = useState('8080')
+  const [gwHost, setGwHost] = useState('127.0.0.1')
+  const [lanEnabled, setLanEnabled] = useState(false)
   const [portError, setPortError] = useState<string | null>(null)
   const [format, setFormat] = useState<ApiFormat>('openai')
   const portRef = useRef<HTMLInputElement>(null)
 
-  // Load gateway port on mount
+  // Load gateway port and host on mount
   useEffect(() => {
     window.api.gateway?.getStatus?.().then((status: any) => {
       if (status?.port) {
         setGwPort(String(status.port))
         setPortInput(String(status.port))
+      }
+      if (status?.host) {
+        setGwHost(status.host)
+        setLanEnabled(status.host === '0.0.0.0')
       }
     }).catch(() => {})
   }, [])
@@ -74,10 +80,25 @@ export function ApiDashboard() {
     }
     setPortError(null)
     try {
-      await window.api.gateway?.setPort?.(port)
+      const host = lanEnabled ? '0.0.0.0' : '127.0.0.1'
+      await window.api.gateway?.setHostAndPort?.(port, host)
       setGwPort(String(port))
+      setGwHost(host)
     } catch (err: any) {
       setPortError(err?.message || 'Failed to change port')
+    }
+  }
+
+  const handleLanToggle = async () => {
+    const newLan = !lanEnabled
+    const host = newLan ? '0.0.0.0' : '127.0.0.1'
+    setLanEnabled(newLan)
+    try {
+      await window.api.gateway?.setHostAndPort?.(parseInt(gwPort, 10), host)
+      setGwHost(host)
+    } catch (err: any) {
+      setPortError(err?.message || 'Failed to change host')
+      setLanEnabled(!newLan)
     }
   }
 
@@ -131,6 +152,20 @@ export function ApiDashboard() {
                 className="w-24 px-2 py-1 bg-background rounded border border-border font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
               />
               {portError && <span className="text-[10px] text-red-400">{portError}</span>}
+            </div>
+
+            {/* LAN access toggle */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground w-20 flex-shrink-0">LAN</span>
+              <button
+                onClick={handleLanToggle}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${lanEnabled ? 'bg-primary' : 'bg-muted'}`}
+              >
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${lanEnabled ? 'translate-x-4.5' : 'translate-x-0.5'}`} />
+              </button>
+              <span className="text-muted-foreground text-[10px]">
+                {lanEnabled ? 'Accessible from network (0.0.0.0)' : 'Localhost only (127.0.0.1)'}
+              </span>
             </div>
 
             {/* OpenAI base URL */}

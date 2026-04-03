@@ -273,6 +273,7 @@ const api = {
   gateway: {
     getStatus: () => ipcRenderer.invoke('gateway:status'),
     setPort: (port: number) => ipcRenderer.invoke('gateway:restart', port),
+    setHostAndPort: (port: number, host: string) => ipcRenderer.invoke('gateway:restart', port, host),
   },
 
   // App-level settings (API keys, preferences)

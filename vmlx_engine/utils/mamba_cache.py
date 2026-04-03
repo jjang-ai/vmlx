@@ -243,6 +243,17 @@ def patch_mlx_lm_for_mamba():
         OrigMambaCache = ArraysCache  # Fallback
     from mlx_lm.generate import BatchKVCache, BatchRotatingKVCache
 
+    # Patch ArraysCache.make_mask to accept **kwargs.
+    # mlx-lm's base.py calls make_mask(N, return_array=..., window_size=...)
+    # on ALL cache layers, but ArraysCache.make_mask only takes (self, N).
+    # Without this patch, hybrid SSM models crash on every request.
+    _orig_ac_make_mask = ArraysCache.make_mask
+    if 'kwargs' not in _orig_ac_make_mask.__code__.co_varnames:
+        def _ac_make_mask_compat(self, N: int, **kwargs):
+            return _orig_ac_make_mask(self, N)
+        ArraysCache.make_mask = _ac_make_mask_compat
+        logger.debug("Patched ArraysCache.make_mask to accept **kwargs")
+
     # Store original function
     _original_make_cache = gen_module._make_cache
 
@@ -317,7 +328,24 @@ def patch_mlx_lm_for_mamba():
                 dequantized = [_dequantize_layer(c[i]) for c in caches]
                 cache = BatchKVCache.merge(dequantized)
             elif _is_kv_like(layer_cache):
-                cache = BatchKVCache.merge([c[i] for c in caches])
+                # TurboQuantKVCache after compress() has keys=None —
+                # BatchKVCache.merge needs actual tensors. Convert TQ
+                # layers to KVCache via .state (decoded float16 buffers).
+                to_merge = []
+                for c in caches:
+                    layer = c[i]
+                    if (hasattr(layer, 'keys') and layer.keys is None
+                            and getattr(layer, '_joined_k', None) is not None):
+                        # TQ compressed — extract decoded state as KVCache
+                        kv = KVCache()
+                        state = layer.state
+                        if isinstance(state, tuple) and len(state) == 2:
+                            kv.keys, kv.values = state
+                            kv.offset = layer.offset
+                        to_merge.append(kv)
+                    else:
+                        to_merge.append(layer)
+                cache = BatchKVCache.merge(to_merge)
             elif isinstance(layer_cache, RotatingKVCache):
                 cache = BatchRotatingKVCache.merge([c[i] for c in caches])
             elif isinstance(layer_cache, (OrigMambaCache, BatchMambaCache)):

@@ -409,12 +409,39 @@ class HybridSSMStateCache:
     def fetch(
         self, token_ids: List[int], num_tokens: int
     ) -> Optional[List[Any]]:
-        """Fetch SSM states for a matching prompt prefix."""
+        """Fetch SSM states for a matching prompt prefix.
+
+        Returns deep copies of the stored SSM states because the model's
+        forward pass mutates SSM cache objects in-place (cumulative state).
+        Without copying, the stored state would be corrupted after first use,
+        making subsequent cache hits produce wrong output.
+        """
         key = self._key(token_ids, num_tokens)
         states = self._store.get(key)
         if states is not None:
             # Move to end (most recently used)
             self._store.move_to_end(key)
+            # Deep-copy to prevent in-place mutation by the model's forward pass.
+            # SSM state is cumulative — generation updates it token by token.
+            from copy import deepcopy
+            copied = []
+            for s in states:
+                try:
+                    c = deepcopy(s)
+                    # Ensure MLX arrays in .cache are independent buffers.
+                    # Must eval per-layer to materialize copies before next
+                    # deepcopy — bulk eval at end produces garbled output
+                    # (lazy graph interference between layers).
+                    if hasattr(c, 'cache') and isinstance(c.cache, list):
+                        c.cache = [
+                            (mx.array(a) * 1 if a is not None else None)
+                            for a in c.cache
+                        ]
+                        mx.eval(*[x for x in c.cache if x is not None])
+                    copied.append(c)
+                except Exception:
+                    copied.append(s)  # Fallback to shared ref
+            return copied
         return states
 
     def clear(self) -> None:
@@ -1595,10 +1622,7 @@ class MLLMBatchGenerator:
                                         if layer_idx not in kv_set and ssm_idx < len(ssm_states):
                                             full_cache[layer_idx] = ssm_states[ssm_idx]
                                             ssm_idx += 1
-                                    # Re-compress KV layers to TurboQuant AFTER full assembly.
-                                    # Must be after _fix_hybrid_cache so indices match template.
-                                    full_cache = _recompress_to_tq(full_cache, self.language_model)
-
+                                    # TQ recompress safe: blocks now store original float16
                                     req.prompt_cache = full_cache
                                     req._cached_tokens = block_table.num_tokens
                                     if remaining:
@@ -1621,10 +1645,7 @@ class MLLMBatchGenerator:
                                             f"{block_table.num_tokens} cached (KV+SSM)"
                                         )
                                 elif not is_hybrid and reconstructed is not None:
-                                    # Pure attention VLM: can safely skip cached prefix tokens.
-                                    # Trim input_ids to only remaining (uncached) tokens.
-                                    # Re-compress to TQ (indices match template 1:1 for non-hybrid).
-                                    reconstructed = _recompress_to_tq(reconstructed, self.language_model)
+                                    # Pure attention VLM: TQ recompress safe (original float16)
                                     req.prompt_cache = reconstructed
                                     req._cached_tokens = block_table.num_tokens
                                     if remaining:
@@ -1700,7 +1721,6 @@ class MLLMBatchGenerator:
                                         f"(hybrid model — full prefill required)"
                                     )
                                 else:
-                                    cache = _recompress_to_tq(cache, self.language_model)
                                     req.prompt_cache = cache
                                     num_cached = len(token_list) - len(remaining)
                                     if remaining:
@@ -1773,7 +1793,6 @@ class MLLMBatchGenerator:
                                     if disk_result is None:
                                         pass  # Dequantize failed, full prefill
                                     else:
-                                        disk_result = _recompress_to_tq(disk_result, self.language_model)
                                         req.prompt_cache = disk_result
                                         req._cached_tokens = len(token_list)
                                         # Disk cache is exact-match (hash-based), all tokens cached.
@@ -1782,9 +1801,17 @@ class MLLMBatchGenerator:
                                         req.pixel_values = None
                                         req.attention_mask = None
                                         req.image_grid_thw = None
+                                        # Annotate cache_detail: "disk+tq" for TQ-native files,
+                                        # "disk" for standard float16 format.
+                                        _tq_disk = (
+                                            hasattr(self.disk_cache, '_last_fetch_tq_native')
+                                            and self.disk_cache._last_fetch_tq_native
+                                        )
+                                        req._cache_detail = "disk+tq" if _tq_disk else "disk"
                                         logger.info(
                                             f"VLM disk cache (L2) HIT for {req.request_id}: "
                                             f"{len(token_list)} cached tokens"
+                                            f"{' (TQ-native)' if _tq_disk else ''}"
                                         )
                     except Exception as e:
                         logger.debug(f"VLM disk cache fetch failed for {req.request_id}: {e}")
@@ -1821,8 +1848,7 @@ class MLLMBatchGenerator:
                         kv_positions=self._hybrid_kv_positions,
                         num_model_layers=self._hybrid_num_layers,
                     )
-                    # Re-compress AFTER _fix_hybrid_cache so indices match template
-                    req_cache = _recompress_to_tq(req_cache, self.language_model)
+                    pass  # TQ recompress removed from fetch paths
                 else:
                     try:
                         if hasattr(self.language_model, 'make_cache'):
@@ -2308,18 +2334,10 @@ class MLLMBatchGenerator:
                 keep_idx.append(i)
 
             if finish_reason is not None:
-                # Extract cache NOW before batch.filter() invalidates indices
+                # Extract cache NOW before batch.filter() invalidates indices.
+                # Do NOT TQ-compress here — the scheduler needs original float16
+                # for block extraction. TQ recompress happens on the fetch path.
                 captured_cache = batch.extract_cache(i)
-                # TurboQuant: compress TQ layers for storage-efficient caching (5x savings)
-                try:
-                    from jang_tools.turboquant.generate import compress_cache as _tq_compress
-                    _tq_count = _tq_compress(captured_cache)
-                    if _tq_count > 0:
-                        logger.info(f"TurboQuant compressed {_tq_count} layers for {request_id}")
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.warning(f"TurboQuant compress failed: {e}")
                 cache_fn = lambda c=captured_cache: c
 
             responses.append(

@@ -2,17 +2,22 @@
 """
 Disk-based prompt cache persistence for vmlx-engine.
 
-Saves and loads pre-computed KV/Mamba caches to disk using mlx-lm's
-safetensors-based save_prompt_cache/load_prompt_cache. A SQLite index
-maps token hash → cache file for fast lookup.
+L2 cache tier: when the in-memory L1 prefix/paged cache misses, the
+scheduler checks this disk cache before doing a full prefill.
 
-This acts as an L2 cache: the in-memory prefix cache is L1 (fast, limited),
-and the disk cache is L2 (slower I/O, much larger capacity). On cache miss
-in L1, the scheduler checks L2 before doing a full prefill.
+Two storage formats:
+- **TQ-native** (for JANG/TurboQuant models): tq_disk_store.serialize_tq_cache()
+  extracts 3-bit compressed data directly — 26x smaller files. Written via
+  mx.save_safetensors on the main thread. Detected by __tq_native__ metadata.
+- **Standard** (for non-TQ models): safetensors.numpy.save_file with
+  pre-serialized numpy arrays from .state property.
 
 Architecture:
-- Background writer thread: store() enqueues writes so they don't block inference
-- SQLite connection pool: reuses connections instead of opening per-operation
+- Background writer thread: store() pre-serializes on main thread (Metal-safe),
+  enqueues atomic rename + SQLite update for background
+- SQLite connection pool: WAL mode, reuses connections
+- TQ-native deserialization requires TurboQuantEncoder for codebook decode —
+  creates temporary TQ cache to access .key_encoder/.value_encoder
 - Graceful shutdown: flushes pending writes before exit
 """
 
@@ -89,11 +94,19 @@ class DiskCacheManager:
 
     Stores prompt caches as .safetensors files indexed by a SQLite database.
     Compatible with all mlx-lm cache types (KVCache, QuantizedKVCache,
-    RotatingKVCache, ArraysCache/MambaCache, CacheList).
+    RotatingKVCache, ArraysCache/MambaCache, CacheList, TurboQuantKVCache).
+
+    TQ-native storage:
+    When TurboQuantKVCache layers are detected with compressed data, the store
+    uses TQ-native serialization (tq_disk_store.py) which saves the 3-bit packed
+    compressed form directly — 26x smaller than the decompressed float16 state.
+    On fetch, compressed data is decoded and wrapped in KVCache objects, then
+    the caller's _recompress_to_tq() converts back to TurboQuantKVCache.
 
     Features:
     - Background writer thread: store() is non-blocking
     - SQLite connection pool: avoids per-operation connection overhead
+    - TQ-native compression: 26x disk savings for JANG models
     - Graceful shutdown: flushes pending writes
 
     Args:
@@ -119,6 +132,12 @@ class DiskCacheManager:
         self.hits = 0
         self.misses = 0
         self.stores = 0
+        # TQ-native stats: track how many stores/hits used TQ compressed format
+        self.tq_native_stores = 0
+        self.tq_native_hits = 0
+        # Flag set by fetch() to indicate last fetch was TQ-native.
+        # Checked by scheduler to annotate cache_detail as "disk+tq".
+        self._last_fetch_tq_native = False
 
         # Background writer thread
         self._write_queue: queue.Queue = queue.Queue(maxsize=1000)
@@ -229,42 +248,76 @@ class DiskCacheManager:
                 return None
 
             try:
-                from mlx_lm.models.cache import load_prompt_cache, KVCache as _KVC
-                from mlx_lm.utils import tree_unflatten
-                try:
-                    cache = load_prompt_cache(str(file_path))
-                except (KeyError, AttributeError):
-                    # TurboQuantKVCache not in mlx-lm globals — reconstruct as KVCache
-                    arrays, cache_metadata = mx.load(str(file_path), return_metadata=True)
-                    arrays = tree_unflatten(list(arrays.items()))
-                    cache_metadata = tree_unflatten(list(cache_metadata.items()))
-                    info, metadata, classes = cache_metadata
-                    cache = []
-                    for c, state, meta_state in zip(classes, arrays, info):
-                        if c == 'TurboQuantKVCache':
-                            # Reconstruct as KVCache — TQ stores float state via .state
-                            kv = _KVC()
-                            if isinstance(state, (tuple, list)) and len(state) == 2:
-                                kv.keys, kv.values = state[0], state[1]
-                                # TQ meta_state = (offset_str, key_bits_str, value_bits_str)
-                                kv.offset = int(meta_state[0]) if meta_state else 0
-                            cache.append(kv)
-                        else:
-                            # Try normal class lookup for ArraysCache etc
-                            import mlx_lm.models.cache as _cache_mod
-                            cls = getattr(_cache_mod, c, _KVC)
-                            try:
-                                cache.append(cls.from_state(state, meta_state))
-                            except Exception:
-                                # Fallback: create empty cache for unknown types
-                                kv = _KVC()
-                                cache.append(kv)
-                    logger.info(f"Disk cache loaded with TQ→KVCache remap: {len(cache)} layers")
+                # ─── Step 1: Load raw safetensors + metadata header ───
+                # Always load raw first so we can check for TQ-native format
+                # before falling back to mlx-lm's load_prompt_cache().
+                raw_arrays, file_metadata = mx.load(
+                    str(file_path), return_metadata=True
+                )
 
-                # Update access time and count
+                # ─── Step 2: Check for TQ-native format ───
+                # TQ-native files have "__tq_native__" = "true" in metadata.
+                # These store 3-bit compressed TQ data directly (26x smaller).
+                is_tq_native = (
+                    isinstance(file_metadata, dict)
+                    and file_metadata.get("__tq_native__") == "true"
+                )
+
+                if is_tq_native:
+                    # TQ-native: decode compressed data → KVCache objects.
+                    # The caller's _recompress_to_tq() will convert back to
+                    # TurboQuantKVCache using the model's make_cache() template.
+                    from .tq_disk_store import deserialize_tq_cache
+                    cache = deserialize_tq_cache(raw_arrays, file_metadata)
+                    is_tq_hit = True
+                    self._last_fetch_tq_native = True
+                    logger.info(
+                        f"TQ-native disk cache loaded: {len(cache)} layers "
+                        f"from {file_name}"
+                    )
+                else:
+                    # ─── Step 3: Standard format (mlx-lm or legacy TQ remap) ───
+                    is_tq_hit = False
+                    self._last_fetch_tq_native = False
+                    try:
+                        from mlx_lm.models.cache import load_prompt_cache
+                        cache = load_prompt_cache(str(file_path))
+                    except (KeyError, AttributeError):
+                        # TurboQuantKVCache not in mlx-lm globals — remap to KVCache.
+                        # This handles old-format disk caches written before TQ-native.
+                        from mlx_lm.models.cache import KVCache as _KVC
+                        from mlx_lm.utils import tree_unflatten
+                        arrays = tree_unflatten(list(raw_arrays.items()))
+                        cache_metadata_unflat = tree_unflatten(
+                            list(file_metadata.items())
+                        )
+                        info, _meta, classes = cache_metadata_unflat
+                        cache = []
+                        for c, state, meta_state in zip(classes, arrays, info):
+                            if c == 'TurboQuantKVCache':
+                                kv = _KVC()
+                                if isinstance(state, (tuple, list)) and len(state) == 2:
+                                    kv.keys, kv.values = state[0], state[1]
+                                    kv.offset = int(meta_state[0]) if meta_state else 0
+                                cache.append(kv)
+                            else:
+                                import mlx_lm.models.cache as _cache_mod
+                                cls = getattr(_cache_mod, c, _KVC)
+                                try:
+                                    cache.append(cls.from_state(state, meta_state))
+                                except Exception:
+                                    kv = _KVC()
+                                    cache.append(kv)
+                        logger.info(
+                            f"Disk cache loaded with TQ→KVCache remap: "
+                            f"{len(cache)} layers"
+                        )
+
+                # ─── Step 4: Update access metadata + stats ───
                 now = time.time()
                 conn.execute(
-                    "UPDATE cache_entries SET last_accessed = ?, access_count = access_count + 1 "
+                    "UPDATE cache_entries SET last_accessed = ?, "
+                    "access_count = access_count + 1 "
                     "WHERE token_hash = ?",
                     (now, token_hash)
                 )
@@ -272,11 +325,20 @@ class DiskCacheManager:
 
                 with self._stats_lock:
                     self.hits += 1
+                    if is_tq_hit:
+                        self.tq_native_hits += 1
+
                 try:
                     size_mb = file_path.stat().st_size / 1024 / 1024
-                    logger.info(f"Disk cache hit: {len(tokens)} tokens, file={file_name} ({size_mb:.1f}MB)")
+                    fmt = "TQ-native" if is_tq_hit else "standard"
+                    logger.info(
+                        f"Disk cache hit ({fmt}): {len(tokens)} tokens, "
+                        f"file={file_name} ({size_mb:.1f}MB)"
+                    )
                 except OSError:
-                    logger.info(f"Disk cache hit: {len(tokens)} tokens, file={file_name}")
+                    logger.info(
+                        f"Disk cache hit: {len(tokens)} tokens, file={file_name}"
+                    )
                 return cache
 
             except Exception as e:
@@ -285,7 +347,10 @@ class DiskCacheManager:
                 logger.warning(f"Failed to load disk cache {file_path}: {e}")
                 # Remove corrupt entry
                 try:
-                    conn.execute("DELETE FROM cache_entries WHERE token_hash = ?", (token_hash,))
+                    conn.execute(
+                        "DELETE FROM cache_entries WHERE token_hash = ?",
+                        (token_hash,)
+                    )
                     conn.commit()
                     if file_path.exists():
                         file_path.unlink()
@@ -307,6 +372,12 @@ class DiskCacheManager:
         calling thread to prevent concurrent GPU access from the background
         writer. The background thread only does file I/O — no MLX ops.
         This mirrors the pattern in BlockDiskStore.write_block_async().
+
+        TQ-native path:
+        When TurboQuantKVCache layers have compressed data (_compressed_keys
+        and _compressed_values set after compress()), serialization extracts
+        the packed 3-bit data directly instead of calling .state (which
+        decompresses to float16). This gives 26x smaller disk files.
 
         Args:
             tokens: The prompt token IDs this cache corresponds to.
@@ -331,6 +402,24 @@ class DiskCacheManager:
         if existing:
             return True  # Already cached
 
+        if not _HAS_MLX:
+            return False
+
+        # ─── Check for TQ-native serialization ───
+        # TurboQuantKVCache layers with compressed data can be stored at 26x
+        # compression vs float16. We check BEFORE the .state/.meta_state
+        # verification because TQ layers might not need the standard protocol
+        # for our native serialization.
+        try:
+            from .tq_disk_store import is_tq_compressed_cache, serialize_tq_cache
+            use_tq_native = is_tq_compressed_cache(cache)
+        except ImportError:
+            use_tq_native = False
+
+        if use_tq_native:
+            return self._store_tq_native(token_hash, tokens, cache, metadata)
+
+        # ─── Standard serialization (non-TQ or TQ without compressed data) ───
         # Verify cache objects have the required .state/.meta_state protocol
         for i, c in enumerate(cache):
             if not hasattr(c, 'state') or not hasattr(c, 'meta_state'):
@@ -340,14 +429,13 @@ class DiskCacheManager:
                 )
                 return False
 
-        if not _HAS_MLX:
-            return False
-
         # Pre-serialize on the calling (main) thread to prevent MLX GPU ops
         # on the background writer thread, which causes Metal assertion failures
         # from concurrent command buffer access (SIGSEGV / failed assertion).
         try:
-            # Extract tensor data + metadata the same way save_prompt_cache does
+            # Extract tensor data + metadata the same way save_prompt_cache does.
+            # NOTE: For TQ layers, .state decompresses to float16 — this is the
+            # legacy path. TQ-native path above avoids this 5.3x blowup.
             cache_data = [c.state for c in cache]
             cache_info = [c.meta_state for c in cache]
             cache_data_flat = dict(tree_flatten(cache_data))
@@ -392,12 +480,88 @@ class DiskCacheManager:
             logger.warning("Disk cache write queue full, dropping store request")
             return False
 
+    def _store_tq_native(
+        self,
+        token_hash: str,
+        tokens: List[int],
+        cache: List[Any],
+        metadata: Optional[Dict[str, str]],
+    ) -> bool:
+        """Store cache using TQ-native serialization (26x smaller files).
+
+        Extracts TurboQuantKVCache compressed data (_compressed_keys/values)
+        directly instead of calling .state which decompresses to float16.
+
+        All MLX operations (serialize + mx.save_safetensors) happen on the
+        calling (main) thread to prevent Metal command buffer crashes.
+        The background writer only does atomic rename + SQLite update.
+
+        Args:
+            token_hash: Pre-computed SHA-256 hash of token sequence.
+            tokens: The prompt token IDs.
+            cache: Cache layer objects (some/all may be TurboQuantKVCache).
+            metadata: Optional string metadata.
+
+        Returns:
+            True if enqueued, False on failure.
+        """
+        try:
+            from .tq_disk_store import serialize_tq_cache
+
+            # ─── Serialize compressed TQ data on the main thread ───
+            tq_tensors, tq_metadata = serialize_tq_cache(cache)
+
+            # Add standard fields to metadata
+            tq_metadata["num_tokens"] = str(len(tokens))
+            tq_metadata["created_at"] = str(time.time())
+            if metadata:
+                tq_metadata.update(metadata)
+
+            # Materialize all lazy MLX arrays before saving.
+            # This ensures no Metal ops happen during the background thread's
+            # atomic rename (the safetensors write is done here on the main thread).
+            arrays_to_eval = [v for v in tq_tensors.values() if isinstance(v, mx.array)]
+            if arrays_to_eval:
+                mx.eval(*arrays_to_eval)
+
+            # Write safetensors file on the main thread.
+            # mx.save_safetensors accesses Metal buffer memory internally,
+            # so it MUST run on the same thread as inference.
+            file_name = f"cache_{token_hash[:16]}_{len(tokens)}tok_tq.safetensors"
+            tmp_path = self.cache_dir / f"cache_{token_hash[:16]}_{len(tokens)}tok_tq.tmp.safetensors"
+            mx.save_safetensors(str(tmp_path), tq_tensors, tq_metadata)
+
+        except Exception as e:
+            logger.warning(f"TQ-native pre-serialize failed: {e}")
+            return False
+
+        # ─── Enqueue atomic rename + DB update for background thread ───
+        # Queue item format: ("__tq_native__", token_hash, tokens, tmp_path, file_name)
+        try:
+            self._write_queue.put_nowait(
+                ("__tq_native__", token_hash, tokens, str(tmp_path), file_name)
+            )
+            return True
+        except queue.Full:
+            # Clean up temp file since background won't process it
+            try:
+                Path(str(tmp_path)).unlink(missing_ok=True)
+            except Exception:
+                pass
+            logger.warning("Disk cache write queue full, dropping TQ-native store")
+            return False
+
     def _background_writer(self) -> None:
         """Background thread: drain write queue and persist caches.
 
-        All tensor data arrives as pre-evaluated MLX arrays (mx.eval called
-        on the main thread). mx.save_safetensors reads the raw bytes without
-        triggering new Metal computation, preserving bfloat16 and all dtypes.
+        Handles two queue item formats:
+        1. Standard: (token_hash, tokens, cache_data_flat, cache_metadata_flat)
+           — Background thread writes safetensors from pre-serialized numpy arrays.
+        2. TQ-native: ("__tq_native__", token_hash, tokens, tmp_path, file_name)
+           — File already written on main thread. Background does atomic rename + DB.
+
+        All tensor data arrives pre-evaluated (mx.eval or numpy conversion on main).
+        No MLX/Metal operations happen on this thread.
         """
         while not self._stop_event.is_set():
             try:
@@ -406,8 +570,19 @@ class DiskCacheManager:
                 continue
 
             try:
-                token_hash, tokens, cache_data_flat, cache_metadata_flat = item
-                self._write_cache(token_hash, tokens, cache_data_flat, cache_metadata_flat)
+                # ─── Dispatch based on queue item format ───
+                if isinstance(item[0], str) and item[0] == "__tq_native__":
+                    # TQ-native: file already written, just rename + DB update
+                    _, token_hash, tokens, tmp_path_str, file_name = item
+                    self._finalize_tq_native(
+                        token_hash, tokens, tmp_path_str, file_name
+                    )
+                else:
+                    # Standard: write from pre-serialized numpy arrays
+                    token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                    self._write_cache(
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat
+                    )
             except OSError as e:
                 if e.errno == errno.ENOSPC:
                     logger.warning(
@@ -501,6 +676,98 @@ class DiskCacheManager:
                 except Exception:
                     pass
 
+    def _finalize_tq_native(
+        self,
+        token_hash: str,
+        tokens: List[int],
+        tmp_path_str: str,
+        file_name: str,
+    ) -> None:
+        """Finalize a TQ-native cache write (called from background thread).
+
+        The safetensors file was already written by the main thread using
+        mx.save_safetensors with TQ compressed tensors. This method ONLY does:
+        1. Atomic rename: .tmp.safetensors → .safetensors
+        2. SQLite index update
+
+        No MLX operations — prevents Metal command buffer crashes.
+
+        Args:
+            token_hash: SHA-256 hash of the token sequence.
+            tokens: The prompt token IDs (for DB num_tokens field).
+            tmp_path_str: Path to the pre-written temp safetensors file.
+            file_name: Final file name for the cache entry.
+        """
+        tmp_path = Path(tmp_path_str)
+
+        # Double-check not already cached (race with concurrent stores)
+        conn = self._pool.get()
+        try:
+            existing = conn.execute(
+                "SELECT 1 FROM cache_entries WHERE token_hash = ?",
+                (token_hash,)
+            ).fetchone()
+            if existing:
+                # Already cached — clean up temp file
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return
+        finally:
+            self._pool.put(conn)
+
+        try:
+            file_path = self.cache_dir / file_name
+
+            # Atomic rename: readers never see a partially-written file.
+            # os.rename is atomic on macOS (same filesystem).
+            os.rename(str(tmp_path), str(file_path))
+
+            file_size = file_path.stat().st_size
+            now = time.time()
+
+            # Insert into SQLite index
+            db_meta = json.dumps({
+                "num_tokens": str(len(tokens)),
+                "created_at": str(now),
+                "tq_native": "true",
+            })
+            conn = self._pool.get()
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO cache_entries "
+                    "(token_hash, file_name, num_tokens, file_size, "
+                    "created_at, last_accessed, access_count, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    (token_hash, file_name, len(tokens), file_size, now, now, db_meta)
+                )
+                conn.commit()
+            finally:
+                self._pool.put(conn)
+
+            with self._stats_lock:
+                self.stores += 1
+                self.tq_native_stores += 1
+
+            logger.info(
+                f"TQ-native disk cache stored: {len(tokens)} tokens, "
+                f"{file_size / 1024:.1f}KB → {file_name} "
+                f"(~26x smaller than float16)"
+            )
+
+            # Evict if over size limit
+            self._evict_if_needed()
+
+        except Exception as e:
+            logger.warning(f"Failed to finalize TQ-native cache: {e}")
+            # Clean up temp file and any partial final file
+            for p in (tmp_path, self.cache_dir / file_name):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
     def _evict_if_needed(self) -> None:
         """Evict oldest entries if total size exceeds the limit."""
         if not self.max_size_bytes:
@@ -560,6 +827,8 @@ class DiskCacheManager:
             self.hits = 0
             self.misses = 0
             self.stores = 0
+            self.tq_native_stores = 0
+            self.tq_native_hits = 0
         logger.info("Disk cache cleared")
 
     def shutdown(self) -> None:
@@ -569,12 +838,21 @@ class DiskCacheManager:
         if self._writer_thread.is_alive():
             logger.warning("Disk cache writer thread did not stop in time")
 
-        # Flush remaining items from write queue
+        # Flush remaining items from write queue.
+        # Handles both standard and TQ-native queue formats.
         while not self._write_queue.empty():
             try:
                 item = self._write_queue.get_nowait()
-                token_hash, tokens, cache_data_flat, cache_metadata_flat = item
-                self._write_cache(token_hash, tokens, cache_data_flat, cache_metadata_flat)
+                if isinstance(item[0], str) and item[0] == "__tq_native__":
+                    _, token_hash, tokens, tmp_path_str, file_name = item
+                    self._finalize_tq_native(
+                        token_hash, tokens, tmp_path_str, file_name
+                    )
+                else:
+                    token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                    self._write_cache(
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat
+                    )
             except queue.Empty:
                 break
             except Exception as e:
@@ -585,17 +863,31 @@ class DiskCacheManager:
         logger.info("Disk cache shut down")
 
     def stats(self) -> Dict[str, Any]:
-        """Return cache statistics."""
+        """Return cache statistics.
+
+        Includes TQ-native stats when TurboQuant compressed caches have been
+        stored or fetched. The tq_native_stores/hits counters track how many
+        operations used the 26x-compressed TQ format vs standard float16.
+        """
         total_size = self._total_size()
         count = self._count_entries()
         with self._stats_lock:
-            return {
+            result = {
                 "entries": count,
-                "total_size_mb": total_size / 1024 / 1024,
-                "max_size_gb": self.max_size_bytes / 1024 / 1024 / 1024 if self.max_size_bytes else 0,
+                "total_size_mb": round(total_size / 1024 / 1024, 2),
+                "max_size_gb": round(
+                    self.max_size_bytes / 1024 / 1024 / 1024, 2
+                ) if self.max_size_bytes else 0,
                 "hits": self.hits,
                 "misses": self.misses,
                 "stores": self.stores,
-                "hit_rate": self.hits / max(self.hits + self.misses, 1),
+                "hit_rate": round(
+                    self.hits / max(self.hits + self.misses, 1), 3
+                ),
                 "pending_writes": self._write_queue.qsize(),
             }
+            # Include TQ-native stats if any TQ operations occurred
+            if self.tq_native_stores > 0 or self.tq_native_hits > 0:
+                result["tq_native_stores"] = self.tq_native_stores
+                result["tq_native_hits"] = self.tq_native_hits
+            return result

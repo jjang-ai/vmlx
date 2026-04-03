@@ -81,6 +81,8 @@ registerFamily('glm4', { cacheType: 'kv', toolParser: 'glm47', enableAutoToolCho
 // Gemma
 registerFamily('medgemma', { cacheType: 'kv', isMultimodal: true, description: 'Google MedGemma (medical multimodal)', priority: 3 })
 registerFamily('paligemma', { cacheType: 'kv', isMultimodal: true, description: 'Google PaliGemma', priority: 5 })
+registerFamily('gemma4', { cacheType: 'kv', toolParser: 'gemma4', reasoningParser: 'gemma4', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 4 (multimodal)', priority: 5 })
+registerFamily('gemma4-text', { cacheType: 'kv', toolParser: 'gemma4', reasoningParser: 'gemma4', enableAutoToolChoice: true, description: 'Gemma 4 (text-only)', priority: 4 })
 registerFamily('gemma3', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 })
 registerFamily('gemma3-text', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 })
 registerFamily('gemma2', { cacheType: 'kv', description: 'Gemma 2', priority: 15 })
@@ -222,6 +224,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma2': 'gemma2',
   'gemma3': 'gemma3',
   'gemma3_text': 'gemma3-text',
+  'gemma4': 'gemma4',
+  'gemma4_text': 'gemma4-text',
   // ── Phi family ──
   'phi3': 'phi3',
   'phi3v': 'phi3-vision',

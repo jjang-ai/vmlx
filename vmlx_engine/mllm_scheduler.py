@@ -584,6 +584,7 @@ class MLLMScheduler:
         self.running: Dict[str, MLLMRequest] = {}  # Running requests by ID
         self.requests: Dict[str, MLLMRequest] = {}  # All requests by ID
         self.finished_req_ids: Set[str] = set()  # Recently finished
+        self._pending_aborts: Set[str] = set()  # Deferred aborts (Metal safety)
 
         # Mapping between our request IDs and BatchGenerator UIDs
         self.request_id_to_uid: Dict[str, int] = {}
@@ -1116,7 +1117,11 @@ class MLLMScheduler:
         return extracted
 
     def _get_stop_tokens(self) -> Set[int]:
-        """Get stop token IDs from tokenizer."""
+        """Get stop token IDs from tokenizer.
+
+        Also checks the model config registry for additional eos_tokens
+        (e.g., Gemma 4 uses <turn|> as end-of-turn alongside <eos>).
+        """
         stop_tokens = set()
         tokenizer = (
             self.processor.tokenizer
@@ -1135,6 +1140,25 @@ class MLLMScheduler:
                 stop_tokens.update(tokenizer.eos_token_ids)
             else:
                 stop_tokens.add(tokenizer.eos_token_ids)
+
+        # Add extra eos_tokens from model config registry (e.g., <turn|> for Gemma 4)
+        model_name = getattr(tokenizer, 'name_or_path', None)
+        if model_name:
+            try:
+                from .model_config_registry import get_model_config_registry
+                registry = get_model_config_registry()
+                model_config = registry.lookup(model_name)
+                if model_config.eos_tokens and len(model_config.eos_tokens) > 1:
+                    for eos_str in model_config.eos_tokens[1:]:
+                        try:
+                            ids = tokenizer.encode(eos_str, add_special_tokens=False)
+                            if len(ids) == 1:
+                                stop_tokens.add(ids[0])
+                                logger.debug(f"Added extra stop token: {eos_str!r} → {ids[0]}")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
         return stop_tokens
 
@@ -1314,14 +1338,16 @@ class MLLMScheduler:
                 except ValueError:
                     pass
 
-            # Remove from batch generator (holds _batch_lock to prevent race with next())
+            # DEFER batch generator removal to prevent Metal assertion crash.
+            # Client disconnects can happen while Metal command buffers are
+            # in-flight. Calling remove() immediately would touch cache
+            # tensors mid-computation. Instead, mark for deferred cleanup
+            # which runs after the current Metal computation completes.
             if request_id in self.request_id_to_uid:
-                uid = self.request_id_to_uid[request_id]
-                if self.batch_generator is not None:
-                    with self._batch_lock:
-                        self.batch_generator.remove([uid])
-                del self.uid_to_request_id[uid]
-                del self.request_id_to_uid[request_id]
+                if not hasattr(self, '_pending_aborts'):
+                    self._pending_aborts = set()
+                self._pending_aborts.add(request_id)
+                # Don't remove UID mappings here — done in deferred processing
 
             if request_id in self.running:
                 del self.running[request_id]
@@ -1826,6 +1852,27 @@ class MLLMScheduler:
             MLLMSchedulerOutput with results of this step
         """
         output = MLLMSchedulerOutput()
+
+        # Process deferred aborts — safe now because previous step's
+        # Metal computation has completed. Hold _queue_lock to prevent
+        # race with abort_request() modifying _pending_aborts/UID maps.
+        if self._pending_aborts:
+            with self._queue_lock:
+                aborts = list(self._pending_aborts)
+                self._pending_aborts.clear()
+            for rid in aborts:
+                with self._queue_lock:
+                    uid = self.request_id_to_uid.pop(rid, None)
+                if uid is not None:
+                    if self.batch_generator is not None:
+                        try:
+                            with self._batch_lock:
+                                self.batch_generator.remove([uid])
+                        except Exception as e:
+                            logger.warning(f"Deferred abort remove failed for {rid}: {e}")
+                    with self._queue_lock:
+                        self.uid_to_request_id.pop(uid, None)
+                logger.debug(f"Processed deferred abort for {rid}")
 
         # Schedule waiting requests
         with self._queue_lock:

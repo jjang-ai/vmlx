@@ -160,7 +160,7 @@ class MultimodalProcessor:
             )
 
         # Determine add_special_tokens based on model type
-        if self.config and self.config.model_type in ["gemma3", "gemma3n"]:
+        if self.config and self.config.model_type in ["gemma3", "gemma3n", "gemma4"]:
             add_special_tokens = not hasattr(self.processor, "chat_template")
 
         # Prepare inputs using mlx_vlm

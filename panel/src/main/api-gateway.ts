@@ -31,20 +31,33 @@ interface ResolvedSession {
 export class ApiGateway extends EventEmitter {
   private server: Server | null = null
   private port: number = DEFAULT_PORT
+  private host: string = '127.0.0.1'
   private _running = false
   /** Track in-flight JIT loads to prevent duplicate starts */
   private jitPending = new Map<string, Promise<boolean>>()
 
   get running(): boolean { return this._running }
   get activePort(): number { return this.port }
+  get activeHost(): string { return this.host }
 
   // ═══════════════════════════════════════════════════════════════
   // Lifecycle
   // ═══════════════════════════════════════════════════════════════
 
-  async start(port?: number): Promise<void> {
+  async start(port?: number, host?: string): Promise<void> {
     if (this._running) return
     this.port = port ?? parseInt(db.getSetting('gateway_port') || String(DEFAULT_PORT), 10)
+    this.host = host ?? db.getSetting('gateway_host') ?? '127.0.0.1'
+
+    // Reject if a session is already using this port (#44)
+    const sessions = db.getSessions()
+    const sessionPorts = new Set(sessions.map((s: any) => s.port))
+    if (sessionPorts.has(this.port)) {
+      throw new Error(
+        `Gateway port ${this.port} conflicts with an existing session. ` +
+        `Choose a different port to avoid crashes.`
+      )
+    }
 
     const maxRetries = 10
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -78,10 +91,11 @@ export class ApiGateway extends EventEmitter {
         reject(err)
       })
 
-      this.server.listen(port, '0.0.0.0', () => {
+      this.server.listen(port, this.host, () => {
         this._running = true
         db.setSetting('gateway_port', String(port))
-        console.log(`[gateway] Listening on 0.0.0.0:${port}`)
+        db.setSetting('gateway_host', this.host)
+        console.log(`[gateway] Listening on ${this.host}:${port}`)
         this.emit('started', port)
         resolve()
       })
@@ -102,9 +116,9 @@ export class ApiGateway extends EventEmitter {
     })
   }
 
-  async restart(port: number): Promise<void> {
+  async restart(port: number, host?: string): Promise<void> {
     await this.stop()
-    await this.start(port)
+    await this.start(port, host)
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -333,11 +347,22 @@ export class ApiGateway extends EventEmitter {
   }
 
   private async _doJitLoad(sessionId: string): Promise<boolean> {
-    console.log(`[gateway] JIT loading session ${sessionId}`)
+    const session = db.getSession(sessionId)
+    const isStandby = session?.status === 'standby'
+    console.log(`[gateway] JIT ${isStandby ? 'waking' : 'loading'} session ${sessionId}`)
     try {
-      await sessionManager.startSession(sessionId)
+      if (isStandby) {
+        // Session process is alive but model is sleeping — wake it via admin endpoint
+        const wakeResult = await sessionManager.wakeSession(sessionId)
+        if (!wakeResult.success) {
+          throw new Error(wakeResult.error || 'wake failed')
+        }
+      } else {
+        // Session process not running — start it
+        await sessionManager.startSession(sessionId)
+      }
     } catch (err) {
-      console.error(`[gateway] Failed to start session ${sessionId}: ${err}`)
+      console.error(`[gateway] Failed to ${isStandby ? 'wake' : 'start'} session ${sessionId}: ${err}`)
       return false
     }
 

@@ -373,7 +373,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const id = uuidv4()
-    const host = config.host || '0.0.0.0'
+    const host = config.host || '127.0.0.1'
     const port = config.port || await this.findAvailablePort()
     const now = Date.now()
 
@@ -878,7 +878,7 @@ export class SessionManager extends EventEmitter {
     'speculativeModel', 'numDraftTokens', 'streamFromDisk',
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
-    'enableAutoToolChoice',
+    'enableAutoToolChoice', 'chatTemplate',
     'logLevel', 'corsOrigins',
     'enableJit',
     'imageMode', 'imageQuantize',
@@ -977,7 +977,7 @@ export class SessionManager extends EventEmitter {
         const detected = detectModelConfigFromDir(proc.modelPath)
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
-          host: '0.0.0.0',
+          host: '127.0.0.1',
           port: proc.port,
           timeout: 300,
           maxNumSeqs: 256,
@@ -1003,7 +1003,7 @@ export class SessionManager extends EventEmitter {
           id,
           modelPath: proc.modelPath,
           modelName: proc.modelName || proc.modelPath.split('/').pop() || proc.modelPath,
-          host: '0.0.0.0',
+          host: '127.0.0.1',
           port: proc.port,
           pid: proc.pid,
           status: adoptStatus,
@@ -1766,30 +1766,32 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Disk cache (L2 persistent cache) — DISABLED for v1.3.x
-    // Known to cause Metal crashes and cache corruption on some model types.
-    // if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected.usePagedCache)) {
-    //   args.push('--enable-disk-cache')
-    //   if (config.diskCacheDir) {
-    //     args.push('--disk-cache-dir', config.diskCacheDir)
-    //   }
-    //   if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) {
-    //     args.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
-    //   }
-    // }
+    // Disk cache (L2 persistent cache) — RE-ENABLED in v1.3.15
+    // TQ-native serialization stores 3-bit compressed data directly (26x smaller).
+    // Metal crash fix: all mx.save_safetensors calls now happen on main thread;
+    // background writer only does atomic rename + SQLite update.
+    if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected.usePagedCache)) {
+      args.push('--enable-disk-cache')
+      if (config.diskCacheDir) {
+        args.push('--disk-cache-dir', config.diskCacheDir)
+      }
+      if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) {
+        args.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
+      }
+    }
 
-    // Block-level disk cache (L2 for paged cache blocks) — DISABLED for v1.3.x
-    // Known to cause cache corruption / short responses / mismatched block errors.
-    // Will re-enable after block serialization bugs are fully resolved.
-    // if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
-    //   args.push('--enable-block-disk-cache')
-    //   if (config.blockDiskCacheDir) {
-    //     args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
-    //   }
-    //   if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) {
-    //     args.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
-    //   }
-    // }
+    // Block-level disk cache (L2 for paged cache blocks) — RE-ENABLED in v1.3.15
+    // All serialization happens on main thread (same Metal safety as above).
+    // Background writer only does atomic rename + SQLite index update.
+    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
+      args.push('--enable-block-disk-cache')
+      if (config.blockDiskCacheDir) {
+        args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
+      }
+      if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) {
+        args.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
+      }
+    }
 
     // Performance
     if (config.streamInterval && config.streamInterval > 0) {
@@ -1955,6 +1957,9 @@ export class SessionManager extends EventEmitter {
     const sessions = db.getSessions()
     // Check ALL session ports (DB has UNIQUE constraint on port column)
     const usedPorts = new Set(sessions.map(s => s.port))
+    // Also exclude the API gateway port to prevent overlap crashes (#44)
+    const gwPort = parseInt(db.getSetting('gateway_port') || '8080', 10)
+    if (gwPort) usedPorts.add(gwPort)
     let port = 8000
     while (usedPorts.has(port) || !(await this.isPortFree(port))) {
       port++

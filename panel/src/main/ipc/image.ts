@@ -466,7 +466,7 @@ export function registerImageHandlers(): void {
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
 
           const config: Partial<ServerConfig> = {
-            host: serverSettings?.host || '0.0.0.0',
+            host: serverSettings?.host || '127.0.0.1',
             port: serverSettings?.port || 0,  // 0 = auto-assign
             apiKey: serverSettings?.apiKey || '',
             logLevel: (serverSettings?.logLevel || 'INFO') as 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR',

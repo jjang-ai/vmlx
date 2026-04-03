@@ -198,19 +198,21 @@ function createWindow(): void {
     ipcMain.handle('gateway:status', () => ({
       running: apiGateway.running,
       port: apiGateway.activePort,
+      host: apiGateway.activeHost,
     }))
-    ipcMain.handle('gateway:start', async (_e, port?: number) => {
-      await apiGateway.start(port)
-      return { running: true, port: apiGateway.activePort }
+    ipcMain.handle('gateway:start', async (_e, port?: number, host?: string) => {
+      await apiGateway.start(port, host)
+      return { running: true, port: apiGateway.activePort, host: apiGateway.activeHost }
     })
     ipcMain.handle('gateway:stop', async () => {
       await apiGateway.stop()
       return { running: false }
     })
-    ipcMain.handle('gateway:restart', async (_e, port: number) => {
+    ipcMain.handle('gateway:restart', async (_e, port: number, host?: string) => {
       db.setSetting('gateway_port', String(port))
-      await apiGateway.restart(port)
-      return { running: true, port }
+      if (host) db.setSetting('gateway_host', host)
+      await apiGateway.restart(port, host)
+      return { running: true, port, host: apiGateway.activeHost }
     })
 
     // Prompt templates

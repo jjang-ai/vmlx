@@ -80,9 +80,11 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     _layer_type_list = _text_cfg.get("layer_types", [])
     _hybrid_pattern = _text_cfg.get("hybrid_override_pattern",
                         model_config.get("hybrid_override_pattern", ""))
+    # Known attention layer types (all need KV cache)
+    _ATTENTION_TYPES = {"full_attention", "sliding_attention"}
     if _layer_type_list:
         _layer_types = [
-            "attention" if lt == "full_attention" else "ssm"
+            "attention" if lt in _ATTENTION_TYPES else "ssm"
             for lt in _layer_type_list[:n_layers]
         ]
         while len(_layer_types) < n_layers:
@@ -367,10 +369,17 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
 
     config.setdefault("text_config", {})
     config.setdefault("vision_config", {})
-    config.setdefault("audio_config", {})
+    # audio_config: None means no audio — remove so update_module_configs
+    # doesn't call from_dict(None) which crashes (Gemma 4 has audio_config: null)
+    if config.get("audio_config") is None:
+        config.pop("audio_config", None)
+    else:
+        config.setdefault("audio_config", {})
 
     model_config = model_class.ModelConfig.from_dict(config)
-    modules = ["text", "vision", "perceiver", "projector", "audio"]
+    # Only include modules whose config key exists and is not None
+    modules = [m for m in ["text", "vision", "perceiver", "projector", "audio"]
+               if config.get(f"{m}_config") is not None]
     model_config = update_module_configs(model_config, model_class, config, modules)
     model = model_class.Model(model_config)
 
@@ -392,6 +401,11 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
         if k.endswith('.scales'):
             qpath = k[:-len('.scales')]
             quantized_suffixes.add(qpath)
+            # Also add sanitize-remapped paths so nn.quantize() can match
+            # module paths that differ from raw weight keys (e.g., Gemma 4
+            # JANG uses switch_mlp.* but model expects experts.switch_glu.*)
+            if ".switch_mlp." in qpath:
+                quantized_suffixes.add(qpath.replace(".switch_mlp.", ".experts.switch_glu."))
 
     quantization = {"group_size": block_size, "bits": default_bits}
 

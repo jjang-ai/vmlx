@@ -177,6 +177,8 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {diskCache.hit_rate != null && <StatCard label="Hit Rate" value={`${(diskCache.hit_rate * 100).toFixed(1)}%`} />}
             {diskCache.hits != null && <StatCard label="Hits / Misses" value={`${diskCache.hits} / ${diskCache.misses ?? 0}`} />}
             {diskCache.stores != null && <StatCard label="Stores" value={String(diskCache.stores)} />}
+            {diskCache.tq_native_stores != null && diskCache.tq_native_stores > 0 && <StatCard label="TQ-Native Stores" value={String(diskCache.tq_native_stores)} />}
+            {diskCache.tq_native_hits != null && diskCache.tq_native_hits > 0 && <StatCard label="TQ-Native Hits" value={String(diskCache.tq_native_hits)} />}
             {diskCache.pending_writes != null && diskCache.pending_writes > 0 && <StatCard label="Pending Writes" value={String(diskCache.pending_writes)} />}
           </div>
         </div>

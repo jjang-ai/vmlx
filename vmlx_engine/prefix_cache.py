@@ -572,25 +572,43 @@ class BlockAwarePrefixCache:
             mm = getattr(self.model, 'model', None)
             if mm is not None and mm is not self.model:
                 candidates.append(mm)
+            # TWO-PASS scan: MLA detection MUST come first.
+            # VLM wrappers (e.g., mistral3 wrapping mistral4) have
+            # num_key_value_heads=32 on model.args but kv_lora_rank
+            # only on a nested text_config. Single-pass breaks on the
+            # first num_key_value_heads=32 before finding kv_lora_rank.
+            #
+            # Pass 1: scan ALL candidates for kv_lora_rank (MLA → H=1)
             for model_obj in candidates:
                 for attr in ('args', 'config', 'text_config'):
                     cfg = getattr(model_obj, attr, None)
                     if cfg is None:
                         continue
-                    # MLA models store compressed KV latents with H=1.
-                    # Check kv_lora_rank before num_key_value_heads.
                     kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                    if not kv_lora_rank:
+                        tc = getattr(cfg, 'text_config', None)
+                        if tc is not None:
+                            kv_lora_rank = getattr(tc, 'kv_lora_rank', 0)
                     if kv_lora_rank and kv_lora_rank > 0:
                         n_kv = 1  # MLA: compressed latent, single "head"
                         break
-                    n_kv = (
-                        getattr(cfg, 'num_key_value_heads', 0)
-                        or getattr(cfg, 'num_kv_heads', 0)
-                    )
-                    if n_kv:
-                        break
                 if n_kv:
                     break
+            # Pass 2: if no MLA found, get num_key_value_heads
+            if not n_kv:
+                for model_obj in candidates:
+                    for attr in ('args', 'config', 'text_config'):
+                        cfg = getattr(model_obj, attr, None)
+                        if cfg is None:
+                            continue
+                        n_kv = (
+                            getattr(cfg, 'num_key_value_heads', 0)
+                            or getattr(cfg, 'num_kv_heads', 0)
+                        )
+                        if n_kv:
+                            break
+                    if n_kv:
+                        break
         except Exception:
             pass
         if not isinstance(n_kv, int):
@@ -669,6 +687,40 @@ class BlockAwarePrefixCache:
 
             return block_table, remaining
 
+        # Fallback: chain-hash lookup with L2 disk check.
+        # find_shared_prefix uses legacy content hashes (in-memory only).
+        # get_computed_blocks uses chain hashes and checks disk on L1 miss.
+        # After server restart, L1 is empty but disk blocks persist.
+        if self.paged_cache._disk_store is not None:
+            cached_blocks, num_cached = self.paged_cache.get_computed_blocks(tokens)
+            # MLLM path stores blocks with N-1 tokens (truncated for re-feed).
+            # If full token list misses, try N-1 to match what was stored.
+            if not cached_blocks and len(tokens) > 1:
+                cached_blocks, num_cached = self.paged_cache.get_computed_blocks(tokens[:-1])
+            if cached_blocks:
+                block_table = self.paged_cache.create_block_table(request_id)
+                for cb in cached_blocks:
+                    with self.paged_cache._lock:
+                        cb.ref_count += 1
+                    block_table.block_ids.append(cb.block_id)
+                    block_table.num_tokens += cb.token_count
+                    # Re-register in legacy hash_to_block for future in-memory hits
+                    if cb.token_count == self.block_size:
+                        chunk = tokens[block_table.num_tokens - cb.token_count:block_table.num_tokens]
+                    else:
+                        chunk = tokens[block_table.num_tokens - cb.token_count:block_table.num_tokens]
+                    self.paged_cache.register_block_hash(cb, chunk)
+
+                remaining = tokens[block_table.num_tokens:]
+                self._hits += 1
+                self._tokens_saved += block_table.num_tokens
+                logger.info(
+                    f"Disk L2 hit for {request_id}: "
+                    f"{len(cached_blocks)} blocks, {block_table.num_tokens} tokens "
+                    f"restored from SSD"
+                )
+                return block_table, remaining
+
         # No cache hit
         self._misses += 1
         logger.debug(f"Cache miss for {request_id}")
@@ -737,6 +789,11 @@ class BlockAwarePrefixCache:
                 parent_hash = _compute_chain_hash(parent_hash, tokens[eb_start:eb_end])
 
         disk_store = self.paged_cache._disk_store  # May be None
+        logger.info(
+            f"Block disk write-through: disk_store={'present' if disk_store else 'None'}, "
+            f"is_tensor_data={is_tensor_data}, new_tokens={len(new_tokens)}, "
+            f"num_new_blocks={num_new_blocks}"
+        )
 
         # Pre-convert source KV arrays to numpy for safe slicing.
         # MLX has a Metal command buffer bug: any evaluation of lazy slices
@@ -779,8 +836,14 @@ class BlockAwarePrefixCache:
                                 k_np = k_np.astype(mx.float16)
                                 v_np = v_np.astype(mx.float16)
                             np_sources[idx] = (np.array(k_np), np.array(v_np), keys.dtype)
-                    except Exception:
-                        pass
+                    except Exception as _npe:
+                        logger.debug(f"np_sources skip layer {idx}: {_npe}")
+
+        if disk_store is not None:
+            logger.info(
+                f"Block disk: np_sources has {len(np_sources)} positional layers "
+                f"(out of {len(cache_data)} total)"
+            )
 
         # Detect cache_data position offset for cache-hit requests.
         # After a cache hit, the BatchGenerator's raw cache may only contain
@@ -856,6 +919,11 @@ class BlockAwarePrefixCache:
                 block_table.num_tokens += len(block_tokens)
                 self.paged_cache.stats.total_tokens_cached += len(block_tokens)
                 parent_hash = block_chain_hash
+                if disk_store is not None:
+                    logger.debug(
+                        f"Block disk: block {existing_block.block_id} reused from L1 "
+                        f"(skip disk write)"
+                    )
                 continue
 
             # Also check legacy hash for blocks stored before chain hashing.
@@ -942,9 +1010,26 @@ class BlockAwarePrefixCache:
                             local_start, local_end, is_last,
                         )
                         if np_block:
+                            # Count non-skip entries
+                            _kv_count = sum(1 for e in np_block if e[0] == "kv")
+                            logger.info(
+                                f"Block disk: queuing write for block {block.block_id} "
+                                f"({_kv_count} kv layers, {len(block_tokens)} tokens)"
+                            )
                             pending_disk_writes.append(
                                 (block_chain_hash, np_block, len(block_tokens))
                             )
+                        else:
+                            logger.warning(
+                                f"Block disk: _numpy_block_slice returned empty "
+                                f"for block {block.block_id} "
+                                f"(local [{local_start}:{local_end}], is_last={is_last})"
+                            )
+                    elif disk_store is not None and not np_sources:
+                        logger.warning(
+                            f"Block disk: np_sources empty for block {block.block_id}, "
+                            f"cannot write to disk"
+                        )
 
             # Register in hash caches under lock (both chain hash and legacy)
             with self.paged_cache._lock:
@@ -957,11 +1042,16 @@ class BlockAwarePrefixCache:
 
         # Write deferred disk blocks (all numpy — no MLX/Metal ops).
         if pending_disk_writes and disk_store is not None:
+            logger.info(
+                f"Block disk: writing {len(pending_disk_writes)} blocks to SSD"
+            )
             for block_hash, block_data, tok_count in pending_disk_writes:
                 try:
                     disk_store.write_block_async(block_hash, block_data, tok_count)
-                except Exception:
-                    pass
+                except Exception as _wbe:
+                    logger.warning(
+                        f"Block disk: write_block_async failed: {_wbe}"
+                    )
 
         # Update prefix index
         self._update_prefix_index(tokens, block_table.block_ids)
@@ -1008,7 +1098,8 @@ class BlockAwarePrefixCache:
         # Class name is most reliable
         if class_name:
             positional = {"KVCache", "BatchKVCache", "RotatingKVCache",
-                          "BatchRotatingKVCache", "QuantizedKVCache"}
+                          "BatchRotatingKVCache", "QuantizedKVCache",
+                          "TurboQuantKVCache"}
             cumulative = {"MambaCache", "BatchMambaCache", "ArraysCache"}
             if any(cls in class_name for cls in positional):
                 return True
@@ -1458,6 +1549,11 @@ class BlockAwarePrefixCache:
                     )
                     # Materialize concatenated quantized tensors
                     mx.eval(*concat_keys, *concat_values)
+                    # Force independent copies for single-block case (same aliasing issue)
+                    if len(quantized_kv_slices_keys) == 1:
+                        concat_keys = tuple(k * 1 for k in concat_keys)
+                        concat_values = tuple(v * 1 for v in concat_values)
+                        mx.eval(*concat_keys, *concat_values)
 
                     # Validate head count for quantized cache too
                     first_k = concat_keys[0]
@@ -1515,6 +1611,18 @@ class BlockAwarePrefixCache:
                     # Materialize lazy concatenation to avoid accumulating a massive
                     # Metal command buffer that can trigger GPU timeout (SIGTERM)
                     mx.eval(concat_keys, concat_values)
+                    # CRITICAL: Force independent copies of the reconstructed arrays.
+                    # mx.concatenate([single_array]) can return the same object,
+                    # creating aliasing between block.cache_data and the live KVCache.
+                    # During generation, the model's forward pass builds a lazy graph
+                    # referencing these arrays. On subsequent reuse of the same block,
+                    # MLX may reuse/invalidate the underlying buffer, producing garbage.
+                    # mx.contiguous() on an already-contiguous, already-evaluated array
+                    # is a no-op, so we use slice-and-eval to guarantee a fresh buffer.
+                    if len(kv_slices_keys) == 1:
+                        concat_keys = concat_keys * 1  # Force new buffer allocation
+                        concat_values = concat_values * 1
+                        mx.eval(concat_keys, concat_values)
 
                     # Validate head count against model config.
                     # Catches stale blocks with inflated H from BatchKVCache.merge().

@@ -46,9 +46,10 @@ class MLLMModelWrapper:
             self._inject_pixel_values = hints.get("inject_pixel_values", False)
         if not self._inject_pixel_values:
             # Fallback: detect from model_type attribute
+            _mt = str(getattr(model, "model_type", "")).lower()
             self._inject_pixel_values = (
                 hasattr(model, "model_type")
-                and "gemma3" in str(getattr(model, "model_type", "")).lower()
+                and ("gemma3" in _mt or "gemma4" in _mt)
             )
 
     def __call__(self, *args, **kwargs):

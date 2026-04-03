@@ -82,6 +82,11 @@ SUPPORTED_MODELS: dict[str, str] = {
     "flux1-dev": "dev",
     "klein-4b": "flux2-klein-4b",
     "klein-9b": "flux2-klein-9b",
+    # HuggingFace repo name aliases (FLUX.2-klein-4B → flux2-klein-4b)
+    "flux.2-klein-4b": "flux2-klein-4b",
+    "flux.2-klein-9b": "flux2-klein-9b",
+    "flux.2-klein-base-4b": "flux2-klein-base-4b",
+    "flux.2-klein-base-9b": "flux2-klein-base-9b",
 }
 
 EDIT_MODELS: dict[str, str] = {
@@ -257,9 +262,16 @@ class ImageGenEngine:
         # Resolve canonical mflux name
         resolved_name = mflux_name
         if not resolved_name:
-            resolved_name = SUPPORTED_MODELS.get(model_name.lower())
+            # Normalize: strip HF org prefix, lowercase for lookup
+            _lookup = model_name.lower()
+            if "/" in _lookup:
+                _lookup = _lookup.rsplit("/", 1)[-1]
+            # Strip quantization suffixes from directory names (e.g., "-4bit", "-8bit")
+            import re
+            _lookup = re.sub(r'-\d+bit$', '', _lookup)
+            resolved_name = SUPPORTED_MODELS.get(_lookup)
             if not resolved_name:
-                resolved_name = EDIT_MODELS.get(model_name.lower())
+                resolved_name = EDIT_MODELS.get(_lookup)
             if not resolved_name:
                 resolved_name = model_name
 
