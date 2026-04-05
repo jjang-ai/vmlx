@@ -1960,8 +1960,16 @@ class MLLMBatchGenerator:
                 all_logprobs.append(logprobs.squeeze(0))
                 succeeded_requests.append(req)
 
-                # Capture SSM state at prompt boundary for hybrid models
-                if self._is_hybrid and req.prompt_cache is None:
+                # Capture SSM state at prompt boundary for hybrid models.
+                # The SSM advances during generation on every turn, so the
+                # stored state must be refreshed after each prefill, not only
+                # on cache-MISS turns. Gating on `req.prompt_cache is None`
+                # leaves the SSM cache stale after cache-HIT turns, producing
+                # an alternating HIT/MISS pattern on repeated multi-turn
+                # conversations (the next fetch key references a longer token
+                # list that has no matching SSM entry, forcing full prefill).
+                # See https://github.com/jjang-ai/vmlx/issues/45 for repro.
+                if self._is_hybrid:
                     try:
                         kv_set = set(self._hybrid_kv_positions)
                         ssm_layers = []
