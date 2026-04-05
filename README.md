@@ -65,6 +65,8 @@
 
 ## Quickstart
 
+[![SafeSkill 45/100](https://img.shields.io/badge/SafeSkill-45%2F100_Use%20with%20Caution-orange)](https://safeskill.dev/scan/jjang-ai-vmlx)
+
 ### Install from PyPI
 
 Published on [PyPI as `vmlx`](https://pypi.org/project/vmlx/) -- install and run in one command:
