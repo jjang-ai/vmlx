@@ -341,6 +341,8 @@ class SimpleEngine(BaseEngine):
                 # For MLLM, use the chat method which handles images/videos
                 # Run in thread pool to allow asyncio timeout to work
                 mllm_kwargs = dict(kwargs)
+                if template_tools:  # pass tools to MLLM chat template
+                    mllm_kwargs["tools"] = template_tools
                 if thinking_enabled is not None:
                     mllm_kwargs["enable_thinking"] = thinking_enabled
                 if reasoning_effort:

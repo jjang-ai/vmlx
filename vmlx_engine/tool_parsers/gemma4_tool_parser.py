@@ -27,13 +27,57 @@ _ETC = "<tool_call|>"    # end-of-tool-call
 
 # Pattern to extract tool calls: <|tool_call>call:name{...}<tool_call|>
 _TOOL_CALL_PATTERN = re.compile(
-    r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>',
+    r'<\|tool_call>call:([\w:]+)\{(.*?)\}<tool_call\|>',  # [\w:]+ handles namespace:func format
     re.DOTALL,
 )
 
 # Gemma 4 escape token for string quoting
+# Fallback: hub:func({args})<tool_call|> format (missing start token)
+# Gemma 4 sometimes generates this without the <|tool_call> prefix
+_HUB_PATTERN = re.compile(
+    r'(\w+):(\w+)\((.*)\)<tool_call\|>',
+    re.DOTALL,
+)
+
+# Direct: TOOLNAME{{JSON}}<tool_call|> — full tool name, double-brace JSON, no start token
+_DIRECT_PATTERN = re.compile(
+    r'([\w]+)\{\{(.*?)\}\}<tool_call\|>',
+    re.DOTALL,
+)
+
 _ESCAPE_OPEN = '<|"|>'
 _ESCAPE_CLOSE = '<|"|>'
+
+
+def _find_tool_name(func_name: str, request: dict | None) -> str:
+    """Map short function name (e.g. 'list') to full tool name from request tools.
+
+    When Gemma 4 generates 'hub:list' it means the function called 'list'
+    from the tool namespace. We look in request['tools'] for a tool whose
+    name ends with the function name (e.g. 'mcp__CherryHub__list').
+    Falls back to func_name if no match found.
+    """
+    if not request:
+        return func_name
+    tools = request.get("tools", [])
+    # Exact match first
+    for tool in tools:
+        name = tool.get("function", {}).get("name", "") if isinstance(tool, dict) else ""
+        if name == func_name:
+            return name
+    # Suffix match: mcp__CherryHub__list ends with 'list'
+    for tool in tools:
+        name = tool.get("function", {}).get("name", "") if isinstance(tool, dict) else ""
+        if name.endswith(f"__{func_name}") or name.endswith(f":{func_name}"):
+            return name
+    # Namespace:function match: hub:list → extract 'list', find tool ending with __list
+    if ":" in func_name:
+        short = func_name.split(":")[-1]  # hub:list -> list
+        for tool in tools:
+            name = tool.get("function", {}).get("name", "") if isinstance(tool, dict) else ""
+            if name.endswith(f"__{short}") or name == short:
+                return name
+    return func_name
 
 
 def _parse_gemma4_args(args_str: str) -> dict[str, Any]:
@@ -147,14 +191,53 @@ class Gemma4ToolParser(ToolParser):
         for name, args_str in matches:
             arguments = _parse_gemma4_args(args_str)
             if name:
+                # Resolve namespace:function names (e.g. hub:list -> mcp__CherryHub__list)
+                resolved_name = _find_tool_name(name, request)
                 tool_calls.append({
                     "id": generate_tool_id(),
-                    "name": name,
+                    "name": resolved_name,
                     "arguments": json.dumps(arguments, ensure_ascii=False),
                 })
 
         if matches:
             cleaned_text = _TOOL_CALL_PATTERN.sub("", cleaned_text).strip()
+
+        # Fallback: try hub:func({args})<tool_call|> format
+        # Gemma 4 sometimes omits the <|tool_call> start token and uses
+        # JavaScript-style parentheses: hub:list({limit:100})<tool_call|>
+        if not tool_calls:
+            hub_matches = _HUB_PATTERN.findall(cleaned_text)
+            for namespace, func_name, args_paren in hub_matches:
+                # Reconstruct args: ({limit:100}) -> {limit:100}
+                args_str = args_paren.strip()
+                if not args_str.startswith("{"):
+                    args_str = "{" + args_str + "}"
+                arguments = _parse_gemma4_args(args_str)
+                # Resolve full tool name from request context
+                full_name = _find_tool_name(func_name, request)
+                tool_calls.append({
+                    "id": generate_tool_id(),
+                    "name": full_name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                })
+            if hub_matches:
+                cleaned_text = _HUB_PATTERN.sub("", cleaned_text).strip()
+
+        # Fallback: TOOLNAME{{JSON}}<tool_call|> — direct full tool name with double-brace JSON
+        if not tool_calls:
+            direct_matches = _DIRECT_PATTERN.findall(cleaned_text)
+            for tool_name, args_json in direct_matches:
+                try:
+                    arguments = json.loads("{" + args_json + "}")
+                except (json.JSONDecodeError, ValueError):
+                    arguments = _parse_gemma4_args("{" + args_json + "}")
+                tool_calls.append({
+                    "id": generate_tool_id(),
+                    "name": tool_name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                })
+            if direct_matches:
+                cleaned_text = _DIRECT_PATTERN.sub("", cleaned_text).strip()
 
         # Fallback: try Hermes format
         if not tool_calls:
@@ -204,7 +287,11 @@ class Gemma4ToolParser(ToolParser):
     ) -> dict[str, Any] | None:
         """Extract tool calls from streaming output."""
         # Check for Gemma 4 native tool call end marker
-        if _STC in current_text and _ETC in delta_text:
+        # Also trigger on hub:func({args})<tool_call|> (missing _STC start token)
+        _has_etc = _ETC in delta_text
+        _has_hub = _HUB_PATTERN.search(current_text) is not None
+        _has_direct = _DIRECT_PATTERN.search(current_text) is not None
+        if (_STC in current_text or _has_hub or _has_direct) and _has_etc:
             result = self.extract_tool_calls(current_text, request)
             if result.tools_called:
                 return {

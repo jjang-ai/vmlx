@@ -1004,6 +1004,7 @@ class MLXMultimodalLM:
         self,
         chat_messages: list[dict],
         enable_thinking: bool | None = None,
+        tools: list | None = None,
     ) -> str:
         """
         Apply chat template to structured messages with enable_thinking support.
@@ -1019,6 +1020,28 @@ class MLXMultimodalLM:
         Returns:
             Formatted prompt string
         """
+        # If tools are provided, use tokenizer.apply_chat_template directly.
+        # mlx_vlm's get_chat_template does not support the tools parameter.
+        if tools:
+            try:
+                _tok = (
+                    self.processor.tokenizer
+                    if hasattr(self.processor, "tokenizer")
+                    else self.processor
+                )
+                _tmpl_kw = {"tools": tools, "add_generation_prompt": True, "tokenize": False}
+                if enable_thinking is not None:
+                    _tmpl_kw["enable_thinking"] = enable_thinking
+                _fp = _tok.apply_chat_template(chat_messages, **_tmpl_kw)
+                logger.debug(f"Applied chat template with {len(tools)} tools via tokenizer")
+                if enable_thinking is False and _fp and "<think>" in _fp:
+                    _lt = _fp.rfind("<think>")
+                    if _lt >= 0 and "</think>" not in _fp[_lt + 7:]:
+                        _fp = _fp[:_lt].rstrip() + "\n"
+                return _fp
+            except Exception as _te:
+                logger.warning(f"Chat template with tools failed: {_te}. Falling back.")
+
         from mlx_vlm.prompt_utils import get_chat_template
 
         template_kwargs = {}
@@ -1417,7 +1440,8 @@ class MLXMultimodalLM:
                 f"  Chat msg {i}: role={cm['role']}, content={content_preview}..."
             )
         enable_thinking = kwargs.pop("enable_thinking", None)
-        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
+        tools = kwargs.pop("tools", None)
+        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking, tools=tools)
 
         # Post-template image count guard: VLM chat templates may not expand
         # image placeholders for assistant-role messages. Trim all_images to
@@ -1727,7 +1751,8 @@ class MLXMultimodalLM:
 
         # Apply chat template
         enable_thinking = kwargs.pop("enable_thinking", None)
-        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
+        tools = kwargs.pop("tools", None)
+        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking, tools=tools)
 
         # Post-template image count guard: VLM chat templates may not expand
         # image placeholders for assistant-role messages. Trim all_images to

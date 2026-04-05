@@ -274,6 +274,7 @@ _TOOL_CALL_MARKERS = [
     "<tool_call>",
     "<|tool_call>",   # Gemma 4 native tool call format
     "<|tool_call|>",
+    "<tool_call|>",    # Gemma 4 hub: format end-token (no start token)
     "[TOOL_CALLS]",
     "<function=",
     "<minimax:tool_call>",
@@ -3868,6 +3869,7 @@ async def create_chat_completion(
             logger.debug(f"Added {len(all_tools)} tools (tool_choice={_tool_choice})")
 
     # Pass merged tools to engine (normalize all to template format)
+    logger.info(f"[DEBUG] all_tools count={len(all_tools)}, request.tools={bool(getattr(request,"tools",None))}")
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
 
