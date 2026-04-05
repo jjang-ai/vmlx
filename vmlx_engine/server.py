@@ -763,15 +763,21 @@ def _coerce_tool_call_argument_types(
     schema_map = {}
     for tool in (tools or []):
         try:
-            if hasattr(tool, "function") and tool.function:
-                name = getattr(tool.function, "name", "")
-                params = getattr(tool.function, "parameters", {}) or {}
+            fn = None
+            if hasattr(tool, "function") and tool.function is not None:
+                fn = tool.function
             elif isinstance(tool, dict):
                 fn = tool.get("function", {})
+            if not fn:
+                continue
+            if isinstance(fn, dict):
                 name = fn.get("name", "")
                 params = fn.get("parameters", {}) or {}
             else:
-                continue
+                name = getattr(fn, "name", "") or ""
+                params = getattr(fn, "parameters", None) or {}
+                if not isinstance(params, dict):
+                    params = {}
             if name:
                 schema_map[name] = params.get("properties", {}) if isinstance(params, dict) else {}
         except Exception:
@@ -870,7 +876,10 @@ def _parse_tool_calls_with_parser(
             pass
 
     if not active_parser:
-        return parse_tool_calls(output_text)
+        _fallback_text, _fallback_tcs = parse_tool_calls(output_text)
+        if _fallback_tcs and request and getattr(request, "tools", None):
+            _coerce_tool_call_argument_types(_fallback_tcs, request.tools)
+        return _fallback_text, _fallback_tcs
 
     # Create a fresh parser instance per call for thread-safety.
     # Non-streaming requests can be concurrent — sharing a global instance
@@ -885,7 +894,10 @@ def _parse_tool_calls_with_parser(
         logger.warning(
             f"Failed to initialize tool parser '{active_parser}': {e}"
         )
-        return parse_tool_calls(output_text)
+        _fallback_text, _fallback_tcs = parse_tool_calls(output_text)
+        if _fallback_tcs and request and getattr(request, "tools", None):
+            _coerce_tool_call_argument_types(_fallback_tcs, request.tools)
+        return _fallback_text, _fallback_tcs
 
     # Use the configured parser, fall back to generic if it finds nothing
     try:
@@ -913,10 +925,16 @@ def _parse_tool_calls_with_parser(
         else:
             # Specific parser found nothing — try generic parser as fallback
             # (handles Nemotron, Llama, raw JSON, etc.)
-            return parse_tool_calls(output_text)
+            _fallback_text, _fallback_tcs = parse_tool_calls(output_text)
+            if _fallback_tcs and request and getattr(request, "tools", None):
+                _coerce_tool_call_argument_types(_fallback_tcs, request.tools)
+            return _fallback_text, _fallback_tcs
     except Exception as e:
         logger.warning(f"Tool parser error: {e}")
-        return parse_tool_calls(output_text)
+        _fallback_text, _fallback_tcs = parse_tool_calls(output_text)
+        if _fallback_tcs and request and getattr(request, "tools", None):
+            _coerce_tool_call_argument_types(_fallback_tcs, request.tools)
+        return _fallback_text, _fallback_tcs
 
 
 def _detect_native_tool_support() -> bool:
@@ -3973,7 +3991,7 @@ async def create_chat_completion(
     )
 
     # Coerce tool call argument types to match schema (e.g. 50 -> 50 for integer params)
-    if tool_calls and getattr(request, tools, None):
+    if tool_calls and getattr(request, "tools", None):
         _coerce_tool_call_argument_types(tool_calls, request.tools)
 
     # Process response_format if specified
