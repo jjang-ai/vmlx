@@ -61,6 +61,56 @@ def validate_tool_arguments(
             raise ToolArgumentValidationError(error_msg) from e
 
 
+
+
+def coerce_arguments_to_schema(
+    arguments: Dict[str, Any],
+    tool: Optional["MCPTool"],
+) -> Dict[str, Any]:
+    """
+    Coerce argument types to match the tool's JSON schema.
+
+    Handles the case where the model outputs numeric values as strings
+    (e.g. limit="50" instead of limit=50), which fails schema validation.
+    Supports: integer, number (float), boolean coercion from str.
+    """
+    if tool is None or not tool.input_schema:
+        return arguments
+
+    properties = tool.input_schema.get("properties", {})
+    if not properties:
+        return arguments
+
+    coerced = dict(arguments)
+    for key, value in coerced.items():
+        if key not in properties:
+            continue
+        expected_type = properties[key].get("type")
+        if expected_type == "integer" and isinstance(value, str):
+            try:
+                coerced[key] = int(value)
+                logger.debug(
+                    f"Coerced argument '{key}': str('{value}') → int({int(value)})"
+                )
+            except (ValueError, TypeError):
+                pass
+        elif expected_type == "number" and isinstance(value, str):
+            try:
+                coerced[key] = float(value)
+                logger.debug(
+                    f"Coerced argument '{key}': str('{value}') → float({float(value)})"
+                )
+            except (ValueError, TypeError):
+                pass
+        elif expected_type == "boolean" and isinstance(value, str):
+            if value.lower() in ("true", "1", "yes"):
+                coerced[key] = True
+                logger.debug(f"Coerced argument '{key}': str → bool(True)")
+            elif value.lower() in ("false", "0", "no"):
+                coerced[key] = False
+                logger.debug(f"Coerced argument '{key}': str → bool(False)")
+    return coerced
+
 class ToolExecutor:
     """
     Handles execution of tool calls from model responses.
@@ -215,6 +265,11 @@ class ToolExecutor:
                     except json.JSONDecodeError:
                         arguments = {}
 
+                # Coerce argument types to match schema (e.g. "50" -> 50 for integer params)
+                _tool_ref = self._get_tool_by_name(name)
+                arguments = coerce_arguments_to_schema(arguments, _tool_ref)
+                func["arguments"] = arguments  # update so _validate_tool_call sees coerced args
+
                 server_name = self._get_server_for_tool(name)
                 tool_name = name.split("__")[-1] if "__" in name else name
 
@@ -324,6 +379,11 @@ class ToolExecutor:
                     arguments = json.loads(arguments)
                 except json.JSONDecodeError:
                     arguments = {}
+
+            # Coerce argument types to match schema (e.g. "50" -> 50 for integer params)
+            _tool_ref = self._get_tool_by_name(name)
+            arguments = coerce_arguments_to_schema(arguments, _tool_ref)
+            func["arguments"] = arguments  # update so _validate_tool_call sees coerced args
 
             server_name = self._get_server_for_tool(name)
             tool_name = name.split("__")[-1] if "__" in name else name
