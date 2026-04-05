@@ -19,7 +19,10 @@ from .models import Message
 SPECIAL_TOKENS_PATTERN = re.compile(
     r"<\|im_end\|>|<\|im_start\|>|<\|endoftext\|>|"
     r"<\|end\|>|<\|eot_id\|>|<\|start_header_id\|>|<\|end_header_id\|>|"
-    r"</s>|<s>|<pad>|\[PAD\]|\[SEP\]|\[CLS\]"
+    r"</s>|<s>|<pad>|\[PAD\]|\[SEP\]|\[CLS\]|"
+    # Gemma 4 channel/turn tokens — strip channel headers like
+    # "<|channel>default\n<channel|>" that leak into output when reasoning is off
+    r"<\|channel>[^\n]*\n<channel\|>|<\|channel>|<channel\|>|<turn\|>|<\|turn>"
 )
 
 
