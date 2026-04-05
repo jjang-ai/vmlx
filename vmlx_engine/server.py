@@ -906,6 +906,9 @@ def _parse_tool_calls_with_parser(
                 )
                 for tc in result.tool_calls
             ]
+            # Coerce argument types (e.g. "50" -> 50) before returning to any caller
+            if request and getattr(request, "tools", None):
+                _coerce_tool_call_argument_types(tool_calls, request.tools)
             return result.content or "", tool_calls
         else:
             # Specific parser found nothing — try generic parser as fallback
