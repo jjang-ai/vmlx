@@ -191,7 +191,7 @@ class MLLMSchedulerConfig:
     # Enable vision embedding cache
     enable_vision_cache: bool = True
     # Maximum cache entries
-    vision_cache_size: int = 100
+    vision_cache_size: int = 16
     # Default max tokens
     default_max_tokens: int = 256
     # Default video FPS for frame extraction

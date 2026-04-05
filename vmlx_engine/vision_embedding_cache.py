@@ -109,7 +109,7 @@ class VisionEmbeddingCache:
 
     def __init__(
         self,
-        max_pixel_entries: int = 100,
+        max_pixel_entries: int = 16,
         enabled: bool = True,
         **kwargs,
     ):
@@ -184,10 +184,14 @@ class VisionEmbeddingCache:
         key = self._make_key(images, prompt)
 
         # Evict oldest if at capacity
+        evicted = False
         while len(self._pixel_cache) >= self.max_pixel_entries:
             oldest_key = next(iter(self._pixel_cache))
             del self._pixel_cache[oldest_key]
+            evicted = True
             logger.debug(f"Pixel cache evicted: {oldest_key[:20]}...")
+        if evicted:
+            mx.clear_cache()
 
         entry = PixelCacheEntry(
             pixel_values=pixel_values,
@@ -209,8 +213,11 @@ class VisionEmbeddingCache:
 
     def clear(self) -> None:
         """Clear cache and reset stats."""
+        had_entries = len(self._pixel_cache) > 0
         self._pixel_cache.clear()
         self.stats = VisionCacheStats()
+        if had_entries:
+            mx.clear_cache()
 
     def __repr__(self) -> str:
         return (

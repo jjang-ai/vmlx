@@ -122,10 +122,10 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
 
-    # JANG models: check jang config has_vision field, then fall through
-    # to config.json check. Don't early-return False — some JANG models
-    # have has_vision=false in jang_config but DO have vision_config in
-    # config.json (e.g., Mistral 4 JANG VLM).
+    # JANG models: jang_config.has_vision is authoritative.
+    # When explicitly set, it overrides config.json vision_config
+    # (e.g., Mistral 4 text-only JANG has vision_config in config.json
+    # because mistral3 is a VLM wrapper arch, but jang_config says false).
     from ..utils.jang_loader import is_jang_model, _find_config_path
     from pathlib import Path
     if is_jang_model(local_path):
@@ -133,11 +133,14 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
             cfg_path = _find_config_path(Path(local_path))
             if cfg_path is not None:
                 jang_cfg = json.loads(cfg_path.read_text())
-                if jang_cfg.get("architecture", {}).get("has_vision", False):
+                has_vision = jang_cfg.get("architecture", {}).get("has_vision")
+                if has_vision is True:
                     return True
+                if has_vision is False:
+                    return False
         except Exception:
             pass
-        # Fall through to config.json check instead of returning False
+        # has_vision not set — fall through to config.json check
 
     # Primary: check config.json for vision_config (authoritative for local models)
     config_path = os.path.join(local_path, "config.json")

@@ -440,7 +440,12 @@ class HybridSSMStateCache:
                         mx.eval(*[x for x in c.cache if x is not None])
                     copied.append(c)
                 except Exception:
-                    copied.append(s)  # Fallback to shared ref
+                    # Deepcopy failed — return None (cache miss) rather than
+                    # returning a shared reference. The model mutates SSM state
+                    # in-place during forward passes, so a shared ref would
+                    # corrupt the stored companion for all future requests.
+                    logger.debug(f"SSM companion deepcopy failed for layer — treating as cache miss")
+                    return None
             return copied
         return states
 
@@ -1000,7 +1005,7 @@ class MLLMBatchGenerator:
         completion_batch_size: int = 16,  # Can be larger for text generation
         prefill_step_size: int = 1024,
         enable_vision_cache: bool = True,
-        vision_cache_size: int = 100,
+        vision_cache_size: int = 16,
         paged_cache_manager: Optional[Any] = None,
         block_aware_cache: Optional[Any] = None,
         memory_aware_cache: Optional[Any] = None,
@@ -1103,7 +1108,6 @@ class MLLMBatchGenerator:
         # Vision embedding cache for repeated images
         self.vision_cache = VisionEmbeddingCache(
             max_pixel_entries=vision_cache_size,
-            max_encoding_entries=vision_cache_size // 2,
             enabled=enable_vision_cache,
         )
         if enable_vision_cache:
@@ -1351,13 +1355,27 @@ class MLLMBatchGenerator:
             getattr(model_config, "image_token_index", None) if model_config else None
         )
 
-        # Prepare inputs using mlx_vlm
-        inputs = prepare_inputs(
-            self.processor,
-            images=all_images if all_images else None,
-            prompts=request.prompt,
-            image_token_index=image_token_index,
-        )
+        # Prepare inputs using mlx_vlm.
+        # prepare_inputs has a BaseImageProcessor path that hardcodes split("<image>").
+        # Models using a different image token (e.g. Gemma 4 uses "<|image|>") never
+        # get their images processed through that path. When the prompt has images but
+        # no "<image>" literal, bypass prepare_inputs and call process_inputs directly
+        # which invokes the processor's native __call__ (handles any image token format).
+        if all_images and "<image>" not in request.prompt:
+            from mlx_vlm.utils import process_inputs
+            inputs = process_inputs(
+                self.processor,
+                prompts=request.prompt,
+                images=all_images,
+                add_special_tokens=False,
+            )
+        else:
+            inputs = prepare_inputs(
+                self.processor,
+                images=all_images if all_images else None,
+                prompts=request.prompt,
+                image_token_index=image_token_index,
+            )
 
         request.input_ids = inputs.get("input_ids")
         request.pixel_values = inputs.get("pixel_values")
@@ -1903,7 +1921,18 @@ class MLLMBatchGenerator:
                         raise
                 per_request_caches.append(req_cache)
 
+                # Free pixel_values and vision tensors after encoding —
+                # they're never needed again and can be very large for
+                # high-res multi-image requests (fixes OOM on 122B + images)
+                req.pixel_values = None
+                req.attention_mask = None
+                req.image_grid_thw = None
+                req.extra_kwargs = {}
+
                 last_logits = logits[:, -1, :]
+                mx.eval(last_logits)  # materialize before freeing logits buffer
+                del logits
+                mx.clear_cache()
                 logprobs = last_logits - mx.logsumexp(
                     last_logits, axis=-1, keepdims=True
                 )
@@ -2002,6 +2031,7 @@ class MLLMBatchGenerator:
                     req.pixel_values = None
                     req.attention_mask = None
                     req.image_grid_thw = None
+                    req.extra_kwargs = {}
                     # Flush stale GPU state before retry
                     mx.clear_cache()
                     try:
@@ -2013,6 +2043,9 @@ class MLLMBatchGenerator:
                         logits = self._run_vision_encoding(req, cache=req_cache)
                         per_request_caches.append(req_cache)
                         last_logits = logits[:, -1, :]
+                        mx.eval(last_logits)  # materialize before freeing logits buffer
+                        del logits
+                        mx.clear_cache()
                         logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
                         req_sampler = self._make_request_sampler(req)
                         sampled = req_sampler(logprobs)
@@ -2047,6 +2080,9 @@ class MLLMBatchGenerator:
                                 logits = self._run_vision_encoding(req, cache=req_cache)
                                 per_request_caches.append(req_cache)
                                 last_logits = logits[:, -1, :]
+                                mx.eval(last_logits)  # materialize before freeing logits buffer
+                                del logits
+                                mx.clear_cache()
                                 logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
                                 req_sampler = self._make_request_sampler(req)
                                 sampled = req_sampler(logprobs)
@@ -2060,6 +2096,14 @@ class MLLMBatchGenerator:
                         else:
                             logger.error(f"Retry also failed for {req.request_id}: {retry_err}")
                 # Per-request prefill failure (bad image, OOM, etc.)
+                # Clean up vision tensors — without this, pixel_values and partial
+                # cache from make_cache() leak until GC collects them (hundreds of MB
+                # for 122B+ models with high-res images).
+                req.pixel_values = None
+                req.attention_mask = None
+                req.image_grid_thw = None
+                req.extra_kwargs = {}
+                mx.clear_cache()
                 # Queue an immediate error response instead of killing the entire batch.
                 logger.error(
                     f"Prefill failed for {req.request_id}: {prefill_err} — "

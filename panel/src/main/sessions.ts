@@ -1,5 +1,6 @@
 import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
 import { lookup } from 'dns'
+import { powerSaveBlocker } from 'electron'
 import { EventEmitter } from 'events'
 import { existsSync, readdirSync, statSync } from 'fs'
 import { createServer } from 'net'
@@ -110,6 +111,10 @@ export class SessionManager extends EventEmitter {
   // before marking session as down. Long prefill operations (e.g. 44k+
   // tokens) can block the server's event loop for 30+ seconds.
   private static readonly MAX_FAIL_COUNT = 60
+
+  // ── System sleep prevention ──
+  /** Electron powerSaveBlocker ID (-1 = not active) */
+  private powerBlockerId: number = -1
 
   // ── Idle / Sleep tracking ──
   /** Timestamp of last API request per session (for idle detection) */
@@ -811,8 +816,10 @@ export class SessionManager extends EventEmitter {
       this.failCounts.delete(sessionId)
       const managed = this.processes.get(sessionId)
 
+      // Mark intentional stop on managed process to prevent crash misreport
+      if (managed) managed.intentionalStop = true
+
       if (managed?.process) {
-        managed.intentionalStop = true
         await this.killChildProcess(managed.process)
         this.processes.delete(sessionId)
       } else if (managed?.adoptedPid) {
@@ -1262,6 +1269,9 @@ export class SessionManager extends EventEmitter {
 
       // Check for idle sessions that should enter sleep
       await this.checkIdleSessions()
+
+      // Prevent macOS system sleep while any model is actively running
+      this.updatePowerBlocker()
     }, 5000)
   }
 
@@ -1269,6 +1279,29 @@ export class SessionManager extends EventEmitter {
     if (this.monitorInterval) {
       clearInterval(this.monitorInterval)
       this.monitorInterval = null
+    }
+    this.releasePowerBlocker()
+  }
+
+  /** Start/stop powerSaveBlocker based on whether any session is running */
+  private updatePowerBlocker(): void {
+    const sessions = db.getSessions()
+    const hasActive = sessions.some(
+      (s: any) => s.type !== 'remote' && (s.status === 'running' || s.status === 'loading')
+    )
+    if (hasActive && this.powerBlockerId === -1) {
+      this.powerBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+      console.log(`[POWER] System sleep blocked (id=${this.powerBlockerId})`)
+    } else if (!hasActive && this.powerBlockerId !== -1) {
+      this.releasePowerBlocker()
+    }
+  }
+
+  private releasePowerBlocker(): void {
+    if (this.powerBlockerId !== -1) {
+      powerSaveBlocker.stop(this.powerBlockerId)
+      console.log(`[POWER] System sleep unblocked (id=${this.powerBlockerId})`)
+      this.powerBlockerId = -1
     }
   }
 

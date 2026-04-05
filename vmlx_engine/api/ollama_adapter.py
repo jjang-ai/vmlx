@@ -44,6 +44,9 @@ def ollama_chat_to_openai(body: dict) -> dict:
     # Forward tools if present (Ollama tool calling)
     if body.get("tools"):
         req["tools"] = body["tools"]
+    # Ollama 0.7+ supports think at top level: {"model": "...", "think": true}
+    if body.get("think") is not None:
+        req["enable_thinking"] = body["think"]
     return req
 
 

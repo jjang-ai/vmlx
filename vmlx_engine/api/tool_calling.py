@@ -260,6 +260,35 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
             flags=re.DOTALL,
         ).strip()
 
+    # Lenient Nemotron-variant: <tool_call> <function=name> <parameter=k> v <parameter=k2> v2 </tool_call>
+    # Some models omit </parameter> and </function> closing tags.
+    if not nemotron_matches:
+        lenient_nemotron_pattern = (
+            r"<tool_call>\s*<function=([^>]+)>(.*?)</tool_call>"
+        )
+        lenient_matches = re.findall(lenient_nemotron_pattern, text, re.DOTALL)
+        for name, params_block in lenient_matches:
+            # Parse parameters: <parameter=key> value (terminated by next <parameter= or end)
+            param_pattern = r"<parameter=([^>]+)>\s*(.*?)(?=\s*<parameter=|\s*$)"
+            params = re.findall(param_pattern, params_block, re.DOTALL)
+            arguments = {p_name.strip(): p_value.strip() for p_name, p_value in params}
+            tool_calls.append(
+                ToolCall(
+                    id=f"call_{uuid.uuid4().hex[:8]}",
+                    type="function",
+                    function=FunctionCall(
+                        name=name.strip(), arguments=json.dumps(arguments)
+                    ),
+                )
+            )
+        if lenient_matches:
+            cleaned_text = re.sub(
+                r"<tool_call>\s*<function=[^>]+>.*?</tool_call>",
+                "",
+                cleaned_text,
+                flags=re.DOTALL,
+            ).strip()
+
     # Pattern for Qwen-style tool calls: <tool_call>{"json"}</tool_call>
     qwen_pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"
     qwen_matches = re.findall(qwen_pattern, cleaned_text, re.DOTALL)
