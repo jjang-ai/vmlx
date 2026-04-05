@@ -104,12 +104,13 @@ def _convert_to_json(args_str: str) -> str:
     s = args_str
     # Replace Gemma 4 escape tokens with double quotes
     s = s.replace(_ESCAPE_OPEN, '"').replace(_ESCAPE_CLOSE, '"')
-    # Add quotes around unquoted keys (word before colon)
-    s = re.sub(r'(\b\w+)\s*:', r'"\1":', s)
-    # Wrap in braces if not already
+    # Wrap in braces first so the regex can anchor on { for the first key
     s = s.strip()
     if not s.startswith('{'):
         s = '{' + s + '}'
+    # Add quotes around unquoted keys at JSON key positions (after { or ,).
+    # This avoids corrupting values like URLs (http://...) or times (14:30).
+    s = re.sub(r'(?<=[{,])\s*(\w+)\s*:', r' "\1":', s)
     return s
 
 

@@ -49,7 +49,7 @@ class MLLMModelWrapper:
             _mt = str(getattr(model, "model_type", "")).lower()
             self._inject_pixel_values = (
                 hasattr(model, "model_type")
-                and ("gemma3" in _mt or "gemma4" in _mt)
+                and _mt in ("gemma3", "gemma3n", "gemma4")
             )
 
     def __call__(self, *args, **kwargs):
@@ -181,7 +181,7 @@ class BatchedEngine(BaseEngine):
             prefill_batch_size=prefill_batch_size,
             completion_batch_size=completion_batch_size,
             enable_vision_cache=True,
-            vision_cache_size=100,
+            vision_cache_size=16,
             # Propagate cache settings from user's SchedulerConfig
             enable_prefix_cache=getattr(self._scheduler_config, "enable_prefix_cache", True),
             use_paged_cache=getattr(self._scheduler_config, "use_paged_cache", True),

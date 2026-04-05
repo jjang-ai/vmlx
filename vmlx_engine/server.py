@@ -761,22 +761,38 @@ def _parse_tool_calls_with_parser(
     Returns:
         Tuple of (cleaned_text, tool_calls)
     """
-    # If auto tool choice is not enabled, use the generic parser
-    if not _enable_auto_tool_choice or not _tool_call_parser:
+    # Determine which parser to use.
+    # If --enable-auto-tool-choice was set, use the configured parser.
+    # Otherwise, if the request has tools, auto-detect from model config
+    # so clients like Cherry Studio get proper parsing without CLI flags.
+    active_parser = _tool_call_parser
+    if not active_parser and request and getattr(request, 'tools', None):
+        try:
+            from .model_config_registry import get_model_config_registry
+            registry = get_model_config_registry()
+            detected = registry.get_tool_parser(
+                _model_path or _model_name or getattr(request, 'model', '') or ''
+            )
+            if detected:
+                active_parser = detected
+        except Exception:
+            pass
+
+    if not active_parser:
         return parse_tool_calls(output_text)
 
     # Create a fresh parser instance per call for thread-safety.
     # Non-streaming requests can be concurrent — sharing a global instance
     # risks interleaved state even with reset().
     try:
-        parser_cls = ToolParserManager.get_tool_parser(_tool_call_parser)
+        parser_cls = ToolParserManager.get_tool_parser(active_parser)
         tokenizer = None
         if _engine is not None and hasattr(_engine, "_tokenizer"):
             tokenizer = _engine._tokenizer
         parser_instance = parser_cls(tokenizer)
     except Exception as e:
         logger.warning(
-            f"Failed to initialize tool parser '{_tool_call_parser}': {e}"
+            f"Failed to initialize tool parser '{active_parser}': {e}"
         )
         return parse_tool_calls(output_text)
 
@@ -824,17 +840,28 @@ def _detect_native_tool_support() -> bool:
     Returns:
         True if native format should be preserved
     """
-    if not _enable_auto_tool_choice or not _tool_call_parser:
+    # Determine active parser: CLI-configured or auto-detected from model config
+    active_parser = _tool_call_parser
+    if not active_parser:
+        try:
+            from .model_config_registry import get_model_config_registry
+            registry = get_model_config_registry()
+            active_parser = registry.get_tool_parser(
+                _model_path or _model_name or ''
+            )
+        except Exception:
+            pass
+    if not active_parser:
         return False
 
     try:
-        parser_cls = ToolParserManager.get_tool_parser(_tool_call_parser)
+        parser_cls = ToolParserManager.get_tool_parser(active_parser)
         if parser_cls.supports_native_format():
             return True
     except KeyError:
         # Parser not found - this is a configuration error, log as error
         logger.error(
-            f"Tool parser '{_tool_call_parser}' not found. "
+            f"Tool parser '{active_parser}' not found. "
             f"Available parsers: {ToolParserManager.list_registered()}"
         )
         return False
