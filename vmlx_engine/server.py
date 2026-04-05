@@ -745,6 +745,97 @@ def get_engine() -> BaseEngine:
     return _engine
 
 
+
+def _coerce_tool_call_argument_types(
+    tool_calls: list,
+    tools: list,
+) -> None:
+    """
+    Coerce tool call argument types in-place to match request tool schemas.
+
+    When a model serializes integer values as strings (e.g. limit="50"),
+    this fixes them before the response is sent to the client, preventing
+    MCP servers from rejecting them with type validation errors.
+    """
+    import json as _json
+
+    # Build tool name → properties map from request.tools
+    schema_map = {}
+    for tool in (tools or []):
+        try:
+            if hasattr(tool, "function") and tool.function:
+                name = getattr(tool.function, "name", "")
+                params = getattr(tool.function, "parameters", {}) or {}
+            elif isinstance(tool, dict):
+                fn = tool.get("function", {})
+                name = fn.get("name", "")
+                params = fn.get("parameters", {}) or {}
+            else:
+                continue
+            if name:
+                schema_map[name] = params.get("properties", {}) if isinstance(params, dict) else {}
+        except Exception:
+            continue
+
+    for tc in (tool_calls or []):
+        try:
+            fn = getattr(tc, "function", None) or (tc.get("function", {}) if isinstance(tc, dict) else {})
+            name = getattr(fn, "name", None) or (fn.get("name", "") if isinstance(fn, dict) else "")
+            args_raw = getattr(fn, "arguments", None)
+            if args_raw is None and isinstance(fn, dict):
+                args_raw = fn.get("arguments", "{}")
+
+            if not isinstance(args_raw, str):
+                continue
+
+            try:
+                args = _json.loads(args_raw)
+            except _json.JSONDecodeError:
+                continue
+
+            if not isinstance(args, dict):
+                continue
+
+            properties = schema_map.get(name, {})
+            coerced = False
+            for key, val in args.items():
+                if key not in properties or not isinstance(val, str):
+                    continue
+                expected = properties[key].get("type")
+                if expected == "integer":
+                    try:
+                        args[key] = int(val)
+                        coerced = True
+                    except (ValueError, TypeError):
+                        pass
+                elif expected == "number":
+                    try:
+                        args[key] = float(val)
+                        coerced = True
+                    except (ValueError, TypeError):
+                        pass
+                elif expected == "boolean":
+                    lv = val.lower()
+                    if lv in ("true", "1", "yes"):
+                        args[key] = True
+                        coerced = True
+                    elif lv in ("false", "0", "no"):
+                        args[key] = False
+                        coerced = True
+
+            if coerced:
+                new_args = _json.dumps(args, ensure_ascii=False)
+                if hasattr(fn, "arguments"):
+                    object.__setattr__(fn, "arguments", new_args)
+                else:
+                    fn["arguments"] = new_args
+                logger.debug(
+                    f"Coerced tool call arguments for '{name}': {args_raw!r} -> {new_args!r}"
+                )
+        except Exception as e:
+            logger.debug(f"_coerce_tool_call_argument_types: skipping tc due to {e}")
+
+
 def _parse_tool_calls_with_parser(
     output_text: str, request: ChatCompletionRequest | ResponsesRequest | None = None
 ) -> tuple[str, list | None]:
@@ -3877,6 +3968,10 @@ async def create_chat_completion(
         _parse_tool_calls_with_parser(_cc_parse_text, request)
         if not _suppress_tools else (_cc_parse_text or content_for_parsing, None)
     )
+
+    # Coerce tool call argument types to match schema (e.g. 50 -> 50 for integer params)
+    if tool_calls and getattr(request, tools, None):
+        _coerce_tool_call_argument_types(tool_calls, request.tools)
 
     # Process response_format if specified
     if response_format and not tool_calls:
