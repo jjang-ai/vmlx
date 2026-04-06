@@ -274,6 +274,7 @@ def serve_command(args):
         scheduler_config = SchedulerConfig(
             max_num_seqs=args.max_num_seqs,
             prefill_batch_size=args.prefill_batch_size,
+            prefill_step_size=getattr(args, 'prefill_step_size', 2048),
             completion_batch_size=args.completion_batch_size,
             enable_prefix_cache=enable_prefix_cache,
             prefix_cache_size=args.prefix_cache_size,
@@ -521,6 +522,7 @@ def bench_command(args):
         scheduler_config = SchedulerConfig(
             max_num_seqs=args.max_num_seqs,
             prefill_batch_size=args.prefill_batch_size,
+            prefill_step_size=getattr(args, 'prefill_step_size', 2048),
             completion_batch_size=args.completion_batch_size,
             enable_prefix_cache=enable_prefix_cache,
             prefix_cache_size=args.prefix_cache_size,
@@ -805,6 +807,13 @@ Examples:
         help="How many new prompts to process at once during the 'prefill' phase "
              "(reading the input). Higher = faster throughput but more memory spikes. "
              "Requires --continuous-batching. (default: 8)",
+    )
+    serve_parser.add_argument(
+        "--prefill-step-size", type=int, default=2048,
+        help="Maximum tokens per prefill chunk. Smaller values reduce peak Metal memory "
+             "during prefill — required for very large MoE models (e.g. 128-expert Qwen3.5-397B) "
+             "that hit Metal single-buffer OOM at long contexts. Try 512 or 256 if prefill "
+             "crashes. Requires --continuous-batching. (default: 2048)",
     )
     serve_parser.add_argument(
         "--completion-batch-size", type=int, default=32,
@@ -1242,6 +1251,10 @@ Examples:
     )
     bench_parser.add_argument(
         "--prefill-batch-size", type=int, default=8, help="Prefill batch size"
+    )
+    bench_parser.add_argument(
+        "--prefill-step-size", type=int, default=2048,
+        help="Tokens per prefill chunk — reduce for large MoE models hitting Metal OOM (default: 2048)"
     )
     bench_parser.add_argument(
         "--completion-batch-size", type=int, default=16, help="Completion batch size"

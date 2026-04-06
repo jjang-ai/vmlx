@@ -26,6 +26,7 @@ interface ResolvedSession {
   modelName: string
   modelPath: string
   servedModelName?: string
+  embeddingModel?: string
 }
 
 export class ApiGateway extends EventEmitter {
@@ -265,6 +266,7 @@ export class ApiGateway extends EventEmitter {
         modelName: s.modelName || s.modelPath.split('/').pop() || '',
         modelPath: s.modelPath,
         servedModelName: config.servedModelName || undefined,
+        embeddingModel: config.embeddingModel || undefined,
       }
     })
 
@@ -295,6 +297,14 @@ export class ApiGateway extends EventEmitter {
     const byPath = candidates.find(c => c.modelPath === modelName)
     if (byPath) return byPath
 
+    // 4b. Exact match on embeddingModel (for --embedding-model sessions)
+    const byEmbed = candidates.find(c => c.embeddingModel === modelName)
+    if (byEmbed) return byEmbed
+
+    // 4c. Case-insensitive embeddingModel match
+    const byEmbedCI = candidates.find(c => c.embeddingModel?.toLowerCase() === lower)
+    if (byEmbedCI) return byEmbedCI
+
     // 5. Case-insensitive modelName match
     const byNameCI = candidates.find(c => c.modelName.toLowerCase() === lower)
     if (byNameCI) return byNameCI
@@ -324,6 +334,9 @@ export class ApiGateway extends EventEmitter {
       let config: any = {}
       try { config = JSON.parse(s.config || '{}') } catch (_) {}
       names.push(config.servedModelName || s.modelName || s.modelPath.split('/').pop() || 'unknown')
+      if (config.embeddingModel && !names.includes(config.embeddingModel)) {
+        names.push(config.embeddingModel)
+      }
     }
     return names
   }
@@ -462,6 +475,17 @@ export class ApiGateway extends EventEmitter {
         seen.add(actualName)
         models.push({
           id: actualName,
+          object: 'model',
+          created: Math.floor((s.createdAt || Date.now()) / 1000),
+          owned_by: 'vmlx-engine',
+        })
+      }
+
+      // List embedding model if configured
+      if (config.embeddingModel && !seen.has(config.embeddingModel)) {
+        seen.add(config.embeddingModel)
+        models.push({
+          id: config.embeddingModel,
           object: 'model',
           created: Math.floor((s.createdAt || Date.now()) / 1000),
           owned_by: 'vmlx-engine',

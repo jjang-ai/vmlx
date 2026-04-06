@@ -137,9 +137,15 @@ class Gemma4ReasoningParser(ReasoningParser):
             if len(current_text) < 18:
                 # Could be start of marker — hold
                 return None
-            # Not a thought channel — emit as content
-            if clean_delta:
-                return DeltaMessage(content=clean_delta)
+            # Not a thought channel — emit as content.
+            # On the first emit (crossing the 18-char threshold), flush
+            # ALL accumulated text so the buffered prefix isn't lost.
+            content_so_far = current_text.replace(_EOT, "").strip()
+            if content_so_far and len(content_so_far) > self._emitted_content:
+                new = content_so_far[self._emitted_content:]
+                self._emitted_content = len(content_so_far)
+                if new:
+                    return DeltaMessage(content=new)
             return None
 
         # Skip the special tokens themselves

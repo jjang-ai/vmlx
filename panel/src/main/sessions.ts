@@ -877,7 +877,7 @@ export class SessionManager extends EventEmitter {
     'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
     'prefixCacheSize', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
-    'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
+    'maxNumSeqs', 'prefillBatchSize', 'prefillStepSize', 'completionBatchSize',
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
     // to server in the request body (chat.ts:818), so changes take effect immediately.
@@ -1710,6 +1710,9 @@ export class SessionManager extends EventEmitter {
     }
     if (config.prefillBatchSize && config.prefillBatchSize > 0) {
       args.push('--prefill-batch-size', config.prefillBatchSize.toString())
+    }
+    if (config.prefillStepSize && config.prefillStepSize > 0) {
+      args.push('--prefill-step-size', config.prefillStepSize.toString())
     }
     if (config.completionBatchSize && config.completionBatchSize > 0) {
       args.push('--completion-batch-size', config.completionBatchSize.toString())
