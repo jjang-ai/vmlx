@@ -1960,8 +1960,12 @@ class MLLMBatchGenerator:
                 all_logprobs.append(logprobs.squeeze(0))
                 succeeded_requests.append(req)
 
-                # Capture SSM state at prompt boundary for hybrid models
-                if self._is_hybrid and req.prompt_cache is None:
+                # Capture SSM state at prompt boundary for hybrid models.
+                # Must fire on BOTH cache-miss AND cache-hit turns: on a hit,
+                # the SSM state advances during prefill of remaining tokens,
+                # so the next turn needs a fresh companion keyed on the longer
+                # token list.  (Fixes alternating miss/hit pattern — #45)
+                if self._is_hybrid:
                     try:
                         kv_set = set(self._hybrid_kv_positions)
                         ssm_layers = []

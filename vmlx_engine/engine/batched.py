@@ -180,6 +180,7 @@ class BatchedEngine(BaseEngine):
             max_num_seqs=max_num_seqs,
             prefill_batch_size=prefill_batch_size,
             completion_batch_size=completion_batch_size,
+            prefill_step_size=getattr(self._scheduler_config, "prefill_step_size", 1024),
             enable_vision_cache=True,
             vision_cache_size=16,
             # Propagate cache settings from user's SchedulerConfig

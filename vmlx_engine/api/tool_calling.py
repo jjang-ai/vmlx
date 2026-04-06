@@ -239,7 +239,13 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
         # Parse parameters from <parameter=name>value</parameter> format
         param_pattern = r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>"
         params = re.findall(param_pattern, params_block, re.DOTALL)
-        arguments = {p_name.strip(): p_value.strip() for p_name, p_value in params}
+        arguments = {}
+        for p_name, p_value in params:
+            v = p_value.strip()
+            try:
+                arguments[p_name.strip()] = json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                arguments[p_name.strip()] = v
 
         tool_calls.append(
             ToolCall(
@@ -271,7 +277,13 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
             # Parse parameters: <parameter=key> value (terminated by next <parameter= or end)
             param_pattern = r"<parameter=([^>]+)>\s*(.*?)(?=\s*<parameter=|\s*$)"
             params = re.findall(param_pattern, params_block, re.DOTALL)
-            arguments = {p_name.strip(): p_value.strip() for p_name, p_value in params}
+            arguments = {}
+            for p_name, p_value in params:
+                v = p_value.strip()
+                try:
+                    arguments[p_name.strip()] = json.loads(v)
+                except (json.JSONDecodeError, ValueError):
+                    arguments[p_name.strip()] = v
             tool_calls.append(
                 ToolCall(
                     id=f"call_{uuid.uuid4().hex[:8]}",
