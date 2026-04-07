@@ -1,0 +1,1400 @@
+openapi: 3.1.0
+info:
+  title: vmlx Unified Local API
+  version: 0.1.0
+  description: >-
+    Route inventory generated from FastAPI decorators in vmlx_engine/server.py.
+servers:
+  - url: http://127.0.0.1:8000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: x-api-key
+paths:
+  /admin/deep-sleep:
+    post:
+      operationId: "admin_deep_sleep"
+      summary: "Enter deep sleep: unload model entirely. Process stays alive, port stays allocated."
+      tags:
+        - "Admin"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /admin/soft-sleep:
+    post:
+      operationId: "admin_soft_sleep"
+      summary: "Enter soft sleep: clear all caches, reduce Metal cache limit. Model stays loaded."
+      tags:
+        - "Admin"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /admin/wake:
+    post:
+      operationId: "admin_wake"
+      summary: "Wake from sleep: reload model. Triggered by JIT or manual wake."
+      tags:
+        - "Admin"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/chat:
+    post:
+      operationId: "ollama_chat"
+      summary: "Ollama-compatible chat — translates to /v1/chat/completions internally."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/copy:
+    post:
+      operationId: "ollama_copy"
+      summary: "ollama copy"
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/create:
+    post:
+      operationId: "ollama_create"
+      summary: "ollama create"
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/delete:
+    post:
+      operationId: "ollama_delete"
+      summary: "ollama delete"
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/embed:
+    post:
+      operationId: "ollama_embed"
+      summary: "Ollama-compatible embeddings."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/embeddings:
+    post:
+      operationId: "ollama_embed"
+      summary: "Ollama-compatible embeddings."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/generate:
+    post:
+      operationId: "ollama_generate"
+      summary: "Ollama-compatible generate — translates to /v1/completions internally."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/ps:
+    get:
+      operationId: "ollama_ps"
+      summary: "Ollama-compatible running model list."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/pull:
+    post:
+      operationId: "ollama_pull"
+      summary: "ollama pull"
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/show:
+    post:
+      operationId: "ollama_show"
+      summary: "Ollama-compatible model info."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/tags:
+    get:
+      operationId: "ollama_tags"
+      summary: "Ollama-compatible model list."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /api/version:
+    get:
+      operationId: "ollama_version"
+      summary: "Ollama version shim for client compat checks."
+      tags:
+        - "Ollama Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /audio/speech:
+    post:
+      operationId: "create_speech_compat"
+      summary: "OpenAI spec path alias for /v1/audio/speech."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /audio/transcriptions:
+    post:
+      operationId: "create_transcription_compat"
+      summary: "OpenAI spec path alias for /v1/audio/transcriptions."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /audio/translations:
+    post:
+      operationId: "create_translation_compat"
+      summary: "OpenAI-compatible translation endpoint."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /audio/voices:
+    get:
+      operationId: "list_voices_compat"
+      summary: "OpenAI spec path alias for /v1/audio/voices."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /chat/completions:
+    post:
+      operationId: "create_chat_completion_compat"
+      summary: "OpenAI spec path alias for /v1/chat/completions."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /completions:
+    post:
+      operationId: "create_completion_compat"
+      summary: "OpenAI spec path alias for /v1/completions."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /deepgram/vl/listen:
+    post:
+      operationId: "deepgram_listen"
+      summary: "Deepgram-compatible pre-recorded transcription endpoint (local MLX)."
+      tags:
+        - "Deepgram"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /deepgram/vl/models:
+    get:
+      operationId: "deepgram_models_alias"
+      summary: "Deepgram-style model list endpoint (alias, local only)."
+      tags:
+        - "Deepgram"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /deepgram/vl/models/{model_id}:
+    get:
+      operationId: "deepgram_model_detail_alias"
+      summary: "Deepgram-style model detail endpoint (alias, local only)."
+      tags:
+        - "Deepgram"
+      parameters:
+        - in: path
+          name: "model_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /deepgram/vl/read:
+    post:
+      operationId: "deepgram_read"
+      summary: "Deepgram-compatible text analysis endpoint (local MLX)."
+      tags:
+        - "Deepgram"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /deepgram/vl/speak:
+    post:
+      operationId: "deepgram_speak"
+      summary: "Deepgram-compatible TTS endpoint (local MLX)."
+      tags:
+        - "Deepgram"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /embeddings:
+    post:
+      operationId: "create_embeddings_compat"
+      summary: "OpenAI spec path alias for /v1/embeddings."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /files:
+    get:
+      operationId: "list_local_files"
+      summary: "List locally stored files in OpenAI-compatible format."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    post:
+      operationId: "create_local_file"
+      summary: "Upload a file to a local disk-backed store with OpenAI-compatible metadata."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /files/{file_id}:
+    delete:
+      operationId: "delete_local_file"
+      summary: "Delete a locally stored file."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "file_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    get:
+      operationId: "retrieve_local_file"
+      summary: "Retrieve metadata for a locally stored file."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "file_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /files/{file_id}/content:
+    get:
+      operationId: "retrieve_local_file_content"
+      summary: "Return the raw content of a locally stored file."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "file_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /health:
+    get:
+      operationId: "health"
+      summary: "Health check endpoint."
+      tags:
+        - "Admin"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /images/edits:
+    post:
+      operationId: "create_image_edit_compat"
+      summary: "OpenAI spec path alias for /v1/images/edits."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /images/generations:
+    post:
+      operationId: "create_image_compat"
+      summary: "OpenAI spec path alias for /v1/images/generations."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /images/variations:
+    post:
+      operationId: "create_image_variation_compat"
+      summary: "OpenAI-compatible image variations endpoint."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /lmstudio/v1/chat:
+    post:
+      operationId: "lmstudio_chat"
+      summary: "LM Studio native v1 chat endpoint with stateful sessions."
+      tags:
+        - "LM Studio"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /lmstudio/v1/models:
+    get:
+      operationId: "lmstudio_list_models"
+      summary: "LM Studio native v1 model list."
+      tags:
+        - "LM Studio"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /lmstudio/v1/models/download:
+    post:
+      operationId: "lmstudio_download_model"
+      summary: "LM Studio native v1 model download endpoint."
+      tags:
+        - "LM Studio"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /lmstudio/v1/models/download/status:
+    get:
+      operationId: "lmstudio_download_status"
+      summary: "LM Studio native v1 model download status endpoint."
+      tags:
+        - "LM Studio"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /lmstudio/v1/models/load:
+    post:
+      operationId: "lmstudio_load_model"
+      summary: "LM Studio native v1 model load endpoint."
+      tags:
+        - "LM Studio"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /lmstudio/v1/models/unload:
+    post:
+      operationId: "lmstudio_unload_model"
+      summary: "LM Studio native v1 model unload endpoint."
+      tags:
+        - "LM Studio"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /models:
+    get:
+      operationId: "list_models_compat"
+      summary: "OpenAI spec path alias for GET /v1/models."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /models/{model}:
+    get:
+      operationId: "retrieve_model_compat"
+      summary: "OpenAI spec path for retrieving model metadata."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "model"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /moderations:
+    post:
+      operationId: "create_moderation_compat"
+      summary: "OpenAI-compatible moderation endpoint (local heuristic placeholder)."
+      tags:
+        - "Other"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /realtime:
+    get:
+      operationId: "realtime_websocket"
+      summary: "OpenAI Realtime-compatible websocket endpoint."
+      tags:
+        - "OpenAI Compatible"
+      x-websocket: true
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "101":
+          description: "Switching Protocols"
+  /realtime/client_secrets:
+    post:
+      operationId: "create_realtime_client_secret"
+      summary: "OpenAI spec endpoint for ephemeral realtime client secrets."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /realtime/sessions:
+    post:
+      operationId: "create_realtime_session_compat"
+      summary: "OpenAI spec path alias for realtime session creation."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /realtime/transcription_sessions:
+    post:
+      operationId: "create_realtime_transcription_session"
+      summary: "Create an OpenAI Realtime transcription session with a local client secret."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /responses:
+    post:
+      operationId: "create_response_compat"
+      summary: "OpenAI spec path alias for /v1/responses."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /responses/{response_id}:
+    delete:
+      operationId: "delete_response_compat"
+      summary: "Delete a locally persisted response object."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    get:
+      operationId: "get_response_compat"
+      summary: "Retrieve a locally persisted response object."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /responses/{response_id}/cancel:
+    post:
+      operationId: "cancel_response_compat"
+      summary: "OpenAI spec path alias for /v1/responses/{response_id}/cancel."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /responses/{response_id}/input_items:
+    get:
+      operationId: "get_response_input_items_compat"
+      summary: "Compatibility endpoint for response input item retrieval."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/audio/speech:
+    post:
+      operationId: "create_speech"
+      summary: "Generate speech from text (OpenAI TTS API compatible)."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/audio/transcriptions:
+    post:
+      operationId: "create_transcription"
+      summary: "Transcribe audio to text (OpenAI Whisper API compatible)."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/audio/voices:
+    get:
+      operationId: "list_voices"
+      summary: "List available voices for a TTS model."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/cache:
+    delete:
+      operationId: "clear_cache"
+      summary: "Clear caches."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/cache/entries:
+    get:
+      operationId: "cache_entries"
+      summary: "List cached prefix entries with metadata."
+      tags:
+        - "Cache"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/cache/stats:
+    get:
+      operationId: "cache_stats"
+      summary: "Get cache statistics for debugging and monitoring."
+      tags:
+        - "Cache"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/cache/warm:
+    post:
+      operationId: "cache_warm"
+      summary: "Warm the prefix cache by pre-computing KV states for given prompts."
+      tags:
+        - "Cache"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/chat/completions:
+    post:
+      operationId: "create_chat_completion"
+      summary: "Create a chat completion (supports multimodal content for VLM models)."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/chat/completions/{request_id}/cancel:
+    post:
+      operationId: "cancel_chat_completion"
+      summary: "Cancel an ongoing chat completion request."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "request_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/completions:
+    post:
+      operationId: "create_completion"
+      summary: "Create a text completion."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/completions/{request_id}/cancel:
+    post:
+      operationId: "cancel_completion"
+      summary: "Cancel an ongoing text completion request."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "request_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/embeddings:
+    post:
+      operationId: "create_embeddings"
+      summary: "Create embeddings for the given input text(s)."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/files:
+    get:
+      operationId: "list_local_files"
+      summary: "List locally stored files in OpenAI-compatible format."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    post:
+      operationId: "create_local_file"
+      summary: "Upload a file to a local disk-backed store with OpenAI-compatible metadata."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/files/{file_id}:
+    delete:
+      operationId: "delete_local_file"
+      summary: "Delete a locally stored file."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "file_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    get:
+      operationId: "retrieve_local_file"
+      summary: "Retrieve metadata for a locally stored file."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "file_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/files/{file_id}/content:
+    get:
+      operationId: "retrieve_local_file_content"
+      summary: "Return the raw content of a locally stored file."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "file_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/images/edits:
+    post:
+      operationId: "create_image_edit"
+      summary: "Edit an image using an instruction and a source image."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/images/generations:
+    post:
+      operationId: "create_image"
+      summary: "Generate images from text prompts using Flux models."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/mcp/execute:
+    post:
+      operationId: "execute_mcp_tool"
+      summary: "Execute an MCP tool."
+      tags:
+        - "MCP"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/mcp/servers:
+    get:
+      operationId: "list_mcp_servers"
+      summary: "Get status of all MCP servers."
+      tags:
+        - "MCP"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/mcp/tools:
+    get:
+      operationId: "list_mcp_tools"
+      summary: "List all available MCP tools."
+      tags:
+        - "MCP"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/messages:
+    post:
+      operationId: "create_anthropic_message"
+      summary: "Anthropic Messages API endpoint."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/models:
+    get:
+      operationId: "list_models"
+      summary: "List available models."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/realtime:
+    get:
+      operationId: "realtime_websocket"
+      summary: "OpenAI Realtime-compatible websocket endpoint."
+      tags:
+        - "OpenAI Compatible"
+      x-websocket: true
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "101":
+          description: "Switching Protocols"
+  /v1/realtime/client_secrets:
+    post:
+      operationId: "create_realtime_client_secret"
+      summary: "OpenAI spec endpoint for ephemeral realtime client secrets."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/realtime/sessions:
+    post:
+      operationId: "create_realtime_session"
+      summary: "Create an OpenAI Realtime-compatible session."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/realtime/transcription_sessions:
+    post:
+      operationId: "create_realtime_transcription_session"
+      summary: "Create an OpenAI Realtime transcription session with a local client secret."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/rerank:
+    post:
+      operationId: "create_rerank"
+      summary: "Rerank documents by relevance to a query."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/responses:
+    post:
+      operationId: "create_response"
+      summary: "Create a response using the OpenAI Responses API format."
+      tags:
+        - "OpenAI Compatible"
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/responses/{response_id}:
+    delete:
+      operationId: "delete_response_compat"
+      summary: "Delete a locally persisted response object."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    get:
+      operationId: "get_response_compat"
+      summary: "Retrieve a locally persisted response object."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/responses/{response_id}/cancel:
+    post:
+      operationId: "cancel_response"
+      summary: "Cancel an ongoing Responses API request."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/responses/{response_id}/input_items:
+    get:
+      operationId: "get_response_input_items_compat"
+      summary: "Compatibility endpoint for response input item retrieval."
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "response_id"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /v1/{prefix}/{rest:path}:
+    delete:
+      operationId: "openai_v1_core_delete_fallback"
+      summary: "openai v1 core delete fallback"
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    get:
+      operationId: "openai_v1_core_get_fallback"
+      summary: "openai v1 core get fallback"
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    patch:
+      operationId: "openai_v1_core_patch_fallback"
+      summary: "openai v1 core patch fallback"
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    post:
+      operationId: "openai_v1_core_post_fallback"
+      summary: "openai v1 core post fallback"
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    put:
+      operationId: "openai_v1_core_put_fallback"
+      summary: "openai v1 core put fallback"
+      tags:
+        - "OpenAI Compatible"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+  /{prefix}/{rest:path}:
+    delete:
+      operationId: "openai_cloud_delete_fallback"
+      summary: "openai cloud delete fallback"
+      tags:
+        - "Other"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    get:
+      operationId: "openai_cloud_get_fallback"
+      summary: "openai cloud get fallback"
+      tags:
+        - "Other"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    patch:
+      operationId: "openai_cloud_patch_fallback"
+      summary: "openai cloud patch fallback"
+      tags:
+        - "Other"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    post:
+      operationId: "openai_cloud_post_fallback"
+      summary: "openai cloud post fallback"
+      tags:
+        - "Other"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"
+    put:
+      operationId: "openai_cloud_put_fallback"
+      summary: "openai cloud put fallback"
+      tags:
+        - "Other"
+      parameters:
+        - in: path
+          name: "prefix"
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: "rest"
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
+      responses:
+        "200":
+          description: "Successful response"

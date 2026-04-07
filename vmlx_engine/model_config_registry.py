@@ -180,6 +180,20 @@ class ModelConfigRegistry:
                         self._match_cache[model_name] = config
                         return config
 
+            # Name-based fallback for emerging model IDs that may not expose a
+            # stable model_type yet (or when config.json couldn't be loaded).
+            lower_name = model_name.lower()
+            if "voxtral" in lower_name:
+                for config in self._configs:
+                    if config.family_name == "voxtral":
+                        self._match_cache[model_name] = config
+                        return config
+            if "qwen3" in lower_name and "omni" in lower_name:
+                for config in self._configs:
+                    if config.family_name == "qwen3_omni":
+                        self._match_cache[model_name] = config
+                        return config
+
             self._match_cache[model_name] = _DEFAULT_CONFIG
             return _DEFAULT_CONFIG
 

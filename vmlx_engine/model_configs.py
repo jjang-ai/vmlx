@@ -175,6 +175,20 @@ def register_all(registry=None):
 
     _register(
         ModelConfig(
+        family_name="qwen3_omni",
+        model_types=["qwen3_omni", "qwen3_omni_moe", "qwen3omni"],
+        cache_type="kv",
+        eos_tokens=["<|im_end|>"],
+        tool_parser="qwen",
+        reasoning_parser="gemma4",
+        think_in_template=True,
+        is_mllm=True,
+        priority=4,
+        )
+    )
+
+    _register(
+        ModelConfig(
             family_name="qwen2",
             model_types=["qwen2", "qwen2_moe", "qwen"],
             cache_type="kv",
@@ -324,6 +338,17 @@ def register_all(registry=None):
             priority=10,
         )
     )
+
+    _register(ModelConfig(
+        family_name="voxtral",
+        model_types=["voxtral", "voxtral_realtime"],
+        cache_type="kv",
+        is_mllm=True,
+        tool_parser="mistral",
+        supports_native_tools=True,
+        preserve_native_tool_format=True,
+        priority=8,
+    ))
 
     # ── DeepSeek family ──
 
