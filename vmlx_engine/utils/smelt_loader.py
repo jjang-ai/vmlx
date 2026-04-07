@@ -365,11 +365,172 @@ def _build_expert_index(model_path: Path) -> ExpertIndex:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ExpertIndex — Part 5: smelt_estimate convenience helper
+# ExpertIndex — Part 5: smelt_estimate helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# JANG config filenames in priority order
+_JANG_CONFIG_NAMES = (
+    "jang_config.json",
+    "jjqf_config.json",
+    "jang_cfg.json",
+    "mxq_config.json",
+)
 
-def smelt_estimate(index: ExpertIndex, expert_fraction: float) -> dict:
+
+def smelt_estimate(model_path: "str | Path") -> dict:
+    """Fast pre-scan (JSON only, no model loading) for Smelt mode compatibility.
+
+    Reads jang_config.json and config.json, then calls ExpertIndex.build() to
+    scan safetensors headers.  No weight data is loaded at any point.
+
+    Args:
+        model_path: Path to a JANG quantised model directory.
+
+    Returns:
+        On success::
+
+            {
+                "compatible": True,
+                "num_experts": 256,
+                "num_moe_layers": 44,
+                "backbone_gb": 4.2,
+                "expert_size_mb": 0.86,   # per-layer average total expert bytes
+                "total_expert_gb": 58.8,
+                "baseline_gb": 63.0,
+            }
+
+        On failure::
+
+            {
+                "compatible": False,
+                "reason": "<human-readable explanation>",
+            }
+    """
+    model_path = Path(model_path)
+
+    # ------------------------------------------------------------------
+    # 1. Must have a jang_config.json (or equivalent)
+    # ------------------------------------------------------------------
+    jang_cfg_path: Optional[Path] = None
+    for name in _JANG_CONFIG_NAMES:
+        candidate = model_path / name
+        if candidate.exists():
+            jang_cfg_path = candidate
+            break
+
+    if jang_cfg_path is None:
+        return {
+            "compatible": False,
+            "reason": (
+                "No JANG config found "
+                f"({', '.join(_JANG_CONFIG_NAMES)})"
+            ),
+        }
+
+    try:
+        jang_cfg = json.loads(jang_cfg_path.read_text())
+    except Exception as exc:
+        return {"compatible": False, "reason": f"Cannot read {jang_cfg_path.name}: {exc}"}
+
+    # ------------------------------------------------------------------
+    # 2. Must NOT use codebook VQ
+    # ------------------------------------------------------------------
+    # codebook_vq may live at top level or nested under "quantization"
+    quant_block = jang_cfg if isinstance(jang_cfg, dict) else {}
+    if isinstance(quant_block.get("quantization"), dict):
+        quant_block = quant_block["quantization"]
+
+    if quant_block.get("codebook_vq", False):
+        return {
+            "compatible": False,
+            "reason": "Codebook VQ quantisation is not supported by Smelt mode",
+        }
+
+    # ------------------------------------------------------------------
+    # 3. Must have MoE experts (num_experts > 1 in config.json)
+    # ------------------------------------------------------------------
+    config_path = model_path / "config.json"
+    if not config_path.exists():
+        return {"compatible": False, "reason": "config.json not found"}
+
+    try:
+        model_cfg = json.loads(config_path.read_text())
+    except Exception as exc:
+        return {"compatible": False, "reason": f"Cannot read config.json: {exc}"}
+
+    # Check both top-level and text_config (VLM wrapper)
+    text_cfg = model_cfg.get("text_config", model_cfg)
+    num_experts_cfg = (
+        text_cfg.get("num_experts")
+        or text_cfg.get("num_local_experts")
+        or text_cfg.get("n_routed_experts")
+        or model_cfg.get("num_experts")
+        or model_cfg.get("num_local_experts")
+        or model_cfg.get("n_routed_experts")
+        or 0
+    )
+    if not isinstance(num_experts_cfg, int) or num_experts_cfg <= 1:
+        return {
+            "compatible": False,
+            "reason": (
+                f"Model does not appear to be MoE "
+                f"(num_experts={num_experts_cfg!r})"
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # 4. Must have at least one *.safetensors file
+    # ------------------------------------------------------------------
+    st_files = sorted(model_path.glob("*.safetensors"))
+    if not st_files:
+        return {
+            "compatible": False,
+            "reason": "No .safetensors files found — cannot build expert index",
+        }
+
+    # ------------------------------------------------------------------
+    # 5. ExpertIndex.build() must find MoE layers
+    # ------------------------------------------------------------------
+    try:
+        index = ExpertIndex.build(model_path)
+    except Exception as exc:
+        return {"compatible": False, "reason": f"ExpertIndex.build() failed: {exc}"}
+
+    if index.num_moe_layers == 0:
+        return {
+            "compatible": False,
+            "reason": (
+                "ExpertIndex found no MoE layers — "
+                "expert key patterns may not match this architecture"
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # 6. Build result
+    # ------------------------------------------------------------------
+    backbone_gb = index.backbone_bytes / 1e9
+    total_expert_gb = index.expert_size_bytes / 1e9
+    baseline_gb = backbone_gb + total_expert_gb
+
+    # per-layer average total expert bytes → MB
+    expert_size_mb = (
+        (index.expert_size_bytes / index.num_moe_layers) / 1e6
+        if index.num_moe_layers > 0
+        else 0.0
+    )
+
+    return {
+        "compatible": True,
+        "num_experts": index.num_experts,
+        "num_moe_layers": index.num_moe_layers,
+        "backbone_gb": round(backbone_gb, 2),
+        "expert_size_mb": round(expert_size_mb, 2),
+        "total_expert_gb": round(total_expert_gb, 2),
+        "baseline_gb": round(baseline_gb, 2),
+    }
+
+
+def smelt_ram_estimate(index: ExpertIndex, expert_fraction: float) -> dict:
     """Estimate RAM usage for Smelt mode given an expert fraction.
 
     Args:
