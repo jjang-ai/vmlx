@@ -816,6 +816,24 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
                             except Exception:
                                 continue
 
+        # Gemma 4 MoE: JANG stores expert weights under switch_mlp.{gate,up,down}_proj
+        # but mlx-vlm's Gemma4TextModel wraps them in an Experts(nn.Module) whose
+        # SwitchGLU sub-module expects experts.switch_glu.{gate,up,down}_proj.
+        # Without this rename the weights don't match any model parameter path and
+        # are silently discarded by load_weights(strict=False), leaving all MoE
+        # expert layers at their random initialisation — producing garbled output.
+        # Note: the quantized-suffix tracking at line ~554 already acknowledges this
+        # mismatch, but the rename was never applied to the weight dict itself.
+        if any(".switch_mlp." in k for k in shard_weights):
+            shard_weights = {
+                (
+                    k.replace(".switch_mlp.", ".experts.switch_glu.")
+                    if ".switch_mlp." in k
+                    else k
+                ): v
+                for k, v in shard_weights.items()
+            }
+
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
