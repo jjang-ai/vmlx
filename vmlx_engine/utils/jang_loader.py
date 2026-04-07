@@ -816,6 +816,19 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
                             except Exception:
                                 continue
 
+        # Gemma 4 MoE: rename switch_mlp.* -> experts.switch_glu.* to match model
+        # model.sanitize() renames model.language_model -> language_model.model but
+        # does NOT rename switch_mlp -> experts.switch_glu, causing all MoE expert
+        # weights to silently fail loading (strict=False) and stay random-init.
+        _renamed = {}
+        for _k, _v in shard_weights.items():
+            if ".switch_mlp." in _k:
+                _new_k = _k.replace(".switch_mlp.", ".experts.switch_glu.")
+                _renamed[_new_k] = _v
+            else:
+                _renamed[_k] = _v
+        shard_weights = _renamed
+
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
@@ -844,6 +857,19 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict, lazy: bool = False):
 
     if not lazy:
         _chunked_eval_params(model)
+
+    # Gemma 4 VLM: upcast vision_tower to bfloat16 to prevent float16 overflow.
+    # Vision encoder attention scores can exceed float16 range (±65504) producing
+    # -inf values that propagate through embed_vision as NaN → all-pad output.
+    _text_mt2 = config.get("text_config", {}).get("model_type", "")
+    if _text_mt2 == "gemma4_text":
+        _vt = getattr(model, "vision_tower", None)
+        _ev = getattr(model, "embed_vision", None)
+        if _vt is not None:
+            _vt.set_dtype(mx.bfloat16)
+            logger.info("  Gemma4 vision_tower upcast to bfloat16 (float16 overflow fix)")
+        if _ev is not None:
+            _ev.set_dtype(mx.bfloat16)
 
     # TurboQuant: patch language_model.make_cache for JANG VLM with TQ enabled
     _lang_model = getattr(model, "language_model", None)
