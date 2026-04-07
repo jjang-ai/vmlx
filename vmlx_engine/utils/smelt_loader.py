@@ -1,20 +1,407 @@
+# SPDX-License-Identifier: Apache-2.0
 """smelt_loader.py — Smelt mode components for partial expert loading.
 
-TurboRouteWrapper wraps an existing MoE block and injects cache-bias routing
-so that the model prefers loaded experts.  Expert compute is delegated to the
-NATIVE compiled SwitchGLU/SwitchMLP kernel — no custom matmul, baseline speed.
+Contains two main components:
 
-Three routing styles:
-  softmax   — Qwen 3.5, Mistral 4, Gemma 4 (default)
-  sigmoid   — MiniMax M2.5, GLM-5 (e_score_correction_bias + normalize)
-  pre_routed — Nemotron Cascade/Super (gate returns (indices, scores) directly;
-               cache_bias NOT injected here — Nemotron's compiled gate owns it)
+1. ExpertIndex — safetensors expert location scanner
+   Scans safetensors file headers to map MoE expert weight locations on disk
+   (file path, byte offset, shape, dtype) WITHOUT loading any weight data.
+
+   Supports all expert key naming conventions across 6 model families:
+     - backbone.layers.N.mixer.switch_mlp.{up_proj,down_proj}.*
+         Nemotron (2-proj SwitchMLP, mixer parent)
+     - model.layers.N.mlp.switch_mlp.{gate_proj,up_proj,down_proj}.*
+         Qwen 3.5, Mistral 4 (mlp parent)
+     - model.layers.N.block_sparse_moe.switch_mlp.{gate_proj,up_proj,down_proj}.*
+         MiniMax M2.5 (block_sparse_moe parent)
+     - model.language_model.layers.N.switch_mlp.{gate_proj,up_proj,down_proj}.*
+         Gemma 4 (language_model prefix, no mlp parent)
+     - model.language_model.layers.N.mlp.switch_mlp.{gate_proj,up_proj,down_proj}.*
+         Mistral VLM variant (language_model + mlp parent)
+
+   Each projection (gate_proj, up_proj, down_proj / up_proj, down_proj for
+   Nemotron) is tracked for all three tensor suffixes: .weight, .scales, .biases.
+
+2. TurboRouteWrapper — wraps an existing MoE block and injects cache-bias
+   routing so that the model prefers loaded experts. Expert compute is
+   delegated to the NATIVE compiled SwitchGLU/SwitchMLP kernel — no custom
+   matmul, baseline speed.
+
+   Three routing styles:
+     softmax    — Qwen 3.5, Mistral 4, Gemma 4 (default)
+     sigmoid    — MiniMax M2.5, GLM-5 (e_score_correction_bias + normalize)
+     pre_routed — Nemotron Cascade/Super (gate returns (indices, scores)
+                  directly; cache_bias NOT injected here — Nemotron's compiled
+                  gate owns it)
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import re
+import struct
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import mlx.core as mx
 import mlx.nn as nn
+
+logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ExpertIndex — Part 1: Data classes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class TensorInfo:
+    """Location and metadata for a single tensor in a safetensors file."""
+
+    file_path: Path
+    abs_offset: int    # 8 (header-size field) + header_size + data_offsets[0]
+    num_bytes: int     # data_offsets[1] - data_offsets[0]
+    shape: List[int]
+    dtype: str         # safetensors dtype string, e.g. "U32", "F16", "BF16"
+
+    @property
+    def total_bytes(self) -> int:
+        return self.num_bytes
+
+
+@dataclass
+class ProjectionTensors:
+    """All tensors (.weight, .scales, .biases) for one projection."""
+
+    weight: Optional[TensorInfo] = None
+    scales: Optional[TensorInfo] = None
+    biases: Optional[TensorInfo] = None
+
+    @property
+    def total_bytes(self) -> int:
+        total = 0
+        for t in (self.weight, self.scales, self.biases):
+            if t is not None:
+                total += t.total_bytes
+        return total
+
+    def all_tensors(self) -> List[TensorInfo]:
+        """Return all non-None TensorInfo objects."""
+        return [t for t in (self.weight, self.scales, self.biases) if t is not None]
+
+
+@dataclass
+class LayerExpertInfo:
+    """Expert weight locations for a single transformer layer.
+
+    Nemotron uses 2-projection SwitchMLP (up_proj + down_proj only, no gate).
+    All other supported families use 3-projection (gate_proj + up_proj + down_proj).
+    """
+
+    layer_idx: int
+    gate_proj: Optional[ProjectionTensors] = None
+    up_proj: Optional[ProjectionTensors] = None
+    down_proj: Optional[ProjectionTensors] = None
+
+    @property
+    def total_bytes(self) -> int:
+        total = 0
+        for proj in (self.gate_proj, self.up_proj, self.down_proj):
+            if proj is not None:
+                total += proj.total_bytes
+        return total
+
+    @property
+    def num_experts(self) -> Optional[int]:
+        """Infer expert count from the first available weight tensor shape[0]."""
+        for proj in (self.gate_proj, self.up_proj, self.down_proj):
+            if proj is not None and proj.weight is not None:
+                return proj.weight.shape[0]
+        return None
+
+
+@dataclass
+class ExpertIndex:
+    """Complete expert weight map for a model.
+
+    Attributes:
+        layers: Per-layer expert weight locations, keyed by layer index.
+        model_path: Directory the model was loaded from.
+        num_experts: Expert count inferred from first expert tensor shape[0].
+        num_moe_layers: Count of layers that have expert weights.
+        expert_size_bytes: Total bytes occupied by expert weights.
+        backbone_bytes: Total bytes for non-expert (backbone) weights.
+    """
+
+    layers: Dict[int, LayerExpertInfo] = field(default_factory=dict)
+    model_path: Optional[Path] = None
+    num_experts: int = 0
+    num_moe_layers: int = 0
+    expert_size_bytes: int = 0
+    backbone_bytes: int = 0
+
+    @classmethod
+    def build(cls, path: "str | Path") -> "ExpertIndex":
+        """Scan a model directory and build an ExpertIndex.
+
+        Reads only safetensors file headers (first 8 + header_size bytes) —
+        no weight data is loaded into memory.
+
+        Args:
+            path: Path to the model directory.
+
+        Returns:
+            ExpertIndex populated with all expert tensor locations.
+
+        Raises:
+            FileNotFoundError: If no safetensors files are found.
+        """
+        return _build_expert_index(Path(path))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ExpertIndex — Part 2: Key pattern matching
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Regex captures: (layer_idx, proj_name, tensor_suffix)
+# Handles all 5 path structures described in the module docstring.
+#
+# Named groups:
+#   layer_nem  — Nemotron: backbone.layers.N.mixer.switch_mlp
+#   layer_mm   — MiniMax: *.layers.N.block_sparse_moe.switch_mlp
+#   layer_g4   — Gemma 4: *.language_model.layers.N.switch_mlp (no mlp)
+#   layer_qw   — Qwen/Mistral: *.layers.N.mlp.switch_mlp
+#   proj       — gate_proj | up_proj | down_proj
+#   suffix     — weight | scales | biases
+#
+# Order matters: Gemma 4 pattern (no mlp parent) MUST come before the
+# generic mlp pattern to avoid false matches against mlp.switch_mlp paths.
+
+_EXPERT_KEY_RE = re.compile(
+    r"(?:"
+    # 1. Nemotron: backbone.layers.N.mixer.switch_mlp
+    r"backbone\.layers\.(?P<layer_nem>\d+)\.mixer\.switch_mlp"
+    r"|"
+    # 2. MiniMax: *.layers.N.block_sparse_moe.switch_mlp
+    r"(?:[^.]+\.)*layers\.(?P<layer_mm>\d+)\.block_sparse_moe\.switch_mlp"
+    r"|"
+    # 3. Gemma 4: *.language_model.layers.N.switch_mlp (no mlp parent)
+    #    Must precede the mlp pattern to avoid partial matches.
+    r"(?:[^.]+\.)*language_model\.layers\.(?P<layer_g4>\d+)\.switch_mlp"
+    r"|"
+    # 4. Qwen/Mistral text + Mistral VLM: *.layers.N.mlp.switch_mlp
+    r"(?:[^.]+\.)*layers\.(?P<layer_qw>\d+)\.mlp\.switch_mlp"
+    r")"
+    r"\."
+    r"(?P<proj>gate_proj|up_proj|down_proj)"
+    r"\."
+    r"(?P<suffix>weight|scales|biases)"
+    r"$",
+)
+
+
+def _match_expert_key(key: str) -> Optional[Tuple[int, str, str]]:
+    """Return (layer_idx, proj_name, suffix) if *key* matches an expert pattern.
+
+    Returns None if the key does not match any known expert weight pattern.
+    """
+    m = _EXPERT_KEY_RE.match(key)
+    if not m:
+        return None
+    # Pick whichever layer group matched (exactly one will be non-None)
+    layer_str = (
+        m.group("layer_nem")
+        or m.group("layer_mm")
+        or m.group("layer_g4")
+        or m.group("layer_qw")
+    )
+    return int(layer_str), m.group("proj"), m.group("suffix")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ExpertIndex — Part 3: Safetensors header reader (no weight loading)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _read_safetensors_header(file_path: Path) -> Tuple[int, dict]:
+    """Read safetensors header metadata without loading weight data.
+
+    Safetensors format:
+      - Bytes 0..7  : little-endian uint64 = header_size (number of JSON bytes)
+      - Bytes 8..8+header_size-1 : UTF-8 JSON header
+      - Bytes 8+header_size.. : raw tensor data
+
+    Each tensor entry in the header: {"dtype": str, "shape": [...], "data_offsets": [start, end]}
+    Absolute byte offset for a tensor = 8 + header_size + data_offsets[0].
+
+    Returns:
+        (header_size, header_dict)
+    """
+    with open(file_path, "rb") as f:
+        raw = f.read(8)
+        if len(raw) < 8:
+            raise ValueError(f"File too small to be safetensors: {file_path}")
+        header_size = struct.unpack("<Q", raw)[0]
+        header_bytes = f.read(header_size)
+
+    header = json.loads(header_bytes)
+    return header_size, header
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ExpertIndex — Part 4: Index builder
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _get_safetensors_files(model_path: Path) -> List[Path]:
+    """Return all *.safetensors files in *model_path*, sorted by name."""
+    files = sorted(model_path.glob("*.safetensors"))
+    if not files:
+        raise FileNotFoundError(
+            f"No .safetensors files found in {model_path}"
+        )
+    return files
+
+
+def _build_expert_index(model_path: Path) -> ExpertIndex:
+    """Core implementation for ExpertIndex.build()."""
+    st_files = _get_safetensors_files(model_path)
+    logger.debug(
+        "ExpertIndex: scanning %d safetensors files in %s",
+        len(st_files),
+        model_path,
+    )
+
+    layers: Dict[int, LayerExpertInfo] = {}
+    total_expert_bytes = 0
+    total_backbone_bytes = 0
+
+    for st_file in st_files:
+        try:
+            header_size, header = _read_safetensors_header(st_file)
+        except Exception as e:
+            logger.warning(
+                "ExpertIndex: skipping %s — %s", st_file.name, e
+            )
+            continue
+
+        # Absolute data region start = 8 (the header-size uint64) + header_size
+        data_region_start = 8 + header_size
+
+        for key, meta in header.items():
+            if key == "__metadata__":
+                continue
+            if not isinstance(meta, dict):
+                continue
+
+            data_offsets = meta.get("data_offsets")
+            if data_offsets is None or len(data_offsets) != 2:
+                continue
+
+            shape = meta.get("shape", [])
+            dtype = meta.get("dtype", "")
+            byte_start, byte_end = data_offsets
+            num_bytes = byte_end - byte_start
+            abs_offset = data_region_start + byte_start
+
+            match = _match_expert_key(key)
+            if match is None:
+                # Non-expert weight — count toward backbone bytes
+                total_backbone_bytes += num_bytes
+                continue
+
+            layer_idx, proj_name, suffix = match
+            total_expert_bytes += num_bytes
+
+            # Ensure layer entry exists
+            if layer_idx not in layers:
+                layers[layer_idx] = LayerExpertInfo(layer_idx=layer_idx)
+
+            layer_info = layers[layer_idx]
+
+            # Get or create ProjectionTensors for this projection
+            proj_obj: Optional[ProjectionTensors] = getattr(layer_info, proj_name, None)
+            if proj_obj is None:
+                proj_obj = ProjectionTensors()
+                setattr(layer_info, proj_name, proj_obj)
+
+            tensor_info = TensorInfo(
+                file_path=st_file,
+                abs_offset=abs_offset,
+                num_bytes=num_bytes,
+                shape=list(shape),
+                dtype=dtype,
+            )
+
+            setattr(proj_obj, suffix, tensor_info)
+
+    # Infer num_experts from first available MoE layer
+    num_experts = 0
+    for layer_info in sorted(layers.values(), key=lambda li: li.layer_idx):
+        n = layer_info.num_experts
+        if n is not None:
+            num_experts = n
+            break
+
+    num_moe_layers = len(layers)
+    logger.info(
+        "ExpertIndex built: %d MoE layers, %d experts/layer, "
+        "expert=%.2fGB backbone=%.2fGB",
+        num_moe_layers,
+        num_experts,
+        total_expert_bytes / 1e9,
+        total_backbone_bytes / 1e9,
+    )
+
+    return ExpertIndex(
+        layers=layers,
+        model_path=model_path,
+        num_experts=num_experts,
+        num_moe_layers=num_moe_layers,
+        expert_size_bytes=total_expert_bytes,
+        backbone_bytes=total_backbone_bytes,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ExpertIndex — Part 5: smelt_estimate convenience helper
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def smelt_estimate(index: ExpertIndex, expert_fraction: float) -> dict:
+    """Estimate RAM usage for Smelt mode given an expert fraction.
+
+    Args:
+        index: ExpertIndex from ExpertIndex.build().
+        expert_fraction: Fraction of expert weight bytes to keep in RAM.
+            0.0 = backbone only, 1.0 = full model loaded.
+
+    Returns:
+        Dict with keys:
+            total_model_bytes  — full model size in bytes
+            backbone_bytes     — non-expert weight bytes
+            expert_bytes       — expert weight bytes (full set)
+            smelt_ram_bytes    — estimated RAM with smelt_fraction
+            expert_fraction    — the input fraction (echoed back)
+    """
+    expert_bytes = index.expert_size_bytes
+    backbone_bytes = index.backbone_bytes
+    total = expert_bytes + backbone_bytes
+    smelt_ram = backbone_bytes + int(expert_bytes * expert_fraction)
+
+    return {
+        "total_model_bytes": total,
+        "backbone_bytes": backbone_bytes,
+        "expert_bytes": expert_bytes,
+        "smelt_ram_bytes": smelt_ram,
+        "expert_fraction": expert_fraction,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TurboRouteWrapper (Task 3)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 # ---------------------------------------------------------------------------
 # Supported MoE class names (used by _detect_routing_style / _find_moe_block)
