@@ -733,14 +733,20 @@ class MLXMultimodalLM:
         from ..utils.jang_loader import is_jang_model
         if is_jang_model(resolved_name):
             logger.info(f"Loading JANG VL model: {self.model_name}")
-            from ..utils.jang_loader import load_jang_vlm_model
             from mlx_vlm.utils import load_config
             try:
                 from .. import server as _server_module
-                _lazy = getattr(_server_module, '_stream_from_disk', False)
+                _smelt = getattr(_server_module, '_smelt_enabled', False)
+                _smelt_pct = getattr(_server_module, '_smelt_experts', 50)
             except Exception:
-                _lazy = False
-            self.model, self.processor = load_jang_vlm_model(resolved_name, lazy=_lazy)
+                _smelt = False
+                _smelt_pct = 50
+            if _smelt:
+                from ..utils.smelt_loader import smelt_load
+                self.model, self.processor = smelt_load(resolved_name, expert_percent=_smelt_pct)
+            else:
+                from ..utils.jang_loader import load_jang_vlm_model
+                self.model, self.processor = load_jang_vlm_model(resolved_name)
             self.config = load_config(resolved_name)
             self._loaded = True
             logger.info(f"JANG VL model loaded: {self.model_name}")
@@ -757,14 +763,9 @@ class MLXMultimodalLM:
             # video_processor sub-components (Qwen3.5-VL, InternVL, etc.) load cleanly.
             self._patch_video_processor()
             import warnings
-            try:
-                from .. import server as _server_module
-                _lazy = getattr(_server_module, '_stream_from_disk', False)
-            except Exception:
-                _lazy = False
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
-                self.model, self.processor = load(self.model_name, lazy=_lazy)
+                self.model, self.processor = load(self.model_name)
             self.config = load_config(self.model_name)
 
             # TurboQuant: auto-enable for ALL MLX VLM models

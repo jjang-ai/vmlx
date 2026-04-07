@@ -39,7 +39,6 @@ The server provides:
 """
 
 import argparse
-import atexit
 import asyncio
 import base64
 import json
@@ -216,16 +215,8 @@ def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
 
 _last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
-_stream_from_disk: bool = False  # --stream-from-disk: lazy mmap loading, no caching
-_ssd_temp_dir: str | None = None  # JANG temp weight dir — cleaned up on shutdown
-
-
-def _cleanup_ssd_temp():
-    if _ssd_temp_dir and os.path.isdir(_ssd_temp_dir):
-        import shutil
-        shutil.rmtree(_ssd_temp_dir, ignore_errors=True)
-
-atexit.register(_cleanup_ssd_temp)
+_smelt_enabled: bool = False  # --smelt: partial expert loading for MoE
+_smelt_experts: int = 50  # --smelt-experts: percentage of experts per layer
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
@@ -944,8 +935,8 @@ def load_model(
     max_tokens: int = 32768,
     force_mllm: bool = False,
     served_model_name: str | None = None,
-    stream_from_disk: bool = False,
-    stream_memory_percent: int = 90,
+    smelt: bool = False,
+    smelt_experts: int = 50,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -958,9 +949,10 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args, _stream_from_disk, _ssd_temp_dir
+    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args, _smelt_enabled, _smelt_experts
 
-    _stream_from_disk = stream_from_disk
+    _smelt_enabled = smelt
+    _smelt_experts = smelt_experts
 
     # Save CLI args for model reload on wake from deep sleep
     _cli_args = {
@@ -970,8 +962,8 @@ def load_model(
         'max_tokens': max_tokens,
         'force_mllm': force_mllm,
         'served_model_name': served_model_name,
-        'stream_from_disk': stream_from_disk,
-        'stream_memory_percent': stream_memory_percent,
+        'smelt': smelt,
+        'smelt_experts': smelt_experts,
     }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
@@ -1112,149 +1104,6 @@ def load_model(
     except Exception:
         pass
 
-    # Set Metal memory limit for disk streaming — RAISE it to allow macOS SSD paging.
-    # macOS unified memory lets Metal allocate virtual memory beyond physical RAM.
-    # macOS transparently pages to SSD (~7.4GB/s). The default MLX limit is ~95% of
-    # RAM which blocks models larger than RAM. We set it to a multiple of RAM so
-    # the full model can be mmap'd and macOS handles paging.
-    if stream_from_disk:
-        try:
-            import mlx.core as mx
-            import psutil
-            mem = psutil.virtual_memory()
-            # User's stream_memory_percent controls the multiplier:
-            #   50% → 1.5x RAM,  75% → 2.5x RAM,  90% → 3.5x RAM (default)
-            # Higher = more virtual memory for model, macOS pages more aggressively
-            multiplier = 1.0 + (stream_memory_percent / 100.0 * 3.0)
-            limit = int(mem.total * multiplier)
-            _set_limit = getattr(mx, 'set_memory_limit', None) or getattr(mx.metal, 'set_memory_limit', None)
-            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
-            if _set_limit:
-                _set_limit(limit)
-                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB ({multiplier:.1f}x of {mem.total / (1024**3):.1f}GB RAM) for disk streaming")
-            # Disable Metal allocator cache so freed memory returns to macOS immediately
-            # for SSD paging instead of being hoarded in the free-list
-            if _set_cache:
-                _set_cache(0)
-                logger.info("Metal cache limit set to 0 (disabled) for disk streaming")
-            else:
-                logger.warning("Cannot set Metal memory limit — mlx.metal.set_memory_limit not available")
-        except Exception as e:
-            logger.warning(f"Failed to set Metal memory limit: {e}")
-
-    # Memory advisory for disk-streaming mode
-    if stream_from_disk:
-        try:
-            import psutil
-            from pathlib import Path as _Path
-            mem = psutil.virtual_memory()
-            available_gb = mem.available / (1024 ** 3)
-            total_gb = mem.total / (1024 ** 3)
-
-            # Estimate model size from safetensors file sizes on disk (lazy=True means
-            # Metal active memory is ~0, so we can't use mx.metal.get_active_memory)
-            model_gb = 0
-            try:
-                model_dir = _Path(_model_path or model_name)
-                if model_dir.is_dir():
-                    st_files = list(model_dir.glob("*.safetensors"))
-                    if st_files:
-                        model_gb = sum(f.stat().st_size for f in st_files) / (1024 ** 3)
-            except Exception:
-                pass
-
-            if model_gb > 0 and model_gb < total_gb * 0.75:
-                logger.warning(
-                    f"DISK-STREAMING ADVISORY: Model (~{model_gb:.1f}GB) fits in RAM "
-                    f"({total_gb:.1f}GB total, {available_gb:.1f}GB available). "
-                    f"Consider disabling --stream-from-disk for better performance."
-                )
-                print(f"\n  TIP: Model (~{model_gb:.1f}GB on disk) fits in RAM ({total_gb:.1f}GB). "
-                      f"Disable --stream-from-disk for 2-5x faster inference.\n")
-            elif model_gb > 0 and model_gb >= total_gb * 0.90:
-                logger.warning(
-                    f"DISK-STREAMING WARNING: Model (~{model_gb:.1f}GB) may EXCEED available RAM "
-                    f"({total_gb:.1f}GB total). Inference requires additional memory for KV cache. "
-                    f"The first request may crash with a Metal assertion failure. "
-                    f"Consider using a smaller quantization or a machine with more RAM."
-                )
-                print(f"\n  WARNING: Model (~{model_gb:.1f}GB) is very close to or exceeds "
-                      f"your {total_gb:.0f}GB RAM. First inference may fail.\n")
-            else:
-                used_desc = f"~{model_gb:.1f}GB model" if model_gb > 0 else "Model"
-                logger.info(
-                    f"DISK-STREAMING: {used_desc} with {total_gb:.1f}GB RAM — "
-                    f"macOS SSD paging active (~7.4GB/s bandwidth)"
-                )
-                print(f"\n  DISK-STREAMING: {used_desc} — macOS SSD paging active. "
-                      f"First request will be slow as weights page in.\n")
-        except Exception as e:
-            logger.debug(f"Memory advisory failed: {e}")
-
-    # SSD disk-streaming: set up per-layer weight recycling.
-    # Build weight index, save JANG temp weights if needed, configure model
-    # to use ssd_stream_generate instead of mlx_lm.stream_generate.
-    if stream_from_disk and _engine is not None:
-        try:
-            from .utils.weight_index import build_weight_index, save_all_layer_weights
-            from .utils.jang_loader import is_jang_model
-            from .api.utils import resolve_to_local_path
-            import tempfile
-
-            # Get the LLM wrapper (has _stream_from_disk attribute)
-            llm_model = None
-            if hasattr(_engine, '_model') and hasattr(_engine._model, '_stream_from_disk'):
-                # SimpleEngine stores the MLXLanguageModel
-                llm_model = _engine._model
-            elif hasattr(_engine, '_model'):
-                llm_model = _engine._model
-
-            if llm_model is not None and hasattr(llm_model, '_stream_from_disk'):
-                llm_model._stream_from_disk = True
-                llm_model._model_path = _model_path
-
-                # Build weight index from safetensors files
-                try:
-                    weight_index = build_weight_index(_model_path)
-                    llm_model._weight_index = weight_index
-                    logger.info(f"SSD weight index: {len(weight_index)} layers from {_model_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to build weight index: {e}")
-
-                # For JANG models: try to save transformed weights to temp files.
-                # This may fail for quantized models (QuantizedLinear dtype mismatch).
-                # If it fails, SSD streaming falls back to loading from original
-                # safetensors files via the weight index (works for most JANG models
-                # since only gate weights are dequanted at load time).
-                if is_jang_model(resolve_to_local_path(_model_path) if _model_path else _model_path):
-                    try:
-                        raw_model = llm_model.model
-                        # Clean up previous temp dir if exists (e.g. after deep sleep wake)
-                        if _ssd_temp_dir and os.path.isdir(_ssd_temp_dir):
-                            import shutil
-                            shutil.rmtree(_ssd_temp_dir, ignore_errors=True)
-                        temp_dir = tempfile.mkdtemp(prefix="vmlx_ssd_")
-                        _ssd_temp_dir = temp_dir
-                        paths = save_all_layer_weights(raw_model, temp_dir)
-                        llm_model._temp_weight_dir = temp_dir
-                        logger.info(f"JANG temp weights: {len(paths)} layers saved to {temp_dir}")
-                    except Exception as e:
-                        logger.info(f"JANG temp save not possible ({e}) — using original safetensors via weight index")
-
-                logger.info("SSD per-layer weight recycling configured")
-            else:
-                logger.warning("SSD streaming: could not configure model (no _stream_from_disk attr)")
-        except Exception as e:
-            logger.warning(f"Failed to configure SSD streaming: {e}")
-
-        # Warn if MLLM (multimodal) model — SSD only wired for LLM text path
-        if _engine is not None:
-            if hasattr(_engine, '_model') and not hasattr(getattr(_engine, '_model', None), '_stream_from_disk'):
-                logger.warning(
-                    "SSD disk streaming: model does not support per-layer weight recycling "
-                    "(likely VLM/multimodal). Text inference will use standard loading."
-                )
-
     # Log system memory after model load
     try:
         import psutil
@@ -1308,6 +1157,18 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
         total_tokens=_pt + _ct,
         input_tokens_details=InputTokensDetails(cached_tokens=cached, cache_detail=detail) if cached > 0 else None,
     )
+
+
+@app.get("/v1/smelt/estimate")
+async def smelt_estimate_endpoint(model: str = Query(...)):
+    """Pre-scan a model for Smelt compatibility and size estimates."""
+    from .utils.smelt_loader import smelt_estimate
+    from starlette.responses import JSONResponse
+    try:
+        result = smelt_estimate(model)
+        return JSONResponse(result)
+    except Exception as e:
+        return JSONResponse({"compatible": False, "reason": str(e)})
 
 
 @app.get("/health")
@@ -1604,8 +1465,8 @@ async def admin_wake():
                     max_tokens=_cli_args.get('max_tokens', 32768),
                     force_mllm=_cli_args.get('force_mllm', False),
                     served_model_name=_cli_args.get('served_model_name'),
-                    stream_from_disk=_cli_args.get('stream_from_disk', False),
-                    stream_memory_percent=_cli_args.get('stream_memory_percent', 90),
+                    smelt=_cli_args.get('smelt', False),
+                    smelt_experts=_cli_args.get('smelt_experts', 50),
                 )
                 # SimpleEngine needs async start (load_model defers it inside event loop)
                 if _engine and hasattr(_engine, '_needs_async_start') and _engine._needs_async_start:

@@ -229,37 +229,6 @@ def serve_command(args):
         server.load_embedding_model(args.embedding_model, lock=True)
         print(f"Embedding model loaded: {args.embedding_model}")
 
-    # Disk-streaming mode: override cache flags
-    if getattr(args, 'stream_from_disk', False):
-        ssd_budget = getattr(args, 'ssd_memory_budget', 0)
-        ssd_prefetch = getattr(args, 'ssd_prefetch_layers', 0)
-        print("\n" + "=" * 60)
-        print("SSD DISK-STREAMING MODE — PER-LAYER WEIGHT RECYCLING")
-        print("=" * 60)
-        print("  Loads/frees each layer's weights from SSD per token.")
-        print("  Only 1 layer in GPU memory at a time.")
-        if ssd_budget > 0:
-            print(f"  Memory budget: {ssd_budget} MB")
-        if ssd_prefetch > 0:
-            print(f"  Prefetch layers: {ssd_prefetch}")
-        print("  All caching disabled, max 1 sequence.")
-        print("=" * 60 + "\n")
-        # Force-disable all caching features
-        args.use_paged_cache = False
-        args.enable_prefix_cache = False
-        args.disable_prefix_cache = True
-        args.enable_disk_cache = False
-        args.enable_block_disk_cache = False
-        args.kv_cache_quantization = "none"
-        args.cache_memory_percent = 0.0
-        args.cache_memory_mb = 0
-        args.max_num_seqs = 1
-        # Force SimpleEngine — BatchedEngine doesn't support weight recycling
-        args.continuous_batching = False
-        # Disable speculative decoding if present
-        if hasattr(args, 'speculative_model'):
-            args.speculative_model = None
-
     # Build scheduler config for batched mode
     scheduler_config = None
     if args.continuous_batching:
@@ -302,6 +271,9 @@ def serve_command(args):
             # Prompt Lookup Decoding
             pld_enabled=args.enable_pld,
             pld_summary_interval=args.pld_summary_interval,
+            # Smelt mode
+            smelt=getattr(args, 'smelt', False),
+            smelt_experts=getattr(args, 'smelt_experts', 50),
         )
 
         print("Mode: Continuous batching (for multiple concurrent users)")
@@ -448,8 +420,8 @@ def serve_command(args):
             max_tokens=args.max_tokens,
             served_model_name=getattr(args, 'served_model_name', None),
             force_mllm=getattr(args, 'is_mllm', False),
-            stream_from_disk=getattr(args, 'stream_from_disk', False),
-            stream_memory_percent=getattr(args, 'stream_memory_percent', 90),
+            smelt=getattr(args, 'smelt', False),
+            smelt_experts=getattr(args, 'smelt_experts', 50),
         )
         # Save speculative config for deep sleep/wake reload
         server._cli_args['speculative_model'] = getattr(args, 'speculative_model', None)
@@ -496,21 +468,6 @@ def bench_command(args):
     from .request import SamplingParams
     from .scheduler import SchedulerConfig
 
-    # Disk-streaming mode: override cache flags (same gating as serve_command)
-    if getattr(args, 'stream_from_disk', False):
-        from . import server as _server_module
-        _server_module._stream_from_disk = True
-        args.use_paged_cache = False
-        args.enable_prefix_cache = False
-        args.disable_prefix_cache = True
-        args.enable_disk_cache = False
-        args.enable_block_disk_cache = False
-        args.kv_cache_quantization = "none"
-        args.cache_memory_percent = 0.0
-        args.cache_memory_mb = 0
-        args.max_num_seqs = 1
-        print("DISK-STREAMING MODE: All caching disabled for benchmark.")
-
     # Handle prefix cache flags
     enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
 
@@ -547,6 +504,9 @@ def bench_command(args):
             enable_block_disk_cache=getattr(args, 'enable_block_disk_cache', False),
             block_disk_cache_dir=getattr(args, 'block_disk_cache_dir', None),
             block_disk_cache_max_gb=getattr(args, 'block_disk_cache_max_gb', 10.0),
+            # Smelt mode
+            smelt=getattr(args, 'smelt', False),
+            smelt_experts=getattr(args, 'smelt_experts', 50),
         )
         engine_config = EngineConfig(
             model_name=args.model,
@@ -983,38 +943,21 @@ Examples:
         default=10.0,
         help="Maximum total size of block disk cache in GB. 0 = unlimited. (default: 10)",
     )
-    # Disk-streaming mode (models larger than RAM)
+    # Smelt mode (partial expert loading for MoE models)
     serve_parser.add_argument(
-        "--stream-from-disk",
+        "--smelt",
         action="store_true",
-        help="Enable disk-streaming mode for models that exceed available RAM. "
-             "Weights stay mmap'd on SSD and are paged in on demand by macOS. "
-             "Automatically disables all caching features and limits to 1 sequence. "
-             "Expect 2-5x slower inference (SSD ~7.4GB/s vs GPU ~200GB/s).",
+        default=False,
+        help="Enable Smelt mode: load only a fraction of MoE experts per layer. "
+             "Dramatically reduces RAM for large MoE models while maintaining "
+             "baseline inference speed via cache-biased routing.",
     )
     serve_parser.add_argument(
-        "--stream-memory-percent",
+        "--smelt-experts",
         type=int,
-        default=90,
-        help="Percentage of total RAM to allocate for Metal when disk-streaming. "
-             "Lower values leave more headroom for KV cache. "
-             "Default: 90. For very large models, try 75-80. (default: 90)",
-    )
-    serve_parser.add_argument(
-        "--ssd-memory-budget",
-        type=int,
-        default=0,
-        help="Metal memory budget in MB for SSD streaming layer weights. "
-             "0 = auto (fit one layer + headroom). "
-             "Controls how much GPU memory is available for weight recycling. (default: 0)",
-    )
-    serve_parser.add_argument(
-        "--ssd-prefetch-layers",
-        type=int,
-        default=0,
-        help="Number of layers to prefetch from SSD during decode. "
-             "0 = load on demand. 1+ = async prefetch ahead. "
-             "Higher values use more memory but may improve throughput. (default: 0)",
+        default=50,
+        help="Percentage of experts to load per MoE layer in Smelt mode (0-100). "
+             "Lower = less RAM, higher = better quality. (default: 50)",
     )
     # MCP options
     serve_parser.add_argument(
@@ -1368,9 +1311,16 @@ Examples:
         help="Maximum block disk cache size in GB (default: 10)",
     )
     bench_parser.add_argument(
-        "--stream-from-disk",
+        "--smelt",
         action="store_true",
-        help="Enable disk-streaming mode for benchmarking models that exceed RAM.",
+        default=False,
+        help="Enable Smelt mode for benchmarking MoE models with partial expert loading.",
+    )
+    bench_parser.add_argument(
+        "--smelt-experts",
+        type=int,
+        default=50,
+        help="Percentage of experts per MoE layer in Smelt mode (default: 50)",
     )
 
     # Detokenizer benchmark

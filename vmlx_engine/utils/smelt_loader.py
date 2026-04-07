@@ -194,17 +194,21 @@ _EXPERT_KEY_RE = re.compile(
     r"(?:[^.]+\.)*layers\.(?P<layer_qw>\d+)\.mlp\.switch_mlp"
     r")"
     r"\."
-    r"(?P<proj>gate_proj|up_proj|down_proj)"
+    r"(?P<proj>gate_proj|up_proj|down_proj|fc1|fc2)"
     r"\."
     r"(?P<suffix>weight|scales|biases)"
     r"$",
 )
 
 
+_FC_TO_PROJ = {"fc1": "up_proj", "fc2": "down_proj"}
+
+
 def _match_expert_key(key: str) -> Optional[Tuple[int, str, str]]:
     """Return (layer_idx, proj_name, suffix) if *key* matches an expert pattern.
 
     Returns None if the key does not match any known expert weight pattern.
+    Nemotron uses fc1/fc2 for SwitchMLP — these are normalized to up_proj/down_proj.
     """
     m = _EXPERT_KEY_RE.match(key)
     if not m:
@@ -216,7 +220,10 @@ def _match_expert_key(key: str) -> Optional[Tuple[int, str, str]]:
         or m.group("layer_g4")
         or m.group("layer_qw")
     )
-    return int(layer_str), m.group("proj"), m.group("suffix")
+    proj = m.group("proj")
+    # Normalize Nemotron fc1/fc2 → up_proj/down_proj
+    proj = _FC_TO_PROJ.get(proj, proj)
+    return int(layer_str), proj, m.group("suffix")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -568,13 +575,21 @@ def smelt_ram_estimate(index: ExpertIndex, expert_fraction: float) -> dict:
 # Supported MoE class names (used by _detect_routing_style / _find_moe_block)
 # ---------------------------------------------------------------------------
 _MOE_CLASSES = {
-    "Qwen3NextSparseMoeBlock",
-    "MiniMaxMoE",
-    "NemotronHMoEBlock",
-    "LatentNemotronHMoE",
-    "Mistral4MoE",
-    "GlmMoeDsaMoE",
-    "Gemma4SparseMoeBlock",
+    # Qwen family
+    "Qwen3NextSparseMoeBlock",  # Qwen 3.5 (qwen3_next.py)
+    "Qwen3MoeSparseMoeBlock",   # Qwen 3 (qwen3_moe.py)
+    "Qwen2MoeSparseMoeBlock",   # Qwen 2 (qwen2_moe.py)
+    # MiniMax
+    "MiniMaxSparseMoeBlock",    # MiniMax M2.5 (minimax.py)
+    # Nemotron
+    "NemotronHMoE",             # Nemotron Cascade/Super (nemotron_h.py)
+    # Mistral
+    "Mistral4MoE",              # Mistral Small 4 (mistral4.py)
+    # DeepSeek / GLM-5 (glm_moe_dsa inherits from deepseek_v32)
+    "DeepseekV2MoE",            # DeepSeek V2 (deepseek_v2.py)
+    "DeepseekV32MoE",           # DeepSeek V3 / GLM-5 (deepseek_v32.py)
+    # Generic
+    "SparseMoeBlock",           # dbrx, bailing_moe_linear, etc.
 }
 
 
@@ -590,7 +605,7 @@ def _detect_routing_style(moe_block: nn.Module) -> str:
     class_name = type(moe_block).__name__
     if "MiniMax" in class_name or "Glm" in class_name:
         return "sigmoid"
-    if "NemotronH" in class_name or "DeepSeek" in class_name:
+    if "NemotronH" in class_name or "Deepseek" in class_name:
         return "pre_routed"
     return "softmax"
 
@@ -702,16 +717,22 @@ class TurboRouteWrapper(nn.Module):
 
         else:
             # Softmax — Qwen 3.5, Mistral 4, Gemma 4 (default)
-            gates = orig.gate(x)
-            gates = mx.softmax(gates, axis=-1, precise=True)
-            orig_gates = gates                              # unbiased
-            gates = gates + self.cache_bias                 # biased for selection
-            inds = mx.argpartition(-gates, kth=ne - 1, axis=-1)[..., :ne]
-            # Use UNBIASED scores for weighting
-            scores = mx.take_along_axis(orig_gates, inds, axis=-1)
+            raw_logits = orig.gate(x)
+            # Add cache_bias to RAW logits (pre-softmax) so the bias magnitude
+            # is compatible with the logit scale. Adding -1000 to post-softmax
+            # probabilities (0-1 range) completely overwhelms the scores.
+            biased_logits = raw_logits + self.cache_bias
+            inds = mx.argpartition(-biased_logits, kth=ne - 1, axis=-1)[..., :ne]
+            # Use UNBIASED softmax probabilities for expert weighting
+            probs = mx.softmax(raw_logits, axis=-1, precise=True)
+            scores = mx.take_along_axis(probs, inds, axis=-1)
             scores = scores / (mx.sum(scores, axis=-1, keepdims=True) + 1e-20)
             rsf = getattr(orig, "routed_scaling_factor", 1.0)
             scores = scores * rsf
+            # Gemma 4: per_expert_scale applied after normalization
+            pes = getattr(orig, "per_expert_scale", None)
+            if pes is not None:
+                scores = scores * pes[inds]
 
         # ------------------------------------------------------------------
         # 2. Remap global → local slot indices
@@ -813,25 +834,49 @@ def _is_gemma4_layer(layer) -> bool:
     """
     return (
         hasattr(layer, "router")
-        and hasattr(layer, "switch_mlp")
+        and hasattr(layer, "experts")
         and not hasattr(layer, "block_sparse_moe")
         and not hasattr(layer, "mixer")
     )
 
 
-class _Gemma4MoeShim(nn.Module):
-    """Thin shim that wraps Gemma 4's separate router + switch_mlp as a single MoE block.
+class _Gemma4Gate(nn.Module):
+    """Extracts raw logits from Gemma 4's Router (norm → scale → proj).
 
-    Gemma 4 has ``layer.router`` (computes top-k) and ``layer.switch_mlp``
-    (the expert SwitchGLU) as siblings.  TurboRouteWrapper expects a single
-    MoE block with ``.gate`` and ``.switch_mlp``.  This shim bridges them.
+    TurboRouteWrapper expects gate(x) to return raw logits before softmax.
+    Gemma 4's Router does norm+scale+proj+softmax+argpartition all in one.
+    This wrapper reproduces just the norm+scale+proj portion.
     """
 
-    def __init__(self, router, switch_mlp, num_experts_per_tok: int = 2):
+    def __init__(self, router):
         super().__init__()
-        self.gate = router
-        self.switch_mlp = switch_mlp
+        self.norm = router.norm
+        self.proj = router.proj
+        self.scale = router.scale
+        self._root_size = router._root_size
+
+    def __call__(self, x):
+        x = self.norm(x)
+        x = x * self._root_size
+        x = x * self.scale
+        return self.proj(x)
+
+
+class _Gemma4MoeShim(nn.Module):
+    """Thin shim that wraps Gemma 4's separate router + experts as a single MoE block.
+
+    Gemma 4 has ``layer.router`` (computes top-k) and ``layer.experts``
+    (wraps SwitchGLU) as siblings.  TurboRouteWrapper expects a single
+    MoE block with ``.gate`` (returns logits) and ``.switch_mlp`` (SwitchGLU).
+    """
+
+    def __init__(self, router, switch_glu, num_experts_per_tok: int = 8):
+        super().__init__()
+        self.gate = _Gemma4Gate(router)
+        self.switch_mlp = switch_glu
         self.num_experts_per_tok = num_experts_per_tok
+        # Expose per_expert_scale for TurboRouteWrapper to apply after score normalization
+        self.per_expert_scale = getattr(router, "per_expert_scale", None)
 
 
 def smelt_load(
@@ -886,21 +931,96 @@ def smelt_load(
     # Detect model features
     top_type = model_cfg.get("model_type", "")
     text_type = model_cfg.get("text_config", {}).get("model_type", "")
+    text_cfg = model_cfg.get("text_config", model_cfg)
     is_nemotron = top_type == "nemotron_h"
-    needs_gate_dequant = is_nemotron or text_type == "mistral4"
+    is_nemotron_fc_rename = is_nemotron
+    # Gate dequant needed for ALL MoE models — JANG packs gate weights as uint32
+    # which must be dequantized before routing (sigmoid/softmax need float input).
+    # Same logic as jang_loader: _needs_gate_dequant = _needs_fc_rename or _n_experts > 0
+    _n_experts = (
+        text_cfg.get("num_experts")
+        or text_cfg.get("num_local_experts")
+        or text_cfg.get("n_routed_experts")
+        or 0
+    )
+    needs_gate_dequant = is_nemotron or text_type == "mistral4" or _n_experts > 0
     nemotron_renames = {
         "switch_mlp.up_proj": "switch_mlp.fc1",
         "switch_mlp.down_proj": "switch_mlp.fc2",
     }
 
     # ── Step 1: Load backbone only ────────────────────────────────────
+    _is_vlm = False
     try:
         model, config = _load_model_skeleton(
             path, lazy=True, strict=False, model_config=config
         )
-    except ValueError:
-        from mlx_vlm.utils import load_model as _load_vlm
-        model, _ = _load_vlm(path, lazy=True, model_config=config)
+    except (ValueError, ImportError, ModuleNotFoundError):
+        # VLM model (e.g. Gemma 4) — build skeleton via mlx_vlm's model class system
+        from mlx_vlm.utils import (
+            get_model_and_args,
+            load_config as vlm_load_config,
+            update_module_configs,
+        )
+        vlm_cfg = vlm_load_config(path)
+        model_class, _ = get_model_and_args(config=vlm_cfg)
+        vlm_cfg.setdefault("text_config", {})
+        vlm_cfg.setdefault("vision_config", {})
+        if vlm_cfg.get("audio_config") is None:
+            vlm_cfg.pop("audio_config", None)
+        else:
+            vlm_cfg.setdefault("audio_config", {})
+        model_config_obj = model_class.ModelConfig.from_dict(vlm_cfg)
+        modules = [
+            m for m in ["text", "vision", "perceiver", "projector", "audio"]
+            if vlm_cfg.get(f"{m}_config") is not None
+        ]
+        model_config_obj = update_module_configs(model_config_obj, model_class, vlm_cfg, modules)
+        model = model_class.Model(model_config_obj)
+        _is_vlm = True
+
+        # VLM models need nn.quantize() to convert Linear → QuantizedLinear
+        # before loading uint32-packed weights. Build quantized_suffixes from
+        # weight keys that have .scales (same approach as _load_jang_v2_vlm).
+        import mlx.nn as _nn
+        from mlx_vlm.utils import skip_multimodal_module
+        _weight_files = _get_v2_weight_files(path)
+        _all_keys = set()
+        for _sf in _weight_files:
+            _d = mx.load(str(_sf))
+            _all_keys.update(_d.keys())
+            del _d
+        _qsuffixes = set()
+        for _k in _all_keys:
+            if _k.endswith(".scales"):
+                _qpath = _k[:-len(".scales")]
+                _qsuffixes.add(_qpath)
+                if "language_model.model." in _qpath:
+                    _qsuffixes.add(_qpath.replace("language_model.model.", "model.language_model.", 1))
+                if "model.language_model." in _qpath:
+                    _qsuffixes.add(_qpath.replace("model.language_model.", "language_model.model.", 1))
+
+        def _vlm_class_pred(p, m):
+            if skip_multimodal_module(p):
+                return False
+            if not hasattr(m, "to_quantized"):
+                return False
+            if p in _qsuffixes or f"model.{p}" in _qsuffixes:
+                return True
+            if "language_model.model." in p:
+                if p.replace("language_model.model.", "model.language_model.", 1) in _qsuffixes:
+                    return True
+            if p.endswith("lm_head") or "language_model.lm_head" in p:
+                if "lm_head" in _qsuffixes:
+                    return True
+            return False
+
+        _nn.quantize(
+            model,
+            group_size=config["quantization"]["group_size"],
+            bits=config["quantization"]["bits"],
+            class_predicate=_vlm_class_pred,
+        )
 
     _upgrade_switch_to_quantized(
         model, config["quantization"]["bits"], config["quantization"]["group_size"]
@@ -922,10 +1042,12 @@ def smelt_load(
                 n_skipped += 1
                 continue
 
-            # Nemotron/Mistral: collect gate scales/biases for dequantization
+            # MoE gate dequant: collect gate scales/biases for dequantization.
+            # Gate keys: .mlp.gate., .mixer.gate., .block_sparse_moe.gate.
+            # but NOT gate_proj (which is a SwitchGLU expert projection).
             if needs_gate_dequant:
                 is_gate_meta = (
-                    (".mlp.gate." in k or ".mixer.gate." in k)
+                    ".gate." in k
                     and "gate_proj" not in k
                     and (k.endswith(".scales") or k.endswith(".biases"))
                 )
@@ -934,7 +1056,7 @@ def smelt_load(
                     gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
                     continue
                 # Nemotron fc1/fc2 rename
-                if is_nemotron:
+                if is_nemotron_fc_rename:
                     for old, new in nemotron_renames.items():
                         if old in k:
                             k = k.replace(old, new)
@@ -967,13 +1089,80 @@ def smelt_load(
                             except Exception:
                                 continue
 
+        # Gemma 4 PLE: dequantize ScaledLinear + Embedding weights (#52)
+        if text_type == "gemma4_text":
+            for _ple_name in ("per_layer_model_projection", "embed_tokens_per_layer"):
+                for _pfx in (f"language_model.model.{_ple_name}", f"model.language_model.{_ple_name}"):
+                    _w_key = f"{_pfx}.weight"
+                    if _w_key not in filtered:
+                        continue
+                    _w = filtered[_w_key]
+                    if _w.dtype != mx.uint32:
+                        continue
+                    _s_key = f"{_pfx}.scales"
+                    if _s_key not in filtered:
+                        continue
+                    _s = filtered[_s_key]
+                    _b = filtered.get(f"{_pfx}.biases", mx.zeros_like(_s))
+                    for _bits in (8, 6, 4, 3, 2):
+                        _real = _w.shape[-1] * (32 // _bits)
+                        _gs = _real // _s.shape[-1] if _s.shape[-1] > 0 else 0
+                        if _gs >= 2 and _gs * _s.shape[-1] == _real:
+                            try:
+                                _dq = mx.dequantize(_w, _s, _b, group_size=_gs, bits=_bits)
+                                mx.eval(_dq)
+                                filtered[_w_key] = _dq.astype(mx.float16)
+                                filtered.pop(_s_key, None)
+                                filtered.pop(f"{_pfx}.biases", None)
+                                logger.info(f"  Dequantized Gemma4 PLE: {_w_key}")
+                                break
+                            except Exception:
+                                continue
+
         if filtered:
             if hasattr(model, "sanitize"):
-                filtered = model.sanitize(filtered)
+                try:
+                    filtered = model.sanitize(filtered)
+                except (KeyError, ValueError):
+                    pass
+            # VLM models may need vision/language sanitizers
+            if _is_vlm:
+                try:
+                    from mlx_vlm.utils import sanitize_weights as _vlm_sanitize
+                    _vlm_model_class = type(model)
+                    if hasattr(_vlm_model_class, "VisionModel"):
+                        filtered = _vlm_sanitize(
+                            _vlm_model_class.VisionModel, filtered,
+                            model_cfg.get("vision_config", {})
+                        )
+                    if hasattr(_vlm_model_class, "LanguageModel"):
+                        filtered = _vlm_sanitize(
+                            _vlm_model_class.LanguageModel, filtered,
+                            model_cfg.get("text_config", model_cfg)
+                        )
+                except (KeyError, ValueError, AttributeError):
+                    pass
             model.load_weights(list(filtered.items()), strict=False)
         del weights, filtered
 
     _fix_quantized_bits(model, {})
+
+    # Fix gate weights that got dequantized to float16 but are inside a
+    # QuantizedLinear (e.g. CRACK-variant JANG models). The QuantizedLinear
+    # would try to dequantize again, producing garbage routing.
+    for _, module in model.named_modules():
+        class_name = type(module).__name__
+        if class_name not in _MOE_CLASSES and not hasattr(module, "switch_mlp"):
+            continue
+        gate = getattr(module, "gate", None)
+        if gate is None:
+            continue
+        w = gate.get("weight") if hasattr(gate, "get") else getattr(gate, "weight", None)
+        if w is not None and w.dtype != mx.uint32 and hasattr(gate, "bits"):
+            new_gate = nn.Linear(w.shape[1], w.shape[0], bias=False)
+            new_gate.weight = w
+            module.gate = new_gate
+
     logger.info("  Backbone: %d loaded, %d expert skipped", n_loaded, n_skipped)
 
     tokenizer = load_tokenizer(path)
@@ -1000,7 +1189,8 @@ def smelt_load(
 
         # ── Step 7: Gemma 4 special handling ──────────────────────────
         if _is_gemma4_layer(layer):
-            switch = layer.switch_mlp
+            # Gemma 4: layer.experts.switch_glu is the SwitchGLU module
+            switch = layer.experts.switch_glu
             # Fill expert weights
             for pa, pi in [
                 ("gate_proj", li_info.gate_proj),
@@ -1032,14 +1222,80 @@ def smelt_load(
                 bias_np[e] = 0.0
             cache_bias = mx.array(bias_np)
 
-            # Create shim and wrap
+            # Create shim: _Gemma4Gate extracts raw logits, switch_glu is the expert module
             ne_per_tok = getattr(layer.router, "num_experts_per_tok",
-                                 getattr(layer.router, "top_k", 2))
+                                 getattr(layer.router, "top_k",
+                                         getattr(layer.config, "top_k_experts", 8)))
             shim = _Gemma4MoeShim(layer.router, switch, ne_per_tok)
             wrapper = TurboRouteWrapper(shim, remap, cache_bias, "softmax")
-            # Replace both router and switch_mlp on the layer
-            layer.router = None  # prevent double forward
-            layer.switch_mlp = wrapper
+
+            # Gemma 4's layer.__call__ does:
+            #   indices, weights = self.router(h)
+            #   h2 = self.experts(h2, indices, weights)
+            # We need experts(h2, indices, weights) to use our wrapper(h2) instead.
+            # Wrap the wrapper to accept and ignore Gemma 4's pre-computed routing args.
+            # Gemma 4 architecture: Router and Experts receive DIFFERENT inputs.
+            #   Router gets: h (post-attention, pre-feedforward)
+            #   Experts get: h2 = pre_feedforward_layernorm_2(h)
+            # So we can't re-route from inside Experts (wrong input for gate).
+            #
+            # Solution: patch the ROUTER to inject cache_bias into its logits,
+            # and patch EXPERTS to remap global indices to local slots.
+
+            class _Gemma4SmeltRouter(nn.Module):
+                """Router with cache_bias injected into expert selection."""
+                def __init__(self, orig_router, cache_bias_arr):
+                    super().__init__()
+                    self.orig = orig_router
+                    self.cache_bias = cache_bias_arr
+                    # Forward config and attributes
+                    self.config = orig_router.config
+                    self.norm = orig_router.norm
+                    self.proj = orig_router.proj
+                    self.scale = orig_router.scale
+                    self.per_expert_scale = orig_router.per_expert_scale
+                    self._root_size = orig_router._root_size
+
+                def __call__(self, x):
+                    x = self.norm(x)
+                    x = x * self._root_size
+                    x = x * self.scale
+                    expert_scores = self.proj(x)
+
+                    # Inject cache_bias into raw logits for selection
+                    biased_scores = expert_scores + self.cache_bias
+                    top_k = self.config.top_k_experts
+                    top_k_indices = mx.argpartition(
+                        -biased_scores, kth=top_k - 1, axis=-1
+                    )[..., :top_k]
+
+                    # Use UNBIASED probs for weighting (same as original)
+                    router_probs = mx.softmax(expert_scores, axis=-1)
+                    top_k_weights = mx.take_along_axis(router_probs, top_k_indices, axis=-1)
+                    top_k_weights = top_k_weights / mx.sum(top_k_weights, axis=-1, keepdims=True)
+                    top_k_weights = top_k_weights * self.per_expert_scale[top_k_indices]
+                    return top_k_indices, top_k_weights
+
+            class _Gemma4SmeltExperts(nn.Module):
+                """Experts wrapper that remaps global indices to local slots."""
+                def __init__(self, orig_experts, remap_table):
+                    super().__init__()
+                    self.orig_experts = orig_experts
+                    self.remap = remap_table
+
+                def __call__(self, x, top_k_indices, top_k_weights):
+                    if self.remap is not None:
+                        local_inds = self.remap[top_k_indices]
+                    else:
+                        local_inds = top_k_indices
+                    return self.orig_experts(x, local_inds, top_k_weights)
+
+            if remap is not None:
+                layer.router = _Gemma4SmeltRouter(layer.router, cache_bias)
+                layer.experts = _Gemma4SmeltExperts(layer.experts, remap)
+            else:
+                # Full expert coverage — no changes needed
+                pass
             patched += 1
             continue
 
@@ -1130,5 +1386,20 @@ def smelt_load(
         "Smelt load complete: %d/%d experts, %d layers, %.1fs",
         n_load, num_experts, patched, elapsed,
     )
+
+    if _is_vlm:
+        # VLM models need processor (not just tokenizer) for image handling
+        try:
+            from mlx_vlm.utils import load_processor, load_image_processor
+            from .jang_loader import _build_vlm_processor
+            image_processor = load_image_processor(path)
+            eos_token_id = getattr(model.config, "eos_token_id", None) if hasattr(model, "config") else None
+            try:
+                processor = load_processor(path, True, eos_token_ids=eos_token_id)
+            except (ImportError, ValueError):
+                processor = _build_vlm_processor(path, eos_token_id)
+            return model, processor
+        except Exception as e:
+            logger.warning(f"Failed to load VLM processor, falling back to tokenizer: {e}")
 
     return model, tokenizer

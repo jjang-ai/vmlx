@@ -8,8 +8,14 @@ integration with vLLM's model execution system.
 
 from vmlx_engine.models.llm import MLXLanguageModel
 from vmlx_engine.models.mllm import MLXMultimodalLM
+from vmlx_engine.models.codebook import CodebookVQLanguageModel
 
 # Backwards compatibility aliases
 MLXVisionLanguageModel = MLXMultimodalLM
 
-__all__ = ["MLXLanguageModel", "MLXMultimodalLM", "MLXVisionLanguageModel"]
+__all__ = [
+    "MLXLanguageModel",
+    "MLXMultimodalLM",
+    "MLXVisionLanguageModel",
+    "CodebookVQLanguageModel",
+]

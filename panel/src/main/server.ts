@@ -102,6 +102,10 @@ export interface ServerConfig {
 
   // Max context length override (0 = use model default)
   maxContextLength?: number
+
+  // Smelt mode (partial MoE expert loading)
+  smelt?: boolean
+  smeltExperts?: number
 }
 
 export interface DetectedProcess {

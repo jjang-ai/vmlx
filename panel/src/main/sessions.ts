@@ -882,7 +882,7 @@ export class SessionManager extends EventEmitter {
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
     // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'mcpConfig', 'servedModelName',
-    'speculativeModel', 'numDraftTokens', 'streamFromDisk',
+    'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice', 'chatTemplate',
@@ -1868,11 +1868,11 @@ export class SessionManager extends EventEmitter {
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
 
-    // SSD disk streaming
-    if ((config as any).streamFromDisk) {
-      args.push('--stream-from-disk')
-      if ((config as any).streamMemoryPercent && (config as any).streamMemoryPercent !== 100) {
-        args.push('--stream-memory-percent', (config as any).streamMemoryPercent.toString())
+    // Smelt mode (partial MoE expert loading)
+    if (config.smelt) {
+      args.push('--smelt')
+      if (config.smeltExperts && config.smeltExperts !== 50) {
+        args.push('--smelt-experts', config.smeltExperts.toString())
       }
     }
 

@@ -118,6 +118,10 @@ class SchedulerConfig:
     block_disk_cache_dir: Optional[str] = None  # None = ~/.cache/vmlx-engine/block-cache/<model_hash>
     block_disk_cache_max_gb: float = 10.0  # 0 = unlimited
 
+    # Smelt mode (partial expert loading for MoE models)
+    smelt: bool = False
+    smelt_experts: int = 50
+
     # Prompt Lookup Decoding (PLD) speculative acceleration
     pld_enabled: bool = False        # Enable PLD (opt-in; best for long structured/repetitive output)
     pld_summary_interval: int = 487  # Log effectiveness summary every N spec-decode tokens
@@ -358,6 +362,8 @@ class Scheduler:
                         # (same fix as prompt disk cache — C3)
                         quant_tag = self.config.kv_cache_quantization or "none"
                         block_scope_key = f"{self.config.model_path}:quant={quant_tag}"
+                        if getattr(self.config, 'smelt', False):
+                            block_scope_key += f":smelt_{getattr(self.config, 'smelt_experts', 50)}"
                         model_hash = hashlib.sha256(
                             block_scope_key.encode()
                         ).hexdigest()[:12]
@@ -453,6 +459,8 @@ class Scheduler:
                         if n_layers:
                             break
                 scope_key = f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
+                if getattr(self.config, 'smelt', False):
+                    scope_key += f":smelt_{getattr(self.config, 'smelt_experts', 50)}"
                 model_hash = hashlib.sha256(
                     scope_key.encode()
                 ).hexdigest()[:12]

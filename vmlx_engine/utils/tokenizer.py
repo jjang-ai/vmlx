@@ -230,9 +230,10 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             f"Check that the model directory is available."
         )
 
-    # Check if disk streaming mode is active (lazy mmap loading)
+    # Check if Smelt mode is active (partial expert loading)
     from .. import server as _server_module
-    _lazy = getattr(_server_module, '_stream_from_disk', False)
+    _smelt = getattr(_server_module, '_smelt_enabled', False)
+    _smelt_pct = getattr(_server_module, '_smelt_experts', 50)
 
     # Resolve HuggingFace repo IDs to local paths so that JANG detection
     # (which checks for jang_config.json on disk) works for remote models.
@@ -246,9 +247,12 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
     # Checking tokenizer fallback first would bypass the JANG loader for Nemotron-H.
     from .jang_loader import is_jang_model
     if is_jang_model(local_model_path):
-        from .jang_loader import load_jang_model
         logger.info(f"Detected JANG model: {model_name}")
-        return load_jang_model(local_model_path, lazy=_lazy)
+        if _smelt:
+            from .smelt_loader import smelt_load
+            return smelt_load(local_model_path, expert_percent=_smelt_pct)
+        from .jang_loader import load_jang_model
+        return load_jang_model(local_model_path)
 
     # Check if model needs tokenizer fallback (e.g., Nemotron).
     # Pass resolved local path so _get_model_type_from_config can read config.json.
@@ -256,26 +260,26 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
         logger.info(
             f"Model {model_name} requires tokenizer fallback, loading directly..."
         )
-        model, tokenizer = _load_with_tokenizer_fallback(local_model_path, lazy=_lazy)
+        model, tokenizer = _load_with_tokenizer_fallback(local_model_path)
         _apply_turboquant_to_model(model, local_model_path)
         return model, tokenizer
 
     try:
-        model, tokenizer = load(model_name, tokenizer_config=tokenizer_config, lazy=_lazy)
+        model, tokenizer = load(model_name, tokenizer_config=tokenizer_config)
         _apply_turboquant_to_model(model, local_model_path)
         return model, tokenizer
     except ValueError as e:
         # Fallback for models with non-standard tokenizers
         if "TokenizersBackend" in str(e) or "Tokenizer class" in str(e):
             logger.warning(f"Standard tokenizer loading failed, using fallback: {e}")
-            model, tokenizer = _load_with_tokenizer_fallback(model_name, lazy=_lazy)
+            model, tokenizer = _load_with_tokenizer_fallback(model_name)
             _apply_turboquant_to_model(model, local_model_path)
             return model, tokenizer
         else:
             raise
 
 
-def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
+def _load_with_tokenizer_fallback(model_name: str):
     """Load model with fallback tokenizer for non-standard models like Nemotron."""
     from mlx_lm.utils import load_model
 
@@ -294,7 +298,7 @@ def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
     ensure_latent_moe_support(str(model_path))
 
     # Load model
-    model, _ = load_model(model_path, lazy=lazy)
+    model, _ = load_model(model_path)
 
     # Try to load tokenizer from tokenizer.json directly
     tokenizer_json = model_path / "tokenizer.json"

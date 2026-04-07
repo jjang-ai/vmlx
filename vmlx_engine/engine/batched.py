@@ -447,6 +447,18 @@ class BatchedEngine(BaseEngine):
             if extra_template_kwargs:
                 template_kwargs.update(extra_template_kwargs)
 
+            # Convert image_url content items to {"type": "image"} for chat templates
+            # that only recognize the "image" type (e.g. Gemma 4).  The mlx_vlm path
+            # above handles this conversion, but when it's skipped (tools, multi-turn)
+            # the raw tokenizer template needs the right item type.
+            if num_images > 0 and self._is_mllm:
+                for msg in messages:
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "image_url":
+                                item["type"] = "image"
+
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
             except Exception as template_err:
