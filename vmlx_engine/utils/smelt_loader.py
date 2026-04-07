@@ -750,3 +750,385 @@ class TurboRouteWrapper(nn.Module):
                 y = y + shared(x)
 
         return y
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# smelt_load — main Smelt loading function
+# ═══════════════════════════════════════════════════════════════════════════════
+
+import gc
+import time
+
+import numpy as np
+
+# Safetensors dtype → numpy dtype mapping for expert pread
+_NP_DTYPE_MAP = {
+    "U32": np.uint32,
+    "F16": np.float16,
+    "BF16": np.float16,
+    "F32": np.float32,
+    "I32": np.int32,
+    "U8": np.uint8,
+}
+
+
+def _load_expert_subset(ti: TensorInfo, indices: list) -> mx.array:
+    """Load a subset of experts from a safetensors file via numpy pread.
+
+    Reads the full [num_experts, ...] tensor from disk using numpy fromfile
+    with offset+count, then slices to the selected expert indices.
+    For full coverage (all experts selected), returns the entire tensor.
+    """
+    np_dtype = _NP_DTYPE_MAP.get(ti.dtype, np.uint8)
+    data = np.fromfile(
+        ti.file_path, dtype=np.uint8, count=ti.num_bytes, offset=ti.abs_offset
+    )
+    full_np = data.view(np_dtype).reshape(ti.shape)
+    if len(indices) >= ti.shape[0]:
+        return mx.array(full_np)
+    subset = full_np[np.array(indices)]
+    return mx.array(subset)
+
+
+def _get_layers_list(model):
+    """Find the transformer layers list from a model object."""
+    for accessor in [
+        lambda m: m.language_model.model.layers,
+        lambda m: m.model.layers,
+        lambda m: m.backbone.layers,
+    ]:
+        try:
+            return accessor(model)
+        except AttributeError:
+            continue
+    raise ValueError("Could not find model layers")
+
+
+def _is_gemma4_layer(layer) -> bool:
+    """Check if a layer uses Gemma 4's separate router + switch_mlp pattern.
+
+    Gemma 4 has layer.router + layer.switch_mlp as siblings (not nested
+    inside an MoE block). The router is a separate Router class that computes
+    top-k indices/weights, then passes them to switch_mlp.
+    """
+    return (
+        hasattr(layer, "router")
+        and hasattr(layer, "switch_mlp")
+        and not hasattr(layer, "block_sparse_moe")
+        and not hasattr(layer, "mixer")
+    )
+
+
+class _Gemma4MoeShim(nn.Module):
+    """Thin shim that wraps Gemma 4's separate router + switch_mlp as a single MoE block.
+
+    Gemma 4 has ``layer.router`` (computes top-k) and ``layer.switch_mlp``
+    (the expert SwitchGLU) as siblings.  TurboRouteWrapper expects a single
+    MoE block with ``.gate`` and ``.switch_mlp``.  This shim bridges them.
+    """
+
+    def __init__(self, router, switch_mlp, num_experts_per_tok: int = 2):
+        super().__init__()
+        self.gate = router
+        self.switch_mlp = switch_mlp
+        self.num_experts_per_tok = num_experts_per_tok
+
+
+def smelt_load(
+    model_path: str,
+    expert_percent: int = 50,
+) -> tuple:
+    """Load a JANG MoE model in Smelt mode (partial expert loading).
+
+    Smelt loads only the model backbone + a fraction of expert weights,
+    dramatically reducing RAM usage while maintaining baseline inference speed
+    via native SwitchGLU kernels and cache-biased routing.
+
+    Args:
+        model_path: Path to a JANG v2 model directory.
+        expert_percent: Percentage of experts to load per layer (0-100).
+
+    Returns:
+        (model, tokenizer) — standard mlx_lm interface.
+    """
+    from mlx_lm.utils import load_config, load_model as _load_model_skeleton, load_tokenizer
+
+    from vmlx_engine.utils.jang_loader import (
+        JANG_CONFIG_FILENAMES,
+        _chunked_eval_params,
+        _fix_quantized_bits,
+        _get_v2_weight_files,
+        _patch_turboquant_make_cache,
+        _upgrade_switch_to_quantized,
+    )
+
+    path = Path(model_path)
+    t0 = time.perf_counter()
+    logger.info("Smelt loading %s (expert_percent=%d)", path.name, expert_percent)
+
+    # ── Read configs ──────────────────────────────────────────────────
+    model_cfg = json.loads((path / "config.json").read_text())
+    jang_cfg = None
+    for name in JANG_CONFIG_FILENAMES:
+        p = path / name
+        if p.exists():
+            jang_cfg = json.loads(p.read_text())
+            break
+    if jang_cfg is None:
+        raise FileNotFoundError(f"No JANG config found in {path}")
+
+    config = load_config(path)
+    if "quantization" not in config:
+        bs = jang_cfg.get("quantization", {}).get("block_size", 64)
+        bw = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
+        config["quantization"] = {"group_size": bs, "bits": min(bw)}
+
+    # Detect model features
+    top_type = model_cfg.get("model_type", "")
+    text_type = model_cfg.get("text_config", {}).get("model_type", "")
+    is_nemotron = top_type == "nemotron_h"
+    needs_gate_dequant = is_nemotron or text_type == "mistral4"
+    nemotron_renames = {
+        "switch_mlp.up_proj": "switch_mlp.fc1",
+        "switch_mlp.down_proj": "switch_mlp.fc2",
+    }
+
+    # ── Step 1: Load backbone only ────────────────────────────────────
+    try:
+        model, config = _load_model_skeleton(
+            path, lazy=True, strict=False, model_config=config
+        )
+    except ValueError:
+        from mlx_vlm.utils import load_model as _load_vlm
+        model, _ = _load_vlm(path, lazy=True, model_config=config)
+
+    _upgrade_switch_to_quantized(
+        model, config["quantization"]["bits"], config["quantization"]["group_size"]
+    )
+
+    # Load weights, skipping expert (switch_mlp/switch_glu) keys
+    weight_files = _get_v2_weight_files(path)
+    n_loaded = n_skipped = 0
+
+    for sf in weight_files:
+        weights = mx.load(str(sf))
+        filtered = {}
+        gate_parts = {}
+
+        for k, v in weights.items():
+            if k.endswith(".importance") or k.startswith("mtp."):
+                continue
+            if "switch_mlp" in k or "switch_glu" in k:
+                n_skipped += 1
+                continue
+
+            # Nemotron/Mistral: collect gate scales/biases for dequantization
+            if needs_gate_dequant:
+                is_gate_meta = (
+                    (".mlp.gate." in k or ".mixer.gate." in k)
+                    and "gate_proj" not in k
+                    and (k.endswith(".scales") or k.endswith(".biases"))
+                )
+                if is_gate_meta:
+                    prefix = k.rsplit(".", 1)[0]
+                    gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
+                    continue
+                # Nemotron fc1/fc2 rename
+                if is_nemotron:
+                    for old, new in nemotron_renames.items():
+                        if old in k:
+                            k = k.replace(old, new)
+                            break
+
+            filtered[k] = v
+            n_loaded += 1
+
+        # Dequantize gate weights (routing needs full precision)
+        if needs_gate_dequant:
+            for prefix, parts in gate_parts.items():
+                wkey = f"{prefix}.weight"
+                if wkey in filtered and "scales" in parts:
+                    qw = filtered[wkey]
+                    scales = parts["scales"]
+                    biases = parts.get("biases", mx.zeros_like(scales))
+                    for bits in [8, 6, 4, 3, 2]:
+                        epu = 32 // bits
+                        real = qw.shape[-1] * epu
+                        n_s = scales.shape[-1]
+                        gs = real // n_s if n_s > 0 else 0
+                        if gs > 0 and gs * n_s == real:
+                            try:
+                                dq = mx.dequantize(qw, scales, biases, gs, bits)
+                                mx.eval(dq)
+                                filtered[wkey] = dq.astype(mx.float32)
+                                filtered.pop(f"{prefix}.scales", None)
+                                filtered.pop(f"{prefix}.biases", None)
+                                break
+                            except Exception:
+                                continue
+
+        if filtered:
+            if hasattr(model, "sanitize"):
+                filtered = model.sanitize(filtered)
+            model.load_weights(list(filtered.items()), strict=False)
+        del weights, filtered
+
+    _fix_quantized_bits(model, {})
+    logger.info("  Backbone: %d loaded, %d expert skipped", n_loaded, n_skipped)
+
+    tokenizer = load_tokenizer(path)
+
+    # ── Step 2: Build ExpertIndex ─────────────────────────────────────
+    ei = ExpertIndex.build(str(path))
+    num_experts = ei.num_experts
+
+    # ── Step 3: Calculate n_load ──────────────────────────────────────
+    n_load = max(1, int(num_experts * expert_percent / 100))
+    n_load = min(n_load, num_experts)
+    selected = list(range(n_load))
+    logger.info(
+        "  Smelt: loading %d/%d experts (%d%%)",
+        n_load, num_experts, expert_percent,
+    )
+
+    # ── Step 4-6: Fill experts + wrap ─────────────────────────────────
+    layers_list = _get_layers_list(model)
+    patched = 0
+
+    for li, li_info in ei.layers.items():
+        layer = layers_list[li]
+
+        # ── Step 7: Gemma 4 special handling ──────────────────────────
+        if _is_gemma4_layer(layer):
+            switch = layer.switch_mlp
+            # Fill expert weights
+            for pa, pi in [
+                ("gate_proj", li_info.gate_proj),
+                ("up_proj", li_info.up_proj),
+                ("down_proj", li_info.down_proj),
+            ]:
+                if pi is None:
+                    continue
+                proj = getattr(switch, pa, None)
+                if proj is None:
+                    continue
+                proj.weight = _load_expert_subset(pi.weight, selected)
+                if pi.scales is not None:
+                    proj.scales = _load_expert_subset(pi.scales, selected)
+                if pi.biases is not None and hasattr(proj, "biases"):
+                    proj.biases = _load_expert_subset(pi.biases, selected)
+
+            # Build remap + cache_bias
+            if n_load >= num_experts:
+                remap = None
+            else:
+                remap_np = np.zeros(num_experts, dtype=np.uint32)
+                for j, g in enumerate(selected):
+                    remap_np[g] = j
+                remap = mx.array(remap_np)
+
+            bias_np = np.full(num_experts, -1000.0, dtype=np.float32)
+            for e in selected:
+                bias_np[e] = 0.0
+            cache_bias = mx.array(bias_np)
+
+            # Create shim and wrap
+            ne_per_tok = getattr(layer.router, "num_experts_per_tok",
+                                 getattr(layer.router, "top_k", 2))
+            shim = _Gemma4MoeShim(layer.router, switch, ne_per_tok)
+            wrapper = TurboRouteWrapper(shim, remap, cache_bias, "softmax")
+            # Replace both router and switch_mlp on the layer
+            layer.router = None  # prevent double forward
+            layer.switch_mlp = wrapper
+            patched += 1
+            continue
+
+        # ── Standard MoE block path ───────────────────────────────────
+        moe, moe_attr = _find_moe_block(layer)
+        if moe is None:
+            continue
+        switch = getattr(moe, "switch_mlp", getattr(moe, "switch_glu", None))
+        if switch is None:
+            continue
+
+        # Fill expert weights from SSD
+        for pa, pi in [
+            ("gate_proj", li_info.gate_proj),
+            ("up_proj", li_info.up_proj),
+            ("down_proj", li_info.down_proj),
+            ("fc1", li_info.up_proj),   # Nemotron 2-proj pattern
+            ("fc2", li_info.down_proj),  # Nemotron 2-proj pattern
+        ]:
+            if pi is None:
+                continue
+            proj = getattr(switch, pa, None)
+            if proj is None:
+                continue
+            proj.weight = _load_expert_subset(pi.weight, selected)
+            if pi.scales is not None:
+                proj.scales = _load_expert_subset(pi.scales, selected)
+            if pi.biases is not None and hasattr(proj, "biases"):
+                proj.biases = _load_expert_subset(pi.biases, selected)
+
+        # Build remap + cache_bias
+        if n_load >= num_experts:
+            remap = None
+        else:
+            remap_np = np.zeros(num_experts, dtype=np.uint32)
+            for j, g in enumerate(selected):
+                remap_np[g] = j
+            remap = mx.array(remap_np)
+
+        bias_np = np.full(num_experts, -1000.0, dtype=np.float32)
+        for e in selected:
+            bias_np[e] = 0.0
+        cache_bias = mx.array(bias_np)
+
+        # Wrap with TurboRouteWrapper
+        routing_style = _detect_routing_style(moe)
+        wrapper = TurboRouteWrapper(moe, remap, cache_bias, routing_style)
+        setattr(layers_list[li], moe_attr, wrapper)
+        patched += 1
+
+    logger.info("  Wrapped %d MoE layers", patched)
+
+    # ── Step 8: bfloat16 if needed ────────────────────────────────────
+    needs_bf16 = (
+        is_nemotron
+        or text_type == "mistral4"
+        or num_experts >= 512
+        # MLA detection
+        or model_cfg.get("text_config", model_cfg).get("kv_lora_rank", 0) > 0
+    )
+    lm_obj = model.language_model if hasattr(model, "language_model") else model
+
+    if needs_bf16:
+        logger.info("  Converting to bfloat16")
+        lm_obj.set_dtype(mx.bfloat16)
+
+    # ── Step 9: Materialize parameters ────────────────────────────────
+    _chunked_eval_params(model)
+
+    # ── Step 10: TurboQuant patching ──────────────────────────────────
+    text_cfg = model_cfg.get("text_config", model_cfg)
+    _patch_turboquant_make_cache(lm_obj, jang_cfg, text_cfg)
+
+    # Ensure make_cache exists
+    if not hasattr(lm_obj, "make_cache"):
+        from mlx_lm.models.cache import KVCache
+        n_layers = len(layers_list)
+        lm_obj.make_cache = lambda: [KVCache() for _ in range(n_layers)]
+
+    gc.collect()
+    try:
+        mx.clear_cache()
+    except Exception:
+        pass
+
+    elapsed = time.perf_counter() - t0
+    logger.info(
+        "Smelt load complete: %d/%d experts, %d layers, %.1fs",
+        n_load, num_experts, patched, elapsed,
+    )
+
+    return model, tokenizer
