@@ -3134,9 +3134,24 @@ class Scheduler:
                     # mismatch on fetch → garbled output. Skip storage;
                     # KV blocks still provide partial TTFT benefit.
                     if _gpl > 0:
-                        logger.debug(
-                            f"SSM companion: skipping for {request_id} "
-                            f"(gpl={_gpl}, post-gen SSM contaminated)"
+                        # Queue deferred SSM re-derive instead of skipping.
+                        # The post-gen SSM state is contaminated by thinking
+                        # tokens, so we can't store it directly. But we CAN
+                        # queue a re-derive that runs during idle time (no
+                        # active requests) — a separate prefill pass on just
+                        # the prompt tokens to capture clean SSM state. This
+                        # doesn't help the CURRENT conversation but ensures
+                        # the NEXT request with the same prompt prefix gets
+                        # a full KV+SSM cache hit instead of re-prefilling.
+                        if not hasattr(self, '_ssm_rederive_queue'):
+                            self._ssm_rederive_queue = []
+                        self._ssm_rederive_queue.append(
+                            (list(all_tokens), prompt_len, request_id)
+                        )
+                        logger.info(
+                            f"SSM companion: queued deferred re-derive for "
+                            f"{request_id} (gpl={_gpl}, {prompt_len} prompt "
+                            f"tokens, will run during next idle period)"
                         )
                     elif prompt_len > 0:
                         _ssm_key_tokens = all_tokens
@@ -4263,6 +4278,70 @@ class Scheduler:
                 logger.debug("Periodic Metal memory cache cleanup")
             except Exception:
                 pass
+
+        # ── Deferred SSM re-derive (idle-time processing) ──
+        # For thinking models (gen_prompt_len > 0), the SSM companion store
+        # queues a re-derive task instead of skipping entirely. We run the
+        # re-derive here ONLY when the scheduler is idle (no running
+        # requests) — the forward pass uses the Metal GPU so it can't
+        # overlap with active generation. The re-derive runs a separate
+        # prefill pass on just the prompt tokens (no thinking/output
+        # contamination) and stores the clean SSM state for future prefix
+        # cache hits. This means the CURRENT conversation pays full
+        # re-prefill on each turn, but the NEXT conversation with the
+        # same prompt prefix gets an instant KV+SSM cache hit.
+        if (
+            self._is_hybrid
+            and not self.running
+            and hasattr(self, '_ssm_rederive_queue')
+            and self._ssm_rederive_queue
+            and self._ssm_state_cache is not None
+        ):
+            # Process ONE task per step to avoid long GPU stalls
+            tokens, prompt_len, orig_request_id = self._ssm_rederive_queue.pop(0)
+            try:
+                logger.info(
+                    f"SSM re-derive: running deferred prefill for "
+                    f"{orig_request_id} ({prompt_len} prompt tokens, "
+                    f"{len(self._ssm_rederive_queue)} remaining in queue)"
+                )
+                clean_cache = self._prefill_for_prompt_only_cache(tokens)
+                if clean_cache is not None:
+                    # Extract SSM layers from the clean cache
+                    kv_set = set(self._hybrid_kv_positions or [])
+                    ssm_layers = []
+                    for layer_idx, c in enumerate(clean_cache):
+                        if layer_idx not in kv_set:
+                            if hasattr(c, 'cache') and isinstance(c.cache, list):
+                                from copy import deepcopy
+                                import mlx.core as mx
+                                cloned = deepcopy(c)
+                                cloned.cache = [
+                                    mx.contiguous(mx.array(a)) if a is not None else None
+                                    for a in c.cache
+                                ]
+                                ssm_layers.append(cloned)
+                            else:
+                                ssm_layers.append(c)
+                    if ssm_layers:
+                        self._ssm_state_cache.store(
+                            tokens, prompt_len, ssm_layers
+                        )
+                        logger.info(
+                            f"SSM re-derive: stored clean companion for "
+                            f"{orig_request_id}: {len(ssm_layers)} SSM layers, "
+                            f"{prompt_len}-token key (next fetch will hit)"
+                        )
+                    del clean_cache
+                    try:
+                        import mlx.core as mx
+                        mx.clear_memory_cache()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(
+                    f"SSM re-derive failed for {orig_request_id}: {e}"
+                )
 
         return output
 
