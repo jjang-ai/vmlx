@@ -67,11 +67,7 @@ class MLXLanguageModel:
         self.tokenizer = None
         self._loaded = False
 
-        # SSD disk-streaming state (set by server.py after model load)
-        self._stream_from_disk = False
         self._model_path = None
-        self._weight_index = None
-        self._temp_weight_dir = None
 
     def load(self) -> None:
         """Load the model and tokenizer."""
@@ -106,11 +102,16 @@ class MLXLanguageModel:
             self._loaded = True
             logger.info(f"Model loaded successfully: {self.model_name}")
 
-        except ImportError:
+        except ImportError as _ie:
+            # ISSUE-A4-003: previously this raised a generic message that masked
+            # the real ImportError (e.g. missing jang_tools, missing turboquant,
+            # etc.). Preserve the original cause via `from _ie` so debugging is
+            # not blocked by the friendly message.
             raise ImportError(
-                "mlx-lm is required for LLM inference. "
-                "Install with: pip install mlx-lm"
-            )
+                "mlx-lm (or one of its plugins) failed to import for LLM "
+                f"inference. Original error: {_ie}. Install/fix with: "
+                "pip install mlx-lm"
+            ) from _ie
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -162,22 +163,6 @@ class MLXLanguageModel:
         """
         if not self._loaded:
             self.load()
-
-        # SSD disk-streaming: use custom generate loop
-        if self._stream_from_disk and self._model_path:
-            from ..utils.ssd_generate import ssd_generate
-            output_text = ssd_generate(
-                self.model, self.tokenizer, prompt, self._model_path,
-                weight_index=self._weight_index,
-                temp_weight_dir=self._temp_weight_dir,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                repetition_penalty=repetition_penalty,
-            )
-            tokens = self.tokenizer.encode(output_text)
-            finish_reason = "length" if len(tokens) >= max_tokens else "stop"
-            return GenerationOutput(text=output_text, tokens=tokens, finish_reason=finish_reason)
 
         from mlx_lm import generate
 
@@ -287,44 +272,6 @@ class MLXLanguageModel:
         """
         if not self._loaded:
             self.load()
-
-        # SSD disk-streaming: use custom generate loop
-        if self._stream_from_disk and self._model_path:
-            from ..utils.ssd_generate import ssd_stream_generate
-
-            token_count = 0
-            accumulated_text = ""
-            for response in ssd_stream_generate(
-                self.model, self.tokenizer, prompt, self._model_path,
-                weight_index=self._weight_index,
-                temp_weight_dir=self._temp_weight_dir,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                repetition_penalty=repetition_penalty,
-            ):
-                token_count += 1
-                new_text = response.text
-                accumulated_text += new_text
-                should_stop = False
-                if stop:
-                    for stop_seq in stop:
-                        if stop_seq in accumulated_text:
-                            should_stop = True
-                            break
-                finished = should_stop or token_count >= max_tokens or response.finish_reason is not None
-                finish_reason = None
-                if finished:
-                    finish_reason = "stop" if should_stop else (response.finish_reason or "length")
-                yield StreamingOutput(
-                    text=new_text,
-                    token=response.token if hasattr(response, "token") else 0,
-                    finished=finished,
-                    finish_reason=finish_reason,
-                )
-                if finished:
-                    break
-            return
 
         from mlx_lm import stream_generate
 

@@ -15,6 +15,148 @@ from typing import Any, Optional
 logger = logging.getLogger("vmlx_engine")
 
 
+def _detect_turboquant_layer_types(
+    text_cfg: dict, n_layers: int, root_cfg: dict | None = None
+) -> tuple[list[str], int, int]:
+    """Detect layer types and dimensions for TurboQuant cache configuration.
+
+    Analyzes hybrid layer configuration (layer_types, hybrid_override_pattern,
+    full_attention_interval) to determine which layers need attention cache
+    vs SSM cache. Also computes key_dim and val_dim for MLA vs standard models.
+
+    Args:
+        text_cfg: The text config dict (may be top-level for LLMs, nested for VLMs).
+        n_layers: Number of model layers.
+        root_cfg: Fallback config for hybrid_override_pattern/full_attention_interval
+            when not found in text_cfg. Use for VLM wrappers where root config
+            may have the hybrid pattern.
+
+    Returns:
+        Tuple of (layer_types list, key_dim, val_dim).
+        layer_types[i] is "attention" or "ssm".
+    """
+    key_dim = text_cfg.get("head_dim", 128)
+    val_dim = text_cfg.get("head_dim", 128)
+    if text_cfg.get("kv_lora_rank", 0) > 0:
+        key_dim = text_cfg.get("qk_nope_head_dim", 128) + text_cfg.get(
+            "qk_rope_head_dim", 64
+        )
+        val_dim = text_cfg.get("v_head_dim", 128)
+
+    layer_type_list = text_cfg.get("layer_types", [])
+    hybrid_pattern = text_cfg.get("hybrid_override_pattern", "")
+    if not hybrid_pattern and root_cfg is not None:
+        hybrid_pattern = root_cfg.get("hybrid_override_pattern", "")
+    full_attn_interval = text_cfg.get("full_attention_interval", 0)
+    if full_attn_interval == 0 and root_cfg is not None:
+        full_attn_interval = root_cfg.get("full_attention_interval", 0)
+    _attn_types = {"full_attention", "sliding_attention"}
+
+    if layer_type_list:
+        layer_types = [
+            "attention" if lt in _attn_types else "ssm"
+            for lt in layer_type_list[:n_layers]
+        ]
+        while len(layer_types) < n_layers:
+            layer_types.append("attention")
+    elif hybrid_pattern:
+        layer_types = []
+        for ch in hybrid_pattern[:n_layers]:
+            if ch == "M":
+                layer_types.append("ssm")
+            elif ch == "*":
+                layer_types.append("attention")
+    elif full_attn_interval > 0:
+        layer_types = [
+            "attention" if (i + 1) % full_attn_interval == 0 else "ssm"
+            for i in range(n_layers)
+        ]
+    else:
+        layer_types = ["attention"] * n_layers
+
+    return layer_types, key_dim, val_dim
+
+
+def is_mla_model(config: Any) -> bool:
+    """Return True iff the model uses Multi-head Latent Attention (MLA).
+
+    MLA models — DeepSeek V2/V3, GLM-5.1, Mistral 4, and any future architecture that
+    sets ``kv_lora_rank > 0`` — store keys and values via a learned latent projection
+    instead of the standard per-head KV layout. They also build their per-layer cache
+    as ``CacheList(KVCache, KVCache)`` rather than a single flat KVCache. **TurboQuant's
+    flat 3-bit KV compression is incompatible** with this layout (see deepseek_v32.py
+    line 454 ``cache[0][0] if cache[0] else None`` upstream — not fixed in mlx-lm
+    0.31.2 either), so every TQ patch site MUST skip MLA models.
+
+    Centralizing this check here lets every consumer (jang_loader, tokenizer, prefix
+    cache trie, scheduler KV-quant gate) share one definition. Originally requested
+    by Agent 1 (REQ-001 in the 2026-04-07 audit) and also consumed by Agent 3 (SSM
+    companion path).
+
+    Accepted shapes for ``config``:
+
+    * a parsed ``config.json`` dict (top-level or VLM wrapper with ``text_config``)
+    * a path-like / ``str`` pointing at a model dir or its ``config.json``
+    * a model object exposing a ``config`` attribute (best-effort)
+
+    The check looks at top-level ``kv_lora_rank`` first, then ``text_config.kv_lora_rank``,
+    then any nested ``language_config`` / ``llm_config`` if present. Returns ``False``
+    on any error so callers degrade safely.
+    """
+    cfg: Optional[dict[str, Any]] = None
+
+    if isinstance(config, dict):
+        cfg = config
+    elif isinstance(config, (str, os.PathLike)):
+        try:
+            p = Path(config)
+            if p.is_dir():
+                p = p / "config.json"
+            if p.exists():
+                cfg = json.loads(p.read_text())
+        except Exception:
+            return False
+    else:
+        # Best-effort: model object with .config or .args
+        for attr in ("config", "args", "model_config"):
+            inner = getattr(config, attr, None)
+            if isinstance(inner, dict):
+                cfg = inner
+                break
+            if inner is not None and hasattr(inner, "__dict__"):
+                cfg = vars(inner)
+                break
+
+    if not isinstance(cfg, dict):
+        return False
+
+    # Try every nested config tree where MLA might be declared.
+    for sub in (
+        cfg,
+        cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else None,
+        cfg.get("language_config")
+        if isinstance(cfg.get("language_config"), dict)
+        else None,
+        cfg.get("llm_config") if isinstance(cfg.get("llm_config"), dict) else None,
+    ):
+        if not isinstance(sub, dict):
+            continue
+        try:
+            if int(sub.get("kv_lora_rank") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+        # Gemma4 shared KV: layers share a single KV cache via num_kv_shared_layers.
+        # This is a form of latent compression — TQ's flat cache breaks the shared
+        # structure (make_cache returns a partial list, shared layers index into it).
+        try:
+            if int(sub.get("num_kv_shared_layers") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 @dataclass
 class ModelInfo:
     """Structured metadata about an MLX or HuggingFace model."""
@@ -105,22 +247,18 @@ def inspect_model(model_path: str) -> ModelInfo:
         try:
             config = json.load(f)
         except json.JSONDecodeError as e:
-            raise FileNotFoundError(
-                f"Invalid JSON in {config_path}: {e}"
-            ) from e
+            raise FileNotFoundError(f"Invalid JSON in {config_path}: {e}") from e
 
     # Collect weight files
-    weight_files = sorted(
-        [f.name for f in path.glob("*.safetensors")]
-    )
-    total_size = sum(
-        (path / f).stat().st_size for f in weight_files
-    )
+    weight_files = sorted([f.name for f in path.glob("*.safetensors")])
+    total_size = sum((path / f).stat().st_size for f in weight_files)
     total_size_gb = total_size / (1024**3)
 
     # Extract architecture info
     architectures = config.get("architectures", [])
-    architecture = architectures[0] if architectures else config.get("model_type", "unknown")
+    architecture = (
+        architectures[0] if architectures else config.get("model_type", "unknown")
+    )
     model_type = config.get("model_type", "unknown")
 
     # Dimensions — VLM models often nest text config inside "text_config".
@@ -156,10 +294,7 @@ def inspect_model(model_path: str) -> ModelInfo:
     n_routed_experts = _cfg("n_routed_experts") or _cfg("num_local_experts")
     num_experts_per_tok = _cfg("num_experts_per_tok")
     moe_latent_size = _cfg("moe_latent_size")
-    needs_latent_moe = (
-        model_type == "nemotron_h"
-        and moe_latent_size is not None
-    )
+    needs_latent_moe = model_type == "nemotron_h" and moe_latent_size is not None
 
     # Hybrid (Mamba + attention)
     hybrid_pattern = config.get("hybrid_override_pattern")
@@ -176,7 +311,12 @@ def inspect_model(model_path: str) -> ModelInfo:
     jang_target_bits = None
     jang_actual_bits = None
     jang_block_size = None
-    for jang_cfg_name in ("jang_config.json", "jjqf_config.json", "jang_cfg.json", "mxq_config.json"):
+    for jang_cfg_name in (
+        "jang_config.json",
+        "jjqf_config.json",
+        "jang_cfg.json",
+        "mxq_config.json",
+    ):
         jang_cfg_path = path / jang_cfg_name
         if jang_cfg_path.exists():
             try:
@@ -290,7 +430,9 @@ def _estimate_param_count(config: dict) -> float:
         if latent_size:
             # LatentMoE: experts operate in latent space
             expert_input_dim = latent_size
-        expert_params = n_experts * (expert_proj_count * expert_input_dim * moe_intermediate)
+        expert_params = n_experts * (
+            expert_proj_count * expert_input_dim * moe_intermediate
+        )
 
         # LatentMoE: add fc1_latent_proj + fc2_latent_proj (shared, not per-expert)
         if latent_size:
@@ -298,9 +440,8 @@ def _estimate_param_count(config: dict) -> float:
 
         # Shared expert(s) — operate in full hidden_size
         n_shared = _get("n_shared_experts") or 0
-        shared_intermediate = (
-            _get("moe_shared_expert_intermediate_size")
-            or (intermediate if n_shared > 0 else 0)
+        shared_intermediate = _get("moe_shared_expert_intermediate_size") or (
+            intermediate if n_shared > 0 else 0
         )
         shared_params = n_shared * (dense_proj_count * hidden * shared_intermediate)
 
@@ -355,10 +496,9 @@ def _estimate_param_count(config: dict) -> float:
         # MoE model with some initial dense layers (e.g., GLM-4.7)
         dense_layers = first_k_dense
         moe_layers = layers - dense_layers
-        total_layer_params = (
-            dense_layers * (attn_params + dense_mlp_params + hidden * 2)
-            + moe_layers * (attn_params + moe_mlp_params + hidden * 2)
-        )
+        total_layer_params = dense_layers * (
+            attn_params + dense_mlp_params + hidden * 2
+        ) + moe_layers * (attn_params + moe_mlp_params + hidden * 2)
     elif n_experts > 1:
         # Pure MoE model (all layers have attention + MoE)
         total_layer_params = layers * (attn_params + moe_mlp_params + hidden * 2)
@@ -433,14 +573,18 @@ def available_memory_gb() -> float:
     """Get available system memory in GB."""
     try:
         import psutil
+
         return psutil.virtual_memory().available / (1024**3)
     except ImportError:
         # Fallback: use sysctl on macOS
         try:
             import subprocess
+
             result = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             # Total memory * 0.7 as rough available estimate
             total = int(result.stdout.strip()) / (1024**3)
@@ -453,56 +597,21 @@ def total_memory_gb() -> float:
     """Get total system memory in GB."""
     try:
         import psutil
+
         return psutil.virtual_memory().total / (1024**3)
     except ImportError:
         try:
             import subprocess
+
             result = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             return int(result.stdout.strip()) / (1024**3)
         except Exception:
             return 16.0
-
-
-def list_models_in_dir(search_path: str) -> list[ModelInfo]:
-    """
-    Scan a directory for MLX/HuggingFace models.
-
-    Looks for subdirectories containing both config.json and at least
-    one .safetensors file.
-
-    Args:
-        search_path: Directory to scan (non-recursive, checks immediate subdirs)
-
-    Returns:
-        List of ModelInfo sorted by model_type
-    """
-    path = Path(search_path)
-    if not path.is_dir():
-        return []
-
-    models = []
-
-    # Check if the path itself is a model directory
-    if (path / "config.json").exists() and list(path.glob("*.safetensors")):
-        try:
-            models.append(inspect_model(str(path)))
-        except Exception as e:
-            logger.debug(f"Failed to inspect {path}: {e}")
-
-    # Check subdirectories
-    for subdir in sorted(path.iterdir()):
-        if not subdir.is_dir():
-            continue
-        if (subdir / "config.json").exists() and list(subdir.glob("*.safetensors")):
-            try:
-                models.append(inspect_model(str(subdir)))
-            except Exception as e:
-                logger.debug(f"Failed to inspect {subdir}: {e}")
-
-    return sorted(models, key=lambda m: (m.model_type, m.model_path))
 
 
 def resolve_model_path(model_name: str) -> str:
@@ -531,11 +640,14 @@ def resolve_model_path(model_name: str) -> str:
     # Check HuggingFace cache
     try:
         from huggingface_hub import scan_cache_dir
+
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
             if repo.repo_id == model_name:
                 # Find the latest revision
-                for revision in sorted(repo.revisions, key=lambda r: r.last_modified or 0, reverse=True):
+                for revision in sorted(
+                    repo.revisions, key=lambda r: r.last_modified or 0, reverse=True
+                ):
                     snapshot_path = revision.snapshot_path
                     if (Path(snapshot_path) / "config.json").exists():
                         return str(snapshot_path)
@@ -545,17 +657,24 @@ def resolve_model_path(model_name: str) -> str:
     # Looks like a HuggingFace repo ID (org/model format) — try downloading.
     # Must not start with / . or ~ (filesystem paths), and have exactly one /
     _looks_like_hf = (
-        '/' in model_name
-        and not model_name.startswith(('/', '.', '~'))
-        and model_name.count('/') == 1
+        "/" in model_name
+        and not model_name.startswith(("/", ".", "~"))
+        and model_name.count("/") == 1
     )
     if _looks_like_hf:
         try:
             from huggingface_hub import snapshot_download
+
             logger.info(f"Downloading model from HuggingFace: {model_name}")
             downloaded_path = snapshot_download(
                 model_name,
-                allow_patterns=["*.safetensors", "*.json", "*.txt", "*.model", "*.tiktoken"],
+                allow_patterns=[
+                    "*.safetensors",
+                    "*.json",
+                    "*.txt",
+                    "*.model",
+                    "*.tiktoken",
+                ],
             )
             if Path(downloaded_path).is_dir():
                 logger.info(f"Downloaded to: {downloaded_path}")
@@ -569,6 +688,34 @@ def resolve_model_path(model_name: str) -> str:
         f"  huggingface-cli download {model_name}\n"
         f"Or provide a local directory path."
     )
+
+
+def list_models_in_dir(directory: str) -> list[str]:
+    """Scan a directory for valid model subdirectories.
+
+    A valid model directory must contain both a ``config.json`` and at
+    least one weight file (``*.safetensors`` or ``*.gguf``).
+
+    Returns a list of absolute paths to model directories.
+    """
+    import os
+
+    if not os.path.isdir(directory):
+        return []
+
+    results: list[str] = []
+    for entry in sorted(os.listdir(directory)):
+        model_dir = os.path.join(directory, entry)
+        if not os.path.isdir(model_dir):
+            continue
+        has_config = os.path.isfile(os.path.join(model_dir, "config.json"))
+        has_weights = any(
+            f.endswith(".safetensors") or f.endswith(".gguf")
+            for f in os.listdir(model_dir)
+        )
+        if has_config and has_weights:
+            results.append(os.path.abspath(model_dir))
+    return results
 
 
 def format_model_info(info: ModelInfo) -> str:
@@ -597,7 +744,11 @@ def format_model_info(info: ModelInfo) -> str:
     lines.append(f"Vocab size: {info.vocab_size:,}")
 
     if info.is_jang:
-        bits_str = f"{info.jang_actual_bits:.1f}" if info.jang_actual_bits else f"{info.jang_target_bits}"
+        bits_str = (
+            f"{info.jang_actual_bits:.1f}"
+            if info.jang_actual_bits
+            else f"{info.jang_target_bits}"
+        )
         lines.append(
             f"Quantization: JANG {bits_str}-bit mixed-precision "
             f"(block_size={info.jang_block_size})"
@@ -613,7 +764,9 @@ def format_model_info(info: ModelInfo) -> str:
     if info.is_mllm:
         lines.append("Multimodal: Yes (vision)")
 
-    lines.append(f"Weight files: {len(info.weight_files)} ({info.total_weight_size_gb:.1f} GB)")
+    lines.append(
+        f"Weight files: {len(info.weight_files)} ({info.total_weight_size_gb:.1f} GB)"
+    )
 
     # Memory estimates
     lines.append("")
@@ -621,7 +774,13 @@ def format_model_info(info: ModelInfo) -> str:
     total_mem = total_memory_gb()
     for bits in [2, 3, 4, 8, 16]:
         mem = estimate_memory_gb(info, bits)
-        fit = "OK" if mem < total_mem * 0.9 else "TIGHT" if mem < total_mem else "TOO LARGE"
+        fit = (
+            "OK"
+            if mem < total_mem * 0.9
+            else "TIGHT"
+            if mem < total_mem
+            else "TOO LARGE"
+        )
         marker = " <--" if info.quant_bits == bits else ""
         lines.append(f"  {bits:2d}-bit: {mem:6.1f} GB  [{fit}]{marker}")
     lines.append(f"  System: {total_mem:.0f} GB unified memory")

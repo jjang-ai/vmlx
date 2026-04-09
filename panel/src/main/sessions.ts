@@ -875,14 +875,14 @@ export class SessionManager extends EventEmitter {
     'kvCacheQuantization', 'kvCacheGroupSize',
     'enableDiskCache', 'diskCacheMaxGb', 'diskCacheDir',
     'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
-    'prefixCacheSize', 'cacheTtlMinutes', 'isMultimodal',
+    'prefixCacheSize', 'prefixCacheMaxBytes', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
     'maxNumSeqs', 'prefillBatchSize', 'prefillStepSize', 'completionBatchSize',
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
     // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'mcpConfig', 'servedModelName',
-    'speculativeModel', 'numDraftTokens', 'streamFromDisk',
+    'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice', 'chatTemplate',
@@ -999,6 +999,7 @@ export class SessionManager extends EventEmitter {
           continuousBatching: true,
           enablePrefixCache: true,
           prefixCacheSize: 100,
+          prefixCacheMaxBytes: 0,
           cacheMemoryMb: 0,
           cacheMemoryPercent: 30,
           noMemoryAwareCache: false,
@@ -1792,6 +1793,9 @@ export class SessionManager extends EventEmitter {
         if (config.prefixCacheSize && config.prefixCacheSize > 0) {
           args.push('--prefix-cache-size', config.prefixCacheSize.toString())
         }
+        if (config.prefixCacheMaxBytes && config.prefixCacheMaxBytes > 0) {
+          args.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
+        }
       } else {
         if (config.cacheMemoryMb && config.cacheMemoryMb > 0) {
           args.push('--cache-memory-mb', config.cacheMemoryMb.toString())
@@ -1868,11 +1872,12 @@ export class SessionManager extends EventEmitter {
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
 
-    // SSD disk streaming
-    if ((config as any).streamFromDisk) {
-      args.push('--stream-from-disk')
-      if ((config as any).streamMemoryPercent && (config as any).streamMemoryPercent !== 100) {
-        args.push('--stream-memory-percent', (config as any).streamMemoryPercent.toString())
+    // Smelt mode (partial expert loading)
+    if ((config as any).smelt) {
+      args.push('--smelt')
+      const pct = (config as any).smeltExperts ?? 50
+      if (pct !== 50) {
+        args.push('--smelt-experts', pct.toString())
       }
     }
 

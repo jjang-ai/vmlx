@@ -306,6 +306,7 @@ class EngineCore:
         videos: Optional[List[Any]] = None,
         gen_prompt_len: int = 0,
         num_messages: int = 1,
+        segment_boundaries: Optional[List[Any]] = None,
     ) -> str:
         """
         Add a request for processing.
@@ -350,6 +351,13 @@ class EngineCore:
         # Multi-turn conversations (>2 messages = system+user+assistant+...)
         # should always store cache even for short outputs.
         request._has_history = num_messages > 2
+
+        # F11 (audit 2026-04-08): attach per-segment boundaries from the chat
+        # template render so the LLM scheduler can store cache entries with
+        # the correct cache_type (system/user/assistant) — drives Agent 1's
+        # PrefixCacheManager priority LRU breakthrough.
+        if segment_boundaries:
+            request._segment_boundaries = list(segment_boundaries)
 
         # Setup output collector with stream_interval from config
         self._output_collectors[request_id] = RequestOutputCollector(aggregate=True)

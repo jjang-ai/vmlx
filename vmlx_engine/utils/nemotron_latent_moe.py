@@ -51,6 +51,29 @@ def patch_nemotron_h_for_latent_moe():
             import mlx.nn as nn
 
             nemotron_h = importlib.import_module("mlx_lm.models.nemotron_h")
+
+            # Audit-2026-04-07 risk §6.7: defensive ordering check.
+            # The patch only affects NemotronHBlock instances created AFTER this
+            # function runs. If any NemotronHBlock already exists, the patch is
+            # too late — existing instances have the wrong shape and Nemotron
+            # Super 120B will silently load with regular MoE instead of LatentMoE,
+            # producing a `gather_qmm` shape mismatch crash at inference time.
+            # The gc walk runs at most once per process (gated by `_patched`),
+            # so the ~100ms cost is acceptable to fail loud instead of silently.
+            _block_cls = getattr(nemotron_h, "NemotronHBlock", None)
+            if _block_cls is not None:
+                import gc as _gc
+                _existing = sum(1 for _o in _gc.get_objects() if type(_o) is _block_cls)
+                if _existing > 0:
+                    logger.warning(
+                        "patch_nemotron_h_for_latent_moe: %d existing NemotronHBlock "
+                        "instance(s) found in the process before this patch ran. They "
+                        "will NOT have LatentMoE support and Nemotron Super 120B will "
+                        "likely crash with a gather_qmm shape mismatch at inference. "
+                        "Ensure ensure_latent_moe_support() is called BEFORE any model "
+                        "load that might instantiate NemotronHBlock.",
+                        _existing,
+                    )
             switch_layers = importlib.import_module("mlx_lm.models.switch_layers")
             SwitchMLP = switch_layers.SwitchMLP
 

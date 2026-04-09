@@ -32,58 +32,32 @@ def _apply_turboquant_to_model(model, model_path: str):
         return  # TQ not available
 
     # Need model with .layers to determine layer count and dims
-    if not hasattr(model, 'layers') or not model.layers:
+    if not hasattr(model, "layers") or not model.layers:
+        return
+
+    # MLA models (DeepSeek V2/V3, GLM-5.1, Mistral 4) use CacheList(KVCache, KVCache)
+    # per layer. TQ flat cache breaks CacheList structure → BatchGenerator fails.
+    # Centralized via model_inspector.is_mla_model() so this stays in sync with
+    # jang_loader.py and Agent 1's prefix-cache trie (REQ-001, 2026-04-07 audit).
+    from .model_inspector import _detect_turboquant_layer_types, is_mla_model
+
+    if is_mla_model(model_path):
+        logger.info("  TurboQuant skipped: MLA model (CacheList incompatible)")
         return
 
     try:
         n_layers = len(model.layers)
 
         # Read config.json for head dimensions and layer types
-        config_path = Path(model_path) / 'config.json'
+        config_path = Path(model_path) / "config.json"
         if not config_path.exists():
             return
         config = json.loads(config_path.read_text())
-        text_cfg = config.get('text_config', config)
+        text_cfg = config.get("text_config", config)
 
-        # Key/value dimensions
-        key_dim = text_cfg.get('head_dim', 128)
-        val_dim = text_cfg.get('head_dim', 128)
-        if text_cfg.get('kv_lora_rank', 0) > 0:
-            key_dim = text_cfg.get('qk_nope_head_dim', 128) + text_cfg.get('qk_rope_head_dim', 64)
-            val_dim = text_cfg.get('v_head_dim', 128)
-
-        # Layer types (hybrid detection)
-        layer_type_list = text_cfg.get('layer_types', [])
-        hybrid_pattern = text_cfg.get('hybrid_override_pattern',
-                            config.get('hybrid_override_pattern', ''))
-        full_attn_interval = text_cfg.get('full_attention_interval',
-                                config.get('full_attention_interval', 0))
-        _attn_types = {'full_attention', 'sliding_attention'}
-        if layer_type_list:
-            layer_types = [
-                'attention' if lt in _attn_types else 'ssm'
-                for lt in layer_type_list[:n_layers]
-            ]
-            while len(layer_types) < n_layers:
-                layer_types.append('attention')
-        elif hybrid_pattern:
-            layer_types = []
-            for ch in hybrid_pattern[:n_layers]:
-                if ch == 'M':
-                    layer_types.append('ssm')
-                elif ch == '*':
-                    layer_types.append('attention')
-                # 'E' (MoE expert) layers are FFN-only with no cache.
-                # Model.make_cache() and forward pass skip them, so we must too
-                # to keep cache indices aligned.
-        elif full_attn_interval > 0:
-            # Qwen3-Next: every N-th layer (1-indexed) is full attention (#38)
-            layer_types = [
-                'attention' if (i + 1) % full_attn_interval == 0 else 'ssm'
-                for i in range(n_layers)
-            ]
-        else:
-            layer_types = ['attention'] * n_layers
+        layer_types, key_dim, val_dim = _detect_turboquant_layer_types(
+            text_cfg, n_layers, root_cfg=config
+        )
 
         # Default TQ config
         tq_config = TurboQuantConfig(
@@ -97,17 +71,23 @@ def _apply_turboquant_to_model(model, model_path: str):
         )
 
         n_cache = len(layer_types)
-        def _tq_make_cache(_cfg=tq_config, _n=n_cache, _kd=key_dim, _vd=val_dim, _lt=layer_types):
-            return make_turboquant_cache(_cfg, _n, [_kd]*_n, [_vd]*_n, _lt)
+
+        def _tq_make_cache(
+            _cfg=tq_config, _n=n_cache, _kd=key_dim, _vd=val_dim, _lt=layer_types
+        ):
+            return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
 
         model.make_cache = _tq_make_cache
 
-        n_attn = sum(1 for t in layer_types if t == 'attention')
-        n_ssm = sum(1 for t in layer_types if t == 'ssm')
-        logger.info(f"  TurboQuant auto-enabled: 3-bit keys/values, "
-                    f"{n_attn} attention" + (f" + {n_ssm} SSM" if n_ssm > 0 else "") + " layers")
+        n_attn = sum(1 for t in layer_types if t == "attention")
+        n_ssm = sum(1 for t in layer_types if t == "ssm")
+        logger.info(
+            f"  TurboQuant auto-enabled: 3-bit keys/values, "
+            f"{n_attn} attention" + (f" + {n_ssm} SSM" if n_ssm > 0 else "") + " layers"
+        )
     except Exception as e:
         logger.debug(f"TurboQuant auto-enable failed (non-fatal): {e}")
+
 
 # Models that require tokenizer fallback
 FALLBACK_MODELS = [
@@ -136,40 +116,113 @@ def _get_model_type_from_config(model_name: str) -> str | None:
 # Notably EXCLUDES nemotron/nemotron_h which DO need tokenizer fallback.
 _STANDARD_ARCHITECTURES = {
     # Qwen
-    "qwen3_5", "qwen3_5_moe",
-    "qwen3", "qwen3_moe", "qwen3_vl", "qwen3_vl_moe", "qwen3_next",
-    "qwen2", "qwen2_moe", "qwen2_vl", "qwen2_5_vl", "qwen", "qwen_mamba",
+    "qwen3_5",
+    "qwen3_5_moe",
+    "qwen3",
+    "qwen3_moe",
+    "qwen3_vl",
+    "qwen3_vl_moe",
+    "qwen3_next",
+    "qwen2",
+    "qwen2_moe",
+    "qwen2_vl",
+    "qwen2_5_vl",
+    "qwen",
+    "qwen_mamba",
     # Llama
-    "llama", "llama4",
+    "llama",
+    "llama4",
     # Mistral
-    "mistral", "mistral4", "mixtral", "pixtral", "codestral", "devstral", "codestral_mamba",
+    "mistral",
+    "mistral4",
+    "mixtral",
+    "pixtral",
+    "codestral",
+    "devstral",
+    "codestral_mamba",
     # DeepSeek
-    "deepseek_v2", "deepseek_v3", "deepseek_vl", "deepseek_vl2", "deepseek_vl_v2",
-    "deepseek2", "deepseek",
+    "deepseek_v2",
+    "deepseek_v3",
+    "deepseek_vl",
+    "deepseek_vl2",
+    "deepseek_vl_v2",
+    "deepseek2",
+    "deepseek",
     # GLM / GPT-OSS
-    "chatglm", "glm4", "glm4_moe", "glm4_moe_lite", "glm", "gpt_oss",
+    "chatglm",
+    "glm4",
+    "glm4_moe",
+    "glm4_moe_lite",
+    "glm",
+    "gpt_oss",
     # StepFun
-    "step3p5", "step", "step1v",
+    "step3p5",
+    "step",
+    "step1v",
     # Gemma
-    "gemma", "gemma2", "gemma3", "gemma3_text", "gemma4", "gemma4_text", "paligemma", "paligemma2",
+    "gemma",
+    "gemma2",
+    "gemma3",
+    "gemma3_text",
+    "gemma4",
+    "gemma4_text",
+    "paligemma",
+    "paligemma2",
     # Phi
-    "phi3", "phi3v", "phi3small", "phi4", "phi4mm", "phi4flash", "phi4_reasoning", "phi",
+    "phi3",
+    "phi3v",
+    "phi3small",
+    "phi4",
+    "phi4mm",
+    "phi4flash",
+    "phi4_reasoning",
+    "phi",
     # MiniMax
-    "minimax", "minimax_m2", "minimax_m2_5",
+    "minimax",
+    "minimax_m2",
+    "minimax_m2_5",
     # Jamba / Mamba / SSM
-    "jamba", "mamba", "mamba2", "falcon_mamba", "rwkv", "rwkv5", "rwkv6",
+    "jamba",
+    "mamba",
+    "mamba2",
+    "falcon_mamba",
+    "rwkv",
+    "rwkv5",
+    "rwkv6",
     # IBM Granite
-    "granite", "granite_moe",
+    "granite",
+    "granite_moe",
     # Cohere
-    "cohere", "cohere2",
+    "cohere",
+    "cohere2",
     # Others
-    "hermes", "kimi_k2", "exaone", "exaone3", "olmo", "olmo2",
-    "starcoder2", "stablelm", "baichuan",
-    "internlm", "internlm2", "internlm3", "internlm_xcomposer2",
-    "yi", "orion",
+    "hermes",
+    "kimi_k2",
+    "exaone",
+    "exaone3",
+    "olmo",
+    "olmo2",
+    "starcoder2",
+    "stablelm",
+    "baichuan",
+    "internlm",
+    "internlm2",
+    "internlm3",
+    "internlm_xcomposer2",
+    "yi",
+    "orion",
     # MLLM
-    "llava", "llava_next", "idefics2", "idefics3", "cogvlm", "cogvlm2",
-    "florence2", "molmo", "minicpmv", "smolvlm", "internvl_chat",
+    "llava",
+    "llava_next",
+    "idefics2",
+    "idefics3",
+    "cogvlm",
+    "cogvlm2",
+    "florence2",
+    "molmo",
+    "minicpmv",
+    "smolvlm",
+    "internvl_chat",
 }
 
 
@@ -220,7 +273,24 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
     """
     from mlx_lm import load
 
+    # Register vendored Gemma 4 native text MoE under the mlx_lm.models namespace.
+    # Idempotent + a no-op when mlx-lm >= 0.31.2 ships the upstream module itself.
+    # This local-port matches the audit-2026-04-07 team consensus (Agent 1 / 2 / 3
+    # all chose local-port over an mlx-lm version bump).
+    try:
+        from ..models.gemma4_native_register import register_gemma4_native
+
+        register_gemma4_native()
+    except Exception as _e:  # pragma: no cover
+        logger.debug(f"register_gemma4_native skipped: {_e}")
+
     tokenizer_config = tokenizer_config or {}
+    # Q1 (audit-2026-04-07): trust_remote_code=True silences the noisy HF
+    # warning on load for models with custom tokenizer_config classes
+    # (e.g. nemotron_h) and unblocks any custom tokenizer code path. Safe
+    # because model paths served by vMLX come from user-local disk or
+    # trusted JANG pipelines. Only set if caller didn't already override.
+    tokenizer_config.setdefault("trust_remote_code", True)
 
     # Check if local path exists before loading
     model_path = Path(model_name)
@@ -230,13 +300,16 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             f"Check that the model directory is available."
         )
 
-    # Check if disk streaming mode is active (lazy mmap loading)
+    # Check if Smelt mode is active (partial expert loading)
     from .. import server as _server_module
-    _lazy = getattr(_server_module, '_stream_from_disk', False)
+
+    _smelt = getattr(_server_module, "_smelt_enabled", False)
+    _smelt_pct = getattr(_server_module, "_smelt_experts", 50)
 
     # Resolve HuggingFace repo IDs to local paths so that JANG detection
     # (which checks for jang_config.json on disk) works for remote models.
     from ..api.utils import resolve_to_local_path
+
     local_model_path = resolve_to_local_path(model_name)
     if local_model_path != model_name:
         logger.info(f"Resolved HF model to: {local_model_path}")
@@ -245,10 +318,16 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
     # repacks weights into QuantizedLinear and handles tokenizer internally.
     # Checking tokenizer fallback first would bypass the JANG loader for Nemotron-H.
     from .jang_loader import is_jang_model
+
     if is_jang_model(local_model_path):
-        from .jang_loader import load_jang_model
         logger.info(f"Detected JANG model: {model_name}")
-        return load_jang_model(local_model_path, lazy=_lazy)
+        if _smelt:
+            from .smelt_loader import smelt_load
+
+            return smelt_load(local_model_path, expert_percent=_smelt_pct)
+        from .jang_loader import load_jang_model
+
+        return load_jang_model(local_model_path)
 
     # Check if model needs tokenizer fallback (e.g., Nemotron).
     # Pass resolved local path so _get_model_type_from_config can read config.json.
@@ -256,19 +335,23 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
         logger.info(
             f"Model {model_name} requires tokenizer fallback, loading directly..."
         )
-        model, tokenizer = _load_with_tokenizer_fallback(local_model_path, lazy=_lazy)
+        model, tokenizer = _load_with_tokenizer_fallback(local_model_path, lazy=False)
         _apply_turboquant_to_model(model, local_model_path)
         return model, tokenizer
 
     try:
-        model, tokenizer = load(model_name, tokenizer_config=tokenizer_config, lazy=_lazy)
+        model, tokenizer = load(
+            model_name, tokenizer_config=tokenizer_config, lazy=False
+        )
         _apply_turboquant_to_model(model, local_model_path)
         return model, tokenizer
     except ValueError as e:
         # Fallback for models with non-standard tokenizers
         if "TokenizersBackend" in str(e) or "Tokenizer class" in str(e):
             logger.warning(f"Standard tokenizer loading failed, using fallback: {e}")
-            model, tokenizer = _load_with_tokenizer_fallback(model_name, lazy=_lazy)
+            model, tokenizer = _load_with_tokenizer_fallback(
+                local_model_path, lazy=False
+            )
             _apply_turboquant_to_model(model, local_model_path)
             return model, tokenizer
         else:
@@ -287,10 +370,12 @@ def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
         model_path = local_path
     else:
         from huggingface_hub import snapshot_download
+
         model_path = Path(snapshot_download(model_name))
 
     # Apply LatentMoE patch before model load (must happen before NemotronHBlock init)
     from .nemotron_latent_moe import ensure_latent_moe_support
+
     ensure_latent_moe_support(str(model_path))
 
     # Load model
@@ -337,17 +422,13 @@ def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
             jinja_path = model_path / "chat_template.jinja"
             if jinja_path.exists():
                 try:
-                    jinja_template = jinja_path.read_text()
-                    tokenizer.chat_template = jinja_template
+                    tokenizer.chat_template = jinja_path.read_text()
                     logger.info("Chat template loaded from chat_template.jinja")
                 except Exception as e:
                     logger.warning(f"Failed to read chat_template.jinja: {e}")
-                    jinja_template = None
-            else:
-                jinja_template = None
 
             # Fall back to built-in templates if no model template found
-            if not getattr(tokenizer, 'chat_template', None):
+            if not getattr(tokenizer, "chat_template", None):
                 if _needs_tokenizer_fallback(model_name):
                     tokenizer.chat_template = NEMOTRON_CHAT_TEMPLATE
                     logger.info("Using fallback Nemotron chat template")

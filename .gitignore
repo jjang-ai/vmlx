@@ -145,3 +145,7 @@ nohup.out
 # Internal audit docs
 docs/audit-*
 docs/final-*
+
+# Smelt / JANG MoE artifacts
+*.smt
+.smelt/

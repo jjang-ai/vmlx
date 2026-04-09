@@ -143,6 +143,67 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {schedulerCache.cow_copies != null && schedulerCache.cow_copies > 0 && (
               <StatCard label="COW Copies" value={String(schedulerCache.cow_copies)} />
             )}
+            {/* F4 (audit 2026-04-08): Agent 1's PrefixCacheManager
+                 cache_type LRU exposes per-type byte / entry counts.
+                 Display them when present so users can see system /
+                 user / assistant priority pinning at a glance. */}
+            {schedulerCache.max_bytes != null && schedulerCache.max_bytes > 0 && schedulerCache.nbytes != null && (
+              <StatCard
+                label="Cache Bytes"
+                value={`${(schedulerCache.nbytes / (1024 * 1024)).toFixed(1)} / ${(schedulerCache.max_bytes / (1024 * 1024)).toFixed(0)} MB`}
+              />
+            )}
+          </div>
+          {schedulerCache.entries_by_type && (
+            <div className="grid grid-cols-3 gap-2 text-xs mt-2">
+              {(['system', 'user', 'assistant'] as const).map((t) => {
+                const n = schedulerCache.entries_by_type?.[t] ?? 0
+                const b = schedulerCache.nbytes_by_type?.[t] ?? 0
+                if (n === 0 && b === 0) return null
+                return (
+                  <div key={t} className="bg-background px-2 py-1.5 rounded border border-border">
+                    <div className="text-[10px] uppercase text-muted-foreground">{t}</div>
+                    <div className="font-mono">{n} entries</div>
+                    <div className="font-mono text-[10px] text-muted-foreground">{(b / (1024 * 1024)).toFixed(1)} MB</div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SSM Companion Cache (hybrid models only).
+           A3→A1-001 (audit 2026-04-08): also surface nbytes_mb so users
+           can see the real cache memory cost on hybrid models — Nemotron
+           120B can silently consume ~32 GB of SSM state beyond the
+           prefix-cache budget. Field is provided either via the legacy
+           top-level `stats.ssm_companion` shape or the new
+           `schedulerCache.ssm_companion_cache` shape (preferred). */}
+      {(stats?.ssm_companion || (schedulerCache as any)?.ssm_companion_cache) && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">SSM Companion</h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            {(() => {
+              const ssm =
+                (schedulerCache as any)?.ssm_companion_cache ||
+                stats?.ssm_companion ||
+                {}
+              return (
+                <>
+                  <StatCard
+                    label="Entries"
+                    value={`${ssm.entries ?? 0} / ${ssm.max_entries ?? 0}`}
+                  />
+                  {ssm.nbytes_mb != null && ssm.nbytes_mb > 0 && (
+                    <StatCard
+                      label="SSM Bytes"
+                      value={`${ssm.nbytes_mb.toFixed(1)} MB`}
+                    />
+                  )}
+                </>
+              )
+            })()}
           </div>
         </div>
       )}

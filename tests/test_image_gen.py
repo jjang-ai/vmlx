@@ -602,13 +602,13 @@ class TestEditModelDispatch:
         assert "image_path" not in call_kwargs  # QwenImageEdit uses image_paths only
         assert call_kwargs["prompt"] == "make it red"
 
-    def test_kontext_edit_passes_strength(self):
+    def test_kontext_edit_removes_strength(self):
         engine = self._setup_edit_engine("dev-kontext")
         result = engine.edit("add hat", image_path="/tmp/img.png", strength=0.6, seed=42)
 
         call_kwargs = engine._model.generate_image.call_args.kwargs
         assert call_kwargs["image_path"] == "/tmp/img.png"
-        assert call_kwargs["image_strength"] == 0.6
+        assert "image_strength" not in call_kwargs
 
     def test_fill_requires_mask(self):
         engine = self._setup_edit_engine("dev-fill")

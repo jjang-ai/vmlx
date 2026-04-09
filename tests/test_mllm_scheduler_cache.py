@@ -196,6 +196,13 @@ class TestHybridSSMStateCache:
         assert cache is not None
 
     def test_store_and_fetch(self):
+        # Updated 2026-04-08 (Agent 3, REQ-A3-001): fetch() now returns
+        # a (states, is_complete) tuple per the SSMCompanionCache extraction.
+        # The legacy `result is ssm_states` identity assertion was wrong even
+        # before the API change because fetch() deep-copies per session
+        # 2026-03-28b root cause fix. New assertion verifies tuple shape +
+        # default is_complete=True; for the canonical deep-copy independence
+        # check see tests/test_ssm_companion_cache.py.
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
@@ -205,7 +212,10 @@ class TestHybridSSMStateCache:
         cache.store(tokens, 5, ssm_states)
         result = cache.fetch(tokens, 5)
 
-        assert result is ssm_states
+        assert result is not None
+        states, is_complete = result
+        assert is_complete is True
+        assert len(states) == 2
 
     def test_fetch_miss(self):
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
@@ -215,6 +225,7 @@ class TestHybridSSMStateCache:
         assert result is None
 
     def test_lru_eviction(self):
+        # Updated 2026-04-08 (Agent 3, REQ-A3-001): fetch() returns tuple.
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=2)
@@ -224,10 +235,13 @@ class TestHybridSSMStateCache:
         cache.store([5, 6], 2, ["state_c"])  # Should evict [1,2]
 
         assert cache.fetch([1, 2], 2) is None  # Evicted
-        assert cache.fetch([3, 4], 2) == ["state_b"]
-        assert cache.fetch([5, 6], 2) == ["state_c"]
+        r_b = cache.fetch([3, 4], 2)
+        assert r_b is not None and r_b[0] == ["state_b"]
+        r_c = cache.fetch([5, 6], 2)
+        assert r_c is not None and r_c[0] == ["state_c"]
 
     def test_lru_access_refresh(self):
+        # Updated 2026-04-08 (Agent 3, REQ-A3-001): fetch() returns tuple.
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=2)
@@ -241,9 +255,11 @@ class TestHybridSSMStateCache:
         # Now store [5,6] — should evict [3,4] (oldest), not [1,2]
         cache.store([5, 6], 2, ["state_c"])
 
-        assert cache.fetch([1, 2], 2) == ["state_a"]
+        r_a = cache.fetch([1, 2], 2)
+        assert r_a is not None and r_a[0] == ["state_a"]
         assert cache.fetch([3, 4], 2) is None  # Evicted
-        assert cache.fetch([5, 6], 2) == ["state_c"]
+        r_c = cache.fetch([5, 6], 2)
+        assert r_c is not None and r_c[0] == ["state_c"]
 
     def test_clear(self):
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
@@ -255,6 +271,7 @@ class TestHybridSSMStateCache:
 
     def test_prefix_keying(self):
         """Verify that cache is keyed by prefix, not full token list."""
+        # Updated 2026-04-08 (Agent 3, REQ-A3-001): fetch() returns tuple.
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
@@ -266,10 +283,14 @@ class TestHybridSSMStateCache:
         # Fetch with same 5-token prefix but different suffix
         tokens_different_suffix = [1, 2, 3, 4, 5, 99, 98, 97]
         result = cache.fetch(tokens_different_suffix, 5)
-        assert result == ["state_5"]
+        assert result is not None
+        states, is_complete = result
+        assert states == ["state_5"]
+        assert is_complete is True
 
     def test_different_lengths_different_keys(self):
         """Same prefix tokens but different num_tokens → different keys."""
+        # Updated 2026-04-08 (Agent 3, REQ-A3-001): fetch() returns tuple.
         from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
 
         cache = HybridSSMStateCache(max_entries=10)
@@ -278,8 +299,10 @@ class TestHybridSSMStateCache:
         cache.store(tokens, 3, ["state_3"])
         cache.store(tokens, 5, ["state_5"])
 
-        assert cache.fetch(tokens, 3) == ["state_3"]
-        assert cache.fetch(tokens, 5) == ["state_5"]
+        r3 = cache.fetch(tokens, 3)
+        r5 = cache.fetch(tokens, 5)
+        assert r3 is not None and r3[0] == ["state_3"]
+        assert r5 is not None and r5[0] == ["state_5"]
 
 
 # ============================================================

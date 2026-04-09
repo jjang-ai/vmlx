@@ -65,6 +65,23 @@ def _is_kv_like(c) -> bool:
     return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
 
 
+# A3-BUG-004: warn-once per unknown kwarg in BatchMambaCache.prepare so we
+# notice when upstream mlx-lm grows new prepare() params we don't yet handle.
+_seen_unknown_prepare_kwargs: set = set()
+
+
+def _warn_unknown_prepare_kwarg(name: str) -> None:
+    if name in _seen_unknown_prepare_kwargs:
+        return
+    _seen_unknown_prepare_kwargs.add(name)
+    logger.warning(
+        "BatchMambaCache.prepare received unknown kwarg %r — silently dropped. "
+        "Upstream mlx-lm may have added a new ArraysCache.prepare parameter "
+        "that vMLX needs to backport. Re-verify after the next mlx-lm bump.",
+        name,
+    )
+
+
 class BatchMambaCache(MambaCache):
     """
     Batch-aware MambaCache for continuous batching.
@@ -92,18 +109,91 @@ class BatchMambaCache(MambaCache):
             if not self.cache or len(self.cache) != size:
                 self.cache = [None] * size
         self._batch_size = len(left_padding) if left_padding else 0
+        # Ensure `lengths` exists on both 0.31.1 (parent has no field) and
+        # 0.31.2 (parent sets it in __new__). Harmless overwrite-to-None on
+        # 0.31.2 because __new__ already set it to None.
+        if not hasattr(self, "lengths"):
+            self.lengths = None
+
+    # ------------------------------------------------------------------
+    # Backport of ArraysCache.lengths / prepare(lengths=) / advance(N) /
+    # finalize() from mlx-lm 0.31.2. These methods enable per-sequence
+    # length tracking for batched SSM (variable-length sequences in one
+    # batch). On mlx-lm 0.31.2+ parents these methods override the parent
+    # implementation with identical semantics — harmless. On 0.31.1 parents
+    # these methods are the ONLY implementation available.
+    #
+    # Upstream reference: /tmp/mlx_lm_latest/mlx_lm/models/cache.py:594-696
+    # Hybrid models that call these (in mlx-lm 0.31.2): kimi_linear, plamo2,
+    # mamba2, nemotron_h, lfm2_moe, qwen3_5, qwen3_next, lfm2, granitemoehybrid.
+    # ------------------------------------------------------------------
+
+    def prepare(self, *, left_padding=None, lengths=None, right_padding=None, **kwargs):
+        """Set per-sequence lengths and/or left_padding for batched SSM masking.
+
+        Called once at the start of batched prefill. `lengths` is a per-sequence
+        array of remaining-token counts; `left_padding` is a per-sequence array
+        of padding offsets. `right_padding` is accepted for API compat but
+        ignored by ArraysCache-derived caches (BatchKVCache uses it).
+
+        Forward-compat audit trail (A3-BUG-004): if upstream mlx-lm grows new
+        ``prepare()`` keyword arguments, log a one-time warning per kwarg name
+        so we notice silent drops at the next bump rather than discovering
+        them via wrong outputs months later.
+        """
+        if lengths is not None:
+            self.lengths = mx.array(lengths)
+        if left_padding is not None:
+            # Track delta relative to existing left_padding, mirroring
+            # upstream BatchKVCache.prepare semantics.
+            lp = mx.array(left_padding)
+            if self.left_padding is not None:
+                self.left_padding = self.left_padding + lp
+            else:
+                self.left_padding = lp
+        if kwargs:
+            for k in kwargs:
+                _warn_unknown_prepare_kwarg(k)
+
+    def advance(self, N: int) -> None:
+        """Decrement per-sequence `lengths` and `left_padding` by N tokens.
+
+        Called after each forward step so `make_mask(N)` reflects remaining
+        tokens. Only touches `lengths` and `left_padding`; the state arrays
+        in `self.cache` are untouched.
+
+        A3-BUG-003 (perf): use in-place ``-=`` to match upstream
+        ArraysCache.advance and avoid an N-allocation-per-step hot-path
+        cost on hybrid models (~40 layers × 1 alloc/step ≈ 40 allocs/step
+        averted on Nemotron Cascade 2).
+        """
+        if self.lengths is not None:
+            self.lengths -= N
+        if self.left_padding is not None:
+            self.left_padding -= N
+
+    def finalize(self) -> None:
+        """Clear per-sequence length tracking at end of prefill/generation."""
+        self.lengths = None
+        self.left_padding = None
 
     def filter(self, batch_indices) -> None:
         """Filter batch to keep only specified indices.
 
-        Overrides ArraysCache.filter() to also filter left_padding.
-        Without this, left_padding retains the original batch_size after
-        filtering, causing make_mask() to return a mask with stale dimensions
-        that triggers shape mismatches in SSM layers during batched generation.
-
-        This matches BatchKVCache.filter() which also filters its left_padding.
+        Inline None-safe re-implementation of ArraysCache.filter(). We can't
+        safely delegate to `super().filter()` because mlx-lm 0.31.1's
+        `ArraysCache.filter` does `[c[batch_indices] for c in self.cache]`
+        with no None guard — it crashes on empty/partial caches. Upstream
+        0.31.2 added the guard. Doing it inline works identically on both
+        versions, and also gives us one pass to carry `lengths` and
+        `left_padding` through the shrink (upstream still doesn't filter
+        `left_padding`).
         """
-        super().filter(batch_indices)
+        self.cache = [
+            c[batch_indices] if c is not None else None for c in self.cache
+        ]
+        if self.lengths is not None:
+            self.lengths = self.lengths[batch_indices]
         if self.left_padding is not None:
             self.left_padding = self.left_padding[batch_indices]
 
@@ -130,6 +220,19 @@ class BatchMambaCache(MambaCache):
             for c in self.cache
         ]
         cache.left_padding = None  # Single sequence, no batch padding
+        # Carry a single-element `lengths` for the extracted sequence so the
+        # returned cache can continue to participate in batched SSM masking
+        # if it's later re-merged. Upstream ArraysCache.extract doesn't do
+        # this (lengths dropped on extract), but vMLX re-merges extracted
+        # caches through BatchMambaCache.merge so preserving it is cheaper
+        # than re-deriving.
+        if getattr(self, "lengths", None) is not None:
+            try:
+                cache.lengths = self.lengths[idx : idx + 1]
+            except Exception:
+                cache.lengths = None
+        else:
+            cache.lengths = None
         return cache
 
     def extend(self, other: "BatchMambaCache") -> None:
@@ -154,6 +257,17 @@ class BatchMambaCache(MambaCache):
         self._batch_size = (self._batch_size or 0) + (other._batch_size or 0)
         # Reset left_padding — merged batch uses no-op masking
         self.left_padding = None
+        # Concatenate per-sequence lengths if both sides have them; otherwise
+        # drop (no-op mask on the merged result).
+        self_len = getattr(self, "lengths", None)
+        other_len = getattr(other, "lengths", None)
+        if self_len is not None and other_len is not None:
+            try:
+                self.lengths = mx.concatenate([self_len, other_len], axis=0)
+            except Exception:
+                self.lengths = None
+        else:
+            self.lengths = None
 
     @classmethod
     def merge(cls, caches: List[MambaCache]) -> "BatchMambaCache":
@@ -209,6 +323,20 @@ class BatchMambaCache(MambaCache):
                 "batch size or sequence length. (%s)", e
             )
             raise
+
+        # Carry per-sequence `lengths` through the merge if every source
+        # cache has it set. If any source is missing lengths, drop the field
+        # (no-op mask on the merged result). Upstream 0.31.2 ArraysCache
+        # doesn't implement merge() at this level — BatchMambaCache is the
+        # authoritative merger for vMLX continuous batching.
+        try:
+            src_lengths = [getattr(c, "lengths", None) for c in caches]
+            if all(l is not None for l in src_lengths):
+                merged_cache.lengths = mx.concatenate(src_lengths, axis=0)
+            else:
+                merged_cache.lengths = None
+        except Exception:
+            merged_cache.lengths = None
 
         return merged_cache
 
@@ -319,7 +447,18 @@ def patch_mlx_lm_for_mamba():
         return kv
 
     def _patched_merge_caches(caches):
-        """Merge caches with support for all cache types."""
+        """Merge caches with support for all cache types.
+
+        Empty-input fast path: when ``caches`` is empty OR ``caches[0]`` is
+        an empty list, return an empty list. This case is hit by mlx-lm
+        0.31.2's ``PromptProcessingBatch.empty()`` constructor which calls
+        ``_merge_caches([])`` to initialise an empty prompt batch — without
+        the early return the next line `range(len(caches[0]))` raises
+        IndexError. Discovered during Phase 4 live test on Nemotron Cascade
+        2 30B JANG_2L (audit 2026-04-08, ISSUE-A3-003).
+        """
+        if not caches or not caches[0]:
+            return []
         batch_cache = []
         for i in range(len(caches[0])):
             layer_cache = caches[0][i]

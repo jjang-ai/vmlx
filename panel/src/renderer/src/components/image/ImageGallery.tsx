@@ -1,108 +1,146 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { Download, Copy, Loader2, ImageIcon, Pencil, RefreshCw } from 'lucide-react'
-import type { ImageGenerationInfo } from './ImageTab'
+import { useState, useEffect, useCallback } from "react";
+import {
+  Download,
+  Copy,
+  Loader2,
+  ImageIcon,
+  Pencil,
+  RefreshCw,
+} from "lucide-react";
+import type { ImageGenerationInfo } from "./ImageTab";
 
 interface ImageGalleryProps {
-  generations: ImageGenerationInfo[]
-  generating: boolean
-  mode?: 'generate' | 'edit'
-  onRegenerate?: (gen: ImageGenerationInfo) => void
+  generations: ImageGenerationInfo[];
+  generating: boolean;
+  mode?: "generate" | "edit";
+  onRegenerate?: (gen: ImageGenerationInfo) => void;
 }
 
 // MLX Studio Image Gallery — mlx.studio — Jinho Jang
-export function ImageGallery({ generations, generating, mode, onRegenerate }: ImageGalleryProps) {
+export function ImageGallery({
+  generations,
+  generating,
+  mode,
+  onRegenerate,
+}: ImageGalleryProps) {
   if (generations.length === 0 && !generating) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-8">
-        <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${
-          mode === 'edit' ? 'bg-violet-500/10' : 'bg-primary/10'
-        }`}>
-          {mode === 'edit'
-            ? <Pencil className="h-8 w-8 text-violet-400" />
-            : <ImageIcon className="h-8 w-8 text-primary" />
-          }
+        <div
+          className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${
+            mode === "edit" ? "bg-violet-500/10" : "bg-primary/10"
+          }`}
+        >
+          {mode === "edit" ? (
+            <Pencil className="h-8 w-8 text-violet-400" />
+          ) : (
+            <ImageIcon className="h-8 w-8 text-primary" />
+          )}
         </div>
         <h3 className="text-lg font-semibold mb-2">
-          {mode === 'edit' ? 'Edit your first image' : 'Generate your first image'}
+          {mode === "edit"
+            ? "Edit your first image"
+            : "Generate your first image"}
         </h3>
         <p className="text-sm text-muted-foreground max-w-sm">
-          {mode === 'edit'
-            ? 'Upload a source image and type a prompt below to edit it with the selected model.'
-            : 'Type a prompt below and click Generate to create an image with the selected model.'
-          }
+          {mode === "edit"
+            ? "Upload a source image and type a prompt below to edit it with the selected model."
+            : "Type a prompt below and click Generate to create an image with the selected model."}
         </p>
         <p className="text-[9px] text-muted-foreground/30 mt-8">mlx.studio</p>
       </div>
-    )
+    );
   }
 
   return (
     <div className="h-full overflow-auto p-4">
-      <div className={`grid gap-4 ${
-        mode === 'edit'
-          ? 'grid-cols-1 md:grid-cols-2'
-          : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
-      }`} style={{ minWidth: 0 }}>
+      <div
+        className={`grid gap-4 ${
+          mode === "edit"
+            ? "grid-cols-1 md:grid-cols-2"
+            : "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
+        }`}
+        style={{ minWidth: 0 }}
+      >
         {generations.map((gen) => (
-          <ImageCard key={gen.id} generation={gen} onRegenerate={onRegenerate} sessionMode={mode} />
+          <ImageCard
+            key={gen.id}
+            generation={gen}
+            onRegenerate={onRegenerate}
+            sessionMode={mode}
+          />
         ))}
 
         {/* Loading skeleton while generating */}
-        {generating && (
-          <GeneratingSkeleton mode={mode} />
-        )}
+        {generating && <GeneratingSkeleton mode={mode} />}
       </div>
     </div>
-  )
+  );
 }
 
-function ImageCard({ generation, onRegenerate, sessionMode }: { generation: ImageGenerationInfo; onRegenerate?: (gen: ImageGenerationInfo) => void; sessionMode?: 'generate' | 'edit' }) {
-  const [imageData, setImageData] = useState<string | null>(null)
-  const [sourceData, setSourceData] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [hovered, setHovered] = useState(false)
+function ImageCard({
+  generation,
+  onRegenerate,
+  sessionMode,
+}: {
+  generation: ImageGenerationInfo;
+  onRegenerate?: (gen: ImageGenerationInfo) => void;
+  sessionMode?: "generate" | "edit";
+}) {
+  const [imageData, setImageData] = useState<string | null>(null);
+  const [sourceData, setSourceData] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [hovered, setHovered] = useState(false);
 
-  const hasSource = !!generation.sourceImagePath
+  const hasSource = !!generation.sourceImagePath;
   // Gen model + source = variation, edit model + source = edit
-  const isVariation = hasSource && sessionMode === 'generate'
-  const isEdit = hasSource && !isVariation
+  const isVariation = hasSource && sessionMode === "generate";
+  const isEdit = hasSource && !isVariation;
 
   useEffect(() => {
-    let cancelled = false
-    const promises: Promise<void>[] = []
+    let cancelled = false;
+    const promises: Promise<void>[] = [];
 
     // Load output image
     promises.push(
-      window.api.image.readFile(generation.imagePath).then((data: string | null) => {
-        if (!cancelled) setImageData(data)
-      }).catch(() => {})
-    )
+      window.api.image
+        .readFile(generation.imagePath)
+        .then((data: string | null) => {
+          if (!cancelled) setImageData(data);
+        })
+        .catch(() => {}),
+    );
 
     // Load source image for edits
     if (generation.sourceImagePath) {
       promises.push(
-        window.api.image.readFile(generation.sourceImagePath).then((data: string | null) => {
-          if (!cancelled) setSourceData(data)
-        }).catch(() => {})
-      )
+        window.api.image
+          .readFile(generation.sourceImagePath)
+          .then((data: string | null) => {
+            if (!cancelled) setSourceData(data);
+          })
+          .catch(() => {}),
+      );
     }
 
     Promise.all(promises).then(() => {
-      if (!cancelled) setLoading(false)
-    })
+      if (!cancelled) setLoading(false);
+    });
 
-    return () => { cancelled = true }
-  }, [generation.imagePath, generation.sourceImagePath])
+    return () => {
+      cancelled = true;
+    };
+  }, [generation.imagePath, generation.sourceImagePath]);
 
   const handleSave = useCallback(async () => {
-    await window.api.image.saveFile(generation.imagePath)
-  }, [generation.imagePath])
+    await window.api.image.saveFile(generation.imagePath);
+  }, [generation.imagePath]);
 
   const handleCopySeed = useCallback(() => {
     if (generation.seed != null) {
-      navigator.clipboard.writeText(generation.seed.toString()).catch(() => {})
+      navigator.clipboard.writeText(generation.seed.toString()).catch(() => {});
     }
-  }, [generation.seed])
+  }, [generation.seed]);
 
   return (
     <div
@@ -122,21 +160,33 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
                 <Loader2 className="h-6 w-6 text-muted-foreground animate-spin" />
               </div>
             ) : imageData ? (
-              <img src={imageData} alt="Edited" className="w-full h-full object-contain" />
+              <img
+                src={imageData}
+                alt="Edited"
+                className="w-full h-full object-contain"
+              />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-xs">
                 Failed to load
               </div>
             )}
-            <span className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 text-white rounded font-medium ${isVariation ? 'bg-emerald-600/80' : 'bg-violet-600/80'}`}>
-              {isVariation ? 'Variation' : 'Edited'}
+            <span
+              className={`absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 text-white rounded font-medium ${isVariation ? "bg-emerald-600/80" : "bg-violet-600/80"}`}
+            >
+              {isVariation ? "Variation" : "Edited"}
             </span>
 
             {/* Source image thumbnail (bottom-left corner) */}
             {sourceData && (
               <div className="absolute bottom-2 left-2 w-16 h-16 rounded border-2 border-white/60 overflow-hidden shadow-lg">
-                <img src={sourceData} alt="Source" className="w-full h-full object-contain" />
-                <span className="absolute bottom-0 left-0 right-0 text-[8px] text-center bg-black/60 text-white py-px">{isVariation ? 'Source' : 'Original'}</span>
+                <img
+                  src={sourceData}
+                  alt="Source"
+                  className="w-full h-full object-contain"
+                />
+                <span className="absolute bottom-0 left-0 right-0 text-[8px] text-center bg-black/60 text-white py-px">
+                  {isVariation ? "Source" : "Original"}
+                </span>
               </div>
             )}
           </div>
@@ -180,17 +230,26 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
       <div className="p-3">
         <div className="flex items-center gap-1 mb-1">
           {isVariation && (
-            <span className="text-[9px] px-1 py-0 rounded bg-emerald-500/15 text-emerald-500 flex-shrink-0">Var</span>
+            <span className="text-[9px] px-1 py-0 rounded bg-emerald-500/15 text-emerald-500 flex-shrink-0">
+              Var
+            </span>
           )}
           {isEdit && (
-            <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">Edit</span>
+            <span className="text-[9px] px-1 py-0 rounded bg-violet-500/15 text-violet-400 flex-shrink-0">
+              Edit
+            </span>
           )}
-          <p className="text-xs text-foreground line-clamp-2" title={generation.prompt}>
+          <p
+            className="text-xs text-foreground line-clamp-2"
+            title={generation.prompt}
+          >
             {generation.prompt}
           </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-          <span>{generation.width}x{generation.height}</span>
+          <span>
+            {generation.width}x{generation.height}
+          </span>
           <span>{generation.steps} steps</span>
           {generation.strength != null && (
             <span>str: {generation.strength}</span>
@@ -198,9 +257,7 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
           {generation.elapsedSeconds != null && (
             <span>{generation.elapsedSeconds.toFixed(1)}s</span>
           )}
-          {generation.seed != null && (
-            <span>seed: {generation.seed}</span>
-          )}
+          {generation.seed != null && <span>seed: {generation.seed}</span>}
         </div>
 
         {/* Action buttons — always visible */}
@@ -211,8 +268,8 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
                 onClick={() => onRegenerate(generation)}
                 className={`flex-1 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
                   isEdit
-                    ? 'bg-violet-500/15 text-violet-400 hover:bg-violet-500/25'
-                    : 'bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25'
+                    ? "bg-violet-500/15 text-violet-400 hover:bg-violet-500/25"
+                    : "bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25"
                 }`}
                 title="Use this image as starting point for next generation"
               >
@@ -232,20 +289,21 @@ function ImageCard({ generation, onRegenerate, sessionMode }: { generation: Imag
         )}
       </div>
     </div>
-  )
+  );
 }
 
-function GeneratingSkeleton({ mode }: { mode?: 'generate' | 'edit' }) {
-  const [elapsed, setElapsed] = useState(0)
+function GeneratingSkeleton({ mode }: { mode?: "generate" | "edit" }) {
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    const interval = setInterval(() => setElapsed(prev => prev + 1), 1000)
-    return () => clearInterval(interval)
-  }, [])
+    const interval = setInterval(() => setElapsed((prev) => prev + 1), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
-  const formatTime = (s: number) => s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
-  const label = mode === 'edit' ? 'Editing' : 'Generating'
-  const color = mode === 'edit' ? 'text-violet-400' : 'text-primary'
+  const formatTime = (s: number) =>
+    s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  const label = mode === "edit" ? "Editing" : "Generating";
+  const color = mode === "edit" ? "text-violet-400" : "text-primary";
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
@@ -253,14 +311,19 @@ function GeneratingSkeleton({ mode }: { mode?: 'generate' | 'edit' }) {
         <Loader2 className={`h-10 w-10 ${color} animate-spin`} />
         <div className="text-center">
           <p className={`text-sm font-medium ${color}`}>{label}...</p>
-          <p className="text-xs text-muted-foreground mt-1">{formatTime(elapsed)}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {formatTime(elapsed)}
+          </p>
         </div>
       </div>
       <div className="p-3">
         <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-          <div className={`h-full rounded-full animate-pulse ${mode === 'edit' ? 'bg-violet-500/50' : 'bg-primary/50'}`} style={{ width: '100%' }} />
+          <div
+            className={`h-full rounded-full animate-pulse ${mode === "edit" ? "bg-violet-500/50" : "bg-primary/50"}`}
+            style={{ width: "100%" }}
+          />
         </div>
       </div>
     </div>
-  )
+  );
 }

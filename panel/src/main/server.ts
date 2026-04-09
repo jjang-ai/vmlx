@@ -24,12 +24,14 @@ export interface ServerConfig {
   // Concurrent processing
   maxNumSeqs?: number
   prefillBatchSize?: number
+  prefillStepSize?: number
   completionBatchSize?: number
   continuousBatching: boolean
 
   // Prefix cache
   enablePrefixCache?: boolean
   prefixCacheSize?: number
+  prefixCacheMaxBytes?: number
   cacheMemoryMb?: number
   cacheMemoryPercent?: number
   noMemoryAwareCache?: boolean

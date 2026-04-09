@@ -346,7 +346,11 @@ class SimpleEngine(BaseEngine):
                 if reasoning_effort:
                     mllm_kwargs["reasoning_effort"] = reasoning_effort
                 if extra_ct_kwargs:
-                    mllm_kwargs.update(extra_ct_kwargs)
+                    # Strip reserved keys (Concern #14): see above.
+                    mllm_kwargs.update({
+                        k: v for k, v in extra_ct_kwargs.items()
+                        if k not in ("tokenize", "add_generation_prompt")
+                    })
                 output = await asyncio.to_thread(
                     self._model.chat,
                     messages=messages,
@@ -390,7 +394,16 @@ class SimpleEngine(BaseEngine):
                     if reasoning_effort:
                         tpl_kwargs["reasoning_effort"] = reasoning_effort
                     if extra_ct_kwargs:
-                        tpl_kwargs.update(extra_ct_kwargs)
+                        # Strip reserved keys (Concern #14): tokenize and
+                        # add_generation_prompt are managed by us. A client passing
+                        # tokenize=True via chat_template_kwargs would change the
+                        # return type from str to list[int] and break downstream
+                        # code that expects a string.
+                        _safe_extra = {
+                            k: v for k, v in extra_ct_kwargs.items()
+                            if k not in ("tokenize", "add_generation_prompt")
+                        }
+                        tpl_kwargs.update(_safe_extra)
 
                     try:
                         prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
@@ -438,10 +451,23 @@ class SimpleEngine(BaseEngine):
                     **kwargs,
                 )
                 text = clean_output_text(output.text)
+                _prompt_tokens = getattr(output, "prompt_tokens", 0)
+                # Concern #11 (audit 2026-04-08): non-streaming path was missing
+                # the prompt_tokens fallback that the streaming path has at
+                # line ~282. If the model wrapper reports 0 (e.g. because the
+                # internal token counter wasn't wired for this model family),
+                # re-tokenize the prompt to recover a real count. This also
+                # closes the surface that surfaced ISSUE-A4-004 (nemotron_h
+                # HTTP serve reported prompt_tokens=0 with all-<unk> output).
+                if _prompt_tokens == 0:
+                    try:
+                        _prompt_tokens = len(tokenizer.encode(prompt))
+                    except Exception:
+                        _prompt_tokens = 0
                 return GenerationOutput(
                     text=text,
                     tokens=getattr(output, "tokens", []),
-                    prompt_tokens=getattr(output, "prompt_tokens", 0),
+                    prompt_tokens=_prompt_tokens,
                     completion_tokens=getattr(
                         output, "completion_tokens", len(getattr(output, "tokens", []))
                     ),
@@ -513,7 +539,11 @@ class SimpleEngine(BaseEngine):
             if reasoning_effort:
                 mllm_kwargs["reasoning_effort"] = reasoning_effort
             if extra_ct_kwargs:
-                mllm_kwargs.update(extra_ct_kwargs)
+                # Strip reserved keys (Concern #14): see above.
+                mllm_kwargs.update({
+                    k: v for k, v in extra_ct_kwargs.items()
+                    if k not in ("tokenize", "add_generation_prompt")
+                })
 
             async with self._generation_lock:
                 try:
@@ -653,9 +683,17 @@ class SimpleEngine(BaseEngine):
                 template_kwargs["tools"] = template_tools
             if reasoning_effort:
                 template_kwargs["reasoning_effort"] = reasoning_effort
-            # Merge extra chat_template_kwargs (e.g. thinking_budget)
+            # Merge extra chat_template_kwargs (e.g. thinking_budget).
+            # Strip reserved keys (Concern #14): tokenize and
+            # add_generation_prompt are managed by us; a client passing them
+            # via chat_template_kwargs would change return type / silently
+            # break downstream code.
             if extra_ct_kwargs:
-                template_kwargs.update(extra_ct_kwargs)
+                _safe_extra = {
+                    k: v for k, v in extra_ct_kwargs.items()
+                    if k not in ("tokenize", "add_generation_prompt")
+                }
+                template_kwargs.update(_safe_extra)
 
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)

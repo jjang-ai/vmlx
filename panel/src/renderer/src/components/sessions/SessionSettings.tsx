@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
-import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, CASUAL_CONFIG, EXPERT_CONFIG } from './SessionConfigForm'
-import { useInferenceMode } from '../layout/InferenceMode'
+import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 
 interface Session {
   id: string
@@ -46,6 +45,7 @@ function buildCommandPreview(
   // Concurrent processing
   if (config.maxNumSeqs && config.maxNumSeqs > 0) parts.push('--max-num-seqs', config.maxNumSeqs.toString())
   if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
+  if (config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
   if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
   if (isVLM) parts.push('--is-mllm')

@@ -14,6 +14,54 @@ Features:
 
 __version__ = "1.0.3"
 
+# mlx_lm 0.31.x changed create_attention_mask() to require return_array and
+# window_size positional args.  mlx_vlm's qwen3_5/language.py calls
+# create_ssm_mask(h, cache) which calls cache.make_mask(N) without those args.
+# KVCache.make_mask passes them through to the local create_attention_mask()
+# in cache.py which now requires all 4 positional args -> TypeError.
+# Patch create_ssm_mask to always pass defaults for the new args.
+try:
+    import mlx_lm.models.base as _base
+
+    if hasattr(_base, "create_ssm_mask"):
+        _orig_ssm_mask = _base.create_ssm_mask
+
+        def _patched_ssm_mask(h, cache=None):
+            if cache is not None and hasattr(cache, "make_mask"):
+                try:
+                    return cache.make_mask(h.shape[1])
+                except TypeError:
+                    return cache.make_mask(
+                        h.shape[1], return_array=False, window_size=None
+                    )
+            return None
+
+        _base.create_ssm_mask = _patched_ssm_mask
+except Exception:
+    pass
+
+# Also patch KVCache.make_mask to provide defaults for the new positional args
+# in mlx_lm.models.cache.create_attention_mask(N, offset, return_array, window_size).
+try:
+    import mlx_lm.models.cache as _cache_mod
+
+    if hasattr(_cache_mod, "KVCache") and hasattr(_cache_mod.KVCache, "make_mask"):
+        _orig_kv_make_mask = _cache_mod.KVCache.make_mask
+        _cache_create_attention_mask = getattr(
+            _cache_mod, "create_attention_mask", None
+        )
+
+        def _patched_kv_make_mask(self, *args, **kwargs):
+            kwargs.setdefault("return_array", False)
+            kwargs.setdefault("window_size", None)
+            if _cache_create_attention_mask is not None:
+                return _cache_create_attention_mask(*args, offset=self.offset, **kwargs)
+            return _orig_kv_make_mask(self, *args, **kwargs)
+
+        _cache_mod.KVCache.make_mask = _patched_kv_make_mask
+except Exception:
+    pass
+
 # All imports are lazy to allow usage on non-Apple Silicon platforms
 # (e.g., CI running on Linux) where mlx_lm is not available.
 

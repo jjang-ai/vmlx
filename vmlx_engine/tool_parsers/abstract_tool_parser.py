@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 # 2. Only closing tag: ...content before...</think> or ...[/THINK] (when think is in prompt)
 THINK_TAG_PATTERN = re.compile(r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])", re.DOTALL)
 IMPLICIT_THINK_PATTERN = re.compile(r"^.*?(?:</think>|\[/THINK\])", re.DOTALL)
+UNCLOSED_THINK_PATTERN = re.compile(r"(?:<think>|\[THINK\]).*$", re.DOTALL)
 
 
 def generate_tool_id() -> str:
@@ -98,6 +99,12 @@ class ToolParser(ABC):
         # (when <think> was injected in the prompt)
         if result == text and ("</think>" in text or "[/THINK]" in text):
             result = IMPLICIT_THINK_PATTERN.sub("", text)
+
+        # Finally, if an open tag remains without a close tag (e.g. hit max_tokens),
+        # strip everything from the open tag to the end of string to prevent 
+        # evaluating hallucinated models inside the brainstorming monologue.
+        if "<think>" in result or "[THINK]" in result:
+            result = UNCLOSED_THINK_PATTERN.sub("", result)
 
         return result.strip()
 

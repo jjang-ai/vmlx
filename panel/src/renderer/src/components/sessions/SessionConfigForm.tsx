@@ -8,10 +8,12 @@ export interface SessionConfig {
   timeout: number
   maxNumSeqs: number
   prefillBatchSize: number
+  prefillStepSize: number
   completionBatchSize: number
   continuousBatching: boolean
   enablePrefixCache: boolean
   prefixCacheSize: number
+  prefixCacheMaxBytes: number
   cacheMemoryMb: number
   cacheMemoryPercent: number
   cacheTtlMinutes: number
@@ -37,7 +39,8 @@ export interface SessionConfig {
   servedModelName: string
   speculativeModel: string
   numDraftTokens: number
-  streamFromDisk: boolean
+  smelt: boolean
+  smeltExperts: number
   defaultTemperature: number
   defaultTopP: number
   embeddingModel: string
@@ -62,10 +65,12 @@ export const DEFAULT_CONFIG: SessionConfig = {
   timeout: 300,
   maxNumSeqs: 256,
   prefillBatchSize: 0,
+  prefillStepSize: 0,
   completionBatchSize: 0,
   continuousBatching: true,
   enablePrefixCache: true,
   prefixCacheSize: 100,
+  prefixCacheMaxBytes: 0,
   cacheMemoryMb: 0,
   cacheMemoryPercent: 30,
   cacheTtlMinutes: 0,
@@ -92,7 +97,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
   servedModelName: '',
   speculativeModel: '',
   numDraftTokens: 3,
-  streamFromDisk: false,
+  smelt: false,
+  smeltExperts: 50,
   defaultTemperature: 0,
   defaultTopP: 0,
   embeddingModel: '',
@@ -155,10 +161,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
 
-  const ssdActive = !!config.streamFromDisk
-  const batchingOff = !config.continuousBatching || ssdActive
+  const smeltActive = !!config.smelt
+  const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
-  const prefixOff = !config.enablePrefixCache || ssdActive
+  const prefixOff = !config.enablePrefixCache
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
 
   const toggleSection = (section: keyof typeof expandedSections) => {
@@ -263,7 +269,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <SliderField
           label="Prefill Batch Size"
-          tooltip="Maximum number of tokens to process in a single prefill (prompt processing) step. Larger batches use more memory but process prompts faster. Reduce if you're running out of memory during prompt processing."
+          tooltip="Maximum number of concurrent prompts processed in parallel during the prefill (prompt processing) phase. Higher = more parallelism for multi-user workloads, more memory pressure during prompt ingest. Default 8."
           value={config.prefillBatchSize}
           onChange={v => onChange('prefillBatchSize', v)}
           min={1}
@@ -273,6 +279,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Default (8)"
+        />
+        <SliderField
+          label="Prefill Step Size"
+          tooltip="Maximum number of tokens processed in a single prefill forward pass per sequence. Larger = fewer kernel launches and faster prefill, more transient memory. Reduce if you OOM mid-prompt on long contexts. Default 2048."
+          value={config.prefillStepSize}
+          onChange={v => onChange('prefillStepSize', v)}
+          min={64}
+          max={8192}
+          step={64}
+          defaultValue={2048}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel="Default (2048)"
         />
         <SliderField
           label="Completion Batch Size"
@@ -287,15 +306,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="Default (32)"
         />
-        <CheckField label="SSD Disk Streaming" tooltip="Stream model weights from SSD layer-by-layer instead of loading everything into RAM. Allows running models larger than available memory at the cost of slower generation. Disables continuous batching and all caching features." checked={config.streamFromDisk} onChange={v => onChange('streamFromDisk', v)} />
-        {ssdActive && <PerformanceHint text="Model weights are streamed from SSD on each forward pass. Generation is slower but models of any size can run." />}
-        <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={ssdActive} />
-        {ssdActive && <IncompatWarning text="SSD disk streaming forces single-sequence mode. Continuous batching and all caching features are overridden at launch." />}
+        <CheckField label="Smelt Mode" tooltip="Partial expert loading for MoE models. Loads backbone + N% of experts from SSD, reducing RAM by ~50% while maintaining ~97% baseline speed via cache-biased routing and native SwitchGLU kernels." checked={config.smelt} onChange={v => onChange('smelt', v)} />
+        {smeltActive && (
+          <SliderField label="Smelt Experts %" value={config.smeltExperts} onChange={v => onChange('smeltExperts', v)} min={10} max={100} step={5} defaultValue={50} />
+        )}
+        {smeltActive && <PerformanceHint text={`Loading ${config.smeltExperts}% of experts per MoE layer. Lower = less RAM, slightly more routing bias.`} />}
+        <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
         <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
-        {!ssdActive && !config.continuousBatching && config.enablePrefixCache && (
+        {!config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
         )}
-        {!ssdActive && !config.continuousBatching && (
+        {!config.continuousBatching && (
           <InfoNote text="Turning this off disables: prefix caching, paged KV cache, KV cache quantization, and disk caching. Enable it to unlock these features." />
         )}
       </Section>
@@ -323,6 +344,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="Default (100)"
+                />
+                <SliderField
+                  label="Prefix Cache Max Bytes (MB)"
+                  tooltip="Optional global byte budget for the legacy entry-count prefix cache. When set, eviction also fires when total cached bytes exceed this. Eviction priority is assistant → user → system, so shared system prompts persist across users/sessions. 0 = unlimited (entry-count only)."
+                  value={Math.floor((config.prefixCacheMaxBytes || 0) / (1024 * 1024))}
+                  onChange={v => onChange('prefixCacheMaxBytes', v * 1024 * 1024)}
+                  min={0}
+                  max={32768}
+                  step={256}
+                  defaultValue={0}
+                  allowUnlimited
+                  unlimitedValue={0}
+                  unlimitedLabel="Unlimited"
                 />
               </>
             ) : (
@@ -742,12 +776,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Speculative Decoding */}
       <Section title="Speculative Decoding" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage}>
-        {ssdActive && <IncompatWarning text="SSD disk streaming disables speculative decoding. The draft model is overridden to none at launch." />}
-        {!ssdActive && <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />}
-        {!ssdActive && config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
+        <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
+        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
         {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
         <Field label="Draft Model" tooltip="Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.">
-          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder="mlx-community/small-draft-model" className="cfg-input" disabled={ssdActive} />
+          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder="mlx-community/small-draft-model" className="cfg-input" disabled={false} />
         </Field>
         {config.speculativeModel && (
           <SliderField
@@ -759,7 +792,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             max={20}
             step={1}
             defaultValue={DEFAULT_CONFIG.numDraftTokens}
-            disabled={ssdActive}
+            disabled={false}
           />
         )}
       </Section>

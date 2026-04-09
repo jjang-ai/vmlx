@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
-import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, CASUAL_CONFIG, EXPERT_CONFIG, SliderField } from './SessionConfigForm'
+import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
 import { useInferenceMode } from '../layout/InferenceMode'
 
 interface Session {

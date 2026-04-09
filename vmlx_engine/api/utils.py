@@ -5,6 +5,7 @@ Utility functions for text processing and model detection.
 
 import functools
 import json
+import logging
 import os
 import re
 
@@ -100,6 +101,30 @@ def resolve_to_local_path(model_name: str) -> str:
     return model_name
 
 
+# Q2 (audit-2026-04-07): result cache for is_mllm_model() to stop repeated
+# INFO log emissions on hot paths (is_mllm_model is called from multiple
+# request entry points per turn). Keyed by (model_name, local_path,
+# config_mtime) — mtime invalidates the cache if the user edits config.json
+# or jang_config.json between loads.
+_IS_MLLM_CACHE: dict[tuple, bool] = {}
+
+
+def _is_mllm_cache_key(model_name: str, local_path: str) -> tuple:
+    """Build a cache key that invalidates on config.json / jang_config.json edits."""
+    try:
+        cfg_mtime = 0.0
+        jang_mtime = 0.0
+        cfg_path = os.path.join(local_path, "config.json")
+        jang_path = os.path.join(local_path, "jang_config.json")
+        if os.path.isfile(cfg_path):
+            cfg_mtime = os.path.getmtime(cfg_path)
+        if os.path.isfile(jang_path):
+            jang_mtime = os.path.getmtime(jang_path)
+        return (model_name, local_path, cfg_mtime, jang_mtime)
+    except Exception:
+        return (model_name, local_path, 0.0, 0.0)
+
+
 def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
     Check if model is a multimodal language model.
@@ -118,62 +143,95 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     Returns:
         True if model is detected as MLLM/VLM
     """
+    # Audit-2026-04-07 risk §6.8: log which detection tier matched at INFO so
+    # parser-detection debugging is possible. Tiers are checked in order; the
+    # first one to return wins.
+    _logger = logging.getLogger("vmlx_engine")
+
     if force_mllm:
+        # Not cached — force_mllm is cheap + callers may toggle at runtime.
+        _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)
         return True
 
     # Resolve HF repo IDs (e.g. "Org/Model") to local cache path so that
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
 
-    # JANG models: jang_config.has_vision is authoritative.
-    # When explicitly set, it overrides config.json vision_config
-    # (e.g., Mistral 4 text-only JANG has vision_config in config.json
-    # because mistral3 is a VLM wrapper arch, but jang_config says false).
-    from ..utils.jang_loader import is_jang_model, _find_config_path
-    from pathlib import Path
-    if is_jang_model(local_path):
-        try:
-            cfg_path = _find_config_path(Path(local_path))
-            if cfg_path is not None:
-                jang_cfg = json.loads(cfg_path.read_text())
-                has_vision = jang_cfg.get("architecture", {}).get("has_vision")
-                if has_vision is True:
+    # Q2 result cache check — return without re-logging if we've already
+    # resolved this (model_name, local_path, config_mtime, jang_mtime).
+    _cache_key = _is_mllm_cache_key(model_name, local_path)
+    if _cache_key in _IS_MLLM_CACHE:
+        return _IS_MLLM_CACHE[_cache_key]
+
+    def _resolve() -> bool:
+        # JANG models: jang_config.has_vision is authoritative.
+        # When explicitly set, it overrides config.json vision_config
+        # (e.g., Mistral 4 text-only JANG has vision_config in config.json
+        # because mistral3 is a VLM wrapper arch, but jang_config says false).
+        from ..utils.jang_loader import is_jang_model, _find_config_path
+        from pathlib import Path
+        if is_jang_model(local_path):
+            try:
+                cfg_path = _find_config_path(Path(local_path))
+                if cfg_path is not None:
+                    jang_cfg = json.loads(cfg_path.read_text())
+                    arch = jang_cfg.get("architecture", {}) or {}
+                    if "has_vision" in arch:
+                        has_vision = arch.get("has_vision")
+                        if has_vision is True:
+                            _logger.info(
+                                "is_mllm_model(%s): tier=jang_config_explicit_true result=True",
+                                model_name,
+                            )
+                            return True
+                        if has_vision is False:
+                            _logger.info(
+                                "is_mllm_model(%s): tier=jang_config_explicit_false result=False",
+                                model_name,
+                            )
+                            return False
+            except Exception:
+                pass
+
+        # Primary: check config.json for vision_config (authoritative for local models)
+        config_path = os.path.join(local_path, "config.json")
+        if os.path.isfile(config_path):
+            try:
+                model_config = json.loads(open(config_path).read())
+                if "vision_config" in model_config:
+                    _logger.info(
+                        "is_mllm_model(%s): tier=config_json_vision_config result=True",
+                        model_name,
+                    )
                     return True
-                if has_vision is False:
-                    return False
-        except Exception:
-            pass
-        # has_vision not set — fall through to config.json check
+            except Exception:
+                pass
 
-    # Primary: check config.json for vision_config (authoritative for local models)
-    config_path = os.path.join(local_path, "config.json")
-    if os.path.isfile(config_path):
+        # Secondary: use model config registry (reads model_type from config.json).
         try:
-            model_config = json.loads(open(config_path).read())
-            if "vision_config" in model_config:
-                return True
+            from ..model_config_registry import get_model_config_registry
+
+            registry = get_model_config_registry()
+            reg_config = registry.lookup(local_path)
+            if reg_config.family_name == "unknown" and local_path != model_name:
+                reg_config = registry.lookup(model_name)
+            if reg_config.family_name != "unknown":
+                _logger.info(
+                    "is_mllm_model(%s): tier=registry_family_%s result=%s",
+                    model_name,
+                    reg_config.family_name,
+                    reg_config.is_mllm,
+                )
+                return reg_config.is_mllm
         except Exception:
             pass
 
-    # Secondary: use model config registry (reads model_type from config.json).
-    # Pass local_path so registry can read config.json even for HF repo IDs,
-    # but also try the original model_name for name-based disambiguation
-    # (e.g. GLM-Z1, MedGemma regex patterns in registry.lookup).
-    try:
-        from ..model_config_registry import get_model_config_registry
+        _logger.info("is_mllm_model(%s): tier=fallthrough result=False", model_name)
+        return False
 
-        registry = get_model_config_registry()
-        # Try resolved path first (can read config.json from disk)
-        reg_config = registry.lookup(local_path)
-        if reg_config.family_name == "unknown" and local_path != model_name:
-            # Retry with original name for name-based regex disambiguation
-            reg_config = registry.lookup(model_name)
-        if reg_config.family_name != "unknown":
-            return reg_config.is_mllm
-    except Exception:
-        pass
-
-    return False
+    _result = _resolve()
+    _IS_MLLM_CACHE[_cache_key] = _result
+    return _result
 
 
 # Backwards compatibility alias

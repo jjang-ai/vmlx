@@ -108,3 +108,23 @@ class ReasoningParser(ABC):
         This is intentionally a default no-op implementation.
         """
         pass
+
+    def reasoning_tag_token_seqs(self, tokenizer: Any) -> dict:
+        """Return the token sequences that delimit reasoning content.
+
+        Used by `vmlx_engine.state_machine.make_state_machine` to build a
+        token-level Aho-Corasick state machine that can detect reasoning
+        boundaries in O(1) per token (replacing the per-token substring
+        scan in `scheduler.py` line ~2349).
+
+        Returns a dict with two keys:
+            "start": List[List[int]] — start-of-reasoning token sequences
+            "end":   List[List[int]] — end-of-reasoning token sequences
+
+        Both lists may be empty (default). Subclasses that have well-defined
+        tag tokens override this. Subclasses with text-only / regex-based
+        detection (e.g. gptoss channel-marker cleanup) should leave it as
+        an empty default — the scheduler then falls back to the legacy
+        substring path for that parser.
+        """
+        return {"start": [], "end": []}

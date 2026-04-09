@@ -33,6 +33,43 @@ JANG_CONFIG_FILENAMES = [
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 
 
+def _set_wired_limit_for_model(weight_files):
+    """Raise MLX wired memory limit to fit model + headroom.
+
+    MLX's default wired limit is ~75% of the device's recommended max working
+    set. Models larger than this default get pages swapped during eval,
+    causing Metal command buffer timeouts.
+
+    Sets wired limit to model_size + 8 GB headroom, capped at the OS's
+    max working set (which the user can raise via:
+        sudo sysctl iogpu.wired_limit_mb=250000
+    persisted in /etc/sysctl.conf).
+
+    Official MLX API (mx.set_wired_limit) — not a hack.
+    """
+    try:
+        total_bytes = sum(sf.stat().st_size for sf in weight_files)
+        # 8 GB headroom for activations, KV cache, scheduler overhead
+        target = total_bytes + 8 * 1024 * 1024 * 1024
+        # Cap at OS max working set (sysctl iogpu.wired_limit_mb)
+        try:
+            max_ws = mx.metal.device_info().get("max_recommended_working_set_size")
+            if max_ws and target > max_ws:
+                target = max_ws
+        except Exception:
+            pass
+        if hasattr(mx, "set_wired_limit"):
+            mx.set_wired_limit(target)
+        else:
+            mx.metal.set_wired_limit(target)
+        logger.info(
+            f"  Wired limit set to {target / 1e9:.0f} GB "
+            f"(model {total_bytes / 1e9:.0f} GB)"
+        )
+    except Exception as e:
+        logger.warning(f"  Could not set wired limit: {e}")
+
+
 def _chunked_eval_params(model, chunk_size: int = 200):
     """Evaluate model parameters in chunks to avoid Metal GPU timeout on large models (>200GB)."""
     import mlx.utils as _mlx_utils
@@ -53,6 +90,20 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         jang_cfg: Parsed jang_config.json dict
         model_config: Parsed config.json dict (or text_config for VLM)
     """
+    # MLA models (DeepSeek V2/V3, GLM-5.1, Mistral 4) use CacheList(KVCache, KVCache)
+    # per layer. TQ replaces this with flat TurboQuantKVCache which breaks the
+    # CacheList structure → BatchGenerator's _make_cache fails → "not subscriptable"
+    # error. Skip TQ for MLA models. Centralized via model_inspector.is_mla_model()
+    # so the check stays in sync with tokenizer.py and Agent 1's prefix-cache trie
+    # (REQ-001 in the 2026-04-07 audit).
+    from .model_inspector import _detect_turboquant_layer_types, is_mla_model
+
+    if is_mla_model(model_config):
+        logger.info(
+            "  TurboQuant skipped: MLA model uses CacheList (incompatible with TQ flat cache)"
+        )
+        return
+
     _tq_cfg = jang_cfg.get("turboquant")
     if not _tq_cfg:
         # Auto-enable TQ with defaults for ALL JANG models
@@ -84,54 +135,9 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     # Get text config (may be nested under text_config for VLM wrappers)
     _text_cfg = model_config.get("text_config", model_config)
 
-    # Key/value dimensions (MLA models have different dims)
-    _key_dim = _text_cfg.get("head_dim", 128)
-    _val_dim = _text_cfg.get("head_dim", 128)
-    if _text_cfg.get("kv_lora_rank", 0) > 0:
-        _key_dim = _text_cfg.get("qk_nope_head_dim", 128) + _text_cfg.get(
-            "qk_rope_head_dim", 64
-        )
-        _val_dim = _text_cfg.get("v_head_dim", 128)
-
-    # Detect hybrid layer types
-    _layer_type_list = _text_cfg.get("layer_types", [])
-    _hybrid_pattern = _text_cfg.get(
-        "hybrid_override_pattern", model_config.get("hybrid_override_pattern", "")
+    _layer_types, _key_dim, _val_dim = _detect_turboquant_layer_types(
+        _text_cfg, n_layers, root_cfg=model_config
     )
-    # Qwen3-Next uses full_attention_interval: every N-th layer is full attention,
-    # the rest are linear SSM (GatedDeltaNet). SSM layers need ArraysCache, not TQ.
-    _full_attn_interval = _text_cfg.get(
-        "full_attention_interval", model_config.get("full_attention_interval", 0)
-    )
-    # Known attention layer types (all need KV cache)
-    _ATTENTION_TYPES = {"full_attention", "sliding_attention"}
-    if _layer_type_list:
-        _layer_types = [
-            "attention" if lt in _ATTENTION_TYPES else "ssm"
-            for lt in _layer_type_list[:n_layers]
-        ]
-        while len(_layer_types) < n_layers:
-            _layer_types.append("attention")
-    elif _hybrid_pattern:
-        _layer_types = []
-        for ch in _hybrid_pattern[:n_layers]:
-            if ch == "M":
-                _layer_types.append("ssm")
-            elif ch == "*":
-                # Dense attention layers — need KV cache
-                _layer_types.append("attention")
-            # 'E' (MoE expert) layers are FFN-only, no cache needed.
-            # Model's forward pass skips them in cache indexing (cache_counter
-            # only increments for M and * layers), so we must NOT create
-            # cache objects for E layers to keep indices aligned.
-    elif _full_attn_interval > 0:
-        # Qwen3-Next pattern: every N-th layer (1-indexed) is full attention (#38)
-        _layer_types = [
-            "attention" if (i + 1) % _full_attn_interval == 0 else "ssm"
-            for i in range(n_layers)
-        ]
-    else:
-        _layer_types = ["attention"] * n_layers
 
     _n_attn = sum(1 for t in _layer_types if t == "attention")
     _n_ssm = sum(1 for t in _layer_types if t == "ssm")
@@ -321,12 +327,31 @@ def _load_codebook_vq_model(
 # ─── v2 loader (instant) ────────────────────────────────────────────
 
 
-def _load_jang_v2(path: Path, jang_cfg: dict):
+def _is_expert_key(k: str) -> bool:
+    """Check if a weight key belongs to MoE experts (switch_mlp/switch_glu).
+
+    Used by smelt mode to filter out expert weights during backbone-only loading.
+    Expert weights are loaded separately via ExpertIndex + _load_expert_subset.
+    """
+    return "switch_mlp" in k or "switch_glu" in k
+
+
+def _load_jang_v2(
+    path: Path,
+    jang_cfg: dict,
+    skip_eval: bool = False,
+    filter_expert_keys: bool = False,
+):
     """
     Load a JANG v2 model — instant via mx.load() mmap.
 
     v2 models store weights in MLX-native format (uint32 packed weights,
     float16 scales/biases) in standard safetensors. No repacking needed.
+
+    Args:
+        filter_expert_keys: If True, skip expert (switch_mlp/switch_glu) weights
+            during loading. Used by smelt mode — experts are filled separately.
+            Weights are mmap'd so filtering after load has no RAM penalty.
     """
     from mlx_lm.utils import (
         load_config,
@@ -382,6 +407,13 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
     # weight into MoEGate.weight. Our custom weight loading loop below
     # dequantizes the gate weight (uint32 → bfloat16) and overwrites it.
 
+    # Detect if model has VLM-style key naming (model.language_model.layers)
+    # but text model param paths (language_model.model.layers). This happens when
+    # qwen3_5_moe (VLM wrapper) is loaded as text — JANG converter stores VLM-style
+    # keys but mlx-lm creates language_model.model.* params. Without remapping,
+    # ALL weights are silently dropped (strict=False) → model runs on zeros.
+    _needs_vlm_key_remap = hasattr(model, "language_model") and "text_config" in config
+
     for sf in weight_files:
         weights = mx.load(str(sf))
         # Nemotron-H: filter mtp/importance weights
@@ -391,6 +423,46 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
                 for k, v in weights.items()
                 if not k.endswith(".importance") and "mtp." not in k
             }
+        # Remap VLM-style keys for models loaded as text but with VLM key structure.
+        # model.language_model.X → language_model.model.X  (layers, embed, norm)
+        # lm_head.X → language_model.lm_head.X  (bare top-level in safetensors)
+        if _needs_vlm_key_remap:
+            # Audit-2026-04-07 risk §6.3 hardening: count source `model.language_model.*`
+            # keys before remap, count `language_model.model.*` keys after, and refuse to
+            # proceed if any source key was silently lost. `model.load_weights(strict=False)`
+            # masks silent drops downstream — without this guard, a regression in the remap
+            # logic would produce a model running on partial/zero weights with no error.
+            _src_lm_count = sum(
+                1 for k in weights.keys() if k.startswith("model.language_model.")
+            )
+            _src_lm_head = sum(1 for k in weights.keys() if k.startswith("lm_head."))
+            remapped = {}
+            for k, v in weights.items():
+                if k.startswith("model.language_model."):
+                    remapped[
+                        k.replace("model.language_model.", "language_model.model.", 1)
+                    ] = v
+                elif k.startswith("lm_head."):
+                    remapped["language_model." + k] = v
+                else:
+                    remapped[k] = v
+            _dst_lm_count = sum(
+                1 for k in remapped.keys() if k.startswith("language_model.model.")
+            )
+            _dst_lm_head = sum(
+                1 for k in remapped.keys() if k.startswith("language_model.lm_head.")
+            )
+            if (_src_lm_count > 0 and _dst_lm_count != _src_lm_count) or (
+                _src_lm_head > 0 and _dst_lm_head != _src_lm_head
+            ):
+                raise RuntimeError(
+                    f"jang_loader VLM key remap dropped weights: "
+                    f"source language_model.*={_src_lm_count} → remapped={_dst_lm_count}, "
+                    f"source lm_head.*={_src_lm_head} → remapped={_dst_lm_head}. "
+                    f"This means a regression in the remap logic — refusing to load a "
+                    f"silently-incomplete VLM-as-text model. File={getattr(sf, 'name', sf)}"
+                )
+            weights = remapped
         if hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
         # MoE gate dequant + optional Nemotron fc rename
@@ -437,11 +509,14 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
                             except Exception:
                                 continue
             weights = renamed
+        # Smelt mode: filter expert weights (loaded separately via ExpertIndex)
+        if filter_expert_keys:
+            weights = {k: v for k, v in weights.items() if not _is_expert_key(k)}
         model.load_weights(list(weights.items()), strict=False)
         del weights
         gc.collect()
 
-    _fix_quantized_bits(model, {})
+    _fix_quantized_bits(model)
 
     if not hasattr(model, "config"):
         model.config = config
@@ -468,7 +543,9 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
             f"(float16 overflow prevention)"
         )
 
-    _chunked_eval_params(model)
+    if not skip_eval:
+        _set_wired_limit_for_model(_get_v2_weight_files(path))
+        _chunked_eval_params(model)
 
     # TurboQuant: patch make_cache for JANG models with TQ enabled
     _patch_turboquant_make_cache(model, jang_cfg, _model_cfg)
@@ -478,15 +555,19 @@ def _load_jang_v2(path: Path, jang_cfg: dict):
     actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
     source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
     logger.info(
-        f"JANG v2 loaded in {elapsed:.1f}s: {source_model} "
-        f"({actual_bits:.1f}-bit avg)"
+        f"JANG v2 loaded in {elapsed:.1f}s: {source_model} ({actual_bits:.1f}-bit avg)"
     )
 
     tokenizer = load_tokenizer(path, eos_token_ids=config.get("eos_token_id", None))
     return model, tokenizer
 
 
-def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
+def _load_jang_v2_vlm(
+    path: Path,
+    jang_cfg: dict,
+    skip_eval: bool = False,
+    filter_expert_keys: bool = False,
+):
     """Load a JANG v2 Vision-Language model via mmap — instant."""
     import mlx.nn as nn
     from mlx_vlm.utils import (
@@ -696,6 +777,7 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
                         continue
                     _s = shard_weights[_s_key]
                     _b = shard_weights.get(_b_key, mx.zeros_like(_s))
+                    _ple_dequantized = False
                     for _try_bits in (8, 6, 4, 3, 2):
                         _elem = 32 // _try_bits
                         _real_cols = _w.shape[-1] * _elem
@@ -716,9 +798,22 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
                                     f"  Dequantized Gemma4 PLE: {_w_key} "
                                     f"(bits={_try_bits}, gs={_gs})"
                                 )
+                                _ple_dequantized = True
                                 break
                             except Exception:
                                 continue
+                    # Audit-2026-04-07 risk §6.4 hardening: bit-width search exhaustion
+                    # used to silently leave the uint32 weight in place — forward pass
+                    # would then matmul/take on uint32 and produce garbage / all-pad
+                    # output (#52). Fail loud instead so the user gets a clear error.
+                    if not _ple_dequantized:
+                        raise RuntimeError(
+                            f"jang_loader Gemma4 PLE dequant: failed to find a valid "
+                            f"bit-width for {_w_key} (shape={_w.shape}, scales="
+                            f"{_s.shape}). Tried bits=[8,6,4,3,2]. Without dequant, "
+                            f"forward pass produces garbage output (#52). Please "
+                            f"verify the JANG file integrity and quant format."
+                        )
 
         # Mistral4 MLA: split kv_b_proj → embed_q + unembed_out.
         # Original implementation by Jinho Jang (eric@jangq.ai) for vMLX.
@@ -812,11 +907,16 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
                             except Exception:
                                 continue
 
+        # Smelt mode: filter expert weights (loaded separately via ExpertIndex)
+        if filter_expert_keys:
+            shard_weights = {
+                k: v for k, v in shard_weights.items() if not _is_expert_key(k)
+            }
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
 
-    _fix_quantized_bits(model, {})
+    _fix_quantized_bits(model)
 
     if not hasattr(model, "config"):
         model.config = model_config
@@ -838,7 +938,9 @@ def _load_jang_v2_vlm(path: Path, jang_cfg: dict):
         _reason = "MLA" if _is_mla else f"{_n_experts} experts"
         logger.info(f"  bfloat16 enabled: {_reason}, hidden={_hidden}")
 
-    _chunked_eval_params(model)
+    if not skip_eval:
+        _set_wired_limit_for_model(_get_v2_weight_files(path))
+        _chunked_eval_params(model)
 
     # TurboQuant: patch language_model.make_cache for JANG VLM with TQ enabled
     _lang_model = getattr(model, "language_model", None)
@@ -877,7 +979,9 @@ def _get_v2_weight_files(path: Path) -> list[Path]:
 # ─── Public API ──────────────────────────────────────────────────────
 
 
-def load_jang_vlm_model(model_path: str | Path):
+def load_jang_vlm_model(
+    model_path: str | Path, skip_eval: bool = False, filter_expert_keys: bool = False
+):
     """
     Load a JANG Vision-Language model into mlx-vlm for multimodal inference.
 
@@ -885,6 +989,8 @@ def load_jang_vlm_model(model_path: str | Path):
 
     Args:
         model_path: Path to the JANG VLM model directory
+        skip_eval: If True, skip _chunked_eval_params (for smelt deferred eval)
+        filter_expert_keys: If True, skip expert weights (for smelt mode)
 
     Returns:
         Tuple of (model, processor) compatible with mlx-vlm.generate()
@@ -902,7 +1008,9 @@ def load_jang_vlm_model(model_path: str | Path):
     # v2: instant load
     if _is_v2_model(path):
         logger.info(f"JANG v2 VLM detected — loading via mmap (instant)")
-        return _load_jang_v2_vlm(path, jang_cfg)
+        return _load_jang_v2_vlm(
+            path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys
+        )
 
     # v1: repack path (legacy)
     logger.info(f"JANG v1 VLM detected — repacking (this takes a few minutes)")
@@ -912,6 +1020,8 @@ def load_jang_vlm_model(model_path: str | Path):
 def load_jang_model(
     model_path: str | Path,
     config_manager: Optional[Any] = None,
+    skip_eval: bool = False,
+    filter_expert_keys: bool = False,
 ):
     """
     Load a JANG model for inference.
@@ -965,7 +1075,9 @@ def load_jang_model(
     # v2: instant load via mmap
     if _is_v2_model(path):
         logger.info(f"JANG v2 detected — loading via mmap (instant)")
-        return _load_jang_v2(path, jang_cfg)
+        return _load_jang_v2(
+            path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys
+        )
 
     # v1: repack path (legacy)
     logger.info(
@@ -1029,7 +1141,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
             del weights
             gc.collect()
 
-        _fix_quantized_bits(model, {})
+        _fix_quantized_bits(model)
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1040,16 +1152,24 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     # bfloat16 for 512+ expert models (same as v2 loader)
     _model_cfg = json.loads((path / "config.json").read_text())
     _text_cfg = _model_cfg.get("text_config", _model_cfg)
-    _n_experts = _text_cfg.get(
-        "num_experts",
-        _text_cfg.get("num_local_experts", _text_cfg.get("n_routed_experts", 0)),
+    _n_experts = (
+        _text_cfg.get("num_experts")
+        or _text_cfg.get("num_local_experts")
+        or _text_cfg.get("n_routed_experts")
+        or 0
     )
-    _hidden = _text_cfg.get("hidden_size", 0)
-    if _n_experts >= 512 and _hidden >= 4096:
+    _hidden = _text_cfg.get("hidden_size") or 0
+    _text_mt = _text_cfg.get("model_type", _model_cfg.get("model_type", ""))
+    _is_mla = (_text_cfg.get("kv_lora_rank") or 0) > 0
+    if (_n_experts >= 512 and _hidden >= 4096) or _text_mt == "mistral4" or _is_mla:
         model.set_dtype(mx.bfloat16)
-        logger.info(f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden}")
+        _reason = "MLA" if _is_mla else f"{_n_experts} experts"
+        logger.info(f"  bfloat16 enabled: {_reason}, hidden={_hidden}")
 
     _chunked_eval_params(model)
+
+    _patch_turboquant_make_cache(model, jang_cfg, _model_cfg)
+
     elapsed = time.perf_counter() - start
     from mlx.utils import tree_flatten
 
@@ -1064,7 +1184,9 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
 
 
 def _load_jang_v1_vlm(
-    path: Path, jang_cfg: dict, config_path: Path,
+    path: Path,
+    jang_cfg: dict,
+    config_path: Path,
 ):
     """Load a JANG v1 VLM model by repacking (legacy)."""
     import mlx.nn as nn
@@ -1138,7 +1260,7 @@ def _load_jang_v1_vlm(
             del shard_weights
             gc.collect()
 
-        _fix_quantized_bits(model, {})
+        _fix_quantized_bits(model)
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1149,16 +1271,26 @@ def _load_jang_v1_vlm(
     # bfloat16 for 512+ expert models (same as v2 loader)
     _model_cfg = json.loads((path / "config.json").read_text())
     _text_cfg = _model_cfg.get("text_config", _model_cfg)
-    _n_experts = _text_cfg.get(
-        "num_experts",
-        _text_cfg.get("num_local_experts", _text_cfg.get("n_routed_experts", 0)),
+    _n_experts = (
+        _text_cfg.get("num_experts")
+        or _text_cfg.get("num_local_experts")
+        or _text_cfg.get("n_routed_experts")
+        or 0
     )
-    _hidden = _text_cfg.get("hidden_size", 0)
-    if _n_experts >= 512 and _hidden >= 4096:
+    _hidden = _text_cfg.get("hidden_size") or 0
+    _text_mt = _text_cfg.get("model_type", _model_cfg.get("model_type", ""))
+    _is_mla = (_text_cfg.get("kv_lora_rank") or 0) > 0
+    if (_n_experts >= 512 and _hidden >= 4096) or _text_mt == "mistral4" or _is_mla:
         model.set_dtype(mx.bfloat16)
-        logger.info(f"  bfloat16 enabled: {_n_experts} experts, hidden={_hidden}")
+        _reason = "MLA" if _is_mla else f"{_n_experts} experts"
+        logger.info(f"  bfloat16 enabled: {_reason}, hidden={_hidden}")
 
     _chunked_eval_params(model)
+
+    _lang_model = getattr(model, "language_model", None)
+    if _lang_model is not None and hasattr(_lang_model, "layers"):
+        _patch_turboquant_make_cache(_lang_model, jang_cfg, _model_cfg)
+
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v1 VLM loaded in {elapsed:.1f}s")
 
@@ -1664,7 +1796,7 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
             setattr(parent, parts[1], ql)
 
 
-def _fix_quantized_bits(model, weights=None):
+def _fix_quantized_bits(model):
     """Fix per-layer bits AND group_size for JANG mixed-precision models.
 
     Matches jang-tools 2.1.0 logic: router/gate tensors prefer gs=64 (precision-critical),
@@ -1888,176 +2020,3 @@ def _infer_weight_shape(base_name, config, n_elements):
 
     logger.warning(f"  Could not infer shape for {base_name} ({n_elements} elements)")
     return None
-
-
-# ─── Upgrade v1 → v2 ────────────────────────────────────────────────
-
-
-def upgrade_v1_to_v2(model_path: str | Path) -> None:
-    """
-    Upgrade a JANG v1 model to v2 format in-place.
-
-    Repacks uint8 qweight → uint32 MLX-native, then replaces
-    the .jang.safetensors files with standard .safetensors files.
-    After upgrade, the model loads instantly via mx.load() mmap.
-
-    Args:
-        model_path: path to JANG v1 model directory
-    """
-    path = Path(model_path)
-    config_path = _find_config_path(path)
-    if not config_path:
-        raise FileNotFoundError(f"No JANG config found in {path}")
-
-    if _is_v2_model(path):
-        print(f"  Already v2 format: {path}")
-        return
-
-    jang_cfg = json.loads(config_path.read_text())
-    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
-
-    # Load model config
-    model_config = json.loads((path / "config.json").read_text())
-    config = dict(model_config)
-    tc = config.get("text_config", {})
-    for key in [
-        "hidden_size",
-        "intermediate_size",
-        "num_attention_heads",
-        "num_key_value_heads",
-        "head_dim",
-        "vocab_size",
-        "moe_intermediate_size",
-        "shared_expert_intermediate_size",
-    ]:
-        if key in tc and key not in config:
-            config[key] = tc[key]
-
-    print(f"  Upgrading JANG v1 → v2: {path}")
-    print(
-        f"  This repacks {sum(1 for _ in path.glob('*.jang.safetensors'))} JANG shards to MLX-native format..."
-    )
-
-    # Run the v1 repack to get MLX-format tensors
-    result, tmp_dir = _repack_jang_to_mlx(path, block_size, config)
-
-    try:
-        # Collect all repacked tensors
-        all_tensors = {}
-        if tmp_dir is not None:
-            for sf in result:
-                data = mx.load(sf)
-                for k, v in data.items():
-                    all_tensors[k] = np.array(v)
-                del data
-                gc.collect()
-        else:
-            for k, v in result.items():
-                all_tensors[k] = np.array(v)
-            del result
-            gc.collect()
-
-        print(f"  Repacked {len(all_tensors)} tensors to MLX-native format")
-
-        # Write v2 safetensors
-        from safetensors.numpy import save_file
-
-        # Shard into ~5 GB files
-        max_shard = 5 * 1024**3
-        shards = []
-        current_shard = {}
-        current_size = 0
-        weight_map = {}
-        total_size = 0
-        shard_idx = 0
-
-        for name in sorted(all_tensors.keys()):
-            arr = all_tensors[name]
-            arr_bytes = arr.nbytes
-            if current_size + arr_bytes > max_shard and current_shard:
-                n_shards_est = max(
-                    1, sum(a.nbytes for a in all_tensors.values()) // max_shard + 1
-                )
-                shard_name = (
-                    f"model-{shard_idx + 1:05d}-of-{n_shards_est:05d}.safetensors"
-                )
-                shards.append((shard_name, current_shard))
-                shard_idx += 1
-                current_shard = {}
-                current_size = 0
-            current_shard[name] = arr
-            current_size += arr_bytes
-            total_size += arr_bytes
-
-        if current_shard:
-            shard_idx += 1
-            shards.append((f"placeholder", current_shard))
-
-        # Fix shard names with correct total count
-        n_shards = len(shards)
-        final_shards = []
-        for i, (_, shard_data) in enumerate(shards):
-            shard_name = f"model-{i + 1:05d}-of-{n_shards:05d}.safetensors"
-            final_shards.append((shard_name, shard_data))
-            for tensor_name in shard_data:
-                weight_map[tensor_name] = shard_name
-
-        # Write new safetensors files
-        for shard_name, shard_data in final_shards:
-            save_file(shard_data, str(path / shard_name))
-            print(
-                f"  Wrote {shard_name} ({sum(a.nbytes for a in shard_data.values()) / 1e9:.1f} GB)"
-            )
-
-        # Write v2 index
-        index = {
-            "metadata": {
-                "format": "jang",
-                "format_version": "2.0",
-                "total_size": total_size,
-            },
-            "weight_map": weight_map,
-        }
-        (path / "model.safetensors.index.json").write_text(
-            json.dumps(index, indent=2) + "\n"
-        )
-
-        # Update config.json with quantization key
-        bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
-        model_config["quantization"] = {
-            "group_size": block_size,
-            "bits": min(bit_widths),
-        }
-        (path / "config.json").write_text(
-            json.dumps(model_config, indent=2, ensure_ascii=False) + "\n"
-        )
-
-        # Update jang_config.json version
-        jang_cfg["format_version"] = "2.0"
-        config_path.write_text(
-            json.dumps(jang_cfg, indent=2, ensure_ascii=False) + "\n"
-        )
-
-        # Remove old v1 files
-        old_files = list(path.glob("*.jang.safetensors"))
-        old_files += list(path.glob("*.jjqf.safetensors"))
-        old_files += list(path.glob("*.mxq.safetensors"))
-        for old_idx_name in [
-            "model.jang.index.json",
-            "model.jjqf.index.json",
-            "model.mxq.index.json",
-        ]:
-            old_idx = path / old_idx_name
-            if old_idx.exists():
-                old_files.append(old_idx)
-
-        for f in old_files:
-            f.unlink()
-            print(f"  Removed {f.name}")
-
-        print(f"\n  Upgrade complete! Model now loads instantly via mx.load() mmap.")
-        print(f"  v2 shards: {n_shards}, total: {total_size / 1e9:.1f} GB")
-
-    finally:
-        if tmp_dir:
-            shutil.rmtree(tmp_dir, ignore_errors=True)

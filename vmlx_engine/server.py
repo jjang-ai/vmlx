@@ -126,10 +126,14 @@ logger = logging.getLogger(__name__)
 
 # Global engine instance
 _engine: BaseEngine | None = None
-_standby_state: str | None = None  # None = active, 'soft' = caches cleared, 'deep' = model unloaded
+_standby_state: str | None = (
+    None  # None = active, 'soft' = caches cleared, 'deep' = model unloaded
+)
 _pre_sleep_cache_limit: int | None = None  # Saved cache limit before soft sleep
 _cli_args: dict = {}  # Saved CLI args for model reload on wake
-_wake_lock: asyncio.Lock | None = None  # Lazy-init mutex for JIT wake (prevents double load_model)
+_wake_lock: asyncio.Lock | None = (
+    None  # Lazy-init mutex for JIT wake (prevents double load_model)
+)
 _model_name: str | None = None
 _model_path: str | None = None  # Full local path for config.json lookups
 _served_model_name: str | None = None  # Custom name for API (--served-model-name)
@@ -137,11 +141,15 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
-_default_enable_thinking: bool | None = None  # Set via --default-enable-thinking or --chat-template-kwargs
+_default_enable_thinking: bool | None = (
+    None  # Set via --default-enable-thinking or --chat-template-kwargs
+)
 _default_chat_template_kwargs: dict | None = None  # Set via --chat-template-kwargs
 _custom_chat_template: str | None = None  # Set via --chat-template
 _max_prompt_tokens: int = 0  # Set at startup based on available memory (0 = no limit)
-_model_name_mismatch_warned: bool = False  # Suppress repeated model name mismatch warnings
+_model_name_mismatch_warned: bool = (
+    False  # Suppress repeated model name mismatch warnings
+)
 
 
 def _estimate_max_prompt_tokens() -> int:
@@ -153,8 +161,11 @@ def _estimate_max_prompt_tokens() -> int:
     """
     try:
         import mlx.core as mx
-        _device_info = getattr(mx, 'device_info', None) or mx.metal.device_info
-        _get_active = getattr(mx, 'get_active_memory', None) or mx.metal.get_active_memory
+
+        _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
+        _get_active = (
+            getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+        )
         max_ws = _device_info()["max_recommended_working_set_size"]
         active = _get_active()
         free = max_ws - active
@@ -162,20 +173,30 @@ def _estimate_max_prompt_tokens() -> int:
         kv_budget = int(free * 0.6)
         # Estimate bytes per token from engine config
         engine = get_engine()
-        if hasattr(engine, 'model'):
+        if hasattr(engine, "model"):
             model = engine.model
-            config = getattr(model, 'config', None) or getattr(model, 'args', None)
+            config = getattr(model, "config", None) or getattr(model, "args", None)
             if config:
-                n_layers = getattr(config, 'num_hidden_layers', 0) or getattr(config, 'n_layers', 0)
-                n_kv_heads = getattr(config, 'num_key_value_heads', 0) or getattr(config, 'n_kv_heads', 0)
-                head_dim = getattr(config, 'head_dim', 0)
+                n_layers = getattr(config, "num_hidden_layers", 0) or getattr(
+                    config, "n_layers", 0
+                )
+                n_kv_heads = getattr(config, "num_key_value_heads", 0) or getattr(
+                    config, "n_kv_heads", 0
+                )
+                head_dim = getattr(config, "head_dim", 0)
                 if not head_dim:
-                    hidden = getattr(config, 'hidden_size', 0)
-                    n_heads = getattr(config, 'num_attention_heads', 0) or getattr(config, 'n_heads', 0)
+                    hidden = getattr(config, "hidden_size", 0)
+                    n_heads = getattr(config, "num_attention_heads", 0) or getattr(
+                        config, "n_heads", 0
+                    )
                     head_dim = hidden // n_heads if n_heads else 128
                 if n_layers and n_kv_heads and head_dim:
-                    bytes_per_token = n_layers * 2 * n_kv_heads * head_dim * 2  # K+V, float16
-                    max_tokens = kv_budget // bytes_per_token if bytes_per_token > 0 else 0
+                    bytes_per_token = (
+                        n_layers * 2 * n_kv_heads * head_dim * 2
+                    )  # K+V, float16
+                    max_tokens = (
+                        kv_budget // bytes_per_token if bytes_per_token > 0 else 0
+                    )
                     return max(1024, max_tokens)  # floor at 1K tokens
         return 0
     except Exception:
@@ -210,26 +231,41 @@ def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
             base["enable_thinking"] = bool(val)
         else:
             # dict, list, or other non-scalar — remove to avoid silent misinterpretation
-            logger.warning(f"Invalid enable_thinking value {val!r} in chat_template_kwargs, ignoring")
+            logger.warning(
+                f"Invalid enable_thinking value {val!r} in chat_template_kwargs, ignoring"
+            )
             del base["enable_thinking"]
     return base
 
-_last_request_time: float = 0.0  # Epoch timestamp of last API request (for idle sleep timer)
+
+_last_request_time: float = (
+    0.0  # Epoch timestamp of last API request (for idle sleep timer)
+)
+_inference_endpoints: list[str] = [
+    "/v1/chat/",
+    "/v1/completions",
+    "/v1/images/",
+    "/v1/mcp/execute",
+    "/v1/messages",
+    "/v1/responses",
+    "/v1/embeddings",
+    "/v1/audio/transcriptions",
+    "/v1/audio/speech",
+    "/v1/rerank",
+    "/api/chat",
+    "/api/generate",
+    "/api/embed",  # Ollama inference endpoints
+]
+_wake_timeout: int = 300
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
-_stream_from_disk: bool = False  # --stream-from-disk: lazy mmap loading, no caching
-_ssd_temp_dir: str | None = None  # JANG temp weight dir — cleaned up on shutdown
-
-
-def _cleanup_ssd_temp():
-    if _ssd_temp_dir and os.path.isdir(_ssd_temp_dir):
-        import shutil
-        shutil.rmtree(_ssd_temp_dir, ignore_errors=True)
-
-atexit.register(_cleanup_ssd_temp)
+_smelt_enabled: bool = False  # --smelt: partial expert loading for MoE
+_smelt_experts: int = 50  # --smelt-experts: percentage of experts per layer
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
-_THINK_STRIP_RE = re.compile(r'(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*', re.DOTALL)
+_THINK_STRIP_RE = re.compile(
+    r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*", re.DOTALL
+)
 
 
 def _resolve_temperature(request_value: float | None) -> float:
@@ -256,7 +292,9 @@ _mcp_manager = None
 # Global embedding engine (lazy loaded)
 _embedding_engine = None
 _embedding_model_locked: str | None = None  # Set when --embedding-model is used
-_embedding_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
+_embedding_lock: asyncio.Lock | None = (
+    None  # Lazy-init to avoid binding to wrong event loop
+)
 
 # API key authentication
 _api_key: str | None = None
@@ -272,7 +310,7 @@ _template_always_thinks_cache: dict[str, bool] = {}
 # Tool call markers to detect in streaming output for buffering
 _TOOL_CALL_MARKERS = [
     "<tool_call>",
-    "<|tool_call>",   # Gemma 4 native tool call format
+    "<|tool_call>",  # Gemma 4 native tool call format
     "<|tool_call|>",
     "[TOOL_CALLS]",
     "<function=",
@@ -309,14 +347,18 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
         test_msgs = [{"role": "user", "content": "__test__"}]
         try:
             rendered = tokenizer.apply_chat_template(
-                test_msgs, enable_thinking=False,
-                add_generation_prompt=True, tokenize=False,
+                test_msgs,
+                enable_thinking=False,
+                add_generation_prompt=True,
+                tokenize=False,
             )
         except TypeError:
             # Tokenizer doesn't accept enable_thinking — render without it
             # and check if <think> is always present (it's an always-thinking template)
             rendered = tokenizer.apply_chat_template(
-                test_msgs, add_generation_prompt=True, tokenize=False,
+                test_msgs,
+                add_generation_prompt=True,
+                tokenize=False,
             )
         # Check if an UNCLOSED <think> appears after the user message.
         # Templates that output <think></think> (empty, closed) ARE honoring
@@ -371,13 +413,17 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
         test_msgs = [{"role": "user", "content": "__test__"}]
         try:
             rendered = tokenizer.apply_chat_template(
-                test_msgs, enable_thinking=True,
-                add_generation_prompt=True, tokenize=False,
+                test_msgs,
+                enable_thinking=True,
+                add_generation_prompt=True,
+                tokenize=False,
             )
         except TypeError:
             # Tokenizer doesn't accept enable_thinking — render without it
             rendered = tokenizer.apply_chat_template(
-                test_msgs, add_generation_prompt=True, tokenize=False,
+                test_msgs,
+                add_generation_prompt=True,
+                tokenize=False,
             )
         # Check if generation prompt ends with </think> (+ optional whitespace)
         # This means thinking is completed in the prompt, model outputs plain text
@@ -429,10 +475,13 @@ async def lifespan(app: FastAPI):
         # Apply chat template override for BatchedEngine (SimpleEngine does it in load_model)
         try:
             from .model_config_registry import get_model_config_registry
+
             _mc = get_model_config_registry().lookup(_model_path or _model_name or "")
             if _mc.chat_template_custom and _engine.tokenizer:
                 _engine.tokenizer.chat_template = _mc.chat_template_custom
-                logger.info(f"Applied custom chat template for {_mc.family_name} model (batched)")
+                logger.info(
+                    f"Applied custom chat template for {_mc.family_name} model (batched)"
+                )
         except Exception as e:
             logger.warning(f"Failed to apply custom chat template (batched): {e}")
 
@@ -447,7 +496,9 @@ async def lifespan(app: FastAPI):
         try:
             await init_mcp(mcp_config)
         except Exception as e:
-            logger.error(f"Failed to initialize MCP — continuing without tool support: {e}")
+            logger.error(
+                f"Failed to initialize MCP — continuing without tool support: {e}"
+            )
 
     yield
 
@@ -493,19 +544,16 @@ security = HTTPBearer(auto_error=False)
 @app.middleware("http")
 async def track_request_time(request: Request, call_next):
     """Track last request time, JIT wake from sleep, gate text endpoints on image servers."""
-    global _last_request_time, _standby_state
+    global _last_request_time, _standby_state, _inference_endpoints, _wake_timeout
     path = request.url.path
     # Identify actual inference endpoints (not metadata like /v1/models, /v1/cache, /v1/mcp/tools)
     # This list drives BOTH idle timer reset AND JIT wake
     # Cancel endpoints should NOT trigger JIT wake or reset idle timer —
     # they are lightweight checks, not inference requests.
     is_cancel = "/cancel" in path
-    is_inference = not is_cancel and any(path.startswith(p) for p in [
-        "/v1/chat/", "/v1/completions", "/v1/images/", "/v1/mcp/execute",
-        "/v1/messages", "/v1/responses", "/v1/embeddings",
-        "/v1/audio/transcriptions", "/v1/audio/speech", "/v1/rerank",
-        "/api/chat", "/api/generate", "/api/embed",  # Ollama inference endpoints
-    ])
+    is_inference = not is_cancel and any(
+        path.startswith(p) for p in _inference_endpoints
+    )
     # Update last request time for inference only — metadata queries shouldn't keep model awake
     if is_inference:
         _last_request_time = time.time()
@@ -521,34 +569,56 @@ async def track_request_time(request: Request, call_next):
             if _standby_state is None:
                 pass  # Already awake — proceed
             else:
-                logger.info(f"JIT wake: request to {path} while in {_standby_state} sleep")
+                logger.info(
+                    f"JIT wake: request to {path} while in {_standby_state} sleep"
+                )
                 try:
                     from starlette.responses import JSONResponse
+
                     wake_result = await admin_wake()
                     if isinstance(wake_result, dict) and wake_result.get("error"):
                         return JSONResponse(
                             status_code=503,
-                            content={"error": {"message": f"Failed to wake model: {wake_result['error']}", "type": "server_error"}}
+                            content={
+                                "error": {
+                                    "message": f"Failed to wake model: {wake_result['error']}",
+                                    "type": "server_error",
+                                }
+                            },
                         )
-                    # For deep sleep, model takes time to reload — wait up to 300s
+                    # For deep sleep, model takes time to reload — wait up to `_wake_timeout` seconds
                     # (large models like 60GB+ JANG MoE can take 30-60s to mmap load)
-                    for i in range(600):
+                    max_iterations = _wake_timeout * 2
+                    for i in range(max_iterations):
                         if _standby_state is None:
                             break
                         if i > 0 and i % 20 == 0:
-                            logger.info(f"JIT wake: still loading after {i * 0.5:.0f}s...")
+                            logger.info(
+                                f"JIT wake: still loading after {i * 0.5:.0f}s..."
+                            )
                         await asyncio.sleep(0.5)
                     if _standby_state is not None:
                         return JSONResponse(
                             status_code=503,
-                            content={"error": {"message": "Model still loading after 300s wake timeout", "type": "server_error"}}
+                            content={
+                                "error": {
+                                    "message": f"Model still loading after {_wake_timeout}s wake timeout",
+                                    "type": "server_error",
+                                }
+                            },
                         )
                 except Exception as e:
                     logger.error(f"JIT wake failed: {e}")
                     from starlette.responses import JSONResponse
+
                     return JSONResponse(
                         status_code=503,
-                        content={"error": {"message": f"JIT wake failed: {e}", "type": "server_error"}}
+                        content={
+                            "error": {
+                                "message": f"JIT wake failed: {e}",
+                                "type": "server_error",
+                            }
+                        },
                     )
 
     # Gate: image servers only serve /health, /v1/models, /v1/images/*
@@ -556,13 +626,14 @@ async def track_request_time(request: Request, call_next):
         allowed_image_paths = ["/v1/images/", "/v1/models"]
         if not any(path.startswith(p) for p in allowed_image_paths):
             from starlette.responses import JSONResponse
+
             return JSONResponse(
                 status_code=400,
                 content={
                     "error": {
                         "message": "This is an image server. "
-                                   "Text endpoints are not available. "
-                                   "Use /v1/images/generations or /v1/images/edits.",
+                        "Text endpoints are not available. "
+                        "Use /v1/images/generations or /v1/images/edits.",
                         "type": "invalid_request_error",
                     }
                 },
@@ -641,15 +712,15 @@ def _apply_jit_compilation():
         import mlx.core as mx
 
         # Get the inner model object — SimpleEngine and BatchedEngine both store it
-        model_obj = getattr(_engine, '_model', None)
+        model_obj = getattr(_engine, "_model", None)
         if model_obj is None:
-            model_obj = getattr(_engine, 'model', None)
+            model_obj = getattr(_engine, "model", None)
         if model_obj is None:
             logger.warning("JIT: Could not find model object on engine — skipping")
             return
 
         # The actual nn.Module is often nested: engine._model.model
-        inner = getattr(model_obj, 'model', model_obj)
+        inner = getattr(model_obj, "model", model_obj)
         if inner is None or not callable(inner):
             logger.warning("JIT: Model object is not callable — skipping")
             return
@@ -659,15 +730,15 @@ def _apply_jit_compilation():
 
         # Replace in-place on the wrapper and verify
         replaced = False
-        if hasattr(model_obj, 'model') and model_obj.model is inner:
+        if hasattr(model_obj, "model") and model_obj.model is inner:
             model_obj.model = compiled
-            replaced = (model_obj.model is compiled)
-        elif hasattr(_engine, '_model'):
+            replaced = model_obj.model is compiled
+        elif hasattr(_engine, "_model"):
             _engine._model = compiled
-            replaced = (_engine._model is compiled)
-        elif hasattr(_engine, 'model'):
+            replaced = _engine._model is compiled
+        elif hasattr(_engine, "model"):
             _engine.model = compiled
-            replaced = (_engine.model is compiled)
+            replaced = _engine.model is compiled
 
         if replaced:
             logger.info("JIT: mx.compile applied successfully — running warmup pass")
@@ -676,8 +747,10 @@ def _apply_jit_compilation():
             # pages ~30GB+ of mmap weights AND allocates cache/activations,
             # causing Metal OOM on memory-constrained machines (e.g. 122B on 48GB).
             try:
-                warmup_cache = model_obj.make_cache() if hasattr(model_obj, 'make_cache') else None
-                lm = getattr(model_obj, 'language_model', model_obj)
+                warmup_cache = (
+                    model_obj.make_cache() if hasattr(model_obj, "make_cache") else None
+                )
+                lm = getattr(model_obj, "language_model", model_obj)
                 warmup_input = mx.array([[0]])  # Single dummy token
                 if warmup_cache is not None:
                     lm(warmup_input, cache=warmup_cache)
@@ -685,13 +758,19 @@ def _apply_jit_compilation():
                     lm(warmup_input)
                 mx.synchronize()  # Force Metal to finish
                 del warmup_cache
-                if hasattr(mx, 'clear_cache'):
+                if hasattr(mx, "clear_cache"):
                     mx.clear_cache()
-                logger.info("JIT: Warmup complete — model weights paged in, Metal shaders compiled")
+                logger.info(
+                    "JIT: Warmup complete — model weights paged in, Metal shaders compiled"
+                )
             except Exception as warmup_err:
-                logger.info(f"JIT: Warmup skipped ({warmup_err}) — first request will be slower")
+                logger.info(
+                    f"JIT: Warmup skipped ({warmup_err}) — first request will be slower"
+                )
         else:
-            logger.warning("JIT: mx.compile created but could not verify replacement — model structure may have changed")
+            logger.warning(
+                "JIT: mx.compile created but could not verify replacement — model structure may have changed"
+            )
     except Exception as e:
         logger.warning(f"JIT: mx.compile failed, running without JIT: {e}")
 
@@ -713,7 +792,6 @@ async def check_rate_limit(request: Request):
             detail=f"Rate limit exceeded. Retry after {retry_after} seconds.",
             headers={"Retry-After": str(retry_after)},
         )
-
 
 
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -766,12 +844,13 @@ def _parse_tool_calls_with_parser(
     # Otherwise, if the request has tools, auto-detect from model config
     # so clients like Cherry Studio get proper parsing without CLI flags.
     active_parser = _tool_call_parser
-    if not active_parser and request and getattr(request, 'tools', None):
+    if not active_parser and request and getattr(request, "tools", None):
         try:
             from .model_config_registry import get_model_config_registry
+
             registry = get_model_config_registry()
             detected = registry.get_tool_parser(
-                _model_path or _model_name or getattr(request, 'model', '') or ''
+                _model_path or _model_name or getattr(request, "model", "") or ""
             )
             if detected:
                 active_parser = detected
@@ -791,9 +870,7 @@ def _parse_tool_calls_with_parser(
             tokenizer = _engine._tokenizer
         parser_instance = parser_cls(tokenizer)
     except Exception as e:
-        logger.warning(
-            f"Failed to initialize tool parser '{active_parser}': {e}"
-        )
+        logger.warning(f"Failed to initialize tool parser '{active_parser}': {e}")
         return parse_tool_calls(output_text)
 
     # Use the configured parser, fall back to generic if it finds nothing
@@ -845,10 +922,9 @@ def _detect_native_tool_support() -> bool:
     if not active_parser:
         try:
             from .model_config_registry import get_model_config_registry
+
             registry = get_model_config_registry()
-            active_parser = registry.get_tool_parser(
-                _model_path or _model_name or ''
-            )
+            active_parser = registry.get_tool_parser(_model_path or _model_name or "")
         except Exception:
             pass
     if not active_parser:
@@ -872,11 +948,14 @@ def _detect_native_tool_support() -> bool:
     # Fallback: check model config registry for preserve_native_tool_format
     try:
         from .model_config_registry import get_model_config_registry
+
         _mc = get_model_config_registry().lookup(_model_path or _model_name or "")
         if _mc.preserve_native_tool_format:
             return True
     except Exception:
-        logger.debug("Model config registry lookup failed, skipping native format detection")
+        logger.debug(
+            "Model config registry lookup failed, skipping native format detection"
+        )
 
     return False
 
@@ -944,8 +1023,8 @@ def load_model(
     max_tokens: int = 32768,
     force_mllm: bool = False,
     served_model_name: str | None = None,
-    stream_from_disk: bool = False,
-    stream_memory_percent: int = 90,
+    smelt: bool = False,
+    smelt_experts: int = 50,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -958,27 +1037,40 @@ def load_model(
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
     """
-    global _engine, _model_name, _model_path, _default_max_tokens, _served_model_name, _model_load_error, _jang_metadata, _cli_args, _stream_from_disk, _ssd_temp_dir
+    global \
+        _engine, \
+        _model_name, \
+        _model_path, \
+        _default_max_tokens, \
+        _served_model_name, \
+        _model_load_error, \
+        _jang_metadata, \
+        _cli_args, \
+        _smelt_enabled, \
+        _smelt_experts
 
-    _stream_from_disk = stream_from_disk
+    _smelt_enabled = smelt
+    _smelt_experts = smelt_experts
 
     # Save CLI args for model reload on wake from deep sleep
     _cli_args = {
-        'use_batching': use_batching,
-        'scheduler_config': scheduler_config,
-        'stream_interval': stream_interval,
-        'max_tokens': max_tokens,
-        'force_mllm': force_mllm,
-        'served_model_name': served_model_name,
-        'stream_from_disk': stream_from_disk,
-        'stream_memory_percent': stream_memory_percent,
+        "use_batching": use_batching,
+        "scheduler_config": scheduler_config,
+        "stream_interval": stream_interval,
+        "max_tokens": max_tokens,
+        "force_mllm": force_mllm,
+        "served_model_name": served_model_name,
+        "smelt": smelt,
+        "smelt_experts": smelt_experts,
     }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
     # Note: load_model() is called from CLI startup and also from admin_wake() during live serving.
     if _engine is not None:
         try:
-            if hasattr(_engine, '_scheduler') and hasattr(_engine._scheduler, 'deep_reset'):
+            if hasattr(_engine, "_scheduler") and hasattr(
+                _engine._scheduler, "deep_reset"
+            ):
                 _engine._scheduler.deep_reset()
         except Exception as e:
             logger.warning(f"Failed to stop previous engine: {e}")
@@ -1000,9 +1092,10 @@ def load_model(
     # Log system memory before model load for diagnostics
     try:
         import psutil
+
         mem = psutil.virtual_memory()
-        available_gb = mem.available / (1024 ** 3)
-        total_gb = mem.total / (1024 ** 3)
+        available_gb = mem.available / (1024**3)
+        total_gb = mem.total / (1024**3)
         logger.info(
             f"System memory before load: {available_gb:.1f}GB available / "
             f"{total_gb:.1f}GB total ({mem.percent}% used)"
@@ -1050,12 +1143,18 @@ def load_model(
 
     # Apply JIT compilation if enabled — only for SimpleEngine (already started above).
     # BatchedEngine starts in lifespan(), so JIT is applied there instead.
-    if _enable_jit and _engine is not None and hasattr(_engine, '_loaded') and _engine._loaded:
+    if (
+        _enable_jit
+        and _engine is not None
+        and hasattr(_engine, "_loaded")
+        and _engine._loaded
+    ):
         _apply_jit_compilation()
 
     # Apply chat template override from model config registry (e.g. Harmony for GPT-OSS)
     try:
         from .model_config_registry import get_model_config_registry
+
         _mc = get_model_config_registry().lookup(model_name)
         if _mc.chat_template_custom and _engine and _engine.tokenizer:
             _engine.tokenizer.chat_template = _mc.chat_template_custom
@@ -1066,22 +1165,28 @@ def load_model(
     # Apply user's custom chat template (highest priority — overrides both model and registry templates)
     if _custom_chat_template and _engine and _engine.tokenizer:
         _engine.tokenizer.chat_template = _custom_chat_template
-        logger.info(f"Applied custom chat template from --chat-template ({len(_custom_chat_template)} chars)")
+        logger.info(
+            f"Applied custom chat template from --chat-template ({len(_custom_chat_template)} chars)"
+        )
 
     # Compute max safe prompt token limit based on available GPU memory
     global _max_prompt_tokens
     _max_prompt_tokens = _estimate_max_prompt_tokens()
     if _max_prompt_tokens > 0:
-        logger.info(f"Max safe prompt length: ~{_max_prompt_tokens:,} tokens "
-                    f"(based on available GPU memory)")
+        logger.info(
+            f"Max safe prompt length: ~{_max_prompt_tokens:,} tokens "
+            f"(based on available GPU memory)"
+        )
 
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
     try:
         from .utils.jang_loader import is_jang_model, JANG_CONFIG_FILENAMES
         from .api.utils import resolve_to_local_path
+
         _resolved_model = resolve_to_local_path(model_name)
         if is_jang_model(_resolved_model):
             from pathlib import Path
+
             for cfg_name in JANG_CONFIG_FILENAMES:
                 cfg_path = Path(_resolved_model) / cfg_name
                 if cfg_path.exists():
@@ -1100,167 +1205,30 @@ def load_model(
     # Log Metal GPU memory after model load
     try:
         import mlx.core as mx
+
         active_gb = peak_gb = None
         if hasattr(mx, "get_active_memory"):
-            active_gb = mx.get_active_memory() / (1024 ** 3)
-            peak_gb = mx.get_peak_memory() / (1024 ** 3)
+            active_gb = mx.get_active_memory() / (1024**3)
+            peak_gb = mx.get_peak_memory() / (1024**3)
         elif hasattr(mx, "metal") and hasattr(mx.metal, "get_active_memory"):
-            active_gb = mx.metal.get_active_memory() / (1024 ** 3)
-            peak_gb = mx.metal.get_peak_memory() / (1024 ** 3)
+            active_gb = mx.metal.get_active_memory() / (1024**3)
+            peak_gb = mx.metal.get_peak_memory() / (1024**3)
         if active_gb is not None:
-            logger.info(f"Metal GPU memory after load: {active_gb:.2f}GB active, {peak_gb:.2f}GB peak")
+            logger.info(
+                f"Metal GPU memory after load: {active_gb:.2f}GB active, {peak_gb:.2f}GB peak"
+            )
     except Exception:
         pass
-
-    # Set Metal memory limit for disk streaming — RAISE it to allow macOS SSD paging.
-    # macOS unified memory lets Metal allocate virtual memory beyond physical RAM.
-    # macOS transparently pages to SSD (~7.4GB/s). The default MLX limit is ~95% of
-    # RAM which blocks models larger than RAM. We set it to a multiple of RAM so
-    # the full model can be mmap'd and macOS handles paging.
-    if stream_from_disk:
-        try:
-            import mlx.core as mx
-            import psutil
-            mem = psutil.virtual_memory()
-            # User's stream_memory_percent controls the multiplier:
-            #   50% → 1.5x RAM,  75% → 2.5x RAM,  90% → 3.5x RAM (default)
-            # Higher = more virtual memory for model, macOS pages more aggressively
-            multiplier = 1.0 + (stream_memory_percent / 100.0 * 3.0)
-            limit = int(mem.total * multiplier)
-            _set_limit = getattr(mx, 'set_memory_limit', None) or getattr(mx.metal, 'set_memory_limit', None)
-            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
-            if _set_limit:
-                _set_limit(limit)
-                logger.info(f"Metal memory limit set to {limit / (1024**3):.1f}GB ({multiplier:.1f}x of {mem.total / (1024**3):.1f}GB RAM) for disk streaming")
-            # Disable Metal allocator cache so freed memory returns to macOS immediately
-            # for SSD paging instead of being hoarded in the free-list
-            if _set_cache:
-                _set_cache(0)
-                logger.info("Metal cache limit set to 0 (disabled) for disk streaming")
-            else:
-                logger.warning("Cannot set Metal memory limit — mlx.metal.set_memory_limit not available")
-        except Exception as e:
-            logger.warning(f"Failed to set Metal memory limit: {e}")
-
-    # Memory advisory for disk-streaming mode
-    if stream_from_disk:
-        try:
-            import psutil
-            from pathlib import Path as _Path
-            mem = psutil.virtual_memory()
-            available_gb = mem.available / (1024 ** 3)
-            total_gb = mem.total / (1024 ** 3)
-
-            # Estimate model size from safetensors file sizes on disk (lazy=True means
-            # Metal active memory is ~0, so we can't use mx.metal.get_active_memory)
-            model_gb = 0
-            try:
-                model_dir = _Path(_model_path or model_name)
-                if model_dir.is_dir():
-                    st_files = list(model_dir.glob("*.safetensors"))
-                    if st_files:
-                        model_gb = sum(f.stat().st_size for f in st_files) / (1024 ** 3)
-            except Exception:
-                pass
-
-            if model_gb > 0 and model_gb < total_gb * 0.75:
-                logger.warning(
-                    f"DISK-STREAMING ADVISORY: Model (~{model_gb:.1f}GB) fits in RAM "
-                    f"({total_gb:.1f}GB total, {available_gb:.1f}GB available). "
-                    f"Consider disabling --stream-from-disk for better performance."
-                )
-                print(f"\n  TIP: Model (~{model_gb:.1f}GB on disk) fits in RAM ({total_gb:.1f}GB). "
-                      f"Disable --stream-from-disk for 2-5x faster inference.\n")
-            elif model_gb > 0 and model_gb >= total_gb * 0.90:
-                logger.warning(
-                    f"DISK-STREAMING WARNING: Model (~{model_gb:.1f}GB) may EXCEED available RAM "
-                    f"({total_gb:.1f}GB total). Inference requires additional memory for KV cache. "
-                    f"The first request may crash with a Metal assertion failure. "
-                    f"Consider using a smaller quantization or a machine with more RAM."
-                )
-                print(f"\n  WARNING: Model (~{model_gb:.1f}GB) is very close to or exceeds "
-                      f"your {total_gb:.0f}GB RAM. First inference may fail.\n")
-            else:
-                used_desc = f"~{model_gb:.1f}GB model" if model_gb > 0 else "Model"
-                logger.info(
-                    f"DISK-STREAMING: {used_desc} with {total_gb:.1f}GB RAM — "
-                    f"macOS SSD paging active (~7.4GB/s bandwidth)"
-                )
-                print(f"\n  DISK-STREAMING: {used_desc} — macOS SSD paging active. "
-                      f"First request will be slow as weights page in.\n")
-        except Exception as e:
-            logger.debug(f"Memory advisory failed: {e}")
-
-    # SSD disk-streaming: set up per-layer weight recycling.
-    # Build weight index, save JANG temp weights if needed, configure model
-    # to use ssd_stream_generate instead of mlx_lm.stream_generate.
-    if stream_from_disk and _engine is not None:
-        try:
-            from .utils.weight_index import build_weight_index, save_all_layer_weights
-            from .utils.jang_loader import is_jang_model
-            from .api.utils import resolve_to_local_path
-            import tempfile
-
-            # Get the LLM wrapper (has _stream_from_disk attribute)
-            llm_model = None
-            if hasattr(_engine, '_model') and hasattr(_engine._model, '_stream_from_disk'):
-                # SimpleEngine stores the MLXLanguageModel
-                llm_model = _engine._model
-            elif hasattr(_engine, '_model'):
-                llm_model = _engine._model
-
-            if llm_model is not None and hasattr(llm_model, '_stream_from_disk'):
-                llm_model._stream_from_disk = True
-                llm_model._model_path = _model_path
-
-                # Build weight index from safetensors files
-                try:
-                    weight_index = build_weight_index(_model_path)
-                    llm_model._weight_index = weight_index
-                    logger.info(f"SSD weight index: {len(weight_index)} layers from {_model_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to build weight index: {e}")
-
-                # For JANG models: try to save transformed weights to temp files.
-                # This may fail for quantized models (QuantizedLinear dtype mismatch).
-                # If it fails, SSD streaming falls back to loading from original
-                # safetensors files via the weight index (works for most JANG models
-                # since only gate weights are dequanted at load time).
-                if is_jang_model(resolve_to_local_path(_model_path) if _model_path else _model_path):
-                    try:
-                        raw_model = llm_model.model
-                        # Clean up previous temp dir if exists (e.g. after deep sleep wake)
-                        if _ssd_temp_dir and os.path.isdir(_ssd_temp_dir):
-                            import shutil
-                            shutil.rmtree(_ssd_temp_dir, ignore_errors=True)
-                        temp_dir = tempfile.mkdtemp(prefix="vmlx_ssd_")
-                        _ssd_temp_dir = temp_dir
-                        paths = save_all_layer_weights(raw_model, temp_dir)
-                        llm_model._temp_weight_dir = temp_dir
-                        logger.info(f"JANG temp weights: {len(paths)} layers saved to {temp_dir}")
-                    except Exception as e:
-                        logger.info(f"JANG temp save not possible ({e}) — using original safetensors via weight index")
-
-                logger.info("SSD per-layer weight recycling configured")
-            else:
-                logger.warning("SSD streaming: could not configure model (no _stream_from_disk attr)")
-        except Exception as e:
-            logger.warning(f"Failed to configure SSD streaming: {e}")
-
-        # Warn if MLLM (multimodal) model — SSD only wired for LLM text path
-        if _engine is not None:
-            if hasattr(_engine, '_model') and not hasattr(getattr(_engine, '_model', None), '_stream_from_disk'):
-                logger.warning(
-                    "SSD disk streaming: model does not support per-layer weight recycling "
-                    "(likely VLM/multimodal). Text inference will use standard loading."
-                )
 
     # Log system memory after model load
     try:
         import psutil
+
         mem = psutil.virtual_memory()
-        available_gb = mem.available / (1024 ** 3)
-        logger.info(f"System memory after load: {available_gb:.1f}GB available ({mem.percent}% used)")
+        available_gb = mem.available / (1024**3)
+        logger.info(
+            f"System memory after load: {available_gb:.1f}GB available ({mem.percent}% used)"
+        )
         if mem.percent > 95:
             logger.warning(
                 f"CRITICAL: System memory at {mem.percent}%. "
@@ -1292,7 +1260,11 @@ def get_usage(output: GenerationOutput) -> Usage:
         prompt_tokens=total_prompt_tokens,
         completion_tokens=total_completion_tokens,
         total_tokens=total_prompt_tokens + total_completion_tokens,
-        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached, cache_detail=detail) if cached > 0 else None,
+        prompt_tokens_details=PromptTokensDetails(
+            cached_tokens=cached, cache_detail=detail
+        )
+        if cached > 0
+        else None,
     )
 
 
@@ -1306,7 +1278,11 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
         input_tokens=_pt,
         output_tokens=_ct,
         total_tokens=_pt + _ct,
-        input_tokens_details=InputTokensDetails(cached_tokens=cached, cache_detail=detail) if cached > 0 else None,
+        input_tokens_details=InputTokensDetails(
+            cached_tokens=cached, cache_detail=detail
+        )
+        if cached > 0
+        else None,
     )
 
 
@@ -1333,7 +1309,11 @@ async def health():
     if _standby_state:
         status = f"standby_{_standby_state}"  # "standby_soft" or "standby_deep"
     elif _model_type == "image":
-        status = "healthy" if (_image_gen is not None and _image_gen.is_loaded) else "no_model"
+        status = (
+            "healthy"
+            if (_image_gen is not None and _image_gen.is_loaded)
+            else "no_model"
+        )
     else:
         status = "healthy" if _engine is not None else "no_model"
 
@@ -1341,6 +1321,7 @@ async def health():
     memory_info = None
     try:
         import mlx.core as mx
+
         active = peak = cache = None
         if hasattr(mx, "get_active_memory"):
             active = mx.get_active_memory()
@@ -1364,17 +1345,17 @@ async def health():
     if _engine:
         # Check both LLM scheduler (via AsyncEngineCore) and MLLM scheduler
         scheduler = None
-        if hasattr(_engine, '_engine') and _engine._engine:
-            scheduler = getattr(_engine._engine.engine, 'scheduler', None)
-        elif hasattr(_engine, '_mllm_scheduler') and _engine._mllm_scheduler:
+        if hasattr(_engine, "_engine") and _engine._engine:
+            scheduler = getattr(_engine._engine.engine, "scheduler", None)
+        elif hasattr(_engine, "_mllm_scheduler") and _engine._mllm_scheduler:
             scheduler = _engine._mllm_scheduler
         if scheduler:
-            kv_bits = getattr(scheduler, '_kv_cache_bits', 0)
+            kv_bits = getattr(scheduler, "_kv_cache_bits", 0)
             if kv_bits:
                 kv_quant_info = {
                     "enabled": True,
                     "bits": kv_bits,
-                    "group_size": getattr(scheduler, '_kv_cache_group_size', 64),
+                    "group_size": getattr(scheduler, "_kv_cache_group_size", 64),
                 }
             else:
                 kv_quant_info = {"enabled": False}
@@ -1383,6 +1364,7 @@ async def health():
     spec_info = None
     try:
         from .speculative import get_spec_stats
+
         spec_info = get_spec_stats()
     except ImportError:
         pass
@@ -1409,14 +1391,24 @@ async def health():
     if _model_load_error:
         # Sanitize: strip absolute filesystem paths from error messages for security
         import re
-        sanitized = re.sub(r'(/[^\s:]+)+', '<path>', _model_load_error)
+
+        sanitized = re.sub(r"(/[^\s:]+)+", "<path>", _model_load_error)
         result["error"] = sanitized
     if memory_info:
         result["memory"] = memory_info
     if kv_quant_info:
         result["kv_cache_quantization"] = kv_quant_info
     if spec_info:
-        result["speculative_decoding"] = spec_info.get("speculative_decoding", spec_info)
+        result["speculative_decoding"] = spec_info.get(
+            "speculative_decoding", spec_info
+        )
+
+    # Smelt mode: report partial expert loading status
+    if _smelt_enabled:
+        result["smelt"] = {
+            "enabled": True,
+            "expert_percent": _smelt_experts,
+        }
 
     # JANG format: report cached quantization metadata (populated at load time)
     if _jang_metadata:
@@ -1448,18 +1440,22 @@ def _get_scheduler():
 
 # ── Admin: Sleep / Wake ──
 
+
 @app.post("/admin/soft-sleep", dependencies=[Depends(verify_api_key)])
 async def admin_soft_sleep():
     """Enter soft sleep: clear all caches, reduce Metal cache limit. Model stays loaded."""
     global _standby_state, _pre_sleep_cache_limit, _wake_lock
     from starlette.responses import JSONResponse
+
     if _wake_lock is None:
         _wake_lock = asyncio.Lock()
 
     async with _wake_lock:
-        if _standby_state == 'deep':
-            return JSONResponse(status_code=409, content={"error": "Already in deep sleep"})
-        if _standby_state == 'soft':
+        if _standby_state == "deep":
+            return JSONResponse(
+                status_code=409, content={"error": "Already in deep sleep"}
+            )
+        if _standby_state == "soft":
             return {"status": "already_soft"}
 
         try:
@@ -1467,21 +1463,23 @@ async def admin_soft_sleep():
 
             scheduler = _get_scheduler()
             if scheduler is not None:
-                if hasattr(scheduler, 'deep_reset'):
+                if hasattr(scheduler, "deep_reset"):
                     scheduler.deep_reset()
-                elif hasattr(scheduler, '_prefix_cache') and scheduler._prefix_cache:
+                elif hasattr(scheduler, "_prefix_cache") and scheduler._prefix_cache:
                     scheduler._prefix_cache.clear()
 
-            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            _set_cache = getattr(mx, "set_cache_limit", None) or getattr(
+                mx.metal, "set_cache_limit", None
+            )
             if _set_cache:
                 _pre_sleep_cache_limit = _set_cache(512 * 1024 * 1024)
 
-            if hasattr(mx, 'clear_cache'):
+            if hasattr(mx, "clear_cache"):
                 mx.clear_cache()
-            elif hasattr(mx.metal, 'clear_cache'):
+            elif hasattr(mx.metal, "clear_cache"):
                 mx.metal.clear_cache()
 
-            _standby_state = 'soft'
+            _standby_state = "soft"
             logger.info("Entered soft sleep — caches cleared, model loaded")
             return {"status": "soft_sleep"}
 
@@ -1495,12 +1493,15 @@ async def admin_deep_sleep():
     """Enter deep sleep: unload model entirely. Process stays alive, port stays allocated."""
     global _engine, _standby_state, _pre_sleep_cache_limit, _wake_lock
     from starlette.responses import JSONResponse
+
     if _wake_lock is None:
         _wake_lock = asyncio.Lock()
 
     async with _wake_lock:
-        if _standby_state == 'deep':
-            return JSONResponse(status_code=409, content={"error": "Already in deep sleep"})
+        if _standby_state == "deep":
+            return JSONResponse(
+                status_code=409, content={"error": "Already in deep sleep"}
+            )
 
         try:
             import mlx.core as mx
@@ -1508,19 +1509,21 @@ async def admin_deep_sleep():
 
             # Save Metal cache limit before deep sleep (if not already saved by soft sleep)
             if _pre_sleep_cache_limit is None:
-                _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+                _set_cache = getattr(mx, "set_cache_limit", None) or getattr(
+                    mx.metal, "set_cache_limit", None
+                )
                 if _set_cache:
                     _pre_sleep_cache_limit = _set_cache(512 * 1024 * 1024)
 
             scheduler = _get_scheduler()
             if scheduler is not None:
-                if hasattr(scheduler, 'deep_reset'):
+                if hasattr(scheduler, "deep_reset"):
                     scheduler.deep_reset()
 
             if _model_type == "image" and _image_gen is not None:
                 _image_gen.unload()
             elif _engine is not None:
-                if hasattr(_engine, 'stop'):
+                if hasattr(_engine, "stop"):
                     try:
                         await _engine.stop()
                     except Exception:
@@ -1530,17 +1533,18 @@ async def admin_deep_sleep():
             # Unload speculative draft model to free GPU memory
             try:
                 from .speculative import unload_draft_model
+
                 unload_draft_model()
             except Exception as e:
                 logger.debug(f"Draft model unload during deep sleep: {e}")
 
             gc.collect()
-            if hasattr(mx, 'clear_cache'):
+            if hasattr(mx, "clear_cache"):
                 mx.clear_cache()
-            elif hasattr(mx.metal, 'clear_cache'):
+            elif hasattr(mx.metal, "clear_cache"):
                 mx.metal.clear_cache()
 
-            _standby_state = 'deep'
+            _standby_state = "deep"
             logger.info("Entered deep sleep — model unloaded, process alive")
             return {"status": "deep_sleep"}
 
@@ -1560,9 +1564,11 @@ async def admin_wake():
     try:
         import mlx.core as mx
 
-        if _standby_state == 'soft':
+        if _standby_state == "soft":
             # Soft sleep: model is still loaded, just restore cache limit
-            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            _set_cache = getattr(mx, "set_cache_limit", None) or getattr(
+                mx.metal, "set_cache_limit", None
+            )
             if _set_cache and _pre_sleep_cache_limit is not None:
                 _set_cache(_pre_sleep_cache_limit)
             _standby_state = None
@@ -1570,10 +1576,12 @@ async def admin_wake():
             logger.info("Woke from soft sleep — cache limit restored")
             return {"status": "active"}
 
-        elif _standby_state == 'deep':
+        elif _standby_state == "deep":
             # Deep sleep: need to reload model
             # Restore cache limit first
-            _set_cache = getattr(mx, 'set_cache_limit', None) or getattr(mx.metal, 'set_cache_limit', None)
+            _set_cache = getattr(mx, "set_cache_limit", None) or getattr(
+                mx.metal, "set_cache_limit", None
+            )
             if _set_cache and _pre_sleep_cache_limit is not None:
                 _set_cache(_pre_sleep_cache_limit)
             _pre_sleep_cache_limit = None
@@ -1584,12 +1592,14 @@ async def admin_wake():
                 await asyncio.to_thread(
                     _image_gen.load,
                     _model_name,
-                    quantize=getattr(_image_gen, '_quantize', None),
-                    model_path=getattr(_image_gen, '_model_path', None),
-                    mflux_class=getattr(_image_gen, '_mflux_class', None),
+                    quantize=getattr(_image_gen, "_quantize", None),
+                    model_path=getattr(_image_gen, "_model_path", None),
+                    mflux_class=getattr(_image_gen, "_mflux_class", None),
                 )
                 _standby_state = None
-                logger.info(f"Woke from deep sleep — image model {_model_name} reloaded")
+                logger.info(
+                    f"Woke from deep sleep — image model {_model_name} reloaded"
+                )
                 return {"status": "active"}
             elif _model_path or _model_name:
                 # Reload text model — run in thread to avoid blocking event loop
@@ -1598,17 +1608,21 @@ async def admin_wake():
                 await asyncio.to_thread(
                     load_model,
                     _model_path or _model_name,
-                    use_batching=_cli_args.get('use_batching', False),
-                    scheduler_config=_cli_args.get('scheduler_config'),
-                    stream_interval=_cli_args.get('stream_interval', 1),
-                    max_tokens=_cli_args.get('max_tokens', 32768),
-                    force_mllm=_cli_args.get('force_mllm', False),
-                    served_model_name=_cli_args.get('served_model_name'),
-                    stream_from_disk=_cli_args.get('stream_from_disk', False),
-                    stream_memory_percent=_cli_args.get('stream_memory_percent', 90),
+                    use_batching=_cli_args.get("use_batching", False),
+                    scheduler_config=_cli_args.get("scheduler_config"),
+                    stream_interval=_cli_args.get("stream_interval", 1),
+                    max_tokens=_cli_args.get("max_tokens", 32768),
+                    force_mllm=_cli_args.get("force_mllm", False),
+                    served_model_name=_cli_args.get("served_model_name"),
+                    smelt=_cli_args.get("smelt", False),
+                    smelt_experts=_cli_args.get("smelt_experts", 50),
                 )
                 # SimpleEngine needs async start (load_model defers it inside event loop)
-                if _engine and hasattr(_engine, '_needs_async_start') and _engine._needs_async_start:
+                if (
+                    _engine
+                    and hasattr(_engine, "_needs_async_start")
+                    and _engine._needs_async_start
+                ):
                     await _engine.start()
                     _engine._needs_async_start = False
                 # Re-apply JIT compilation after deep wake (load_model skips it
@@ -1616,13 +1630,14 @@ async def admin_wake():
                 if _enable_jit and _engine is not None:
                     _apply_jit_compilation()
                 # Reload speculative draft model if configured
-                _spec_model = _cli_args.get('speculative_model')
+                _spec_model = _cli_args.get("speculative_model")
                 if _spec_model:
                     try:
                         from .speculative import SpeculativeConfig, load_draft_model
+
                         _spec_cfg = SpeculativeConfig(
                             model=_spec_model,
-                            num_tokens=_cli_args.get('num_draft_tokens', 3),
+                            num_tokens=_cli_args.get("num_draft_tokens", 3),
                         )
                         await asyncio.to_thread(load_draft_model, _spec_cfg)
                         logger.info(f"Draft model reloaded: {_spec_model}")
@@ -1664,6 +1679,7 @@ async def cache_stats():
             "num_requests_processed": stats.get("num_requests_processed", 0),
             "total_prompt_tokens": stats.get("total_prompt_tokens", 0),
             "total_completion_tokens": stats.get("total_completion_tokens", 0),
+            "ewma_ttft_seconds": stats.get("ewma_ttft_seconds", 0),
         }
         # KV cache quantization info
         if hasattr(scheduler, "_kv_cache_bits"):
@@ -1698,29 +1714,44 @@ async def cache_stats():
 
     # TurboQuant status
     if _engine:
-        model = getattr(_engine, '_model', None) or getattr(_engine, 'model', None)
-        if model and hasattr(model, 'make_cache'):
-            _tq_active = getattr(model.make_cache, '__name__', '') == '_tq_make_cache'
+        model = getattr(_engine, "_model", None) or getattr(_engine, "model", None)
+        if model and hasattr(model, "make_cache"):
+            _tq_active = getattr(model.make_cache, "__name__", "") in (
+                "_tq_make_cache",
+                "_turboquant_make_cache",
+            )
             if _tq_active:
                 result["turbo_quant"] = {"enabled": True}
 
     # SSM companion cache stats (hybrid models only)
     # LLM scheduler has _ssm_state_cache directly; MLLM has it on batch_generator
     if scheduler:
-        _ssm_cache = getattr(scheduler, '_ssm_state_cache', None)
+        _ssm_cache = getattr(scheduler, "_ssm_state_cache", None)
         if _ssm_cache is None:
-            _bg = getattr(scheduler, 'batch_generator', None)
+            _bg = getattr(scheduler, "batch_generator", None)
             if _bg is not None:
-                _ssm_cache = getattr(_bg, '_ssm_state_cache', None)
-        if _ssm_cache is not None and hasattr(_ssm_cache, '_store'):
+                _ssm_cache = getattr(_bg, "_ssm_state_cache", None)
+        if _ssm_cache is not None:
+            # A3→A2-003 (audit 2026-04-08): use the public size /
+            # max_entries properties exposed by SSMCompanionCache
+            # (REQ-A3-001) instead of reaching into private attrs.
+            # Falls back to the legacy private-attr path for any
+            # back-compat aliases that don't expose the new properties.
+            _entries = getattr(_ssm_cache, "size", None)
+            if _entries is None:
+                _entries = len(getattr(_ssm_cache, "_store", {}) or {})
+            _max = getattr(_ssm_cache, "max_entries", None)
+            if _max is None:
+                _max = getattr(_ssm_cache, "_max_entries", 0)
             result["ssm_companion"] = {
-                "entries": len(_ssm_cache._store),
-                "max_entries": getattr(_ssm_cache, '_max_entries', 0),
+                "entries": _entries,
+                "max_entries": _max,
             }
 
     # Metal GPU memory info
     try:
         import mlx.core as mx
+
         active = peak = cache_mem = None
         if hasattr(mx, "get_active_memory"):
             active = mx.get_active_memory()
@@ -1757,30 +1788,40 @@ async def cache_entries():
     if getattr(scheduler, "memory_aware_cache", None) is not None:
         cache_type = "memory_aware"
         from .memory_cache import _BYTES_PER_MB
+
         for tokens_key, entry in scheduler.memory_aware_cache._entries.items():
-            entries.append({
-                "tokens_count": len(tokens_key),
-                "memory_bytes": entry.memory_bytes,
-                "memory_mb": round(entry.memory_bytes / _BYTES_PER_MB, 2),
-                "cache_type": "memory_aware",
-            })
+            entries.append(
+                {
+                    "tokens_count": len(tokens_key),
+                    "memory_bytes": entry.memory_bytes,
+                    "memory_mb": round(entry.memory_bytes / _BYTES_PER_MB, 2),
+                    "cache_type": "memory_aware",
+                }
+            )
     elif getattr(scheduler, "block_aware_cache", None) is not None:
         cache_type = "paged"
-        for block_id, block in scheduler.block_aware_cache.paged_cache.allocated_blocks.items():
-            entries.append({
-                "block_id": block_id,
-                "tokens_count": block.token_count,
-                "ref_count": block.ref_count,
-                "has_data": block.cache_data is not None,
-                "cache_type": "paged",
-            })
+        for (
+            block_id,
+            block,
+        ) in scheduler.block_aware_cache.paged_cache.allocated_blocks.items():
+            entries.append(
+                {
+                    "block_id": block_id,
+                    "tokens_count": block.token_count,
+                    "ref_count": block.ref_count,
+                    "has_data": block.cache_data is not None,
+                    "cache_type": "paged",
+                }
+            )
     elif getattr(scheduler, "prefix_cache", None) is not None:
         cache_type = "legacy"
         for _, tokens_tuple in scheduler.prefix_cache._lru:
-            entries.append({
-                "tokens_count": len(tokens_tuple),
-                "cache_type": "legacy",
-            })
+            entries.append(
+                {
+                    "tokens_count": len(tokens_tuple),
+                    "cache_type": "legacy",
+                }
+            )
 
     return {
         "cache_type": cache_type,
@@ -1852,11 +1893,17 @@ async def cache_warm(request: dict):
                     warmed += 1
                     token_counts.append(len(tokens))
                 else:
-                    errors.append(f"Prompt {i}: cache store rejected (too large or full)")
+                    errors.append(
+                        f"Prompt {i}: cache store rejected (too large or full)"
+                    )
             except Exception as e:
                 errors.append(f"Prompt {i}: {type(e).__name__}: {e}")
 
-        return {"warmed": warmed, "token_counts": token_counts, "errors": errors if errors else None}
+        return {
+            "warmed": warmed,
+            "token_counts": token_counts,
+            "errors": errors if errors else None,
+        }
 
     return await asyncio.to_thread(_do_warm)
 
@@ -1888,9 +1935,9 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
                 scheduler.disk_cache.clear()
                 cleared.append("disk_cache")
             # Also clear L2 paged block disk store (separate from legacy disk_cache)
-            paged_mgr = getattr(scheduler, 'paged_cache_manager', None)
+            paged_mgr = getattr(scheduler, "paged_cache_manager", None)
             if paged_mgr is not None:
-                disk_store = getattr(paged_mgr, '_disk_store', None)
+                disk_store = getattr(paged_mgr, "_disk_store", None)
                 if disk_store is not None:
                     disk_store.clear()
                     cleared.append("block_disk_store")
@@ -1902,6 +1949,7 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
                 clear_multimodal_kv_cache,
                 clear_pixel_values_cache,
             )
+
             clear_multimodal_kv_cache()
             clear_pixel_values_cache()
             cleared.append("multimodal_kv")
@@ -1915,8 +1963,7 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
 
 
 @app.post(
-    "/v1/chat/completions/{request_id}/cancel",
-    dependencies=[Depends(verify_api_key)]
+    "/v1/chat/completions/{request_id}/cancel", dependencies=[Depends(verify_api_key)]
 )
 async def cancel_chat_completion(request_id: str):
     """
@@ -1938,7 +1985,9 @@ async def cancel_chat_completion(request_id: str):
         ```
     """
     if _engine is None:
-        raise HTTPException(status_code=404, detail="No model loaded — no active requests to cancel")
+        raise HTTPException(
+            status_code=404, detail="No model loaded — no active requests to cancel"
+        )
 
     # Abort the request (returns True if found, False if not found/already finished)
     success = await _engine.abort_request(request_id)
@@ -1949,14 +1998,11 @@ async def cancel_chat_completion(request_id: str):
     else:
         raise HTTPException(
             status_code=404,
-            detail=f"Request {request_id} not found or already finished"
+            detail=f"Request {request_id} not found or already finished",
         )
 
 
-@app.post(
-    "/v1/responses/{response_id}/cancel",
-    dependencies=[Depends(verify_api_key)]
-)
+@app.post("/v1/responses/{response_id}/cancel", dependencies=[Depends(verify_api_key)])
 async def cancel_response(response_id: str):
     """
     Cancel an ongoing Responses API request.
@@ -1968,7 +2014,9 @@ async def cancel_response(response_id: str):
         Success message or 404 if request not found
     """
     if _engine is None:
-        raise HTTPException(status_code=404, detail="No model loaded — no active requests to cancel")
+        raise HTTPException(
+            status_code=404, detail="No model loaded — no active requests to cancel"
+        )
     success = await _engine.abort_request(response_id)
 
     if success:
@@ -1977,14 +2025,11 @@ async def cancel_response(response_id: str):
     else:
         raise HTTPException(
             status_code=404,
-            detail=f"Response {response_id} not found or already finished"
+            detail=f"Response {response_id} not found or already finished",
         )
 
 
-@app.post(
-    "/v1/completions/{request_id}/cancel",
-    dependencies=[Depends(verify_api_key)]
-)
+@app.post("/v1/completions/{request_id}/cancel", dependencies=[Depends(verify_api_key)])
 async def cancel_completion(request_id: str):
     """
     Cancel an ongoing text completion request.
@@ -1998,7 +2043,9 @@ async def cancel_completion(request_id: str):
         Success message or 404 if request not found
     """
     if _engine is None:
-        raise HTTPException(status_code=404, detail="No model loaded — no active requests to cancel")
+        raise HTTPException(
+            status_code=404, detail="No model loaded — no active requests to cancel"
+        )
     success = await _engine.abort_request(request_id)
 
     if success:
@@ -2007,7 +2054,7 @@ async def cancel_completion(request_id: str):
     else:
         raise HTTPException(
             status_code=404,
-            detail=f"Request {request_id} not found or already finished"
+            detail=f"Request {request_id} not found or already finished",
         )
 
 
@@ -2055,15 +2102,26 @@ async def create_anthropic_message(
     try:
         body = await fastapi_request.json()
     except Exception:
-        return JSONResponse(status_code=400, content={
-            "type": "error", "error": {"type": "invalid_request_error", "message": "Invalid JSON in request body"}
-        })
+        return JSONResponse(
+            status_code=400,
+            content={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid JSON in request body",
+                },
+            },
+        )
     try:
         anthropic_req = AnthropicRequest(**body)
     except Exception as e:
-        return JSONResponse(status_code=400, content={
-            "type": "error", "error": {"type": "invalid_request_error", "message": str(e)}
-        })
+        return JSONResponse(
+            status_code=400,
+            content={
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": str(e)},
+            },
+        )
 
     # Convert to chat completion request
     chat_req = to_chat_completion(anthropic_req)
@@ -2102,7 +2160,10 @@ async def create_anthropic_message(
         _msg_kwargs["enable_thinking"] = _default_enable_thinking
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (same as OpenAI path)
-    if _reasoning_parser and type(_reasoning_parser).__name__ == "MistralReasoningParser":
+    if (
+        _reasoning_parser
+        and type(_reasoning_parser).__name__ == "MistralReasoningParser"
+    ):
         if chat_req.enable_thinking is True and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "high"
             _msg_kwargs["reasoning_effort"] = "high"
@@ -2119,15 +2180,14 @@ async def create_anthropic_message(
 
     # Strip <think> blocks from prior assistant messages when thinking is disabled.
     # Same logic as the OpenAI path — prevents model from mimicking prior reasoning.
-    _explicit_thinking_off = (
-        chat_req.enable_thinking is False
-        or (_ct_kwargs.get("enable_thinking") is False)
+    _explicit_thinking_off = chat_req.enable_thinking is False or (
+        _ct_kwargs.get("enable_thinking") is False
     )
     if _explicit_thinking_off and messages_dump:
         cleaned = []
         for msg in messages_dump:
             if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
-                stripped = _THINK_STRIP_RE.sub('', msg["content"]).strip()
+                stripped = _THINK_STRIP_RE.sub("", msg["content"]).strip()
                 if stripped != msg["content"]:
                     if not stripped:
                         continue
@@ -2199,8 +2259,16 @@ async def create_anthropic_message(
                         if tc.get("id"):
                             # Ensure tool_calls list is big enough for this index
                             while len(tool_calls) <= tc_idx:
-                                tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
-                            tool_calls[tc_idx] = {"id": tc["id"], "function": tc.get("function", {})}
+                                tool_calls.append(
+                                    {
+                                        "id": "",
+                                        "function": {"name": "", "arguments": ""},
+                                    }
+                                )
+                            tool_calls[tc_idx] = {
+                                "id": tc["id"],
+                                "function": tc.get("function", {}),
+                            }
                         elif tc_idx < len(tool_calls):
                             # Append arguments to the correct tool call by index
                             args = tc.get("function", {}).get("arguments", "")
@@ -2235,12 +2303,14 @@ async def create_anthropic_message(
                 input_data = json.loads(func.get("arguments", "{}"))
             except json.JSONDecodeError:
                 input_data = {}
-            content.append({
-                "type": "tool_use",
-                "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:12]}"),
-                "name": func.get("name", ""),
-                "input": input_data,
-            })
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:12]}"),
+                    "name": func.get("name", ""),
+                    "input": input_data,
+                }
+            )
 
         if not content:
             content = [{"type": "text", "text": ""}]
@@ -2377,8 +2447,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
 
         elapsed = time.perf_counter() - start_time
         logger.info(
-            f"Embeddings: {len(texts)} inputs, {prompt_tokens} tokens "
-            f"in {elapsed:.2f}s"
+            f"Embeddings: {len(texts)} inputs, {prompt_tokens} tokens in {elapsed:.2f}s"
         )
 
         # Build OpenAI-compatible response with ordered indices
@@ -2399,8 +2468,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         raise HTTPException(
             status_code=503,
             detail=(
-                "mlx-embeddings not installed. "
-                "Install with: pip install mlx-embeddings"
+                "mlx-embeddings not installed. Install with: pip install mlx-embeddings"
             ),
         )
     except HTTPException:
@@ -2415,7 +2483,9 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
 # =============================================================================
 
 _reranker = None  # Lazy-loaded reranker instance
-_reranker_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
+_reranker_lock: asyncio.Lock | None = (
+    None  # Lazy-init to avoid binding to wrong event loop
+)
 
 
 @app.post(
@@ -2444,9 +2514,14 @@ async def create_rerank(request: Request):
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
     if not documents:
-        raise HTTPException(status_code=400, detail="documents list is required and must be non-empty")
+        raise HTTPException(
+            status_code=400, detail="documents list is required and must be non-empty"
+        )
     if len(documents) > 1000:
-        raise HTTPException(status_code=400, detail=f"Too many documents ({len(documents)}). Maximum is 1000.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many documents ({len(documents)}). Maximum is 1000.",
+        )
 
     # Normalize documents to strings
     doc_texts = []
@@ -2467,8 +2542,11 @@ async def create_rerank(request: Request):
         # Load reranker if needed (or if model changed)
         if _reranker is None or (model and _reranker.model_path != model):
             if not model:
-                raise HTTPException(status_code=400, detail="model is required for first rerank request")
+                raise HTTPException(
+                    status_code=400, detail="model is required for first rerank request"
+                )
             from .reranker import Reranker
+
             if _reranker is not None:
                 _reranker.unload()
             _reranker = Reranker(model)
@@ -2511,6 +2589,7 @@ async def create_rerank(request: Request):
 async def ollama_tags():
     """Ollama-compatible model list."""
     from .api.ollama_adapter import build_tags_response
+
     name = _resolve_model_name()
     return build_tags_response(name, _model_name or name)
 
@@ -2519,7 +2598,11 @@ async def ollama_tags():
 async def ollama_ps():
     """Ollama-compatible running model list."""
     name = _resolve_model_name()
-    return {"models": [{"name": name, "model": _model_name or name, "size": 0, "digest": ""}]}
+    return {
+        "models": [
+            {"name": name, "model": _model_name or name, "size": 0, "digest": ""}
+        ]
+    }
 
 
 @app.get("/api/version", dependencies=[Depends(verify_api_key)])
@@ -2533,8 +2616,15 @@ async def ollama_show(fastapi_request: Request):
     """Ollama-compatible model info."""
     name = _resolve_model_name()
     return {
-        "modelfile": "", "parameters": "", "template": "",
-        "details": {"format": "mlx", "family": "", "parameter_size": "", "quantization_level": ""},
+        "modelfile": "",
+        "parameters": "",
+        "template": "",
+        "details": {
+            "format": "mlx",
+            "family": "",
+            "parameter_size": "",
+            "quantization_level": "",
+        },
         "model_info": {"name": name},
     }
 
@@ -2547,6 +2637,7 @@ async def ollama_chat(fastapi_request: Request):
         openai_chat_response_to_ollama,
         openai_chat_chunk_to_ollama_ndjson,
     )
+
     body = await fastapi_request.json()
     model_name = body.get("model", _resolve_model_name())
     is_streaming = body.get("stream", True)
@@ -2554,6 +2645,7 @@ async def ollama_chat(fastapi_request: Request):
     openai_req = ollama_chat_to_openai(body)
 
     from .api.models import ChatCompletionRequest
+
     chat_req = ChatCompletionRequest(**openai_req)
 
     if not is_streaming:
@@ -2576,7 +2668,9 @@ async def ollama_chat(fastapi_request: Request):
 
     engine = get_engine()
     chat_kwargs = {
-        "max_tokens": chat_req.max_tokens if chat_req.max_tokens is not None else _default_max_tokens,
+        "max_tokens": chat_req.max_tokens
+        if chat_req.max_tokens is not None
+        else _default_max_tokens,
         "temperature": _resolve_temperature(chat_req.temperature),
         "top_p": _resolve_top_p(chat_req.top_p),
     }
@@ -2601,13 +2695,12 @@ async def ollama_chat(fastapi_request: Request):
                 messages.append(dict(msg))
     else:
         from .api.utils import extract_multimodal_content
+
         messages, _, _ = extract_multimodal_content(chat_req.messages)
 
     async def ndjson_stream():
         async for sse_line in stream_chat_completion(
-            engine, messages, chat_req,
-            fastapi_request=fastapi_request,
-            **chat_kwargs
+            engine, messages, chat_req, fastapi_request=fastapi_request, **chat_kwargs
         ):
             ndjson = openai_chat_chunk_to_ollama_ndjson(sse_line, model_name)
             if ndjson:
@@ -2624,6 +2717,7 @@ async def ollama_generate(fastapi_request: Request):
     is_streaming = body.get("stream", True)
 
     from .api.ollama_adapter import ollama_generate_to_openai
+
     openai_req = ollama_generate_to_openai(body)
 
     from .api.models import CompletionRequest
@@ -2647,7 +2741,9 @@ async def ollama_generate(fastapi_request: Request):
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
             "response": text,
             "done": True,
-            "done_reason": choices[0].get("finish_reason", "stop") if choices else "stop",
+            "done_reason": choices[0].get("finish_reason", "stop")
+            if choices
+            else "stop",
         }
 
     # Streaming: wrap completions SSE → NDJSON
@@ -2676,6 +2772,7 @@ async def ollama_embed(fastapi_request: Request):
     body = await fastapi_request.json()
     # Forward to OpenAI embeddings endpoint
     from .api.models import EmbeddingRequest
+
     openai_req = EmbeddingRequest(
         model=body.get("model", _resolve_model_name()),
         input=body.get("input") or body.get("prompt", ""),
@@ -2691,16 +2788,23 @@ async def ollama_embed(fastapi_request: Request):
 
 # Ollama no-op endpoints (prevent client errors)
 @app.post("/api/pull", dependencies=[Depends(verify_api_key)])
-async def ollama_pull(): return {"status": "success"}
+async def ollama_pull():
+    return {"status": "success"}
+
 
 @app.post("/api/delete", dependencies=[Depends(verify_api_key)])
-async def ollama_delete(): return {"status": "success"}
+async def ollama_delete():
+    return {"status": "success"}
+
 
 @app.post("/api/copy", dependencies=[Depends(verify_api_key)])
-async def ollama_copy(): return {"status": "success"}
+async def ollama_copy():
+    return {"status": "success"}
+
 
 @app.post("/api/create", dependencies=[Depends(verify_api_key)])
-async def ollama_create(): return {"status": "success"}
+async def ollama_create():
+    return {"status": "success"}
 
 
 # =============================================================================
@@ -2708,7 +2812,9 @@ async def ollama_create(): return {"status": "success"}
 # =============================================================================
 
 _image_gen = None  # Lazy-loaded ImageGenEngine
-_image_gen_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
+_image_gen_lock: asyncio.Lock | None = (
+    None  # Lazy-init to avoid binding to wrong event loop
+)
 
 
 @app.post(
@@ -2750,20 +2856,31 @@ async def create_image(request: Request):
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
     if response_format == "url":
-        raise HTTPException(status_code=400, detail="response_format 'url' is not supported. Use 'b64_json'.")
+        raise HTTPException(
+            status_code=400,
+            detail="response_format 'url' is not supported. Use 'b64_json'.",
+        )
 
     # Parse size
     try:
         width, height = [int(x) for x in size.split("x")]
     except (ValueError, AttributeError):
-        raise HTTPException(status_code=400, detail=f"Invalid size format: {size}. Use WxH (e.g., 1024x1024)")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid size format: {size}. Use WxH (e.g., 1024x1024)",
+        )
 
     # Enforce dimension limits (prevent OOM from absurd sizes)
     MAX_DIM = 4096
     if width < 64 or height < 64:
-        raise HTTPException(status_code=400, detail=f"Minimum dimension is 64. Got {width}x{height}")
+        raise HTTPException(
+            status_code=400, detail=f"Minimum dimension is 64. Got {width}x{height}"
+        )
     if width > MAX_DIM or height > MAX_DIM:
-        raise HTTPException(status_code=400, detail=f"Maximum dimension is {MAX_DIM}. Got {width}x{height}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum dimension is {MAX_DIM}. Got {width}x{height}",
+        )
 
     # Map quality to steps
     steps = body.get("steps")  # Allow explicit steps override
@@ -2799,22 +2916,26 @@ async def create_image(request: Request):
         if _image_gen is None:
             try:
                 from .image_gen import ImageGenEngine
+
                 _image_gen = ImageGenEngine()
             except ImportError:
                 raise HTTPException(
                     status_code=501,
-                    detail="mflux not installed. Install with: pip install mflux"
+                    detail="mflux not installed. Install with: pip install mflux",
                 )
 
         # Resolve aliases before comparison (e.g., "flux-schnell" → "schnell")
         from .image_gen import SUPPORTED_MODELS as _IMG_MODELS
+
         resolved_model = _IMG_MODELS.get(model.lower(), model) if model else model
 
         # If pre-loaded (from serve command), skip re-loading unless explicitly different model.
         already_loaded = _image_gen.is_loaded and (
-            not model or resolved_model == _image_gen.model_name or
-            model == _model_name or model == _served_model_name or
-            model == _model_path
+            not model
+            or resolved_model == _image_gen.model_name
+            or model == _model_name
+            or model == _served_model_name
+            or model == _model_path
         )
         if not already_loaded:
             try:
@@ -2822,7 +2943,9 @@ async def create_image(request: Request):
                     _image_gen.unload()
                 _image_gen.load(model, quantize=quantize, model_path=model_path)
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Failed to load image model '{model}': {e}")
+                raise HTTPException(
+                    status_code=500, detail=f"Failed to load image model '{model}': {e}"
+                )
 
         # If source image provided (img2img), save to temp file for mflux
         source_image_path = None
@@ -2831,7 +2954,8 @@ async def create_image(request: Request):
             if source_image_b64 and image_strength is not None:
                 import tempfile
                 from pathlib import Path
-                raw_b64 = re.sub(r'^data:image/[^;]+;base64,', '', source_image_b64)
+
+                raw_b64 = re.sub(r"^data:image/[^;]+;base64,", "", source_image_b64)
                 img_bytes = base64.b64decode(raw_b64)
                 tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
                 tmp.write(img_bytes)
@@ -2860,13 +2984,17 @@ async def create_image(request: Request):
                     )
                 except Exception as e:
                     logger.error(f"Image generation failed: {e}")
-                    raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
+                    raise HTTPException(
+                        status_code=500, detail=f"Image generation failed: {e}"
+                    )
 
-                images.append({
-                    "b64_json": result.b64_json,
-                    "revised_prompt": prompt,
-                    "seed": result.seed,
-                })
+                images.append(
+                    {
+                        "b64_json": result.b64_json,
+                        "revised_prompt": prompt,
+                        "seed": result.seed,
+                    }
+                )
         finally:
             # Clean up temp source image
             if source_image_path:
@@ -2892,7 +3020,10 @@ async def create_image(request: Request):
 # =============================================================================
 
 
-@app.post("/v1/images/edits", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+@app.post(
+    "/v1/images/edits",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
 async def create_image_edit(request: Request):
     """Edit an image using an instruction and a source image.
 
@@ -2943,9 +3074,13 @@ async def create_image_edit(request: Request):
         width, height = 1024, 1024
     # Validate dimensions (same limits as image generation)
     if width < 64 or width > 4096:
-        raise HTTPException(status_code=400, detail=f"Width must be between 64 and 4096, got {width}")
+        raise HTTPException(
+            status_code=400, detail=f"Width must be between 64 and 4096, got {width}"
+        )
     if height < 64 or height > 4096:
-        raise HTTPException(status_code=400, detail=f"Height must be between 64 and 4096, got {height}")
+        raise HTTPException(
+            status_code=400, detail=f"Height must be between 64 and 4096, got {height}"
+        )
 
     # Save base64 image to temp file (mflux needs file paths)
     tmp_dir = tempfile.mkdtemp(prefix="vmlx_edit_")
@@ -2958,19 +3093,22 @@ async def create_image_edit(request: Request):
         # Handles: JPEG, PNG (with alpha), MPO (iPhone Portrait), WebP, GIF,
         # BMP, TIFF, AVIF, CMYK, 16-bit, EXIF-rotated images.
         # HEIC requires pillow-heif plugin (not bundled).
-        image_b64 = re.sub(r'^data:image/[^;]+;base64,', '', image_b64)
+        image_b64 = re.sub(r"^data:image/[^;]+;base64,", "", image_b64)
         image_data = base64.b64decode(image_b64)
         try:
             from PIL import Image as _PILImage, ImageOps as _ImageOps
             import io as _io
+
             src_img = _PILImage.open(_io.BytesIO(image_data))
             src_format = src_img.format
             src_original_mode = src_img.mode
 
             # For animated images (GIF, APNG, WebP), use only the first frame
-            if getattr(src_img, 'is_animated', False):
+            if getattr(src_img, "is_animated", False):
                 src_img.seek(0)
-                logger.info(f"Edit: animated {src_format} detected, using first frame only")
+                logger.info(
+                    f"Edit: animated {src_format} detected, using first frame only"
+                )
 
             # Apply EXIF orientation (iPhone/DSLR photos may be rotated)
             try:
@@ -2979,41 +3117,47 @@ async def create_image_edit(request: Request):
                 pass  # No EXIF data or unsupported — continue without rotation
 
             # Convert to 8-bit RGB (handles RGBA, CMYK, P, L, I, I;16, F, LA, PA modes)
-            if src_img.mode in ('RGBA', 'LA', 'PA'):
+            if src_img.mode in ("RGBA", "LA", "PA"):
                 # Composite alpha onto white background before converting
-                background = _PILImage.new('RGB', src_img.size, (255, 255, 255))
+                background = _PILImage.new("RGB", src_img.size, (255, 255, 255))
                 background.paste(src_img, mask=src_img.split()[-1])
                 src_img = background
-            elif src_img.mode != 'RGB':
-                src_img = src_img.convert('RGB')
+            elif src_img.mode != "RGB":
+                src_img = src_img.convert("RGB")
 
-            src_img.save(str(image_path), format='PNG')
-            logger.info(f"Edit: received image {len(image_b64)} b64 chars -> {len(image_data)} bytes "
-                        f"(format={src_format}, mode={src_original_mode}, size={src_img.size}), "
-                        f"converted to RGB PNG at {image_path}")
+            src_img.save(str(image_path), format="PNG")
+            logger.info(
+                f"Edit: received image {len(image_b64)} b64 chars -> {len(image_data)} bytes "
+                f"(format={src_format}, mode={src_original_mode}, size={src_img.size}), "
+                f"converted to RGB PNG at {image_path}"
+            )
         except Exception as conv_err:
             # Provide actionable error instead of silently saving raw bytes
             err_msg = str(conv_err)
-            if 'HEIF' in err_msg.upper() or 'HEIC' in err_msg.upper() or 'cannot identify' in err_msg.lower():
+            if (
+                "HEIF" in err_msg.upper()
+                or "HEIC" in err_msg.upper()
+                or "cannot identify" in err_msg.lower()
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Unsupported image format: {conv_err}. "
-                           f"HEIC/HEIF images require the pillow-heif package. "
-                           f"Please convert to JPEG or PNG before uploading."
+                    f"HEIC/HEIF images require the pillow-heif package. "
+                    f"Please convert to JPEG or PNG before uploading.",
                 )
             raise HTTPException(
-                status_code=400,
-                detail=f"Failed to process input image: {conv_err}"
+                status_code=400, detail=f"Failed to process input image: {conv_err}"
             )
 
         # Decode and save mask if provided — also convert via PIL
         if mask_b64:
             mask_path = Path(tmp_dir) / "mask.png"
-            mask_b64_clean = re.sub(r'^data:image/[^;]+;base64,', '', mask_b64)
+            mask_b64_clean = re.sub(r"^data:image/[^;]+;base64,", "", mask_b64)
             mask_data = base64.b64decode(mask_b64_clean)
             try:
                 from PIL import Image as _PILImage, ImageOps as _ImageOps
                 import io as _io
+
                 mask_img = _PILImage.open(_io.BytesIO(mask_data))
                 # Apply EXIF orientation to match source image
                 try:
@@ -3021,14 +3165,13 @@ async def create_image_edit(request: Request):
                 except Exception:
                     pass
                 # Masks should be grayscale (L mode) — convert if needed
-                if mask_img.mode != 'L':
-                    mask_img = mask_img.convert('L')
-                mask_img.save(str(mask_path), format='PNG')
+                if mask_img.mode != "L":
+                    mask_img = mask_img.convert("L")
+                mask_img.save(str(mask_path), format="PNG")
                 logger.info(f"Edit: mask converted to grayscale PNG at {mask_path}")
             except Exception as mask_err:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to process mask image: {mask_err}"
+                    status_code=400, detail=f"Failed to process mask image: {mask_err}"
                 )
 
         global _image_gen_lock
@@ -3043,14 +3186,16 @@ async def create_image_edit(request: Request):
             if _image_gen is None:
                 try:
                     from .image_gen import ImageGenEngine
+
                     _image_gen = ImageGenEngine()
                 except ImportError:
                     raise HTTPException(
                         status_code=501,
-                        detail="mflux not installed. Install with: pip install mflux"
+                        detail="mflux not installed. Install with: pip install mflux",
                     )
 
             from .image_gen import EDIT_MODELS
+
             resolved = EDIT_MODELS.get(model.lower(), model)
 
             # Check if we need to load a different model
@@ -3062,28 +3207,37 @@ async def create_image_edit(request: Request):
                     if _image_gen.is_loaded:
                         _image_gen.unload()
                     edit_model_path = body.get("model_path") or _model_path
-                    _image_gen.load(model, model_path=edit_model_path, quantize=_image_quantize)
+                    _image_gen.load(
+                        model, model_path=edit_model_path, quantize=_image_quantize
+                    )
                 except HTTPException:
                     raise
                 except Exception as e:
                     raise HTTPException(
                         status_code=500,
-                        detail=f"Failed to load edit model '{model}': {e}"
+                        detail=f"Failed to load edit model '{model}': {e}",
                     )
 
             # Generate edited images (inside lock)
             # Verify the input image can be opened
             try:
                 from PIL import Image as _PILImage
+
                 _src = _PILImage.open(str(image_path))
-                logger.info(f"Edit: source image verified: {_src.size} mode={_src.mode} format={_src.format}")
+                logger.info(
+                    f"Edit: source image verified: {_src.size} mode={_src.mode} format={_src.format}"
+                )
             except Exception as _e:
                 logger.error(f"Edit: source image INVALID: {_e}")
-                raise HTTPException(status_code=400, detail=f"Invalid source image: {_e}")
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid source image: {_e}"
+                )
 
-            logger.info(f"Edit: model={model} resolved={resolved} prompt={prompt[:50]!r} "
-                        f"size={width}x{height} steps={steps} guidance={guidance} "
-                        f"strength={strength} seed={seed}")
+            logger.info(
+                f"Edit: model={model} resolved={resolved} prompt={prompt[:50]!r} "
+                f"size={width}x{height} steps={steps} guidance={guidance} "
+                f"strength={strength} seed={seed}"
+            )
 
             for i in range(n):
                 if await request.is_disconnected():
@@ -3109,24 +3263,22 @@ async def create_image_edit(request: Request):
                 except Exception as e:
                     logger.error(f"Image editing failed: {e}")
                     raise HTTPException(
-                        status_code=500,
-                        detail=f"Image editing failed: {e}"
+                        status_code=500, detail=f"Image editing failed: {e}"
                     )
 
-                images.append({
-                    "b64_json": result.b64_json,
-                    "revised_prompt": prompt,
-                    "seed": result.seed,
-                })
+                images.append(
+                    {
+                        "b64_json": result.b64_json,
+                        "revised_prompt": prompt,
+                        "seed": result.seed,
+                    }
+                )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Image edit endpoint error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Image editing failed: {e}"
-        )
+        raise HTTPException(status_code=500, detail=f"Image editing failed: {e}")
     finally:
         # Clean up temp files
         try:
@@ -3192,7 +3344,9 @@ async def list_mcp_servers() -> MCPServersResponse:
     return MCPServersResponse(servers=servers)
 
 
-@app.post("/v1/mcp/execute", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+@app.post(
+    "/v1/mcp/execute", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)]
+)
 async def execute_mcp_tool(request: MCPExecuteRequest) -> MCPExecuteResponse:
     """Execute an MCP tool."""
     if _mcp_manager is None:
@@ -3224,7 +3378,10 @@ _stt_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong eve
 _tts_lock: asyncio.Lock | None = None  # Lazy-init to avoid binding to wrong event loop
 
 
-@app.post("/v1/audio/transcriptions", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+@app.post(
+    "/v1/audio/transcriptions",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
 async def create_transcription(
     file: UploadFile,
     model: str = "whisper-large-v3",
@@ -3303,7 +3460,10 @@ async def create_transcription(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/v1/audio/speech", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+@app.post(
+    "/v1/audio/speech",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
 async def create_speech(request: AudioSpeechRequest):
     """
     Generate speech from text (OpenAI TTS API compatible).
@@ -3344,11 +3504,15 @@ async def create_speech(request: AudioSpeechRequest):
             # Capture local ref inside lock to prevent concurrent unload during generation
             local_tts = _tts_engine
 
-        audio = local_tts.generate(request.input, voice=request.voice, speed=request.speed)
+        audio = local_tts.generate(
+            request.input, voice=request.voice, speed=request.speed
+        )
         audio_bytes = local_tts.to_bytes(audio, format=request.response_format)
 
         content_type = (
-            "audio/wav" if request.response_format == "wav" else f"audio/{request.response_format}"
+            "audio/wav"
+            if request.response_format == "wav"
+            else f"audio/{request.response_format}"
         )
         return Response(content=audio_bytes, media_type=content_type)
 
@@ -3412,12 +3576,14 @@ async def create_completion(request: CompletionRequest):
     for i, prompt in enumerate(prompts):
         try:
             gen_kwargs = {
-                    "prompt": prompt,
-                    "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
-                    "temperature": _resolve_temperature(request.temperature),
-                    "top_p": _resolve_top_p(request.top_p),
-                    "stop": request.stop,
-                }
+                "prompt": prompt,
+                "max_tokens": request.max_tokens
+                if request.max_tokens is not None
+                else _default_max_tokens,
+                "temperature": _resolve_temperature(request.temperature),
+                "top_p": _resolve_top_p(request.top_p),
+                "stop": request.stop,
+            }
             if request.top_k is not None:
                 gen_kwargs["top_k"] = request.top_k
             if request.min_p is not None:
@@ -3520,7 +3686,11 @@ async def create_chat_completion(
     """
     # Model name validation: accept served name, actual name, or any name (permissive)
     resolved_name = _resolve_model_name()
-    if request.model and request.model != resolved_name and request.model != _model_name:
+    if (
+        request.model
+        and request.model != resolved_name
+        and request.model != _model_name
+    ):
         global _model_name_mismatch_warned
         log_fn = logger.debug if _model_name_mismatch_warned else logger.info
         log_fn(
@@ -3549,23 +3719,26 @@ async def create_chat_completion(
     # and reject before prefill if it would likely OOM.
     if _max_prompt_tokens > 0 and request.messages:
         _est_chars = sum(
-            len(str(m.content)) if hasattr(m, 'content') and m.content else 0
+            len(str(m.content)) if hasattr(m, "content") and m.content else 0
             for m in request.messages
         )
         _est_tokens = _est_chars // 3  # conservative: ~3 chars per token
         if _est_tokens > _max_prompt_tokens:
             from starlette.responses import JSONResponse
+
             _est_gb = (_est_tokens * 0.4) / 1024  # ~0.4MB per token KV
             return JSONResponse(
                 status_code=413,
-                content={"error": {
-                    "message": f"Prompt too long (~{_est_tokens:,} tokens estimated). "
-                               f"This would need ~{_est_gb:.1f}GB of KV cache memory, "
-                               f"exceeding the safe limit of ~{_max_prompt_tokens:,} tokens. "
-                               f"Shorten your prompt or use a model with fewer layers/heads.",
-                    "type": "invalid_request_error",
-                    "code": "prompt_too_long"
-                }}
+                content={
+                    "error": {
+                        "message": f"Prompt too long (~{_est_tokens:,} tokens estimated). "
+                        f"This would need ~{_est_gb:.1f}GB of KV cache memory, "
+                        f"exceeding the safe limit of ~{_max_prompt_tokens:,} tokens. "
+                        f"Shorten your prompt or use a model with fewer layers/heads.",
+                        "type": "invalid_request_error",
+                        "code": "prompt_too_long",
+                    }
+                },
             )
 
     # For MLLM models, keep original messages with embedded images
@@ -3611,9 +3784,8 @@ async def create_chat_completion(
     # prompt doesn't inject <think>. This is the root cause of "thinking OFF but model
     # still thinks on 2nd message" bugs.
     _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
-    _explicit_thinking_off = (
-        request.enable_thinking is False
-        or (_ct_kwargs.get("enable_thinking") is False)
+    _explicit_thinking_off = request.enable_thinking is False or (
+        _ct_kwargs.get("enable_thinking") is False
     )
     if _explicit_thinking_off and messages:
         cleaned = []
@@ -3622,7 +3794,7 @@ async def create_chat_completion(
                 content = msg["content"]
                 # Skip list content (assistant messages with images from PR #29)
                 if isinstance(content, str):
-                    stripped = _THINK_STRIP_RE.sub('', content).strip()
+                    stripped = _THINK_STRIP_RE.sub("", content).strip()
                     if stripped != content:
                         if not stripped:
                             continue  # Drop assistant messages that were ONLY thinking
@@ -3632,7 +3804,9 @@ async def create_chat_completion(
 
     # Prepare kwargs
     chat_kwargs = {
-        "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
+        "max_tokens": request.max_tokens
+        if request.max_tokens is not None
+        else _default_max_tokens,
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -3659,7 +3833,10 @@ async def create_chat_completion(
     else:
         # Auto-detect from model config + tokenizer vocabulary.
         from .model_config_registry import get_model_config_registry
-        _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
+
+        _mc = get_model_config_registry().lookup(
+            _model_path or _model_name or request.model
+        )
         _enable = _mc.think_in_template
         if not _enable and _mc.reasoning_parser:
             # Model has a reasoning parser — enable thinking by default.
@@ -3670,7 +3847,7 @@ async def create_chat_completion(
         if not _enable:
             try:
                 _tok = engine.tokenizer
-                if getattr(_tok, 'has_thinking', False):
+                if getattr(_tok, "has_thinking", False):
                     _enable = True
             except Exception:
                 pass
@@ -3698,7 +3875,10 @@ async def create_chat_completion(
     # This approach (auto-mapping enable_thinking to reasoning_effort for models that
     # use [MODEL_SETTINGS] blocks) was developed through extensive trial and error.
     # If you adapt this pattern, please credit the original author.
-    if _reasoning_parser and type(_reasoning_parser).__name__ == "MistralReasoningParser":
+    if (
+        _reasoning_parser
+        and type(_reasoning_parser).__name__ == "MistralReasoningParser"
+    ):
         if request.enable_thinking is True and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "high"
             chat_kwargs["reasoning_effort"] = "high"
@@ -3725,7 +3905,7 @@ async def create_chat_completion(
     # Handle tool_choice: "none" suppresses tools entirely, "auto"/None is default,
     # "required" or specific tool dict are handled post-generation.
     _tool_choice = request.tool_choice
-    _suppress_tools = (_tool_choice == "none")
+    _suppress_tools = _tool_choice == "none"
 
     # Merge MCP tools with user-provided tools
     all_tools = []
@@ -3742,12 +3922,16 @@ async def create_chat_completion(
         if request.tools:
             # If tool_choice is a specific tool dict, filter to only that tool
             if isinstance(_tool_choice, dict):
-                target_name = (_tool_choice.get("function", {}).get("name")
-                               or _tool_choice.get("name"))
+                target_name = _tool_choice.get("function", {}).get(
+                    "name"
+                ) or _tool_choice.get("name")
                 if target_name:
                     # request.tools are ToolDefinition Pydantic models (type + function dict)
-                    filtered = [t for t in request.tools
-                                if t.function.get("name") == target_name]
+                    filtered = [
+                        t
+                        for t in request.tools
+                        if t.function.get("name") == target_name
+                    ]
                     all_tools.extend(filtered if filtered else request.tools)
                 else:
                     all_tools.extend(request.tools)
@@ -3789,7 +3973,9 @@ async def create_chat_completion(
                     f"[chat] reasoning_effort='{_effort}' adjusted max_tokens: "
                     f"{_original_max} -> {_adjusted}"
                 )
-            logger.info(f"[chat] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})")
+            logger.info(
+                f"[chat] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})"
+            )
         # GPT-OSS/GLM Flash models sometimes generate <|im_end|> (ChatML format)
         # which is NOT a single token in the Harmony vocabulary — it shatters into
         # sub-tokens and leaks into output. Add it as a string stop sequence.
@@ -3805,7 +3991,7 @@ async def create_chat_completion(
                 messages,
                 request,
                 fastapi_request=fastapi_request,
-                **chat_kwargs
+                **chat_kwargs,
             ),
             media_type="text/event-stream",
         )
@@ -3843,11 +4029,11 @@ async def create_chat_completion(
         # Clone parser per-request to avoid shared state across concurrent requests
         request_parser = _reasoning_parser.__class__()
         # Initialize parser state (harmony_active, etc.) — same as streaming path
-        _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get("prompt_suffix", "").startswith("<|start|>assistant<|channel|>analysis")
+        _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get(
+            "prompt_suffix", ""
+        ).startswith("<|start|>assistant<|channel|>analysis")
         request_parser.reset_state(harmony_active=_harmony_prefix_active)
-        reasoning_text, remaining_text = request_parser.extract_reasoning(
-            output.text
-        )
+        reasoning_text, remaining_text = request_parser.extract_reasoning(output.text)
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:
@@ -3864,9 +4050,11 @@ async def create_chat_completion(
             reasoning_text = None
 
     # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
-    _cc_parse_text = _THINK_STRIP_RE.sub('', content_for_parsing)
-    if _cc_parse_text == content_for_parsing and ('</think>' in content_for_parsing or '[/THINK]' in content_for_parsing):
-        for _end_tag in ('</think>', '[/THINK]'):
+    _cc_parse_text = _THINK_STRIP_RE.sub("", content_for_parsing)
+    if _cc_parse_text == content_for_parsing and (
+        "</think>" in content_for_parsing or "[/THINK]" in content_for_parsing
+    ):
+        for _end_tag in ("</think>", "[/THINK]"):
             if _end_tag in content_for_parsing:
                 _, _, _cc_parse_text = content_for_parsing.partition(_end_tag)
                 break
@@ -3875,7 +4063,8 @@ async def create_chat_completion(
     # Parse tool calls from output using configured parser (skip when tool_choice="none")
     cleaned_text, tool_calls = (
         _parse_tool_calls_with_parser(_cc_parse_text, request)
-        if not _suppress_tools else (_cc_parse_text or content_for_parsing, None)
+        if not _suppress_tools
+        else (_cc_parse_text or content_for_parsing, None)
     )
 
     # Process response_format if specified
@@ -3891,12 +4080,13 @@ async def create_chat_completion(
             _rf_strict = False
             if isinstance(response_format, dict):
                 _rf_strict = response_format.get("json_schema", {}).get("strict", False)
-            elif hasattr(response_format, "json_schema") and response_format.json_schema:
+            elif (
+                hasattr(response_format, "json_schema") and response_format.json_schema
+            ):
                 _rf_strict = getattr(response_format.json_schema, "strict", False)
             if _rf_strict:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"response_format strict mode: {error}"
+                    status_code=400, detail=f"response_format strict mode: {error}"
                 )
             logger.warning(f"JSON validation failed: {error}")
 
@@ -3938,6 +4128,7 @@ async def create_chat_completion(
     # always includes content:null with tool_calls — required by many clients).
     if tool_calls:
         from starlette.responses import JSONResponse
+
         resp_dict = response.model_dump(exclude_none=True)
         # Force content:null back into the message
         for choice in resp_dict.get("choices", []):
@@ -3971,7 +4162,8 @@ def _extract_text_from_content(content) -> str:
 
 
 def _responses_input_to_messages(
-    input_data: str | list, instructions: str | None = None,
+    input_data: str | list,
+    instructions: str | None = None,
     preserve_multimodal: bool = False,
 ) -> list[dict]:
     """Convert Responses API input to chat messages format.
@@ -3987,6 +4179,7 @@ def _responses_input_to_messages(
             image_url/video_url parts instead of extracting text only. MLLM engines
             extract images from message content internally.
     """
+
     def _resolve_content(raw_content):
         """Resolve content: preserve arrays for MLLM, extract text for LLM."""
         if preserve_multimodal and isinstance(raw_content, list):
@@ -4002,7 +4195,8 @@ def _responses_input_to_messages(
                 else:
                     clean_parts.append(p)
             has_media = any(
-                isinstance(p, dict) and p.get("type") in ("image_url", "image", "video_url", "video")
+                isinstance(p, dict)
+                and p.get("type") in ("image_url", "image", "video_url", "video")
                 for p in clean_parts
             )
             if has_media:
@@ -4036,7 +4230,11 @@ def _responses_input_to_messages(
                 raw = item.content if hasattr(item, "content") else ""
                 msg: dict = {"role": role, "content": _resolve_content(raw)}
                 if hasattr(item, "tool_calls") and item.tool_calls:
-                    msg["tool_calls"] = item.tool_calls if isinstance(item.tool_calls, list) else [item.tool_calls]
+                    msg["tool_calls"] = (
+                        item.tool_calls
+                        if isinstance(item.tool_calls, list)
+                        else [item.tool_calls]
+                    )
                 if hasattr(item, "tool_call_id") and item.tool_call_id:
                     msg["tool_call_id"] = item.tool_call_id
                 messages.append(msg)
@@ -4057,27 +4255,33 @@ def _responses_input_to_messages(
                     args_parsed = {}
             else:
                 args_parsed = args_raw if args_raw else {}
-            messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{
-                    "id": call_id,
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name", ""),
-                        "arguments": args_parsed,
-                    },
-                }],
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": item.get("name", ""),
+                                "arguments": args_parsed,
+                            },
+                        }
+                    ],
+                }
+            )
             continue
 
         # function_call_output → tool message with result
         if item_type == "function_call_output":
-            messages.append({
-                "role": "tool",
-                "tool_call_id": item.get("call_id", ""),
-                "content": item.get("output", ""),
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": item.get("call_id", ""),
+                    "content": item.get("output", ""),
+                }
+            )
             continue
 
         # message type with content parts
@@ -4090,18 +4294,22 @@ def _responses_input_to_messages(
             role = _normalize_role(item.get("role", "user"))
             # Preserve tool messages with tool_call_id (Chat Completions format)
             if role == "tool" and "tool_call_id" in item:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": item["tool_call_id"],
-                    "content": _extract_text_from_content(item.get("content", "")),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item["tool_call_id"],
+                        "content": _extract_text_from_content(item.get("content", "")),
+                    }
+                )
             # Preserve assistant messages with tool_calls (Chat Completions format)
             elif role == "assistant" and "tool_calls" in item:
-                messages.append({
-                    "role": "assistant",
-                    "content": item.get("content"),
-                    "tool_calls": item["tool_calls"],
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": item.get("content"),
+                        "tool_calls": item["tool_calls"],
+                    }
+                )
             else:
                 content = _resolve_content(item.get("content", ""))
                 messages.append({"role": role, "content": content})
@@ -4147,7 +4355,11 @@ async def create_response(
     """
     # Model name validation (same as chat completions)
     resolved_name = _resolve_model_name()
-    if request.model and request.model != resolved_name and request.model != _model_name:
+    if (
+        request.model
+        and request.model != resolved_name
+        and request.model != _model_name
+    ):
         global _model_name_mismatch_warned
         log_fn = logger.debug if _model_name_mismatch_warned else logger.info
         log_fn(
@@ -4175,27 +4387,35 @@ async def create_response(
     # For MLLM models, preserve content arrays with image/video parts — MLLM engines
     # extract images from message content internally (same as Chat Completions path)
     messages = _responses_input_to_messages(
-        request.input, request.instructions,
+        request.input,
+        request.instructions,
         preserve_multimodal=engine.is_mllm,
     )
 
     # Handle text format (json_object / json_schema) — translate to response_format
-    if request.text and isinstance(request.text, dict) and request.text.get("type") != "text":
+    if (
+        request.text
+        and isinstance(request.text, dict)
+        and request.text.get("type") != "text"
+    ):
         # Convert Responses API text format to Chat Completions response_format
         json_instruction = build_json_system_prompt(request.text)
         if json_instruction:
             messages = _inject_json_instruction(messages, json_instruction)
     elif hasattr(request.text, "type") and request.text.type != "text":
-        text_dict = request.text.model_dump(exclude_none=True) if hasattr(request.text, "model_dump") else {"type": request.text.type}
+        text_dict = (
+            request.text.model_dump(exclude_none=True)
+            if hasattr(request.text, "model_dump")
+            else {"type": request.text.type}
+        )
         json_instruction = build_json_system_prompt(text_dict)
         if json_instruction:
             messages = _inject_json_instruction(messages, json_instruction)
 
     # Strip <think> blocks from history when thinking is OFF (same as Chat Completions path)
     _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
-    _explicit_thinking_off = (
-        request.enable_thinking is False
-        or (_ct_kwargs.get("enable_thinking") is False)
+    _explicit_thinking_off = request.enable_thinking is False or (
+        _ct_kwargs.get("enable_thinking") is False
     )
     if _explicit_thinking_off and messages:
         cleaned = []
@@ -4204,7 +4424,7 @@ async def create_response(
                 content = msg["content"]
                 # Skip list content (assistant messages with images from PR #29)
                 if isinstance(content, str):
-                    stripped = _THINK_STRIP_RE.sub('', content).strip()
+                    stripped = _THINK_STRIP_RE.sub("", content).strip()
                     if stripped != content:
                         if not stripped:
                             continue  # Drop assistant messages that were ONLY thinking
@@ -4214,7 +4434,9 @@ async def create_response(
 
     # Build kwargs
     chat_kwargs = {
-        "max_tokens": request.max_output_tokens if request.max_output_tokens is not None else _default_max_tokens,
+        "max_tokens": request.max_output_tokens
+        if request.max_output_tokens is not None
+        else _default_max_tokens,
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -4241,7 +4463,10 @@ async def create_response(
     else:
         # Auto-detect from model config + tokenizer vocabulary.
         from .model_config_registry import get_model_config_registry
-        _mc = get_model_config_registry().lookup(_model_path or _model_name or request.model)
+
+        _mc = get_model_config_registry().lookup(
+            _model_path or _model_name or request.model
+        )
         _enable = _mc.think_in_template
         if not _enable and _mc.reasoning_parser:
             # Model has a reasoning parser — enable thinking by default.
@@ -4252,7 +4477,7 @@ async def create_response(
         if not _enable:
             try:
                 _tok = engine.tokenizer
-                if getattr(_tok, 'has_thinking', False):
+                if getattr(_tok, "has_thinking", False):
                     _enable = True
             except Exception:
                 pass
@@ -4274,7 +4499,10 @@ async def create_response(
             chat_kwargs["max_tokens"] = _effort_max
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (Responses API path).
-    if _reasoning_parser and type(_reasoning_parser).__name__ == "MistralReasoningParser":
+    if (
+        _reasoning_parser
+        and type(_reasoning_parser).__name__ == "MistralReasoningParser"
+    ):
         _resp_thinking = chat_kwargs.get("enable_thinking")
         if _resp_thinking is True and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "high"
@@ -4297,7 +4525,7 @@ async def create_response(
     # Handle tool_choice: "none" suppresses tools entirely, "auto"/None is default,
     # "required" or specific tool dict are handled post-generation.
     _tool_choice = request.tool_choice
-    _suppress_tools = (_tool_choice == "none")
+    _suppress_tools = _tool_choice == "none"
 
     # Merge MCP tools with user-provided tools
     all_tools = []
@@ -4314,15 +4542,20 @@ async def create_response(
         if request.tools:
             # If tool_choice is a specific tool dict, filter to only that tool
             if isinstance(_tool_choice, dict):
-                target_name = (_tool_choice.get("function", {}).get("name")
-                               or _tool_choice.get("name"))
+                target_name = _tool_choice.get("function", {}).get(
+                    "name"
+                ) or _tool_choice.get("name")
             else:
                 target_name = None
 
             for tool in request.tools:
                 tool_type = tool.get("type", "")
                 # Skip built-in Responses API tools (web_search, code_interpreter, file_search, etc.)
-                if tool_type != "function" and "function" not in tool and "name" not in tool:
+                if (
+                    tool_type != "function"
+                    and "function" not in tool
+                    and "name" not in tool
+                ):
                     continue
                 # Chat Completions nested format: {"type": "function", "function": {...}}
                 if "function" in tool:
@@ -4337,7 +4570,9 @@ async def create_response(
                     if target_name and tool.get("name") != target_name:
                         continue
                     flat = ResponsesToolDefinition(**tool)
-                    all_tools.append(ToolDefinition(**flat.to_chat_completions_format()))
+                    all_tools.append(
+                        ToolDefinition(**flat.to_chat_completions_format())
+                    )
             logger.debug(f"Added {len(all_tools)} tools (tool_choice={_tool_choice})")
 
     # Pass merged tools to engine
@@ -4363,7 +4598,9 @@ async def create_response(
                     f"[responses] reasoning_effort='{_effort}' adjusted max_tokens: "
                     f"{_original_max} -> {_adjusted}"
                 )
-            logger.info(f"[responses] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})")
+            logger.info(
+                f"[responses] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})"
+            )
         # GPT-OSS/GLM Flash: add <|im_end|> as string stop sequence (see Chat Completions path)
         _stop = chat_kwargs.get("stop") or []
         if "<|im_end|>" not in _stop:
@@ -4372,7 +4609,9 @@ async def create_response(
 
     if request.stream:
         return StreamingResponse(
-            stream_responses_api(engine, messages, request, fastapi_request, **chat_kwargs),
+            stream_responses_api(
+                engine, messages, request, fastapi_request, **chat_kwargs
+            ),
             media_type="text/event-stream",
         )
 
@@ -4409,11 +4648,11 @@ async def create_response(
         # Clone parser per-request to avoid shared state across concurrent requests
         request_parser = _reasoning_parser.__class__()
         # Initialize parser state (harmony_active, etc.) — same as streaming path
-        _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get("prompt_suffix", "").startswith("<|start|>assistant<|channel|>analysis")
+        _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get(
+            "prompt_suffix", ""
+        ).startswith("<|start|>assistant<|channel|>analysis")
         request_parser.reset_state(harmony_active=_harmony_prefix_active)
-        reasoning_text, remaining_text = request_parser.extract_reasoning(
-            output.text
-        )
+        reasoning_text, remaining_text = request_parser.extract_reasoning(output.text)
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:
@@ -4430,9 +4669,11 @@ async def create_response(
             reasoning_text = None
 
     # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
-    parse_text = _THINK_STRIP_RE.sub('', content_for_parsing)
-    if parse_text == content_for_parsing and ('</think>' in content_for_parsing or '[/THINK]' in content_for_parsing):
-        for _end_tag in ('</think>', '[/THINK]'):
+    parse_text = _THINK_STRIP_RE.sub("", content_for_parsing)
+    if parse_text == content_for_parsing and (
+        "</think>" in content_for_parsing or "[/THINK]" in content_for_parsing
+    ):
+        for _end_tag in ("</think>", "[/THINK]"):
             if _end_tag in content_for_parsing:
                 _, _, parse_text = content_for_parsing.partition(_end_tag)
                 break
@@ -4441,33 +4682,40 @@ async def create_response(
     # Parse tool calls (skip when tool_choice="none")
     cleaned_text, tool_calls = (
         _parse_tool_calls_with_parser(parse_text, request)
-        if not _suppress_tools else (parse_text or content_for_parsing, None)
+        if not _suppress_tools
+        else (parse_text or content_for_parsing, None)
     )
 
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
     _text_format = request.text if hasattr(request, "text") else None
-    if _text_format and hasattr(_text_format, 'model_dump'):
+    if _text_format and hasattr(_text_format, "model_dump"):
         _text_format = _text_format.model_dump(exclude_none=True)
-    if _text_format and isinstance(_text_format, dict) and _text_format.get("type") not in (None, "text") and not tool_calls:
+    if (
+        _text_format
+        and isinstance(_text_format, dict)
+        and _text_format.get("type") not in (None, "text")
+        and not tool_calls
+    ):
         # Build a response_format-compatible dict for parse_json_output
         _rf_type = _text_format.get("type", "")
         if _rf_type in ("json_schema", "json_object"):
             response_format = _text_format
             _out_text = cleaned_text or content_for_parsing
-            _out_text, parsed_json, is_valid, error = parse_json_output(_out_text, response_format)
+            _out_text, parsed_json, is_valid, error = parse_json_output(
+                _out_text, response_format
+            )
             if parsed_json is not None:
                 cleaned_text = json.dumps(parsed_json)
             if not is_valid:
                 _rf_strict = _text_format.get("json_schema", {}).get("strict", False)
                 if _rf_strict:
                     raise HTTPException(
-                        status_code=400,
-                        detail=f"response_format strict mode: {error}"
+                        status_code=400, detail=f"response_format strict mode: {error}"
                     )
                 logger.warning(f"[responses] JSON validation failed: {error}")
 
     # Enforce tool_choice="required": model MUST produce at least one tool call
-    _resp_tool_choice = getattr(request, 'tool_choice', None)
+    _resp_tool_choice = getattr(request, "tool_choice", None)
     if _resp_tool_choice == "required" and not tool_calls:
         logger.warning(
             f"tool_choice='required' but model produced no tool calls. "
@@ -4487,19 +4735,27 @@ async def create_response(
 
     # Add reasoning output if present
     if reasoning_text:
-        output_items.append(ResponsesOutputMessage(
-            type="reasoning",
-            role="assistant",
-            content=[ResponsesOutputText(type="reasoning", text=reasoning_text)],
-        ))
+        output_items.append(
+            ResponsesOutputMessage(
+                type="reasoning",
+                role="assistant",
+                content=[ResponsesOutputText(type="reasoning", text=reasoning_text)],
+            )
+        )
 
     # Add main message (use cleaned text if tool calls were extracted, otherwise raw text)
-    final_text = clean_output_text(cleaned_text) if cleaned_text else ("" if tool_calls else (output.text or ""))
+    final_text = (
+        clean_output_text(cleaned_text)
+        if cleaned_text
+        else ("" if tool_calls else (output.text or ""))
+    )
     if final_text:
-        output_items.append(ResponsesOutputMessage(
-            role="assistant",
-            content=[ResponsesOutputText(text=final_text)],
-        ))
+        output_items.append(
+            ResponsesOutputMessage(
+                role="assistant",
+                content=[ResponsesOutputText(text=final_text)],
+            )
+        )
 
     # Add tool calls as separate function_call output items (Responses API format)
     if tool_calls:
@@ -4509,7 +4765,9 @@ async def create_response(
             tc_call_id = tc.id if hasattr(tc, "id") and tc.id else None
             fc_kwargs = dict(
                 name=func.name if hasattr(func, "name") else func.get("name", ""),
-                arguments=func.arguments if hasattr(func, "arguments") else func.get("arguments", ""),
+                arguments=func.arguments
+                if hasattr(func, "arguments")
+                else func.get("arguments", ""),
             )
             if tc_call_id:
                 fc_kwargs["call_id"] = tc_call_id
@@ -4574,7 +4832,9 @@ async def stream_completions_multi(
     created = int(time.time())
 
     # Use per-request timeout if provided, otherwise server default
-    _stream_timeout = request.timeout if request.timeout is not None else _default_timeout
+    _stream_timeout = (
+        request.timeout if request.timeout is not None else _default_timeout
+    )
 
     for prompt_index, prompt in enumerate(prompts):
         # Per-prompt request_id so abort targets the correct engine request
@@ -4582,7 +4842,9 @@ async def stream_completions_multi(
         try:
             gen_kwargs: dict = {
                 "prompt": prompt,
-                "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
+                "max_tokens": request.max_tokens
+                if request.max_tokens is not None
+                else _default_max_tokens,
                 "temperature": _resolve_temperature(request.temperature),
                 "top_p": _resolve_top_p(request.top_p),
                 "stop": request.stop,
@@ -4594,7 +4856,9 @@ async def stream_completions_multi(
                 gen_kwargs["min_p"] = request.min_p
             if request.repetition_penalty is not None:
                 gen_kwargs["repetition_penalty"] = request.repetition_penalty
-            async for output in _stream_with_keepalive(engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout):
+            async for output in _stream_with_keepalive(
+                engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout
+            ):
                 if output is None:
                     yield ": keep-alive\n\n"
                     continue
@@ -4607,7 +4871,9 @@ async def stream_completions_multi(
                         {
                             "index": prompt_index,
                             "text": output.new_text,
-                            "finish_reason": output.finish_reason if output.finished else None,
+                            "finish_reason": output.finish_reason
+                            if output.finished
+                            else None,
                         }
                     ],
                 }
@@ -4654,7 +4920,11 @@ def _dump_sse_json(obj) -> str:
 _SSE_KEEPALIVE_INTERVAL = 15.0  # seconds
 
 
-async def _stream_with_keepalive(async_gen, interval: float = _SSE_KEEPALIVE_INTERVAL, total_timeout: float | None = None):
+async def _stream_with_keepalive(
+    async_gen,
+    interval: float = _SSE_KEEPALIVE_INTERVAL,
+    total_timeout: float | None = None,
+):
     """Yield items from async generator, inserting None sentinels on timeout.
     If total_timeout is set, raises TimeoutError after that many seconds of total streaming.
 
@@ -4698,7 +4968,7 @@ async def stream_chat_completion(
     response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
     # Pass response_id as request_id to engine for unified tracking
-    kwargs['request_id'] = response_id
+    kwargs["request_id"] = response_id
 
     # Check if we should include usage in the final chunk
     include_usage = request.stream_options and request.stream_options.include_usage
@@ -4734,7 +5004,10 @@ async def stream_chat_completion(
     # Check if model's chat template injects <think> in the assistant prefix
     # Use _model_name (actual model path) not request.model (which may be "default")
     from .model_config_registry import get_model_config_registry
-    _model_config = get_model_config_registry().lookup(_model_path or _model_name or request.model)
+
+    _model_config = get_model_config_registry().lookup(
+        _model_path or _model_name or request.model
+    )
     think_in_template = _model_config.think_in_template
 
     # Fallback: detect from tokenizer if model config doesn't know this model.
@@ -4743,7 +5016,7 @@ async def stream_chat_completion(
     if not think_in_template and _reasoning_parser:
         try:
             _tok = engine.tokenizer
-            if getattr(_tok, 'has_thinking', False):
+            if getattr(_tok, "has_thinking", False):
                 think_in_template = True
                 logger.info("Detected think_in_template from tokenizer vocabulary")
         except Exception:
@@ -4795,7 +5068,9 @@ async def stream_chat_completion(
     # Create a per-request parser instance to avoid mutable-state conflicts
     # when multiple requests stream concurrently.
     # Check if Harmony analysis prefix was injected (set by chat endpoint above)
-    _harmony_prefix_active = "prompt_suffix" in kwargs and kwargs.get("prompt_suffix", "").startswith("<|start|>assistant<|channel|>analysis")
+    _harmony_prefix_active = "prompt_suffix" in kwargs and kwargs.get(
+        "prompt_suffix", ""
+    ).startswith("<|start|>assistant<|channel|>analysis")
     request_parser = None
     if _reasoning_parser:
         request_parser = _reasoning_parser.__class__()
@@ -4803,7 +5078,9 @@ async def stream_chat_completion(
             think_in_prompt=effective_think_in_template,
             harmony_active=_harmony_prefix_active,
         )
-        logger.debug(f"[chat] Reasoning parser: {type(request_parser).__name__} (think_in_template={effective_think_in_template}, suppress={suppress_reasoning}, harmony_active={_harmony_prefix_active})")
+        logger.debug(
+            f"[chat] Reasoning parser: {type(request_parser).__name__} (think_in_template={effective_think_in_template}, suppress={suppress_reasoning}, harmony_active={_harmony_prefix_active})"
+        )
     else:
         logger.debug("[chat] No reasoning parser active for this request")
 
@@ -4811,7 +5088,9 @@ async def stream_chat_completion(
     accumulated_text = ""
     accumulated_reasoning = ""  # Track reasoning text for fallback
     accumulated_content = ""  # Track content-only text for tool call marker detection
-    streamed_content = ""  # Track content actually yielded to client (for post-stream dedup)
+    streamed_content = (
+        ""  # Track content actually yielded to client (for post-stream dedup)
+    )
     content_was_emitted = False  # Whether any content chunk was actually sent
     reasoning_was_streamed = False  # Whether any reasoning_content chunk was sent
 
@@ -4821,11 +5100,13 @@ async def stream_chat_completion(
     tool_call_buffering = False  # Are we currently buffering for tool calls?
     tool_call_buffering_notified = False  # Have we sent the buffering signal?
     tool_calls_emitted = False  # Were actual tool calls parsed and emitted?
-    _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
+    _suppress_tools = getattr(request, "tool_choice", None) == "none"
     # Auto-enable tool call detection when client sends tools in request (#46),
     # even if server wasn't started with --enable-auto-tool-choice
-    _request_has_tools = bool(getattr(request, 'tools', None))
-    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools) and not _suppress_tools
+    _request_has_tools = bool(getattr(request, "tools", None))
+    tool_call_active = (
+        _enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools
+    ) and not _suppress_tools
 
     # Track token counts for usage reporting
     prompt_tokens = 0
@@ -4834,11 +5115,16 @@ async def stream_chat_completion(
     last_output = None
 
     # Use per-request timeout if provided, otherwise server default
-    _stream_timeout = request.timeout if request.timeout is not None else _default_timeout
+    _stream_timeout = (
+        request.timeout if request.timeout is not None else _default_timeout
+    )
 
     try:
         # Stream content (with SSE keep-alive during long prefills)
-        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=_stream_timeout):
+        async for output in _stream_with_keepalive(
+            engine.stream_chat(messages=messages, **kwargs),
+            total_timeout=_stream_timeout,
+        ):
             # Keep-alive sentinel — emit SSE comment to prevent connection timeout
             if output is None:
                 yield ": keep-alive\n\n"
@@ -4867,7 +5153,11 @@ async def stream_chat_completion(
 
             # Use reasoning parser if enabled
             if request_parser and delta_text:
-                previous_text = accumulated_text[:-len(delta_text)] if delta_text else accumulated_text
+                previous_text = (
+                    accumulated_text[: -len(delta_text)]
+                    if delta_text
+                    else accumulated_text
+                )
                 delta_msg = request_parser.extract_reasoning_streaming(
                     previous_text, accumulated_text, delta_text
                 )
@@ -4875,12 +5165,16 @@ async def stream_chat_completion(
                 if delta_msg is None:
                     # Skip this chunk (e.g., <think> token itself)
                     if suppress_reasoning:
-                        logger.debug(f"[reasoning-debug] parser returned None for delta={repr(delta_text[:50])}, suppress={suppress_reasoning}, think_in_prompt={effective_think_in_template}")
+                        logger.debug(
+                            f"[reasoning-debug] parser returned None for delta={repr(delta_text[:50])}, suppress={suppress_reasoning}, think_in_prompt={effective_think_in_template}"
+                        )
                     continue
 
                 # Debug: log parser output when suppress is active
                 if suppress_reasoning and (delta_msg.content or delta_msg.reasoning):
-                    logger.debug(f"[reasoning-debug] content={repr((delta_msg.content or '')[:30])}, reasoning={repr((delta_msg.reasoning or '')[:30])}, suppress={suppress_reasoning}")
+                    logger.debug(
+                        f"[reasoning-debug] content={repr((delta_msg.content or '')[:30])}, reasoning={repr((delta_msg.reasoning or '')[:30])}, suppress={suppress_reasoning}"
+                    )
 
                 # Accumulate for marker detection (before buffering check)
                 if delta_msg.content:
@@ -4902,7 +5196,11 @@ async def stream_chat_completion(
                                 break
                     if not tool_call_buffering and delta_msg.reasoning:
                         # Use trailing window (last 30 chars covers longest marker)
-                        _reasoning_tail = accumulated_reasoning[-30:] if len(accumulated_reasoning) > 30 else accumulated_reasoning
+                        _reasoning_tail = (
+                            accumulated_reasoning[-30:]
+                            if len(accumulated_reasoning) > 30
+                            else accumulated_reasoning
+                        )
                         for marker in _TOOL_CALL_MARKERS:
                             if marker in _reasoning_tail:
                                 tool_call_buffering = True
@@ -4910,8 +5208,16 @@ async def stream_chat_completion(
                     # GPT-OSS/Harmony native tool format: to=<name> code{...}
                     # Uses regex for specificity (plain "to=" is too broad for markers list)
                     if not tool_call_buffering:
-                        _tc_check = accumulated_content or (accumulated_reasoning[-30:] if accumulated_reasoning else "") or ""
-                        if re.search(r'\bto=\w[\w.]*\s+code\{', _tc_check):
+                        _tc_check = (
+                            accumulated_content
+                            or (
+                                accumulated_reasoning[-30:]
+                                if accumulated_reasoning
+                                else ""
+                            )
+                            or ""
+                        )
+                        if re.search(r"\bto=\w[\w.]*\s+code\{", _tc_check):
                             tool_call_buffering = True
 
                 if tool_call_buffering:
@@ -4943,7 +5249,9 @@ async def stream_chat_completion(
                 # The model still thinks internally (template always injects <think>),
                 # but the UI won't show any thinking text — just a brief pause then the answer.
                 if suppress_reasoning:
-                    emit_content = delta_msg.content  # Only emit actual content after </think>
+                    emit_content = (
+                        delta_msg.content
+                    )  # Only emit actual content after </think>
                     emit_reasoning = None
                     # Note: reasoning tool-call markers are already detected at lines above
                     # via delta_msg.reasoning check — no need to add reasoning to accumulated_content
@@ -4971,7 +5279,9 @@ async def stream_chat_completion(
                                 content=emit_content,
                                 reasoning=emit_reasoning,
                             ),
-                            finish_reason=output.finish_reason if output.finished else None,
+                            finish_reason=output.finish_reason
+                            if output.finished
+                            else None,
                         )
                     ],
                     usage=chunk_usage,
@@ -5028,7 +5338,9 @@ async def stream_chat_completion(
                             delta=ChatCompletionChunkDelta(
                                 content=content if content else None
                             ),
-                            finish_reason=output.finish_reason if output.finished else None,
+                            finish_reason=output.finish_reason
+                            if output.finished
+                            else None,
                         )
                     ],
                     usage=chunk_usage,
@@ -5063,7 +5375,9 @@ async def stream_chat_completion(
                 total_tokens=prompt_tokens + completion_tokens,
             )
             if cached_tokens > 0:
-                _err_usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
+                _err_usage.prompt_tokens_details = PromptTokensDetails(
+                    cached_tokens=cached_tokens
+                )
             err_usage_chunk = ChatCompletionChunk(
                 id=response_id,
                 created=_created_ts,
@@ -5089,14 +5403,18 @@ async def stream_chat_completion(
             # Tool call markers were in reasoning — try parsing reasoning text
             parse_text = accumulated_reasoning.strip()
         else:
-            parse_text = _THINK_STRIP_RE.sub('', accumulated_text)
-            if parse_text == accumulated_text and ('</think>' in parse_text or '[/THINK]' in parse_text):
-                for _end_tag in ('</think>', '[/THINK]'):
+            parse_text = _THINK_STRIP_RE.sub("", accumulated_text)
+            if parse_text == accumulated_text and (
+                "</think>" in parse_text or "[/THINK]" in parse_text
+            ):
+                for _end_tag in ("</think>", "[/THINK]"):
                     if _end_tag in parse_text:
                         _, _, parse_text = parse_text.partition(_end_tag)
                         break
             parse_text = parse_text.strip()
-        cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or accumulated_text, request)
+        cleaned_text, tool_calls = _parse_tool_calls_with_parser(
+            parse_text or accumulated_text, request
+        )
         if tool_calls:
             # Emit any remaining content text before the tool calls,
             # but ONLY the portion that wasn't already streamed.
@@ -5112,7 +5430,7 @@ async def stream_chat_completion(
                     unemitted_content = candidate
                 elif candidate.startswith(already_sent):
                     # Subtract the already-streamed portion
-                    remainder = candidate[len(already_sent):].strip()
+                    remainder = candidate[len(already_sent) :].strip()
                     unemitted_content = remainder if remainder else None
                 else:
                     # Content doesn't overlap (rare: reasoning redirect, etc.)
@@ -5157,14 +5475,16 @@ async def stream_chat_completion(
                 "object": "chat.completion.chunk",
                 "created": _created_ts,
                 "model": request.model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {
-                        "role": "assistant",
-                        "tool_calls": tc_deltas,
-                    },
-                    "finish_reason": None,
-                }],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": tc_deltas,
+                        },
+                        "finish_reason": None,
+                    }
+                ],
             }
             yield f"data: {json.dumps(tc_data_chunk, ensure_ascii=True)}\n\n"
             # Finish chunk: empty delta with finish_reason="tool_calls"
@@ -5173,11 +5493,13 @@ async def stream_chat_completion(
                 "object": "chat.completion.chunk",
                 "created": _created_ts,
                 "model": request.model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "tool_calls",
-                }],
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "tool_calls",
+                    }
+                ],
             }
             yield f"data: {json.dumps(tc_finish_chunk, ensure_ascii=True)}\n\n"
             # Skip normal end-of-stream handling — we already set finish_reason
@@ -5188,7 +5510,9 @@ async def stream_chat_completion(
                     total_tokens=prompt_tokens + completion_tokens,
                 )
                 if cached_tokens > 0:
-                    _tc_usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
+                    _tc_usage.prompt_tokens_details = PromptTokensDetails(
+                        cached_tokens=cached_tokens
+                    )
                 usage_chunk = ChatCompletionChunk(
                     id=response_id,
                     created=_created_ts,
@@ -5207,15 +5531,23 @@ async def stream_chat_completion(
             # When reasoning parser is active, use accumulated_content (content-only)
             # instead of accumulated_text (which includes reasoning and would leak it).
             already_sent = streamed_content.strip()
-            full = accumulated_content.strip() if request_parser else accumulated_text.strip()
+            full = (
+                accumulated_content.strip()
+                if request_parser
+                else accumulated_text.strip()
+            )
             if already_sent and full.startswith(already_sent):
-                remainder = full[len(already_sent):].strip()
+                remainder = full[len(already_sent) :].strip()
             else:
                 remainder = full if not content_was_emitted else ""
             if remainder:
                 # Use the engine's actual finish_reason (e.g., "length" if max_tokens
                 # was hit) instead of hardcoding "stop"
-                _flush_reason = (last_output.finish_reason if last_output and last_output.finish_reason else "stop")
+                _flush_reason = (
+                    last_output.finish_reason
+                    if last_output and last_output.finish_reason
+                    else "stop"
+                )
                 flush_chunk = ChatCompletionChunk(
                     id=response_id,
                     created=_created_ts,
@@ -5235,7 +5567,13 @@ async def stream_chat_completion(
     # producing content after the closing tag.
     # Skip if reasoning was already streamed as reasoning_content chunks — the
     # client already has the text and echoing it as content creates duplicates.
-    if request_parser and not content_was_emitted and accumulated_reasoning and not reasoning_was_streamed and not suppress_reasoning:
+    if (
+        request_parser
+        and not content_was_emitted
+        and accumulated_reasoning
+        and not reasoning_was_streamed
+        and not suppress_reasoning
+    ):
         fallback_chunk = ChatCompletionChunk(
             id=response_id,
             created=_created_ts,
@@ -5254,7 +5592,9 @@ async def stream_chat_completion(
     # When reasoning is suppressed and the model produced ONLY reasoning (no content),
     # emit a diagnostic so the client isn't left with a completely silent empty response.
     if suppress_reasoning and not content_was_emitted and accumulated_reasoning:
-        logger.info(f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting")
+        logger.info(
+            f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
+        )
         diag_chunk = ChatCompletionChunk(
             id=response_id,
             created=_created_ts,
@@ -5275,8 +5615,9 @@ async def stream_chat_completion(
     # Also catches the case where engine yielded an output with 0 completion tokens
     # (e.g., immediate EOS) — last_output is set but nothing was emitted.
     _zero_tokens = (last_output is None) or (
-        not content_was_emitted and not accumulated_reasoning
-        and getattr(last_output, 'completion_tokens', 1) == 0
+        not content_was_emitted
+        and not accumulated_reasoning
+        and getattr(last_output, "completion_tokens", 1) == 0
     )
     if _zero_tokens and not content_was_emitted and not accumulated_reasoning:
         logger.warning(f"Request {response_id}: model generated zero tokens")
@@ -5296,10 +5637,12 @@ async def stream_chat_completion(
         yield f"data: {_dump_sse_json(empty_chunk)}\n\n"
 
     # Enforce tool_choice="required" in streaming: emit error SSE if no tool calls
-    if getattr(request, 'tool_choice', None) == "required" and not tool_calls_emitted:
+    if getattr(request, "tool_choice", None) == "required" and not tool_calls_emitted:
         # tool_calls_emitted is set True only when tool calls were actually parsed and yielded.
         # tool_call_buffering can be True even on false-positive marker detection with no actual calls.
-        logger.warning(f"Stream {response_id}: tool_choice='required' but no tool calls produced")
+        logger.warning(
+            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
+        )
         error_data = {
             "id": response_id,
             "object": "chat.completion.chunk",
@@ -5318,9 +5661,11 @@ async def stream_chat_completion(
     # H4: Validate response_format (json_schema/json_object) at end of stream.
     # Streaming can't reject mid-stream, so validate the accumulated output and
     # log a warning. For strict mode, emit an error SSE event.
-    _rf = getattr(request, 'response_format', None)
+    _rf = getattr(request, "response_format", None)
     if _rf and content_was_emitted and not tool_call_buffering:
-        _final_text = accumulated_content.strip() if request_parser else accumulated_text.strip()
+        _final_text = (
+            accumulated_content.strip() if request_parser else accumulated_text.strip()
+        )
         if _final_text:
             _, parsed_json, is_valid, rf_error = parse_json_output(_final_text, _rf)
             if not is_valid:
@@ -5330,7 +5675,9 @@ async def stream_chat_completion(
                 elif hasattr(_rf, "json_schema") and _rf.json_schema:
                     _rf_strict = getattr(_rf.json_schema, "strict", False)
                 if _rf_strict:
-                    logger.warning(f"Stream {response_id}: JSON schema validation failed (strict): {rf_error}")
+                    logger.warning(
+                        f"Stream {response_id}: JSON schema validation failed (strict): {rf_error}"
+                    )
                     error_data = {
                         "id": response_id,
                         "object": "chat.completion.chunk",
@@ -5342,7 +5689,9 @@ async def stream_chat_completion(
                     }
                     yield f"data: {json.dumps(error_data)}\n\n"
                 else:
-                    logger.warning(f"Stream {response_id}: JSON validation failed: {rf_error}")
+                    logger.warning(
+                        f"Stream {response_id}: JSON validation failed: {rf_error}"
+                    )
 
     # Send final chunk with usage if requested
     if include_usage:
@@ -5352,7 +5701,9 @@ async def stream_chat_completion(
             total_tokens=prompt_tokens + completion_tokens,
         )
         if cached_tokens > 0:
-            _usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
+            _usage.prompt_tokens_details = PromptTokensDetails(
+                cached_tokens=cached_tokens
+            )
         usage_chunk = ChatCompletionChunk(
             id=response_id,
             created=_created_ts,
@@ -5379,7 +5730,7 @@ async def stream_responses_api(
     structured function_call events at the end.
     """
     response_id = f"resp_{uuid.uuid4().hex[:12]}"
-    kwargs['request_id'] = response_id
+    kwargs["request_id"] = response_id
     seq = 0
     created_at = int(time.time())
 
@@ -5393,30 +5744,53 @@ async def stream_responses_api(
         return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=True)}\n\n"
 
     # Emit response.created
-    yield _sse("response.created", {
-        "type": "response.created",
-        "response": {
-            "id": response_id, "object": "response", "created_at": created_at,
-            "status": "in_progress", "model": request.model, "output": [],
+    yield _sse(
+        "response.created",
+        {
+            "type": "response.created",
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "created_at": created_at,
+                "status": "in_progress",
+                "model": request.model,
+                "output": [],
+            },
         },
-    })
+    )
 
     # Create text message output item immediately for streaming
     msg_id = f"item_{uuid.uuid4().hex[:12]}"
-    yield _sse("response.output_item.added", {
-        "type": "response.output_item.added", "output_index": 0,
-        "item": {"id": msg_id, "type": "message", "status": "in_progress",
-                 "role": "assistant", "content": []},
-    })
-    yield _sse("response.content_part.added", {
-        "type": "response.content_part.added", "item_id": msg_id,
-        "output_index": 0, "content_index": 0,
-        "part": {"type": "output_text", "text": "", "annotations": []},
-    })
+    yield _sse(
+        "response.output_item.added",
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": msg_id,
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+            },
+        },
+    )
+    yield _sse(
+        "response.content_part.added",
+        {
+            "type": "response.content_part.added",
+            "item_id": msg_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": []},
+        },
+    )
 
-    _suppress_tools = (getattr(request, 'tool_choice', None) == "none")
-    _request_has_tools = bool(getattr(request, 'tools', None))
-    tool_call_active = (_enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools) and not _suppress_tools
+    _suppress_tools = getattr(request, "tool_choice", None) == "none"
+    _request_has_tools = bool(getattr(request, "tools", None))
+    tool_call_active = (
+        _enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools
+    ) and not _suppress_tools
     tool_call_buffering = False
 
     full_text = ""
@@ -5428,7 +5802,9 @@ async def stream_responses_api(
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
-    last_output = None  # Track last engine output for finish_reason (status: incomplete)
+    last_output = (
+        None  # Track last engine output for finish_reason (status: incomplete)
+    )
 
     # Resolve effective enable_thinking:
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
@@ -5444,14 +5820,17 @@ async def stream_responses_api(
 
     # Reasoning parser setup (mirrors stream_chat_completion)
     from .model_config_registry import get_model_config_registry
-    _model_config = get_model_config_registry().lookup(_model_path or _model_name or request.model)
+
+    _model_config = get_model_config_registry().lookup(
+        _model_path or _model_name or request.model
+    )
     think_in_template = _model_config.think_in_template
 
     # Fallback: detect from tokenizer if model config doesn't know this model
     if not think_in_template and _reasoning_parser:
         try:
             _tok = engine.tokenizer
-            if getattr(_tok, 'has_thinking', False):
+            if getattr(_tok, "has_thinking", False):
                 think_in_template = True
         except Exception:
             pass
@@ -5481,7 +5860,9 @@ async def stream_responses_api(
 
     # Create a per-request parser instance to avoid mutable-state conflicts
     # when multiple requests stream concurrently.
-    _harmony_prefix_active = "prompt_suffix" in kwargs and kwargs.get("prompt_suffix", "").startswith("<|start|>assistant<|channel|>analysis")
+    _harmony_prefix_active = "prompt_suffix" in kwargs and kwargs.get(
+        "prompt_suffix", ""
+    ).startswith("<|start|>assistant<|channel|>analysis")
     request_parser = None
     if _reasoning_parser:
         request_parser = _reasoning_parser.__class__()
@@ -5489,15 +5870,22 @@ async def stream_responses_api(
             think_in_prompt=effective_think_in_template,
             harmony_active=_harmony_prefix_active,
         )
-        logger.debug(f"[responses] Reasoning parser: {type(request_parser).__name__} (think_in_template={effective_think_in_template}, suppress={suppress_reasoning}, harmony_active={_harmony_prefix_active})")
+        logger.debug(
+            f"[responses] Reasoning parser: {type(request_parser).__name__} (think_in_template={effective_think_in_template}, suppress={suppress_reasoning}, harmony_active={_harmony_prefix_active})"
+        )
     else:
         logger.debug("[responses] No reasoning parser active for this request")
 
     # Use per-request timeout if provided, otherwise server default
-    _stream_timeout = request.timeout if request.timeout is not None else _default_timeout
+    _stream_timeout = (
+        request.timeout if request.timeout is not None else _default_timeout
+    )
 
     try:
-        async for output in _stream_with_keepalive(engine.stream_chat(messages=messages, **kwargs), total_timeout=_stream_timeout):
+        async for output in _stream_with_keepalive(
+            engine.stream_chat(messages=messages, **kwargs),
+            total_timeout=_stream_timeout,
+        ):
             # Keep-alive sentinel — emit SSE comment to prevent connection timeout
             if output is None:
                 yield ": keep-alive\n\n"
@@ -5526,7 +5914,9 @@ async def stream_responses_api(
 
                 # Use reasoning parser if enabled
                 if request_parser:
-                    previous_text = full_text[:-len(delta_text)] if delta_text else full_text
+                    previous_text = (
+                        full_text[: -len(delta_text)] if delta_text else full_text
+                    )
                     delta_msg = request_parser.extract_reasoning_streaming(
                         previous_text, full_text, delta_text
                     )
@@ -5551,23 +5941,38 @@ async def stream_responses_api(
                                         tool_call_buffering = True
                                         break
                             if not tool_call_buffering and delta_msg.reasoning:
-                                _reasoning_tail = accumulated_reasoning[-30:] if len(accumulated_reasoning) > 30 else accumulated_reasoning
+                                _reasoning_tail = (
+                                    accumulated_reasoning[-30:]
+                                    if len(accumulated_reasoning) > 30
+                                    else accumulated_reasoning
+                                )
                                 for marker in _TOOL_CALL_MARKERS:
                                     if marker in _reasoning_tail:
                                         tool_call_buffering = True
                                         break
                             # GPT-OSS/Harmony native tool format: to=<name> code{...}
                             if not tool_call_buffering:
-                                _tc_check = accumulated_content or (accumulated_reasoning[-30:] if accumulated_reasoning else "") or ""
-                                if re.search(r'\bto=\w[\w.]*\s+code\{', _tc_check):
+                                _tc_check = (
+                                    accumulated_content
+                                    or (
+                                        accumulated_reasoning[-30:]
+                                        if accumulated_reasoning
+                                        else ""
+                                    )
+                                    or ""
+                                )
+                                if re.search(r"\bto=\w[\w.]*\s+code\{", _tc_check):
                                     tool_call_buffering = True
 
                         if tool_call_buffering:
                             # Emit heartbeat during tool call buffering so the client
                             # sees activity (matches ChatCompletion heartbeat behavior).
-                            yield _sse("response.heartbeat", {
-                                "type": "response.heartbeat",
-                            })
+                            yield _sse(
+                                "response.heartbeat",
+                                {
+                                    "type": "response.heartbeat",
+                                },
+                            )
                             continue
 
                         if not tool_call_buffering:
@@ -5575,7 +5980,9 @@ async def stream_responses_api(
                             # but model forces it), drop reasoning entirely so the user only
                             # sees the final answer after the model finishes thinking.
                             if suppress_reasoning:
-                                emit_content = delta_msg.content  # Only actual content after </think>
+                                emit_content = (
+                                    delta_msg.content
+                                )  # Only actual content after </think>
                                 emit_reasoning = None
                                 # Note: reasoning tool-call markers are already detected above
                                 # via delta_msg.reasoning check — no need to add reasoning to accumulated_content
@@ -5586,22 +5993,29 @@ async def stream_responses_api(
                             # Emit reasoning as custom event
                             if emit_reasoning:
                                 reasoning_was_streamed = True
-                                yield _sse("response.reasoning.delta", {
-                                    "type": "response.reasoning.delta",
-                                    "item_id": msg_id,
-                                    "output_index": 0,
-                                    "delta": emit_reasoning,
-                                })
+                                yield _sse(
+                                    "response.reasoning.delta",
+                                    {
+                                        "type": "response.reasoning.delta",
+                                        "item_id": msg_id,
+                                        "output_index": 0,
+                                        "delta": emit_reasoning,
+                                    },
+                                )
                             # Emit content as standard text delta
                             if emit_content:
                                 content_was_emitted = True
                                 streamed_text += emit_content
-                                yield _sse("response.output_text.delta", {
-                                    "type": "response.output_text.delta",
-                                    "item_id": msg_id,
-                                    "output_index": 0, "content_index": 0,
-                                    "delta": emit_content,
-                                })
+                                yield _sse(
+                                    "response.output_text.delta",
+                                    {
+                                        "type": "response.output_text.delta",
+                                        "item_id": msg_id,
+                                        "output_index": 0,
+                                        "content_index": 0,
+                                        "delta": emit_content,
+                                    },
+                                )
                 else:
                     # Standard path without reasoning parsing
                     content = delta_text
@@ -5615,9 +6029,12 @@ async def stream_responses_api(
 
                     if tool_call_buffering:
                         # Emit heartbeat during tool call buffering (standard path)
-                        yield _sse("response.heartbeat", {
-                            "type": "response.heartbeat",
-                        })
+                        yield _sse(
+                            "response.heartbeat",
+                            {
+                                "type": "response.heartbeat",
+                            },
+                        )
                         continue
                     else:
                         # Add <think> prefix on first chunk for thinking models
@@ -5628,11 +6045,16 @@ async def stream_responses_api(
                         if content:
                             content_was_emitted = True
                             streamed_text += content
-                            yield _sse("response.output_text.delta", {
-                                "type": "response.output_text.delta", "item_id": msg_id,
-                                "output_index": 0, "content_index": 0,
-                                "delta": content,
-                            })
+                            yield _sse(
+                                "response.output_text.delta",
+                                {
+                                    "type": "response.output_text.delta",
+                                    "item_id": msg_id,
+                                    "output_index": 0,
+                                    "content_index": 0,
+                                    "delta": content,
+                                },
+                            )
 
             # Emit per-chunk usage when include_usage is enabled (for real-time metrics)
             if include_usage and (prompt_tokens or completion_tokens):
@@ -5643,24 +6065,30 @@ async def stream_responses_api(
                 }
                 if _cached > 0:
                     usage_obj["input_tokens_details"] = {"cached_tokens": _cached}
-                yield _sse("response.usage", {
-                    "type": "response.usage",
-                    "usage": usage_obj,
-                })
+                yield _sse(
+                    "response.usage",
+                    {
+                        "type": "response.usage",
+                        "usage": usage_obj,
+                    },
+                )
     except Exception as e:
         # On any error, abort the request and emit an error SSE event
         # so the client knows what happened instead of a silent EOF.
         logger.error(f"Stream error for {response_id}: {e}", exc_info=True)
         if hasattr(engine, "abort_request"):
             await engine.abort_request(response_id)
-        yield _sse("error", {
-            "type": "error",
-            "error": {
-                "type": "server_error",
-                "message": f"Stream generation failed: {e}",
-                "code": "internal_error",
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "error": {
+                    "type": "server_error",
+                    "message": f"Stream generation failed: {e}",
+                    "code": "internal_error",
+                },
             },
-        })
+        )
         # M8: Include partial usage in failed response so client gets token counts
         _err_usage = {}
         if prompt_tokens > 0 or completion_tokens > 0:
@@ -5671,25 +6099,32 @@ async def stream_responses_api(
                     "total_tokens": prompt_tokens + completion_tokens,
                 },
             }
-        yield _sse("response.completed", {
-            "type": "response.completed",
-            "response": {
-                "id": response_id, "object": "response",
-                "status": "failed",
-                "error": {"type": "server_error", "message": str(e)},
-                **_err_usage,
+        yield _sse(
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": response_id,
+                    "object": "response",
+                    "status": "failed",
+                    "error": {"type": "server_error", "message": str(e)},
+                    **_err_usage,
+                },
             },
-        })
+        )
         return
 
     # Emit reasoning done event if reasoning was produced (skip when suppressed)
     if accumulated_reasoning and not suppress_reasoning:
-        yield _sse("response.reasoning.done", {
-            "type": "response.reasoning.done",
-            "item_id": msg_id,
-            "output_index": 0,
-            "reasoning": accumulated_reasoning,
-        })
+        yield _sse(
+            "response.reasoning.done",
+            {
+                "type": "response.reasoning.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "reasoning": accumulated_reasoning,
+            },
+        )
 
     # Build output items list for the completed response
     all_output_items = []
@@ -5709,21 +6144,27 @@ async def stream_responses_api(
         elif request_parser and accumulated_reasoning.strip():
             parse_text = accumulated_reasoning.strip()
         else:
-            parse_text = _THINK_STRIP_RE.sub('', full_text)
-            if parse_text == full_text and ('</think>' in full_text or '[/THINK]' in full_text):
-                for _end_tag in ('</think>', '[/THINK]'):
+            parse_text = _THINK_STRIP_RE.sub("", full_text)
+            if parse_text == full_text and (
+                "</think>" in full_text or "[/THINK]" in full_text
+            ):
+                for _end_tag in ("</think>", "[/THINK]"):
                     if _end_tag in full_text:
                         _, _, parse_text = full_text.partition(_end_tag)
                         break
             parse_text = parse_text.strip()
-        cleaned_text, tool_calls = _parse_tool_calls_with_parser(parse_text or full_text, request)
+        cleaned_text, tool_calls = _parse_tool_calls_with_parser(
+            parse_text or full_text, request
+        )
 
     display_text = ""
 
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
         if request_parser and cleaned_text:
-            reasoning_text, content_text = request_parser.extract_reasoning(cleaned_text)
+            reasoning_text, content_text = request_parser.extract_reasoning(
+                cleaned_text
+            )
             if content_text:
                 cleaned_text = content_text
             elif reasoning_text:
@@ -5731,68 +6172,132 @@ async def stream_responses_api(
 
         # Finalize the text message with whatever content was before the tool call
         final_text = (cleaned_text or "").strip()
-        yield _sse("response.output_text.done", {
-            "type": "response.output_text.done", "item_id": msg_id,
-            "output_index": output_index, "content_index": 0, "text": final_text,
-        })
-        yield _sse("response.content_part.done", {
-            "type": "response.content_part.done", "item_id": msg_id,
-            "output_index": output_index, "content_index": 0,
-            "part": {"type": "output_text", "text": final_text, "annotations": []},
-        })
-        yield _sse("response.output_item.done", {
-            "type": "response.output_item.done", "output_index": output_index,
-            "item": {"id": msg_id, "type": "message", "status": "completed",
-                     "role": "assistant",
-                     "content": [{"type": "output_text", "text": final_text, "annotations": []}]},
-        })
+        yield _sse(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": msg_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "text": final_text,
+            },
+        )
+        yield _sse(
+            "response.content_part.done",
+            {
+                "type": "response.content_part.done",
+                "item_id": msg_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": final_text, "annotations": []},
+            },
+        )
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": {
+                    "id": msg_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": final_text, "annotations": []}
+                    ],
+                },
+            },
+        )
         if final_text:
-            all_output_items.append({
-                "id": msg_id, "type": "message", "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": final_text, "annotations": []}],
-            })
+            all_output_items.append(
+                {
+                    "id": msg_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": final_text, "annotations": []}
+                    ],
+                }
+            )
             output_index += 1
 
         # Emit each tool call as a function_call output item
         for tc in tool_calls:
             func = tc.function if hasattr(tc, "function") else tc
             tc_name = func.name if hasattr(func, "name") else func.get("name", "")
-            tc_args = func.arguments if hasattr(func, "arguments") else func.get("arguments", "")
+            tc_args = (
+                func.arguments
+                if hasattr(func, "arguments")
+                else func.get("arguments", "")
+            )
             call_id = tc.id if hasattr(tc, "id") else f"call_{uuid.uuid4().hex[:8]}"
             fc_id = f"fc_{uuid.uuid4().hex[:12]}"
 
-            yield _sse("response.output_item.added", {
-                "type": "response.output_item.added", "output_index": output_index,
-                "item": {"id": fc_id, "type": "function_call", "status": "in_progress",
-                         "call_id": call_id, "name": tc_name, "arguments": ""},
-            })
+            yield _sse(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": output_index,
+                    "item": {
+                        "id": fc_id,
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "call_id": call_id,
+                        "name": tc_name,
+                        "arguments": "",
+                    },
+                },
+            )
             # Emit arguments incrementally in ~16-char chunks per OpenAI spec
             _ARG_CHUNK = 16
             if tc_args:
                 for _ci in range(0, len(tc_args), _ARG_CHUNK):
-                    yield _sse("response.function_call_arguments.delta", {
-                        "type": "response.function_call_arguments.delta", "item_id": fc_id,
-                        "output_index": output_index, "delta": tc_args[_ci:_ci + _ARG_CHUNK],
-                    })
+                    yield _sse(
+                        "response.function_call_arguments.delta",
+                        {
+                            "type": "response.function_call_arguments.delta",
+                            "item_id": fc_id,
+                            "output_index": output_index,
+                            "delta": tc_args[_ci : _ci + _ARG_CHUNK],
+                        },
+                    )
             else:
                 # Empty arguments — emit one delta to satisfy clients
-                yield _sse("response.function_call_arguments.delta", {
-                    "type": "response.function_call_arguments.delta", "item_id": fc_id,
-                    "output_index": output_index, "delta": "",
-                })
-            yield _sse("response.function_call_arguments.done", {
-                "type": "response.function_call_arguments.done", "item_id": fc_id,
-                "output_index": output_index, "arguments": tc_args,
-            })
+                yield _sse(
+                    "response.function_call_arguments.delta",
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": fc_id,
+                        "output_index": output_index,
+                        "delta": "",
+                    },
+                )
+            yield _sse(
+                "response.function_call_arguments.done",
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": fc_id,
+                    "output_index": output_index,
+                    "arguments": tc_args,
+                },
+            )
             fc_item = {
-                "id": fc_id, "type": "function_call", "status": "completed",
-                "call_id": call_id, "name": tc_name, "arguments": tc_args,
+                "id": fc_id,
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": tc_name,
+                "arguments": tc_args,
             }
-            yield _sse("response.output_item.done", {
-                "type": "response.output_item.done", "output_index": output_index,
-                "item": fc_item,
-            })
+            yield _sse(
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": fc_item,
+                },
+            )
             all_output_items.append(fc_item)
             output_index += 1
     else:
@@ -5802,13 +6307,19 @@ async def stream_responses_api(
             # Reasoning was already emitted during streaming — use content-only text
             if accumulated_content:
                 display_text = accumulated_content
-            elif accumulated_reasoning and not reasoning_was_streamed and not suppress_reasoning:
+            elif (
+                accumulated_reasoning
+                and not reasoning_was_streamed
+                and not suppress_reasoning
+            ):
                 # Model only produced reasoning with no content — use as fallback.
                 # Skip if reasoning was already streamed as deltas (avoids duplication).
                 display_text = accumulated_reasoning
             elif display_text:
                 # Fallback: re-parse if streaming didn't accumulate
-                reasoning_text, content_text = request_parser.extract_reasoning(display_text)
+                reasoning_text, content_text = request_parser.extract_reasoning(
+                    display_text
+                )
                 if content_text:
                     display_text = content_text
                 elif reasoning_text:
@@ -5821,88 +6332,156 @@ async def stream_responses_api(
             # is intentionally empty — don't show error fallback
             if suppress_reasoning and accumulated_reasoning:
                 display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
-                logger.info(f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting")
+                logger.info(
+                    f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
+                )
             else:
-                display_text = "[Model produced no response. Check server logs for details.]"
-                logger.warning(f"Request {response_id}: empty response in Responses API")
+                display_text = (
+                    "[Model produced no response. Check server logs for details.]"
+                )
+                logger.warning(
+                    f"Request {response_id}: empty response in Responses API"
+                )
 
-        yield _sse("response.output_text.done", {
-            "type": "response.output_text.done", "item_id": msg_id,
-            "output_index": output_index, "content_index": 0, "text": display_text,
-        })
-        yield _sse("response.content_part.done", {
-            "type": "response.content_part.done", "item_id": msg_id,
-            "output_index": output_index, "content_index": 0,
-            "part": {"type": "output_text", "text": display_text, "annotations": []},
-        })
-        yield _sse("response.output_item.done", {
-            "type": "response.output_item.done", "output_index": output_index,
-            "item": {"id": msg_id, "type": "message", "status": "completed",
-                     "role": "assistant",
-                     "content": [{"type": "output_text", "text": display_text, "annotations": []}]},
-        })
-        all_output_items.append({
-            "id": msg_id, "type": "message", "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": display_text, "annotations": []}],
-        })
+        yield _sse(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": msg_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "text": display_text,
+            },
+        )
+        yield _sse(
+            "response.content_part.done",
+            {
+                "type": "response.content_part.done",
+                "item_id": msg_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": display_text,
+                    "annotations": [],
+                },
+            },
+        )
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": {
+                    "id": msg_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": display_text, "annotations": []}
+                    ],
+                },
+            },
+        )
+        all_output_items.append(
+            {
+                "id": msg_id,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": display_text, "annotations": []}
+                ],
+            }
+        )
 
     # H4: Validate text format (json_schema/json_object) at end of stream.
-    _text_fmt = getattr(request, 'text', None)
+    _text_fmt = getattr(request, "text", None)
     # Convert Pydantic model to dict for uniform access
-    if _text_fmt and hasattr(_text_fmt, 'model_dump'):
+    if _text_fmt and hasattr(_text_fmt, "model_dump"):
         _text_fmt = _text_fmt.model_dump(exclude_none=True)
-    if _text_fmt and isinstance(_text_fmt, dict) and _text_fmt.get("type") not in (None, "text"):
+    if (
+        _text_fmt
+        and isinstance(_text_fmt, dict)
+        and _text_fmt.get("type") not in (None, "text")
+    ):
         _rf_type = _text_fmt.get("type", "")
         _FALLBACK_MSG = "[Model produced no response. Check server logs for details.]"
-        if _rf_type in ("json_schema", "json_object") and display_text and display_text != _FALLBACK_MSG:
+        if (
+            _rf_type in ("json_schema", "json_object")
+            and display_text
+            and display_text != _FALLBACK_MSG
+        ):
             _, _pj, _valid, _err = parse_json_output(display_text, _text_fmt)
             if not _valid:
                 _strict = _text_fmt.get("json_schema", {}).get("strict", False)
                 if _strict:
-                    logger.warning(f"Stream {response_id}: JSON schema validation failed (strict): {_err}")
-                    yield _sse("error", {
-                        "type": "error",
-                        "message": f"response_format strict mode: {_err}",
-                        "code": "json_validation_failed",
-                    })
+                    logger.warning(
+                        f"Stream {response_id}: JSON schema validation failed (strict): {_err}"
+                    )
+                    yield _sse(
+                        "error",
+                        {
+                            "type": "error",
+                            "message": f"response_format strict mode: {_err}",
+                            "code": "json_validation_failed",
+                        },
+                    )
                 else:
-                    logger.warning(f"Stream {response_id}: JSON validation failed: {_err}")
+                    logger.warning(
+                        f"Stream {response_id}: JSON validation failed: {_err}"
+                    )
 
     # Enforce tool_choice="required" in Responses API streaming
-    _resp_stream_tc = getattr(request, 'tool_choice', None)
+    _resp_stream_tc = getattr(request, "tool_choice", None)
     if _resp_stream_tc == "required" and not tool_calls:
-        logger.warning(f"Stream {response_id}: tool_choice='required' but no tool calls produced")
-        yield _sse("error", {
-            "type": "error",
-            "message": (
-                "tool_choice='required' was set but the model did not produce "
-                "any tool calls. Try rephrasing your prompt or using a model "
-                "with better tool-calling support."
-            ),
-            "code": "tool_calls_required",
-        })
+        logger.warning(
+            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
+        )
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "code": "tool_calls_required",
+            },
+        )
 
     # Emit response.completed — use "incomplete" status when max_tokens was hit
-    _resp_finish = getattr(last_output, 'finish_reason', None) if last_output else None
+    _resp_finish = getattr(last_output, "finish_reason", None) if last_output else None
     _resp_status = "incomplete" if _resp_finish == "length" else "completed"
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
-    yield _sse("response.completed", {
-        "type": "response.completed",
-        "response": {
-            "id": response_id, "object": "response", "created_at": created_at,
-            "status": _resp_status, "model": request.model,
-            "output": all_output_items,
-            **_resp_extra,
-            "usage": {
-                "input_tokens": prompt_tokens, "output_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                **({"input_tokens_details": {"cached_tokens": _cached}} if _cached > 0 else {}),
+    yield _sse(
+        "response.completed",
+        {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "created_at": created_at,
+                "status": _resp_status,
+                "model": request.model,
+                "output": all_output_items,
+                **_resp_extra,
+                "usage": {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                    **(
+                        {"input_tokens_details": {"cached_tokens": _cached}}
+                        if _cached > 0
+                        else {}
+                    ),
+                },
             },
         },
-    })
+    )
 
 
 # =============================================================================
@@ -5981,6 +6560,18 @@ Examples:
         action="store_true",
         help="Enable continuous batching for multiple concurrent users",
     )
+    # Smelt options
+    parser.add_argument(
+        "--smelt",
+        action="store_true",
+        help="Enable MoE Smelt mode (partial expert loading for JANG MoE models)",
+    )
+    parser.add_argument(
+        "--smelt-experts",
+        type=int,
+        default=50,
+        help="Percentage of experts to load in Smelt mode (default: 50)",
+    )
     parser.add_argument(
         "--mcp-config",
         type=str,
@@ -6050,8 +6641,8 @@ Examples:
         default=None,
         choices=["true", "false"],
         help="Server-level default for enable_thinking when not specified in request. "
-             "Without this, models with reasoning parsers default to thinking ON. "
-             "Use 'false' to disable thinking for external API clients (OpenCode, etc.)",
+        "Without this, models with reasoning parsers default to thinking ON. "
+        "Use 'false' to disable thinking for external API clients (OpenCode, etc.)",
     )
     parser.add_argument(
         "--enable-auto-tool-choice",
@@ -6076,8 +6667,22 @@ Examples:
     # Set global configuration
     global _api_key, _default_timeout, _rate_limiter
     global _default_temperature, _default_top_p, _default_enable_thinking
+    global _inference_endpoints, _wake_timeout
+    global _smelt_enabled, _smelt_experts
+
     _api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     _default_timeout = args.timeout
+    if getattr(args, "inference_endpoints", None):
+        _inference_endpoints = [
+            e.strip() for e in args.inference_endpoints.split(",") if e.strip()
+        ]
+    if getattr(args, "wake_timeout", None) is not None:
+        _wake_timeout = args.wake_timeout
+
+    if getattr(args, "smelt", False):
+        _smelt_enabled = True
+        _smelt_experts = getattr(args, "smelt_experts", 50)
+
     if args.default_temperature is not None:
         _default_temperature = args.default_temperature
     if args.default_top_p is not None:
@@ -6127,7 +6732,9 @@ Examples:
         detected = registry.get_reasoning_parser(model_name)
         if detected:
             parser_name = detected
-            logger.info(f"Auto-detected reasoning parser: {parser_name} (from model config)")
+            logger.info(
+                f"Auto-detected reasoning parser: {parser_name} (from model config)"
+            )
     elif parser_name == "none":
         # Explicitly disabled by user
         parser_name = None
@@ -6136,7 +6743,9 @@ Examples:
         detected = registry.get_reasoning_parser(model_name)
         if detected:
             parser_name = detected
-            logger.info(f"Auto-detected reasoning parser: {parser_name} (from model name)")
+            logger.info(
+                f"Auto-detected reasoning parser: {parser_name} (from model name)"
+            )
         else:
             logger.info("Reasoning parser 'auto': no parser detected for this model")
             parser_name = None
@@ -6166,9 +6775,13 @@ Examples:
             detected_tool = registry.get_tool_parser(model_name)
             if detected_tool:
                 _tool_call_parser = detected_tool
-                logger.info(f"Auto-detected tool call parser: {_tool_call_parser} (from model name)")
+                logger.info(
+                    f"Auto-detected tool call parser: {_tool_call_parser} (from model name)"
+                )
             else:
-                logger.info("Tool call parser 'auto': no specific parser detected, using generic")
+                logger.info(
+                    "Tool call parser 'auto': no specific parser detected, using generic"
+                )
                 _tool_call_parser = None
         if _tool_call_parser:
             logger.info(f"Tool calling enabled (parser: {_tool_call_parser})")
@@ -6183,6 +6796,8 @@ Examples:
         max_tokens=args.max_tokens,
         force_mllm=args.mllm,
         served_model_name=args.served_model_name,
+        smelt=getattr(args, "smelt", False),
+        smelt_experts=getattr(args, "smelt_experts", 50),
     )
 
     # Start server

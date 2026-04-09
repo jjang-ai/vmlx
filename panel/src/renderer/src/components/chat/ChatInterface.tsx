@@ -484,10 +484,19 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         </div>
       )}
       {/* Model loading banner */}
-      {!sessionEndpoint && sessionId && !loading && sessionStatus === 'loading' && (
+      {!sessionEndpoint && sessionId && sessionStatus === 'loading' && (
         <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-yellow-500/5">
           <Loader2 className="h-3.5 w-3.5 text-yellow-500 animate-spin" />
           <span className="text-xs text-muted-foreground">Loading model...</span>
+        </div>
+      )}
+      {/* TTFT / Waking up banner */}
+      {loading && !streamingMessageId && (
+        <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-primary/5">
+          <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
+          <span className="text-xs text-primary/80">
+            {sessionStatus === 'standby' ? 'Waking up model and restoring caches...' : 'Evaluating prompt...'}
+          </span>
         </div>
       )}
       {/* Model not running banner */}

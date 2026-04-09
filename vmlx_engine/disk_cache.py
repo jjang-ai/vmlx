@@ -169,12 +169,27 @@ class DiskCacheManager:
                 created_at REAL NOT NULL,
                 last_accessed REAL NOT NULL,
                 access_count INTEGER DEFAULT 1,
-                metadata TEXT
+                metadata TEXT,
+                cache_type TEXT DEFAULT 'assistant'
             )
         """)
+        # F3: cache_type column for L2 disk cache. Migrate older DBs that
+        # were created before the column existed (defaults to 'assistant'
+        # so existing entries don't lose system-pinning eligibility — they
+        # just need to be re-stored to be properly tagged).
+        try:
+            conn.execute(
+                "ALTER TABLE cache_entries ADD COLUMN cache_type TEXT DEFAULT 'assistant'"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_last_accessed
             ON cache_entries(last_accessed)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cache_type
+            ON cache_entries(cache_type)
         """)
         conn.commit()
         conn.close()
@@ -226,7 +241,7 @@ class DiskCacheManager:
         conn = self._pool.get()
         try:
             row = conn.execute(
-                "SELECT file_name FROM cache_entries WHERE token_hash = ?",
+                "SELECT file_name, cache_type FROM cache_entries WHERE token_hash = ?",
                 (token_hash,)
             ).fetchone()
 
@@ -236,6 +251,10 @@ class DiskCacheManager:
                 return None
 
             file_name = row[0]
+            # F3: surface the stored cache_type so the L1 backfill in scheduler
+            # can re-tag the entry with the same role (preserves system pinning
+            # across restart).
+            self._last_fetch_cache_type: str = row[1] if len(row) > 1 and row[1] else "assistant"
             file_path = self.cache_dir / file_name
 
             if not file_path.exists():
@@ -360,7 +379,13 @@ class DiskCacheManager:
         finally:
             self._pool.put(conn)
 
-    def store(self, tokens: List[int], cache: List[Any], metadata: Optional[Dict[str, str]] = None) -> bool:
+    def store(
+        self,
+        tokens: List[int],
+        cache: List[Any],
+        metadata: Optional[Dict[str, str]] = None,
+        cache_type: str = "assistant",
+    ) -> bool:
         """
         Enqueue a KV cache for background storage to disk.
 
@@ -416,8 +441,11 @@ class DiskCacheManager:
         except ImportError:
             use_tq_native = False
 
+        if cache_type not in ("system", "user", "assistant"):
+            cache_type = "assistant"
+
         if use_tq_native:
-            return self._store_tq_native(token_hash, tokens, cache, metadata)
+            return self._store_tq_native(token_hash, tokens, cache, metadata, cache_type)
 
         # ─── Standard serialization (non-TQ or TQ without compressed data) ───
         # Verify cache objects have the required .state/.meta_state protocol
@@ -473,7 +501,7 @@ class DiskCacheManager:
         # Enqueue for background write (pre-evaluated arrays — no lazy Metal ops)
         try:
             self._write_queue.put_nowait(
-                (token_hash, tokens, cache_data_flat, cache_metadata_flat)
+                (token_hash, tokens, cache_data_flat, cache_metadata_flat, cache_type)
             )
             return True
         except queue.Full:
@@ -486,6 +514,7 @@ class DiskCacheManager:
         tokens: List[int],
         cache: List[Any],
         metadata: Optional[Dict[str, str]],
+        cache_type: str = "assistant",
     ) -> bool:
         """Store cache using TQ-native serialization (26x smaller files).
 
@@ -536,10 +565,10 @@ class DiskCacheManager:
             return False
 
         # ─── Enqueue atomic rename + DB update for background thread ───
-        # Queue item format: ("__tq_native__", token_hash, tokens, tmp_path, file_name)
+        # Queue item format: ("__tq_native__", token_hash, tokens, tmp_path, file_name, cache_type)
         try:
             self._write_queue.put_nowait(
-                ("__tq_native__", token_hash, tokens, str(tmp_path), file_name)
+                ("__tq_native__", token_hash, tokens, str(tmp_path), file_name, cache_type)
             )
             return True
         except queue.Full:
@@ -572,16 +601,27 @@ class DiskCacheManager:
             try:
                 # ─── Dispatch based on queue item format ───
                 if isinstance(item[0], str) and item[0] == "__tq_native__":
-                    # TQ-native: file already written, just rename + DB update
-                    _, token_hash, tokens, tmp_path_str, file_name = item
+                    # TQ-native: file already written, just rename + DB update.
+                    # 6-tuple includes cache_type (F3); fall back to 5-tuple
+                    # for any in-flight items enqueued before this upgrade.
+                    if len(item) >= 6:
+                        _, token_hash, tokens, tmp_path_str, file_name, cache_type = item
+                    else:
+                        _, token_hash, tokens, tmp_path_str, file_name = item
+                        cache_type = "assistant"
                     self._finalize_tq_native(
-                        token_hash, tokens, tmp_path_str, file_name
+                        token_hash, tokens, tmp_path_str, file_name, cache_type
                     )
                 else:
-                    # Standard: write from pre-serialized numpy arrays
-                    token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                    # Standard: write from pre-serialized numpy arrays.
+                    # 5-tuple includes cache_type; fall back to 4-tuple legacy.
+                    if len(item) >= 5:
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat, cache_type = item
+                    else:
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                        cache_type = "assistant"
                     self._write_cache(
-                        token_hash, tokens, cache_data_flat, cache_metadata_flat
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat, cache_type
                     )
             except OSError as e:
                 if e.errno == errno.ENOSPC:
@@ -600,6 +640,7 @@ class DiskCacheManager:
         tokens: List[int],
         cache_data_flat: Dict[str, Any],
         cache_metadata_flat: Dict[str, str],
+        cache_type: str = "assistant",
     ) -> None:
         """Write a pre-serialized cache to disk (called from background thread).
 
@@ -648,10 +689,10 @@ class DiskCacheManager:
             try:
                 conn.execute(
                     "INSERT OR REPLACE INTO cache_entries "
-                    "(token_hash, file_name, num_tokens, file_size, created_at, last_accessed, access_count, metadata) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "(token_hash, file_name, num_tokens, file_size, created_at, last_accessed, access_count, metadata, cache_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
                     (token_hash, file_name, len(tokens), file_size, now, now,
-                     json.dumps(db_meta))
+                     json.dumps(db_meta), cache_type)
                 )
                 conn.commit()
             finally:
@@ -682,6 +723,7 @@ class DiskCacheManager:
         tokens: List[int],
         tmp_path_str: str,
         file_name: str,
+        cache_type: str = "assistant",
     ) -> None:
         """Finalize a TQ-native cache write (called from background thread).
 
@@ -738,9 +780,9 @@ class DiskCacheManager:
                 conn.execute(
                     "INSERT OR REPLACE INTO cache_entries "
                     "(token_hash, file_name, num_tokens, file_size, "
-                    "created_at, last_accessed, access_count, metadata) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-                    (token_hash, file_name, len(tokens), file_size, now, now, db_meta)
+                    "created_at, last_accessed, access_count, metadata, cache_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                    (token_hash, file_name, len(tokens), file_size, now, now, db_meta, cache_type)
                 )
                 conn.commit()
             finally:
@@ -779,10 +821,19 @@ class DiskCacheManager:
 
         conn = self._pool.get()
         try:
-            # Get entries ordered by LRU (least recently accessed first)
+            # Get entries ordered by cache_type priority then LRU.
+            # Eviction preference: assistant (1) → user (2) → system (3),
+            # within each type oldest-first. This mirrors PrefixCacheManager
+            # cache_type LRU on disk so cross-restart shared system prompts
+            # survive eviction even when the disk is full of assistant entries.
             rows = conn.execute(
                 "SELECT token_hash, file_name, file_size FROM cache_entries "
-                "ORDER BY last_accessed ASC"
+                "ORDER BY CASE COALESCE(cache_type, 'assistant') "
+                "  WHEN 'assistant' THEN 1 "
+                "  WHEN 'user' THEN 2 "
+                "  WHEN 'system' THEN 3 "
+                "  ELSE 1 END ASC, "
+                "last_accessed ASC"
             ).fetchall()
 
             evicted = 0

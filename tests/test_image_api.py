@@ -607,7 +607,7 @@ class TestImageGenErrorHandling:
             return real_import(name, globals, locals, fromlist, level)
 
         # Provide a valid base64-encoded PNG (1x1 pixel)
-        tiny_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50).decode()
+        tiny_png = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x03\x00\x08\xfc\x02\xfe\xa9\x2c\x82\x15\x00\x00\x00\x00IEND\xaeB`\x82").decode()
 
         with patch.object(builtins, "__import__", side_effect=selective_import):
             resp = await client.post(
@@ -698,7 +698,7 @@ class TestImageGenErrorHandling:
 
         mock_engine = MagicMock()
         mock_engine.is_loaded = False
-        mock_engine.load_edit_model.side_effect = RuntimeError("Model not found")
+        mock_engine.load.side_effect = RuntimeError("Model not found")
 
         srv._image_gen = mock_engine
 
@@ -706,7 +706,7 @@ class TestImageGenErrorHandling:
         mock_img_mod.EDIT_MODELS = {"qwen-image-edit": "qwen-image-edit"}
         mock_img_mod.ImageGenEngine = MagicMock(return_value=mock_engine)
 
-        tiny_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 50).decode()
+        tiny_png = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x03\x00\x08\xfc\x02\xfe\xa9\x2c\x82\x15\x00\x00\x00\x00IEND\xaeB`\x82").decode()
 
         import builtins
         real_import = builtins.__import__

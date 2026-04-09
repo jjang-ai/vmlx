@@ -84,7 +84,13 @@ class TestPrefixCacheManager:
         """Test cache manager initialization."""
         manager = PrefixCacheManager(mock_model, max_entries=50)
         assert manager.max_size == 50
-        assert manager.model_key == id(mock_model)
+        # F6 (audit 2026-04-08): model_key is now a content-derived
+        # SHA-256 hex digest (32 chars) instead of id(model). Survives JIT
+        # reload and prevents cross-config trie pollution. Assert shape, not
+        # the legacy int identity.
+        assert isinstance(manager.model_key, str)
+        assert len(manager.model_key) == 32
+        assert all(c in "0123456789abcdef" for c in manager.model_key)
         assert len(manager) == 0
 
     def test_fetch_empty_cache(self, cache_manager):

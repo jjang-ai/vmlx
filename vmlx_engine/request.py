@@ -119,6 +119,29 @@ class Request:
     # Per-request stop tokens added to shared BatchGenerator (for cleanup on abort)
     _added_stop_tokens: Set[int] = field(default_factory=set)
 
+    # Phase 3d (Agent 2): chat segment boundaries for cache_type-aware prefix
+    # cache storage. Populated by API gateways during prompt rendering.
+    # Each entry is `(token_index_inclusive, role)` where role ∈
+    # {"system","user","assistant"}. Token index is the count of tokens
+    # **up to and including** the boundary (not the index of the boundary
+    # token itself). When None or empty, scheduler stores the whole prompt
+    # under the default `cache_type="assistant"` (legacy behaviour).
+    # Consumed by `Scheduler._store_cache_with_segments` and Agent 1's
+    # `PrefixCacheManager.store_cache(cache_type=)`.
+    # See `agentprogress/2/decisions.md` D-A2-008.
+    _segment_boundaries: Optional[List[Any]] = None  # List[Tuple[int, str]]
+
+    # Phase 3c (Agent 2): per-request SequenceStateMachine state.
+    # Lazy-init by `Scheduler._advance_request_state_machine` on first emitted
+    # token. Tracks reasoning/tool tag entry/exit at the token level.
+    _sm_state: Optional[Any] = None
+
+    # Phase 3c (Agent 2): set by `PrefixCacheManager.fetch_cache` to the
+    # number of tokens recovered from the prefix cache. Consumed by the
+    # state machine `advance_from(state, tokens)` to skip-scan the trusted
+    # prefix without re-running tag matching on cached tokens.
+    _cached_prefix_len: int = 0
+
     # Multimodal content (images, video) - raw inputs
     images: Optional[List[Any]] = None
     videos: Optional[List[Any]] = None

@@ -346,6 +346,87 @@ class BatchedEngine(BaseEngine):
             logger.debug(f"Failed to compute gen_prompt_len: {e}")
             return 0
 
+    def _compute_segment_boundaries(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        num_images: int,
+        enable_thinking: bool,
+        extra_template_kwargs: dict | None,
+    ) -> list[tuple[int, str]]:
+        """Compute (token_offset, role) boundaries for the chat history.
+
+        Phase 5 audit fix (F11, 2026-04-08): the LLM scheduler reads
+        ``request._segment_boundaries`` to drive Agent 1's PrefixCacheManager
+        cache_type-priority LRU (system pinned > user > assistant). Without
+        this helper, no API gateway populates the field, and every request
+        gets stored under the default ``cache_type='assistant'`` — defeating
+        cross-session prefix sharing for system prompts entirely.
+
+        We compute boundaries by re-rendering the chat template incrementally
+        for each prefix of messages (without ``add_generation_prompt``) and
+        tokenizing the result. The token-count delta between successive
+        renders gives each segment's end offset.
+
+        Returns:
+            List of ``(token_offset, role)`` tuples in increasing offset
+            order. ``role`` is the role of the message ending at that
+            offset (e.g. ``"system"`` after the system message).
+            Empty list on any failure — the caller falls back to
+            single-store under ``cache_type='assistant'``.
+        """
+        # Skip the work for trivial conversations: 1 message has no boundary,
+        # 0 messages is degenerate.
+        if not messages or len(messages) < 2:
+            return []
+        # Skip if no system or non-uniform structure — only valuable when at
+        # least one message can be pinned with a role > "assistant" priority.
+        roles = {m.get("role") for m in messages}
+        if not (roles & {"system", "user"}):
+            return []
+        try:
+            tokenizer = self._tokenizer or self._processor
+            if tokenizer is None:
+                return []
+            if hasattr(tokenizer, "encode"):
+                enc = tokenizer.encode
+            elif hasattr(tokenizer, "tokenizer") and hasattr(tokenizer.tokenizer, "encode"):
+                enc = tokenizer.tokenizer.encode
+            else:
+                return []
+
+            boundaries: list[tuple[int, str]] = []
+            prev_count = 0
+            for i in range(1, len(messages) + 1):
+                try:
+                    rendered = self._apply_chat_template(
+                        messages[:i],
+                        tools if i == len(messages) else None,
+                        num_images=num_images if i == len(messages) else 0,
+                        enable_thinking=enable_thinking,
+                        extra_template_kwargs=extra_template_kwargs,
+                        skip_generation_prompt=True,
+                    )
+                    cur_count = len(enc(rendered))
+                except Exception:
+                    # Re-rendering can fail for partial histories on some
+                    # templates (e.g. assistant-prefix-only). Skip this
+                    # boundary, keep going.
+                    continue
+                if cur_count <= prev_count:
+                    continue
+                role = messages[i - 1].get("role") or "assistant"
+                # Normalise unknown roles to "assistant" so they hit the
+                # default eviction priority bucket.
+                if role not in ("system", "user", "assistant"):
+                    role = "assistant"
+                boundaries.append((cur_count, role))
+                prev_count = cur_count
+            return boundaries
+        except Exception as e:
+            logger.debug(f"Failed to compute segment boundaries: {e}")
+            return []
+
     def _apply_chat_template(
         self,
         messages: list[dict[str, Any]],
@@ -443,9 +524,15 @@ class BatchedEngine(BaseEngine):
                 template_kwargs["enable_thinking"] = enable_thinking
             if tools:
                 template_kwargs["tools"] = tools
-            # Merge extra chat_template_kwargs (e.g. thinking_budget)
+            # Merge extra chat_template_kwargs (e.g. thinking_budget).
+            # Strip reserved keys (Concern #14): tokenize and
+            # add_generation_prompt are managed by us; client overrides change
+            # the return type and break downstream code.
             if extra_template_kwargs:
-                template_kwargs.update(extra_template_kwargs)
+                template_kwargs.update({
+                    k: v for k, v in extra_template_kwargs.items()
+                    if k not in ("tokenize", "add_generation_prompt")
+                })
 
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
@@ -558,6 +645,7 @@ class BatchedEngine(BaseEngine):
         from ..request import SamplingParams
 
         gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
+        segment_boundaries = kwargs.pop("segment_boundaries", None)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -574,6 +662,7 @@ class BatchedEngine(BaseEngine):
             sampling_params=sampling_params,
             gen_prompt_len=gen_prompt_len,
             num_messages=kwargs.get("num_messages", 1),
+            segment_boundaries=segment_boundaries,
         )
 
         text = clean_output_text(output.output_text)
@@ -655,6 +744,7 @@ class BatchedEngine(BaseEngine):
         from ..request import SamplingParams
 
         gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
+        segment_boundaries = kwargs.pop("segment_boundaries", None)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -672,6 +762,7 @@ class BatchedEngine(BaseEngine):
             request_id=request_id,
             gen_prompt_len=gen_prompt_len,
             num_messages=kwargs.get("num_messages", 1),
+            segment_boundaries=segment_boundaries,
         )
 
         async for output in self._engine.stream_outputs(request_id):
@@ -762,6 +853,17 @@ class BatchedEngine(BaseEngine):
                 thinking_enabled, extra_tpl, prompt,
             )
 
+        # Phase 5 audit fix (F11, 2026-04-08): compute per-segment boundaries
+        # so the LLM scheduler can store cache entries with the correct
+        # cache_type (system / user / assistant). This is what activates
+        # Agent 1's PrefixCacheManager priority LRU breakthrough — without
+        # it, every entry was stored as 'assistant' and system prompts could
+        # not be pinned across sessions.
+        segment_boundaries = self._compute_segment_boundaries(
+            messages, template_tools, len(all_images),
+            thinking_enabled, extra_tpl,
+        )
+
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
@@ -770,6 +872,8 @@ class BatchedEngine(BaseEngine):
         # Single-turn API requests (1-2 messages: system+user) with short output
         # skip cache storage to reduce per-request overhead.
         kwargs["num_messages"] = len(messages)
+        if segment_boundaries:
+            kwargs["segment_boundaries"] = segment_boundaries
 
         return await self.generate(
             prompt=prompt,
@@ -859,12 +963,22 @@ class BatchedEngine(BaseEngine):
                 thinking_enabled, extra_tpl, prompt,
             )
 
+        # F11 (audit 2026-04-08): per-segment boundaries for cache_type LRU.
+        # Mirrors the non-streaming chat() path so the priority eviction
+        # breakthrough fires for streaming requests too.
+        segment_boundaries = self._compute_segment_boundaries(
+            messages, template_tools, len(all_images),
+            thinking_enabled, extra_tpl,
+        )
+
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
         if prompt_suffix:
             prompt += prompt_suffix
 
         # Pass message count for cache skip heuristic (Phase 2 optimization).
         kwargs["num_messages"] = len(messages)
+        if segment_boundaries:
+            kwargs["segment_boundaries"] = segment_boundaries
 
         async for output in self.stream_generate(
             prompt=prompt,

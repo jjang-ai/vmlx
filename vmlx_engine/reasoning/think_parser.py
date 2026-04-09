@@ -56,6 +56,34 @@ class BaseThinkingReasoningParser(ReasoningParser):
         """
         self._think_in_prompt = think_in_prompt
 
+    def reasoning_tag_token_seqs(self, tokenizer) -> dict:
+        """Return token sequences for the reasoning start/end tags.
+
+        Encodes ``self.start_token`` and ``self.end_token`` (text strings
+        defined by each subclass) using the model tokenizer. Used by the
+        scheduler to build a `SequenceStateMachine` for token-level
+        reasoning-boundary detection.
+
+        Falls back to an empty result if encoding fails (e.g. tokenizer
+        absent at request time, or tags become multi-segment splits the
+        state machine cannot represent atomically).
+        """
+        if tokenizer is None:
+            return {"start": [], "end": []}
+        try:
+            encode = getattr(tokenizer, "encode", None)
+            if encode is None and hasattr(tokenizer, "tokenizer"):
+                encode = getattr(tokenizer.tokenizer, "encode", None)
+            if encode is None:
+                return {"start": [], "end": []}
+            start_ids = encode(self.start_token, add_special_tokens=False)
+            end_ids = encode(self.end_token, add_special_tokens=False)
+        except Exception:
+            return {"start": [], "end": []}
+        start_seqs = [list(start_ids)] if start_ids else []
+        end_seqs = [list(end_ids)] if end_ids else []
+        return {"start": start_seqs, "end": end_seqs}
+
     def extract_reasoning(
         self,
         model_output: str,

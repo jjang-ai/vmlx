@@ -363,94 +363,17 @@ def _fix_hybrid_cache(
         return cache
 
 
-class HybridSSMStateCache:
-    """Companion cache for SSM layer states in hybrid models.
-
-    Hybrid models (SSM + attention, e.g. Qwen3.5-VL) store KVCache in the
-    prefix cache but lose MambaCache/ArraysCache state. This companion cache
-    stores SSM state captured at the prompt boundary during prefill, keyed
-    by the prompt token prefix hash.
-
-    On a prefix cache HIT for a hybrid model, if the companion SSM state also
-    hits, we can reconstruct the FULL cache (KV + SSM) and skip the prefix
-    entirely — saving all compute on prefix tokens.
-
-    Without this, hybrid cache hits are wasted: the model must do a full
-    prefill through all layers because SSM state is cumulative.
-    """
-
-    def __init__(self, max_entries: int = 50):
-        self._store: OrderedDict[str, List[Any]] = OrderedDict()
-        self._max_entries = max_entries
-
-    def _key(self, token_ids: List[int], num_tokens: int) -> str:
-        """Deterministic hash key from token prefix using SHA-256."""
-        import hashlib
-        import json
-        data = json.dumps(token_ids[:num_tokens], separators=(",", ":")).encode()
-        return hashlib.sha256(data).hexdigest()
-
-    def store(
-        self,
-        token_ids: List[int],
-        num_tokens: int,
-        ssm_states: List[Any],
-    ) -> None:
-        """Store SSM layer states for a prompt prefix."""
-        key = self._key(token_ids, num_tokens)
-        # Remove existing entry to update position
-        if key in self._store:
-            del self._store[key]
-        self._store[key] = ssm_states
-        # Evict oldest if over limit
-        while len(self._store) > self._max_entries:
-            self._store.popitem(last=False)
-
-    def fetch(
-        self, token_ids: List[int], num_tokens: int
-    ) -> Optional[List[Any]]:
-        """Fetch SSM states for a matching prompt prefix.
-
-        Returns deep copies of the stored SSM states because the model's
-        forward pass mutates SSM cache objects in-place (cumulative state).
-        Without copying, the stored state would be corrupted after first use,
-        making subsequent cache hits produce wrong output.
-        """
-        key = self._key(token_ids, num_tokens)
-        states = self._store.get(key)
-        if states is not None:
-            # Move to end (most recently used)
-            self._store.move_to_end(key)
-            # Deep-copy to prevent in-place mutation by the model's forward pass.
-            # SSM state is cumulative — generation updates it token by token.
-            from copy import deepcopy
-            copied = []
-            for s in states:
-                try:
-                    c = deepcopy(s)
-                    # Ensure MLX arrays in .cache are independent buffers.
-                    # Must eval per-layer to materialize copies before next
-                    # deepcopy — bulk eval at end produces garbled output
-                    # (lazy graph interference between layers).
-                    if hasattr(c, 'cache') and isinstance(c.cache, list):
-                        c.cache = [
-                            (mx.array(a) * 1 if a is not None else None)
-                            for a in c.cache
-                        ]
-                        mx.eval(*[x for x in c.cache if x is not None])
-                    copied.append(c)
-                except Exception:
-                    # Deepcopy failed — return None (cache miss) rather than
-                    # returning a shared reference. The model mutates SSM state
-                    # in-place during forward passes, so a shared ref would
-                    # corrupt the stored companion for all future requests.
-                    logger.debug(f"SSM companion deepcopy failed for layer — treating as cache miss")
-                    return None
-            return copied
-        return states
-
-    def clear(self) -> None:
-        self._store.clear()
+# SSM companion cache moved to vmlx_engine/utils/ssm_companion_cache.py per
+# REQ-A3-001 (option C — Agent 3 owns the file forever, Agent 2 owns the
+# call sites). Imported here as `HybridSSMStateCache` (back-compat alias) so
+# existing call sites in this file and `scheduler.py` continue to work.
+# The new class signature is:
+#   store(token_ids, num_tokens, ssm_states, is_complete: bool = True)
+#   fetch(token_ids, num_tokens) -> Optional[Tuple[List[Any], bool]]
+# Fetch sites in this file have been updated to unpack the new tuple.
+# See `agentprogress/3/notes-to-2.md` for the migration guide and
+# `agentprogress/2/decisions.md` D-A2-007 for the option-C rationale.
+from .utils.ssm_companion_cache import HybridSSMStateCache, SSMCompanionCache  # noqa: F401
 
 
 @dataclass
@@ -780,8 +703,12 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
                 logger.warning(f"Layer {i}: {type(layer_cache).__name__} has no merge(), using empty BatchKVCache")
                 batch_cache.append(BatchKVCache([0] * len(caches)))
         except Exception as e:
-            logger.warning(f"Layer {i} merge failed ({type(layer_cache).__name__}), using empty BatchKVCache: {e}")
-            batch_cache.append(BatchKVCache([0] * len(caches)))
+            logger.warning(f"Layer {i} merge failed ({type(layer_cache).__name__}), using fallback empty cache: {e}")
+            if isinstance(layer_cache, (_MambaCache, ArraysCache)):
+                from .utils.mamba_cache import BatchMambaCache
+                batch_cache.append(BatchMambaCache(size=2, left_padding=[0] * len(caches)))
+            else:
+                batch_cache.append(BatchKVCache([0] * len(caches)))
     return batch_cache
 
 
@@ -1126,15 +1053,7 @@ class MLLMBatchGenerator:
             # Use non-deprecated API when available (MLX ≥ 0.25)
             _device_info = getattr(mx, 'device_info', None) or mx.metal.device_info
             _set_cache = getattr(mx, 'set_cache_limit', None) or mx.metal.set_cache_limit
-            # Check disk-streaming mode — server.py manages wired/cache limits
-            try:
-                from . import server as _server_module
-                _is_streaming = getattr(_server_module, '_stream_from_disk', False)
-            except Exception:
-                _is_streaming = False
-            # In streaming mode: do NOT override wired limit (server.py set a
-            # reduced limit to allow SSD paging) or cache limit (set to 0).
-            if not _is_streaming:
+            if True:  # Always set Metal limits (smelt mode doesn't need special limits)
                 self._old_wired_limit = mx.set_wired_limit(
                     _device_info()["max_recommended_working_set_size"]
                 )
@@ -1447,8 +1366,8 @@ class MLLMBatchGenerator:
         seq_len = input_ids.shape[1]
 
         # TEXT-ONLY FAST PATH: use language_model directly, skip VLM wrapper.
-        # For short text-only prompts (< 2x prefill_step_size), the VLM wrapper
-        # adds overhead from vision encoder path even when pixel_values=None.
+        # The VLM wrapper adds overhead from vision encoder path and some VLM
+        # wrappers (e.g. Gemma 4 loaded via smelt) may not accept pixel_values.
         # Using language_model directly avoids this entirely.
         # Hybrid SSM models must go through the full model for correct mask computation.
         if not has_images and not self._is_hybrid:
@@ -1511,7 +1430,22 @@ class MLLMBatchGenerator:
                     return output.logits
                 return output
 
-        # Standard single-shot VLM forward (image requests or short text)
+        # Standard single-shot VLM forward (image requests or short text).
+        # For text-only requests, try language_model first to avoid passing
+        # pixel_values to models that may not accept it (e.g. smelt-loaded VLM
+        # where the VLM wrapper's __call__ signature differs from standard mlx-vlm).
+        if not has_images:
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None:
+                lm_kwargs = {}
+                if cache is not None:
+                    lm_kwargs["cache"] = cache
+                output = lm(input_ids, **lm_kwargs)
+                request.vision_encoded = True
+                if hasattr(output, "logits"):
+                    return output.logits
+                return output
+
         output = self.model(input_ids, **kwargs)
         request.vision_encoded = True
 
@@ -1601,10 +1535,17 @@ class MLLMBatchGenerator:
                                     # Check companion SSM state cache BEFORE reconstruction.
                                     # Use actual prompt token count (not block-aligned) to match
                                     # the store key which also uses len(all_tokens).
+                                    # REQ-A3-001: fetch now returns Optional[Tuple[List[Any], bool]].
+                                    # is_complete unused here (live MLLM fetch path, not the trie
+                                    # path) — Agent 1's PrefixCacheManager consumes it.
                                     _fetch_num = block_table.num_tokens
-                                    ssm_states = self._ssm_state_cache.fetch(
+                                    _entry = self._ssm_state_cache.fetch(
                                         token_list, _fetch_num
                                     ) if _fetch_num > 0 else None
+                                    if _entry is None:
+                                        ssm_states = None
+                                    else:
+                                        ssm_states, _is_complete = _entry
                                     if ssm_states is None:
                                         # No SSM state — can't use cached KV, must do full prefill.
                                         # Release the block refs that fetch_cache incremented
@@ -2068,9 +2009,16 @@ class MLLMBatchGenerator:
                                 self.block_aware_cache.clear()
                             except Exception:
                                 pass
-                            # Also clear SSM state cache — stale SSM state can cause
-                            # shape mismatches in hybrid models
-                            self._ssm_state_cache.clear()
+                            # A3→A2-001 (audit 2026-04-08): do NOT call
+                            # _ssm_state_cache.clear() here. The previous nuclear
+                            # clear dropped EVERY active session's SSM companion
+                            # entries on a single failed prefill (multi-tenant
+                            # blast radius). The retry below uses make_cache()
+                            # which constructs a fresh hybrid cache instance —
+                            # it does not read from the SSM companion. Other
+                            # requests' stored entries are isolated by the
+                            # deep-copy fetch contract (session 2026-03-28b
+                            # root-cause fix), so leaving them in place is safe.
                             mx.clear_cache()
                             try:
                                 # MUST use make_cache() for hybrid models — it returns

@@ -42,6 +42,12 @@ _MAX_ENTRIES_FALLBACK = 50  # Fallback if memory detection fails
 _PRESSURE_CHECK_INTERVAL = 60.0  # Seconds between memory pressure checks
 _PRESSURE_THRESHOLD = 0.20  # Reduce budget when <20% of total RAM available
 
+# Cache type priority for LRU eviction (F1 backport from PrefixCacheManager).
+# Lower-priority types are evicted first: assistant → user → system. System
+# entries stay pinned and evicted last so cross-session shared system prompts
+# survive across users. Mirrors mlx-lm 0.31.2 LRUPromptCache.CacheOrder.
+_CACHE_TYPE_PRIORITY: tuple[str, ...] = ("assistant", "user", "system")
+
 
 def _get_available_memory() -> int:
     """
@@ -246,9 +252,15 @@ class _CacheEntry:
     cache: list[Any]
     memory_bytes: int
     last_accessed_at: float = field(default_factory=time.monotonic)
+    cache_type: str = "assistant"  # "system" | "user" | "assistant" — F1 backport
 
     @classmethod
-    def create(cls, tokens: list[int], cache: list[Any]) -> _CacheEntry:
+    def create(
+        cls,
+        tokens: list[int],
+        cache: list[Any],
+        cache_type: str = "assistant",
+    ) -> _CacheEntry:
         """Create a cache entry with memory estimation."""
         memory = estimate_kv_cache_memory(cache)
         return cls(
@@ -256,6 +268,7 @@ class _CacheEntry:
             cache=cache,
             memory_bytes=memory,
             last_accessed_at=time.monotonic(),
+            cache_type=cache_type if cache_type in _CACHE_TYPE_PRIORITY else "assistant",
         )
 
     def touch(self) -> None:
@@ -287,6 +300,7 @@ class MemoryAwarePrefixCache:
         self,
         model: Any,
         config: MemoryCacheConfig | None = None,
+        model_path: str | None = None,
     ) -> None:
         """
         Initialize the memory-aware prefix cache.
@@ -294,8 +308,16 @@ class MemoryAwarePrefixCache:
         Args:
             model: The MLX model (used for identification).
             config: Cache configuration. Uses defaults if None.
+            model_path: Optional model directory path. Used to derive a stable
+                content-hash key (replaces id(model) — F6) and feeds the loader
+                fingerprint so divergent loader configs never share entries.
         """
-        self._model_id = id(model)
+        # Lazy import to avoid circular dependency with prefix_cache.
+        try:
+            from .prefix_cache import compute_model_cache_key as _ck
+            self._model_id: str | int = _ck(model, model_path=model_path)
+        except Exception:
+            self._model_id = id(model)
         self._config = config or MemoryCacheConfig()
 
         # Thread safety: non-reentrant lock (store/fetch/_evict_lru don't
@@ -305,6 +327,16 @@ class MemoryAwarePrefixCache:
         # OrderedDict maintains insertion order for LRU
         # Key: tuple(tokens), Value: _CacheEntry
         self._entries: OrderedDict[tuple[int, ...], _CacheEntry] = OrderedDict()
+
+        # Per-cache-type LRU buckets for priority eviction (F1 backport).
+        # Each bucket holds the same keys as `_entries` but partitioned by
+        # cache_type. Eviction pops from the lowest-priority non-empty bucket
+        # first so system entries survive longest. Mirrors PrefixCacheManager.
+        self._lru_by_type: dict[str, OrderedDict[tuple[int, ...], bool]] = {
+            t: OrderedDict() for t in _CACHE_TYPE_PRIORITY
+        }
+        # Per-type byte counters
+        self._bytes_by_type: dict[str, int] = {t: 0 for t in _CACHE_TYPE_PRIORITY}
 
         # Memory tracking
         self._base_memory_limit = self._config.compute_memory_limit()
@@ -514,6 +546,7 @@ class MemoryAwarePrefixCache:
                 entry = self._entries[tokens_key]
                 # Move to end (most recently used) and update access time
                 self._entries.move_to_end(tokens_key)
+                self._touch_type_lru(tokens_key, entry.cache_type)
                 entry.touch()
                 self._stats.hits += 1
                 self._stats.tokens_saved += len(tokens)
@@ -562,6 +595,7 @@ class MemoryAwarePrefixCache:
             # Prefer forward match (exact prefix reuse, no truncation needed)
             if best_forward_match is not None:
                 self._entries.move_to_end(best_forward_match.tokens)
+                self._touch_type_lru(best_forward_match.tokens, best_forward_match.cache_type)
                 best_forward_match.touch()
                 self._stats.hits += 1
                 self._stats.tokens_saved += best_forward_length
@@ -573,6 +607,7 @@ class MemoryAwarePrefixCache:
                 truncated = self._truncate_cache(best_reverse_match.cache, len(tokens))
                 if truncated is not None:
                     self._entries.move_to_end(best_reverse_match.tokens)
+                    self._touch_type_lru(best_reverse_match.tokens, best_reverse_match.cache_type)
                     best_reverse_match.touch()
                     self._stats.hits += 1
                     self._stats.tokens_saved += len(tokens)
@@ -581,7 +616,12 @@ class MemoryAwarePrefixCache:
             self._stats.misses += 1
             return None, tokens
 
-    def store(self, tokens: list[int], cache: list[Any]) -> bool:
+    def store(
+        self,
+        tokens: list[int],
+        cache: list[Any],
+        cache_type: str = "assistant",
+    ) -> bool:
         """
         Store KV cache for future reuse.
 
@@ -595,6 +635,10 @@ class MemoryAwarePrefixCache:
         Args:
             tokens: Token sequence that was processed.
             cache: The computed KV cache to store.
+            cache_type: One of "system" | "user" | "assistant". Controls LRU
+                eviction priority — system entries are pinned and evicted last
+                so shared system prompts persist across users/sessions
+                (F1 backport from PrefixCacheManager).
 
         Returns:
             True if stored successfully, False if rejected.
@@ -607,10 +651,26 @@ class MemoryAwarePrefixCache:
             self._check_memory_pressure()
 
             tokens_key = tuple(tokens)
+            norm_type = cache_type if cache_type in _CACHE_TYPE_PRIORITY else "assistant"
 
-            # If already cached, just update LRU order
+            # If already cached, refresh LRU order and possibly upgrade type.
+            # Type upgrades go assistant → user → system; never downgrade.
             if tokens_key in self._entries:
+                old = self._entries[tokens_key]
                 self._entries.move_to_end(tokens_key)
+                old_priority = _CACHE_TYPE_PRIORITY.index(old.cache_type)
+                new_priority = _CACHE_TYPE_PRIORITY.index(norm_type)
+                if new_priority > old_priority:
+                    # Upgrade: move bytes between buckets
+                    self._bytes_by_type[old.cache_type] = max(
+                        0, self._bytes_by_type[old.cache_type] - old.memory_bytes
+                    )
+                    self._bytes_by_type[norm_type] += old.memory_bytes
+                    if tokens_key in self._lru_by_type[old.cache_type]:
+                        del self._lru_by_type[old.cache_type][tokens_key]
+                    old.cache_type = norm_type
+                self._lru_by_type[old.cache_type][tokens_key] = True
+                self._lru_by_type[old.cache_type].move_to_end(tokens_key)
                 return True
 
             # Evict expired entries first to free space before LRU eviction
@@ -618,7 +678,7 @@ class MemoryAwarePrefixCache:
                 self._evict_expired()
 
             # Create entry and estimate memory
-            entry = _CacheEntry.create(tokens, cache)
+            entry = _CacheEntry.create(tokens, cache, cache_type=norm_type)
 
             # Check if single entry exceeds limit (95% of total cache budget)
             _max_entry_bytes = int(self._max_memory * 0.95)
@@ -630,13 +690,14 @@ class MemoryAwarePrefixCache:
                 )
                 return False
 
-            # Evict until we have room
+            # Evict until we have room — pop lowest-priority bucket first.
             evicted_any = False
             while (
                 self._current_memory + entry.memory_bytes > self._max_memory
                 or len(self._entries) >= self._config.max_entries
             ) and self._entries:
-                self._evict_lru()
+                if not self._evict_lru():
+                    break
                 evicted_any = True
 
             # After batch eviction, run GC to release Python references.
@@ -649,29 +710,53 @@ class MemoryAwarePrefixCache:
             # Store entry
             self._entries[tokens_key] = entry
             self._current_memory += entry.memory_bytes
+            self._bytes_by_type[entry.cache_type] += entry.memory_bytes
+            self._lru_by_type[entry.cache_type][tokens_key] = True
             self._stats.entry_count = len(self._entries)
             self._stats.current_memory_bytes = self._current_memory
 
             logger.debug(
-                f"Stored cache: {len(tokens)} tokens, "
+                f"Stored cache ({entry.cache_type}): {len(tokens)} tokens, "
                 f"{entry.memory_bytes / _BYTES_PER_MB:.2f}MB, "
                 f"total={self._current_memory / _BYTES_PER_MB:.1f}MB"
             )
 
             return True
 
-    def _evict_lru(self) -> None:
-        """Evict the least recently used entry.
+    def _evict_lru(self) -> bool:
+        """Evict one entry, preferring the lowest-priority non-empty bucket
+        (assistant → user → system). System entries are pinned and only
+        evicted when no lower-priority entries remain (F1 backport).
 
-        Caller MUST hold self._lock. This is a private method only called
-        from store() which acquires the lock before entering the eviction loop.
+        Caller MUST hold self._lock. Returns True if an entry was evicted,
+        False if all buckets were empty.
         """
         if not self._entries:
-            return
+            return False
 
-        # popitem(last=False) removes oldest entry (FIFO order = LRU)
-        tokens_key, entry = self._entries.popitem(last=False)
+        target_key: tuple[int, ...] | None = None
+        target_type: str | None = None
+        for t in _CACHE_TYPE_PRIORITY:
+            d = self._lru_by_type[t]
+            if d:
+                target_key, _ = d.popitem(last=False)
+                target_type = t
+                break
+
+        if target_key is None:
+            # Buckets out of sync with _entries — fall back to flat order
+            target_key, _ = next(iter(self._entries.items()))
+            for t in _CACHE_TYPE_PRIORITY:
+                if target_key in self._lru_by_type[t]:
+                    del self._lru_by_type[t][target_key]
+                    target_type = t
+                    break
+
+        entry = self._entries.pop(target_key, None)
+        if entry is None:
+            return False
         freed_bytes = entry.memory_bytes
+        ent_type = entry.cache_type
 
         # Delete the entry's cache reference to allow Metal to free GPU memory
         if hasattr(entry, 'cache'):
@@ -679,14 +764,28 @@ class MemoryAwarePrefixCache:
         del entry
 
         self._current_memory = max(0, self._current_memory - freed_bytes)
+        self._bytes_by_type[ent_type] = max(
+            0, self._bytes_by_type[ent_type] - freed_bytes
+        )
         self._stats.evictions += 1
         self._stats.entry_count = len(self._entries)
         self._stats.current_memory_bytes = self._current_memory
 
         logger.debug(
-            f"Evicted cache: {len(tokens_key)} tokens, "
+            f"Evicted cache ({ent_type}): {len(target_key)} tokens, "
             f"freed {freed_bytes / _BYTES_PER_MB:.2f}MB"
         )
+        return True
+
+    def _touch_type_lru(self, tokens_key: tuple[int, ...], cache_type: str) -> None:
+        """Mark an entry as most-recently-used in its per-type bucket. O(1)."""
+        d = self._lru_by_type.get(cache_type)
+        if d is None:
+            d = self._lru_by_type["assistant"]
+        if tokens_key in d:
+            d.move_to_end(tokens_key)
+        else:
+            d[tokens_key] = True
 
     def _evict_expired(self) -> int:
         """Evict entries that have exceeded their TTL.
@@ -707,10 +806,16 @@ class MemoryAwarePrefixCache:
         for key in expired_keys:
             entry = self._entries.pop(key)
             freed_bytes = entry.memory_bytes
+            ent_type = entry.cache_type
+            if key in self._lru_by_type.get(ent_type, {}):
+                del self._lru_by_type[ent_type][key]
             if hasattr(entry, 'cache'):
                 del entry.cache
             del entry
             self._current_memory = max(0, self._current_memory - freed_bytes)
+            self._bytes_by_type[ent_type] = max(
+                0, self._bytes_by_type[ent_type] - freed_bytes
+            )
             self._stats.evictions += 1
 
         if expired_keys:
@@ -734,7 +839,13 @@ class MemoryAwarePrefixCache:
             if tokens_key not in self._entries:
                 return False
             entry = self._entries.pop(tokens_key)
+            ent_type = entry.cache_type
+            if tokens_key in self._lru_by_type.get(ent_type, {}):
+                del self._lru_by_type[ent_type][tokens_key]
             self._current_memory = max(0, self._current_memory - entry.memory_bytes)
+            self._bytes_by_type[ent_type] = max(
+                0, self._bytes_by_type[ent_type] - entry.memory_bytes
+            )
             self._stats.evictions += 1
             self._stats.entry_count = len(self._entries)
             self._stats.current_memory_bytes = self._current_memory
@@ -751,13 +862,26 @@ class MemoryAwarePrefixCache:
     def clear(self) -> None:
         """Clear all cached entries."""
         self._entries.clear()
+        for d in self._lru_by_type.values():
+            d.clear()
+        for t in self._bytes_by_type:
+            self._bytes_by_type[t] = 0
         self._current_memory = 0
         self._stats = CacheStats(max_memory_bytes=self._max_memory)
         logger.debug("Cache cleared")
 
     def get_stats(self) -> dict[str, Any]:
-        """Get cache statistics."""
-        return self._stats.to_dict()
+        """Get cache statistics with per-type byte / entry breakdown."""
+        d = self._stats.to_dict()
+        d["nbytes"] = self._current_memory
+        d["nbytes_by_type"] = {
+            t: self._bytes_by_type[t] for t in _CACHE_TYPE_PRIORITY
+        }
+        d["entries_by_type"] = {
+            t: len(self._lru_by_type[t]) for t in _CACHE_TYPE_PRIORITY
+        }
+        d["max_bytes"] = self._max_memory
+        return d
 
     @property
     def memory_usage_mb(self) -> float:

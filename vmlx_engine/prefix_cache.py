@@ -15,7 +15,9 @@ This module provides two implementations:
 """
 
 import copy
+import hashlib
 import logging
+import os
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
@@ -33,12 +35,135 @@ from .paged_cache import BlockTable, PagedCacheManager
 logger = logging.getLogger(__name__)
 
 
+def compute_model_cache_key(
+    model: Any,
+    model_path: Optional[str] = None,
+    smelt_enabled: bool = False,
+    smelt_pct: Optional[float] = None,
+    tq_enabled: bool = False,
+    kv_quant_bits: int = 0,
+) -> str:
+    """
+    Compute a stable, content-derived cache key for a loaded model.
+
+    Replaces the legacy `id(model)` key (F6 / Concern #6) which:
+    - Changes on JIT reload (cache becomes orphaned, never reachable)
+    - Doesn't survive across processes for L2 disk cache lookups
+    - Allows trie pollution if a session swaps models in-process
+
+    Mixes in loader fingerprint (A4 Concern #1) so two sessions on the SAME
+    model with DIFFERENT loader configs (smelt %, TQ, JANG quant bits) NEVER
+    share trie entries — divergent K/V tensors otherwise produce silent
+    corruption on cross-session fetch.
+
+    Components:
+    - Architecture id: model class + num_hidden_layers + key arch fields
+    - Path + mtime: catches in-place edits to config.json / jang_config.json
+    - Loader flags: smelt mode, smelt %, TQ enabled, KV quant bits
+
+    Returns the first 32 hex chars of SHA-256 (16 bytes — collision-safe for
+    realistic per-process model counts; trie key compares are O(1) hash).
+
+    Falls back to id(model) string if any component is unavailable, so this
+    is strictly additive over the previous behaviour.
+    """
+    parts: List[str] = []
+
+    # 1. Architecture identity (cheap and safe even if path is unknown)
+    try:
+        parts.append(type(model).__module__ + "." + type(model).__name__)
+        for attr in ("args", "config"):
+            cfg = getattr(model, attr, None)
+            if cfg is None:
+                continue
+            for f in (
+                "model_type",
+                "num_hidden_layers",
+                "num_attention_heads",
+                "num_key_value_heads",
+                "hidden_size",
+                "vocab_size",
+                "kv_lora_rank",
+            ):
+                v = getattr(cfg, f, None)
+                if v is not None and not callable(v):
+                    parts.append(f"{f}={v}")
+            break
+    except Exception:
+        pass
+
+    # 2. Path + mtime — catches edited config.json / jang_config.json
+    if model_path:
+        parts.append(f"path={model_path}")
+        try:
+            for fname in ("config.json", "jang_config.json"):
+                p = os.path.join(model_path, fname)
+                if os.path.exists(p):
+                    parts.append(f"{fname}_mtime={int(os.path.getmtime(p))}")
+        except Exception:
+            pass
+
+    # 3. Loader fingerprint — A4 Concern #1
+    parts.append(f"smelt={1 if smelt_enabled else 0}")
+    if smelt_enabled and smelt_pct is not None:
+        parts.append(f"smelt_pct={float(smelt_pct):.4f}")
+    parts.append(f"tq={1 if tq_enabled else 0}")
+    parts.append(f"kvq={int(kv_quant_bits or 0)}")
+
+    if not parts:
+        # Defensive: fall back to identity
+        return f"id_{id(model):x}"
+
+    digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:32]
+    return digest
+
+
+def is_hybrid_ssm_cache(prompt_cache: Optional[List[Any]]) -> bool:
+    """
+    Detect if a cache list contains any cumulative SSM layer (MambaCache /
+    ArraysCache / BatchMambaCache). Used to short-circuit `mode=longer` trim
+    paths (F2): cumulative SSM state cannot be rewound by `cache.trim(N)`,
+    so a longer-prefix match must downgrade to a miss for hybrid models.
+
+    Inline structural detection — no model_inspector dependency. Walks layer
+    objects looking for either:
+    - Class name in the cumulative cache set, OR
+    - `.cache` attribute that is a list (MambaCache/ArraysCache shape)
+      AND no positional `.keys/.values` attributes
+    """
+    if not prompt_cache:
+        return False
+    cumulative_cls = {"MambaCache", "BatchMambaCache", "ArraysCache"}
+    for layer in prompt_cache:
+        cls = type(layer).__name__
+        if cls in cumulative_cls:
+            return True
+        if isinstance(layer, dict) and layer.get("class_name", "") in cumulative_cls:
+            return True
+        # Structural fallback for nested CacheList wrappers
+        sub = getattr(layer, "caches", None)
+        if isinstance(sub, (list, tuple)):
+            for s in sub:
+                if type(s).__name__ in cumulative_cls:
+                    return True
+    return False
+
+
 @dataclass
 class CacheEntry:
     """Entry in the prefix cache."""
 
     prompt_cache: List[Any]  # The cached KV state
     count: int  # Reference count for sharing
+    cache_type: str = "assistant"  # "system" | "user" | "assistant" — eviction priority
+    nbytes: int = 0  # Estimated memory footprint, computed at store time
+
+
+# Type priority for LRU eviction. Lower-priority types are evicted first.
+# Order: assistant (least sticky) → user → system (pinned, evicted last).
+# This mirrors mlx-lm 0.31.2 LRUPromptCache.CacheOrder so cross-session
+# system prompts stay cached across users.
+_CACHE_TYPE_PRIORITY: Tuple[str, ...] = ("assistant", "user", "system")
 
 
 @dataclass
@@ -95,25 +220,61 @@ class PrefixCacheManager:
         cache_manager.store_cache(full_tokens, prompt_cache)
     """
 
-    def __init__(self, model: Any, max_entries: int = 100):
+    def __init__(
+        self,
+        model: Any,
+        max_entries: int = 100,
+        max_bytes: Optional[int] = None,
+        model_path: Optional[str] = None,
+        smelt_enabled: bool = False,
+        smelt_pct: Optional[float] = None,
+        tq_enabled: bool = False,
+        kv_quant_bits: int = 0,
+    ):
         """
         Initialize the prefix cache manager.
 
         Args:
             model: The MLX model (used for cache key identification)
             max_entries: Maximum number of cached entries before LRU eviction
+            max_bytes: Optional global byte budget. When set, eviction also
+                triggers when total cached bytes exceed this. None = unlimited.
+            model_path, smelt_enabled, smelt_pct, tq_enabled, kv_quant_bits:
+                Loader fingerprint inputs (F6 + A4 Concern #1). Two sessions
+                with divergent loader configs get different model keys and
+                never share trie entries — prevents silent K/V corruption.
         """
         self.model = model
-        self.model_key = id(model)
+        # Content-derived stable key (replaces fragile id(model) — F6).
+        # Survives JIT reload, prevents cross-config trie pollution, and
+        # mixes loader fingerprint so smelt/TQ/JANG variants don't collide.
+        self.model_key = compute_model_cache_key(
+            model,
+            model_path=model_path,
+            smelt_enabled=smelt_enabled,
+            smelt_pct=smelt_pct,
+            tq_enabled=tq_enabled,
+            kv_quant_bits=kv_quant_bits,
+        )
         self.max_size = max_entries
+        self.max_bytes: Optional[int] = max_bytes
 
         # Trie-based cache: nested dicts with token keys
         # Structure: {model_key: {token1: {token2: {..., "cache": CacheEntry}}}}
         self._cache: Dict[Any, Dict] = {}
 
-        # LRU tracking: OrderedDict keyed by (model_key, tuple(tokens))
-        # O(1) move_to_end, O(1) popitem, no duplicate entries
-        self._lru: OrderedDict = OrderedDict()
+        # Per-cache-type LRU tracking. Each type has its own OrderedDict;
+        # eviction pops from the lowest-priority non-empty type first
+        # (assistant → user → system). System entries are evicted last so
+        # shared system prompts persist across users/sessions.
+        # Key shape: (model_key, tuple(tokens)) → True (presence)
+        self._lru_by_type: Dict[str, "OrderedDict[Tuple[Any, tuple], bool]"] = {
+            t: OrderedDict() for t in _CACHE_TYPE_PRIORITY
+        }
+
+        # Per-type byte counters and total
+        self._n_bytes: int = 0
+        self._n_bytes_by_type: Dict[str, int] = {t: 0 for t in _CACHE_TYPE_PRIORITY}
 
         # Statistics
         self.stats = PrefixCacheStats()
@@ -214,7 +375,18 @@ class PrefixCacheManager:
             if cache_entry:
                 # Check if cache supports trimming
                 prompt_cache = cache_entry.prompt_cache
-                if self._can_trim_cache(prompt_cache):
+                # F2 (R-003): hybrid SSM models cannot be trimmed — cumulative
+                # SSM state at position L can't be rewound to L-k without
+                # re-running the model. The auto-switch at scheduler.py:322 saves
+                # the default-config user, but explicit `--no-memory-aware-cache`
+                # users on hybrid models would otherwise hit silent corruption.
+                # Downgrade to miss instead.
+                if is_hybrid_ssm_cache(prompt_cache):
+                    logger.debug(
+                        "PrefixCacheManager: hybrid SSM longer-match downgraded "
+                        "to miss (R-003 — cumulative state cannot be rewound)"
+                    )
+                elif self._can_trim_cache(prompt_cache):
                     trim_amount = len(longer) - len(tokens)
                     # Deep copy IS needed here: _trim_cache mutates the cache
                     # objects' offset/keys/values refs via .trim(), which would
@@ -231,16 +403,27 @@ class PrefixCacheManager:
         self.stats.misses += 1
         return None, tokens
 
-    def store_cache(self, tokens: List[int], prompt_cache: List[Any]) -> None:
+    def store_cache(
+        self,
+        tokens: List[int],
+        prompt_cache: List[Any],
+        cache_type: str = "assistant",
+    ) -> None:
         """
         Store computed cache for future reuse.
 
         Args:
             tokens: Token sequence that was processed
             prompt_cache: The computed KV cache to store
+            cache_type: One of "system", "user", or "assistant". Controls
+                LRU eviction priority — system entries are pinned and evicted
+                last so shared system prompts persist across users/sessions.
+                Defaults to "assistant" for backward compatibility.
         """
         if not tokens:
             return
+        if cache_type not in self._lru_by_type:
+            cache_type = "assistant"
 
         tokens_tuple = tuple(tokens)
 
@@ -254,20 +437,85 @@ class PrefixCacheManager:
                 current[tok] = {}
             current = current[tok]
 
-        # Store or update cache entry
+        # Estimate bytes for this entry. Reuse memory_cache helper to support
+        # KVCache, QuantizedKVCache, MambaCache, ArraysCache, CacheList, and
+        # extracted-state dicts.
+        try:
+            from .memory_cache import estimate_kv_cache_memory  # local import: optional
+            entry_nbytes = estimate_kv_cache_memory(prompt_cache)
+        except Exception:
+            entry_nbytes = 0
+
         key = (self.model_key, tokens_tuple)
+
+        # Replace existing entry: drop old byte counters before re-tracking
         if "cache" in current:
-            current["cache"].count += 1
+            old: CacheEntry = current["cache"]
+            self._n_bytes -= old.nbytes
+            self._n_bytes_by_type[old.cache_type] = max(
+                0, self._n_bytes_by_type[old.cache_type] - old.nbytes
+            )
+            self._remove_from_all_lru(key)
+            current["cache"] = CacheEntry(
+                prompt_cache=prompt_cache,
+                count=old.count + 1,
+                cache_type=cache_type,
+                nbytes=entry_nbytes,
+            )
         else:
-            current["cache"] = CacheEntry(prompt_cache, 1)
+            current["cache"] = CacheEntry(
+                prompt_cache=prompt_cache,
+                count=1,
+                cache_type=cache_type,
+                nbytes=entry_nbytes,
+            )
 
-        # Move to end (most recently used); OrderedDict handles dedup
-        self._lru[key] = True
-        self._lru.move_to_end(key)
+        # Track bytes
+        self._n_bytes += entry_nbytes
+        self._n_bytes_by_type[cache_type] += entry_nbytes
 
-        # Evict if over capacity
-        while len(self._lru) > self.max_size:
-            self._evict_lru()
+        # Push to type-specific LRU (most recently used at the end)
+        type_lru = self._lru_by_type[cache_type]
+        type_lru[key] = True
+        type_lru.move_to_end(key)
+
+        # Evict if over entry count
+        while self._total_lru_size() > self.max_size:
+            if not self._evict_lru():
+                break
+
+        # Evict if over byte budget
+        if self.max_bytes is not None:
+            while self._n_bytes > self.max_bytes:
+                if not self._evict_lru():
+                    break
+
+    def trim_to(self, n_bytes: int) -> int:
+        """
+        Evict entries until total cached bytes <= n_bytes.
+
+        Used by the scheduler to reserve room for in-flight requests when
+        operating with a global byte budget. Returns the number of entries
+        evicted. n_bytes <= 0 clears the cache.
+        """
+        evicted = 0
+        if n_bytes <= 0:
+            count = self._total_lru_size()
+            self.clear()
+            return count
+        while self._n_bytes > n_bytes:
+            if not self._evict_lru():
+                break
+            evicted += 1
+        return evicted
+
+    def _total_lru_size(self) -> int:
+        return sum(len(d) for d in self._lru_by_type.values())
+
+    def _remove_from_all_lru(self, key: Tuple[Any, tuple]) -> None:
+        for d in self._lru_by_type.values():
+            if key in d:
+                del d[key]
 
     def _get_cache_entry(self, tokens: List[int]) -> Optional[CacheEntry]:
         """Get cache entry for given tokens."""
@@ -283,21 +531,37 @@ class PrefixCacheManager:
         return current.get("cache")
 
     def _touch_lru(self, tokens_tuple: tuple) -> None:
-        """Move entry to end of LRU queue (most recently used). O(1)."""
+        """Move entry to end of its type's LRU (most recently used). O(1)."""
         key = (self.model_key, tokens_tuple)
-        if key in self._lru:
-            self._lru.move_to_end(key)
-        else:
-            self._lru[key] = True
+        # Find the type that owns this key (entries live in exactly one bucket)
+        for t in _CACHE_TYPE_PRIORITY:
+            d = self._lru_by_type[t]
+            if key in d:
+                d.move_to_end(key)
+                return
+        # New entry — default to assistant bucket. Real type assigned at store.
+        self._lru_by_type["assistant"][key] = True
 
-    def _evict_lru(self) -> None:
-        """Evict least recently used entry. O(1)."""
-        if not self._lru:
-            return
-
-        (model_key, tokens_tuple), _ = self._lru.popitem(last=False)
-        self._delete_cache(model_key, list(tokens_tuple))
-        self.stats.evictions += 1
+    def _evict_lru(self) -> bool:
+        """Evict the least recently used entry from the lowest-priority
+        non-empty bucket. Returns True if an entry was evicted, False if all
+        buckets were empty. Eviction order: assistant → user → system.
+        """
+        for t in _CACHE_TYPE_PRIORITY:
+            d = self._lru_by_type[t]
+            if d:
+                (model_key, tokens_tuple), _ = d.popitem(last=False)
+                # Untrack bytes BEFORE deleting the entry (lookup needs it)
+                entry = self._get_cache_entry(list(tokens_tuple))
+                if entry is not None:
+                    self._n_bytes -= entry.nbytes
+                    self._n_bytes_by_type[entry.cache_type] = max(
+                        0, self._n_bytes_by_type[entry.cache_type] - entry.nbytes
+                    )
+                self._delete_cache(model_key, list(tokens_tuple))
+                self.stats.evictions += 1
+                return True
+        return False
 
     def _delete_cache(self, model_key: Any, tokens: List[int]) -> None:
         """Delete cache entry and clean up empty trie branches."""
@@ -343,8 +607,15 @@ class PrefixCacheManager:
         return prompt_cache
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
-        return self.stats.to_dict()
+        """Get cache statistics including per-type byte usage."""
+        d = self.stats.to_dict()
+        d["nbytes"] = self._n_bytes
+        d["nbytes_by_type"] = dict(self._n_bytes_by_type)
+        d["entries_by_type"] = {
+            t: len(self._lru_by_type[t]) for t in _CACHE_TYPE_PRIORITY
+        }
+        d["max_bytes"] = self.max_bytes
+        return d
 
     def reset_stats(self) -> None:
         """Reset statistics."""
@@ -353,12 +624,16 @@ class PrefixCacheManager:
     def clear(self) -> None:
         """Clear all cached entries."""
         self._cache.clear()
-        self._lru.clear()
+        for d in self._lru_by_type.values():
+            d.clear()
+        self._n_bytes = 0
+        for t in self._n_bytes_by_type:
+            self._n_bytes_by_type[t] = 0
         self.reset_stats()
 
     def __len__(self) -> int:
         """Return number of cached entries."""
-        return len(self._lru)
+        return self._total_lru_size()
 
 
 # =============================================================================
@@ -482,6 +757,7 @@ class BlockCacheEntry:
     block_table: BlockTable
     cache_data: List[Any]  # Actual KV cache data per block
     last_access: float
+    cache_type: str = "assistant"  # "system" | "user" | "assistant" — segment ownership
 
 
 class BlockAwarePrefixCache:
@@ -515,6 +791,11 @@ class BlockAwarePrefixCache:
         self,
         model: Any,
         paged_cache_manager: PagedCacheManager,
+        model_path: Optional[str] = None,
+        smelt_enabled: bool = False,
+        smelt_pct: Optional[float] = None,
+        tq_enabled: bool = False,
+        kv_quant_bits: int = 0,
     ):
         """
         Initialize block-aware prefix cache.
@@ -522,9 +803,23 @@ class BlockAwarePrefixCache:
         Args:
             model: The MLX model (used for identification)
             paged_cache_manager: The PagedCacheManager instance for block management
+            model_path, smelt_enabled, smelt_pct, tq_enabled, kv_quant_bits:
+                Loader fingerprint inputs (F6 + A4 Concern #1). Mixed into
+                paged-cache content hash so divergent loader configs never
+                collide on shared blocks.
         """
         self.model = model
-        self.model_key = id(model)
+        # Content-derived stable key (replaces id(model)). Includes loader
+        # fingerprint so two sessions with different smelt/TQ/JANG settings
+        # never share blocks (would otherwise corrupt K/V routing).
+        self.model_key = compute_model_cache_key(
+            model,
+            model_path=model_path,
+            smelt_enabled=smelt_enabled,
+            smelt_pct=smelt_pct,
+            tq_enabled=tq_enabled,
+            kv_quant_bits=kv_quant_bits,
+        )
         self.paged_cache = paged_cache_manager
         self.block_size = paged_cache_manager.block_size
 
@@ -534,6 +829,16 @@ class BlockAwarePrefixCache:
 
         # Request to block table mapping
         self._request_tables: Dict[str, BlockCacheEntry] = {}
+
+        # Per-cache-type LRU buckets for block eviction priority. Tracks
+        # request_id sets per type so we can prefer evicting assistant entries
+        # (and the blocks they uniquely reference) before user/system. The
+        # paged_cache itself uses ref-count eviction; this layer adds a
+        # priority signal so the higher-level scheduler can call
+        # `release_low_priority(n)` when under block pressure.
+        self._entries_by_type: Dict[str, "OrderedDict[str, bool]"] = {
+            t: OrderedDict() for t in _CACHE_TYPE_PRIORITY
+        }
 
         # Statistics
         self._hits = 0
@@ -731,6 +1036,7 @@ class BlockAwarePrefixCache:
         request_id: str,
         tokens: List[int],
         cache_data: List[Any],
+        cache_type: str = "assistant",
     ) -> Optional[BlockTable]:
         """
         Store computed cache for future reuse.
@@ -744,6 +1050,10 @@ class BlockAwarePrefixCache:
             cache_data: The computed KV cache to store. Can be:
                 - List of KVCache objects (legacy, stores references)
                 - List of dicts with 'state': (keys, values) tensors (new, stores slices)
+            cache_type: One of "system" | "user" | "assistant". Tagged on the
+                BlockCacheEntry for stats / future eviction prioritization.
+                Block-level eviction itself is governed by paged-cache reference
+                counts; this tag does not change current eviction order.
 
         Returns:
             BlockTable for the stored cache, or None on failure
@@ -1057,11 +1367,22 @@ class BlockAwarePrefixCache:
         self._update_prefix_index(tokens, block_table.block_ids)
 
         # Store entry for request (for legacy compatibility)
+        norm_type = cache_type if cache_type in ("system", "user", "assistant") else "assistant"
         self._request_tables[request_id] = BlockCacheEntry(
             block_table=block_table,
             cache_data=cache_data,
             last_access=time.time(),
+            cache_type=norm_type,
         )
+
+        # Track in per-type bucket for priority-aware eviction (F1 backport).
+        # Drop old entry from any other bucket (request may have been re-stored
+        # with a different role on a follow-up turn).
+        for _t, _d in self._entries_by_type.items():
+            if request_id in _d and _t != norm_type:
+                del _d[request_id]
+        self._entries_by_type[norm_type][request_id] = True
+        self._entries_by_type[norm_type].move_to_end(request_id)
 
         blocks_with_data = sum(
             1
@@ -1377,8 +1698,34 @@ class BlockAwarePrefixCache:
         """
         entry = self._request_tables.pop(request_id, None)
         if entry:
+            # Drop from per-type LRU bucket so eviction priority stays accurate
+            for _d in self._entries_by_type.values():
+                if request_id in _d:
+                    del _d[request_id]
             self.paged_cache.delete_block_table(request_id)
             logger.debug(f"Released cache for {request_id}")
+
+    def release_low_priority(self, n_entries: int = 1) -> int:
+        """
+        Release up to n_entries from the lowest-priority non-empty bucket
+        (assistant → user → system). Used by the scheduler when under block
+        pressure to evict ephemeral assistant entries before pinned system
+        prompts. Returns the number of entries actually released.
+
+        Block-level reclamation still happens through paged_cache ref counts
+        — this just biases WHICH request_table entries get released first.
+        """
+        released = 0
+        for t in _CACHE_TYPE_PRIORITY:
+            d = self._entries_by_type[t]
+            while d and released < n_entries:
+                rid, _ = d.popitem(last=False)
+                if rid in self._request_tables:
+                    self.release_cache(rid)
+                    released += 1
+            if released >= n_entries:
+                break
+        return released
 
     def fork_cache(
         self,
@@ -1678,6 +2025,13 @@ class BlockAwarePrefixCache:
                     try:
                         import mlx_lm.models.cache as cache_mod
                         cache_cls = getattr(cache_mod, class_name, None)
+                        if cache_cls is None and class_name == "ArraysCache":
+                            try:
+                                from vmlx_engine.utils.mamba_cache import ArraysCache
+                                cache_cls = ArraysCache
+                            except Exception:
+                                pass
+                        
                         if cache_cls and hasattr(cache_cls, "from_state"):
                             try:
                                 cache = cache_cls.from_state(state, meta)
@@ -1932,6 +2286,9 @@ class BlockAwarePrefixCache:
             ),
             "tokens_saved": self._tokens_saved,
             "active_requests": len(self._request_tables),
+            "entries_by_type": {
+                t: len(self._entries_by_type[t]) for t in _CACHE_TYPE_PRIORITY
+            },
             **paged_stats,
         }
 
@@ -1946,6 +2303,8 @@ class BlockAwarePrefixCache:
         """Clear all cached data."""
         self._request_tables.clear()
         self._prefix_index.clear()
+        for d in self._entries_by_type.values():
+            d.clear()
         self.paged_cache.clear()
         self._n_kv_heads = None  # Reset cached head count (may change on model switch)
         self.reset_stats()
