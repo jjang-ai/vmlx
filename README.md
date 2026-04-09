@@ -568,6 +568,32 @@ vmlx serve ./my-model-JANG_3M --continuous-batching --use-paged-cache
 
 Pre-quantized JANG models are available at [JANGQ-AI on HuggingFace](https://huggingface.co/JANGQ-AI).
 
+### Smelt Mode (Partial Expert Loading)
+
+For MoE models that don't fit in RAM, **Smelt** loads only a subset of experts per layer from SSD and keeps the backbone resident. Routing is biased toward the resident experts, so response quality stays coherent while RAM usage drops dramatically. Trade-off: throughput scales inversely with expert % loaded, because expert swaps hit SSD on the hot path.
+
+```bash
+# Load 50% of experts per layer (default when --smelt alone)
+vmlx serve ./MyMoE-JANG_4M --smelt --smelt-experts 50
+
+# Aggressive: load 25% — smallest RAM, slowest
+vmlx serve ./MyMoE-JANG_4M --smelt --smelt-experts 25
+```
+
+**Live measurements on `Nemotron-Cascade-2-30B-A3B-JANG_4M-CRACK`** (23 MoE layers × 128 experts/layer, 16.5 GB expert weights + 1.7 GB backbone, Apple M3 Ultra / 128 GB RAM, macOS 25.3):
+
+| `--smelt-experts` | Active RAM | tok/s | Coherent? | Notes |
+|---|---:|---:|---|---|
+| _off (baseline)_ | **17408 MB** | **89.9** | ✓ | All 128/128 experts resident |
+| `50` | 9529 MB (**−45%**) | 21.4 (−76%) | ✓ | 64/128 experts per layer |
+| `25` | 5590 MB (**−68%**) | 8.0 (−91%) | ✓ | 32/128 experts per layer |
+
+All three configurations produced coherent, non-looping output on a 40-word story prompt. The quality bar is set by the routing behavior, not the expert count — as long as the resident experts cover the backbone's hot routing paths, the model stays on-topic.
+
+**Smelt is mutually exclusive with VLM mode.** vMLX detects smelt and automatically disables `--is-mllm` (with a warning) because the vision tower is not wired through the partial-expert loader — image input on a smelt-loaded VLM would produce garbage logits. Use a text-only model when running smelt, or disable smelt when running a VLM.
+
+Smelt requires an MoE model in JANG format. Not compatible with dense models (no experts to partial-load) or with non-JANG formats.
+
 ---
 
 ## CLI Commands
