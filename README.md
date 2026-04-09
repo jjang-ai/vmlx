@@ -580,18 +580,13 @@ vmlx serve ./MyMoE-JANG_4M --smelt --smelt-experts 50
 vmlx serve ./MyMoE-JANG_4M --smelt --smelt-experts 25
 ```
 
-**Verified coherent** (non-looping output, clean English, passes deterministic sanity prompts):
+**Verified coherent** (non-looping output on a JANG MoE model under partial expert loading):
 
-| Model | Architecture | Verification |
+| Model | Format | Verification |
 |---|---|---|
-| `Nemotron-Cascade-2-30B-A3B-JANG_4M-CRACK` | 23 MoE layers × 128 experts, hybrid SSM | vMLX smelt at 25 %, 50 %, 100 % expert loading |
-| `Qwen3.5-REAP-212B-A17B` (v12 CRACK) | 60 layers × 267 experts, hybrid SSM + VL | L28@v3 probe, L27+L31 o_proj surgery, s=8.00 — 8/8 compliance, 4/4 coherence, 33-39 tok/s |
-| `Qwen3.5-REAP-212B-A17B` (v14 CRACK) | 60 layers × 267 experts | 3-layer surgery L27+L31+L35 at 8/8/5 — 4/4 coherence (best quality) |
-| `Qwen3.5-REAP-262B-A17B` CRACK | 60 layers × 333 experts | Same L28 approach as 212B v12 |
-| `MiniMax-M2.5` | 62 layers × 256 experts, 230B | Coherent thinking + response on 91 GB Q2/Q3/Q4 mixed format |
-| `Qwen3.5-35B-A3B` | hybrid MoE SSM | Runs end-to-end with ~8 GB RAM via partial expert loading |
+| `Nemotron-Cascade-2-30B-A3B` | `JANG_4M` | Coherent output at 25 %, 50 %, and 100 % expert loading via vMLX `--smelt` |
 
-Clean RAM / tok-s benchmarks on a dedicated machine to follow. CRACK surgery verification comes from the companion [SMELT](https://github.com/jjang-ai/jang-smelt) project research logs (`research/references/crack/docs/qwen35_212b_262b/212b-crack-log.md`).
+Clean RAM / tok-s benchmarks on a dedicated machine to follow. More JANG smelt reference models will be added as they're measured.
 
 **Smelt is mutually exclusive with VLM mode.** vMLX detects smelt and automatically disables `--is-mllm` (with a warning) because the vision tower is not wired through the partial-expert loader — image input on a smelt-loaded VLM would produce garbage logits. Use a text-only model when running smelt, or disable smelt when running a VLM.
 
