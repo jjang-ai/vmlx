@@ -62,6 +62,27 @@ try:
 except Exception:
     pass
 
+# mlx_vlm's MessageFormatter does not yet have a gemma4 entry in MODEL_CONFIG
+# (mlx-vlm 0.3.x ships gemma3/gemma3n but not gemma4). Without this patch,
+# `mlx_vlm.prompt_utils.apply_chat_template()` raises
+# `ValueError: Unsupported model: gemma4` for any Gemma 4 VLM (including
+# Gemma 4 JANG), and the BatchedEngine silently falls back to the text-only
+# tokenizer path — which drops image content parts entirely, so the model
+# receives the prompt WITHOUT any image placeholder tokens and answers as
+# if no image were provided (see GitHub issue reported 2026-04-09).
+#
+# Fix: register `gemma4` (and the `gemma4_text` sub-type for safety) under
+# `LIST_WITH_IMAGE_TYPE`, which builds the same
+# `[{type: 'image'}, {type: 'text', text: ...}]` content list the Gemma 4
+# Jinja chat template already knows how to render into `<|image|>` tokens.
+try:
+    from mlx_vlm.prompt_utils import MODEL_CONFIG as _VLM_MODEL_CONFIG, MessageFormat as _VLMMF
+
+    _VLM_MODEL_CONFIG.setdefault("gemma4", _VLMMF.LIST_WITH_IMAGE_TYPE)
+    _VLM_MODEL_CONFIG.setdefault("gemma4_text", _VLMMF.LIST_WITH_IMAGE_TYPE)
+except Exception:
+    pass
+
 # All imports are lazy to allow usage on non-Apple Silicon platforms
 # (e.g., CI running on Linux) where mlx_lm is not available.
 

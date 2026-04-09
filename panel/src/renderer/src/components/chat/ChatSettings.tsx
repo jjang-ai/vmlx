@@ -71,13 +71,33 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   }, [])
 
   useEffect(() => {
-    window.api.chat.getOverrides(chatId).then((o: ChatOverrides | null) => {
-      if (o) setOverrides(o)
-      else setOverrides({})
+    (async () => {
+      const saved = await window.api.chat.getOverrides(chatId) as ChatOverrides | null
+      // Pull recommended defaults from the model's own generation_config.json
+      // so the UI shows what the model author recommends — not hardcoded fallbacks
+      // like 0.7 / 0.9 that have no relation to the loaded model. This is display-only
+      // until the user edits + clicks Save (we don't flag dirty, so closing the panel
+      // without editing preserves the NULL state in the DB).
+      let modelDefaults: Partial<ChatOverrides> = {}
+      if (session.modelPath) {
+        try {
+          const gen = await window.api.models.getGenerationDefaults(session.modelPath)
+          if (gen) {
+            if (gen.temperature != null) modelDefaults.temperature = gen.temperature
+            if (gen.topP != null) modelDefaults.topP = gen.topP
+            if (gen.topK != null) modelDefaults.topK = gen.topK
+            if (gen.minP != null) modelDefaults.minP = gen.minP
+            if (gen.repeatPenalty != null) modelDefaults.repeatPenalty = gen.repeatPenalty
+          }
+        } catch (_) {/* no generation_config.json — fall back to hardcoded placeholders */}
+      }
+      // Saved overrides win over model defaults for any field the user has explicitly set.
+      const merged: ChatOverrides = { ...modelDefaults, ...(saved || {}) }
+      setOverrides(merged)
       setDirty(false)
-    })
+    })()
     loadProfiles()
-  }, [chatId, loadProfiles])
+  }, [chatId, session.modelPath, loadProfiles])
 
   const update = <K extends keyof ChatOverrides>(key: K, value: ChatOverrides[K]) => {
     setOverrides(prev => ({ ...prev, [key]: value }))

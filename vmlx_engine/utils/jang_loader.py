@@ -938,6 +938,40 @@ def _load_jang_v2_vlm(
         _reason = "MLA" if _is_mla else f"{_n_experts} experts"
         logger.info(f"  bfloat16 enabled: {_reason}, hidden={_hidden}")
 
+    # Vision tower float16 overflow guard (Gemma 4 VLM JANG 2L/4M).
+    #
+    # Low-bit JANG profiles (2L = 2-bit, 4M = 4-bit) on the ~400M-param Gemma 4
+    # vision tower accumulate rounding error through the 27 SigLIP encoder
+    # layers. In float16 the absolute magnitudes blow past ±65504 in a middle
+    # layer norm → intermediate activations become ±inf → `embed_vision`
+    # projection flips every entry to NaN → the language model samples token
+    # id 0 (`<pad>`) every step and the user sees "no image" output even
+    # though the prompt correctly contains 256 image tokens + pixel_values.
+    #
+    # Upcasting the vision tower + multimodal projector to bfloat16 keeps the
+    # same memory footprint as float16 (16 bits / param) but doubles the
+    # dynamic range so the same activations land in the representable region.
+    # Verified live on Gemma-4-26B-A4B-it-JANG_2L-CRACK 2026-04-09:
+    #   float16  → vision_out min=-inf, embed_vision all NaN, output all <pad>
+    #   bfloat16 → vision_out min=-7.0, embed_vision clean, correct answer
+    #
+    # Applied only to Gemma 4 VLM; other VLMs (Qwen3.5-VL, etc.) stay at
+    # whatever mlx_vlm.load() produced.
+    if _text_mt == "gemma4_text" and hasattr(model, "vision_tower"):
+        try:
+            model.vision_tower.set_dtype(mx.bfloat16)
+            if hasattr(model, "embed_vision"):
+                model.embed_vision.set_dtype(mx.bfloat16)
+            logger.info(
+                "  Vision tower upcast to bfloat16 (Gemma 4 VLM — avoids "
+                "float16 overflow in SigLIP encoder with low-bit JANG quant)"
+            )
+        except Exception as _vt_err:
+            logger.warning(
+                "  Failed to upcast Gemma 4 vision tower to bfloat16: %s",
+                _vt_err,
+            )
+
     if not skip_eval:
         _set_wired_limit_for_model(_get_v2_weight_files(path))
         _chunked_eval_params(model)
