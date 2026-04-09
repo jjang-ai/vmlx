@@ -2345,9 +2345,16 @@ class MLLMScheduler:
                     pass
             if self.disk_cache is not None:
                 try:
-                    stats["disk_cache"] = {"type": "disk", "enabled": True}
+                    # Surface real L2 counters: hits/misses/entries/TQ-native etc.
+                    # Previously only reported `{type:disk, enabled:True}` which
+                    # left the /v1/cache/stats endpoint showing disk_cache as a
+                    # stub even when actual L2 prompt restores worked.
+                    disk_stats = self.disk_cache.stats()
+                    disk_stats["type"] = "disk"
+                    disk_stats["enabled"] = True
+                    stats["disk_cache"] = disk_stats
                 except Exception:
-                    pass
+                    stats["disk_cache"] = {"type": "disk", "enabled": True}
 
             return stats
 

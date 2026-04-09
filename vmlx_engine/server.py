@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# MLX Studio — eric@mlx.studio — Created by Jinho Jang
+# Created by Jinho Jang (eric@jangq.ai) for vMLX / mlxstudio
 """
 Unified OpenAI-compatible API server for vmlx-engine.
 
@@ -719,26 +719,53 @@ def _apply_jit_compilation():
             logger.warning("JIT: Could not find model object on engine — skipping")
             return
 
-        # The actual nn.Module is often nested: engine._model.model
-        inner = getattr(model_obj, "model", model_obj)
-        if inner is None or not callable(inner):
-            logger.warning("JIT: Model object is not callable — skipping")
-            return
+        # Issue #56 Bug 2 — JIT + MLLM: mlx_vlm's generate() path accesses
+        # `model.config.model_type`, `model.config.image_token_index`, and
+        # `model.config.eos_token_id` directly on the top-level VLM wrapper.
+        # If we mx.compile the VLM wrapper itself, it becomes an mlx.gc_func
+        # and those attribute reads raise `AttributeError: 'mlx.gc_func' object
+        # has no attribute 'config'`. For VLM engines we deliberately SKIP
+        # top-level compilation and only compile the inner language_model.model
+        # (the pure transformer), which mlx_vlm never introspects.
+        is_mllm_engine = bool(getattr(_engine, "is_mllm", False) or getattr(_engine, "_is_mllm", False))
+        if is_mllm_engine:
+            # For VLM: compile `language_model.model` (inner transformer) if
+            # available, leave the wrapper alone so .config survives.
+            vlm_model = model_obj if hasattr(model_obj, "language_model") else getattr(model_obj, "model", None)
+            language_model = getattr(vlm_model, "language_model", None) if vlm_model is not None else None
+            inner_transformer = getattr(language_model, "model", None) if language_model is not None else None
+            if inner_transformer is None or not callable(inner_transformer):
+                logger.info("JIT: MLLM model has no inner language_model.model to compile — skipping JIT safely")
+                return
+            logger.info("JIT: Applying mx.compile to language_model.model (VLM wrapper preserved for .config access)")
+            try:
+                compiled = mx.compile(inner_transformer)
+                language_model.model = compiled
+                replaced = language_model.model is compiled
+            except Exception as _vlm_jit_err:
+                logger.warning(f"JIT: VLM language_model compile failed, running without JIT: {_vlm_jit_err}")
+                return
+        else:
+            # LLM engine — compile the full inner module as before
+            inner = getattr(model_obj, "model", model_obj)
+            if inner is None or not callable(inner):
+                logger.warning("JIT: Model object is not callable — skipping")
+                return
 
-        logger.info("JIT: Applying mx.compile to model forward pass...")
-        compiled = mx.compile(inner)
+            logger.info("JIT: Applying mx.compile to model forward pass...")
+            compiled = mx.compile(inner)
 
-        # Replace in-place on the wrapper and verify
-        replaced = False
-        if hasattr(model_obj, "model") and model_obj.model is inner:
-            model_obj.model = compiled
-            replaced = model_obj.model is compiled
-        elif hasattr(_engine, "_model"):
-            _engine._model = compiled
-            replaced = _engine._model is compiled
-        elif hasattr(_engine, "model"):
-            _engine.model = compiled
-            replaced = _engine.model is compiled
+            # Replace in-place on the wrapper and verify
+            replaced = False
+            if hasattr(model_obj, "model") and model_obj.model is inner:
+                model_obj.model = compiled
+                replaced = model_obj.model is compiled
+            elif hasattr(_engine, "_model"):
+                _engine._model = compiled
+                replaced = _engine._model is compiled
+            elif hasattr(_engine, "model"):
+                _engine.model = compiled
+                replaced = _engine.model is compiled
 
         if replaced:
             logger.info("JIT: mx.compile applied successfully — running warmup pass")

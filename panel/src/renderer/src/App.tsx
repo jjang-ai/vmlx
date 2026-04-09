@@ -259,7 +259,7 @@ function ChatModeContent({ activeChatId, sessionEndpoint, sessionStatus, activeS
   )
 }
 
-// MLX Studio — eric@mlx.studio
+// vMLX / mlxstudio — authored by Jinho Jang
 function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-8" data-mlx-studio="jinhojang">

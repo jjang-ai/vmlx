@@ -7,8 +7,47 @@
  * Users can always override auto-detected values via Server Settings UI.
  */
 
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
+import { homedir } from 'os'
+
+/**
+ * Resolve an HF repo id (e.g. `mlx-community/gemma-4-e2b-it-4bit`) to the
+ * newest local snapshot directory inside the HuggingFace hub cache.
+ *
+ * The panel stores `chat.modelPath` as whatever the user downloaded/loaded
+ * with, which for HF hub downloads is the bare repo id — NOT a filesystem
+ * path. `detectModelConfigFromDir()` used to try to read
+ * `<repo id>/config.json` directly, which always fell through to
+ * `DEFAULT_CONFIG` (including `isMultimodal: false`). The panel then stripped
+ * every attached image on its way to the server, so vision requests on HF-
+ * downloaded Gemma 4 E2B / E4B / 26B arrived as text-only.
+ *
+ * This helper mirrors `huggingface_hub`'s cache layout:
+ *   ~/.cache/huggingface/hub/models--{owner}--{repo}/snapshots/{sha}/
+ * Returns null if the repo isn't in the cache or the cache layout is unusable.
+ */
+function resolveHuggingFaceRepoToLocalPath(repoId: string): string | null {
+  if (!repoId || !repoId.includes('/') || repoId.startsWith('/')) return null
+  // An HF repo id is "owner/name"; HF transforms slashes in the folder name
+  // to `--`, so "mlx-community/foo" becomes "models--mlx-community--foo".
+  const folder = 'models--' + repoId.replace(/\//g, '--')
+  const hubDir = join(homedir(), '.cache', 'huggingface', 'hub', folder, 'snapshots')
+  if (!existsSync(hubDir)) return null
+  try {
+    const entries = readdirSync(hubDir)
+      .map(name => {
+        const full = join(hubDir, name)
+        try { return { full, mtime: statSync(full).mtimeMs } } catch { return null }
+      })
+      .filter((x): x is { full: string; mtime: number } => x !== null)
+    if (entries.length === 0) return null
+    entries.sort((a, b) => b.mtime - a.mtime)
+    return entries[0].full
+  } catch {
+    return null
+  }
+}
 
 interface ModelConfig {
   familyName: string
@@ -322,6 +361,16 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
  */
 export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
   try {
+    // HF repo id fallback: if `modelPath` isn't a local directory, try
+    // resolving it to the HuggingFace cache snapshot. Without this, every
+    // model loaded via "Download from HuggingFace" ends up with
+    // `isMultimodal: false` and the panel strips attached images.
+    if (!existsSync(join(modelPath, 'config.json'))) {
+      const resolved = resolveHuggingFaceRepoToLocalPath(modelPath)
+      if (resolved) {
+        modelPath = resolved
+      }
+    }
     const configPath = join(modelPath, 'config.json')
     if (existsSync(configPath)) {
       const raw = readFileSync(configPath, 'utf-8')

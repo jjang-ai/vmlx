@@ -288,7 +288,23 @@ def _load_codebook_vq_model(
         load_model as _load_model_skeleton,
         load_tokenizer,
     )
-    from vmlx_engine.models.codebook import CodebookVQLanguageModel
+    # Codebook VQ is an experimental JANG format. The `vmlx_engine/models/codebook.py`
+    # module (and its `cache/`, `config/`, `metal/` siblings) are not committed to
+    # the public `jjang-ai/vmlx` repo — they exist only in local dev installs.
+    # Fresh clones that don't carry the experimental stack would otherwise crash
+    # with a hard ImportError on the *first* codebook VQ model load. Guard the
+    # import here so the error surface is a clean "feature not available" message
+    # instead of a traceback leaking internal module layout.
+    try:
+        from vmlx_engine.models.codebook import CodebookVQLanguageModel
+    except ImportError as _cb_err:
+        raise RuntimeError(
+            "Codebook VQ model format requires the experimental "
+            "`vmlx_engine.models.codebook` module, which is not included in "
+            "this build. To enable codebook VQ inference, install the "
+            "experimental codebook stack (`vmlx_engine/cache/`, `config/`, "
+            f"`metal/`, `models/codebook*.py`). Original error: {_cb_err}"
+        ) from _cb_err
 
     start = time.perf_counter()
 

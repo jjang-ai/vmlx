@@ -233,6 +233,43 @@ def serve_command(args):
     if getattr(args, 'smelt', False):
         pct = getattr(args, 'smelt_experts', 50)
         print(f"\n  Smelt mode: loading {pct}% of MoE experts per layer\n")
+        # Set server module smelt globals IMMEDIATELY so any downstream
+        # is_mllm_model() call (e.g., the speculative decoding VLM check
+        # below) sees smelt as active. Without this, is_mllm_model() runs
+        # detection based on config.json alone and returns True for VLM
+        # architectures, which would then emit a misleading speculative-
+        # decoding warning AND let force_mllm slip through to the loader.
+        from . import server as _server_module
+        _server_module._smelt_enabled = True
+        _server_module._smelt_experts = pct
+        # Smelt ⊕ VLM mutual exclusion.
+        #
+        # Smelt's partial-expert loader swaps experts in/out of GPU RAM to
+        # reduce footprint on MoE models. The vision encoder and multimodal
+        # projector, however, are NOT expert modules — they're always
+        # resident and depend on the full mlx_vlm model wrapper. When smelt
+        # is active the loader takes a different code path (`smelt_load`)
+        # that does not set up the vision tower state dict the same way as
+        # `load_jang_vlm_model`. In practice that means image input on a
+        # smelt-loaded VLM silently produces garbage logits (vision_tower
+        # weights present but not wired through the expert swapper) and the
+        # model answers as if no image was attached.
+        #
+        # Rather than letting the user hit that silent failure, force
+        # text-only mode: override --is-mllm off and tell is_mllm_model()
+        # to skip VLM detection. If the user explicitly passed --is-mllm
+        # with --smelt we warn loudly so they know the flag was dropped.
+        if getattr(args, 'is_mllm', False):
+            print(
+                "  WARNING: --is-mllm is incompatible with --smelt. Smelt's "
+                "partial-expert loader does not wire the vision tower, so "
+                "image input would produce garbage output. Disabling VLM "
+                "mode for this session — text-only inference only."
+            )
+            args.is_mllm = False
+        # Sentinel consumed by is_mllm_model() via server._smelt_enabled —
+        # the loader also reads this flag to pick the smelt_load code path.
+        setattr(args, '_smelt_forces_text_only', True)
 
     # Build scheduler config for batched mode
     scheduler_config = None

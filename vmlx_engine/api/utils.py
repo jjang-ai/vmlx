@@ -148,6 +148,34 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     # first one to return wins.
     _logger = logging.getLogger("vmlx_engine")
 
+    # Smelt mutual exclusion: when smelt is active, the vision tower is NOT
+    # wired through the partial-expert loader. Allowing a VLM to load under
+    # smelt would silently produce garbage logits on image input (vision
+    # features never reach the language model embeddings). Force text-only
+    # mode unconditionally — overriding force_mllm too, since the user has
+    # no way to have a working VLM under smelt.
+    try:
+        from .. import server as _server_module  # local import to avoid cycles
+        if getattr(_server_module, '_smelt_enabled', False):
+            if force_mllm:
+                _logger.warning(
+                    "is_mllm_model(%s): smelt mode overrides force_mllm — "
+                    "VLM would produce garbage on image input under smelt, "
+                    "forcing text-only",
+                    model_name,
+                )
+            else:
+                _logger.info(
+                    "is_mllm_model(%s): tier=smelt_forces_text_only result=False",
+                    model_name,
+                )
+            return False
+    except Exception:
+        # Defensive: if server module isn't loaded yet (rare race on startup),
+        # fall through to normal detection. The CLI already zeroed args.is_mllm
+        # so force_mllm will be False in the common path.
+        pass
+
     if force_mllm:
         # Not cached — force_mllm is cheap + callers may toggle at runtime.
         _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)

@@ -431,10 +431,18 @@ class MLLMBatchResponse:
     request_id: str  # External request ID
     token: int  # Generated token
     logprobs: mx.array  # Log probabilities
-    finish_reason: Optional[str] = None  # "stop", "length", or None
+    # "stop", "length", "error", or None. "error" is used for prefill failures
+    # that the batched engine catches and converts into a client-visible error
+    # (see Issue #56 Bug 1). Without a distinct reason, silent prefill crashes
+    # look like normal empty completions to the client.
+    finish_reason: Optional[str] = None
     prompt_cache: Optional[Callable[[], List[Any]]] = None  # Cache extraction function
     prompt_token_ids: Optional[List[int]] = None  # Original tokenized prompt for prefix key
     cached_tokens: int = 0  # Number of prompt tokens served from cache
+    # Optional human-readable error message attached when finish_reason="error".
+    # Scheduler and server.py lift this into an HTTP error response so users
+    # can see the actual mlx / mlx_vlm traceback instead of an empty 200.
+    error: Optional[str] = None
 
 
 @dataclass
@@ -1296,9 +1304,50 @@ class MLLMBatchGenerator:
                 image_token_index=image_token_index,
             )
 
-        request.input_ids = inputs.get("input_ids")
-        request.pixel_values = inputs.get("pixel_values")
-        request.attention_mask = inputs.get("attention_mask")
+        # Issue #56 Bug 1 root fix — normalize input_ids to mx.int32.
+        # mlx_vlm's various processors (Mistral3 / Pixtral / Gemma4 / Qwen3.5-VL)
+        # return input_ids as numpy arrays, torch tensors, or mx arrays with
+        # varying dtypes depending on the upstream transformers version. When a
+        # quantized embedding (`nn.QuantizedEmbedding` packed uint32 weights)
+        # receives a numpy/torch index or an mx int64, MLX raises
+        # `ValueError: Cannot index mlx array using the given type` — and the
+        # batched engine's outer prefill-except then silently queued an empty
+        # "stop" response (#56). The SimpleEngine path never hit this because
+        # mlx_vlm.generate() does its own dtype normalization before forward.
+        def _ensure_mx_array(x, target_dtype=None):
+            """Normalize numpy / torch / list / mx inputs to an mx.array,
+            optionally casting to a specific dtype. Pixtral / Mistral 3 /
+            Qwen3.5-VL processors all return different wire formats; the
+            batched engine then passes the raw value straight into forward,
+            which chokes with either `Cannot index mlx array using the given
+            type` (QuantizedEmbedding) or `Cannot interpret mlx.core.bfloat16
+            as a data type` (numpy.astype against an mx dtype). Normalizing
+            once here makes all downstream layer calls match the SimpleEngine
+            path."""
+            if x is None:
+                return None
+            if not isinstance(x, mx.array):
+                try:
+                    if hasattr(x, "tolist"):
+                        x = mx.array(x.tolist())
+                    else:
+                        x = mx.array(x)
+                except Exception:
+                    return x  # give up gracefully, downstream will error
+            if target_dtype is not None and x.dtype != target_dtype:
+                try:
+                    x = x.astype(target_dtype)
+                except Exception:
+                    pass
+            return x
+
+        # Issue #56 — normalize input_ids + pixel_values + attention_mask
+        # before storing on the request. Covers Mistral 3 / Pixtral,
+        # Qwen3.5-VL, Gemma 4, and future VLM families without having to
+        # special-case each processor's output format.
+        request.input_ids = _ensure_mx_array(inputs.get("input_ids"), mx.int32)
+        request.pixel_values = _ensure_mx_array(inputs.get("pixel_values"))
+        request.attention_mask = _ensure_mx_array(inputs.get("attention_mask"))
 
         # Extract extra kwargs
         request.extra_kwargs = {
@@ -1792,6 +1841,29 @@ class MLLMBatchGenerator:
         for i, req in enumerate(requests):
           try:
             with mx.stream(MLLMBatchGenerator._stream):
+                # Reset stale per-batch module state on the language model before
+                # each request's forward pass.
+                #
+                # Some mlx_vlm language models (Qwen3.5 / Qwen3.5-Moe hybrid SSM
+                # family) cache `_rope_deltas` and `_position_ids` at module level
+                # as an optimization for multi-step generation within a single
+                # request. The upstream code only clears them when `pixel_values`
+                # is not None (new vision request). On text-only follow-ups,
+                # request N reuses request N-1's cached position_ids which has
+                # the WRONG seq_length, producing broadcast errors like
+                # `(1, 16, 56, 64) vs (1, 1, 20, 64)` at the first linear_attention
+                # layer — because the slice `_position_ids[:, :, 0:L_new]` ends
+                # up shorter than `L_new` and then broadcasts against the full
+                # queries tensor. Fresh per-request clears fix this universally
+                # and are a no-op for models that don't use these attributes.
+                try:
+                    _lm = self.language_model
+                    for _attr in ("_rope_deltas", "_position_ids"):
+                        if hasattr(_lm, _attr):
+                            setattr(_lm, _attr, None)
+                except Exception:
+                    pass
+
                 if req.prompt_cache is not None:
                     # Dequantize before _fix_hybrid_cache (it checks KVCache,
                     # not QuantizedKVCache which inherits from _BaseCache)
@@ -2057,16 +2129,26 @@ class MLLMBatchGenerator:
                 req.extra_kwargs = {}
                 mx.clear_cache()
                 # Queue an immediate error response instead of killing the entire batch.
+                # Issue #56 Bug 1: use finish_reason="error" + error string so the
+                # scheduler → server path can raise an HTTP 500 with the real
+                # traceback instead of a silent 200 with empty content. Previously
+                # the client saw `{"content": null, "finish_reason": "stop",
+                # "prompt_tokens": 0}` and had no way to distinguish "empty
+                # completion" from "prefill crashed".
+                import traceback as _tb
+                _err_detail = f"{type(prefill_err).__name__}: {prefill_err}"
                 logger.error(
-                    f"Prefill failed for {req.request_id}: {prefill_err} — "
-                    f"other requests in batch will continue"
+                    f"Prefill failed for {req.request_id}: {_err_detail}\n"
+                    f"{_tb.format_exc()}\n"
+                    f"— other requests in batch will continue"
                 )
                 self._prefill_errors.append(MLLMBatchResponse(
                     uid=req.uid,
                     request_id=req.request_id,
                     token=0,
                     logprobs=mx.zeros((1,)),
-                    finish_reason="stop",
+                    finish_reason="error",
+                    error=_err_detail,
                 ))
 
         # Use only the successfully prefilled requests for the batch

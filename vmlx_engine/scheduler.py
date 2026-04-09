@@ -4309,6 +4309,22 @@ class Scheduler:
         if base is not None and ssm_stats is not None:
             base = dict(base)
             base["ssm_companion_cache"] = ssm_stats
+        # Surface L2 prompt disk cache (hits / misses / entries / TQ-native counters)
+        # under a dedicated sub-key. This is the prompt-level disk cache manager
+        # (`DiskCacheManager`), separate from the block-level L2 disk store tracked
+        # by paged_cache's own `disk_hits` counter. Before this fix, prompt-level
+        # L2 restores worked but weren't visible in `/v1/cache/stats`, so users
+        # mistook the counter gap for a functional regression.
+        if self.disk_cache is not None:
+            try:
+                disk_stats = self.disk_cache.stats()
+                if base is None:
+                    base = {}
+                else:
+                    base = dict(base)
+                base["disk_cache"] = disk_stats
+            except Exception:
+                pass
         return base
 
     def _get_ssm_cache_stats(self) -> Optional[Dict[str, Any]]:

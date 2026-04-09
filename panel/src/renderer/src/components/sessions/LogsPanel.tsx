@@ -7,15 +7,23 @@ interface LogsPanelProps {
   isRemote?: boolean
 }
 
-/** Classify a log line for severity coloring */
+/** Classify a log line for severity coloring.
+ *
+ * Issue #54: the log viewport uses a hardcoded dark terminal background
+ * (`bg-[#0d1117]`) for readability, so line colors must be LIGHT for both
+ * light and dark app themes — otherwise theme-aware tokens like
+ * `text-foreground` pick up the app's foreground (dark on light theme)
+ * and render as dark-on-dark ⇒ invisible. Use explicit slate/red/amber
+ * shades that always contrast against the terminal background.
+ */
 function getLineClass(line: string): string {
   if (line.includes('ERROR') || line.includes('Traceback') || line.includes('Exception'))
-    return 'text-destructive'
+    return 'text-red-400'
   if (line.includes('WARNING') || line.includes('warn'))
-    return 'text-warning'
+    return 'text-amber-300'
   if (line.includes('[INFO]'))
-    return 'text-muted-foreground'
-  return 'text-foreground/80'
+    return 'text-slate-400'
+  return 'text-slate-200'
 }
 
 export function LogsPanel({ sessionId, sessionStatus, isRemote }: LogsPanelProps) {
@@ -135,7 +143,7 @@ export function LogsPanel({ sessionId, sessionStatus, isRemote }: LogsPanelProps
         className="flex-1 overflow-y-auto overflow-x-auto bg-[#0d1117] p-2 font-mono text-[11px] leading-relaxed"
       >
         {displayLines.length === 0 ? (
-          <div className="text-muted-foreground/50 text-center py-8">
+          <div className="text-slate-500 text-center py-8">
             {sessionStatus === 'running'
               ? 'No log output yet...'
               : isRemote ? 'Connect to see connection logs' : 'Start the server to see logs'}

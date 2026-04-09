@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# MLX Studio — eric@mlx.studio — Jinho Jang
+# Created by Jinho Jang (eric@jangq.ai) for vMLX / mlxstudio
 """
 Image Generation Engine — Text-to-image and img2img using mflux (MLX-native).
 
