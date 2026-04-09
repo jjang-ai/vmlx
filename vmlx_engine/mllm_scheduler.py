@@ -1590,6 +1590,19 @@ class MLLMScheduler:
                     request.status = RequestStatus.FINISHED_STOPPED
                 elif finish_reason == "length":
                     request.status = RequestStatus.FINISHED_LENGTH_CAPPED
+                elif finish_reason == "error":
+                    # Issue #56 Bug 1: surface batched prefill failures as a
+                    # distinct status. Falls back to FINISHED_STOPPED if the
+                    # status enum doesn't have an error variant (older builds).
+                    request.status = getattr(
+                        RequestStatus, "FINISHED_ERROR", RequestStatus.FINISHED_STOPPED
+                    )
+                    # Attach error detail on the request so the async output
+                    # consumer / server.py can raise it as an HTTPException
+                    # instead of a silent 200 with empty content.
+                    _err = getattr(response, "error", None)
+                    if _err:
+                        request._prefill_error = _err
 
                 output.finished = True
                 output.finish_reason = finish_reason
