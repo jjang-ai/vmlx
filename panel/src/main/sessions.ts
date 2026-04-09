@@ -1725,9 +1725,17 @@ export class SessionManager extends EventEmitter {
 
     // VLM detection: tri-state — undefined=auto, true=force on, false=force off.
     // Only respect explicit user choice (true/false); undefined defers to auto-detect.
-    const isVLM = config.isMultimodal === true ? true
-      : config.isMultimodal === false ? false
-        : !!detected.isMultimodal
+    // Smelt mutual exclusion: smelt's partial-expert loader doesn't wire the
+    // vision tower, so image input on a smelt-loaded VLM produces garbage logits.
+    // Suppress --is-mllm when smelt is active — the CLI also guards this, but
+    // doing it here prevents misleading "Force MLLM mode enabled" log lines and
+    // avoids the edge case where a saved session has isMultimodal=true from
+    // before smelt was turned on.
+    const smeltActive = !!(config as any).smelt
+    const isVLM = smeltActive ? false
+      : config.isMultimodal === true ? true
+        : config.isMultimodal === false ? false
+          : !!detected.isMultimodal
     if (isVLM) args.push('--is-mllm')
 
     if (config.continuousBatching) args.push('--continuous-batching')

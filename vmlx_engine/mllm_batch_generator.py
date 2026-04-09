@@ -1399,7 +1399,13 @@ class MLLMBatchGenerator:
             Logits from the forward pass
         """
         kwargs = dict(request.extra_kwargs)
-        kwargs["pixel_values"] = request.pixel_values
+        # Only pass pixel_values when non-None. Smelt-loaded models use a
+        # text-only wrapper whose __call__ does NOT accept pixel_values at
+        # all — passing even None triggers `unexpected keyword argument
+        # 'pixel_values'`. For standard VLM models, pixel_values=None is a
+        # no-op that the vision encoder skips, so omitting it is safe.
+        if request.pixel_values is not None:
+            kwargs["pixel_values"] = request.pixel_values
         if request.attention_mask is not None:
             kwargs["mask"] = request.attention_mask
         if request.image_grid_thw is not None:
