@@ -899,7 +899,10 @@ class BlockAwarePrefixCache:
                         break
                 if n_kv:
                     break
-            # Pass 2: if no MLA found, get num_key_value_heads
+            # Pass 2: if no MLA found, get num_key_value_heads.
+            # Gemma 4 VLM stores num_key_value_heads inside
+            # model.config.text_config (not directly on model.config),
+            # so we also check cfg.text_config as a nested fallback.
             if not n_kv:
                 for model_obj in candidates:
                     for attr in ('args', 'config', 'text_config'):
@@ -910,6 +913,15 @@ class BlockAwarePrefixCache:
                             getattr(cfg, 'num_key_value_heads', 0)
                             or getattr(cfg, 'num_kv_heads', 0)
                         )
+                        if not n_kv:
+                            # Nested text_config (VLM wrappers like Gemma 4
+                            # whose ModelConfig wraps TextConfig)
+                            tc = getattr(cfg, 'text_config', None)
+                            if tc is not None:
+                                n_kv = (
+                                    getattr(tc, 'num_key_value_heads', 0)
+                                    or getattr(tc, 'num_kv_heads', 0)
+                                )
                         if n_kv:
                             break
                     if n_kv:
