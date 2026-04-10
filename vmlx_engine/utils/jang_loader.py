@@ -412,10 +412,14 @@ def _load_jang_v2(
     start = time.perf_counter()
     config = load_config(path)
 
+    # Always read block_size from jang_config (needed by _pre_fix_bits_from_shard
+    # and other per-shard fixups). config.json's quantization.group_size may differ
+    # from the JANG config's block_size for older models.
+    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
+
     # config.json already has quantization key (written by v2 converter)
     # but ensure it exists for older v2 models
     if "quantization" not in config:
-        block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
         bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
         config["quantization"] = {"group_size": block_size, "bits": min(bit_widths)}
 
