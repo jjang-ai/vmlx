@@ -1297,26 +1297,70 @@ def load_model(
     if force_mllm:
         logger.info("Force MLLM mode enabled via --mllm flag")
 
-    # Distributed inference: set up mesh coordinator instead of local loading
+    # Distributed inference: set up mesh coordinator instead of local loading.
+    # Image models are single-node only — mflux has no concept of layer splits,
+    # so binding mesh TCP ports would just be noise.
+    if distributed and _model_type == "image":
+        logger.info(
+            "Distributed flag ignored for image model — image generation is "
+            "single-node only."
+        )
+        _distributed_enabled = False
+        distributed = False
+
     if distributed:
         logger.info("Distributed mode enabled (%s parallelism)", distributed_mode)
+        _cluster_secret_resolved = (
+            cluster_secret or os.environ.get("VMLX_CLUSTER_SECRET", "")
+        )
+        if not _cluster_secret_resolved:
+            logger.error(
+                "Refusing to start distributed mesh without a cluster secret. "
+                "Set --cluster-secret or VMLX_CLUSTER_SECRET. Generate one with: "
+                "python3 -c 'import secrets; print(secrets.token_urlsafe(24))'"
+            )
+            _distributed_enabled = False
+            _distributed_coordinator = None
+            distributed = False
+
+    if distributed:
         try:
             from .distributed.mesh_manager import MeshManager
             _distributed_coordinator = MeshManager(
-                cluster_secret=cluster_secret or os.environ.get("VMLX_CLUSTER_SECRET", ""),
+                cluster_secret=_cluster_secret_resolved,
                 model_path=model_name,
                 mode=distributed_mode,
                 smelt_percent=smelt_experts if smelt else 100,
                 worker_nodes=worker_nodes,
             )
-            # Run mesh setup — discovery, election, layer assignment, loading
+            # Run mesh setup — discovery, election, layer assignment, loading.
+            # Store the task handle + done-callback so startup exceptions land
+            # in logs instead of silently hanging the first request for 60s.
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(_distributed_coordinator.start())
+                _mesh_start_task = loop.create_task(
+                    _distributed_coordinator.start()
+                )
+
+                def _on_mesh_start_done(task: asyncio.Task) -> None:
+                    if task.cancelled():
+                        return
+                    exc = task.exception()
+                    if exc is not None:
+                        logger.error(
+                            "Distributed mesh startup failed: %s", exc,
+                            exc_info=exc,
+                        )
+
+                _mesh_start_task.add_done_callback(_on_mesh_start_done)
+                _distributed_coordinator._start_task = _mesh_start_task
                 logger.info("Distributed mesh setup deferred to event loop")
             except RuntimeError:
                 asyncio.run(_distributed_coordinator.start())
-                logger.info("Distributed mesh ready: %d nodes", len(_distributed_coordinator.topology.active_nodes))
+                logger.info(
+                    "Distributed mesh ready: %d nodes",
+                    len(_distributed_coordinator.topology.active_nodes),
+                )
 
             # If mesh has >1 node, use DistributedEngine instead of local engine
             num_nodes = len(_distributed_coordinator.topology.active_nodes)
@@ -1332,11 +1376,32 @@ def load_model(
                 logger.info("Distributed inference active: %d nodes, skipping local engine", num_nodes)
                 return  # Skip local SimpleEngine/BatchedEngine creation
             else:
-                logger.info("Single-node or worker mode — falling through to local engine")
+                # Fall through to local engine. Clear the distributed globals
+                # so /v1/cluster/* endpoints + /health don't lie about an
+                # active mesh that doesn't exist.
+                logger.info(
+                    "Single-node or worker mode — falling through to local "
+                    "engine and clearing distributed state"
+                )
+                try:
+                    shutdown = getattr(_distributed_coordinator, "shutdown", None) \
+                        or getattr(_distributed_coordinator, "stop", None)
+                    if shutdown is not None:
+                        result = shutdown()
+                        if asyncio.iscoroutine(result):
+                            try:
+                                asyncio.get_running_loop().create_task(result)
+                            except RuntimeError:
+                                asyncio.run(result)
+                except Exception as e:
+                    logger.debug("Mesh cleanup on fallback failed: %s", e)
+                _distributed_coordinator = None
+                _distributed_enabled = False
         except Exception as e:
             logger.error("Failed to start distributed mesh: %s", e)
             logger.info("Falling back to single-node loading...")
             _distributed_coordinator = None
+            _distributed_enabled = False
             # Fall through to normal loading below
 
     if use_batching:

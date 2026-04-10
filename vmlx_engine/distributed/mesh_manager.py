@@ -95,6 +95,7 @@ class MeshManager:
         self._is_coordinator = False
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
+        self._worker_task: Optional[asyncio.Task] = None
         self._running = False
         self._model_loaded = False
         self._model_config: Optional[dict] = None
@@ -243,14 +244,24 @@ class MeshManager:
     async def shutdown(self):
         """Graceful shutdown."""
         self._running = False
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._monitor_task:
-            self._monitor_task.cancel()
+        for task_name in ("_heartbeat_task", "_monitor_task", "_worker_task"):
+            task = getattr(self, task_name, None)
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
         if self.coordinator:
-            await self.coordinator.shutdown_cluster()
+            try:
+                await self.coordinator.shutdown_cluster()
+            except Exception as e:
+                logger.debug("Coordinator shutdown_cluster failed: %s", e)
         if self.worker:
-            await self.worker.shutdown()
+            try:
+                await self.worker.shutdown()
+            except Exception as e:
+                logger.debug("Worker shutdown failed: %s", e)
         self.node.set_state(NodeState.SHUTDOWN)
         self._emit_status("shutdown")
         logger.info("Mesh shut down")
@@ -259,14 +270,27 @@ class MeshManager:
     # Inference
     # ------------------------------------------------------------------
 
-    async def forward(self, input_ids: mx.array, cache=None) -> mx.array:
+    async def forward(
+        self,
+        input_ids: mx.array,
+        request_id: str,
+        seq_pos: int,
+        local_cache=None,
+    ) -> mx.array:
         """Run a distributed forward pass.
 
-        Only callable on the coordinator node.
+        Only callable on the coordinator node. DistributedEngine calls the
+        Coordinator directly now, so this wrapper is mostly a convenience for
+        external callers.
         """
         if not self._is_coordinator or not self.coordinator:
             raise RuntimeError("forward() can only be called on the coordinator")
-        return await self.coordinator.forward(input_ids, cache=cache)
+        return await self.coordinator.forward(
+            input_ids,
+            request_id=request_id,
+            seq_pos=seq_pos,
+            local_cache=local_cache,
+        )
 
     def get_tokenizer(self):
         if self.coordinator:
@@ -306,9 +330,29 @@ class MeshManager:
             port=self.node.info.port,
             cluster_secret=self.cluster_secret,
         )
-        # Worker serves and waits for coordinator to connect + assign layers
-        asyncio.create_task(self.worker.serve())
+        # Store the serve task so we can cancel on shutdown and surface
+        # exceptions via a done-callback (previously fire-and-forget, which
+        # silently swallowed any worker crash).
+        self._worker_task = asyncio.create_task(self.worker.serve())
+
+        def _on_worker_done(task: asyncio.Task) -> None:
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.error("Worker.serve() task failed: %s", exc, exc_info=exc)
+                # Worker crashed — drop readiness so callers stop asking us
+                # to forward.
+                self._model_loaded = False
+
+        self._worker_task.add_done_callback(_on_worker_done)
         logger.info("Worker started, waiting for coordinator to assign layers...")
+        # NOTE: we return True here so the outer setup flow continues, but we
+        # deliberately do NOT mark self._model_loaded=True in the caller for
+        # worker-mode nodes. Worker mode readiness is determined by the
+        # coordinator having loaded layers — start() gates _model_loaded for
+        # coordinators only. Worker-mode nodes are "ready" as soon as the
+        # TCP listener is up, which is what callers actually need.
         return True
 
     async def _load_model_single_node(self) -> bool:

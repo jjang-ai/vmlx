@@ -11,7 +11,9 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
+import os
 import time
 from typing import Optional
 
@@ -27,12 +29,12 @@ from .protocol import (
     Message,
     MessageType,
     deserialize_tensor,
+    make_cache_ack,
     make_error,
     make_forward_result,
     make_health_ack,
     make_join_ack,
     make_load_ack,
-    serialize_tensor,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,10 +48,35 @@ class Worker:
         port: int = DEFAULT_WORKER_PORT,
         cluster_secret: str = "",
         advertise: bool = True,
+        bind: str = "127.0.0.1",
+        allowed_model_roots: Optional[list[str]] = None,
     ):
+        if not cluster_secret:
+            raise ValueError(
+                "Worker requires a non-empty cluster_secret. "
+                "Set VMLX_CLUSTER_SECRET environment variable or pass --secret "
+                "(not recommended — visible in ps). "
+                "Run `python3 -c 'import secrets; print(secrets.token_urlsafe(24))'` "
+                "to generate one."
+            )
+
         self.port = port
         self.cluster_secret = cluster_secret
         self.advertise = advertise
+        self.bind = bind
+        # Paths are resolved against this allowlist before loading a model.
+        # Empty/None means "any path the user's env points to" — always include
+        # the standard Hugging Face cache and vMLX config dir as defaults.
+        default_roots = [
+            os.path.expanduser("~/mlx"),
+            os.path.expanduser("~/.cache/huggingface"),
+            os.path.expanduser("~/.cache/vmlx"),
+            os.getcwd(),
+        ]
+        self.allowed_model_roots = [
+            os.path.realpath(p) for p in (allowed_model_roots or default_roots)
+            if os.path.exists(p)
+        ]
 
         self.node_info = get_local_node_info()
         self.node_info.port = port
@@ -58,28 +85,44 @@ class Worker:
         self.layers = None
         self.layer_start = 0
         self.layer_end = 0
-        self.cache = {}
+        # Per-request KV cache slots keyed by request_id (populated by
+        # _handle_forward, dropped by _handle_cache_release). Before this
+        # fix a single dict slot was keyed by the hardcoded empty request_id,
+        # causing concurrent requests to corrupt each other.
+        self.cache: dict[str, list] = {}
 
         self._server = None
+        self._http_server = None
+        self._udp_task: Optional[asyncio.Task] = None
         self._advertiser = None
         self._authenticated = False
         self._requests_processed = 0
         self._total_compute_ms = 0.0
 
     async def serve(self):
+        if self.bind == "0.0.0.0":
+            logger.warning(
+                "Worker binding to 0.0.0.0 — reachable from every network "
+                "interface. Only do this on trusted networks (Thunderbolt "
+                "bridge, wired LAN, or Tailscale). Consider --bind 127.0.0.1 "
+                "for localhost-only testing."
+            )
         self._server = await asyncio.start_server(
-            self._handle_connection, "0.0.0.0", self.port,
+            self._handle_connection, self.bind, self.port,
         )
-        logger.info("Worker listening on port %d", self.port)
+        logger.info("Worker listening on %s:%d (binary protocol)", self.bind, self.port)
 
         # HTTP identity endpoint for discovery probes (GET /node_id)
         self._http_server = await asyncio.start_server(
-            self._handle_http, "0.0.0.0", self.port + 1,
+            self._handle_http, self.bind, self.port + 1,
         )
-        logger.info("HTTP identity endpoint on port %d", self.port + 1)
+        logger.info("HTTP identity endpoint on %s:%d", self.bind, self.port + 1)
 
-        # UDP discovery responder
-        self._udp_task = asyncio.create_task(self._udp_responder())
+        # UDP discovery responder — bind only when Bonjour/LAN discovery is
+        # enabled. On localhost loopback testing the responder is useless
+        # and only creates a surface for unauthenticated probes.
+        if self.advertise:
+            self._udp_task = asyncio.create_task(self._udp_responder())
 
         if self.advertise:
             self._advertiser = BonjourAdvertiser(self.node_info)
@@ -90,10 +133,31 @@ class Worker:
 
     async def shutdown(self):
         if self._advertiser:
-            await self._advertiser.stop()
-        if self._server:
+            try:
+                await self._advertiser.stop()
+            except Exception as e:
+                logger.debug("Advertiser stop failed: %s", e)
+        if self._udp_task is not None and not self._udp_task.done():
+            self._udp_task.cancel()
+            try:
+                await self._udp_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._udp_task = None
+        if self._http_server is not None:
+            self._http_server.close()
+            try:
+                await self._http_server.wait_closed()
+            except Exception as e:
+                logger.debug("HTTP server wait_closed failed: %s", e)
+            self._http_server = None
+        if self._server is not None:
             self._server.close()
-            await self._server.wait_closed()
+            try:
+                await self._server.wait_closed()
+            except Exception as e:
+                logger.debug("Server wait_closed failed: %s", e)
+            self._server = None
         logger.info("Worker shut down")
 
     async def _handle_connection(self, reader, writer):
@@ -127,6 +191,7 @@ class Worker:
             MessageType.JOIN: self._handle_join,
             MessageType.LOAD_LAYERS: self._handle_load_layers,
             MessageType.FORWARD: self._handle_forward,
+            MessageType.CACHE_OP: self._handle_cache_op,
             MessageType.HEALTH: self._handle_health,
             MessageType.BANDWIDTH_PROBE: self._handle_bandwidth_probe,
             MessageType.SHUTDOWN: self._handle_shutdown,
@@ -138,7 +203,12 @@ class Worker:
 
     async def _handle_join(self, msg: Message) -> Message:
         secret = msg.metadata.get("secret", "")
-        if self.cluster_secret and secret != self.cluster_secret:
+        # Constant-time comparison so a remote attacker can't learn the
+        # secret byte-by-byte from response-time differences. cluster_secret
+        # is guaranteed non-empty by __init__ so a missing secret fails safely.
+        if not isinstance(secret, str) or not hmac.compare_digest(
+            secret.encode("utf-8"), self.cluster_secret.encode("utf-8")
+        ):
             logger.warning("Join rejected: invalid cluster secret")
             return make_join_ack(False, {"reason": "invalid_secret"})
 
@@ -149,13 +219,58 @@ class Worker:
         logger.info("Join accepted from coordinator")
         return make_join_ack(True, caps)
 
+    def _validate_model_path(self, model_path: str) -> Optional[str]:
+        """Return an error string if path is unsafe, else None.
+
+        Even with cluster auth in place, a compromised coordinator could
+        instruct workers to load arbitrary files. The allowlist restricts
+        loads to directories the operator explicitly opted into.
+        """
+        if not isinstance(model_path, str) or not model_path:
+            return "model_path must be a non-empty string"
+        try:
+            real = os.path.realpath(model_path)
+        except Exception as e:
+            return f"model_path resolution failed: {e}"
+        if not os.path.isdir(real):
+            return f"model_path is not a directory: {real}"
+        if not os.path.isfile(os.path.join(real, "config.json")):
+            return "model_path has no config.json"
+        if self.allowed_model_roots:
+            ok = any(
+                real == root or real.startswith(root + os.sep)
+                for root in self.allowed_model_roots
+            )
+            if not ok:
+                return (
+                    f"model_path {real} not under any allowed root "
+                    f"({', '.join(self.allowed_model_roots)})"
+                )
+        return None
+
     async def _handle_load_layers(self, msg: Message) -> Message:
         if not self._authenticated:
             return make_error("auth", "Not authenticated — send JOIN first")
 
-        model_path = msg.metadata["model_path"]
-        self.layer_start = msg.metadata["layer_start"]
-        self.layer_end = msg.metadata["layer_end"]
+        model_path = msg.metadata.get("model_path", "")
+        path_err = self._validate_model_path(model_path)
+        if path_err:
+            logger.warning("Rejecting load_layers: %s", path_err)
+            return make_error("path", path_err)
+
+        try:
+            layer_start = int(msg.metadata.get("layer_start", -1))
+            layer_end = int(msg.metadata.get("layer_end", -1))
+        except (TypeError, ValueError):
+            return make_error("protocol", "layer_start/layer_end must be integers")
+        if layer_start < 0 or layer_end <= layer_start:
+            return make_error(
+                "protocol",
+                f"invalid layer range [{layer_start}, {layer_end})",
+            )
+
+        self.layer_start = layer_start
+        self.layer_end = layer_end
 
         logger.info(
             "Loading layers %d-%d from %s",
@@ -194,30 +309,45 @@ class Worker:
             )
 
     async def _handle_forward(self, msg: Message) -> Message:
+        # Auth check is mandatory — before this fix an unauth connection
+        # that raced past JOIN could run forwards.
+        if not self._authenticated:
+            return make_error("auth", "Not authenticated — send JOIN first")
         if self.layers is None:
             return make_error("not_loaded", "No layers loaded")
 
         request_id = msg.metadata.get("request_id", "")
-        hidden = deserialize_tensor(msg.payload)
+        if not isinstance(request_id, str) or not request_id:
+            return make_error(
+                "protocol",
+                "request_id is required for forward (non-empty string)",
+            )
+        try:
+            seq_pos = int(msg.metadata.get("seq_pos", 0))
+        except (TypeError, ValueError):
+            return make_error("protocol", "seq_pos must be an integer")
 
+        hidden = deserialize_tensor(msg.payload)
         t0 = time.perf_counter()
 
-        # KV cache management
-        cache_id = msg.metadata.get("cache_id", request_id)
-        if cache_id not in self.cache:
-            # Create KV cache for our layer range
-            self.cache[cache_id] = _make_layer_cache(self.model, self.layer_start, self.layer_end)
+        # KV cache keyed by request_id so concurrent requests get isolated
+        # slots. Released by a CACHE_OP release message when coordinator is
+        # done with the request.
+        cache_slot = self.cache.get(request_id)
+        if cache_slot is None:
+            cache_slot = _make_layer_cache(
+                self.model, self.layer_start, self.layer_end,
+            )
+            self.cache[request_id] = cache_slot
 
-        layer_cache = self.cache[cache_id]
-
-        # Build attention mask from sequence length
         seq_len = hidden.shape[1]
-        total_seq = msg.metadata.get("seq_pos", 0) + seq_len
-        mask = _create_attention_mask(seq_len, total_seq, cache=layer_cache)
+        # seq_pos is the 0-indexed position of the FIRST token in `hidden`
+        # (so prefill starts at 0, decode step N gets seq_pos = prompt_len + N - 1).
+        total_seq = seq_pos + seq_len
+        mask = _create_attention_mask(seq_len, total_seq, cache=cache_slot)
 
-        # Forward through each layer
         for i, layer in enumerate(self.layers):
-            c = layer_cache[i] if layer_cache else None
+            c = cache_slot[i] if cache_slot else None
             hidden = layer(hidden, mask=mask, cache=c)
 
         mx.async_eval(hidden)
@@ -231,6 +361,23 @@ class Worker:
             request_id=request_id,
             compute_time_ms=compute_ms,
         )
+
+    async def _handle_cache_op(self, msg: Message) -> Message:
+        """Handle KV cache lifecycle ops — currently just 'release'."""
+        if not self._authenticated:
+            return make_error("auth", "Not authenticated — send JOIN first")
+        op = msg.metadata.get("op", "")
+        request_id = msg.metadata.get("request_id", "")
+        if op != "release":
+            return make_error("protocol", f"unknown cache op: {op}")
+        if not request_id:
+            return make_error("protocol", "request_id required")
+        # Idempotent — don't error if already gone.
+        existed = request_id in self.cache
+        self.cache.pop(request_id, None)
+        if existed:
+            logger.debug("Released KV cache for request %s", request_id)
+        return make_cache_ack(request_id, success=True)
 
     async def _handle_health(self, msg: Message) -> Message:
         return make_health_ack({
@@ -312,32 +459,41 @@ class Worker:
             logger.debug("UDP discovery port %d in use, skipping responder", UDP_DISCOVERY_PORT)
             return
 
-        sock.settimeout(1.0)
+        sock.settimeout(0.5)
         logger.debug("UDP discovery responder listening on port %d", UDP_DISCOVERY_PORT)
 
-        while True:
+        try:
+            while True:
+                try:
+                    data, addr = sock.recvfrom(4096)
+                    if UDP_MAGIC in data:
+                        import json as _json
+                        response = _json.dumps({
+                            "magic": UDP_MAGIC.decode(),
+                            "node_id": self.node_info.node_id,
+                            "hostname": self.node_info.hostname,
+                            "port": self.port,
+                            "chip": self.node_info.chip,
+                            "ram_gb": self.node_info.ram_gb,
+                            "gpu_cores": self.node_info.gpu_cores,
+                            "available_gb": self.node_info.available_gb,
+                            "vmlx_version": self.node_info.vmlx_version,
+                        }).encode()
+                        sock.sendto(response, addr)
+                except (TimeoutError, BlockingIOError):
+                    pass
+                except Exception as e:
+                    logger.debug("UDP responder ignored error: %s", e)
+                # Yield to the event loop so shutdown's CancelledError can land.
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            logger.debug("UDP responder cancelled")
+            raise
+        finally:
             try:
-                data, addr = sock.recvfrom(4096)
-                if UDP_MAGIC in data:
-                    # Respond with our info
-                    import json as _json
-                    response = _json.dumps({
-                        "magic": UDP_MAGIC.decode(),
-                        "node_id": self.node_info.node_id,
-                        "hostname": self.node_info.hostname,
-                        "port": self.port,
-                        "chip": self.node_info.chip,
-                        "ram_gb": self.node_info.ram_gb,
-                        "gpu_cores": self.node_info.gpu_cores,
-                        "available_gb": self.node_info.available_gb,
-                        "vmlx_version": self.node_info.vmlx_version,
-                    }).encode()
-                    sock.sendto(response, addr)
-            except TimeoutError:
-                pass
+                sock.close()
             except Exception:
                 pass
-            await asyncio.sleep(0)
 
 
 def _load_layer_range(model_path: str, start: int, end: int, quantization=None):

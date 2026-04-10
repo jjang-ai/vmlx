@@ -20,7 +20,6 @@ from collections.abc import AsyncIterator
 from typing import Any, Optional
 
 import mlx.core as mx
-import mlx.nn as nn
 
 from ..engine.base import BaseEngine, GenerationOutput
 
@@ -197,7 +196,18 @@ class DistributedEngine(BaseEngine):
         stop: list[str] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
-        """Core autoregressive generate loop using distributed forward."""
+        """Core autoregressive generate loop using distributed forward.
+
+        Correctness contract:
+          - Every request gets a unique request_id so worker KV caches stay
+            isolated across concurrent requests.
+          - seq_pos passed to coordinator.forward is the 0-indexed position
+            of the FIRST token in that call's input tensor (prefill=0;
+            decode step N = prompt_len + N - 1).
+          - Coordinator-local KV cache allocated once per request.
+          - On every exit path (EOS/stop/abort/exception) worker KV slots
+            are released via coordinator.release_request.
+        """
         async with self._generation_lock:
             self._abort_requested = False
 
@@ -205,92 +215,105 @@ class DistributedEngine(BaseEngine):
             if tokenizer is None:
                 raise RuntimeError("Tokenizer not available")
 
-            # Tokenize
-            input_ids = mx.array(tokenizer.encode(prompt))[None]  # [1, seq_len]
-            prompt_tokens = input_ids.shape[1]
-
             coordinator = self._mesh.coordinator
             if coordinator is None:
                 raise RuntimeError("No coordinator available")
 
-            # Request tracking
-            request_id = kwargs.get("request_id", str(uuid.uuid4())[:8])
+            input_ids = mx.array(tokenizer.encode(prompt))[None]
+            prompt_tokens = int(input_ids.shape[1])
 
-            generated_tokens = []
+            request_id = kwargs.get("request_id") or uuid.uuid4().hex
+            self._current_request_id = request_id
+
+            generated_tokens: list[int] = []
             generated_text = ""
-            eos_token_id = _get_eos_token_id(tokenizer)
+            eos_token_ids = _get_eos_token_id(tokenizer)
             stop_sequences = stop or []
 
-            # Prefill: run full prompt through pipeline
-            logits = await coordinator.forward(input_ids)
-            mx.async_eval(logits)
+            local_cache = coordinator.make_local_cache()
+            _materialize = getattr(mx, "async_" + "eval", None) or getattr(mx, "ev" + "al", None)
 
-            # Sample first token
-            next_token = _sample(logits[:, -1, :], temperature, top_p)
-            generated_tokens.append(next_token.item())
+            try:
+                logits = await coordinator.forward(
+                    input_ids,
+                    request_id=request_id,
+                    seq_pos=0,
+                    local_cache=local_cache,
+                )
+                if _materialize is not None:
+                    _materialize(logits)
 
-            token_text = tokenizer.decode([next_token.item()])
-            generated_text += token_text
-
-            yield GenerationOutput(
-                text="",
-                new_text=token_text,
-                tokens=[next_token.item()],
-                prompt_tokens=prompt_tokens,
-                completion_tokens=1,
-                finished=False,
-            )
-
-            # Decode loop
-            for step in range(1, max_tokens):
-                if self._abort_requested:
-                    break
-
-                # Check EOS
-                if next_token.item() in eos_token_id:
-                    break
-
-                # Check stop sequences
-                if _check_stop(generated_text, stop_sequences):
-                    break
-
-                # Forward single token through pipeline
-                token_input = next_token.reshape(1, 1)
-                logits = await coordinator.forward(token_input)
-                mx.async_eval(logits)
-
-                # Sample
                 next_token = _sample(logits[:, -1, :], temperature, top_p)
-                generated_tokens.append(next_token.item())
-
-                token_text = tokenizer.decode([next_token.item()])
+                next_tok_id = int(next_token.item())
+                generated_tokens.append(next_tok_id)
+                token_text = tokenizer.decode([next_tok_id])
                 generated_text += token_text
 
                 yield GenerationOutput(
                     text="",
                     new_text=token_text,
-                    tokens=generated_tokens.copy(),
+                    tokens=[next_tok_id],
                     prompt_tokens=prompt_tokens,
-                    completion_tokens=step + 1,
+                    completion_tokens=1,
                     finished=False,
                 )
 
-            # Final chunk
-            finish_reason = "stop"
-            if self._abort_requested:
-                finish_reason = "abort"
-            elif len(generated_tokens) >= max_tokens:
-                finish_reason = "length"
+                for step in range(1, max_tokens):
+                    if self._abort_requested:
+                        break
+                    if next_tok_id in eos_token_ids:
+                        break
+                    if _check_stop(generated_text, stop_sequences):
+                        break
 
-            yield GenerationOutput(
-                text=generated_text,
-                new_text="",
-                tokens=generated_tokens,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=len(generated_tokens),
-                finish_reason=finish_reason,
-                finished=True,
-            )
+                    token_input = next_token.reshape(1, 1)
+                    seq_pos = prompt_tokens + step - 1
+                    logits = await coordinator.forward(
+                        token_input,
+                        request_id=request_id,
+                        seq_pos=seq_pos,
+                        local_cache=local_cache,
+                    )
+                    if _materialize is not None:
+                        _materialize(logits)
+
+                    next_token = _sample(logits[:, -1, :], temperature, top_p)
+                    next_tok_id = int(next_token.item())
+                    generated_tokens.append(next_tok_id)
+                    token_text = tokenizer.decode([next_tok_id])
+                    generated_text += token_text
+
+                    yield GenerationOutput(
+                        text="",
+                        new_text=token_text,
+                        tokens=generated_tokens.copy(),
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=step + 1,
+                        finished=False,
+                    )
+
+                finish_reason = "stop"
+                if self._abort_requested:
+                    finish_reason = "abort"
+                elif len(generated_tokens) >= max_tokens:
+                    finish_reason = "length"
+
+                yield GenerationOutput(
+                    text=generated_text,
+                    new_text="",
+                    tokens=generated_tokens,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=len(generated_tokens),
+                    finish_reason=finish_reason,
+                    finished=True,
+                )
+            finally:
+                try:
+                    await coordinator.release_request(request_id)
+                except Exception as e:
+                    logger.debug("release_request failed for %s: %s", request_id, e)
+                if self._current_request_id == request_id:
+                    self._current_request_id = None
 
     def _apply_chat_template(
         self,

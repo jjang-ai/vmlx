@@ -159,9 +159,11 @@ interface SessionConfigFormProps {
   modelType?: 'text' | 'image'
   /** Image mode — 'edit' or 'generate' (only relevant when modelType is 'image') */
   imageMode?: string
+  /** Session ID for components that need to query the running backend (e.g. DistributedNodeList). Omit for the CreateSession form where the session doesn't exist yet. */
+  sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
   const [expandedSections, setExpandedSections] = useState({
@@ -884,18 +886,32 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Distributed Compute */}
-      <Section title="Distributed Compute (Work in Progress)" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
-        <div className="mx-4 mt-3 mb-2 rounded-md border border-amber-500/60 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-          <div className="font-semibold text-amber-100 uppercase tracking-wide text-[10px] mb-1">Work in Progress — Experimental</div>
-          <div className="text-amber-200/90 leading-relaxed">
-            Pipeline parallelism works for text LLMs but this feature is still
-            under active development. Expect rough edges: mesh reconnect after
-            sleep/wake, worker crash recovery, protocol version handshake, and
-            per-worker telemetry are not yet hardened. Tensor parallelism is
-            stubbed for a future release. Not recommended for production.
+      <Section title="Distributed Compute (Pre-Alpha — Localhost Testing Only)" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
+        <div className="mx-4 mt-3 mb-2 rounded-md border-2 border-amber-500 bg-amber-500/15 px-3 py-3 text-xs text-amber-800 dark:text-amber-100">
+          <div className="font-bold uppercase tracking-wide text-[11px] mb-1.5 text-amber-900 dark:text-amber-50">
+            ⚠ Pre-Alpha — localhost loopback only
+          </div>
+          <div className="leading-relaxed text-amber-900/90 dark:text-amber-100/90 space-y-1.5">
+            <p>
+              <strong>This feature is under active development and is not
+              safe to expose on any network you don't fully control.</strong>
+            </p>
+            <p>
+              Known gaps: cluster secret is sent plaintext over the wire (no
+              TLS, no HMAC); worker crash recovery is not implemented;
+              coordinator-loss re-election recovery is a stub; protocol has
+              no version handshake; tensor parallelism is stubbed.
+            </p>
+            <p>
+              Recommended usage today: run one <code>vmlx-worker</code> on
+              the same Mac you're running the coordinator on (different port),
+              bound to <code>127.0.0.1</code>, as a smoke test. Real multi-Mac
+              deployment is blocked behind Phase 2 hardening. See
+              <code>docs/guides/distributed-setup.md</code>.
+            </p>
           </div>
         </div>
-        <PerformanceHint text="Run large models across multiple Macs connected via Thunderbolt 5, Ethernet, or WiFi. Each Mac handles a subset of transformer layers (pipeline parallelism). Works with any network — TB5 is fastest but even WiFi works." />
+        <PerformanceHint text="Pipeline parallelism splits transformer layers across nodes. Each request passes hidden states over a TCP connection between workers. In localhost loopback testing, the overhead is dominated by the loopback memcpy — useful for verifying correctness, not performance." />
         <CheckField
           label="Enable Distributed Inference"
           tooltip="Split the model across multiple Macs. Requires vmlx-worker running on each additional Mac. The coordinator (this Mac) handles tokenization, embedding, and final projection."
@@ -935,7 +951,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               />
             </Field>
             <InfoNote text="Worker nodes: Install vMLX on each Mac and run 'vmlx-worker --secret YOUR_SECRET' from Terminal. Workers auto-advertise via Bonjour — the coordinator discovers them automatically." />
-            <DistributedNodeList enabled={!!config.distributedEnabled} />
+            <DistributedNodeList enabled={!!config.distributedEnabled} sessionId={sessionId} />
             <div className="px-4 py-3 space-y-2">
               <div className="text-xs font-medium text-foreground">Setup Guide</div>
               <div className="text-xs text-muted-foreground space-y-1">

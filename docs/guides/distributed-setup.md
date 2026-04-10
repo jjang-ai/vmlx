@@ -1,241 +1,290 @@
 # Distributed Inference — Setup Guide
 
-> **Status: work in progress.** Pipeline parallelism works for text LLMs but
-> this feature is still under active development. Expect rough edges around
-> worker crash recovery, protocol version handshake, and the sleep/wake
-> lifecycle. Not recommended for production workloads. Tensor parallelism
-> is stubbed for a future release.
+> **⚠ Pre-alpha — localhost loopback testing only.**
+>
+> This feature is under active development. The pipeline-parallel text
+> inference path produces correct output for single-node and for
+> localhost coordinator + localhost worker combos, but several security
+> and resilience gaps make it **unsafe to expose on any network you
+> don't fully control**:
+>
+> - Cluster secret is sent plaintext over TCP (no TLS, no per-message HMAC)
+> - Worker crash detection and recovery are not implemented
+> - Coordinator-loss re-election recovery is a stub
+> - Protocol has no version handshake
+> - Tensor parallelism is stubbed for a future release
+>
+> The guide below walks through the **recommended** usage: running a
+> coordinator and one worker on the same Mac for correctness smoke
+> testing. Multi-Mac deployment is covered in a "Not yet supported"
+> section at the bottom so you know what's coming.
 
-Distributed inference lets you run a large language model across multiple
-Macs connected via Thunderbolt 5, Ethernet, or WiFi. Each Mac holds a
-contiguous slice of transformer layers and passes hidden states to the next
-Mac in the pipeline. The "coordinator" Mac tokenizes input, runs the first
-layer slice, and drives the generation loop; each "worker" runs its own
-layer slice and returns hidden states over the network.
+## What pipeline parallelism does
 
-## When to use it
+A text model has N transformer layers. Pipeline parallelism splits the
+layer list into contiguous ranges, puts each range on a different
+process (the "coordinator" holds the embedding, some layers, and the
+LM head; each "worker" holds a middle slice of layers), and passes
+hidden-state tensors through the pipeline via TCP per token.
 
-- You want to run a model that's too large to fit in any single Mac's RAM
-- You have 2+ Apple Silicon Macs on the same network
-- You can tolerate experimental software and have a way to debug issues
+For **localhost smoke testing** this is still useful because it
+exercises the entire mesh setup, discovery, authentication, layer
+assignment, KV cache lifecycle, and per-token protocol round-trip
+code paths — just without the network hop.
 
-## When NOT to use it
+## Recommended: single-Mac loopback smoke test
 
-- You're shipping to end users (feature is experimental)
-- Your workload is latency-sensitive — pipeline parallelism has inherent
-  per-token bubbles; expect 60-70% of single-node throughput
-- You're using features that aren't distributed-aware yet: Flash MoE, JIT
-  compilation, Smelt mode, speculative decoding, embedding/rerank/audio
-  endpoints, VLM models, continuous batching (multi-request), L2/block
-  disk cache, image generation
-
-## Hardware + network
-
-| Link | Bandwidth | Latency | Verdict |
-|---|---|---|---|
-| Thunderbolt 5 cable | ~120 Gbps | ~0.1ms | Best — nearly compute-limited |
-| Thunderbolt 4 cable | ~40 Gbps | ~0.1ms | Excellent |
-| 10 GbE | ~10 Gbps | ~1ms | Excellent |
-| 1 GbE | ~1 Gbps | ~1ms | Fine for pipeline parallelism |
-| WiFi 6E (5GHz) | ~1 Gbps | ~5-20ms | Works, latency hurts |
-| Tailscale (WAN) | ~100 Mbps | ~20-50ms | Works for testing, slow |
-
-Any network that can ping between Macs will function. Pipeline parallelism
-is bandwidth-tolerant because only hidden states cross the network, not
-weights.
-
-## Prerequisites
-
-- Two or more Apple Silicon Macs (M1 or newer)
-- Same version of vMLX installed on every Mac (coordinator **and** workers).
-  Version mismatch has undefined behavior — there is no protocol version
-  handshake yet.
-- A shared cluster secret — pick a random string. Example:
-  `python3 -c "import secrets; print(secrets.token_urlsafe(24))"`
-- The same model path available on every Mac, OR hosted on a shared mount.
-  Workers load their layer slice independently.
-
-## Setup
-
-### 1. Install vMLX on every Mac
+### 1. Install vMLX
 
 ```bash
 pip install vmlx
 ```
 
-Or use the Electron app (vMLX.app). Workers can run as pip-installed
-command-line processes; you don't need the GUI on workers.
+The Electron app bundles the same `vmlx-worker` binary under
+`vMLX.app/Contents/Resources/bundled-python`, but for testing it's
+easier to use a pip-installed version and a Terminal window.
 
-### 2. Start workers on every non-coordinator Mac
+### 2. Generate a cluster secret
 
-On each worker Mac, open Terminal and run:
+Do **not** pass the secret on the command line — it will land in
+`ps aux` where any logged-in user on the Mac can read it. Use an
+environment variable:
 
 ```bash
-vmlx-worker --port 9100 --secret YOUR_CLUSTER_SECRET
+export VMLX_CLUSTER_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+echo $VMLX_CLUSTER_SECRET  # copy this — you'll need it for the coordinator
 ```
 
-The worker will:
-1. Advertise itself via Bonjour / mDNS on the local network
-2. Listen on TCP port 9100 for coordinator connections
-3. Accept a layer-range assignment from the coordinator
-4. Load only its assigned slice of the model weights
+Keep this terminal open for the worker. In a separate terminal for
+the coordinator, `export` the same value.
 
-Optional worker flags:
-- `--bind 127.0.0.1` — bind to localhost only (default binds to all
-  interfaces; lock down for production)
-- `--name my-mac-studio` — set a friendly hostname for the UI
-- `--log-level DEBUG` — verbose logging for troubleshooting
-
-**The worker process must stay running** — if you close Terminal, the
-worker dies. Use `nohup`, `screen`, `tmux`, or a `launchd` plist for
-persistent workers.
-
-### 3. Start the coordinator
-
-On the coordinator Mac (the one your client will talk to), start vMLX
-normally with the `--distributed` flag:
+### 3. Start the worker bound to localhost
 
 ```bash
+vmlx-worker --port 9100 --bind 127.0.0.1
+```
+
+What this does:
+
+- Binds only to `127.0.0.1` (the default — pass `--allow-public`
+  to bind `0.0.0.0` and reach the network, not recommended right now)
+- Refuses to start if `$VMLX_CLUSTER_SECRET` is empty
+- Uses constant-time secret comparison (`hmac.compare_digest`)
+- Validates any `model_path` the coordinator tries to load against
+  an allowlist (`~/mlx`, `~/.cache/huggingface`, `~/.cache/vmlx`,
+  and the current working directory by default; override with
+  `--allowed-model-root PATH`)
+
+You should see log output like:
+
+```
+============================================================
+vMLX Worker (EXPERIMENTAL — localhost testing recommended)
+============================================================
+  Host: mac-studio.local
+  Chip: Apple M2 Ultra
+  RAM:  192 GB (150 GB available)
+  Bind: 127.0.0.1:9100
+  Bonjour: ON
+  Auth: cluster secret set (33 bytes)
+============================================================
+Worker listening on 127.0.0.1:9100 (binary protocol)
+HTTP identity endpoint on 127.0.0.1:9101
+Worker started, waiting for coordinator to assign layers...
+```
+
+### 4. Start the coordinator in a second terminal
+
+```bash
+export VMLX_CLUSTER_SECRET=<same-value-as-worker>
 vmlx serve \
-  --model mlx-community/Qwen3-235B-A22B-Instruct-2507-4bit \
+  --model ~/.cache/huggingface/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-4bit/snapshots/... \
   --distributed \
   --distributed-mode pipeline \
-  --cluster-secret YOUR_CLUSTER_SECRET \
+  --worker-nodes 127.0.0.1:9100 \
   --port 8000
 ```
 
-Or from the Electron UI:
-1. Create a new session
-2. Open **Distributed Compute** in the session config
-3. Toggle **Enable Distributed Inference** on
-4. Enter the same cluster secret you gave the workers
-5. Start the session
+The `--model` path must be something small enough that splitting
+its layers across two processes is worth doing (any text LLM, even
+0.5B, works for correctness testing). The path must be absolute
+and must exist on disk — workers will validate it against their
+allowlist before loading.
 
-### 4. Verify mesh discovery
-
-The coordinator will:
-1. Probe the local network for advertised workers (Bonjour)
-2. Add any manually-specified nodes (`--worker-nodes 192.168.1.50:9100,...`)
-3. Elect itself as coordinator based on capability score
-4. Assign layer ranges to each worker based on RAM
-5. Ship model weights / layer assignments to each worker
-6. Begin serving inference requests
-
-Watch the coordinator log for lines like:
+Watch the coordinator log for:
 
 ```
-Distributed mesh ready: 3 nodes
-DistributedEngine created (deferred start — 3 nodes)
-Distributed inference active: 3 nodes, skipping local engine
+Distributed mode enabled (pipeline parallelism)
+Distributed mesh setup deferred to event loop
+Cluster ready: coordinator[L0-15] → worker[L16-31]
+Distributed inference active: 2 nodes, skipping local engine
 ```
 
-Or query the REST API:
+### 5. Hit it with a real inference request
 
 ```bash
-curl http://localhost:8000/v1/cluster/status
-curl http://localhost:8000/v1/cluster/nodes
-curl http://localhost:8000/health
-```
-
-## Manual node discovery (when Bonjour fails)
-
-Bonjour / mDNS is blocked on many corporate networks. If the coordinator
-can't see your workers:
-
-**From the Electron UI:** open the Distributed Compute section and click
-"Add Manual" in the node list. Enter the worker's IP and port.
-
-**From the CLI:** pass `--worker-nodes` explicitly:
-
-```bash
-vmlx serve \
-  --model <model-path> \
-  --distributed \
-  --cluster-secret YOUR_SECRET \
-  --worker-nodes 192.168.1.50:9100,192.168.1.51:9100
-```
-
-**From the REST API:**
-
-```bash
-curl -X POST http://localhost:8000/v1/cluster/nodes \
+curl -s http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"address":"192.168.1.50","port":9100}'
+  -d '{
+    "model": "qwen",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "max_tokens": 32
+  }' | python3 -m json.tool
 ```
+
+Then compare against the same model running single-node on the
+same Mac. The text output should match (or differ only by
+sampling noise if temperature > 0).
+
+### 6. Check the cluster REST endpoints
+
+With your API key set via the `Authorization` header if you configured one:
+
+```bash
+curl http://localhost:8000/health | python3 -m json.tool
+curl http://localhost:8000/v1/cluster/status | python3 -m json.tool
+curl http://localhost:8000/v1/cluster/nodes | python3 -m json.tool
+```
+
+The `/health` response should include a `distributed` block showing
+the mode, worker count, and pipeline layer assignments.
+
+### 7. Clean shutdown
+
+Ctrl-C the coordinator first, then Ctrl-C the worker. Both should
+cleanly close their TCP listeners. Worker logs should end with:
+
+```
+Received signal 2, shutting down...
+UDP responder cancelled
+Worker shut down
+```
+
+## Using the Electron UI instead
+
+Same idea, but driven from the vMLX.app session config:
+
+1. Open **Settings → Session Config → Distributed Compute**
+2. The prominent amber banner at the top warns you about the pre-alpha state
+3. Toggle **Enable Distributed Inference**
+4. Leave mode on **Pipeline Parallelism**
+5. Enter the same cluster secret you exported in the worker's terminal
+6. Start the session
+
+The **Node List** inside the panel will poll `/v1/cluster/nodes` every
+5 seconds and show any workers it finds. Use **Add Manual** to enter
+`127.0.0.1:9100` if Bonjour discovery is blocked.
+
+## What to look for when testing
+
+- **Multi-token generation matches single-node output** for a fixed seed
+  (the "wrong seq_pos" bug that made all outputs after the first token
+  garbage is fixed in v1.3.37; verify on your own model)
+- **Concurrent requests don't corrupt each other** — fire two requests at
+  the same time and confirm each gets sensible output (per-request
+  `request_id` now isolates KV cache slots on workers)
+- **Deep sleep + wake keeps working** — trigger JIT sleep, make a request
+  to wake the coordinator, verify the distributed mesh rebuilds
+- **Abort / client disconnect releases worker KV cache** — start a long
+  generation, disconnect the client, check that `/v1/cluster/nodes`
+  shows the worker's cache dropping the slot (requires future telemetry)
+
+## Not yet supported — don't try these in production
+
+These paths exist in the code but are not hardened enough to rely on:
+
+### Multi-Mac deployment
+Running `vmlx-worker` on a second Mac and connecting the coordinator
+over a real network. You *can* do it with `--allow-public` on the
+worker and `--worker-nodes IP:PORT` on the coordinator, but:
+
+- Cluster secret travels plaintext across the network — anyone on the
+  same segment can sniff it
+- No TLS, no per-message HMAC, no replay protection
+- No protocol version handshake, so a coordinator and worker on
+  different vMLX versions can silently misbehave
+- If a worker crashes or its network drops mid-generation the
+  coordinator will currently hang until its 120-second per-worker
+  read timeout fires, then raise an exception
+
+Wait for Phase 2.
+
+### Tensor parallelism
+`--distributed-mode tensor` is stubbed — the code compiles and the CLI
+flag is accepted, but there's no working tensor-parallel forward pass.
+Use `pipeline` only.
+
+### Coordinator loss recovery
+If the coordinator dies mid-session, surviving workers will try to
+elect a new coordinator, but layer redistribution is a `# TODO`. The
+re-elected coordinator has no loaded model. Planned for Phase 2.
+
+### Distributed continuous batching
+Multi-request parallelism across the mesh. Today the coordinator
+serializes requests with an asyncio lock — correct, but no throughput
+benefit over single-node for concurrent load.
+
+### Distributed prefix cache
+Each worker caches its own layer slice per-request; coordinator has
+no global view. Prefix cache hits work only on the coordinator's
+local layer slice.
+
+### Audio, embeddings, rerank, image generation, VLM
+Run on the coordinator only. `--distributed` is silently ignored for
+image models; audio/embed/rerank routes the request through the
+coordinator's local model.
 
 ## Troubleshooting
 
-### "Distributed mesh setup deferred to event loop" but no workers appear
-Check that workers are running (`ps aux | grep vmlx-worker`) and that the
-cluster secret matches on both sides. Bonjour broadcasts may be blocked by
-your router or firewall — fall back to `--worker-nodes`.
+### `Refusing to start: cluster secret is required`
+You didn't `export VMLX_CLUSTER_SECRET`. Set the env var, then relaunch.
 
-### Workers connect but layer assignment looks weird
-The layer-assign algorithm is RAM-proportional. A 128GB Mac Studio will get
-more layers than a 16GB MacBook Air. Check each worker's reported RAM in
-`/v1/cluster/nodes` — if a Mac reports wrong RAM, investigate `mesh_node.py`.
+### `model_path not under any allowed root`
+The worker's path allowlist rejected the coordinator's model path.
+Either move the model under `~/mlx` / `~/.cache/huggingface` /
+`~/.cache/vmlx` / the worker's CWD, or pass
+`--allowed-model-root /path/to/models` when starting the worker.
+
+### `Join rejected: invalid cluster secret`
+Coordinator and worker have different secrets. Both must read
+`$VMLX_CLUSTER_SECRET` from the same value.
+
+### Coordinator log shows `Distributed mesh startup failed: ...`
+Check the worker log for the matching error. Common causes: worker
+isn't listening yet, worker port conflict, wrong `--worker-nodes`
+address.
 
 ### Generation hangs forever
-Most common cause: a worker died mid-request. There is no crash detection
-yet (Phase 2). Restart the coordinator to reset the mesh.
+A worker died mid-request. The coordinator's per-request read has a
+120-second timeout, so you'll get an exception eventually. Crash
+detection is Phase 2.
 
-### "Version mismatch" errors
-All Macs must run the same vMLX version. Version handshake is Phase 2.
+### `/v1/cluster/status` returns 401
+Your session has an API key set but the IPC layer isn't sending it.
+This was fixed in v1.3.37. If you're still seeing it, rebuild the
+Electron app.
 
-### Generation works but output is garbage
-- Check that all Macs are the same Apple Silicon generation (mixing M1 +
-  M4 should work but is untested)
-- Check that the same compute dtype is used on every worker
-- Check that the model was loaded identically on every worker (same
-  quantization, same JANG config)
+### Output is correct for one token but garbage after that
+This was the `seq_pos=0` bug. It's fixed in v1.3.37. If you're still
+seeing it, verify you're running the post-fix version with:
+```
+python3 -c "import vmlx_engine.distributed.coordinator as c; import inspect; print('seq_pos' in inspect.getsource(c.Coordinator.forward))"
+```
+It should print `True`.
 
-### `--distributed` + `--enable-jit` errors out
-This is expected. JIT (mx.compile) traces local layer objects; the
-coordinator doesn't own the layers that distributed workers hold, so any
-compiled graph would be wrong for workers. Run distributed without JIT.
+## What's in a follow-up release
 
-### Same error for `--distributed` + `--smelt` / `--speculative-model`
-Also expected. These combinations are guarded off in Phase 1 until
-validated in Phase 2.
+- TLS option for inter-node traffic
+- HMAC + nonce handshake (proper replay protection)
+- Worker crash detection via heartbeat timeouts
+- Coordinator fail-over with layer redistribution
+- Protocol version handshake
+- Multi-Mac deployment removed from the "not supported" list
+- Tensor parallelism wire-up
+- Distributed continuous batching
+- Per-worker telemetry in `/v1/cluster/nodes` (tokens/sec, latency, memory)
+- SSH-based worker auto-launch helper (`vmlx cluster start --hosts ...`)
 
-## What doesn't work yet (known limitations)
-
-- **Continuous batching across the mesh** — each request currently serializes
-  through the pipeline. Multi-request parallelism is Phase 2.
-- **Prefix cache across the mesh** — coordinator-only cache; workers don't
-  share cached KV blocks.
-- **L2 / block disk cache** — not distributed-aware.
-- **Speculative decoding** — draft model would have to be co-located with
-  target, negating the speedup.
-- **VLM models** — vision encoder and language tower split is untested.
-- **Embeddings / rerank / audio endpoints** — run on the coordinator only;
-  workers have no embedding model.
-- **Image generation (mflux)** — automatically single-node even with
-  `--distributed` set.
-- **Tensor parallelism** — the `--distributed-mode tensor` option exists but
-  is a stub; pipeline is the only working mode today.
-- **Worker crash recovery** — the coordinator does not detect worker
-  disappearance mid-request.
-- **Heterogeneous RAM with MoE models** — the layer assigner is RAM-aware
-  but the MoE-aware layer grouping has not been stress-tested across
-  very asymmetric meshes.
-
-## Security notes
-
-- The cluster secret is passed in plaintext over the initial handshake
-  (HMAC per-message is Phase 2). Do **not** run distributed over untrusted
-  WiFi without a VPN or Tailscale.
-- Workers bind to all interfaces by default. Use `--bind 127.0.0.1` for
-  localhost-only testing, or put the workers behind a firewall.
-- The coordinator's OpenAI API is protected by your normal `--api-key` flag;
-  the cluster secret only authenticates workers to the coordinator, not
-  API clients to the coordinator.
-
-## Next steps
-
-- If distributed works for your workload, file a success report with your
-  mesh topology (Mac models, link type, model size, tokens/sec) so we can
-  add it to the compatibility matrix.
-- If it doesn't work, please file an issue at
-  https://github.com/jjang-ai/vmlx/issues with logs from both coordinator
-  and at least one worker.
+If you hit a bug doing localhost smoke testing, please file an issue
+with logs from both coordinator and worker at
+https://github.com/jjang-ai/vmlx/issues.

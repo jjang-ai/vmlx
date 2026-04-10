@@ -254,3 +254,18 @@ def make_error(code: str, message: str) -> Message:
 
 def make_shutdown() -> Message:
     return Message(type=MessageType.SHUTDOWN, metadata={})
+
+
+def make_cache_release(request_id: str) -> Message:
+    """Tell a worker to drop the KV cache slot for a finished request."""
+    return Message(
+        type=MessageType.CACHE_OP,
+        metadata={"op": "release", "request_id": request_id},
+    )
+
+
+def make_cache_ack(request_id: str, success: bool = True) -> Message:
+    return Message(
+        type=MessageType.CACHE_ACK,
+        metadata={"request_id": request_id, "success": success},
+    )

@@ -109,15 +109,27 @@ class WorkerConnection:
         logger.error("Worker %s failed to load layers %d-%d", self.node.hostname, start, end - 1)
         return False
 
-    async def forward(self, hidden: mx.array, request_id: str, seq_pos: int, cache_id: str = None) -> mx.array:
+    async def forward(
+        self,
+        hidden: mx.array,
+        request_id: str,
+        seq_pos: int,
+    ) -> mx.array:
         if not self._connected:
             raise ConnectionError(f"Worker {self.node.hostname} not connected")
+        if not request_id:
+            raise ValueError("request_id must be non-empty")
 
-        msg = make_forward(hidden, request_id, seq_pos, cache_id)
+        msg = make_forward(hidden, request_id, seq_pos, cache_id=request_id)
         self._writer.write(msg.encode())
         await self._writer.drain()
 
-        resp = await Message.read_from(self._reader)
+        # Bounded wait so a wedged worker can't hang the coordinator forever.
+        # 120s is generous for very large prefills on slow links; decode steps
+        # typically return in single-digit ms.
+        resp = await asyncio.wait_for(
+            Message.read_from(self._reader), timeout=120.0,
+        )
         if resp.type == MessageType.FORWARD_RESULT:
             compute_ms = resp.metadata.get("compute_time_ms", 0)
             logger.debug(
@@ -125,8 +137,35 @@ class WorkerConnection:
             )
             return deserialize_tensor(resp.payload)
         elif resp.type == MessageType.ERROR:
-            raise RuntimeError(f"Worker {self.node.hostname} error: {resp.metadata.get('message', 'unknown')}")
+            raise RuntimeError(
+                f"Worker {self.node.hostname} error: "
+                f"{resp.metadata.get('message', 'unknown')}"
+            )
         raise RuntimeError(f"Unexpected response type: {resp.type}")
+
+    async def release_cache(self, request_id: str) -> bool:
+        """Drop the KV cache slot for a finished request on this worker.
+
+        Fire-and-forget in effect — we wait briefly for the ack but treat
+        failures as non-fatal (the worker will GC the slot when the process
+        ends, and a stuck worker isn't going to unwedge itself here).
+        """
+        if not self._connected:
+            return False
+        from .protocol import make_cache_release
+        try:
+            self._writer.write(make_cache_release(request_id).encode())
+            await self._writer.drain()
+            resp = await asyncio.wait_for(
+                Message.read_from(self._reader), timeout=5.0,
+            )
+            return resp.type == MessageType.CACHE_ACK and resp.metadata.get("success", False)
+        except Exception as e:
+            logger.debug(
+                "Worker %s cache release for %s failed: %s",
+                self.node.hostname, request_id, e,
+            )
+            return False
 
     async def health_check(self) -> dict:
         if not self._connected:
@@ -229,7 +268,8 @@ class Coordinator:
             local_layers: Whether the coordinator also runs layers.
         """
         import json
-        config = json.loads(open(f"{model_path}/config.json").read())
+        with open(f"{model_path}/config.json") as _f:
+            config = json.loads(_f.read())
         text_cfg = config.get("text_config", config)
         num_layers = text_cfg.get("num_hidden_layers", 0)
 
@@ -316,45 +356,140 @@ class Coordinator:
             f"{a.hostname}[L{a.layer_start}-{a.layer_end-1}]" for a in self.assignments
         ))
 
-    async def forward(self, input_ids: mx.array, cache=None) -> mx.array:
+    def make_local_cache(self) -> Optional[list]:
+        """Build a KV cache for the coordinator's own layer slice.
+
+        Each active request gets its own local cache object so concurrent
+        requests don't corrupt each other. Returns None when the coordinator
+        owns no local layers (all layers live on workers).
+        """
+        if not self.local_layers or not self.local_assignment:
+            return None
+        try:
+            raw_model = self.model
+            for accessor in (
+                lambda m: m.language_model.model,
+                lambda m: m.model,
+            ):
+                try:
+                    raw_model = accessor(self.model)
+                    break
+                except AttributeError:
+                    continue
+            if hasattr(raw_model, "make_cache"):
+                full_cache = raw_model.make_cache()
+            elif hasattr(self.model, "make_cache"):
+                full_cache = self.model.make_cache()
+            else:
+                from mlx_lm.models.cache import make_prompt_cache
+                full_cache = make_prompt_cache(self.model)
+            if isinstance(full_cache, list) and len(full_cache) >= self.local_assignment.layer_end:
+                return full_cache[
+                    self.local_assignment.layer_start:self.local_assignment.layer_end
+                ]
+            return full_cache
+        except Exception as e:
+            logger.warning(
+                "Could not create local cache for layers %d-%d: %s — "
+                "running coordinator layers without cache (slow)",
+                self.local_assignment.layer_start,
+                self.local_assignment.layer_end - 1, e,
+            )
+            return None
+
+    async def forward(
+        self,
+        input_ids: mx.array,
+        request_id: str,
+        seq_pos: int,
+        local_cache: Optional[list] = None,
+    ) -> mx.array:
         """Run a distributed forward pass.
 
+        Args:
+            input_ids: [1, seq_len] token ids (prefill) or [1, 1] (decode).
+            request_id: Unique id used to key per-request KV cache slots on
+                each worker. Must be non-empty.
+            seq_pos: 0-indexed position of the first token in input_ids
+                within the full sequence. Prefill passes 0; decode passes
+                prompt_len + generated_count - 1.
+            local_cache: KV cache for the coordinator's own layer slice. See
+                make_local_cache(). None means "no cache" (correct only for
+                single-token-only inference, which is the pre-fix behavior).
+
         1. Embed on coordinator
-        2. Pipeline through nodes in order
+        2. Pipeline through coordinator local layers (with cache) then workers
         3. lm_head on coordinator
         """
-        # Embedding
+        if not request_id:
+            raise ValueError("request_id must be non-empty")
+
         hidden = self.model.model.embed_tokens(input_ids)
 
-        # Pipeline through each node's layer range
+        seq_len = hidden.shape[1]
+        local_mask = _build_causal_mask(seq_len, seq_pos)
+
+        # Pipeline through each node's layer range in assignment order.
         for assignment in self.assignments:
             if assignment.node_id == "coordinator":
-                # Run local layers
                 if self.local_layers:
-                    for layer in self.local_layers:
-                        hidden = layer(hidden, mask=None, cache=None)
+                    for i, layer in enumerate(self.local_layers):
+                        c = local_cache[i] if local_cache else None
+                        hidden = layer(hidden, mask=local_mask, cache=c)
             else:
-                # Send to worker
                 wc = self.workers[assignment.node_id]
                 hidden = await wc.forward(
-                    hidden, request_id="", seq_pos=0,
+                    hidden, request_id=request_id, seq_pos=seq_pos,
                 )
 
-        # lm_head
+        # lm_head (or tied embed projection)
         if hasattr(self.model, "lm_head"):
             logits = self.model.lm_head(hidden)
         elif hasattr(self.model.model, "embed_tokens"):
             logits = self.model.model.embed_tokens.as_linear(hidden)
         else:
             logits = hidden
-
         return logits
+
+    async def release_request(self, request_id: str) -> None:
+        """Drop KV cache slots for a finished request on every worker.
+
+        Called from DistributedEngine's generate loop `finally` block so
+        workers don't accumulate stale caches across requests.
+        """
+        if not request_id:
+            return
+        for wc in self.workers.values():
+            try:
+                await wc.release_cache(request_id)
+            except Exception as e:
+                logger.debug(
+                    "release_cache failed on %s: %s", wc.node.hostname, e,
+                )
 
     async def shutdown_cluster(self):
         for wc in self.workers.values():
             await wc.disconnect()
         self.workers.clear()
         logger.info("Cluster shut down")
+
+
+def _build_causal_mask(query_len: int, seq_pos: int) -> Optional[mx.array]:
+    """Build a causal attention mask for the coordinator's local layers.
+
+    Mirrors the worker's `_create_attention_mask` but runs in the coordinator
+    process so local-layer forwards get correct masking too. Returns None for
+    single-token decode (MLX models handle unmasked 1-token forward).
+    """
+    if query_len == 1:
+        return None
+    import numpy as np
+    total_seq = seq_pos + query_len
+    mask_np = np.full((query_len, total_seq), -1e9, dtype=np.float32)
+    offset = total_seq - query_len
+    for i in range(query_len):
+        mask_np[i, : offset + i + 1] = 0.0
+    return mx.array(mask_np).reshape(1, 1, query_len, total_seq)
 
 
 def _get_layers_list(model):
