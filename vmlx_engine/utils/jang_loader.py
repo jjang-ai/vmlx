@@ -423,6 +423,21 @@ def _load_jang_v2(
         bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
         config["quantization"] = {"group_size": block_size, "bits": min(bit_widths)}
 
+    # Nemotron-H LatentMoE patch: must run BEFORE _load_model_skeleton creates
+    # NemotronHBlock instances. For models with moe_latent_size set (e.g.,
+    # Nemotron-3-Super-120B), experts operate on a latent dim (1024) rather than
+    # hidden_size (4096), with fc1_latent_proj/fc2_latent_proj wrapping the switch_mlp.
+    # mlx-lm 0.31.2+ has native support — ensure_latent_moe_support() is a no-op in
+    # that case. For older mlx-lm (vmlx pins >=0.30.2) the patch monkey-patches
+    # nemotron_h to add LatentMoE. Without this, JANG Nemotron Super models crash
+    # with "[gather_qmm] Last dimension of first input with shape (..., 4096) does
+    # not match the expanded quantized matrix" at first inference.
+    try:
+        from .nemotron_latent_moe import ensure_latent_moe_support
+        ensure_latent_moe_support(str(path))
+    except Exception as _lmoe_e:
+        logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
+
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
     )
@@ -659,6 +674,16 @@ def _load_jang_v2_vlm(
     block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
     bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
     default_bits = min(bit_widths)
+
+    # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale. Must run
+    # BEFORE model_class.Model(model_config) instantiates any NemotronHBlock.
+    # No-op on mlx-lm 0.31.2+ (native support). Defensive: covers any future
+    # VLM wrapper whose text_config is nemotron_h.
+    try:
+        from .nemotron_latent_moe import ensure_latent_moe_support
+        ensure_latent_moe_support(str(path))
+    except Exception as _lmoe_e:
+        logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     config = vlm_load_config(path)
     model_class, _ = get_model_and_args(config=config)
@@ -1239,6 +1264,13 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     config.pop("quantization", None)
     config.pop("quantization_config", None)
     config["quantization"] = {"group_size": block_size, "bits": default_bits}
+
+    # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale.
+    try:
+        from .nemotron_latent_moe import ensure_latent_moe_support
+        ensure_latent_moe_support(str(path))
+    except Exception as _lmoe_e:
+        logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
@@ -1928,13 +1960,15 @@ def _pre_fix_bits_from_shard(model, shard_weights, block_size):
 
     JANG mixed-precision models have per-layer bit widths (e.g. [3, 4, 8]),
     but nn.quantize() applies a uniform bits=min(bit_widths) to ALL modules.
-    When a layer's actual bit width differs from the default, load_weights()
-    raises ValueError ("Expected shape X but received shape Y") because
-    strict=False only suppresses missing keys, not shape mismatches.
+    With strict=False, load_weights() silently overwrites weight shapes even
+    when they don't match the module's expected packed size. However, the
+    module's .bits attribute stays at the wrong value until _fix_quantized_bits
+    runs — any dequantization in that window crashes with "quantized_matmul:
+    shapes incompatible". This function eliminates that dangerous window.
 
-    This function inspects each quantized weight tensor's packed shape,
-    computes the actual bits from the weight/scales geometry, and patches
-    the corresponding module BEFORE load_weights is called.
+    Also required for the doctor command path, which previously used raw
+    mlx_lm.load() with strict=True (default) — that DOES crash on shape
+    mismatch (ValueError).
 
     Must be called after nn.quantize() and after sanitize/remap, but before
     model.load_weights(). Safe to call multiple times across shards.
@@ -1955,53 +1989,56 @@ def _pre_fix_bits_from_shard(model, shard_weights, block_size):
 
     fixed_count = 0
     for k, v in shard_weights.items():
-        if not k.endswith(".weight"):
-            continue
-        if not hasattr(v, "dtype") or v.dtype != mx.uint32:
-            continue
-        s_key = k[:-7] + ".scales"
-        if s_key not in shard_weights:
-            continue
-
-        w_cols = v.shape[-1]
-        s_cols = shard_weights[s_key].shape[-1]
-        if s_cols <= 0:
-            continue
-
-        mod_path = k[:-7]  # strip ".weight"
-        module = modules_by_path.get(mod_path)
-        if module is None:
-            continue
-
-        # Try block_size candidates — same priority as _fix_quantized_bits:
-        # config block_size first, then module's current gs, then common sizes.
-        gs_candidates = [block_size]
-        if hasattr(module, "group_size") and module.group_size not in gs_candidates:
-            gs_candidates.append(module.group_size)
-        for gs in (64, 128):
-            if gs not in gs_candidates:
-                gs_candidates.append(gs)
-
-        for try_bs in gs_candidates:
-            in_dim = s_cols * try_bs
-            if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
+        try:
+            if not k.endswith(".weight"):
                 continue
-            actual_bits = (w_cols * 32) // in_dim
-            if actual_bits not in (2, 3, 4, 5, 6, 8):
+            if not hasattr(v, "dtype") or v.dtype != mx.uint32:
                 continue
-            changed = False
-            if actual_bits != module.bits:
-                module.bits = actual_bits
-                changed = True
-            if try_bs != module.group_size:
-                module.group_size = try_bs
-                changed = True
-            if changed:
-                fixed_count += 1
-                logger.debug(
-                    f"  Pre-fix bits: {mod_path} → {actual_bits}-bit gs={try_bs}"
-                )
-            break
+            s_key = k[:-7] + ".scales"
+            if s_key not in shard_weights:
+                continue
+
+            w_cols = v.shape[-1]
+            s_cols = shard_weights[s_key].shape[-1]
+            if s_cols <= 0:
+                continue
+
+            mod_path = k[:-7]  # strip ".weight"
+            module = modules_by_path.get(mod_path)
+            if module is None:
+                continue
+
+            # Try block_size candidates — same priority as _fix_quantized_bits:
+            # config block_size first, then module's current gs, then common sizes.
+            gs_candidates = [block_size]
+            if hasattr(module, "group_size") and module.group_size not in gs_candidates:
+                gs_candidates.append(module.group_size)
+            for gs in (64, 128):
+                if gs not in gs_candidates:
+                    gs_candidates.append(gs)
+
+            for try_bs in gs_candidates:
+                in_dim = s_cols * try_bs
+                if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
+                    continue
+                actual_bits = (w_cols * 32) // in_dim
+                if actual_bits not in (2, 3, 4, 5, 6, 8):
+                    continue
+                changed = False
+                if actual_bits != module.bits:
+                    module.bits = actual_bits
+                    changed = True
+                if try_bs != module.group_size:
+                    module.group_size = try_bs
+                    changed = True
+                if changed:
+                    fixed_count += 1
+                    logger.debug(
+                        f"  Pre-fix bits: {mod_path} → {actual_bits}-bit gs={try_bs}"
+                    )
+                break
+        except Exception as e:
+            logger.debug(f"  Pre-fix bits: skipped {k}: {e}")
 
     if fixed_count > 0:
         logger.info(

@@ -42,8 +42,13 @@ export interface SessionConfig {
   numDraftTokens: number
   smelt: boolean
   smeltExperts: number
+  flashMoe: boolean
+  flashMoeSlotBank: number
+  flashMoePrefetch: 'none' | 'temporal'
+  flashMoeIoSplit: number
   defaultTemperature: number
   defaultTopP: number
+  defaultEnableThinking?: boolean
   embeddingModel: string
   additionalArgs: string
   enableJit: boolean
@@ -70,9 +75,9 @@ export const DEFAULT_CONFIG: SessionConfig = {
   rateLimit: 0,
   timeout: 300,
   maxNumSeqs: 256,
-  prefillBatchSize: 0,
-  prefillStepSize: 0,
-  completionBatchSize: 0,
+  prefillBatchSize: 512,
+  prefillStepSize: 2048,
+  completionBatchSize: 512,
   continuousBatching: true,
   enablePrefixCache: true,
   prefixCacheSize: 100,
@@ -105,8 +110,13 @@ export const DEFAULT_CONFIG: SessionConfig = {
   numDraftTokens: 3,
   smelt: false,
   smeltExperts: 50,
-  defaultTemperature: 0,
-  defaultTopP: 0,
+  flashMoe: false,
+  flashMoeSlotBank: 256,
+  flashMoePrefetch: 'none',
+  flashMoeIoSplit: 4,
+  defaultTemperature: 70,
+  defaultTopP: 95,
+  defaultEnableThinking: false,
   embeddingModel: '',
   additionalArgs: '',
   enableJit: false,
@@ -127,6 +137,8 @@ export const CASUAL_CONFIG: SessionConfig = {
   ...DEFAULT_CONFIG,
   host: '127.0.0.1',         // Local-only (safer for beginners)
   maxNumSeqs: 1,              // Single user (saves memory from batch overhead)
+  prefillBatchSize: 8,        // Low-memory defaults (override DEFAULT_CONFIG's 512)
+  completionBatchSize: 32,    // Low-memory defaults (override DEFAULT_CONFIG's 512)
   cacheMemoryPercent: 15,     // 15% vs 30% — more headroom for model weights
   maxCacheBlocks: 500,        // Fewer paged blocks (half)
   prefixCacheSize: 50,        // Fewer cached prefixes
@@ -169,6 +181,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const [showCachingHelp, setShowCachingHelp] = useState(false)
 
   const smeltActive = !!config.smelt
+  const flashMoeActive = !!config.flashMoe
+  const distributedActive = !!config.distributedEnabled
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
@@ -313,11 +327,68 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           unlimitedValue={0}
           unlimitedLabel="Default (32)"
         />
-        <CheckField label="Smelt Mode" tooltip="Partial expert loading for MoE models. Loads backbone + N% of experts from SSD, reducing RAM by ~50% while maintaining ~97% baseline speed via cache-biased routing and native SwitchGLU kernels." checked={config.smelt} onChange={v => onChange('smelt', v)} />
+        <CheckField
+          label="Smelt Mode"
+          tooltip="Partial expert loading for MoE models. Loads backbone + N% of experts from SSD, reducing RAM by ~50% while maintaining ~97% baseline speed via cache-biased routing and native SwitchGLU kernels."
+          checked={config.smelt}
+          onChange={v => {
+            onChange('smelt', v)
+            // Mutual exclusion: disable Flash MoE if enabling Smelt
+            if (v && flashMoeActive) onChange('flashMoe', false)
+          }}
+          disabled={flashMoeActive}
+        />
+        {flashMoeActive && (
+          <IncompatWarning text="Smelt is disabled while Flash MoE is on. They both modify MoE expert layers — use one or the other." />
+        )}
         {smeltActive && (
           <SliderField label="Smelt Experts %" value={config.smeltExperts} onChange={v => onChange('smeltExperts', v)} min={10} max={100} step={5} defaultValue={50} />
         )}
         {smeltActive && <PerformanceHint text={`Loading ${config.smeltExperts}% of experts per MoE layer. Lower = less RAM, slightly more routing bias.`} />}
+
+        <CheckField
+          label="Flash MoE (SSD Streaming)"
+          tooltip="Streams MoE expert weights from SSD on-demand instead of keeping them all in RAM. Enables massive MoE models (35B-397B) to run on machines with limited RAM by caching only recently-used experts in a slot-bank cache. Incompatible with Smelt, Distributed, and JIT. ~50% slower than full-RAM mode due to on-demand disk loading."
+          checked={config.flashMoe}
+          onChange={v => {
+            onChange('flashMoe', v)
+            // Mutual exclusion: disable conflicting features
+            if (v) {
+              if (smeltActive) onChange('smelt', false)
+              if (distributedActive) onChange('distributedEnabled', false)
+              if (config.enableJit) onChange('enableJit', false)
+            }
+          }}
+          disabled={smeltActive || distributedActive}
+        />
+        {(smeltActive || distributedActive) && !flashMoeActive && (
+          <IncompatWarning text={`Flash MoE is disabled while ${smeltActive ? 'Smelt' : 'Distributed'} is on. Turn it off to enable Flash MoE.`} />
+        )}
+        {flashMoeActive && (
+          <>
+            <SliderField
+              label="Slot Bank Size"
+              tooltip="Number of expert weight sets cached in RAM. Higher = more cache hits but more RAM. Recommended: 64 for Nemotron/small MoE, 256+ for Qwen3.5 MoE, 512+ for MiniMax (256 experts)."
+              value={config.flashMoeSlotBank}
+              onChange={v => onChange('flashMoeSlotBank', v)}
+              min={16}
+              max={1024}
+              step={16}
+              defaultValue={64}
+            />
+            <SliderField
+              label="I/O Workers"
+              tooltip="Number of parallel disk I/O threads for loading experts. Higher = faster cold loads but more I/O pressure. Default 4 works well for most SSDs."
+              value={config.flashMoeIoSplit}
+              onChange={v => onChange('flashMoeIoSplit', v)}
+              min={1}
+              max={16}
+              step={1}
+              defaultValue={4}
+            />
+            <PerformanceHint text={`Streaming experts from SSD with ${config.flashMoeSlotBank}-slot LRU cache. Non-MoE models automatically pass through (no effect). JIT disabled (incompatible with on-demand loading).`} />
+          </>
+        )}
         <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
         <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
         {!config.continuousBatching && config.enablePrefixCache && (
@@ -655,11 +726,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
         {/* JIT is not available for image models (mflux uses its own GPU pipeline). */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className={`flex items-center gap-2 ${flashMoeActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={!!config.enableJit}
+              checked={!!config.enableJit && !flashMoeActive}
               onChange={e => onChange('enableJit', e.target.checked)}
+              disabled={flashMoeActive}
               className="rounded border-input"
             />
             <span className="text-xs text-muted-foreground">
@@ -667,6 +739,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
+        {flashMoeActive && (
+          <IncompatWarning text="JIT is disabled while Flash MoE is on. Flash MoE's on-demand expert loading is incompatible with mx.compile tracing." />
+        )}
 
         <SliderField
           label="Stream Interval"
@@ -815,8 +890,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           label="Enable Distributed Inference"
           tooltip="Split the model across multiple Macs. Requires vmlx-worker running on each additional Mac. The coordinator (this Mac) handles tokenization, embedding, and final projection."
           checked={!!config.distributedEnabled}
-          onChange={v => onChange('distributedEnabled', v)}
+          onChange={v => {
+            onChange('distributedEnabled', v)
+            // Mutual exclusion: disable Flash MoE if enabling distributed
+            if (v && flashMoeActive) onChange('flashMoe', false)
+          }}
+          disabled={flashMoeActive}
         />
+        {flashMoeActive && (
+          <IncompatWarning text="Distributed is disabled while Flash MoE is on. Flash MoE patches local model layers — distributed workers have their own model copies." />
+        )}
         {config.distributedEnabled && (
           <>
             <SelectField
@@ -894,12 +977,26 @@ export function Tooltip({ text }: { text: string }) {
   const [show, setShow] = useState(false)
   const [pinned, setPinned] = useState(false)
   const [above, setAbove] = useState(true)
+  const [hAnchor, setHAnchor] = useState<'center' | 'left' | 'right'>('center')
   const triggerRef = useRef<HTMLSpanElement>(null)
 
   const updatePosition = () => {
     if (triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
       setAbove(rect.top > 130)
+      // Horizontal: tooltip is w-72 (288px). Need ~144px of clearance on each
+      // side of the trigger for centered layout. If not enough room on one
+      // side, anchor to that side so the tooltip extends toward the other.
+      const vw = window.innerWidth
+      const triggerCenter = rect.left + rect.width / 2
+      const half = 150 // 288/2 + small buffer
+      if (triggerCenter - half < 8) {
+        setHAnchor('left')          // anchor to left of trigger, extends right
+      } else if (triggerCenter + half > vw - 8) {
+        setHAnchor('right')         // anchor to right of trigger, extends left
+      } else {
+        setHAnchor('center')
+      }
     }
   }
 
@@ -935,12 +1032,22 @@ export function Tooltip({ text }: { text: string }) {
       </span>
       {show && (
         <div
-          className={`absolute left-1/2 -translate-x-1/2 w-72 p-2.5 bg-popover text-popover-foreground text-xs rounded-lg shadow-lg border border-border z-50 leading-relaxed ${above ? 'bottom-full mb-2' : 'top-full mt-2'
-            }`}
+          className={`absolute w-72 max-w-[calc(100vw-1rem)] p-2.5 bg-popover text-popover-foreground text-xs rounded-lg shadow-lg border border-border z-50 leading-relaxed ${
+            above ? 'bottom-full mb-2' : 'top-full mt-2'
+          } ${
+            hAnchor === 'left' ? 'left-0'
+              : hAnchor === 'right' ? 'right-0'
+              : 'left-1/2 -translate-x-1/2'
+          }`}
         >
           {text}
-          <div className={`absolute left-1/2 -translate-x-1/2 border-4 border-transparent ${above ? 'top-full -mt-px border-t-border' : 'bottom-full -mb-px border-b-border'
-            }`} />
+          <div className={`absolute border-4 border-transparent ${
+            above ? 'top-full -mt-px border-t-border' : 'bottom-full -mb-px border-b-border'
+          } ${
+            hAnchor === 'left' ? 'left-2'
+              : hAnchor === 'right' ? 'right-2'
+              : 'left-1/2 -translate-x-1/2'
+          }`} />
         </div>
       )}
     </span>

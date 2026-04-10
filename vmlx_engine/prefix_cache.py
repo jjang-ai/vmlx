@@ -847,6 +847,10 @@ class BlockAwarePrefixCache:
 
         # Lazy-cached expected KV head count for validation
         self._n_kv_heads: Optional[int] = None
+        # Lazy-cached set of ALL valid KV head counts (for mixed-head models
+        # like Gemma 4 where sliding_attention layers use num_key_value_heads
+        # and full_attention layers use num_global_key_value_heads).
+        self._allowed_n_kv_heads: Optional[set] = None
 
     def _get_n_kv_heads(self) -> int:
         """Get expected KV head count from model config (cached).
@@ -932,6 +936,64 @@ class BlockAwarePrefixCache:
             n_kv = 0
         self._n_kv_heads = n_kv
         return n_kv
+
+    def _get_allowed_n_kv_heads(self) -> set:
+        """Get the set of valid KV head counts across ALL layers.
+
+        For uniform-head models (Llama, Qwen, etc.), returns {num_key_value_heads}.
+        For mixed-head models (Gemma 4 with interleaved sliding_attention +
+        full_attention, where sliding uses num_key_value_heads=16 and full uses
+        num_global_key_value_heads=4), returns {4, 16}.
+
+        Used to validate reconstructed paged-cache KV shapes without forcing
+        false-positive cache misses on layers that legally have a different
+        head count than the primary num_key_value_heads.
+
+        Returns the empty set if no valid counts could be determined (in which
+        case head-count validation is skipped — better than forcing false misses).
+        """
+        if self._allowed_n_kv_heads is not None:
+            return self._allowed_n_kv_heads
+
+        allowed: set = set()
+        primary = self._get_n_kv_heads()
+        if primary > 0:
+            allowed.add(primary)
+
+        # Scan model config tree for mixed-head architectures.
+        # Gemma 4: num_global_key_value_heads on full_attention layers.
+        # Future-proof for other mixed-head variants by walking the same
+        # config candidates _get_n_kv_heads uses.
+        try:
+            candidates = [self.model]
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None:
+                candidates.append(lm)
+            mm = getattr(self.model, 'model', None)
+            if mm is not None and mm is not self.model:
+                candidates.append(mm)
+            for model_obj in candidates:
+                for attr in ('args', 'config', 'text_config'):
+                    cfg = getattr(model_obj, attr, None)
+                    if cfg is None:
+                        continue
+                    # Gemma 4 global KV heads (full_attention layers)
+                    for field in (
+                        'num_global_key_value_heads',
+                        'global_num_key_value_heads',
+                    ):
+                        val = getattr(cfg, field, None)
+                        if val is None:
+                            tc = getattr(cfg, 'text_config', None)
+                            if tc is not None:
+                                val = getattr(tc, field, None)
+                        if isinstance(val, int) and val > 0:
+                            allowed.add(val)
+        except Exception:
+            pass
+
+        self._allowed_n_kv_heads = allowed
+        return allowed
 
     def fetch_cache(
         self,
@@ -1149,7 +1211,45 @@ class BlockAwarePrefixCache:
                     try:
                         keys, values = state
                         if isinstance(keys, (tuple, list)):
-                            # Quantized: skip numpy path for now
+                            # Quantized KV (QuantizedKVCache / TurboQuantKVCache).
+                            # state = ((w_packed, scales, biases), (w_packed, scales, biases))
+                            # Dequantize to float16 for the numpy extraction path so the
+                            # block disk cache can serialize per-block slices. Without
+                            # this, np_sources stays empty for quantized layers and the
+                            # block disk write-through silently drops everything.
+                            #
+                            # Trade-off: disk cache entries are ~4x larger for q8 (vs.
+                            # storing packed bytes), but storage works.
+                            if len(keys) < 2 or len(values) < 2:
+                                logger.debug(
+                                    f"np_sources skip layer {idx}: quantized state "
+                                    f"arity keys={len(keys)} values={len(values)}"
+                                )
+                                continue
+                            meta = layer_state.get("meta_state", ())
+                            # meta_state typically ends with (group_size, bits)
+                            g_size, q_bits = 64, 8
+                            if isinstance(meta, (tuple, list)) and len(meta) >= 2:
+                                try:
+                                    g_size = int(meta[-2])
+                                    q_bits = int(meta[-1])
+                                except (ValueError, TypeError):
+                                    pass
+                            k_w, k_s = keys[0], keys[1]
+                            k_b = keys[2] if len(keys) >= 3 else mx.zeros_like(k_s)
+                            v_w, v_s = values[0], values[1]
+                            v_b = values[2] if len(values) >= 3 else mx.zeros_like(v_s)
+                            k_dq = mx.dequantize(
+                                k_w, k_s, k_b, group_size=g_size, bits=q_bits,
+                            )
+                            v_dq = mx.dequantize(
+                                v_w, v_s, v_b, group_size=g_size, bits=q_bits,
+                            )
+                            if 'bfloat16' in str(k_dq.dtype):
+                                k_dq = k_dq.astype(mx.float16)
+                                v_dq = v_dq.astype(mx.float16)
+                            mx.eval(k_dq, v_dq)
+                            np_sources[idx] = (np.array(k_dq), np.array(v_dq), k_dq.dtype)
                             continue
                         if hasattr(keys, 'shape'):
                             k_np, v_np = keys, values
@@ -1914,15 +2014,16 @@ class BlockAwarePrefixCache:
                         concat_values = tuple(v * 1 for v in concat_values)
                         mx.eval(*concat_keys, *concat_values)
 
-                    # Validate head count for quantized cache too
+                    # Validate head count for quantized cache too.
+                    # Uses the full allowed set (Gemma 4 mixed-head support).
                     first_k = concat_keys[0]
                     if len(first_k.shape) == 4:
-                        n_kv = self._get_n_kv_heads()
-                        if n_kv > 0 and first_k.shape[1] != n_kv:
+                        allowed_kv = self._get_allowed_n_kv_heads()
+                        if allowed_kv and first_k.shape[1] not in allowed_kv:
                             logger.warning(
                                 f"Quantized head count mismatch in layer {layer_idx}: "
-                                f"got {first_k.shape[1]}, expected {n_kv} — "
-                                f"forcing cache miss"
+                                f"got {first_k.shape[1]}, expected one of "
+                                f"{sorted(allowed_kv)} — forcing cache miss"
                             )
                             return None
 
@@ -1985,15 +2086,23 @@ class BlockAwarePrefixCache:
 
                     # Validate head count against model config.
                     # Catches stale blocks with inflated H from BatchKVCache.merge().
-                    n_kv = self._get_n_kv_heads()
-                    if n_kv > 0:
+                    #
+                    # Mixed-head support: Gemma 4 and similar architectures have
+                    # DIFFERENT KV head counts per layer (sliding_attention layers
+                    # use num_key_value_heads=16; full_attention layers use
+                    # num_global_key_value_heads=4). Checking against a single
+                    # primary count falsely forces cache miss on every
+                    # global-attention layer. Use the full allowed set instead.
+                    allowed_kv = self._get_allowed_n_kv_heads()
+                    if allowed_kv:
                         # 4D: (batch, heads, seq, dim), 3D: (heads, seq, dim)
                         head_axis = 1 if ndim == 4 else 0
-                        if concat_keys.shape[head_axis] != n_kv:
+                        actual_h = concat_keys.shape[head_axis]
+                        if actual_h not in allowed_kv:
                             logger.warning(
                                 f"Head count mismatch in layer {layer_idx}: "
-                                f"got {concat_keys.shape[head_axis]}, expected {n_kv} — "
-                                f"forcing cache miss"
+                                f"got {actual_h}, expected one of {sorted(allowed_kv)} "
+                                f"— forcing cache miss"
                             )
                             return None
 
@@ -2147,13 +2256,14 @@ class BlockAwarePrefixCache:
                             cv = mx.concatenate(sub_kv_vals, axis=seq_axis)
                             mx.eval(ck, cv)
 
-                            # Validate head count in sub-cache
+                            # Validate head count in sub-cache (mixed-head aware)
                             if ndim == 4:
-                                n_kv = self._get_n_kv_heads()
-                                if n_kv > 0 and ck.shape[1] != n_kv:
+                                allowed_kv = self._get_allowed_n_kv_heads()
+                                if allowed_kv and ck.shape[1] not in allowed_kv:
                                     logger.warning(
                                         f"CacheList sub {sub_idx} head mismatch: "
-                                        f"got {ck.shape[1]}, expected {n_kv}"
+                                        f"got {ck.shape[1]}, expected one of "
+                                        f"{sorted(allowed_kv)}"
                                     )
                                     return None
 

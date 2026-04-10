@@ -888,6 +888,7 @@ export class SessionManager extends EventEmitter {
     // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
+    'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
@@ -1896,6 +1897,25 @@ export class SessionManager extends EventEmitter {
       const pct = (config as any).smeltExperts ?? 50
       if (pct !== 50) {
         args.push('--smelt-experts', pct.toString())
+      }
+    }
+
+    // Flash MoE (SSD expert streaming) — mutually exclusive with smelt/distributed/JIT.
+    // Always pass the tunable values when Flash MoE is on so CLI reflects UI exactly
+    // (no stale equality-with-default guard that drifts when DEFAULT_CONFIG changes).
+    if ((config as any).flashMoe) {
+      args.push('--flash-moe')
+      const slotBank = (config as any).flashMoeSlotBank
+      if (typeof slotBank === 'number' && slotBank > 0) {
+        args.push('--flash-moe-slot-bank', slotBank.toString())
+      }
+      const prefetch = (config as any).flashMoePrefetch
+      if (prefetch && prefetch !== 'none') {
+        args.push('--flash-moe-prefetch', prefetch)
+      }
+      const ioSplit = (config as any).flashMoeIoSplit
+      if (typeof ioSplit === 'number' && ioSplit > 0) {
+        args.push('--flash-moe-io-split', ioSplit.toString())
       }
     }
 

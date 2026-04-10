@@ -271,6 +271,20 @@ def serve_command(args):
         # the loader also reads this flag to pick the smelt_load code path.
         setattr(args, '_smelt_forces_text_only', True)
 
+    # Flash MoE mutual exclusion guards
+    if getattr(args, 'flash_moe', False):
+        if getattr(args, 'smelt', False):
+            print("ERROR: --flash-moe and --smelt are mutually exclusive.")
+            print("  Both modify MoE expert layers. Use one or the other:")
+            print("    --smelt: loads partial experts at startup (cache-biased routing)")
+            print("    --flash-moe: streams ALL experts from SSD on-demand (slot-bank cache)")
+            sys.exit(1)
+        if getattr(args, 'distributed', False):
+            print("ERROR: --flash-moe and --distributed are mutually exclusive.")
+            print("  Flash MoE patches local model layers but distributed workers")
+            print("  have their own model copies. Use --smelt for distributed MoE.")
+            sys.exit(1)
+
     # Build scheduler config for batched mode
     scheduler_config = None
     if args.continuous_batching:
@@ -476,6 +490,10 @@ def serve_command(args):
             distributed_mode=getattr(args, 'distributed_mode', 'pipeline'),
             cluster_secret=getattr(args, 'cluster_secret', '') or os.environ.get('VMLX_CLUSTER_SECRET', ''),
             worker_nodes=getattr(args, 'worker_nodes', None),
+            flash_moe=getattr(args, 'flash_moe', False),
+            flash_moe_slot_bank=getattr(args, 'flash_moe_slot_bank', 64),
+            flash_moe_prefetch=getattr(args, 'flash_moe_prefetch', 'none'),
+            flash_moe_io_split=getattr(args, 'flash_moe_io_split', 4),
         )
         # Save speculative config for deep sleep/wake reload
         server._cli_args['speculative_model'] = getattr(args, 'speculative_model', None)
@@ -531,10 +549,39 @@ def bench_command(args):
     # Handle prefix cache flags
     enable_prefix_cache = args.enable_prefix_cache and not args.disable_prefix_cache
 
+    # Flash MoE guards for bench
+    if getattr(args, 'flash_moe', False):
+        if getattr(args, 'smelt', False):
+            print("ERROR: --flash-moe and --smelt are mutually exclusive (bench).")
+            sys.exit(1)
+
     async def run_benchmark():
         print(f"Loading model: {args.model}")
         from .utils.tokenizer import load_model_with_fallback
         model, tokenizer = load_model_with_fallback(args.model)
+
+        # Apply Flash MoE if requested
+        if getattr(args, 'flash_moe', False):
+            print(f"Flash MoE: enabled (slot_bank={getattr(args, 'flash_moe_slot_bank', 64)})")
+            try:
+                from .utils.smelt_loader import ExpertIndex
+                from .utils.flash_moe_loader import FlashMoEExpertLoader, SlotBankCache
+                from .models.flash_moe_integration import apply_flash_moe, free_expert_weights
+                from .api.utils import resolve_to_local_path
+
+                resolved = resolve_to_local_path(args.model)
+                ei = ExpertIndex.build(resolved)
+                if ei.num_moe_layers > 0:
+                    cache = SlotBankCache(max_slots=getattr(args, 'flash_moe_slot_bank', 64))
+                    loader = FlashMoEExpertLoader(ei, cache, io_workers=4)
+                    # Unwrap MLLMModelWrapper if present (bench doesn't use it but be defensive)
+                    raw = getattr(model, '_model', None) or getattr(model, 'model', None) or model
+                    patched = apply_flash_moe(raw, loader)
+                    if patched > 0:
+                        freed = free_expert_weights(raw)
+                        print(f"Flash MoE: {patched} layers patched, {freed/1e9:.1f}GB freed")
+            except Exception as e:
+                print(f"Flash MoE setup failed: {e}")
 
         scheduler_config = SchedulerConfig(
             max_num_seqs=args.max_num_seqs,
@@ -1040,6 +1087,36 @@ Examples:
         help="Percentage of experts to load per MoE layer (10-100). "
              "Lower = less RAM, more routing bias. (default: 50)",
     )
+    # Flash MoE SSD streaming (on-demand expert loading)
+    serve_parser.add_argument(
+        "--flash-moe",
+        action="store_true",
+        default=False,
+        help="Enable Flash MoE: stream expert weights from SSD on-demand. "
+             "Enables massive MoE models (35B-397B) to run with limited RAM "
+             "by keeping only active experts in a slot-bank cache.",
+    )
+    serve_parser.add_argument(
+        "--flash-moe-slot-bank",
+        type=int,
+        default=64,
+        help="Number of expert weight sets to cache in RAM (default: 64). "
+             "Higher = more cache hits but more RAM usage.",
+    )
+    serve_parser.add_argument(
+        "--flash-moe-prefetch",
+        type=str,
+        choices=["none", "temporal"],
+        default="none",
+        help="Expert prefetching strategy (default: none). "
+             "'temporal' prefetches recently-used experts.",
+    )
+    serve_parser.add_argument(
+        "--flash-moe-io-split",
+        type=int,
+        default=4,
+        help="Number of parallel I/O threads for expert loading (default: 4).",
+    )
     # Distributed compute options
     serve_parser.add_argument(
         "--distributed",
@@ -1448,6 +1525,18 @@ Examples:
         type=int,
         default=50,
         help="Percentage of experts to load per MoE layer (default: 50)",
+    )
+    bench_parser.add_argument(
+        "--flash-moe",
+        action="store_true",
+        default=False,
+        help="Enable Flash MoE SSD streaming for benchmarking.",
+    )
+    bench_parser.add_argument(
+        "--flash-moe-slot-bank",
+        type=int,
+        default=64,
+        help="Flash MoE slot bank size (default: 64)",
     )
 
     # Detokenizer benchmark

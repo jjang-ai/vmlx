@@ -260,7 +260,7 @@ def _needs_tokenizer_fallback(model_name: str) -> bool:
     return any(pattern.lower() in model_lower for pattern in FALLBACK_MODELS)
 
 
-def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
+def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, skip_turboquant: bool = False):
     """
     Load model and tokenizer with fallback for non-standard tokenizers.
 
@@ -336,14 +336,16 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             f"Model {model_name} requires tokenizer fallback, loading directly..."
         )
         model, tokenizer = _load_with_tokenizer_fallback(local_model_path, lazy=False)
-        _apply_turboquant_to_model(model, local_model_path)
+        if not skip_turboquant:
+            _apply_turboquant_to_model(model, local_model_path)
         return model, tokenizer
 
     try:
         model, tokenizer = load(
             model_name, tokenizer_config=tokenizer_config, lazy=False
         )
-        _apply_turboquant_to_model(model, local_model_path)
+        if not skip_turboquant:
+            _apply_turboquant_to_model(model, local_model_path)
         return model, tokenizer
     except ValueError as e:
         # Fallback for models with non-standard tokenizers
@@ -352,7 +354,8 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None):
             model, tokenizer = _load_with_tokenizer_fallback(
                 local_model_path, lazy=False
             )
-            _apply_turboquant_to_model(model, local_model_path)
+            if not skip_turboquant:
+                _apply_turboquant_to_model(model, local_model_path)
             return model, tokenizer
         else:
             raise
