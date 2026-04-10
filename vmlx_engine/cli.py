@@ -285,6 +285,31 @@ def serve_command(args):
             print("  have their own model copies. Use --smelt for distributed MoE.")
             sys.exit(1)
 
+    # Distributed compute mutual exclusion guards (Phase 1 conservative set).
+    # Distributed pipeline parallelism splits model layers across workers;
+    # features that patch or trace local layer objects cannot coexist safely.
+    if getattr(args, 'distributed', False):
+        if getattr(args, 'enable_jit', False):
+            print("ERROR: --distributed and --enable-jit are mutually exclusive.")
+            print("  JIT (mx.compile) traces layer objects on the coordinator, but")
+            print("  workers own distinct layer ranges — the compiled graph would be")
+            print("  wrong for every worker except whichever happens to match the trace.")
+            print("  Start distributed without JIT, or run single-node with JIT.")
+            sys.exit(1)
+        if getattr(args, 'smelt', False):
+            print("ERROR: --distributed and --smelt are mutually exclusive (experimental).")
+            print("  Distributed + Smelt has not been validated end-to-end. Each worker")
+            print("  would need to independently smelt its layer range, and layer_assign")
+            print("  is not yet MoE-smelt-aware. Lift this guard once Phase 2 testing")
+            print("  confirms the combination works.")
+            sys.exit(1)
+        if getattr(args, 'speculative_model', None):
+            print("ERROR: --distributed and --speculative-model are mutually exclusive.")
+            print("  Speculative decoding requires the draft model to be co-located with")
+            print("  the target model for low-latency drafting; distributing both would")
+            print("  negate the speedup. Run speculative decoding single-node.")
+            sys.exit(1)
+
     # Build scheduler config for batched mode
     scheduler_config = None
     if args.continuous_batching:

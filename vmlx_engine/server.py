@@ -729,6 +729,19 @@ def _apply_jit_compilation():
         )
         return
 
+    # Distributed pipeline parallelism splits model layers across worker nodes;
+    # the coordinator only ever sees a subset (or none) of the layer objects
+    # that JIT would trace. Compiling on the coordinator bakes a graph that
+    # doesn't match what any worker actually executes. CLI guard already blocks
+    # this combination — defensive skip here covers programmatic callers too.
+    if _distributed_enabled and _distributed_coordinator is not None:
+        logger.info(
+            "JIT: Skipping mx.compile — distributed pipeline parallelism is active. "
+            "Each worker owns a distinct layer range, so coordinator-side tracing "
+            "is unsafe."
+        )
+        return
+
     try:
         import mlx.core as mx
 
@@ -1731,7 +1744,7 @@ async def admin_soft_sleep():
 async def admin_deep_sleep():
     """Enter deep sleep: unload model entirely. Process stays alive, port stays allocated."""
     global _engine, _standby_state, _pre_sleep_cache_limit, _wake_lock
-    global _flash_moe_loader
+    global _flash_moe_loader, _distributed_coordinator
     from starlette.responses import JSONResponse
 
     if _wake_lock is None:
@@ -1780,6 +1793,22 @@ async def admin_deep_sleep():
                 except Exception as e:
                     logger.debug(f"Flash MoE loader shutdown during deep sleep: {e}")
                 _flash_moe_loader = None
+
+            # Tear down the distributed mesh so worker TCP connections close
+            # cleanly and the coordinator doesn't keep heartbeating a model
+            # that no longer exists. admin_wake() rebuilds from _cli_args.
+            if _distributed_coordinator is not None:
+                try:
+                    shutdown = getattr(_distributed_coordinator, "shutdown", None) \
+                        or getattr(_distributed_coordinator, "stop", None)
+                    if shutdown is not None:
+                        result = shutdown()
+                        if asyncio.iscoroutine(result):
+                            await result
+                    logger.info("Distributed mesh coordinator shut down for deep sleep")
+                except Exception as e:
+                    logger.warning(f"Distributed shutdown during deep sleep failed: {e}")
+                _distributed_coordinator = None
 
             # Unload speculative draft model to free GPU memory
             try:
@@ -1871,6 +1900,10 @@ async def admin_wake():
                     flash_moe_slot_bank=_cli_args.get("flash_moe_slot_bank", 64),
                     flash_moe_prefetch=_cli_args.get("flash_moe_prefetch", "none"),
                     flash_moe_io_split=_cli_args.get("flash_moe_io_split", 4),
+                    distributed=_cli_args.get("distributed", False),
+                    distributed_mode=_cli_args.get("distributed_mode", "pipeline"),
+                    cluster_secret=_cli_args.get("cluster_secret", ""),
+                    worker_nodes=_cli_args.get("worker_nodes"),
                 )
                 # Start engine after wake. Both SimpleEngine and BatchedEngine
                 # expose `_loaded` — start() is idempotent for SimpleEngine and

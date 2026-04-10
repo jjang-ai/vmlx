@@ -884,7 +884,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Distributed Compute */}
-      <Section title="Distributed Compute" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
+      <Section title="Distributed Compute (Work in Progress)" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
+        <div className="mx-4 mt-3 mb-2 rounded-md border border-amber-500/60 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          <div className="font-semibold text-amber-100 uppercase tracking-wide text-[10px] mb-1">Work in Progress — Experimental</div>
+          <div className="text-amber-200/90 leading-relaxed">
+            Pipeline parallelism works for text LLMs but this feature is still
+            under active development. Expect rough edges: mesh reconnect after
+            sleep/wake, worker crash recovery, protocol version handshake, and
+            per-worker telemetry are not yet hardened. Tensor parallelism is
+            stubbed for a future release. Not recommended for production.
+          </div>
+        </div>
         <PerformanceHint text="Run large models across multiple Macs connected via Thunderbolt 5, Ethernet, or WiFi. Each Mac handles a subset of transformer layers (pipeline parallelism). Works with any network — TB5 is fastest but even WiFi works." />
         <CheckField
           label="Enable Distributed Inference"
