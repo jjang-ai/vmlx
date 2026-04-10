@@ -390,7 +390,18 @@ const api = {
       ipcRenderer.on('session:loadProgress', handler)
       return () => { ipcRenderer.removeListener('session:loadProgress', handler) }
     },
-  }
+  },
+
+  // Distributed compute
+  distributed: {
+    discover: (sessionId?: string) => ipcRenderer.invoke('distributed:discover', sessionId),
+    status: (sessionId?: string) => ipcRenderer.invoke('distributed:status', sessionId),
+    nodes: (sessionId?: string) => ipcRenderer.invoke('distributed:nodes', sessionId),
+    addNode: (address: string, port?: number, sessionId?: string) =>
+      ipcRenderer.invoke('distributed:addNode', address, port, sessionId),
+    removeNode: (nodeId: string, sessionId?: string) =>
+      ipcRenderer.invoke('distributed:removeNode', nodeId, sessionId),
+  },
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to renderer only if context isolation is enabled

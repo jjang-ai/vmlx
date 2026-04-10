@@ -262,20 +262,61 @@ function ChatModeContent({ activeChatId, sessionEndpoint, sessionStatus, activeS
 // vMLX / mlxstudio — authored by Jinho Jang
 function ChatEmptyState({ onNewChat }: { onNewChat: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center px-8" data-mlx-studio="jinhojang">
-      <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+    <div className="flex flex-col items-center justify-center h-full text-center px-8 overflow-auto" data-mlx-studio="jinhojang">
+      <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4 flex-shrink-0">
         <MessageSquare className="h-8 w-8 text-primary" />
       </div>
       <h2 className="text-lg font-semibold mb-2">Start a conversation</h2>
-      <p className="text-sm text-muted-foreground mb-6 max-w-sm">
-        Select a chat from the sidebar or create a new one to begin.
+      <p className="text-sm text-muted-foreground mb-4 max-w-md">
+        Load a model from the <strong>Server</strong> tab, then come back here to chat.
       </p>
       <button
         onClick={onNewChat}
-        className="px-4 py-2 bg-primary text-primary-foreground text-sm rounded-md hover:bg-primary/90 transition-colors"
+        className="px-4 py-2 bg-primary text-primary-foreground text-sm rounded-md hover:bg-primary/90 transition-colors mb-6"
       >
         New Chat
       </button>
+
+      <div className="text-left max-w-lg space-y-3 text-xs text-muted-foreground border-t border-border pt-4">
+        <p className="font-semibold text-foreground text-sm">Quick Start Guide</p>
+
+        <div>
+          <p className="font-medium text-foreground">Text Models</p>
+          <p>Best for chat, coding, reasoning. Works with any MLX or JANG model.</p>
+          <p className="text-muted-foreground/70 mt-0.5">
+            Recommended: Qwen3, Llama 4, Gemma 4, Nemotron, DeepSeek, Mistral
+          </p>
+        </div>
+
+        <div>
+          <p className="font-medium text-foreground">Vision Models (VLM)</p>
+          <p>Attach images in chat. The model auto-detects as VLM if it has a vision encoder.</p>
+          <p className="text-muted-foreground/70 mt-0.5">
+            Recommended: Gemma 4 E2B/E4B (standard 4-bit), Qwen3.5-VL, Mistral Small 4
+          </p>
+        </div>
+
+        <div>
+          <p className="font-medium text-foreground">Large MoE Models + Smelt</p>
+          <p>
+            Models too big for RAM? Enable <strong>Smelt</strong> in Server Settings to load only a
+            fraction of experts. Trades speed for RAM — 45-68% less memory.
+          </p>
+          <p className="text-muted-foreground/70 mt-0.5">
+            Smelt disables VLM mode (vision). Use text-only models with Smelt.
+          </p>
+        </div>
+
+        <div>
+          <p className="font-medium text-foreground">Tips</p>
+          <ul className="list-disc list-inside space-y-0.5 text-muted-foreground/80">
+            <li>Looping? Increase <strong>Repetition Penalty</strong> in Chat Settings (try 1.1-1.3)</li>
+            <li>Slow first response? That's model weight paging — second message is faster</li>
+            <li>JANG 2-bit models are compact but lower quality. Try JANG 4M or standard 4-bit for best results</li>
+            <li>All settings auto-save per model. Switch models and your settings follow</li>
+          </ul>
+        </div>
+      </div>
     </div>
   )
 }

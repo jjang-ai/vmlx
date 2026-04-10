@@ -472,6 +472,10 @@ def serve_command(args):
             force_mllm=getattr(args, 'is_mllm', False),
             smelt=getattr(args, 'smelt', False),
             smelt_experts=getattr(args, 'smelt_experts', 50),
+            distributed=getattr(args, 'distributed', False),
+            distributed_mode=getattr(args, 'distributed_mode', 'pipeline'),
+            cluster_secret=getattr(args, 'cluster_secret', '') or os.environ.get('VMLX_CLUSTER_SECRET', ''),
+            worker_nodes=getattr(args, 'worker_nodes', None),
         )
         # Save speculative config for deep sleep/wake reload
         server._cli_args['speculative_model'] = getattr(args, 'speculative_model', None)
@@ -1035,6 +1039,37 @@ Examples:
         default=50,
         help="Percentage of experts to load per MoE layer (10-100). "
              "Lower = less RAM, more routing bias. (default: 50)",
+    )
+    # Distributed compute options
+    serve_parser.add_argument(
+        "--distributed",
+        action="store_true",
+        default=False,
+        help="Enable distributed inference (coordinator mode). Discovers worker "
+             "nodes via Bonjour and splits the model across them using pipeline "
+             "parallelism. Workers must be running vmlx-worker on the same network.",
+    )
+    serve_parser.add_argument(
+        "--cluster-secret",
+        type=str,
+        default="",
+        help="Shared secret for authenticating worker nodes. All workers in the "
+             "cluster must use the same secret.",
+    )
+    serve_parser.add_argument(
+        "--distributed-mode",
+        type=str,
+        choices=["pipeline", "tensor"],
+        default="pipeline",
+        help="Parallelism mode: 'pipeline' splits layers across nodes (default), "
+             "'tensor' splits weights within layers (requires high bandwidth).",
+    )
+    serve_parser.add_argument(
+        "--worker-nodes",
+        type=str,
+        default=None,
+        help="Comma-separated list of worker node addresses (ip:port). "
+             "Use instead of Bonjour auto-discovery. Example: 192.168.1.10:9100,192.168.1.11:9100",
     )
     # MCP options
     serve_parser.add_argument(

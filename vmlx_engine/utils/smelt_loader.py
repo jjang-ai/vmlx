@@ -778,6 +778,27 @@ def smelt_load(
     from jang_tools.loader import load_jang_model as _jt_load
     from jang_tools.loader import _fix_quantized_bits
 
+    # Gemma 4 (model_type=gemma4, text_config.model_type=gemma4_text):
+    # jang_tools text-only loader does NOT sanitize Gemma 4's SwitchGLU +
+    # Router + Experts + per_expert_scale weights correctly — produces
+    # garbage output. Use our internal JANG loader instead, which handles
+    # Gemma 4 via the mlx_lm model skeleton with proper weight mapping.
+    import json as _json
+    _is_gemma4_model = False
+    try:
+        _cfg = _json.loads(open(f"{model_path}/config.json").read())
+        _mt = _cfg.get("model_type", "")
+        _tmt = _cfg.get("text_config", {}).get("model_type", "")
+        _is_gemma4_model = _mt == "gemma4" or _tmt == "gemma4_text"
+    except Exception:
+        pass
+    if _is_gemma4_model:
+        # Use our internal JANG text loader which calls mlx_lm's
+        # load_model skeleton with proper Gemma 4 weight sanitization.
+        from ..utils.jang_loader import load_jang_model as _internal_load
+        _jt_load = lambda p: _internal_load(p)
+        logger.info("  Gemma 4 detected: using internal JANG loader (proper weight sanitization)")
+
     path = Path(model_path)
     t0 = time.perf_counter()
     logger.info("Smelt loading %s (expert_percent=%d)", path.name, expert_percent)
@@ -909,29 +930,40 @@ def smelt_load(
                     super().__init__()
                     self.cache_bias = cache_bias_arr
                     self.config = orig_router.config
-                    self.norm = orig_router.norm
                     self.proj = orig_router.proj
                     self.scale = orig_router.scale
                     self.per_expert_scale = orig_router.per_expert_scale
                     self._root_size = orig_router._root_size
+                    # mlx_vlm Router uses self.norm (nn.RMSNorm);
+                    # mlx_lm gemma4_text Router uses inline rms_norm
+                    # with self.eps. Handle both.
+                    self._has_norm = hasattr(orig_router, "norm")
+                    if self._has_norm:
+                        self.norm = orig_router.norm
+                    self.eps = getattr(orig_router, "eps", 1e-6)
 
                 def __call__(self, x):
-                    x = self.norm(x)
-                    x = x * self._root_size
-                    x = x * self.scale
+                    if self._has_norm:
+                        x = self.norm(x)
+                        x = x * self._root_size
+                        x = x * self.scale
+                    else:
+                        # mlx_lm text path: inline rms_norm
+                        x = mx.fast.rms_norm(
+                            x, self.scale * self._root_size, self.eps
+                        )
                     expert_scores = self.proj(x)
+                    # Use biased scores for top-k SELECTION (prefer loaded experts)
                     biased_scores = expert_scores + self.cache_bias
                     top_k = self.config.top_k_experts
                     top_k_indices = mx.argpartition(
-                        -biased_scores, kth=top_k - 1, axis=-1
-                    )[..., :top_k]
-                    router_probs = mx.softmax(expert_scores, axis=-1)
+                        biased_scores, kth=-top_k, axis=-1
+                    )[..., -top_k:]
+                    # Softmax on extracted top-k weights only (matches upstream Router)
                     top_k_weights = mx.take_along_axis(
-                        router_probs, top_k_indices, axis=-1
+                        expert_scores, top_k_indices, axis=-1
                     )
-                    top_k_weights = top_k_weights / mx.sum(
-                        top_k_weights, axis=-1, keepdims=True
-                    )
+                    top_k_weights = mx.softmax(top_k_weights, axis=-1)
                     top_k_weights = top_k_weights * self.per_expert_scale[top_k_indices]
                     return top_k_indices, top_k_weights
 
@@ -1042,14 +1074,18 @@ def smelt_load(
         def _smelt_vlm_call(
             self, input_ids, pixel_values=None, mask=None, cache=None, **kwargs
         ):
-            result = _orig_call(
-                self,
-                input_ids,
-                pixel_values=pixel_values,
-                mask=mask,
-                cache=cache,
-                **kwargs,
-            )
+            # Only pass pixel_values/mask if non-None — smelt forces
+            # text-only mode so the underlying model may be loaded via
+            # mlx_lm (text path) whose __call__ doesn't accept pixel_values.
+            fwd_kwargs = {}
+            if pixel_values is not None:
+                fwd_kwargs["pixel_values"] = pixel_values
+            if mask is not None:
+                fwd_kwargs["mask"] = mask
+            if cache is not None:
+                fwd_kwargs["cache"] = cache
+            fwd_kwargs.update(kwargs)
+            result = _orig_call(self, input_ids, **fwd_kwargs)
             if hasattr(result, "logits"):
                 return result.logits
             return result

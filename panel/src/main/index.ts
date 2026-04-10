@@ -14,6 +14,7 @@ import { registerExportHandlers } from './ipc/export'
 import { registerPerformanceHandlers } from './ipc/performance'
 import { registerDeveloperHandlers, killActiveOperation } from './ipc/developer'
 import { registerCodingToolHandlers } from './ipc/coding-tools'
+import { registerDistributedHandlers } from './ipc/distributed'
 import { sessionManager } from './sessions'
 import { apiGateway } from './api-gateway'
 import { db } from './database'
@@ -97,6 +98,7 @@ function createWindow(): void {
     registerModelSettingsHandlers()
     registerImageHandlers()
     registerCodingToolHandlers()
+    registerDistributedHandlers(() => mainWindow)
 
     // Download window — a real separate window for showing download progress
     ipcMain.handle('downloads:openWindow', () => {

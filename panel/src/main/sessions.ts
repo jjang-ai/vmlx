@@ -607,6 +607,11 @@ export class SessionManager extends EventEmitter {
     if (config.apiKey) {
       spawnEnv.VLLM_API_KEY = config.apiKey
     }
+    // Pass cluster secret via env var for distributed compute (same reason as API key)
+    const clusterSecret = (config as any).distributedSecret
+    if (clusterSecret) {
+      spawnEnv.VMLX_CLUSTER_SECRET = clusterSecret
+    }
     // Pass HuggingFace token for gated model access (used by mflux, transformers, etc.)
     const hfToken = db.getSetting('hf_api_key')
     if (hfToken) {
@@ -883,6 +888,7 @@ export class SessionManager extends EventEmitter {
     // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
+    'distributedEnabled', 'distributedMode', 'distributedSecret',
     'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice', 'chatTemplate',
@@ -987,19 +993,23 @@ export class SessionManager extends EventEmitter {
         const now = Date.now()
         // Auto-detect model config for proper defaults (paged cache, parsers, etc.)
         const detected = detectModelConfigFromDir(proc.modelPath)
+        // Defaults tuned for maximum speed out of the box.
+        // Continuous batching + paged cache + prefix cache = best TTFT.
+        // Cache memory at 30% of available RAM for generous prefix reuse.
+        // Stream interval 1 = lowest latency per-token delivery.
+        // All users get production-grade inference settings on first launch.
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
           host: '127.0.0.1',
           port: proc.port,
           timeout: 300,
           maxNumSeqs: 256,
-          prefillBatchSize: 0,
-          completionBatchSize: 0,
-          // VLM/MLLM models support continuous batching via MLLMScheduler
+          prefillBatchSize: 512,
+          completionBatchSize: 512,
           continuousBatching: true,
           enablePrefixCache: true,
           prefixCacheSize: 100,
-          prefixCacheMaxBytes: 0,
+          prefixCacheMaxBytes: 0, // 0 = unlimited (bounded by cacheMemoryPercent)
           cacheMemoryMb: 0,
           cacheMemoryPercent: 30,
           noMemoryAwareCache: false,
@@ -1887,6 +1897,16 @@ export class SessionManager extends EventEmitter {
       if (pct !== 50) {
         args.push('--smelt-experts', pct.toString())
       }
+    }
+
+    // Distributed compute
+    if ((config as any).distributedEnabled) {
+      args.push('--distributed')
+      const mode = (config as any).distributedMode || 'pipeline'
+      if (mode !== 'pipeline') {
+        args.push('--distributed-mode', mode)
+      }
+      // Cluster secret passed via env var in _startSessionInner (same as API key)
     }
 
     // Speculative decoding

@@ -3143,7 +3143,7 @@ class Scheduler:
                         # doesn't help the CURRENT conversation but ensures
                         # the NEXT request with the same prompt prefix gets
                         # a full KV+SSM cache hit instead of re-prefilling.
-                        if not hasattr(self, '_ssm_rederive_queue'):
+                        if not hasattr(self, "_ssm_rederive_queue"):
                             self._ssm_rederive_queue = []
                         self._ssm_rederive_queue.append(
                             (list(all_tokens), prompt_len, request_id)
@@ -4208,22 +4208,23 @@ class Scheduler:
                     responses = self.batch_generator.next()
                     output.has_work = True
 
-                    # DEBUG
-                    if responses:
-                        _r0 = responses[0]
-                        logger.warning(
-                            f"DEBUG: type(responses)={type(responses)}, type(responses[0])={type(_r0)}, repr={repr(_r0)[:250]}"
-                        )
-
                     if responses:
                         if isinstance(responses, tuple):
+                            # mlx_lm >= 0.31.2 returns
+                            # (prompt_responses, generation_responses).
+                            # PromptProcessingBatch.Response objects have no
+                            # .token and must not drive the request lifecycle.
+                            # Only forward generation responses that carry a
+                            # .token attribute to _process_batch_responses().
                             flat_responses = []
                             for r in responses:
                                 if isinstance(r, list):
                                     flat_responses.extend(r)
                                 elif r is not None:
                                     flat_responses.append(r)
-                            responses = flat_responses
+                            responses = [
+                                r for r in flat_responses if hasattr(r, "token")
+                            ]
 
                         outputs, finished_ids = self._process_batch_responses(responses)
                         output.outputs = outputs
@@ -4293,7 +4294,7 @@ class Scheduler:
         if (
             self._is_hybrid
             and not self.running
-            and hasattr(self, '_ssm_rederive_queue')
+            and hasattr(self, "_ssm_rederive_queue")
             and self._ssm_rederive_queue
             and self._ssm_state_cache is not None
         ):
@@ -4312,21 +4313,22 @@ class Scheduler:
                     ssm_layers = []
                     for layer_idx, c in enumerate(clean_cache):
                         if layer_idx not in kv_set:
-                            if hasattr(c, 'cache') and isinstance(c.cache, list):
+                            if hasattr(c, "cache") and isinstance(c.cache, list):
                                 from copy import deepcopy
                                 import mlx.core as mx
+
                                 cloned = deepcopy(c)
                                 cloned.cache = [
-                                    mx.contiguous(mx.array(a)) if a is not None else None
+                                    mx.contiguous(mx.array(a))
+                                    if a is not None
+                                    else None
                                     for a in c.cache
                                 ]
                                 ssm_layers.append(cloned)
                             else:
                                 ssm_layers.append(c)
                     if ssm_layers:
-                        self._ssm_state_cache.store(
-                            tokens, prompt_len, ssm_layers
-                        )
+                        self._ssm_state_cache.store(tokens, prompt_len, ssm_layers)
                         logger.info(
                             f"SSM re-derive: stored clean companion for "
                             f"{orig_request_id}: {len(ssm_layers)} SSM layers, "
@@ -4335,13 +4337,12 @@ class Scheduler:
                     del clean_cache
                     try:
                         import mlx.core as mx
+
                         mx.clear_memory_cache()
                     except Exception:
                         pass
             except Exception as e:
-                logger.warning(
-                    f"SSM re-derive failed for {orig_request_id}: {e}"
-                )
+                logger.warning(f"SSM re-derive failed for {orig_request_id}: {e}")
 
         return output
 

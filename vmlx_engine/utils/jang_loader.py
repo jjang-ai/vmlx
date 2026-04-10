@@ -352,11 +352,41 @@ def _is_expert_key(k: str) -> bool:
     return "switch_mlp" in k or "switch_glu" in k
 
 
+import re as _re
+_LAYER_INDEX_RE = _re.compile(r"(?:layers|backbone\.layers)\.(\d+)\.")
+
+
+def _filter_by_layer_range(weights: dict, start: int, end: int) -> dict:
+    """Filter weights to only include a specific layer range.
+
+    Keeps:
+    - Weights for layers in [start, end)
+    - Non-layer weights (embed_tokens, lm_head, norm, etc.)
+
+    Used by distributed inference workers to load only their assigned layers.
+    """
+    filtered = {}
+    for k, v in weights.items():
+        m = _LAYER_INDEX_RE.search(k)
+        if m:
+            layer_idx = int(m.group(1))
+            if start <= layer_idx < end:
+                filtered[k] = v
+            # else: skip — not in our range
+        else:
+            # Non-layer weight (embed_tokens, lm_head, norm, etc.)
+            # Always include — coordinator needs embed+lm_head,
+            # workers can ignore them (strict=False drops unused)
+            filtered[k] = v
+    return filtered
+
+
 def _load_jang_v2(
     path: Path,
     jang_cfg: dict,
     skip_eval: bool = False,
     filter_expert_keys: bool = False,
+    layer_range: tuple = None,
 ):
     """
     Load a JANG v2 model — instant via mx.load() mmap.
@@ -368,6 +398,10 @@ def _load_jang_v2(
         filter_expert_keys: If True, skip expert (switch_mlp/switch_glu) weights
             during loading. Used by smelt mode — experts are filled separately.
             Weights are mmap'd so filtering after load has no RAM penalty.
+        layer_range: Optional (start, end) tuple. When set, only loads weights
+            for layers in [start, end). Used by distributed inference workers
+            to load only their assigned layer range. Embedding and lm_head
+            weights are always loaded regardless of layer_range.
     """
     from mlx_lm.utils import (
         load_config,
@@ -430,6 +464,12 @@ def _load_jang_v2(
     # ALL weights are silently dropped (strict=False) → model runs on zeros.
     _needs_vlm_key_remap = hasattr(model, "language_model") and "text_config" in config
 
+    # Gemma 4: JANG stores expert keys as switch_mlp.{gate,up,down}_proj but
+    # mlx-lm gemma4/gemma4_text model uses experts.switch_glu.{gate,up,down}_proj.
+    # Without this remap, expert weights are silently dropped (strict=False)
+    # and the model runs on uninitialized random experts → garbage output.
+    _needs_gemma4_switch_remap = _text_cfg.get("model_type", "") == "gemma4_text" or _model_type == "gemma4"
+
     for sf in weight_files:
         weights = mx.load(str(sf))
         # Nemotron-H: filter mtp/importance weights
@@ -479,6 +519,15 @@ def _load_jang_v2(
                     f"silently-incomplete VLM-as-text model. File={getattr(sf, 'name', sf)}"
                 )
             weights = remapped
+        # Gemma 4: remap JANG switch_mlp → experts.switch_glu BEFORE sanitize
+        # so that model.load_weights matches the actual model parameter paths.
+        if _needs_gemma4_switch_remap:
+            g4_remapped = {}
+            for k, v in weights.items():
+                if ".switch_mlp." in k:
+                    k = k.replace(".switch_mlp.", ".experts.switch_glu.")
+                g4_remapped[k] = v
+            weights = g4_remapped
         if hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
         # MoE gate dequant + optional Nemotron fc rename
@@ -528,6 +577,12 @@ def _load_jang_v2(
         # Smelt mode: filter expert weights (loaded separately via ExpertIndex)
         if filter_expert_keys:
             weights = {k: v for k, v in weights.items() if not _is_expert_key(k)}
+        # Distributed: only load weights for assigned layer range
+        if layer_range is not None:
+            weights = _filter_by_layer_range(weights, layer_range[0], layer_range[1])
+        # Pre-fix per-layer bits before load to prevent shape mismatch
+        # ValueError on JANG mixed-precision models (fixes #62, #63).
+        _pre_fix_bits_from_shard(model, weights, block_size)
         model.load_weights(list(weights.items()), strict=False)
         del weights
         gc.collect()
@@ -685,11 +740,21 @@ def _load_jang_v2_vlm(
     # fall back to minimal sanitize for MoE models where gate_up_proj is already split.
     from mlx_vlm.utils import sanitize_weights
 
+    # Gemma 4: JANG stores expert keys as switch_mlp but model uses experts.switch_glu
+    _vlm_text_mt = config.get("text_config", {}).get("model_type", "")
+    _vlm_needs_gemma4_switch_remap = _vlm_text_mt == "gemma4_text"
+
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
         shard_weights = {
             k: v for k, v in shard_weights.items() if not k.endswith(".importance")
         }
+        # Gemma 4 switch_mlp → experts.switch_glu remap (before sanitize)
+        if _vlm_needs_gemma4_switch_remap:
+            shard_weights = {
+                (k.replace(".switch_mlp.", ".experts.switch_glu.") if ".switch_mlp." in k else k): v
+                for k, v in shard_weights.items()
+            }
 
         # Try model.sanitize() — works for dense VL models.
         # Fails on MoE models because it tries to split gate_up_proj which JANG already split.
@@ -928,6 +993,9 @@ def _load_jang_v2_vlm(
             shard_weights = {
                 k: v for k, v in shard_weights.items() if not _is_expert_key(k)
             }
+        # Pre-fix per-layer bits before load to prevent shape mismatch
+        # ValueError on JANG mixed-precision models (fixes #62, #63).
+        _pre_fix_bits_from_shard(model, shard_weights, block_size)
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
@@ -1072,6 +1140,7 @@ def load_jang_model(
     config_manager: Optional[Any] = None,
     skip_eval: bool = False,
     filter_expert_keys: bool = False,
+    layer_range: tuple = None,
 ):
     """
     Load a JANG model for inference.
@@ -1126,7 +1195,8 @@ def load_jang_model(
     if _is_v2_model(path):
         logger.info(f"JANG v2 detected — loading via mmap (instant)")
         return _load_jang_v2(
-            path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys
+            path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys,
+            layer_range=layer_range,
         )
 
     # v1: repack path (legacy)
@@ -1180,6 +1250,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
                 shard_weights = mx.load(sf)
                 if hasattr(model, "sanitize"):
                     shard_weights = model.sanitize(shard_weights)
+                _pre_fix_bits_from_shard(model, shard_weights, block_size)
                 model.load_weights(list(shard_weights.items()), strict=False)
                 del shard_weights
                 gc.collect()
@@ -1187,6 +1258,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
             weights = result
             if hasattr(model, "sanitize"):
                 weights = model.sanitize(weights)
+            _pre_fix_bits_from_shard(model, weights, block_size)
             model.load_weights(list(weights.items()), strict=False)
             del weights
             gc.collect()
@@ -1306,6 +1378,7 @@ def _load_jang_v1_vlm(
             shard_weights = sanitize_weights(
                 model_class.LanguageModel, shard_weights, model_config.text_config
             )
+            _pre_fix_bits_from_shard(model, shard_weights, block_size)
             model.load_weights(list(shard_weights.items()), strict=False)
             del shard_weights
             gc.collect()
@@ -1844,6 +1917,92 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
                 else:
                     parent = getattr(parent, p)
             setattr(parent, parts[1], ql)
+
+
+def _pre_fix_bits_from_shard(model, shard_weights, block_size):
+    """Fix QuantizedLinear.bits from actual weight shapes BEFORE load_weights.
+
+    JANG mixed-precision models have per-layer bit widths (e.g. [3, 4, 8]),
+    but nn.quantize() applies a uniform bits=min(bit_widths) to ALL modules.
+    When a layer's actual bit width differs from the default, load_weights()
+    raises ValueError ("Expected shape X but received shape Y") because
+    strict=False only suppresses missing keys, not shape mismatches.
+
+    This function inspects each quantized weight tensor's packed shape,
+    computes the actual bits from the weight/scales geometry, and patches
+    the corresponding module BEFORE load_weights is called.
+
+    Must be called after nn.quantize() and after sanitize/remap, but before
+    model.load_weights(). Safe to call multiple times across shards.
+
+    Fixes GitHub issues #62 (MiniMax-M2.5-JANG_3L) and #63
+    (Qwen3.5-122B-A10B-JANG_4K) where embed_tokens is quantized at 4-bit
+    but the module was created at 3-bit (min of bit_widths_used).
+    """
+    # Build module lookup from model tree — paths match sanitized weight keys
+    # after stripping the ".weight" suffix (standard MLX convention).
+    modules_by_path = {}
+    for mod_path, mod in model.named_modules():
+        if hasattr(mod, "bits") and hasattr(mod, "group_size"):
+            modules_by_path[mod_path] = mod
+
+    if not modules_by_path:
+        return
+
+    fixed_count = 0
+    for k, v in shard_weights.items():
+        if not k.endswith(".weight"):
+            continue
+        if not hasattr(v, "dtype") or v.dtype != mx.uint32:
+            continue
+        s_key = k[:-7] + ".scales"
+        if s_key not in shard_weights:
+            continue
+
+        w_cols = v.shape[-1]
+        s_cols = shard_weights[s_key].shape[-1]
+        if s_cols <= 0:
+            continue
+
+        mod_path = k[:-7]  # strip ".weight"
+        module = modules_by_path.get(mod_path)
+        if module is None:
+            continue
+
+        # Try block_size candidates — same priority as _fix_quantized_bits:
+        # config block_size first, then module's current gs, then common sizes.
+        gs_candidates = [block_size]
+        if hasattr(module, "group_size") and module.group_size not in gs_candidates:
+            gs_candidates.append(module.group_size)
+        for gs in (64, 128):
+            if gs not in gs_candidates:
+                gs_candidates.append(gs)
+
+        for try_bs in gs_candidates:
+            in_dim = s_cols * try_bs
+            if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
+                continue
+            actual_bits = (w_cols * 32) // in_dim
+            if actual_bits not in (2, 3, 4, 5, 6, 8):
+                continue
+            changed = False
+            if actual_bits != module.bits:
+                module.bits = actual_bits
+                changed = True
+            if try_bs != module.group_size:
+                module.group_size = try_bs
+                changed = True
+            if changed:
+                fixed_count += 1
+                logger.debug(
+                    f"  Pre-fix bits: {mod_path} → {actual_bits}-bit gs={try_bs}"
+                )
+            break
+
+    if fixed_count > 0:
+        logger.info(
+            f"  Pre-fixed {fixed_count} module(s) with mixed-precision bit widths"
+        )
 
 
 def _fix_quantized_bits(model):

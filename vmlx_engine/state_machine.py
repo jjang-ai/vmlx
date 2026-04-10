@@ -157,6 +157,12 @@ class SequenceStateMachine:
         finalize the sequence.
         """
         s, n, states = state
+        # After a halting match, s becomes None (line 167). If the caller
+        # feeds another token without checking, states[None] crashes with
+        # KeyError. Guard: once halted, stay halted — return the terminal
+        # state unchanged so the caller's finish_reason check fires.
+        if s is None:
+            return state, None, None
         n = _step_trie(n, states[s][0], x)
 
         seq = None

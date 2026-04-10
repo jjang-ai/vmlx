@@ -149,3 +149,5 @@ docs/final-*
 # Smelt / JANG MoE artifacts
 *.smt
 .smelt/
+# Internal implementation guides (for agents, not for release)
+docs/internal/
