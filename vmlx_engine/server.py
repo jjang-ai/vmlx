@@ -260,6 +260,9 @@ _wake_timeout: int = 300
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 _smelt_enabled: bool = False  # --smelt: partial expert loading for MoE
 _smelt_experts: int = 50  # --smelt-experts: percentage of experts per layer
+_distributed_enabled: bool = False  # --distributed: pipeline/tensor parallelism
+_distributed_mode: str = "pipeline"  # --distributed-mode: pipeline or tensor
+_distributed_coordinator = None  # Coordinator instance when distributed is active
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
@@ -1052,6 +1055,10 @@ def load_model(
     served_model_name: str | None = None,
     smelt: bool = False,
     smelt_experts: int = 50,
+    distributed: bool = False,
+    distributed_mode: str = "pipeline",
+    cluster_secret: str = "",
+    worker_nodes: str | None = None,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -1063,6 +1070,10 @@ def load_model(
         stream_interval: Tokens to batch before streaming (batched mode only)
         max_tokens: Default max tokens for generation
         force_mllm: Force loading as MLLM even if not auto-detected
+        distributed: Enable distributed inference (coordinator mode)
+        distributed_mode: 'pipeline' or 'tensor'
+        cluster_secret: Shared secret for worker authentication
+        worker_nodes: Comma-separated ip:port list (overrides Bonjour discovery)
     """
     global \
         _engine, \
@@ -1074,10 +1085,15 @@ def load_model(
         _jang_metadata, \
         _cli_args, \
         _smelt_enabled, \
-        _smelt_experts
+        _smelt_experts, \
+        _distributed_enabled, \
+        _distributed_mode, \
+        _distributed_coordinator
 
     _smelt_enabled = smelt
     _smelt_experts = smelt_experts
+    _distributed_enabled = distributed
+    _distributed_mode = distributed_mode
 
     # Save CLI args for model reload on wake from deep sleep
     _cli_args = {
@@ -1089,6 +1105,10 @@ def load_model(
         "served_model_name": served_model_name,
         "smelt": smelt,
         "smelt_experts": smelt_experts,
+        "distributed": distributed,
+        "distributed_mode": distributed_mode,
+        "cluster_secret": cluster_secret,
+        "worker_nodes": worker_nodes,
     }
 
     # Stop previous engine before loading new model — frees GPU memory, disk cache threads, etc.
@@ -1139,6 +1159,48 @@ def load_model(
 
     if force_mllm:
         logger.info("Force MLLM mode enabled via --mllm flag")
+
+    # Distributed inference: set up mesh coordinator instead of local loading
+    if distributed:
+        logger.info("Distributed mode enabled (%s parallelism)", distributed_mode)
+        try:
+            from .distributed.mesh_manager import MeshManager
+            _distributed_coordinator = MeshManager(
+                cluster_secret=cluster_secret or os.environ.get("VMLX_CLUSTER_SECRET", ""),
+                model_path=model_name,
+                mode=distributed_mode,
+                smelt_percent=smelt_experts if smelt else 100,
+                worker_nodes=worker_nodes,
+            )
+            # Run mesh setup — discovery, election, layer assignment, loading
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_distributed_coordinator.start())
+                logger.info("Distributed mesh setup deferred to event loop")
+            except RuntimeError:
+                asyncio.run(_distributed_coordinator.start())
+                logger.info("Distributed mesh ready: %d nodes", len(_distributed_coordinator.topology.active_nodes))
+
+            # If mesh has >1 node, use DistributedEngine instead of local engine
+            num_nodes = len(_distributed_coordinator.topology.active_nodes)
+            if num_nodes > 1 and _distributed_coordinator._is_coordinator:
+                from .distributed.engine import DistributedEngine
+                _engine = DistributedEngine(_distributed_coordinator)
+                try:
+                    asyncio.get_running_loop()
+                    _engine._needs_async_start = True
+                    logger.info("DistributedEngine created (deferred start — %d nodes)", num_nodes)
+                except RuntimeError:
+                    asyncio.run(_engine.start())
+                logger.info("Distributed inference active: %d nodes, skipping local engine", num_nodes)
+                return  # Skip local SimpleEngine/BatchedEngine creation
+            else:
+                logger.info("Single-node or worker mode — falling through to local engine")
+        except Exception as e:
+            logger.error("Failed to start distributed mesh: %s", e)
+            logger.info("Falling back to single-node loading...")
+            _distributed_coordinator = None
+            # Fall through to normal loading below
 
     if use_batching:
         logger.info(f"Loading model with BatchedEngine: {model_name}")
@@ -1436,6 +1498,23 @@ async def health():
             "enabled": True,
             "expert_percent": _smelt_experts,
         }
+
+    # Distributed compute: report cluster status
+    if _distributed_enabled:
+        dist_info = {
+            "enabled": True,
+            "mode": _distributed_mode,
+        }
+        if _distributed_coordinator:
+            dist_info.update(_distributed_coordinator.status)
+            # Worker count and pipeline from coordinator (if we are coordinator)
+            coord = _distributed_coordinator.coordinator
+            if coord:
+                dist_info["workers"] = len(coord.workers)
+                dist_info["pipeline"] = [
+                    a.to_dict() for a in coord.assignments
+                ] if coord.assignments else []
+        result["distributed"] = dist_info
 
     # JANG format: report cached quantization metadata (populated at load time)
     if _jang_metadata:
@@ -1987,6 +2066,106 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
     if not cleared:
         return {"status": "no_caches_found", "cache_type": cache_type}
     return {"status": "cleared", "caches": cleared, "cache_type": cache_type}
+
+
+# ── Distributed Cluster Endpoints ──
+
+
+@app.get("/v1/cluster/status", dependencies=[Depends(verify_api_key)])
+async def cluster_status():
+    """Get distributed cluster status."""
+    if not _distributed_enabled or not _distributed_coordinator:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        **_distributed_coordinator.status,
+    }
+
+
+@app.get("/v1/cluster/nodes", dependencies=[Depends(verify_api_key)])
+async def cluster_nodes():
+    """Get list of nodes in the distributed mesh."""
+    if not _distributed_enabled or not _distributed_coordinator:
+        return {"nodes": []}
+
+    nodes = []
+    for peer in _distributed_coordinator.topology.peers.values():
+        node_info = {
+            "node_id": peer.node_id,
+            "hostname": peer.hostname,
+            "address": peer.address,
+            "port": peer.port,
+            "chip": peer.chip,
+            "ram_gb": peer.ram_gb,
+            "gpu_cores": peer.gpu_cores,
+            "available_gb": peer.available_gb,
+            "capability_score": peer.capability_score,
+            "state": peer.state,
+            "is_coordinator": peer.is_coordinator,
+            "assigned_layers": peer.assigned_layers,
+            "is_alive": peer.is_alive,
+        }
+        # Add link info if available
+        local_id = _distributed_coordinator.node.node_id
+        link = _distributed_coordinator.topology.get_link(local_id, peer.node_id)
+        if link:
+            node_info["link_type"] = link.link_type.value
+            node_info["bandwidth_mbps"] = link.bandwidth_mbps
+            node_info["latency_ms"] = link.latency_ms
+        nodes.append(node_info)
+
+    return {"nodes": nodes}
+
+
+@app.post("/v1/cluster/nodes", dependencies=[Depends(verify_api_key)])
+async def cluster_add_node(request: dict):
+    """Add a worker node manually by IP:port."""
+    if not _distributed_enabled or not _distributed_coordinator:
+        raise HTTPException(status_code=400, detail="Distributed mode not enabled")
+
+    address = request.get("address")
+    port = request.get("port", 9100)
+    if not address:
+        raise HTTPException(status_code=400, detail="address is required")
+
+    coord = _distributed_coordinator.coordinator
+    if not coord:
+        raise HTTPException(status_code=400, detail="This node is not the coordinator")
+
+    node = await coord.add_node_manual(address, port)
+    if node:
+        return {"success": True, "node": node.to_dict()}
+    raise HTTPException(status_code=502, detail=f"Failed to connect to worker at {address}:{port}")
+
+
+@app.delete("/v1/cluster/nodes/{node_id}", dependencies=[Depends(verify_api_key)])
+async def cluster_remove_node(node_id: str):
+    """Remove a node from the mesh."""
+    if not _distributed_enabled or not _distributed_coordinator:
+        raise HTTPException(status_code=400, detail="Distributed mode not enabled")
+
+    coord = _distributed_coordinator.coordinator
+    if coord and node_id in coord.workers:
+        wc = coord.workers[node_id]
+        await wc.disconnect()
+        del coord.workers[node_id]
+    _distributed_coordinator.topology.remove_peer(node_id)
+    return {"success": True}
+
+
+@app.post("/v1/cluster/scan", dependencies=[Depends(verify_api_key)])
+async def cluster_scan():
+    """Trigger node discovery scan."""
+    if not _distributed_enabled or not _distributed_coordinator:
+        raise HTTPException(status_code=400, detail="Distributed mode not enabled")
+
+    coord = _distributed_coordinator.coordinator
+    if not coord:
+        raise HTTPException(status_code=400, detail="This node is not the coordinator")
+
+    discovered = await coord.discover_nodes(timeout=5.0)
+    nodes = [n.to_dict() for n in discovered]
+    return {"nodes": nodes, "count": len(nodes)}
 
 
 @app.post(

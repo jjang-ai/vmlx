@@ -171,6 +171,30 @@ vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
 | **Prompt Lookup Decoding** | No draft model needed — reuses n-gram matches from the prompt/context. Best for structured or repetitive output (code, JSON, schemas). Enable with `--enable-pld`. |
 | **JIT Compilation** | `mx.compile` Metal kernel fusion (experimental) |
 | **Hybrid SSM Support** | Mamba/GatedDeltaNet layers handled correctly alongside attention |
+| **Distributed Compute** | Pipeline parallelism across multiple Macs via Thunderbolt 5 / Ethernet / WiFi |
+
+### Distributed Inference (Multi-Mac)
+
+Run models too large for a single Mac across 2+ machines. Each Mac loads a subset of transformer layers and they communicate hidden states over the network.
+
+```bash
+# On worker Macs:
+pip install vmlx
+vmlx-worker --secret mysecret
+
+# On coordinator Mac (runs the server):
+vmlx serve JANGQ-AI/Qwen3.5-Coder-Rerank-397B-A27B-JANG_2L --distributed --cluster-secret mysecret
+```
+
+| Feature | Description |
+|---------|-------------|
+| **Pipeline Parallelism** | Split layers across nodes -- hidden state (~8KB/step) flows sequentially |
+| **Auto-Discovery** | Bonjour mDNS, UDP broadcast, HTTP probes, Tailscale, cached peers, manual IP |
+| **Capability-Scored Election** | Most powerful Mac becomes coordinator automatically |
+| **Any Network Works** | TB5 (120 Gbps), 10GbE, 1GbE, WiFi, Tailscale -- PP is not bandwidth-bound |
+| **JANG Support** | Each worker loads its layer range from JANG safetensors (mmap) |
+| **Live Node List** | Desktop app shows discovered nodes, link type, latency, layer assignments |
+| **Cluster API** | `/v1/cluster/status`, `/v1/cluster/nodes`, `/v1/cluster/scan` REST endpoints |
 
 ### 5-Layer Cache Architecture
 
@@ -609,6 +633,7 @@ vmlx convert <model> -j JANG_3M # JANG adaptive quantization
 vmlx info <model>               # Model metadata and config
 vmlx doctor <model>             # Run diagnostics
 vmlx bench <model>              # Performance benchmarks
+vmlx-worker --secret <secret>   # Start distributed worker node
 ```
 
 ---
@@ -634,6 +659,10 @@ vmlx serve <model> \
   --max-model-len 8192 \        # Max context length
   --speculative-model <model> \ # Draft model for speculative decoding
   --enable-pld \                # Prompt Lookup Decoding — no draft model, best for code/JSON/schemas
+  --distributed \               # Enable multi-Mac pipeline parallelism
+  --cluster-secret <secret> \   # Shared auth secret for workers
+  --distributed-mode pipeline \ # pipeline (default) or tensor (coming soon)
+  --worker-nodes ip:port,... \  # Manual worker IPs (overrides auto-discovery)
   --cors-origins "*"            # CORS allowed origins
 ```
 

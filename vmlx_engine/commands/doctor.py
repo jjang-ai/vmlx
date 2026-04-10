@@ -272,10 +272,15 @@ def _run_inference_test(model_path: str) -> tuple[bool, str]:
         from ..utils.nemotron_latent_moe import ensure_latent_moe_support
         ensure_latent_moe_support(model_path)
 
-        from mlx_lm import load
         from mlx_lm.sample_utils import make_sampler
 
-        model, tokenizer = load(model_path)
+        # Use load_model_with_fallback which detects JANG models and routes
+        # them through the JANG loader (handles mixed-precision bit widths).
+        # Raw mlx_lm.load() uses strict=True and crashes on JANG models
+        # where embed_tokens bit width differs from min(bit_widths_used).
+        # Fixes GitHub issues #62 and #63.
+        from ..utils.tokenizer import load_model_with_fallback
+        model, tokenizer = load_model_with_fallback(model_path)
 
         import mlx.core as mx
         from mlx_lm.generate import generate_step

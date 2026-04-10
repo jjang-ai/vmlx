@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { Modal } from '../ui/Modal'
+import { DistributedNodeList } from './DistributedNodeList'
 export interface SessionConfig {
   host: string
   port: number
@@ -55,6 +56,11 @@ export interface SessionConfig {
   chatTemplate?: string
   imageMode?: string
   imageQuantize?: number
+  // Distributed compute
+  distributedEnabled?: boolean
+  distributedMode?: 'pipeline' | 'tensor'
+  distributedSecret?: string
+  distributedNodes?: Array<{ address: string; port: number; hostname?: string }>
 }
 
 export const DEFAULT_CONFIG: SessionConfig = {
@@ -149,6 +155,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const [expandedSections, setExpandedSections] = useState({
     server: true,
     concurrent: false,
+    distributed: false,
     prefixCache: false,
     pagedCache: false,
     kvCacheQuant: false,
@@ -758,18 +765,22 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <SelectField
           label="Multimodal Support (VLM)"
           tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto: detected from config.json (vision_config presence). Force On: always use MLLM scheduler. Force Off: never use MLLM scheduler even if auto-detected."
-          value={config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
+          value={smeltActive ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
           onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
           options={[
             { value: 'auto', label: 'Auto (detect from model)' },
             { value: 'on', label: 'Force On' },
             { value: 'off', label: 'Force Off' },
           ]}
+          disabled={smeltActive}
         />
-        {config.isMultimodal === true && (
+        {smeltActive && (
+          <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt forces text-only loading for partial expert support." />
+        )}
+        {!smeltActive && config.isMultimodal === true && (
           <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
         )}
-        {config.isMultimodal === false && (
+        {!smeltActive && config.isMultimodal === false && (
           <InfoNote text="VLM mode forced OFF — auto-detection is bypassed. Use this only if the model is incorrectly detected as multimodal." />
         )}
       </Section>
@@ -794,6 +805,55 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             defaultValue={DEFAULT_CONFIG.numDraftTokens}
             disabled={false}
           />
+        )}
+      </Section>
+
+      {/* Distributed Compute */}
+      <Section title="Distributed Compute" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
+        <PerformanceHint text="Run large models across multiple Macs connected via Thunderbolt 5, Ethernet, or WiFi. Each Mac handles a subset of transformer layers (pipeline parallelism). Works with any network — TB5 is fastest but even WiFi works." />
+        <CheckField
+          label="Enable Distributed Inference"
+          tooltip="Split the model across multiple Macs. Requires vmlx-worker running on each additional Mac. The coordinator (this Mac) handles tokenization, embedding, and final projection."
+          checked={!!config.distributedEnabled}
+          onChange={v => onChange('distributedEnabled', v)}
+        />
+        {config.distributedEnabled && (
+          <>
+            <SelectField
+              label="Parallelism Mode"
+              tooltip="Pipeline: split layers across nodes (simple, works with any network). Tensor: split weights within layers (requires high bandwidth, 10GbE+ recommended)."
+              value={config.distributedMode || 'pipeline'}
+              onChange={v => onChange('distributedMode', v)}
+              options={[
+                { value: 'pipeline', label: 'Pipeline Parallelism (split layers)' },
+                { value: 'tensor', label: 'Tensor Parallelism (split weights) — coming soon' },
+              ]}
+            />
+            {config.distributedMode === 'tensor' && (
+              <IncompatWarning text="Tensor parallelism is not yet implemented. Use pipeline parallelism for now." />
+            )}
+            <Field label="Cluster Secret" tooltip="Shared secret for authenticating worker nodes. All workers must use the same secret. Leave empty for no authentication (only safe on trusted networks).">
+              <input
+                type="password"
+                value={config.distributedSecret || ''}
+                onChange={e => onChange('distributedSecret', e.target.value)}
+                placeholder="Enter cluster secret for worker auth"
+                className="cfg-input"
+              />
+            </Field>
+            <InfoNote text="Worker nodes: Install vMLX on each Mac and run 'vmlx-worker --secret YOUR_SECRET' from Terminal. Workers auto-advertise via Bonjour — the coordinator discovers them automatically." />
+            <DistributedNodeList enabled={!!config.distributedEnabled} />
+            <div className="px-4 py-3 space-y-2">
+              <div className="text-xs font-medium text-foreground">Setup Guide</div>
+              <div className="text-xs text-muted-foreground space-y-1">
+                <p>1. Connect Macs via <strong>Thunderbolt 5 cable</strong> (fastest) or Ethernet/WiFi</p>
+                <p>2. On each worker Mac: <code className="bg-muted px-1 rounded">pip install vmlx && vmlx-worker --secret YOUR_SECRET</code></p>
+                <p>3. Workers appear automatically above via Bonjour discovery</p>
+                <p>4. Or click "Add Manual" to add by IP if discovery doesn't find them</p>
+                <p className="text-muted-foreground/70 pt-1">Thunderbolt 5: ~120 Gbps, 0.1ms latency (best). 1GbE: works fine for pipeline parallelism. WiFi: works but slower. Any network that can ping the other Mac will work.</p>
+              </div>
+            </div>
+          </>
         )}
       </Section>
 

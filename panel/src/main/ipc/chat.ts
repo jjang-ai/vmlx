@@ -441,18 +441,29 @@ export function registerChatHandlers(
           const genDefaults = (await readGenerationDefaults(modelPath)) || {};
           const modelSettings = db.getModelSettings(modelPath) || {};
 
-          let enableThinking: boolean | undefined;
+          // Default reasoning OFF — most users don't need it and it
+          // confuses new users. Models that explicitly set reasoning_mode
+          // in their model settings will override this.
+          let enableThinking: boolean = false;
           if (modelSettings.reasoning_mode === "always") enableThinking = true;
-          else if (modelSettings.reasoning_mode === "never")
-            enableThinking = false;
 
+          // Sensible defaults: many models ship with temperature=1.0 in
+          // generation_config.json which is too creative for most users and
+          // causes looping on low-bit JANG quants. Cap temperature at 0.7
+          // and always set a mild repetition penalty (1.1) to prevent
+          // token-level repetition loops. Users can still override in
+          // Chat Settings — these are just the starting values.
+          let temp =
+            modelSettings.temperature ?? genDefaults.temperature ?? 0.7;
+          if (temp > 0.7) temp = 0.7; // cap overly creative defaults
           db.setChatOverrides({
             chatId: chat.id,
-            temperature: modelSettings.temperature ?? genDefaults.temperature,
-            topP: modelSettings.top_p ?? genDefaults.topP,
-            topK: genDefaults.topK, // model_settings lacks topK currently
+            temperature: temp,
+            topP: modelSettings.top_p ?? genDefaults.topP ?? 0.9,
+            topK: genDefaults.topK,
             minP: genDefaults.minP,
-            repeatPenalty: genDefaults.repeatPenalty,
+            repeatPenalty:
+              genDefaults.repeatPenalty ?? 1.1, // mild anti-loop default
             maxTokens: modelSettings.max_tokens,
             enableThinking: enableThinking,
           });
