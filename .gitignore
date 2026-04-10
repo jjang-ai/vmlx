@@ -145,9 +145,24 @@ nohup.out
 # Internal audit docs
 docs/audit-*
 docs/final-*
+docs/GITHUB-ISSUES-*
+docs/CROSS-CHECK-*
+docs/cross-check-*
 
 # Smelt / JANG MoE artifacts
 *.smt
 .smelt/
 # Internal implementation guides (for agents, not for release)
 docs/internal/
+
+# Private agentic workspaces
+.sisyphus/
+.agents/
+
+# TypeScript build info / incremental cache
+*.tsbuildinfo
+
+# Ad-hoc top-level benchmarks and scratch scripts (legit tests live under tests/)
+/benchmark_*.py
+/test_*.py
+/test_build_args.ts
