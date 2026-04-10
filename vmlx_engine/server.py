@@ -260,6 +260,8 @@ _wake_timeout: int = 300
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 _smelt_enabled: bool = False  # --smelt: partial expert loading for MoE
 _smelt_experts: int = 50  # --smelt-experts: percentage of experts per layer
+_flash_moe_enabled: bool = False  # --flash-moe: SSD expert streaming
+_flash_moe_loader = None  # FlashMoEExpertLoader instance (set after model load)
 _distributed_enabled: bool = False  # --distributed: pipeline/tensor parallelism
 _distributed_mode: str = "pipeline"  # --distributed-mode: pipeline or tensor
 _distributed_coordinator = None  # Coordinator instance when distributed is active
@@ -488,6 +490,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to apply custom chat template (batched): {e}")
 
+    # Apply Flash MoE for BatchedEngine (model just loaded via start() above).
+    # SimpleEngine Flash MoE is applied in load_model() where it starts synchronously.
+    if _flash_moe_enabled and _engine is not None:
+        _apply_flash_moe_patching()
+
     # Apply JIT compilation for BatchedEngine (which just started above).
     # SimpleEngine JIT is applied in load_model() where it starts synchronously.
     if _enable_jit and _engine is not None:
@@ -709,6 +716,17 @@ def _apply_jit_compilation():
     """
     global _engine
     if _engine is None:
+        return
+
+    # Flash MoE patches MoE blocks with Python loops + disk I/O that mx.compile
+    # cannot trace. Warmup pass would bake specific experts into the compiled
+    # graph, and subsequent requests with different experts would produce wrong
+    # outputs. Skip JIT when Flash MoE is active.
+    if _flash_moe_enabled and _flash_moe_loader is not None:
+        logger.info(
+            "JIT: Skipping mx.compile — Flash MoE is active. "
+            "Flash MoE's on-demand expert loading is incompatible with JIT tracing."
+        )
         return
 
     try:
@@ -1045,6 +1063,101 @@ def _resolve_model_name() -> str:
     return _served_model_name or _model_name or "default"
 
 
+def _get_raw_model_from_engine():
+    """Extract the raw MLX nn.Module from the current engine.
+
+    Engine types store models differently:
+      - SimpleEngine: _model is MLXLanguageModel/MLXMultimodalLM, raw at _model.model
+      - BatchedEngine LLM: _model is MLLMModelWrapper, raw at _model._model
+      - BatchedEngine MLLM: _model is raw model from _mllm_instance.model
+
+    Returns None if engine or model not loaded.
+    """
+    if _engine is None:
+        return None
+    model = getattr(_engine, "_model", None)
+    if model is None:
+        return None
+    # MLLMModelWrapper wraps the raw model in ._model
+    raw = getattr(model, "_model", None)
+    if raw is not None:
+        return raw
+    # MLXLanguageModel/MLXMultimodalLM wraps in .model
+    raw = getattr(model, "model", None)
+    if raw is not None:
+        return raw
+    # Direct model (shouldn't happen but be defensive)
+    return model
+
+
+def _apply_flash_moe_patching():
+    """Apply Flash MoE SSD streaming to the loaded model.
+
+    Must be called AFTER the engine loads the model. Works for both
+    SimpleEngine and BatchedEngine.
+    """
+    global _flash_moe_loader
+
+    if not _flash_moe_enabled:
+        return
+
+    # Defensive: should be blocked by CLI guard, but check again here in case
+    # load_model is called directly (programmatic use, wake-from-sleep, etc.)
+    if _smelt_enabled:
+        logger.warning(
+            "Flash MoE: refusing to patch — smelt is also enabled (mutually exclusive)"
+        )
+        return
+    if _distributed_enabled:
+        logger.warning(
+            "Flash MoE: refusing to patch — distributed mode is active (mutually exclusive)"
+        )
+        return
+
+    raw_model = _get_raw_model_from_engine()
+    if raw_model is None:
+        logger.warning("Flash MoE: could not find raw model in engine")
+        return
+
+    try:
+        from .utils.flash_moe_loader import FlashMoEExpertLoader, SlotBankCache
+        from .utils.smelt_loader import ExpertIndex
+        from .models.flash_moe_integration import apply_flash_moe, free_expert_weights
+        from .api.utils import resolve_to_local_path
+
+        resolved_path = resolve_to_local_path(_model_path or _model_name)
+        ei = ExpertIndex.build(resolved_path)
+
+        if ei.num_moe_layers == 0:
+            logger.info("Flash MoE: model has no MoE layers, skipping")
+            return
+
+        cli = _cli_args or {}
+        slot_bank = cli.get("flash_moe_slot_bank", 64)
+        io_split = cli.get("flash_moe_io_split", 4)
+
+        cache = SlotBankCache(max_slots=slot_bank)
+        _flash_moe_loader = FlashMoEExpertLoader(
+            expert_index=ei,
+            cache=cache,
+            io_workers=io_split,
+        )
+        patched = apply_flash_moe(raw_model, _flash_moe_loader)
+        if patched > 0:
+            freed = free_expert_weights(raw_model)
+            logger.info(
+                "Flash MoE enabled: %d layers patched, %.2f GB freed, "
+                "slot bank=%d, io_workers=%d",
+                patched, freed / 1e9, slot_bank, io_split,
+            )
+        else:
+            logger.warning("Flash MoE: no MoE layers found to patch")
+            _flash_moe_loader = None
+    except Exception as e:
+        logger.error("Flash MoE setup failed: %s", e)
+        _flash_moe_loader = None
+
+
 def load_model(
     model_name: str,
     use_batching: bool = False,
@@ -1059,6 +1172,10 @@ def load_model(
     distributed_mode: str = "pipeline",
     cluster_secret: str = "",
     worker_nodes: str | None = None,
+    flash_moe: bool = False,
+    flash_moe_slot_bank: int = 64,
+    flash_moe_prefetch: str = "none",
+    flash_moe_io_split: int = 4,
 ):
     """
     Load a model (auto-detects MLLM vs LLM).
@@ -1086,12 +1203,15 @@ def load_model(
         _cli_args, \
         _smelt_enabled, \
         _smelt_experts, \
+        _flash_moe_enabled, \
+        _flash_moe_loader, \
         _distributed_enabled, \
         _distributed_mode, \
         _distributed_coordinator
 
     _smelt_enabled = smelt
     _smelt_experts = smelt_experts
+    _flash_moe_enabled = flash_moe
     _distributed_enabled = distributed
     _distributed_mode = distributed_mode
 
@@ -1105,6 +1225,10 @@ def load_model(
         "served_model_name": served_model_name,
         "smelt": smelt,
         "smelt_experts": smelt_experts,
+        "flash_moe": flash_moe,
+        "flash_moe_slot_bank": flash_moe_slot_bank,
+        "flash_moe_prefetch": flash_moe_prefetch,
+        "flash_moe_io_split": flash_moe_io_split,
         "distributed": distributed,
         "distributed_mode": distributed_mode,
         "cluster_secret": cluster_secret,
@@ -1229,6 +1353,11 @@ def load_model(
             asyncio.run(_engine.start())
         model_type = "MLLM" if _engine.is_mllm else "LLM"
         logger.info(f"{model_type} model loaded (simple mode): {model_name}")
+
+    # Apply Flash MoE for SimpleEngine (model already loaded above).
+    # BatchedEngine defers model loading to lifespan() — Flash MoE applied there.
+    if flash_moe and _engine is not None and hasattr(_engine, "_loaded") and _engine._loaded:
+        _apply_flash_moe_patching()
 
     # Apply JIT compilation if enabled — only for SimpleEngine (already started above).
     # BatchedEngine starts in lifespan(), so JIT is applied there instead.
@@ -1516,6 +1645,10 @@ async def health():
                 ] if coord.assignments else []
         result["distributed"] = dist_info
 
+    # Flash MoE: report SSD streaming status
+    if _flash_moe_enabled and _flash_moe_loader is not None:
+        result["flash_moe"] = _flash_moe_loader.stats()
+
     # JANG format: report cached quantization metadata (populated at load time)
     if _jang_metadata:
         result["quantization_format"] = _jang_metadata
@@ -1598,6 +1731,7 @@ async def admin_soft_sleep():
 async def admin_deep_sleep():
     """Enter deep sleep: unload model entirely. Process stays alive, port stays allocated."""
     global _engine, _standby_state, _pre_sleep_cache_limit, _wake_lock
+    global _flash_moe_loader
     from starlette.responses import JSONResponse
 
     if _wake_lock is None:
@@ -1635,6 +1769,17 @@ async def admin_deep_sleep():
                     except Exception:
                         pass
                 _engine = None
+
+            # Clear stale Flash MoE loader — the FlashMoEExpertLoader holds
+            # references to the now-freed model's ExpertIndex and thread pool.
+            # Leaving this set would cause /health to report stale stats and
+            # would leak the I/O worker threads across the sleep cycle.
+            if _flash_moe_loader is not None:
+                try:
+                    _flash_moe_loader.shutdown()
+                except Exception as e:
+                    logger.debug(f"Flash MoE loader shutdown during deep sleep: {e}")
+                _flash_moe_loader = None
 
             # Unload speculative draft model to free GPU memory
             try:
@@ -1722,15 +1867,27 @@ async def admin_wake():
                     served_model_name=_cli_args.get("served_model_name"),
                     smelt=_cli_args.get("smelt", False),
                     smelt_experts=_cli_args.get("smelt_experts", 50),
+                    flash_moe=_cli_args.get("flash_moe", False),
+                    flash_moe_slot_bank=_cli_args.get("flash_moe_slot_bank", 64),
+                    flash_moe_prefetch=_cli_args.get("flash_moe_prefetch", "none"),
+                    flash_moe_io_split=_cli_args.get("flash_moe_io_split", 4),
                 )
-                # SimpleEngine needs async start (load_model defers it inside event loop)
+                # Start engine after wake. Both SimpleEngine and BatchedEngine
+                # expose `_loaded` — start() is idempotent for SimpleEngine and
+                # required for BatchedEngine (lifespan usually handles this,
+                # but wake bypasses lifespan).
                 if (
-                    _engine
-                    and hasattr(_engine, "_needs_async_start")
-                    and _engine._needs_async_start
+                    _engine is not None
+                    and hasattr(_engine, "_loaded")
+                    and not _engine._loaded
                 ):
                     await _engine.start()
-                    _engine._needs_async_start = False
+                    if hasattr(_engine, "_needs_async_start"):
+                        _engine._needs_async_start = False
+                # Re-apply Flash MoE after wake (load_model skipped it because
+                # _engine._loaded was False when called inside event loop)
+                if _flash_moe_enabled and _engine is not None:
+                    _apply_flash_moe_patching()
                 # Re-apply JIT compilation after deep wake (load_model skips it
                 # because _engine._loaded is False at check time inside event loop)
                 if _enable_jit and _engine is not None:
@@ -2888,8 +3045,16 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs["min_p"] = chat_req.min_p
     if chat_req.repetition_penalty is not None:
         chat_kwargs["repetition_penalty"] = chat_req.repetition_penalty
+    # enable_thinking precedence: per-request > chat_template_kwargs > server default.
+    # Mirrors the OpenAI path at create_chat_completion so clients get identical
+    # behavior whether they speak the OpenAI or Ollama wire format.
+    _ollama_ct_kwargs = _merge_ct_kwargs(chat_req.chat_template_kwargs)
     if chat_req.enable_thinking is not None:
         chat_kwargs["enable_thinking"] = chat_req.enable_thinking
+    elif "enable_thinking" in _ollama_ct_kwargs:
+        chat_kwargs["enable_thinking"] = bool(_ollama_ct_kwargs["enable_thinking"])
+    elif _default_enable_thinking is not None:
+        chat_kwargs["enable_thinking"] = _default_enable_thinking
 
     # Extract messages (same logic as create_chat_completion)
     if engine.is_mllm:

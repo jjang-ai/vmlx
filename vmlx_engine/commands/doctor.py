@@ -278,9 +278,11 @@ def _run_inference_test(model_path: str) -> tuple[bool, str]:
         # them through the JANG loader (handles mixed-precision bit widths).
         # Raw mlx_lm.load() uses strict=True and crashes on JANG models
         # where embed_tokens bit width differs from min(bit_widths_used).
+        # Skip TurboQuant: doctor is a smoke test, not a server — TQ changes
+        # cache behavior and could mask or introduce issues (H7/H9 audit).
         # Fixes GitHub issues #62 and #63.
         from ..utils.tokenizer import load_model_with_fallback
-        model, tokenizer = load_model_with_fallback(model_path)
+        model, tokenizer = load_model_with_fallback(model_path, skip_turboquant=True)
 
         import mlx.core as mx
         from mlx_lm.generate import generate_step
