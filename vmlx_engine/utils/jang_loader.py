@@ -412,6 +412,38 @@ def _load_jang_v2(
     start = time.perf_counter()
     config = load_config(path)
 
+    # Mistral-Small-4-119B mismatch: HF config.json has top model_type="mistral3"
+    # (the VLM wrapper class) but text_config.model_type="mistral4" (the inner
+    # MLA language model). When loaded as text-only via mlx_lm, the top-level
+    # model_type wins → mistral3 skeleton (standard q_proj/k_proj/v_proj
+    # attention) gets instantiated → MLA weights have nowhere to land →
+    # model runs on random init → "armanarmanarman" / "Bub Bub Bub" token soup.
+    #
+    # Fix: when text_config.model_type is mistral4 and top is mistral3, promote
+    # text_config to the model config so mlx_lm.load_model picks the proper
+    # mistral4.Model class with embed_q / unembed_out MLA structure.
+    # Mirrored from the kv_b_proj split fix below — both must run together.
+    _tc_for_model_type = config.get("text_config", {}) or {}
+    if (
+        config.get("model_type") == "mistral3"
+        and _tc_for_model_type.get("model_type") == "mistral4"
+    ):
+        logger.info(
+            "  Mistral 4 model_type promotion: top mistral3 + text_config "
+            "mistral4 → loading inner text model directly via mlx_lm mistral4 "
+            "(VLM wrapper bypassed for text inference)"
+        )
+        # Build a flat text-only config from text_config + preserve quant
+        _flat = dict(_tc_for_model_type)
+        _flat.setdefault("model_type", "mistral4")
+        if "quantization" in config:
+            _flat["quantization"] = config["quantization"]
+        # Keep eos/bos from top level if not in text_config
+        for _kk in ("eos_token_id", "bos_token_id", "pad_token_id"):
+            if _kk in config and _kk not in _flat:
+                _flat[_kk] = config[_kk]
+        config = _flat
+
     # Always read block_size from jang_config (needed by _pre_fix_bits_from_shard
     # and other per-shard fixups). config.json's quantization.group_size may differ
     # from the JANG config's block_size for older models.
@@ -446,6 +478,69 @@ def _load_jang_v2(
         config["quantization"]["bits"],
         config["quantization"]["group_size"],
     )
+
+    # Mistral-Small-4-119B (and any future model_type-promoted text load):
+    # mlx_lm.utils.load_model's nn.quantize predicate `f"{p}.scales" in
+    # weights` cannot match the file's `language_model.model.X.scales` keys
+    # against the post-promotion module paths `model.X` — so embed_tokens,
+    # q_proj, k_proj, etc. stay as plain nn.Linear / nn.Embedding holding
+    # uint32 packed weights → forward pass crashes with rms_norm shape
+    # mismatches. Re-run nn.quantize here with a predicate that scans the
+    # safetensors HEADERS (no data load) and applies the LM-strip rename to
+    # the keys before checking. Cheap (~10ms per shard).
+    if (
+        _is_mistral4_promoted := (
+            getattr(_load_model_skeleton, "__name__", "") == "load_model"
+            and (jang_cfg.get("architecture", {}).get("attention", "") == "mla"
+                 or "mistral4" in str(config.get("model_type", "")))
+        )
+    ):
+        try:
+            from safetensors import safe_open
+            _renamed_quant_paths = set()
+            _wf_for_scan = _get_v2_weight_files(path)
+            for _wf in _wf_for_scan:
+                with safe_open(str(_wf), framework="numpy") as _t:
+                    for _k in _t.keys():
+                        if not _k.endswith(".scales"):
+                            continue
+                        _base = _k[: -len(".scales")]
+                        # Apply the same LM-strip the per-shard loop will
+                        if _base.startswith("language_model.model."):
+                            _base = "model." + _base[len("language_model.model."):]
+                        elif _base.startswith("language_model.lm_head."):
+                            _base = "lm_head." + _base[len("language_model.lm_head."):]
+                        elif _base.startswith("language_model."):
+                            _base = _base[len("language_model."):]
+                        _renamed_quant_paths.add(_base)
+                        # mlx_lm/models/mistral4.py:sanitize splits kv_b_proj
+                        # into embed_q + unembed_out (with re-quantization).
+                        # The split happens AFTER nn.quantize, so we need to
+                        # pre-register the resulting embed_q / unembed_out
+                        # paths in the predicate set so they ALSO get the
+                        # QuantizedMultiLinear treatment.
+                        if _base.endswith(".kv_b_proj"):
+                            _self_attn = _base[: -len(".kv_b_proj")]
+                            _renamed_quant_paths.add(f"{_self_attn}.embed_q")
+                            _renamed_quant_paths.add(f"{_self_attn}.unembed_out")
+            if _renamed_quant_paths:
+                import mlx.nn as _nn
+                def _post_promo_predicate(p, m):
+                    if not hasattr(m, "to_quantized"):
+                        return False
+                    return p in _renamed_quant_paths
+                _nn.quantize(
+                    model,
+                    group_size=config["quantization"]["group_size"],
+                    bits=config["quantization"]["bits"],
+                    class_predicate=_post_promo_predicate,
+                )
+                logger.info(
+                    f"  Re-quantized {len(_renamed_quant_paths)} modules via "
+                    f"renamed-key predicate (model_type promotion path)"
+                )
+        except Exception as _rq_err:
+            logger.debug(f"  Post-promotion re-quantize skipped: {_rq_err}")
 
     # Load weights via mmap — this is instant
     weight_files = _get_v2_weight_files(path)
@@ -483,6 +578,19 @@ def _load_jang_v2(
     # ALL weights are silently dropped (strict=False) → model runs on zeros.
     _needs_vlm_key_remap = hasattr(model, "language_model") and "text_config" in config
 
+    # Mistral 4 119B mismatch (companion to the model_type promotion above):
+    # the JANG file has VLM-style `language_model.model.X` weight keys, but the
+    # promoted mistral4 text model has `model.X` parameter paths. Remap by
+    # stripping the `language_model.` prefix so weights actually land in the
+    # mistral4 modules. Without this every weight is silently dropped by
+    # strict=False and the model runs on init noise → "armanarmanarman" /
+    # "ఉ из yılındaaltar" multilingual token soup. NO-REGRESSION-CHECKLIST §11.
+    _needs_mistral4_lm_strip = (
+        not _needs_vlm_key_remap
+        and _model_type == "mistral4"
+        and not hasattr(model, "language_model")
+    )
+
     # Gemma 4: JANG stores expert keys as switch_mlp.{gate,up,down}_proj but
     # mlx-lm gemma4/gemma4_text model uses experts.switch_glu.{gate,up,down}_proj.
     # Without this remap, expert weights are silently dropped (strict=False)
@@ -498,6 +606,42 @@ def _load_jang_v2(
                 for k, v in weights.items()
                 if not k.endswith(".importance") and "mtp." not in k
             }
+        # Mistral 4 LM-prefix strip: weights are `language_model.model.X` and
+        # `language_model.lm_head.X` and `lm_head.X`, but the promoted mistral4
+        # text model expects `model.X` and `lm_head.X`. Strip `language_model.`
+        # so weights actually land. Mirror the audit-2026-04-07 §6.3 hardening
+        # pattern (count source/dst, refuse to proceed on silent loss).
+        if _needs_mistral4_lm_strip:
+            _src_count_lm_model = sum(
+                1 for k in weights.keys() if k.startswith("language_model.model.")
+            )
+            _src_count_lm_head = sum(
+                1 for k in weights.keys() if k.startswith("language_model.lm_head.")
+            )
+            _src_count_top_lm_head = sum(
+                1 for k in weights.keys() if k.startswith("lm_head.") and not k.startswith("lm_head.lm_head.")
+            )
+            stripped = {}
+            for k, v in weights.items():
+                if k.startswith("language_model.model."):
+                    stripped["model." + k[len("language_model.model."):]] = v
+                elif k.startswith("language_model.lm_head."):
+                    stripped["lm_head." + k[len("language_model.lm_head."):]] = v
+                elif k.startswith("language_model."):
+                    # other VLM wrapper attrs (e.g. norm, embed_tokens) — strip prefix
+                    stripped[k[len("language_model."):]] = v
+                else:
+                    stripped[k] = v
+            _dst_count_model = sum(1 for k in stripped.keys() if k.startswith("model."))
+            _dst_count_lm_head = sum(1 for k in stripped.keys() if k.startswith("lm_head."))
+            _expected_lm_head = _src_count_lm_head + _src_count_top_lm_head
+            if _src_count_lm_model > 0 and _dst_count_model < _src_count_lm_model:
+                logger.warning(
+                    f"Mistral 4 LM-strip silent loss: src model.* in language_model={_src_count_lm_model} "
+                    f"→ dst model.*={_dst_count_model}"
+                )
+            weights = stripped
+
         # Remap VLM-style keys for models loaded as text but with VLM key structure.
         # model.language_model.X → language_model.model.X  (layers, embed, norm)
         # lm_head.X → language_model.lm_head.X  (bare top-level in safetensors)
@@ -593,6 +737,71 @@ def _load_jang_v2(
                             except Exception:
                                 continue
             weights = renamed
+
+        # Mistral4 MLA: split kv_b_proj → embed_q + unembed_out.
+        # CRITICAL REGRESSION FIX (2026-04-11): the v2 LLM loader was missing
+        # this split (only the v2 VLM loader had it). Mistral-Small-4-119B
+        # has `vision_config` in config.json BUT `jang_config.architecture
+        # .has_vision: false`, so is_mllm_model() returns False and the model
+        # routes to _load_jang_v2 (this function) — which never split
+        # kv_b_proj. Result: embed_q / unembed_out modules kept their random
+        # init weights, every attention head produced noise, and decode
+        # output came out as "armanarmanarman" / "Bub Bub Bub" token soup.
+        #
+        # MLA stores compressed KV latents — the HF kv_b_proj weight must be
+        # dequantized, reshaped (nheads, head_dim, kv_rank), and split into
+        # embed_q (nheads, kv_rank, qk_nope) and unembed_out (nheads, v_head,
+        # kv_rank). Original split implementation by Jinho Jang (eric@jangq.ai)
+        # for vMLX, mirrored from _load_jang_v2_vlm to keep the two paths in
+        # sync. NO-REGRESSION-CHECKLIST §11 row for Mistral 4 MLA family.
+        _t_cfg_for_mla = config.get("text_config", config)
+        _text_mt_for_mla = _t_cfg_for_mla.get("model_type", config.get("model_type", ""))
+        if _text_mt_for_mla == "mistral4":
+            _nheads = _t_cfg_for_mla.get("num_attention_heads", 32)
+            _qk_nope = _t_cfg_for_mla.get("qk_nope_head_dim", 64)
+            _v_head = _t_cfg_for_mla.get("v_head_dim", 128)
+            _kv_rank = _t_cfg_for_mla.get("kv_lora_rank", 256)
+            _head_dim = _qk_nope + _v_head
+            _nlayers = _t_cfg_for_mla.get("num_hidden_layers", 36)
+            _split_count = 0
+            for _l in range(_nlayers):
+                for _pfx in [
+                    f"language_model.model.layers.{_l}.self_attn",
+                    f"model.language_model.layers.{_l}.self_attn",
+                    f"model.layers.{_l}.self_attn",
+                ]:
+                    _kb_key = f"{_pfx}.kv_b_proj.weight"
+                    if _kb_key not in weights:
+                        continue
+                    _v = weights.pop(_kb_key)
+                    _s_key = f"{_pfx}.kv_b_proj.scales"
+                    _b_key = f"{_pfx}.kv_b_proj.biases"
+                    if _s_key in weights:
+                        _s = weights.pop(_s_key)
+                        _b = weights.pop(_b_key, mx.zeros_like(_s))
+                        for _try_bits in [8, 6, 4, 3, 2]:
+                            _elem = 32 // _try_bits
+                            _real = _v.shape[-1] * _elem
+                            _gs = _real // _s.shape[-1] if _s.shape[-1] > 0 else 0
+                            if _gs > 0 and _gs * _s.shape[-1] == _real:
+                                try:
+                                    _v = mx.dequantize(_v, _s, _b, _gs, _try_bits)
+                                    break
+                                except Exception:
+                                    continue
+                    _v = _v.reshape(_nheads, _head_dim, _kv_rank)
+                    _wk = mx.contiguous(_v[:, :_qk_nope, :].swapaxes(-1, -2))
+                    _wv = mx.contiguous(_v[:, _qk_nope:, :])
+                    weights[f"{_pfx}.embed_q.weight"] = _wk.astype(mx.float16)
+                    weights[f"{_pfx}.unembed_out.weight"] = _wv.astype(mx.float16)
+                    _split_count += 1
+                    break
+            if _split_count > 0:
+                logger.info(
+                    f"  Mistral 4 MLA: split kv_b_proj → embed_q + unembed_out "
+                    f"on {_split_count} layers (LLM v2 loader)"
+                )
+
         # Smelt mode: filter expert weights (loaded separately via ExpertIndex)
         if filter_expert_keys:
             weights = {k: v for k, v in weights.items() if not _is_expert_key(k)}
@@ -605,6 +814,24 @@ def _load_jang_v2(
         model.load_weights(list(weights.items()), strict=False)
         del weights
         gc.collect()
+
+    # Mistral-Small-4-119B + any future model_type-promoted text load: the
+    # internal nn.quantize predicate in mlx_lm.utils.load_model could not see
+    # the renamed keys (it checks `f"{p}.scales" in weights` BEFORE our
+    # LM-strip), so embed_tokens / q_proj / k_proj / etc. ended up as plain
+    # nn.Linear / nn.Embedding holding uint32 packed weights → forward pass
+    # produced rms_norm 4096-vs-? shape mismatches and "armanarmanarman"
+    # token soup. Walk the loaded model and upgrade every Linear/Embedding
+    # whose weight is uint32 to its Quantized variant in place. Safe no-op
+    # for models that nn.quantize already converted.
+    _q_cfg = config.get("quantization", {}) if isinstance(config, dict) else {}
+    _q_bits = _q_cfg.get("bits", min(jang_cfg.get("quantization", {}).get("bit_widths_used", [4])))
+    _q_gs = _q_cfg.get("group_size", block_size)
+    _upg = _upgrade_modules_with_uint32_weights(model, _q_bits, _q_gs)
+    if _upg > 0:
+        logger.info(
+            f"  Upgraded {_upg} modules to Quantized variants (post-load fixup)"
+        )
 
     _fix_quantized_bits(model)
 
@@ -1953,6 +2180,112 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
                 else:
                     parent = getattr(parent, p)
             setattr(parent, parts[1], ql)
+
+
+def _upgrade_modules_with_uint32_weights(model, default_bits: int, default_group_size: int) -> int:
+    """Walk the model and replace any nn.Linear / nn.Embedding whose weight is
+    uint32 (i.e. JANG-packed quantized) with the matching Quantized variant.
+
+    Why this exists: mlx_lm.utils.load_model's internal `nn.quantize` predicate
+    is `f"{p}.scales" in weights`, where `weights` is the dict loaded directly
+    from the safetensors file. For Mistral-Small-4-119B JANG (and any other
+    JANG VLM loaded as text-only via the model_type promotion path), the file
+    keys are `language_model.model.X` but the model module paths are `model.X`.
+    The predicate never matches → modules stay as plain Linear/Embedding →
+    JANG uint32 weights load into them but the forward pass treats them as
+    floats → garbage / shape mismatches / 'rms_norm weight has 4096 elements'
+    crashes deep in the layer call.
+
+    This pass runs AFTER `model.load_weights(...)` so each module already has
+    its uint32 weight + scales + biases. We replace the module in place with
+    QuantizedLinear / QuantizedEmbedding using bits/group_size inferred from
+    the actual weight + scales shapes.
+
+    Returns the number of modules upgraded.
+    """
+    import mlx.nn as nn
+    upgraded = 0
+    for name, module in list(model.named_modules()):
+        if not isinstance(module, (nn.Linear, nn.Embedding)):
+            continue
+        if isinstance(module, (nn.QuantizedLinear, nn.QuantizedEmbedding)):
+            continue
+        w = getattr(module, "weight", None)
+        if w is None or w.dtype != mx.uint32:
+            continue
+        s = getattr(module, "scales", None)
+        if s is None:
+            continue
+        # Infer bits + group_size from actual shapes.
+        # weight: (..., packed_cols) where packed_cols = real_cols * bits / 32
+        # scales: (..., scale_cols) where scale_cols = real_cols / group_size
+        try:
+            packed_cols = w.shape[-1]
+            scale_cols = s.shape[-1]
+            inferred = None
+            for try_bits in (8, 6, 4, 3, 2):
+                real_cols = packed_cols * 32 // try_bits
+                if real_cols % scale_cols != 0:
+                    continue
+                try_gs = real_cols // scale_cols
+                if try_gs in (32, 64, 128):
+                    inferred = (try_bits, try_gs)
+                    break
+            if inferred is None:
+                inferred = (default_bits, default_group_size)
+            bits, gs = inferred
+        except Exception:
+            bits, gs = default_bits, default_group_size
+
+        # Build the matching Quantized variant.
+        try:
+            if isinstance(module, nn.Linear):
+                in_dim = w.shape[-1] * 32 // bits
+                out_dim = w.shape[0]
+                qmod = nn.QuantizedLinear(
+                    input_dims=in_dim,
+                    output_dims=out_dim,
+                    bias=hasattr(module, "bias") and getattr(module, "bias", None) is not None,
+                    group_size=gs,
+                    bits=bits,
+                )
+            else:  # Embedding
+                # Embedding stores (num_embeddings, packed) for QuantizedEmbedding
+                num_emb = w.shape[0]
+                emb_dim = w.shape[-1] * 32 // bits
+                qmod = nn.QuantizedEmbedding(
+                    num_embeddings=num_emb,
+                    dims=emb_dim,
+                    group_size=gs,
+                    bits=bits,
+                )
+            # Move the loaded uint32 weight + scales + biases into the new module
+            qmod.weight = w
+            qmod.scales = s
+            if hasattr(module, "biases"):
+                b = getattr(module, "biases", None)
+                if b is not None:
+                    qmod.biases = b
+        except Exception as e:
+            logger.debug(f"  Quantized upgrade failed for {name}: {e}")
+            continue
+
+        # Splice into the parent module
+        parts = name.rsplit(".", 1)
+        if len(parts) != 2:
+            continue
+        parent = model
+        try:
+            for p in parts[0].split("."):
+                if p.isdigit():
+                    parent = parent[int(p)]
+                else:
+                    parent = getattr(parent, p)
+            setattr(parent, parts[1], qmod)
+            upgraded += 1
+        except Exception:
+            continue
+    return upgraded
 
 
 def _pre_fix_bits_from_shard(model, shard_weights, block_size):

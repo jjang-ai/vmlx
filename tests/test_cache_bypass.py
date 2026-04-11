@@ -612,3 +612,65 @@ class TestDeepseekV32AbsorbFp32Patch:
             "loaded mlx_lm has unpatched deepseek_v32.py — bundled and "
             "active site-packages may have drifted; reapply patch"
         )
+
+    def test_bundled_mistral4_has_fp32_absorb_fix(self):
+        """Mistral 4's MLA absorb decode path needs the same fp32-SDPA cast
+        as deepseek_v32 — same bug, same shape (kv_lora_rank contraction at
+        bf16). Without it, JANG_2L (2-bit) profiles produce 'stern bard bard'
+        word loops on the very first decode.
+        """
+        src = self._read(
+            "panel/bundled-python/python/lib/python3.12/site-packages/mlx_lm/models/mistral4.py"
+        )
+        assert "q_sdpa = q_nope.astype(mx.float32)" in src, (
+            "mistral4.py lost the q_nope→fp32 cast on the L==1 branch — "
+            "JANG 2L Mistral 4 119B will repetition-loop on decode"
+        )
+        assert "k_sdpa = k.astype(mx.float32)" in src
+        assert "v_sdpa = v.astype(mx.float32)" in src
+        assert "mask_sdpa = pe_scores.astype(mx.float32)" in src
+        assert "q_sdpa, k_sdpa, v_sdpa, mask_sdpa = q_nope, k, v, pe_scores" in src
+        assert "output = output.astype(kv_latent.dtype)" in src
+        assert "q_sdpa, k_sdpa, v_sdpa, cache=cache, scale=self.scale, mask=mask_sdpa" in src
+
+
+# ---------------------------------------------------------------------------
+# Mistral-Small-4-119B JANG model_type promotion (mistral3 wrapper hides MLA)
+# ---------------------------------------------------------------------------
+
+
+class TestMistral4ModelTypePromotion:
+    """Mistral-Small-4-119B's HF config.json has top-level model_type=mistral3
+    (the VLM wrapper) but text_config.model_type=mistral4 (MLA inner). Loading
+    via the VLM wrapper used the standard q_proj/k_proj/v_proj attention from
+    mlx_vlm/models/mistral3/language.py, which has nowhere to land the JANG
+    MLA weights → modules kept random init → 'armanarmanarman' / 'Bub Bub'
+    token soup. Earlier was tracked as a JANG quality issue, but it's a
+    loader regression. Promotion + LM-strip + re-quantize landed 2026-04-11.
+    """
+
+    def _read(self, path: str) -> str:
+        with open(path) as f:
+            return f.read()
+
+    def test_v2_llm_loader_has_mistral4_promotion(self):
+        src = self._read("vmlx_engine/utils/jang_loader.py")
+        assert 'Mistral 4 model_type promotion' in src
+        assert 'top mistral3 + text_config' in src
+        assert "_flat = dict(_tc_for_model_type)" in src
+        assert "_flat.setdefault(\"model_type\", \"mistral4\")" in src
+
+    def test_v2_llm_loader_has_lm_strip(self):
+        src = self._read("vmlx_engine/utils/jang_loader.py")
+        assert "_needs_mistral4_lm_strip" in src
+        assert "Mistral 4 LM-prefix strip" in src
+
+    def test_v2_llm_loader_has_post_promo_requantize(self):
+        src = self._read("vmlx_engine/utils/jang_loader.py")
+        assert "Re-quantized" in src
+        assert "_renamed_quant_paths" in src
+        assert "_post_promo_predicate" in src
+        # The predicate must also pre-register embed_q / unembed_out paths
+        # since mlx_lm/mistral4.py:sanitize splits kv_b_proj into them.
+        assert ".embed_q" in src
+        assert ".unembed_out" in src
