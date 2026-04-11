@@ -153,6 +153,14 @@ class Request:
     multimodal_kwargs: Optional[Dict[str, Any]] = None  # Model-specific kwargs
     is_multimodal: bool = False  # Flag indicating this is a multimodal request
 
+    # Cache bypass flag — set by the server when the API request carried
+    # cache_salt or skip_prefix_cache=true. When True, the scheduler skips
+    # EVERY prefix cache layer (paged, memory-aware, legacy prefix, disk
+    # L2, block disk, SSM companion, multimodal pixel_values) for BOTH
+    # lookup and store. Used by benchmark clients that need guaranteed
+    # fresh execution without pollution from prior requests.
+    _bypass_prefix_cache: bool = False
+
     # Metadata
     finish_reason: Optional[str] = None
 

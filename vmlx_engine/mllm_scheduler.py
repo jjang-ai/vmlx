@@ -1303,6 +1303,13 @@ class MLLMScheduler:
         if _gpl > 0:
             request._gen_prompt_len = _gpl
 
+        # Per-request cache bypass (cache_salt / skip_prefix_cache). When set,
+        # the MLLM scheduler will skip EVERY prefix cache layer — paged,
+        # memory-aware, legacy, disk L2, block disk, SSM companion, and the
+        # multimodal vision / pixel_values caches.
+        if kwargs.get("bypass_prefix_cache", False):
+            request._bypass_prefix_cache = True
+
         with self._queue_lock:
             if request_id in self.requests:
                 raise ValueError(f"Request {request_id} already exists")
@@ -1672,6 +1679,10 @@ class MLLMScheduler:
             # prefix cache reuse, so skip entirely.
             _output_len = getattr(request, 'num_output_tokens', 0) if request else 0
             _skip_cache_store = _output_len > 0 and _output_len <= 3 and not getattr(request, '_has_history', False)
+            # Hard bypass from cache_salt / skip_prefix_cache — overrides
+            # the short-output heuristic and ALSO suppresses every store site.
+            if request is not None and getattr(request, '_bypass_prefix_cache', False):
+                _skip_cache_store = True
             if _skip_cache_store:
                 logger.debug(
                     f"Skipping cache store for {request_id}: "

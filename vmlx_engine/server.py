@@ -310,6 +310,31 @@ def _resolve_repetition_penalty(request_value: float | None) -> float | None:
     return None
 
 
+def _compute_bypass_prefix_cache(request_obj) -> bool:
+    """Read request-level cache bypass flag.
+
+    A request bypasses every prefix-cache layer (paged, memory-aware,
+    legacy prefix, disk L2, block disk, SSM companion, multimodal
+    pixel_values) when the client sends either:
+        cache_salt: "<any non-empty string>"
+        skip_prefix_cache: true
+
+    cache_salt is a vLLM-compatible namespacing field. For vMLX we treat
+    any non-empty salt as "please give me fresh state" — no cache hits,
+    no cache stores for this request. The salt itself is not stored; if
+    users want namespaced caches within a run, they should call
+    DELETE /v1/cache between runs instead.
+    """
+    if request_obj is None:
+        return False
+    if getattr(request_obj, "skip_prefix_cache", None) is True:
+        return True
+    salt = getattr(request_obj, "cache_salt", None)
+    if isinstance(salt, str) and salt:
+        return True
+    return False
+
+
 # Global MCP manager
 _mcp_manager = None
 
@@ -2676,6 +2701,8 @@ async def create_anthropic_message(
     _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
     if _rp is not None:
         _msg_kwargs["repetition_penalty"] = _rp
+    if _compute_bypass_prefix_cache(chat_req):
+        _msg_kwargs["_bypass_prefix_cache"] = True
     if chat_req.stop:
         _msg_kwargs["stop"] = chat_req.stop
     # Merge server-wide --chat-template-kwargs defaults with any adapter-populated
@@ -3215,6 +3242,8 @@ async def ollama_chat(fastapi_request: Request):
     _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
+    if _compute_bypass_prefix_cache(chat_req):
+        chat_kwargs["_bypass_prefix_cache"] = True
     # enable_thinking precedence: per-request > chat_template_kwargs > server default.
     # Mirrors the OpenAI path at create_chat_completion so clients get identical
     # behavior whether they speak the OpenAI or Ollama wire format.
@@ -4132,6 +4161,8 @@ async def create_completion(request: CompletionRequest):
             _rp = _resolve_repetition_penalty(request.repetition_penalty)
             if _rp is not None:
                 gen_kwargs["repetition_penalty"] = _rp
+            if _compute_bypass_prefix_cache(request):
+                gen_kwargs["_bypass_prefix_cache"] = True
             output = await asyncio.wait_for(
                 engine.generate(**gen_kwargs),
                 timeout=timeout,
@@ -4363,6 +4394,8 @@ async def create_chat_completion(
     _rp = _resolve_repetition_penalty(request.repetition_penalty)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
+    if _compute_bypass_prefix_cache(request):
+        chat_kwargs["_bypass_prefix_cache"] = True
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
@@ -4994,6 +5027,8 @@ async def create_response(
     _rp = _resolve_repetition_penalty(request.repetition_penalty)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
+    if _compute_bypass_prefix_cache(request):
+        chat_kwargs["_bypass_prefix_cache"] = True
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
@@ -5401,6 +5436,8 @@ async def stream_completions_multi(
             _rp = _resolve_repetition_penalty(request.repetition_penalty)
             if _rp is not None:
                 gen_kwargs["repetition_penalty"] = _rp
+            if _compute_bypass_prefix_cache(request):
+                gen_kwargs["_bypass_prefix_cache"] = True
             async for output in _stream_with_keepalive(
                 engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout
             ):

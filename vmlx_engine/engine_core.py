@@ -307,6 +307,7 @@ class EngineCore:
         gen_prompt_len: int = 0,
         num_messages: int = 1,
         segment_boundaries: Optional[List[Any]] = None,
+        bypass_prefix_cache: bool = False,
     ) -> str:
         """
         Add a request for processing.
@@ -358,6 +359,14 @@ class EngineCore:
         # PrefixCacheManager priority LRU breakthrough.
         if segment_boundaries:
             request._segment_boundaries = list(segment_boundaries)
+
+        # Per-request prefix cache bypass (benchmark isolation).
+        # When set, the scheduler skips EVERY prefix cache layer for this
+        # request — both lookup and store — including the SSM companion
+        # cache on hybrid models. Set by the server gateway layer when the
+        # API request carried cache_salt or skip_prefix_cache=true.
+        if bypass_prefix_cache:
+            request._bypass_prefix_cache = True
 
         # Setup output collector with stream_interval from config
         self._output_collectors[request_id] = RequestOutputCollector(aggregate=True)

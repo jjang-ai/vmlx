@@ -190,6 +190,25 @@ class ChatCompletionRequest(BaseModel):
     # Standard vLLM convention: {"enable_thinking": true/false, ...}
     # enable_thinking here is used as fallback when top-level enable_thinking is None
     chat_template_kwargs: dict | None = None
+    # Cache isolation / bypass control.
+    # When cache_salt is non-empty OR skip_prefix_cache is True, the server
+    # guarantees the request BYPASSES every prefix-cache layer:
+    #   - Paged cache (block_aware_cache)
+    #   - Memory-aware cache (MemoryAwarePrefixCache)
+    #   - Legacy PrefixCacheManager
+    #   - L2 disk cache
+    #   - Block disk store
+    #   - SSM companion cache (hybrid SSM models)
+    #   - MLLM vision / pixel_values caches
+    # Neither fetch nor store runs for the tagged request. Use for benchmark
+    # runs that need guaranteed fresh execution without pollution from prior
+    # requests — e.g., set `cache_salt: str(uuid.uuid4())` per run.
+    #
+    # Note: this is a per-request BYPASS. For multi-turn chats within a run,
+    # pass cache_salt only on the first turn (or none) if you want cache hits
+    # within the run; pass a new salt on every turn for strict isolation.
+    cache_salt: str | None = None
+    skip_prefix_cache: bool | None = None
 
     @field_validator("temperature")
     @classmethod
@@ -329,6 +348,9 @@ class CompletionRequest(BaseModel):
     repetition_penalty: float | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
+    # Cache bypass (see ChatCompletionRequest.cache_salt for semantics).
+    cache_salt: str | None = None
+    skip_prefix_cache: bool | None = None
 
     @field_validator("temperature")
     @classmethod

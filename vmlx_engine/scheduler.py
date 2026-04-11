@@ -2069,8 +2069,20 @@ class Scheduler:
                 "Cannot schedule a request with no input tokens."
             )
 
+        # Per-request cache bypass (from cache_salt / skip_prefix_cache on the
+        # API request). When set, skip EVERY prefix cache lookup below AND
+        # ensure no store happens at the end. This is the hard guarantee that
+        # benchmark runs need to avoid pollution from prior requests.
+        _bypass = bool(getattr(request, "_bypass_prefix_cache", False))
+        if _bypass:
+            logger.debug(
+                f"Request {request.request_id}: _bypass_prefix_cache=True, "
+                "skipping paged / memory-aware / legacy prefix / SSM companion cache lookups"
+            )
+            request.remaining_tokens = request.prompt_token_ids
+
         # Check prefix cache for cached KV state
-        if self.block_aware_cache is not None:
+        if self.block_aware_cache is not None and not _bypass:
             # Use paged cache
             block_table, remaining = self.block_aware_cache.fetch_cache(
                 request.request_id,
@@ -2216,7 +2228,7 @@ class Scheduler:
                     f"Request {request.request_id}: paged cache miss, "
                     f"processing all {len(request.prompt_token_ids)} tokens"
                 )
-        elif self.memory_aware_cache is not None:
+        elif self.memory_aware_cache is not None and not _bypass:
             # Use memory-aware prefix cache
             cache, remaining = self.memory_aware_cache.fetch(request.prompt_token_ids)
             if cache:
@@ -2248,7 +2260,7 @@ class Scheduler:
                     f"Request {request.request_id}: cache miss, "
                     f"processing all {len(request.prompt_token_ids)} tokens"
                 )
-        elif self.prefix_cache is not None:
+        elif self.prefix_cache is not None and not _bypass:
             # Use legacy prefix cache
             cache, remaining = self.prefix_cache.fetch_cache(request.prompt_token_ids)
             if cache:
@@ -2283,7 +2295,9 @@ class Scheduler:
         # Strip gen_prompt_len from the fetch key to match the store key.
         # Thinking models append generation-prompt tokens that change between
         # turns — the cache key must exclude them for consistent SHA-256 matching.
-        if request.prompt_cache is None and self.disk_cache is not None:
+        # Bypass: if the request set _bypass_prefix_cache, skip the disk L2
+        # fallback too (otherwise we'd service the request with stale state).
+        if request.prompt_cache is None and self.disk_cache is not None and not _bypass:
             _disk_fetch_tokens = list(request.prompt_token_ids)
             _gpl = getattr(request, "_gen_prompt_len", 0) or 0
             if _gpl > 0 and _gpl < len(_disk_fetch_tokens):
@@ -3109,6 +3123,11 @@ class Scheduler:
                 and _output_len <= 3
                 and not getattr(request, "_has_history", False)
             )
+            # Hard cache bypass from the API request (cache_salt / skip_prefix_cache).
+            # This overrides all heuristics — the benchmark client asked for
+            # guaranteed fresh execution, so nothing gets stored either.
+            if request is not None and getattr(request, "_bypass_prefix_cache", False):
+                _skip_cache_store = True
             if _skip_cache_store and request is not None:
                 logger.debug(
                     f"Skipping cache store for {request_id}: "

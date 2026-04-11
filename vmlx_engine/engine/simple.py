@@ -147,6 +147,9 @@ class SimpleEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
+        # doesn't leak into self._model.generate which would reject it.
+        kwargs.pop("_bypass_prefix_cache", None)
 
         async with self._generation_lock:
             # Run in thread pool to allow asyncio timeout to work
@@ -198,6 +201,9 @@ class SimpleEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
+        # doesn't leak into self._model.generate which would reject it.
+        kwargs.pop("_bypass_prefix_cache", None)
 
         async with self._generation_lock:
             accumulated_text = ""
@@ -324,6 +330,9 @@ class SimpleEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
+        # doesn't leak into self._model.generate which would reject it.
+        kwargs.pop("_bypass_prefix_cache", None)
 
         # Convert tools for template if provided
         template_tools = convert_tools_for_template(tools) if tools else None
@@ -508,6 +517,9 @@ class SimpleEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+        # SimpleEngine has no prefix cache — eat the bypass kwarg so it
+        # doesn't leak into self._model.generate which would reject it.
+        kwargs.pop("_bypass_prefix_cache", None)
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None

@@ -1568,7 +1568,12 @@ class MLLMBatchGenerator:
             # cache hit would serve KV states from a different image's vision encoding.
             # Text-only follow-up requests (no new images) can safely use prefix cache.
             has_images = req.pixel_values is not None
-            if self.block_aware_cache is not None and req.prompt_cache is None and not has_images:
+            # Per-request cache bypass (cache_salt / skip_prefix_cache).
+            # When set, skip every VLM prefix-cache layer — paged, memory-aware,
+            # legacy prefix, disk L2, SSM companion — so benchmark runs get
+            # fresh execution without pollution from prior multimodal requests.
+            _mllm_bypass = bool(getattr(req, "_bypass_prefix_cache", False))
+            if self.block_aware_cache is not None and req.prompt_cache is None and not has_images and not _mllm_bypass:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
@@ -1705,7 +1710,7 @@ class MLLMBatchGenerator:
                         logger.warning(f"Failed to fetch paged cache for {req.request_id}: {e}")
 
             # Memory-aware or legacy prefix cache fetch (non-paged paths)
-            elif (self.memory_aware_cache is not None or self.prefix_cache is not None) and req.prompt_cache is None:
+            elif (self.memory_aware_cache is not None or self.prefix_cache is not None) and req.prompt_cache is None and not _mllm_bypass:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
@@ -1777,7 +1782,7 @@ class MLLMBatchGenerator:
             # L2: Disk cache fallback when in-memory cache missed.
             # DiskCacheManager.fetch() returns Optional[List[Any]] (exact match only,
             # no partial prefix), NOT a tuple like prefix_cache.fetch_cache().
-            if req.prompt_cache is None and self.disk_cache is not None:
+            if req.prompt_cache is None and self.disk_cache is not None and not _mllm_bypass:
                 if req.input_ids is not None:
                     try:
                         token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()

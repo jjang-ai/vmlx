@@ -613,6 +613,13 @@ class BatchedEngine(BaseEngine):
         if not self._loaded:
             await self.start()
 
+        # Cache-bypass flag from the server gateway layer. Forwarded by every
+        # chat/completion handler when the API request carried cache_salt or
+        # skip_prefix_cache=true. Engine pops it out of kwargs so it doesn't
+        # leak downstream and attaches it to the internal Request object so
+        # the scheduler can gate EVERY lookup and store site on it.
+        bypass_prefix_cache = bool(kwargs.pop("_bypass_prefix_cache", False))
+
         if self._is_mllm and self._mllm_scheduler:
             # Use MLLM scheduler for all requests (text-only and multimodal)
             # MLLM models only initialize _mllm_scheduler, not _engine
@@ -631,6 +638,7 @@ class BatchedEngine(BaseEngine):
                 video_max_frames=kwargs.get("video_max_frames"),
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
+                bypass_prefix_cache=bypass_prefix_cache,
             )
 
             return GenerationOutput(
@@ -663,6 +671,7 @@ class BatchedEngine(BaseEngine):
             gen_prompt_len=gen_prompt_len,
             num_messages=kwargs.get("num_messages", 1),
             segment_boundaries=segment_boundaries,
+            bypass_prefix_cache=bypass_prefix_cache,
         )
 
         text = clean_output_text(output.output_text)
@@ -707,6 +716,11 @@ class BatchedEngine(BaseEngine):
         if not self._loaded:
             await self.start()
 
+        # Per-request cache bypass (forwarded from server gateway — see
+        # BatchedEngine.chat for details). Pop out of kwargs so it doesn't
+        # collide with downstream positional arguments.
+        bypass_prefix_cache = bool(kwargs.pop("_bypass_prefix_cache", False))
+
         if self._is_mllm and self._mllm_scheduler:
             # Use MLLM scheduler for all requests (text-only and multimodal)
             # MLLM models only initialize _mllm_scheduler, not _engine
@@ -726,6 +740,7 @@ class BatchedEngine(BaseEngine):
                 video_max_frames=kwargs.get("video_max_frames"),
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
+                bypass_prefix_cache=bypass_prefix_cache,
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
@@ -763,6 +778,7 @@ class BatchedEngine(BaseEngine):
             gen_prompt_len=gen_prompt_len,
             num_messages=kwargs.get("num_messages", 1),
             segment_boundaries=segment_boundaries,
+            bypass_prefix_cache=bypass_prefix_cache,
         )
 
         async for output in self._engine.stream_outputs(request_id):
