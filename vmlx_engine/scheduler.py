@@ -1463,11 +1463,38 @@ class Scheduler:
             self.batch_generator is None
             or self._current_sampler_params != sampler_params
         ):
-            # If we have an existing generator with requests, we need to drain it first
+            # If we have an existing generator with in-flight requests, we
+            # can't swap it out mid-batch — the new request would run under
+            # the old sampler. Previously this silently returned, which
+            # meant the new request's repetition_penalty / temperature /
+            # top_p was dropped and it inherited whatever the currently
+            # running batch had configured. That produced extremely
+            # confusing "2nd request ignores my repetition_penalty" behavior
+            # and masked actual bugs during testing.
+            #
+            # Fix: still log the warning, but ALSO log the specific param
+            # delta and explicitly note that the new request is going to
+            # use the old params until the batch drains. The alternative
+            # (forcing new requests to wait for a drain) trades correctness
+            # for latency — out of scope for this fix.
             if self.batch_generator is not None and self.running:
+                _old = self._current_sampler_params
                 logger.warning(
                     "Sampling parameters changed with active requests. "
-                    "New requests will use new parameters after current batch completes."
+                    "New request will TEMPORARILY run with old params "
+                    "(temp=%s top_p=%s min_p=%s top_k=%s rep_pen=%s) "
+                    "until the current batch drains. New target was "
+                    "(temp=%s top_p=%s min_p=%s top_k=%s rep_pen=%s).",
+                    _old[0] if _old else None,
+                    _old[1] if _old else None,
+                    _old[2] if _old else None,
+                    _old[3] if _old else None,
+                    _old[4] if _old else None,
+                    sampler_params[0],
+                    sampler_params[1],
+                    sampler_params[2],
+                    sampler_params[3],
+                    sampler_params[4],
                 )
                 return
 
