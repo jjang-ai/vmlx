@@ -309,6 +309,18 @@ def serve_command(args):
             print("  the target model for low-latency drafting; distributing both would")
             print("  negate the speedup. Run speculative decoding single-node.")
             sys.exit(1)
+        # Tensor parallelism is stubbed for Phase 2. The `tensor_parallel.py`
+        # module exists as scaffolding (ColumnParallelLinear, RowParallelLinear,
+        # shard_model_tp) but no path in the codebase wires it up. Refusing
+        # here prevents users from silently getting wrong behavior.
+        if getattr(args, 'distributed_mode', 'pipeline') == 'tensor':
+            print("ERROR: --distributed-mode tensor is not yet implemented.")
+            print("  Tensor parallelism would shard each layer's weight matrices")
+            print("  across nodes (column- and row-parallel linears with all-reduce).")
+            print("  The vmlx_engine.distributed.tensor_parallel module exists as")
+            print("  scaffolding only — no forward pass is wired. Phase 2 work item.")
+            print("  Use --distributed-mode pipeline for now (this IS the default).")
+            sys.exit(1)
 
     # Build scheduler config for batched mode
     scheduler_config = None

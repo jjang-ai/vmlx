@@ -69,16 +69,71 @@ class WorkerConnection:
             self._writer.write(join_msg.encode())
             await self._writer.drain()
 
-            resp = await Message.read_from(self._reader)
+            resp = await asyncio.wait_for(
+                Message.read_from(self._reader), timeout=10.0,
+            )
             if resp.type == MessageType.JOIN_ACK and resp.metadata.get("accepted"):
-                self._connected = True
                 caps = resp.metadata.get("capabilities", {})
+
+                # Version compatibility check. Coordinator and worker must
+                # run the same vMLX version (no protocol handshake yet, so
+                # mismatched versions are undefined behavior). MLX library
+                # version is warned but not enforced — different MLX versions
+                # may produce slightly different floats but still converge
+                # to the same tokens on greedy decode.
+                worker_vmlx = caps.get("vmlx_version", "unknown")
+                worker_mlx = caps.get("mlx_version", "unknown")
+                try:
+                    from vmlx_engine import __version__ as _our_vmlx
+                except ImportError:
+                    _our_vmlx = "unknown"
+                try:
+                    import mlx.core as _mx_core
+                    _our_mlx = getattr(_mx_core, "__version__", "unknown")
+                except ImportError:
+                    _our_mlx = "unknown"
+
+                if (
+                    worker_vmlx != "unknown"
+                    and _our_vmlx != "unknown"
+                    and worker_vmlx != _our_vmlx
+                ):
+                    logger.error(
+                        "Worker %s runs vmlx %s but coordinator runs %s — "
+                        "version mismatch is unsafe (no protocol handshake yet). "
+                        "Upgrade both sides to the same version and retry.",
+                        self.node.hostname, worker_vmlx, _our_vmlx,
+                    )
+                    try:
+                        self._writer.close()
+                        await self._writer.wait_closed()
+                    except Exception:
+                        pass
+                    return False
+
+                if (
+                    worker_mlx != "unknown"
+                    and _our_mlx != "unknown"
+                    and worker_mlx != _our_mlx
+                ):
+                    logger.warning(
+                        "Worker %s runs mlx %s but coordinator runs %s — "
+                        "different MLX versions may produce slightly different "
+                        "float outputs. Prefer matching versions for reproducibility.",
+                        self.node.hostname, worker_mlx, _our_mlx,
+                    )
+
+                self._connected = True
                 self.node.chip = caps.get("chip", self.node.chip)
                 self.node.ram_gb = caps.get("ram_gb", self.node.ram_gb)
                 self.node.gpu_cores = caps.get("gpu_cores", self.node.gpu_cores)
                 self.node.available_gb = caps.get("available_gb", self.node.available_gb)
                 self.node.status = "connected"
-                logger.info("Connected to worker %s (%s, %dGB)", self.node.hostname, self.node.chip, self.node.ram_gb)
+                logger.info(
+                    "Connected to worker %s (%s, %dGB, vmlx=%s, mlx=%s)",
+                    self.node.hostname, self.node.chip, self.node.ram_gb,
+                    worker_vmlx, worker_mlx,
+                )
                 return True
             else:
                 reason = resp.metadata.get("reason", "unknown")

@@ -1308,6 +1308,57 @@ def load_model(
         _distributed_enabled = False
         distributed = False
 
+    # VL / multimodal models are not yet supported in distributed mode.
+    # DistributedEngine hardcodes is_mllm=False, so an image request would
+    # silently route through the text-only coordinator path and embed image
+    # tokens as text garbage. Fail loudly instead of producing wrong output.
+    # Phase 2 work item: vision encoder on coordinator + language tower on
+    # the pipeline, with image tokens flowing as ordinary embeddings.
+    if distributed:
+        try:
+            from .api.utils import resolve_to_local_path
+            from .model_config_registry import is_mllm_model
+
+            _resolved_for_mllm = resolve_to_local_path(model_name)
+            _is_vl = False
+            try:
+                _is_vl = is_mllm_model(_resolved_for_mllm)
+            except Exception:
+                # Fallback: check config.json directly for vision_config
+                try:
+                    import json as _json
+                    with open(f"{_resolved_for_mllm}/config.json") as _f:
+                        _cfg = _json.load(_f)
+                    if (
+                        "vision_config" in _cfg
+                        or _cfg.get("model_type", "").endswith("_vl")
+                        or "vlm" in _cfg.get("model_type", "").lower()
+                    ):
+                        _is_vl = True
+                except Exception:
+                    pass
+            # force_mllm overrides auto-detection — user explicitly asked for MLLM
+            if force_mllm:
+                _is_vl = True
+
+            if _is_vl:
+                logger.error(
+                    "Refusing to start distributed mode for VL/multimodal model. "
+                    "DistributedEngine is text-only today (is_mllm=False). A VL "
+                    "request would silently route through the text-only coordinator "
+                    "path and embed image tokens as text garbage. Run this model "
+                    "single-node for now. Phase 2 will add VL support once the "
+                    "vision encoder + language tower pipeline split is implemented."
+                )
+                _distributed_enabled = False
+                _distributed_coordinator = None
+                distributed = False
+        except Exception as e:
+            logger.debug(
+                "VL detection failed (non-fatal): %s — proceeding with distributed",
+                e,
+            )
+
     if distributed:
         logger.info("Distributed mode enabled (%s parallelism)", distributed_mode)
         _cluster_secret_resolved = (

@@ -110,24 +110,119 @@ def get_local_node_info() -> NodeInfo:
 
 
 def detect_link_type(interface: str) -> LinkType:
-    """Classify a network interface by link type."""
+    """Classify a network interface by link type.
+
+    Uses four independent checks and combines them:
+      1. Interface name substring match (bridge*, utun*, en*)
+      2. Thunderbolt presence via system_profiler SPThunderboltDataType
+      3. Wi-Fi check via networksetup -listallhardwareports
+      4. Link speed via ifconfig media (10Gbase / 1000base / ...)
+
+    Thunderbolt wins if ANY of these report a Thunderbolt link that
+    covers `interface`. This is more robust than name matching alone
+    because macOS names Thunderbolt bridges `bridge0`, `bridge1`,
+    `en7`, etc. depending on how many Thunderbolt devices are
+    connected and in what order.
+    """
     iface = interface.lower()
-    if iface.startswith("bridge") or "thunderbolt" in iface:
+
+    # Method 1: interface name heuristic
+    if "thunderbolt" in iface:
         return LinkType.THUNDERBOLT
     if iface.startswith("utun"):
         return LinkType.TAILSCALE
+
+    # Method 2: system_profiler SPThunderboltDataType — authoritative
+    # source for Thunderbolt topology. Checks whether ANY connected TB
+    # device has an active bridge, then classifies bridge* as TB.
+    if iface.startswith("bridge"):
+        if _thunderbolt_has_active_bridge():
+            return LinkType.THUNDERBOLT
+        # `bridge0` on macOS is also used for AP mode / internet sharing.
+        # Without a TB peer it's not a TB link — fall through.
+
+    # en* interfaces — could be Ethernet or Wi-Fi, and could ALSO be
+    # a Thunderbolt Ethernet adapter on TB5 (which reports as en0 or
+    # en1 in some configurations).
     if iface.startswith("en"):
         if _is_wifi_interface(interface):
             return LinkType.WIFI
+
+        # Method 3: is this en* interface actually a Thunderbolt Ethernet
+        # bridge on TB5? Check system_profiler for a "Thunderbolt Network"
+        # device whose BSD name matches this interface.
+        if _thunderbolt_owns_interface(interface):
+            return LinkType.THUNDERBOLT
+
+        # Method 4: link speed from ifconfig media
         speed = _get_link_speed_mbps(interface)
+        if speed >= 40000:
+            # TB4 = 40 Gbps, TB5 = 80/120 Gbps — ifconfig may report
+            # these as "40Gbase" / "80Gbase". Classify as Thunderbolt
+            # even if the interface name didn't advertise it.
+            return LinkType.THUNDERBOLT
         if speed >= 5000:
             return LinkType.ETHERNET_10G
         return LinkType.ETHERNET_1G
     return LinkType.UNKNOWN
 
 
+def _thunderbolt_has_active_bridge() -> bool:
+    """Return True if system_profiler reports at least one connected
+    Thunderbolt device with a networking bridge. This is the
+    authoritative way to detect a live Thunderbolt link between two
+    Macs — plugging a TB cable without an active peer reports the
+    port but no bridge, while an active peer shows a `Link Status:
+    0x1` or similar active state.
+    """
+    try:
+        result = subprocess.run(
+            ["system_profiler", "SPThunderboltDataType", "-json"],
+            capture_output=True, text=True, timeout=5,
+        )
+        data = json.loads(result.stdout)
+        items = data.get("SPThunderboltDataType", [])
+        for item in items:
+            # Each TB port is an entry. A port with a peer will have
+            # connected devices listed under "_items" and a
+            # "device_name_key" showing the remote Mac's name.
+            sub = item.get("_items", [])
+            if sub:
+                return True
+            if item.get("device_name_key"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _thunderbolt_owns_interface(interface: str) -> bool:
+    """Return True if the given BSD interface name is associated with
+    a Thunderbolt Networking device (macOS's "Thunderbolt Bridge" or
+    "Thunderbolt Ethernet Slot" presented as en*)."""
+    try:
+        result = subprocess.run(
+            ["networksetup", "-listallhardwareports"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.splitlines()
+        for i, line in enumerate(lines):
+            if f"Device: {interface}" in line and i > 0:
+                prev = lines[i - 1].lower()
+                if "thunderbolt" in prev:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def detect_best_route(target_ip: str) -> LinkType:
-    """Detect the link type for reaching a specific IP address."""
+    """Detect the link type for reaching a specific IP address.
+
+    Uses `route -n get <ip>` to find the outgoing interface, then
+    classifies it. If the route lookup fails (e.g., no route), returns
+    UNKNOWN so the caller can decide whether to retry or reject.
+    """
     try:
         result = subprocess.run(
             ["route", "-n", "get", target_ip],
@@ -512,12 +607,27 @@ class UDPBroadcaster:
 async def probe_http_identity(address: str, port: int = DEFAULT_WORKER_PORT) -> Optional[NodeInfo]:
     """Probe a known IP for a vMLX worker via HTTP GET /node_id.
 
-    Workers expose a lightweight identity endpoint. Works across
-    subnets, VPNs, and any network that supports TCP.
+    Workers expose two listeners:
+      - `port` → binary protocol (length-prefixed JSON + tensor payloads)
+      - `port + 1` → HTTP identity endpoint (for this probe)
+
+    This function takes the BINARY port (the one the caller will later
+    use for WorkerConnection.connect) and internally probes the HTTP
+    port at `port + 1`. The returned NodeInfo carries the binary port
+    so downstream code doesn't need to know about the +1 offset.
+
+    Before this fix both `_cached` (manual --worker-nodes) and the
+    Tailscale peer probe were passing 9100 and hitting the binary
+    server with a raw HTTP request — the binary server would try to
+    parse 'GET ' as a 4-byte big-endian header length (1.1GB), fail
+    with IncompleteReadError, and silently close the connection.
+    Both discovery methods appeared broken because every probe
+    returned None.
     """
+    http_port = port + 1
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(address, port), timeout=3.0,
+            asyncio.open_connection(address, http_port), timeout=3.0,
         )
         request = f"GET /node_id HTTP/1.0\r\nHost: {address}\r\n\r\n"
         writer.write(request.encode())
@@ -535,6 +645,8 @@ async def probe_http_identity(address: str, port: int = DEFAULT_WORKER_PORT) -> 
         body = resp_str.split("\r\n\r\n", 1)[-1].strip()
         info = json.loads(body)
 
+        # NodeInfo.port holds the BINARY port — WorkerConnection.connect
+        # uses this value for the real inference TCP connection.
         return NodeInfo(
             node_id=info.get("node_id", f"{address}:{port}"),
             hostname=info.get("hostname", address),
@@ -595,10 +707,35 @@ async def discover_tailscale_peers(worker_port: int = DEFAULT_WORKER_PORT) -> Li
     return found
 
 
+async def verify_reachable(address: str, port: int, timeout: float = 3.0) -> bool:
+    """Pre-flight TCP reachability check.
+
+    Bonjour can return a stale or intentionally-announced address
+    that isn't actually routable from the coordinator (worker moved
+    networks, firewall, mDNS cache lag). This is a cheap connect-only
+    test that confirms the binary port is answering BEFORE the
+    coordinator tries to send a JOIN message and wait for a 10s
+    connect timeout inside WorkerConnection.connect.
+    """
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(address, port), timeout=timeout,
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 async def discover_all(
     timeout: float = 5.0,
     cached_peers: Optional[List[dict]] = None,
     on_found: Optional[Callable[[NodeInfo, str], None]] = None,
+    verify: bool = True,
 ) -> List[NodeInfo]:
     """Run ALL discovery methods in parallel and deduplicate results.
 
@@ -661,11 +798,37 @@ async def discover_all(
         return_exceptions=True,
     )
 
-    result = [node for node, method in all_nodes.values()]
+    raw_result = [(node, method) for node, method in all_nodes.values()]
+
+    if verify and raw_result:
+        # Pre-flight reachability check — drop any discovered node whose
+        # advertised address doesn't accept TCP on the binary port. Catches
+        # stale mDNS entries, firewall blocks, and NAT'd addresses.
+        probes = [
+            verify_reachable(node.address, node.port)
+            for node, _ in raw_result
+        ]
+        reachable = await asyncio.gather(*probes, return_exceptions=True)
+        verified: List[NodeInfo] = []
+        for (node, method), ok in zip(raw_result, reachable):
+            if ok is True:
+                verified.append(node)
+            else:
+                logger.info(
+                    "Discovery: dropping %s (%s) — %s:%d not reachable",
+                    node.hostname, method, node.address, node.port,
+                )
+        result = verified
+    else:
+        result = [node for node, _ in raw_result]
+
+    method_counts = {}
+    for _, method in raw_result:
+        method_counts[method] = method_counts.get(method, 0) + 1
     logger.info(
-        "Discovery complete: %d nodes found (%s)",
+        "Discovery complete: %d raw / %d reachable (%s)",
+        len(raw_result),
         len(result),
-        ", ".join(f"{m}:{sum(1 for _,mm in all_nodes.values() if mm == m)}"
-                  for m in sorted(set(m for _, m in all_nodes.values()))),
+        ", ".join(f"{m}:{c}" for m, c in sorted(method_counts.items())),
     )
     return result
