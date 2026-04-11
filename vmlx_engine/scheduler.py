@@ -65,6 +65,53 @@ CACHE_CORRUPTION_PATTERNS = [
 ]
 
 
+def _rebuild_meta_state_after_truncation(
+    cls_name: str,
+    orig_meta: tuple,
+    safe_len: int,
+) -> Optional[tuple]:
+    """Rebuild a cache layer's meta_state after slicing its KV tensors to
+    ``safe_len`` tokens. Returns ``None`` to signal "cannot safely truncate —
+    skip this store" (used for RotatingKVCache when the circular buffer has
+    already wrapped).
+
+    Why this exists: different mlx-lm cache classes pack different fields
+    into ``meta_state``, and blindly overwriting slot 0 with the new length
+    silently corrupted RotatingKVCache's ``keep`` field, producing word-loop
+    generations after the first cache hit on Gemma 4 (25 sliding + 5 full
+    attention layers).
+
+    meta_state layouts (from mlx_lm/models/cache.py):
+      - ``KVCache``          → ``(offset,)``
+      - ``QuantizedKVCache`` → ``(offset, group_size, bits)``
+      - ``RotatingKVCache``  → ``(keep, max_size, offset, _idx)``
+    """
+    if "Rotating" in cls_name:
+        if not orig_meta or len(orig_meta) < 4:
+            return (str(0), str(safe_len), str(safe_len), str(safe_len))
+        try:
+            keep = int(orig_meta[0])
+            max_size = int(orig_meta[1])
+            offset = int(orig_meta[2])
+        except (ValueError, TypeError):
+            return (str(0), str(safe_len), str(safe_len), str(safe_len))
+        if offset > max_size:
+            # Circular buffer has wrapped — slot order != token order, so
+            # a head-aligned slice is meaningless. Refuse to store.
+            return None
+        return (
+            str(keep),
+            str(max_size),
+            str(safe_len),
+            str(safe_len),
+        )
+    # KVCache / QuantizedKVCache: slot 0 IS the offset. Preserve tail
+    # (group_size, bits, …) unchanged.
+    if orig_meta:
+        return (str(safe_len),) + tuple(orig_meta[1:])
+    return (str(safe_len),)
+
+
 class SchedulingPolicy(Enum):
     """Scheduling policy for request ordering."""
 
@@ -249,6 +296,25 @@ class Scheduler:
         self._tq_active = getattr(model, "make_cache", None) and getattr(
             model.make_cache, "__name__", ""
         ) in ("_tq_make_cache", "_turboquant_make_cache")
+
+        # Mixed-attention models (Gemma 4 = sliding + full) currently drift
+        # under the prefix-cache reconstruct path and produce word loops on
+        # the 3rd multi-turn request. Transparently bypass the prefix cache
+        # on every request for these models until the root cause is found.
+        # Cache_salt / skip_prefix_cache remain the per-request escape hatch
+        # for every other class of benchmark.
+        self._force_bypass_prefix_cache = False
+        try:
+            self._force_bypass_prefix_cache = self._model_has_mixed_attention(model)
+            if self._force_bypass_prefix_cache:
+                logger.warning(
+                    "LLM mixed-attention model detected (e.g. Gemma 4 sliding+full). "
+                    "Prefix cache is auto-bypassed on every request — multi-turn "
+                    "reconstructed KV state causes generation loops at the current "
+                    "rep_penalty floor."
+                )
+        except Exception as e:
+            logger.debug(f"Mixed-attention detection failed: {e}")
 
         # Per-model SequenceStateMachine for token-level reasoning/stop detection.
         # Lazy-built on first request because we need the reasoning parser instance
@@ -588,6 +654,29 @@ class Scheduler:
         # periodically (every 60s) even during continuous load.
         self._last_metal_gc_time = time.monotonic()
         self._metal_gc_interval = 60.0  # seconds
+
+    @staticmethod
+    def _model_has_mixed_attention(model: Any) -> bool:
+        """Return True for models that interleave sliding-window and full
+        attention layers (Gemma 4 pattern). Detection is conservative: only
+        returns True when the config clearly lists at least two distinct
+        attention modes including at least one sliding variant.
+        """
+        candidates = []
+        for attr in ('args', 'config'):
+            cfg = getattr(model, attr, None)
+            if cfg is not None:
+                candidates.append(cfg)
+                tc = getattr(cfg, 'text_config', None)
+                if tc is not None:
+                    candidates.append(tc)
+        for cfg in candidates:
+            layer_types = getattr(cfg, 'layer_types', None)
+            if layer_types and isinstance(layer_types, (list, tuple)):
+                kinds = set(layer_types)
+                if len(kinds) >= 2 and any('sliding' in str(k) for k in kinds):
+                    return True
+        return False
 
     @staticmethod
     def _is_hybrid_model(model: Any) -> bool:
@@ -1648,10 +1737,16 @@ class Scheduler:
             pass
 
         def _to_numpy(arr):
-            """Convert an evaluated MLX array to numpy (safe CPU memcpy)."""
+            """Convert an evaluated MLX array to numpy (safe CPU memcpy).
+
+            bf16 goes through float32 (not float16): fp16 has only 5 exponent
+            bits vs bf16's 8, so the downcast silently clips attention KV
+            values and corrupts cached state enough to produce word loops
+            on sensitive models (e.g. Gemma 4 JANG multi-turn rep_pen basin).
+            """
             try:
                 if arr.dtype == mx.bfloat16:
-                    return np.array(arr.astype(mx.float16))
+                    return np.array(arr.astype(mx.float32))
                 return np.array(arr)
             except Exception:
                 return arr
@@ -2029,6 +2124,12 @@ class Scheduler:
         """
         if request.request_id in self.requests:
             raise ValueError(f"Request {request.request_id} already exists")
+
+        # Model-level forced bypass (e.g. Gemma 4 mixed sliding+full
+        # attention). See __init__ for rationale. Applies on top of any
+        # per-request cache_salt / skip_prefix_cache bypass.
+        if getattr(self, "_force_bypass_prefix_cache", False):
+            request._bypass_prefix_cache = True
 
         # Reset PLD auto-tune window on each new request — each generation
         # is a different workload, so cwnd from the previous request is
@@ -3310,9 +3411,10 @@ class Scheduler:
                                             trunc_ok = False
                                             break
                                         state = sd.get("state")
+                                        cls_name = sd.get("class_name", "")
                                         if (
                                             state is None
-                                            or sd.get("class_name") == "CacheList"
+                                            or cls_name == "CacheList"
                                         ):
                                             # CacheList/skip: pass through
                                             truncated_dicts.append(sd)
@@ -3334,14 +3436,17 @@ class Scheduler:
                                                     else:
                                                         keys = keys[:, :safe, :]
                                                         values = values[:, :safe, :]
-                                                    # Preserve original meta but update offset.
-                                                    # KVCache meta = ('offset',)
-                                                    orig_meta = sd.get("meta_state", ())
-                                                    new_meta = (
-                                                        (str(safe),) + orig_meta[1:]
-                                                        if orig_meta
-                                                        else (str(safe),)
+                                                    new_meta = _rebuild_meta_state_after_truncation(
+                                                        cls_name,
+                                                        sd.get("meta_state", ()),
+                                                        safe,
                                                     )
+                                                    if new_meta is None:
+                                                        # RotatingKVCache with wrapped
+                                                        # buffer: cannot safely truncate.
+                                                        # Skip this store entirely.
+                                                        trunc_ok = False
+                                                        break
                                                     truncated_dicts.append(
                                                         {
                                                             **sd,
@@ -3369,16 +3474,14 @@ class Scheduler:
                                                             t[..., :safe, :]
                                                             for t in values
                                                         )
-                                                        # Preserve group_size + bits from QuantizedKVCache meta.
-                                                        # meta_state = ('offset', 'group_size', 'bits')
-                                                        orig_meta = sd.get(
-                                                            "meta_state", ()
+                                                        new_meta = _rebuild_meta_state_after_truncation(
+                                                            cls_name,
+                                                            sd.get("meta_state", ()),
+                                                            safe,
                                                         )
-                                                        new_meta = (
-                                                            (str(safe),) + orig_meta[1:]
-                                                            if orig_meta
-                                                            else (str(safe),)
-                                                        )
+                                                        if new_meta is None:
+                                                            trunc_ok = False
+                                                            break
                                                         truncated_dicts.append(
                                                             {
                                                                 **sd,

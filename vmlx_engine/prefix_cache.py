@@ -1246,17 +1246,26 @@ class BlockAwarePrefixCache:
                                 v_w, v_s, v_b, group_size=g_size, bits=q_bits,
                             )
                             if 'bfloat16' in str(k_dq.dtype):
-                                k_dq = k_dq.astype(mx.float16)
-                                v_dq = v_dq.astype(mx.float16)
+                                # Use float32 (not float16) for the numpy round-trip.
+                                # fp16 has only 5 exponent bits vs bf16's 8 — casting
+                                # down silently clips/loses precision for many
+                                # attention KV values. On Gemma 4 JANG this caused
+                                # "step-by-step" word loops on the 3rd multi-turn
+                                # request because the cached KV drift pushed the
+                                # sampler into a degenerate rep_pen-proof basin.
+                                k_dq = k_dq.astype(mx.float32)
+                                v_dq = v_dq.astype(mx.float32)
                             mx.eval(k_dq, v_dq)
                             np_sources[idx] = (np.array(k_dq), np.array(v_dq), k_dq.dtype)
                             continue
                         if hasattr(keys, 'shape'):
                             k_np, v_np = keys, values
-                            # numpy doesn't support bfloat16 — cast first
+                            # numpy doesn't support bfloat16 — cast through fp32
+                            # (NOT fp16, which silently clips). See the Gemma 4
+                            # multi-turn word-loop note above.
                             if hasattr(k_np, 'dtype') and 'bfloat16' in str(k_np.dtype):
-                                k_np = k_np.astype(mx.float16)
-                                v_np = v_np.astype(mx.float16)
+                                k_np = k_np.astype(mx.float32)
+                                v_np = v_np.astype(mx.float32)
                             np_sources[idx] = (np.array(k_np), np.array(v_np), keys.dtype)
                     except Exception as _npe:
                         logger.debug(f"np_sources skip layer {idx}: {_npe}")

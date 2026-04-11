@@ -394,6 +394,29 @@ class MLLMScheduler:
         except Exception as e:
             logger.warning(f"Failed to detect hybrid cache model: {e}")
 
+        # Detect mixed-attention models (e.g. Gemma 4 = 25 sliding + 5 full).
+        # These models break under the paged prefix-cache reconstruct path:
+        # reconstructed KV drifts enough from fresh-prefill KV that rep_pen=1.1
+        # can no longer escape degenerate basins, producing word loops like
+        # "step-by-step-step-by-step-…" on the third multi-turn request.
+        # Root cause is still under investigation. Until it's fixed, every
+        # request on these models is transparently served as if the client
+        # had sent `cache_salt` / `skip_prefix_cache=True`. Other models
+        # (uniform attention, hybrid SSM) keep their full cache behaviour.
+        self._force_bypass_prefix_cache = False
+        try:
+            self._force_bypass_prefix_cache = self._model_has_mixed_attention(lang_model)
+            if self._force_bypass_prefix_cache:
+                logger.warning(
+                    "VLM mixed-attention model detected (e.g. Gemma 4 sliding+full). "
+                    "Prefix cache is auto-bypassed on every request — multi-turn "
+                    "reconstructed KV state causes generation loops at the current "
+                    "rep_penalty floor. Use `cache_salt` to document the bypass "
+                    "explicitly in benchmark runs."
+                )
+        except Exception as e:
+            logger.debug(f"Mixed-attention detection failed: {e}")
+
         if self._is_hybrid:
             try:
                 from .utils.mamba_cache import ensure_mamba_support
@@ -905,19 +928,48 @@ class MLLMScheduler:
                         new_cache.offset = safe_target
                         truncated.append(new_cache)
                     else:
-                        # Standard KVCache
+                        # Standard KVCache / RotatingKVCache.
+                        # CRITICAL: preserve the original class for sliding-
+                        # window layers (e.g. Gemma 4's 25 sliding_attention
+                        # layers). Demoting them to KVCache drops `keep` /
+                        # `max_size` / `_idx`, so on the next turn the model
+                        # sees a non-rotating buffer with garbage window
+                        # state and generates word-loops.
                         from mlx_lm.models.cache import KVCache
-                        new_cache = KVCache()
+                        cls_name = type(layer_cache).__name__
+                        new_cache = None
+                        if "Rotating" in cls_name:
+                            try:
+                                from mlx_lm.models.cache import RotatingKVCache
+                                max_size = getattr(layer_cache, "max_size", target_len)
+                                keep = getattr(layer_cache, "keep", 0)
+                                offset = getattr(layer_cache, "offset", 0)
+                                if offset > max_size:
+                                    # Wrapped circular buffer — head-aligned
+                                    # slice is not in temporal order. Skip.
+                                    return None
+                                new_cache = RotatingKVCache(
+                                    max_size=max_size,
+                                    keep=keep,
+                                )
+                            except ImportError:
+                                new_cache = KVCache()
+                        if new_cache is None:
+                            new_cache = KVCache()
                         ndim = k.ndim
                         if ndim == 4:
-                            new_cache.keys = k[:, :, :target_len, :]
-                            new_cache.values = v[:, :, :target_len, :]
+                            safe_target = min(target_len, k.shape[2])
+                            new_cache.keys = k[:, :, :safe_target, :]
+                            new_cache.values = v[:, :, :safe_target, :]
                         elif ndim == 3:
-                            new_cache.keys = k[:, :target_len, :]
-                            new_cache.values = v[:, :target_len, :]
+                            safe_target = min(target_len, k.shape[1])
+                            new_cache.keys = k[:, :safe_target, :]
+                            new_cache.values = v[:, :safe_target, :]
                         else:
                             return None
-                        new_cache.offset = target_len
+                        new_cache.offset = safe_target
+                        if "Rotating" in cls_name and hasattr(new_cache, "_idx"):
+                            new_cache._idx = safe_target
                         truncated.append(new_cache)
                 except Exception as e:
                     logger.warning(f"Failed to truncate KVCache layer: {e}")
@@ -951,6 +1003,30 @@ class MLLMScheduler:
                 truncated.append(layer_cache)
 
         return truncated
+
+    def _model_has_mixed_attention(self, lang_model) -> bool:
+        """Return True for models that interleave sliding-window and full
+        attention layers (Gemma 4 pattern).
+
+        Detection is conservative: we only return True when we can prove
+        the config has at least two distinct attention modes. For everything
+        else we return False and the normal prefix-cache pipeline runs.
+        """
+        candidates = []
+        for attr in ('args', 'config'):
+            cfg = getattr(lang_model, attr, None)
+            if cfg is not None:
+                candidates.append(cfg)
+                tc = getattr(cfg, 'text_config', None)
+                if tc is not None:
+                    candidates.append(tc)
+        for cfg in candidates:
+            layer_types = getattr(cfg, 'layer_types', None)
+            if layer_types and isinstance(layer_types, (list, tuple)):
+                kinds = set(layer_types)
+                if len(kinds) >= 2 and any('sliding' in str(k) for k in kinds):
+                    return True
+        return False
 
     def _detect_n_kv_heads(self) -> int:
         """Detect number of KV heads from VLM language model config.
@@ -1308,6 +1384,12 @@ class MLLMScheduler:
         # memory-aware, legacy, disk L2, block disk, SSM companion, and the
         # multimodal vision / pixel_values caches.
         if kwargs.get("bypass_prefix_cache", False):
+            request._bypass_prefix_cache = True
+
+        # Model-level forced bypass (e.g. Gemma 4 mixed-attention). Applies
+        # BEFORE any per-request check so the scheduler treats these as if
+        # the client had sent `cache_salt`. See __init__ for rationale.
+        if getattr(self, "_force_bypass_prefix_cache", False):
             request._bypass_prefix_cache = True
 
         with self._queue_lock:

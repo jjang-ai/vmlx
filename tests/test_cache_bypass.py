@@ -406,3 +406,143 @@ class TestHappyPathStillUsesCache:
             max_tokens=100,
         )
         assert _compute_bypass_prefix_cache(r) is False
+
+
+# ---------------------------------------------------------------------------
+# Mixed-attention auto-bypass (Gemma 4 sliding + full pattern)
+# ---------------------------------------------------------------------------
+
+
+class TestMixedAttentionAutoBypass:
+    """Gemma 4 and similar models with interleaved sliding-window + full
+    attention layers drift under the prefix-cache reconstruct path and
+    produce word loops on the 3rd multi-turn request. The schedulers
+    detect this at init and transparently bypass the prefix cache on
+    every request.
+    """
+
+    def _read(self, path):
+        with open(path) as f:
+            return f.read()
+
+    def test_llm_scheduler_has_mixed_attention_helper(self):
+        src = self._read("vmlx_engine/scheduler.py")
+        assert "def _model_has_mixed_attention(" in src, (
+            "scheduler.py lost the _model_has_mixed_attention helper"
+        )
+        assert "_force_bypass_prefix_cache" in src, (
+            "scheduler.py lost the _force_bypass_prefix_cache flag"
+        )
+        assert 'request._bypass_prefix_cache = True' in src, (
+            "scheduler.add_request no longer forces the per-request bypass flag"
+        )
+
+    def test_mllm_scheduler_has_mixed_attention_helper(self):
+        src = self._read("vmlx_engine/mllm_scheduler.py")
+        assert "def _model_has_mixed_attention(" in src, (
+            "mllm_scheduler.py lost the _model_has_mixed_attention helper"
+        )
+        assert "_force_bypass_prefix_cache" in src, (
+            "mllm_scheduler.py lost the _force_bypass_prefix_cache flag"
+        )
+
+    def test_mixed_attention_helper_detects_gemma4_layer_types(self):
+        """Feed the helper a mock model whose args.layer_types look like
+        Gemma 4 (25 sliding + 5 full) and assert it returns True."""
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            layer_types = (["sliding_attention"] * 25) + (["full_attention"] * 5)
+
+        class _Model:
+            args = _Args()
+
+        assert Scheduler._model_has_mixed_attention(_Model()) is True
+
+    def test_mixed_attention_helper_ignores_uniform_models(self):
+        """Uniform-attention models (Llama, Qwen) must return False so
+        they keep the full prefix-cache behaviour."""
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            layer_types = ["full_attention"] * 32
+
+        class _Model:
+            args = _Args()
+
+        assert Scheduler._model_has_mixed_attention(_Model()) is False
+
+    def test_mixed_attention_helper_handles_text_config(self):
+        """VLM wrappers store the attention layout under text_config."""
+        from vmlx_engine.scheduler import Scheduler
+
+        class _TextCfg:
+            layer_types = (["sliding_attention"] * 2) + (["full_attention"] * 1)
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _Model:
+            config = _Cfg()
+
+        assert Scheduler._model_has_mixed_attention(_Model()) is True
+
+
+# ---------------------------------------------------------------------------
+# RotatingKVCache meta_state truncation: keep + max_size must NOT be lost
+# ---------------------------------------------------------------------------
+
+
+class TestRotatingKVCacheMetaStateTruncation:
+    """Gemma 4 uses RotatingKVCache for sliding layers with
+    meta_state = (keep, max_size, offset, _idx). The scheduler's
+    gen_prompt_len truncation path previously assumed slot 0 was ``offset``
+    and silently overwrote ``keep`` with the truncated sequence length —
+    this is the bug that prompted the RotatingKVCache investigation.
+    The helper below must preserve keep + max_size and only touch
+    offset/_idx.
+    """
+
+    def test_rotating_kv_cache_preserves_keep_and_max_size(self):
+        from vmlx_engine.scheduler import _rebuild_meta_state_after_truncation
+        meta = _rebuild_meta_state_after_truncation(
+            "RotatingKVCache",
+            (str(0), str(1024), str(150), str(150)),
+            safe_len=93,
+        )
+        assert meta == ("0", "1024", "93", "93"), (
+            f"RotatingKVCache meta_state slot 0 (keep) must stay at 0, "
+            f"slot 1 (max_size) must stay at 1024; got {meta}"
+        )
+
+    def test_rotating_kv_cache_wrapped_refuses_store(self):
+        """A circular buffer that has wrapped (offset > max_size) cannot
+        be truncated by a head-aligned slice — refuse to store rather
+        than corrupt."""
+        from vmlx_engine.scheduler import _rebuild_meta_state_after_truncation
+        meta = _rebuild_meta_state_after_truncation(
+            "RotatingKVCache",
+            (str(0), str(1024), str(2000), str(800)),
+            safe_len=93,
+        )
+        assert meta is None
+
+    def test_standard_kv_cache_meta_state_unchanged(self):
+        from vmlx_engine.scheduler import _rebuild_meta_state_after_truncation
+        meta = _rebuild_meta_state_after_truncation(
+            "KVCache",
+            (str(150),),
+            safe_len=93,
+        )
+        assert meta == ("93",)
+
+    def test_quantized_kv_cache_preserves_group_size_and_bits(self):
+        from vmlx_engine.scheduler import _rebuild_meta_state_after_truncation
+        meta = _rebuild_meta_state_after_truncation(
+            "QuantizedKVCache",
+            (str(150), str(64), str(8)),
+            safe_len=93,
+        )
+        assert meta == ("93", "64", "8"), (
+            f"QuantizedKVCache must preserve (group_size, bits); got {meta}"
+        )
