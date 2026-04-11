@@ -239,11 +239,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Session Header */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card/50 flex-shrink-0">
-        <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1">
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-card/50 flex-shrink-0 overflow-x-auto [scrollbar-width:thin]">
+        <button onClick={onBack} className="text-muted-foreground hover:text-foreground text-sm flex items-center gap-1 flex-shrink-0">
           <ArrowLeft className="h-3.5 w-3.5" /> Sessions
         </button>
-        <div className="w-px h-4 bg-border" />
+        <div className="w-px h-4 bg-border flex-shrink-0" />
 
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColor}`} />

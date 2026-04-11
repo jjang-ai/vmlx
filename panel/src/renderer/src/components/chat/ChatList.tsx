@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { Pencil, Trash2, Folder, X, MessageSquare, Search } from 'lucide-react'
+import { Pencil, Trash2, Folder, X, MessageSquare, Search, Upload } from 'lucide-react'
 
 interface Chat {
   id: string
@@ -280,16 +280,18 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
         <div className="flex gap-2">
           <button
             onClick={onNewChat}
-            className="flex-1 px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium"
+            className="flex-1 min-w-0 px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium truncate"
           >
             + New Chat
           </button>
           <button
             onClick={handleImport}
-            className="px-3 py-2 border border-border rounded hover:bg-accent text-sm"
+            className="flex-shrink-0 px-2.5 py-2 border border-border rounded hover:bg-accent text-sm flex items-center gap-1.5 whitespace-nowrap"
             title="Import chat from file"
+            aria-label="Import chat"
           >
-            Import
+            <Upload className="h-3.5 w-3.5" />
+            <span>Import</span>
           </button>
         </div>
 

@@ -786,6 +786,30 @@ def _apply_jit_compilation():
         )
         return
 
+    # GH issue #66: TurboQuantKVCache is a custom non-MLX class. mx.compile()
+    # rejects any function arg that isn't an mx.array / int / float / str / None,
+    # so the very first prefill on a JIT-compiled JANG model raises:
+    #   ValueError: [compile] Function arguments must be trees of arrays or
+    #   constants ... received type jang_tools.turboquant.cache.TurboQuantKVCache
+    # Detect TQ via the patched make_cache name and skip JIT for those models.
+    # This restores the JANG model load path without dropping JIT for non-TQ
+    # models that legitimately benefit from it.
+    try:
+        _eng_model = getattr(_engine, "_model", None) or getattr(_engine, "model", None)
+        if _eng_model is not None:
+            _lm_for_tq = getattr(_eng_model, "language_model", None) or _eng_model
+            _make_cache = getattr(_lm_for_tq, "make_cache", None)
+            _make_cache_name = getattr(_make_cache, "__name__", "") if _make_cache else ""
+            if _make_cache_name in ("_turboquant_make_cache", "_tq_make_cache"):
+                logger.info(
+                    "JIT: Skipping mx.compile — TurboQuantKVCache is active. "
+                    "mx.compile() cannot trace custom cache objects (issue #66). "
+                    "Use --kv-cache-quantization none if you need JIT for this model."
+                )
+                return
+    except Exception as _tq_check_err:
+        logger.debug(f"JIT: TQ-presence check failed ({_tq_check_err}) — proceeding")
+
     try:
         import mlx.core as mx
 

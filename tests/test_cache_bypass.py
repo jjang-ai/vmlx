@@ -546,3 +546,69 @@ class TestRotatingKVCacheMetaStateTruncation:
         assert meta == ("93", "64", "8"), (
             f"QuantizedKVCache must preserve (group_size, bits); got {meta}"
         )
+
+
+# ---------------------------------------------------------------------------
+# DeepseekV32Attention MLA absorb fp32-SDPA fix (GLM-5.1, DeepSeek-V3.2-Exp)
+# ---------------------------------------------------------------------------
+
+
+class TestDeepseekV32AbsorbFp32Patch:
+    """The bundled mlx_lm/models/deepseek_v32.py must keep the L==1 absorb-
+    branch SDPA inputs cast to fp32, otherwise GLM-5.1 / glm_moe_dsa decode
+    drifts ~7.0 in logit magnitude per token vs the prefill path and
+    produces repetition loops ('1.1.1.1...', 'precedence precedence...').
+
+    Source-level guard: a future mlx_lm bump that overwrites the bundled
+    file will revert this patch silently. These tests fail immediately when
+    that happens, so the regression is caught before a release ships.
+    """
+
+    def _read(self, path: str) -> str:
+        with open(path) as f:
+            return f.read()
+
+    def test_bundled_deepseek_v32_has_fp32_absorb_fix(self):
+        src = self._read(
+            "panel/bundled-python/python/lib/python3.12/site-packages/mlx_lm/models/deepseek_v32.py"
+        )
+        # The fp32 cast lines must be present in the L==1 branch.
+        assert "q_sdpa = q_nope.astype(mx.float32)" in src, (
+            "deepseek_v32.py lost the q_nope→fp32 cast on the L==1 branch — "
+            "GLM-5.1 / DeepSeek-V3.2 will repetition-loop on decode"
+        )
+        assert "k_sdpa = k.astype(mx.float32)" in src
+        assert "v_sdpa = v.astype(mx.float32)" in src
+        assert "mask_sdpa = pe_scores.astype(mx.float32)" in src
+        # The else branch must alias the variables (no fp32 on prefill path).
+        assert "q_sdpa, k_sdpa, v_sdpa, mask_sdpa = q_nope, k, v, pe_scores" in src
+        # Output must be cast back to bf16 before unembed_out.
+        assert "output = output.astype(kv_latent.dtype)" in src, (
+            "deepseek_v32.py lost the output→bf16 cast-back before unembed_out"
+        )
+        # SDPA must use the _sdpa variables, not the originals.
+        assert "q_sdpa, k_sdpa, v_sdpa, cache=cache, scale=self.scale, mask=mask_sdpa" in src
+
+    def test_only_l_eq_1_branch_is_touched_not_prefill(self):
+        """Negative-space guard: the prefill (L != 1) branch must be
+        unchanged so we don't accidentally slow down every other MLA model
+        (Mistral 4, Qwen3.5 MLA variants, DeepSeek V3 / V2)."""
+        src = self._read(
+            "panel/bundled-python/python/lib/python3.12/site-packages/mlx_lm/models/deepseek_v32.py"
+        )
+        # Prefill branch still uses the original logic
+        assert "k = self.embed_q(kv_latent, transpose=False)" in src
+        assert "v = self.unembed_out(kv_latent)" in src
+
+    def test_bundled_deepseek_v32_module_imports(self):
+        """Smoke test: the patched module must still be valid Python."""
+        import importlib
+        mod = importlib.import_module("mlx_lm.models.deepseek_v32")
+        assert hasattr(mod, "DeepseekV32Attention"), "module schema regressed"
+        assert hasattr(mod, "Model"), "module schema regressed"
+        import inspect
+        attn_src = inspect.getsource(mod.DeepseekV32Attention.__call__)
+        assert "q_sdpa" in attn_src, (
+            "loaded mlx_lm has unpatched deepseek_v32.py — bundled and "
+            "active site-packages may have drifted; reapply patch"
+        )
