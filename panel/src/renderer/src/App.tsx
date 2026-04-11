@@ -105,9 +105,19 @@ function App() {
   }, [sessions, openChat, dispatch])
 
   const handleNewChat = useCallback(async () => {
-    // Find the first running session, or any session
+    // mlxstudio #60: when the user has explicitly switched to session A in
+    // the sidebar, "+ New Chat" must create a chat against session A — not
+    // whichever running session happens to be first in the array. Earlier
+    // logic always picked `sessions.find(s => running)` which was a coin
+    // flip after loading a second model. Now we honor `activeSessionId`
+    // (set by `openChat` / `handleSessionChange` whenever the user
+    // navigates to a chat) and only fall back to "first running" or
+    // "first session" when nothing is active yet.
+    const explicit = state.activeSessionId
+      ? sessions.find(s => s.id === state.activeSessionId)
+      : null
     const running = sessions.find(s => s.status === 'running')
-    const target = running || sessions[0]
+    const target = explicit || running || sessions[0]
 
     if (!target) {
       // No sessions — switch to server mode to create one
@@ -126,7 +136,7 @@ function App() {
     if (result?.id) {
       openChat(result.id, target.id)
     }
-  }, [sessions, setMode, dispatch, openChat])
+  }, [sessions, state.activeSessionId, setMode, dispatch, openChat])
 
   const handleSessionChange = useCallback(async (sessionId: string) => {
     if (!state.activeChatId) return
