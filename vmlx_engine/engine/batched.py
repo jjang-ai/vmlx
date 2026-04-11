@@ -288,6 +288,62 @@ class BatchedEngine(BaseEngine):
         self._loaded = False
         logger.info("BatchedEngine stopped")
 
+    def _inject_fallback_chat_template(self, tokenizer) -> str | None:
+        """Best-effort attach a chat_template to a tokenizer that's missing one.
+
+        Why this exists (GH issue #66 part 2): mlx-community quants ship the
+        chat template as a SEPARATE ``chat_template.jinja`` file alongside
+        the tokenizer instead of baking it into ``tokenizer_config.json``.
+        Stock HF transformers raises ``tokenizer.chat_template is not set``
+        on first use. Falling back here lets the user run those quants
+        without re-downloading a JANG variant just to get a working prompt.
+
+        Resolution order:
+          1. ``chat_template.jinja`` in the model directory (most common)
+          2. ``chat_template.json`` (alternate format)
+          3. The model_configs registry's ``chat_template_custom`` field
+             (Harmony fallback for GLM/GPT-OSS-style models)
+
+        Returns the source description (e.g. ``"chat_template.jinja"``) on
+        success, ``None`` if no fallback was found. Mutates ``tokenizer``
+        in place by setting ``tokenizer.chat_template``.
+        """
+        if not hasattr(tokenizer, "chat_template"):
+            return None
+        try:
+            from pathlib import Path
+            model_dir = Path(self._model_name) if self._model_name else None
+            if model_dir and model_dir.is_dir():
+                # 1. chat_template.jinja
+                jinja_path = model_dir / "chat_template.jinja"
+                if jinja_path.is_file():
+                    tokenizer.chat_template = jinja_path.read_text(encoding="utf-8")
+                    return str(jinja_path.name)
+                # 2. chat_template.json
+                json_path = model_dir / "chat_template.json"
+                if json_path.is_file():
+                    import json as _json
+                    data = _json.loads(json_path.read_text(encoding="utf-8"))
+                    tpl = data.get("chat_template") if isinstance(data, dict) else None
+                    if isinstance(tpl, str):
+                        tokenizer.chat_template = tpl
+                        return str(json_path.name)
+        except Exception as e:
+            logger.debug(f"chat_template file probe failed: {e}")
+
+        # 3. Registry fallback by family
+        try:
+            from ..model_config_registry import get_model_config_registry
+            mc = get_model_config_registry().lookup(self._model_name or "")
+            tpl = getattr(mc, "chat_template_custom", None)
+            if isinstance(tpl, str) and tpl.strip():
+                tokenizer.chat_template = tpl
+                return f"registry:{mc.family_name}"
+        except Exception as e:
+            logger.debug(f"registry chat_template lookup failed: {e}")
+
+        return None
+
     def _compute_gen_prompt_len(
         self,
         messages: list[dict[str, Any]],
@@ -534,32 +590,55 @@ class BatchedEngine(BaseEngine):
                     if k not in ("tokenize", "add_generation_prompt")
                 })
 
+            prompt = None
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
             except Exception as template_err:
-                # Progressively strip non-essential kwargs to preserve tools/thinking
-                # when only extra kwargs (e.g. thinking_budget) cause failures.
-                # Strip order: extra kwargs first, then tools, then enable_thinking.
-                strip_order = [
-                    k for k in template_kwargs
-                    if k not in ("tokenize", "add_generation_prompt")
-                ]
-                # Reverse so we strip least important first (extra kwargs added last)
-                prompt = None
-                for key in reversed(strip_order):
-                    del template_kwargs[key]
-                    try:
-                        prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
-                        stripped = [k for k in strip_order if k not in template_kwargs]
-                        logger.warning(
-                            f"Chat template succeeded after stripping: {stripped} "
-                            f"(original error: {template_err})"
-                        )
-                        break
-                    except Exception:
-                        continue
+                # GH#66 part 2 — mlx-community quants (e.g. mlx-community/
+                # gemma-4-31b-8bit) often DON'T bake `chat_template` into
+                # tokenizer_config.json, so HF transformers raises
+                # `ValueError: tokenizer.chat_template is not set`. The
+                # template is usually shipped as a separate file in the
+                # model dir (`chat_template.jinja` or `chat_template.json`).
+                # Load it once, attach it to the tokenizer, and retry —
+                # avoids forcing the user to re-download a JANG variant
+                # just to get a working prompt.
+                _err_msg = str(template_err)
+                if "chat_template is not set" in _err_msg or "no template argument" in _err_msg:
+                    _injected = self._inject_fallback_chat_template(tokenizer)
+                    if _injected:
+                        try:
+                            prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                            logger.info(
+                                f"Chat template injected from {_injected} for {self._model_name}"
+                            )
+                        except Exception as retry_err:
+                            template_err = retry_err
+                            prompt = None
+
                 if prompt is None:
-                    # All kwargs stripped and still failing — last resort
+                    # Progressively strip non-essential kwargs to preserve tools/thinking
+                    # when only extra kwargs (e.g. thinking_budget) cause failures.
+                    # Strip order: extra kwargs first, then tools, then enable_thinking.
+                    strip_order = [
+                        k for k in template_kwargs
+                        if k not in ("tokenize", "add_generation_prompt")
+                    ]
+                    # Reverse so we strip least important first (extra kwargs added last)
+                    for key in reversed(strip_order):
+                        del template_kwargs[key]
+                        try:
+                            prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
+                            stripped = [k for k in strip_order if k not in template_kwargs]
+                            logger.warning(
+                                f"Chat template succeeded after stripping: {stripped} "
+                                f"(original error: {template_err})"
+                            )
+                            break
+                        except Exception:
+                            continue
+                if prompt is None:
+                    # All kwargs stripped and still failing — last resort (will raise)
                     prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
 
             prompt = check_and_inject_fallback_tools(
