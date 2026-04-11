@@ -242,7 +242,16 @@ class MeshManager:
         return success
 
     async def shutdown(self):
-        """Graceful shutdown."""
+        """Graceful shutdown — idempotent.
+
+        admin_deep_sleep can call this twice (once via DistributedEngine.stop()
+        and once via the server.py standalone distributed teardown block),
+        so subsequent calls short-circuit instead of re-iterating already
+        closed writers / cancelled tasks.
+        """
+        if getattr(self, "_shut_down", False):
+            return
+        self._shut_down = True
         self._running = False
         for task_name in ("_heartbeat_task", "_monitor_task", "_worker_task"):
             task = getattr(self, task_name, None)

@@ -86,14 +86,23 @@ class Worker:
         self.layer_start = 0
         self.layer_end = 0
         # Per-request KV cache slots keyed by request_id (populated by
-        # _handle_forward, dropped by _handle_cache_release). Before this
-        # fix a single dict slot was keyed by the hardcoded empty request_id,
+        # _handle_forward, dropped by _handle_cache_release). Before the
+        # Phase 1 fix a single dict slot was keyed by an empty request_id,
         # causing concurrent requests to corrupt each other.
+        #
+        # Each slot also carries a last-touched monotonic timestamp so the
+        # TTL sweep can reap orphaned slots when a coordinator dies between
+        # prefill and the release broadcast.
         self.cache: dict[str, list] = {}
+        self._cache_last_touched: dict[str, float] = {}
+        # 600 seconds — anything still active under the generation lock
+        # will be touched well within 10 minutes even on enormous prompts.
+        self._cache_ttl_seconds: float = 600.0
 
         self._server = None
         self._http_server = None
         self._udp_task: Optional[asyncio.Task] = None
+        self._cache_sweeper_task: Optional[asyncio.Task] = None
         self._advertiser = None
         self._authenticated = False
         self._requests_processed = 0
@@ -128,6 +137,12 @@ class Worker:
             self._advertiser = BonjourAdvertiser(self.node_info)
             await self._advertiser.start()
 
+        # Background cache TTL sweeper — reaps orphaned KV cache slots
+        # whose coordinator dropped the connection between prefill and
+        # the release message. Without this, a flaky network slowly
+        # leaks KV cache memory across requests.
+        self._cache_sweeper_task = asyncio.create_task(self._cache_sweeper())
+
         async with self._server:
             await self._server.serve_forever()
 
@@ -144,6 +159,13 @@ class Worker:
             except (asyncio.CancelledError, Exception):
                 pass
             self._udp_task = None
+        if self._cache_sweeper_task is not None and not self._cache_sweeper_task.done():
+            self._cache_sweeper_task.cancel()
+            try:
+                await self._cache_sweeper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._cache_sweeper_task = None
         if self._http_server is not None:
             self._http_server.close()
             try:
@@ -332,13 +354,16 @@ class Worker:
 
         # KV cache keyed by request_id so concurrent requests get isolated
         # slots. Released by a CACHE_OP release message when coordinator is
-        # done with the request.
+        # done with the request (or by the TTL sweeper if the coordinator
+        # drops the connection without sending release).
         cache_slot = self.cache.get(request_id)
         if cache_slot is None:
             cache_slot = _make_layer_cache(
                 self.model, self.layer_start, self.layer_end,
             )
             self.cache[request_id] = cache_slot
+        # Touch the slot so the TTL sweeper doesn't reap it mid-generation.
+        self._cache_last_touched[request_id] = time.monotonic()
 
         seq_len = hidden.shape[1]
         # seq_pos is the 0-indexed position of the FIRST token in `hidden`
@@ -375,9 +400,46 @@ class Worker:
         # Idempotent — don't error if already gone.
         existed = request_id in self.cache
         self.cache.pop(request_id, None)
+        self._cache_last_touched.pop(request_id, None)
         if existed:
             logger.debug("Released KV cache for request %s", request_id)
         return make_cache_ack(request_id, success=True)
+
+    async def _cache_sweeper(self) -> None:
+        """Reap orphaned cache slots whose last-touched time exceeds TTL.
+
+        Safety net for the case where a coordinator drops its TCP
+        connection mid-generation without sending the CACHE_OP release
+        — e.g., coordinator OOMs, network partition, or client kills the
+        coordinator process. Without this, each orphaned request permanently
+        leaks a full KV cache for this worker's layer range until process
+        restart.
+
+        Runs every 60 seconds. A slot is eligible for eviction if its
+        last-touched timestamp is older than `_cache_ttl_seconds` (600s
+        by default — longer than any reasonable single-request generation).
+        """
+        try:
+            while True:
+                await asyncio.sleep(60.0)
+                now = time.monotonic()
+                stale = [
+                    rid for rid, ts in self._cache_last_touched.items()
+                    if now - ts > self._cache_ttl_seconds
+                ]
+                for rid in stale:
+                    self.cache.pop(rid, None)
+                    self._cache_last_touched.pop(rid, None)
+                if stale:
+                    logger.info(
+                        "Cache sweeper reaped %d stale slot(s): %s",
+                        len(stale), stale[:5],
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Cache sweeper crashed: %s", e)
+            raise
 
     async def _handle_health(self, msg: Message) -> Message:
         return make_health_ack({
@@ -534,13 +596,21 @@ def _make_layer_cache(model, layer_start: int, layer_end: int) -> list:
     Uses the model's make_cache() to get the full cache structure,
     then extracts entries for our assigned layers. Handles hybrid SSM
     models where cache entries may be mixed types (KVCache + MambaCache).
+
+    Returns None when the worker cannot build a correct per-layer mapping
+    (e.g., hybrid SSM models where make_cache() produces fewer entries
+    than there are transformer layers because MLP/MoE blocks don't have
+    cache entries). Workers with cache=None still produce correct output
+    but pay an O(N²) penalty for re-running attention over the full
+    context on every decode step — this is a Phase 2 TODO for Nemotron.
     """
     try:
-        # Get the raw model (unwrap VLM wrapper if needed)
+        # Get the raw model (unwrap VLM wrapper or backbone-style model)
         raw_model = model
         for accessor in [
             lambda m: m.language_model.model,
             lambda m: m.model,
+            lambda m: m.backbone,
         ]:
             try:
                 raw_model = accessor(model)
@@ -556,21 +626,52 @@ def _make_layer_cache(model, layer_start: int, layer_end: int) -> list:
             from mlx_lm.models.cache import make_prompt_cache
             full_cache = make_prompt_cache(model)
 
-        # Extract only our layer range — preserves cache type per layer
-        # (KVCache for attention layers, MambaCache for SSM layers)
-        if isinstance(full_cache, list) and len(full_cache) >= layer_end:
-            return full_cache[layer_start:layer_end]
-        elif isinstance(full_cache, list) and len(full_cache) > 0:
-            # Cache length doesn't match layer count (some models share cache entries)
-            # Take what we can
-            num_cache = len(full_cache)
-            ratio = num_cache / max(1, layer_end)
-            cache_start = int(layer_start * ratio)
-            cache_end = int(layer_end * ratio)
-            return full_cache[cache_start:cache_end]
-        return full_cache
+        if not isinstance(full_cache, list):
+            return None
+
+        # Determine the full layer count so we can validate the 1:1 mapping.
+        total_layers = None
+        for accessor in [
+            lambda m: len(m.language_model.model.layers),
+            lambda m: len(m.model.layers),
+            lambda m: len(m.backbone.layers),
+            lambda m: len(m.layers),
+        ]:
+            try:
+                total_layers = accessor(model)
+                break
+            except (AttributeError, TypeError):
+                continue
+
+        if total_layers is not None and len(full_cache) != total_layers:
+            # Hybrid SSM case — ratio slicing is WRONG because cache entries
+            # don't correspond 1:1 to layers. Return None so the worker
+            # forwards without cache (correct but slow). Do NOT silently
+            # return a wrong slice.
+            logger.warning(
+                "Worker cache slice skipped: model has %d layers but "
+                "make_cache() returned %d entries (hybrid SSM?). Worker "
+                "will run layers %d-%d without cache — correct output but "
+                "O(N²). Known Phase 2 limitation for Nemotron-style "
+                "hybrid SSM models in distributed mode.",
+                total_layers, len(full_cache), layer_start, layer_end - 1,
+            )
+            return None
+
+        if len(full_cache) < layer_end:
+            logger.warning(
+                "Worker cache length %d < layer_end %d — running %d-%d "
+                "without cache",
+                len(full_cache), layer_end, layer_start, layer_end - 1,
+            )
+            return None
+
+        return full_cache[layer_start:layer_end]
     except Exception as e:
-        logger.warning("Could not create cache for layers %d-%d: %s — running without cache", layer_start, layer_end - 1, e)
+        logger.warning(
+            "Could not create cache for layers %d-%d: %s — running without cache",
+            layer_start, layer_end - 1, e,
+        )
         return None
 
 

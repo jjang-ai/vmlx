@@ -360,8 +360,14 @@ class Coordinator:
         """Build a KV cache for the coordinator's own layer slice.
 
         Each active request gets its own local cache object so concurrent
-        requests don't corrupt each other. Returns None when the coordinator
-        owns no local layers (all layers live on workers).
+        requests don't corrupt each other. Returns None when:
+          - the coordinator owns no local layers, or
+          - the model's make_cache() returns a list whose length doesn't
+            match the full layer count (hybrid SSM case — Nemotron only
+            creates cache entries for attention + SSM layers, skipping
+            MLP/MoE. A naive slice would feed the wrong cached K/V to the
+            wrong layer). Returning None forces layers to run without
+            cache (correct but O(N²) — see the Phase 2 TODO).
         """
         if not self.local_layers or not self.local_assignment:
             return None
@@ -370,6 +376,7 @@ class Coordinator:
             for accessor in (
                 lambda m: m.language_model.model,
                 lambda m: m.model,
+                lambda m: m.backbone,
             ):
                 try:
                     raw_model = accessor(self.model)
@@ -383,11 +390,42 @@ class Coordinator:
             else:
                 from mlx_lm.models.cache import make_prompt_cache
                 full_cache = make_prompt_cache(self.model)
-            if isinstance(full_cache, list) and len(full_cache) >= self.local_assignment.layer_end:
-                return full_cache[
-                    self.local_assignment.layer_start:self.local_assignment.layer_end
-                ]
-            return full_cache
+
+            if not isinstance(full_cache, list):
+                return None
+
+            # Only slice when we can establish a 1:1 correspondence between
+            # cache entries and layers. For hybrid SSM models, the cache
+            # length is less than the layer count because MLP/MoE layers
+            # have no cache entries — slicing by layer index would be
+            # incorrect. Bail out with a warning in that case.
+            try:
+                all_layers = _get_layers_list(self.model)
+                num_layers = len(all_layers)
+            except ValueError:
+                num_layers = None
+
+            if num_layers is not None and len(full_cache) != num_layers:
+                logger.warning(
+                    "Coordinator cache slice skipped: model has %d layers "
+                    "but make_cache() returned %d entries (hybrid SSM?). "
+                    "Running local layers without cache — generation will "
+                    "be O(N²). This is a known Phase 2 limitation for "
+                    "Nemotron-style hybrid models in distributed mode.",
+                    num_layers, len(full_cache),
+                )
+                return None
+
+            start = self.local_assignment.layer_start
+            end = self.local_assignment.layer_end
+            if len(full_cache) < end:
+                logger.warning(
+                    "Coordinator cache slice [%d, %d) out of range for "
+                    "cache of length %d — running local layers without cache.",
+                    start, end, len(full_cache),
+                )
+                return None
+            return full_cache[start:end]
         except Exception as e:
             logger.warning(
                 "Could not create local cache for layers %d-%d: %s — "
@@ -424,7 +462,32 @@ class Coordinator:
         if not request_id:
             raise ValueError("request_id must be non-empty")
 
-        hidden = self.model.model.embed_tokens(input_ids)
+        # Multi-accessor embed_tokens fallback — different model families
+        # expose embeddings at different paths:
+        #   - Qwen / Mistral / Gemma / Llama text:  model.model.embed_tokens
+        #   - VLM wrappers (Qwen3.5-VL, Gemma 4 VL): model.language_model.model.embed_tokens
+        #   - Nemotron hybrid:                       model.backbone.embeddings
+        # Previous hardcoded `self.model.model.embed_tokens` crashed Nemotron
+        # with AttributeError on the very first token.
+        _embed = None
+        for _accessor in (
+            lambda m: m.language_model.model.embed_tokens,
+            lambda m: m.model.embed_tokens,
+            lambda m: m.backbone.embeddings,
+            lambda m: m.backbone.embed_tokens,
+        ):
+            try:
+                _embed = _accessor(self.model)
+                break
+            except AttributeError:
+                continue
+        if _embed is None:
+            raise RuntimeError(
+                "Could not locate embed_tokens on the model. Distributed "
+                "inference needs to embed input tokens on the coordinator. "
+                "Model: " + type(self.model).__name__
+            )
+        hidden = _embed(input_ids)
 
         seq_len = hidden.shape[1]
         local_mask = _build_causal_mask(seq_len, seq_pos)
@@ -442,13 +505,28 @@ class Coordinator:
                     hidden, request_id=request_id, seq_pos=seq_pos,
                 )
 
-        # lm_head (or tied embed projection)
-        if hasattr(self.model, "lm_head"):
+        # lm_head or tied-embedding projection. Multi-accessor so backbone
+        # and VLM-wrapped models work — the old hardcoded path assumed
+        # self.model.lm_head OR self.model.model.embed_tokens.
+        if hasattr(self.model, "lm_head") and self.model.lm_head is not None:
             logits = self.model.lm_head(hidden)
-        elif hasattr(self.model.model, "embed_tokens"):
-            logits = self.model.model.embed_tokens.as_linear(hidden)
         else:
-            logits = hidden
+            logits = None
+            for _accessor in (
+                lambda m: m.language_model.model.embed_tokens,
+                lambda m: m.model.embed_tokens,
+                lambda m: m.backbone.embeddings,
+                lambda m: m.backbone.embed_tokens,
+            ):
+                try:
+                    _embed = _accessor(self.model)
+                    if _embed is not None and hasattr(_embed, "as_linear"):
+                        logits = _embed.as_linear(hidden)
+                        break
+                except AttributeError:
+                    continue
+            if logits is None:
+                logits = hidden  # no projection available — return raw hidden
         return logits
 
     async def release_request(self, request_id: str) -> None:
