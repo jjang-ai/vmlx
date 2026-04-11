@@ -1790,6 +1790,54 @@ export function registerChatHandlers(
                 emitDelta(reasoning, true);
               }
 
+              // Suppressed-reasoning heartbeat: server emits a chunk with
+              // usage but no content and no reasoning when the model's
+              // template ignored enable_thinking=false and is generating
+              // reasoning tokens internally (e.g., MiniMax M2.5). Without
+              // this branch the UI sees no stream updates for many seconds
+              // and appears hung. Update the stale message metrics so the
+              // user at least sees a live token counter while reasoning
+              // finishes internally.
+              const _hasContent = !!choice?.content;
+              const _hasFinish = !!finishReason;
+              if (
+                !_hasContent &&
+                !reasoning &&
+                !_hasFinish &&
+                parsed.usage &&
+                fullContent === "" &&
+                reasoningContent === ""
+              ) {
+                try {
+                  const win = getWindow();
+                  if (win && !win.isDestroyed()) {
+                    const now = Date.now();
+                    if (firstTokenTime === null) firstTokenTime = now;
+                    const ttft = Math.max(
+                      0,
+                      firstTokenTime
+                        ? (firstTokenTime - fetchStartTime) / 1000
+                        : 0,
+                    );
+                    win.webContents.send("chat:stream", {
+                      chatId,
+                      messageId: assistantMessage.id,
+                      fullContent: "",
+                      isReasoning: false,
+                      metrics: {
+                        tokenCount: tokenCount,
+                        promptTokens,
+                        cachedTokens,
+                        cacheDetail,
+                        tokensPerSecond: "0.0",
+                        ttft: ttft.toFixed(2),
+                        elapsed: ((now - fetchStartTime) / 1000).toFixed(1),
+                      },
+                    });
+                  }
+                } catch (_) {}
+              }
+
               if (choice?.content) {
                 // Client-side fallback: if server didn't provide reasoning_content
                 // but content contains <think> tags, extract them client-side.

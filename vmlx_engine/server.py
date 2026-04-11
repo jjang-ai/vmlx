@@ -5789,17 +5789,38 @@ async def stream_chat_completion(
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
 
-                # When reasoning is suppressed (client requested enable_thinking=False but model forces it),
-                # drop reasoning chunks entirely so the user only sees the final answer.
-                # The model still thinks internally (template always injects <think>),
-                # but the UI won't show any thinking text — just a brief pause then the answer.
+                # When reasoning is suppressed (client requested enable_thinking=False
+                # but the model's template ignored it and still injected <think>),
+                # drop reasoning chunks so the user only sees the final answer.
+                # The model still thinks internally but the UI won't show any of it.
                 if suppress_reasoning:
                     emit_content = (
                         delta_msg.content
                     )  # Only emit actual content after </think>
                     emit_reasoning = None
-                    # Note: reasoning tool-call markers are already detected at lines above
-                    # via delta_msg.reasoning check — no need to add reasoning to accumulated_content
+                    # MiniMax M2.5 + 2-bit JANG reasoning models can reason for
+                    # many seconds before closing </think>. If we `continue` on
+                    # every reasoning chunk, the SSE stream is silent the entire
+                    # time and the client UI appears hung ("loading forever").
+                    # Fix: emit a content=None heartbeat chunk so the client
+                    # knows the stream is alive and progressing — the UI can
+                    # exit its "loading" state and show a live working indicator
+                    # with token counts while the reasoning finishes internally.
+                    if not emit_content and not output.finished:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output) if include_usage else None,
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
+                        continue
                 else:
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
@@ -6529,8 +6550,20 @@ async def stream_responses_api(
                                     delta_msg.content
                                 )  # Only actual content after </think>
                                 emit_reasoning = None
-                                # Note: reasoning tool-call markers are already detected above
-                                # via delta_msg.reasoning check — no need to add reasoning to accumulated_content
+                                # Heartbeat for Responses API: while the model is
+                                # inside a suppressed <think> block (MiniMax M2.5
+                                # etc.), emit a response.in_progress event so the
+                                # client knows the stream is still alive and can
+                                # display a working indicator instead of hanging.
+                                if not emit_content and not output.finished:
+                                    yield _sse(
+                                        "response.in_progress",
+                                        {
+                                            "type": "response.in_progress",
+                                            "output_index": 0,
+                                        },
+                                    )
+                                    continue
                             else:
                                 emit_reasoning = delta_msg.reasoning
                                 emit_content = delta_msg.content
