@@ -890,7 +890,7 @@ export class SessionManager extends EventEmitter {
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
-    'defaultTemperature', 'defaultTopP',
+    'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice', 'chatTemplate',
     'logLevel', 'corsOrigins',
@@ -1945,6 +1945,13 @@ export class SessionManager extends EventEmitter {
     }
     if (config.defaultTopP != null && config.defaultTopP > 0) {
       args.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
+    }
+    // Server-level default repetition penalty — stored as integer ×100
+    // (slider convention matching temp/top-p). Default 110 = 1.10, which
+    // prevents Gemma 4 word-loops and 2-bit quant dash-loops on external
+    // API clients (Ollama, OpenAI SDK, Anthropic SDK, raw curl).
+    if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0) {
+      args.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
     }
 
     // Embedding model

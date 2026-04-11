@@ -94,6 +94,14 @@ def serve_command(args):
             print(f"Error: --default-top-p must be between 0 (exclusive) and 1, got {args.default_top_p}")
             sys.exit(1)
         server._default_top_p = args.default_top_p
+    if getattr(args, 'default_repetition_penalty', None) is not None:
+        if not (0.5 <= args.default_repetition_penalty <= 2.0):
+            print(
+                f"Error: --default-repetition-penalty must be between 0.5 and 2.0, "
+                f"got {args.default_repetition_penalty}"
+            )
+            sys.exit(1)
+        server._default_repetition_penalty = args.default_repetition_penalty
 
     # Apply default enable_thinking
     _det = getattr(args, 'default_enable_thinking', None)
@@ -1332,6 +1340,16 @@ Examples:
              "tokens whose cumulative probability ≤ this value: 0.9 = use top 90%% of probability mass. "
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
+    )
+    serve_parser.add_argument(
+        "--default-repetition-penalty",
+        type=float,
+        default=None,
+        help="Server-wide default repetition penalty for generation. 1.0 = no penalty, "
+             "1.1 = mild anti-loop (recommended — prevents Gemma 4 word-loops and 2-bit "
+             "quant dash-loops), higher = less repetition at the cost of fluency. "
+             "Overridden by per-request 'repetition_penalty'. If not set, no penalty is "
+             "applied server-wide.",
     )
     serve_parser.add_argument(
         "--default-enable-thinking",

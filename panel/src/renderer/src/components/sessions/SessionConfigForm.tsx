@@ -48,6 +48,7 @@ export interface SessionConfig {
   flashMoeIoSplit: number
   defaultTemperature: number
   defaultTopP: number
+  defaultRepetitionPenalty: number
   defaultEnableThinking?: boolean
   embeddingModel: string
   additionalArgs: string
@@ -116,6 +117,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   flashMoeIoSplit: 4,
   defaultTemperature: 70,
   defaultTopP: 95,
+  defaultRepetitionPenalty: 110,
   defaultEnableThinking: false,
   embeddingModel: '',
   additionalArgs: '',

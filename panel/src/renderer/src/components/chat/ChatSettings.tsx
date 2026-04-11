@@ -484,10 +484,10 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             />
             <SliderField
               label="Repetition Penalty"
-              value={overrides.repeatPenalty ?? 1.0}
-              onChange={v => update('repeatPenalty', v === 1.0 ? undefined : v)}
+              value={overrides.repeatPenalty ?? 1.1}
+              onChange={v => update('repeatPenalty', v === 1.1 ? undefined : v)}
               min={1.0} max={2.0} step={0.05}
-              help="Penalizes repeated tokens. 1.0 = no penalty, higher = less repetition."
+              help="Penalizes repeated tokens. 1.0 = no penalty, 1.1 = mild (default, prevents dash/word loops on Gemma 4 and 2-bit quants), higher = less repetition at the cost of fluency."
             />
           </div>
         </div>

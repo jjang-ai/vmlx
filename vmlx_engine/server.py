@@ -141,6 +141,7 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
+_default_repetition_penalty: float | None = None  # Set via --default-repetition-penalty
 _default_enable_thinking: bool | None = (
     None  # Set via --default-enable-thinking or --chat-template-kwargs
 )
@@ -289,6 +290,24 @@ def _resolve_top_p(request_value: float | None) -> float:
     if _default_top_p is not None:
         return _default_top_p
     return _FALLBACK_TOP_P
+
+
+def _resolve_repetition_penalty(request_value: float | None) -> float | None:
+    """Resolve repetition penalty: request > CLI default > None (mlx-lm default = 1.0).
+
+    Returns None when neither the request nor CLI specified a value, which
+    means "don't pass repetition_penalty at all to the engine" — mlx-lm then
+    applies its implicit 1.0 (no penalty). When a value is returned, the
+    caller should include it in chat_kwargs so the engine applies it.
+
+    Mirrors the structure of _resolve_temperature / _resolve_top_p but returns
+    Optional[float] so callers can distinguish "not set" from "set to 1.0".
+    """
+    if request_value is not None:
+        return request_value
+    if _default_repetition_penalty is not None:
+        return _default_repetition_penalty
+    return None
 
 
 # Global MCP manager
@@ -2654,8 +2673,9 @@ async def create_anthropic_message(
         _msg_kwargs["top_k"] = chat_req.top_k
     if chat_req.min_p is not None:
         _msg_kwargs["min_p"] = chat_req.min_p
-    if chat_req.repetition_penalty is not None:
-        _msg_kwargs["repetition_penalty"] = chat_req.repetition_penalty
+    _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
+    if _rp is not None:
+        _msg_kwargs["repetition_penalty"] = _rp
     if chat_req.stop:
         _msg_kwargs["stop"] = chat_req.stop
     # Merge server-wide --chat-template-kwargs defaults with any adapter-populated
@@ -3192,8 +3212,9 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs["top_k"] = chat_req.top_k
     if chat_req.min_p is not None and chat_req.min_p > 0:
         chat_kwargs["min_p"] = chat_req.min_p
-    if chat_req.repetition_penalty is not None:
-        chat_kwargs["repetition_penalty"] = chat_req.repetition_penalty
+    _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
+    if _rp is not None:
+        chat_kwargs["repetition_penalty"] = _rp
     # enable_thinking precedence: per-request > chat_template_kwargs > server default.
     # Mirrors the OpenAI path at create_chat_completion so clients get identical
     # behavior whether they speak the OpenAI or Ollama wire format.
@@ -4108,8 +4129,9 @@ async def create_completion(request: CompletionRequest):
                 gen_kwargs["top_k"] = request.top_k
             if request.min_p is not None:
                 gen_kwargs["min_p"] = request.min_p
-            if request.repetition_penalty is not None:
-                gen_kwargs["repetition_penalty"] = request.repetition_penalty
+            _rp = _resolve_repetition_penalty(request.repetition_penalty)
+            if _rp is not None:
+                gen_kwargs["repetition_penalty"] = _rp
             output = await asyncio.wait_for(
                 engine.generate(**gen_kwargs),
                 timeout=timeout,
@@ -4338,8 +4360,9 @@ async def create_chat_completion(
         chat_kwargs["top_k"] = request.top_k
     if request.min_p is not None:
         chat_kwargs["min_p"] = request.min_p
-    if request.repetition_penalty is not None:
-        chat_kwargs["repetition_penalty"] = request.repetition_penalty
+    _rp = _resolve_repetition_penalty(request.repetition_penalty)
+    if _rp is not None:
+        chat_kwargs["repetition_penalty"] = _rp
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
@@ -4968,8 +4991,9 @@ async def create_response(
         chat_kwargs["top_k"] = request.top_k
     if request.min_p is not None:
         chat_kwargs["min_p"] = request.min_p
-    if request.repetition_penalty is not None:
-        chat_kwargs["repetition_penalty"] = request.repetition_penalty
+    _rp = _resolve_repetition_penalty(request.repetition_penalty)
+    if _rp is not None:
+        chat_kwargs["repetition_penalty"] = _rp
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
@@ -5374,8 +5398,9 @@ async def stream_completions_multi(
                 gen_kwargs["top_k"] = request.top_k
             if request.min_p is not None:
                 gen_kwargs["min_p"] = request.min_p
-            if request.repetition_penalty is not None:
-                gen_kwargs["repetition_penalty"] = request.repetition_penalty
+            _rp = _resolve_repetition_penalty(request.repetition_penalty)
+            if _rp is not None:
+                gen_kwargs["repetition_penalty"] = _rp
             async for output in _stream_with_keepalive(
                 engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout
             ):
@@ -7156,6 +7181,18 @@ Examples:
         help="Default top_p for generation when not specified in request",
     )
     parser.add_argument(
+        "--default-repetition-penalty",
+        type=float,
+        default=None,
+        help=(
+            "Default repetition penalty when not specified in request. "
+            "1.0 = no penalty, 1.1 = mild (prevents Gemma 4 word-loops / "
+            "2-bit quant dash-loops), higher = less repetition. "
+            "Without this flag, external API clients (curl, Ollama, OpenAI SDK, "
+            "Anthropic SDK) run at 1.0 by default."
+        ),
+    )
+    parser.add_argument(
         "--default-enable-thinking",
         type=str,
         default=None,
@@ -7186,7 +7223,7 @@ Examples:
 
     # Set global configuration
     global _api_key, _default_timeout, _rate_limiter
-    global _default_temperature, _default_top_p, _default_enable_thinking
+    global _default_temperature, _default_top_p, _default_repetition_penalty, _default_enable_thinking
     global _inference_endpoints, _wake_timeout
     global _smelt_enabled, _smelt_experts
 
@@ -7207,6 +7244,8 @@ Examples:
         _default_temperature = args.default_temperature
     if args.default_top_p is not None:
         _default_top_p = args.default_top_p
+    if getattr(args, "default_repetition_penalty", None) is not None:
+        _default_repetition_penalty = args.default_repetition_penalty
     if args.default_enable_thinking is not None:
         _default_enable_thinking = args.default_enable_thinking == "true"
 

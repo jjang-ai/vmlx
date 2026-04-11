@@ -1179,10 +1179,10 @@ export function registerChatHandlers(
               obj.top_k = overrides.topK;
             if (overrides?.minP != null && overrides.minP > 0)
               obj.min_p = overrides.minP;
-            if (
-              overrides?.repeatPenalty != null &&
-              overrides.repeatPenalty !== 1.0
-            )
+            // Always send when explicitly set — don't short-circuit on 1.0,
+            // because the server may now have a --default-repetition-penalty
+            // flag that would otherwise override the user's explicit 1.0.
+            if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
               obj.tools = filterTools(overrides).map((t) => ({
@@ -1231,10 +1231,10 @@ export function registerChatHandlers(
               obj.top_k = overrides.topK;
             if (overrides?.minP != null && overrides.minP > 0)
               obj.min_p = overrides.minP;
-            if (
-              overrides?.repeatPenalty != null &&
-              overrides.repeatPenalty !== 1.0
-            )
+            // Always send when explicitly set — don't short-circuit on 1.0,
+            // because the server may now have a --default-repetition-penalty
+            // flag that would otherwise override the user's explicit 1.0.
+            if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
               // Chat Completions API: tools must be in OpenAI format with "function" wrapper
