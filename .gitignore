@@ -166,3 +166,11 @@ docs/internal/
 /benchmark_*.py
 /test_*.py
 /test_build_args.ts
+
+# Internal regression audit + notes (not committed)
+NO-REGRESSION-CHECKLIST.md
+AUDIT-*.md
+HANDOFF-*.md
+TEST-MATRIX-*.md
+BENCHMARK-*.md
+panel/build_dmg.sh
