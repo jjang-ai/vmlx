@@ -2350,9 +2350,14 @@ class Scheduler:
                                     extracted,
                                     cache_type=_l1_type,
                                 )
-                                # Clean up request table entry — blocks persist via LRU
-                                self.block_aware_cache._request_tables.pop(
+                                # Clean up request table entry. Release request refs so
+                                # blocks become "cached but free" (still hash-resident,
+                                # now reclaimable via LRU).
+                                _entry = self.block_aware_cache._request_tables.pop(
                                     request.request_id, None
+                                )
+                                self.block_aware_cache.paged_cache.release_request_refs(
+                                    _entry.block_table if _entry else None
                                 )
                                 self.block_aware_cache.paged_cache.detach_request(
                                     request.request_id
@@ -3138,8 +3143,13 @@ class Scheduler:
 
             # Always clean up paged cache tracking entries regardless of
             # cache skip, to prevent unbounded memory growth on benchmarks.
+            # Release request refs here so completed-request blocks can enter
+            # the free LRU queue while remaining cache-resident.
             if self.block_aware_cache is not None:
-                self.block_aware_cache._request_tables.pop(request_id, None)
+                _entry = self.block_aware_cache._request_tables.pop(request_id, None)
+                self.block_aware_cache.paged_cache.release_request_refs(
+                    _entry.block_table if _entry else None
+                )
                 self.block_aware_cache.paged_cache.detach_request(request_id)
 
             # Hybrid SSM companion state capture.
