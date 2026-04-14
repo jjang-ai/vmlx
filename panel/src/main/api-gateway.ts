@@ -630,7 +630,11 @@ export class ApiGateway extends EventEmitter {
       if (url === "/api/tags") return this.handleOllamaTags(res);
       if (url === "/api/ps") return this.handleOllamaPs(res);
       if (url === "/api/version")
-        return this.sendJson(res, 200, { version: "0.6.2" }); // Compat shim
+        // mlxstudio#72: Copilot in VS Code gates on version >= 0.6.4. Real
+        // Ollama is on 0.12.x; report a plausible recent real version so
+        // other version-gated clients don't refuse to connect. Kept in sync
+        // with vmlx_engine/server.py:ollama_version.
+        return this.sendJson(res, 200, { version: "0.12.6" });
       return this.sendJson(res, 404, { error: "Unknown endpoint" });
     }
 
@@ -804,7 +808,24 @@ export class ApiGateway extends EventEmitter {
               prompt_eval_count: openai.usage?.prompt_tokens || 0,
             };
             if (choice?.message?.tool_calls) {
-              response.message.tool_calls = choice.message.tool_calls;
+              // mlxstudio#72: Ollama's tool_calls schema expects `arguments`
+              // as an object. OpenAI emits it as a JSON-encoded string.
+              // Translate, dropping the OpenAI-only `id`/`type` wrappers.
+              response.message.tool_calls = (
+                choice.message.tool_calls as any[]
+              ).map((tc: any) => {
+                let args: any = tc.function?.arguments ?? {};
+                if (typeof args === "string") {
+                  try {
+                    args = JSON.parse(args);
+                  } catch {
+                    args = { _raw: args };
+                  }
+                }
+                return {
+                  function: { name: tc.function?.name || "", arguments: args },
+                };
+              });
             }
             this.sendJson(res, 200, response);
           } catch (_) {
@@ -854,15 +875,40 @@ export class ApiGateway extends EventEmitter {
                 content += delta.content;
               }
 
-              // tool_calls arrive in a single delta chunk (finish_reason=null);
-              // the subsequent finish chunk (finish_reason="tool_calls") is suppressed.
+              // tool_calls may arrive in one delta chunk or be fragmented
+              // across several (OpenAI streams function name in the first
+              // chunk, arguments incrementally). We accumulate per-index
+              // and collapse to Ollama format at the finish boundary.
+              // mlxstudio#72: Ollama expects `arguments` as an object, not
+              // a JSON-encoded string — we parse on finish.
               if (delta?.tool_calls) {
-                toolCalls = delta.tool_calls.map((tc: any) => ({
-                  function: {
-                    name: tc.function?.name || "",
-                    arguments: tc.function?.arguments || "",
-                  },
-                }));
+                if (!toolCalls) toolCalls = [];
+                for (const tc of delta.tool_calls) {
+                  // Resolve target slot. Most vMLX-emitted chunks carry an
+                  // explicit `index`, but some providers (and the CLI tools
+                  // path) omit it — in that case fall back to "continue the
+                  // last slot we opened", defaulting to slot 0 on the very
+                  // first fragment. NEVER use `toolCalls.length - 1` as a
+                  // default when the array is empty — that's -1, and JS
+                  // array[-1] silently creates a string-keyed prop.
+                  let idx: number;
+                  if (typeof tc.index === "number" && tc.index >= 0) {
+                    idx = tc.index;
+                  } else if (toolCalls.length > 0) {
+                    idx = toolCalls.length - 1;
+                  } else {
+                    idx = 0;
+                  }
+                  const slot = toolCalls[idx] || {
+                    function: { name: "", arguments: "" },
+                  };
+                  if (tc.function?.name) slot.function.name = tc.function.name;
+                  if (tc.function?.arguments != null) {
+                    slot.function.arguments =
+                      (slot.function.arguments || "") + tc.function.arguments;
+                  }
+                  toolCalls[idx] = slot;
+                }
               }
 
               if (finishReason != null) {
@@ -886,7 +932,26 @@ export class ApiGateway extends EventEmitter {
                       : doneReason || "stop",
                 };
                 if (toolCalls) {
-                  ollamaMsg.message.tool_calls = toolCalls;
+                  // Parse accumulated JSON-string arguments into objects
+                  // (Ollama protocol requirement). Drop entries that ended
+                  // up nameless — they're stale OpenAI delta noise.
+                  ollamaMsg.message.tool_calls = toolCalls
+                    .filter((tc: any) => tc.function?.name)
+                    .map((tc: any) => {
+                      let args: any = tc.function.arguments;
+                      if (typeof args === "string") {
+                        try {
+                          args = args.length > 0 ? JSON.parse(args) : {};
+                        } catch {
+                          args = { _raw: args };
+                        }
+                      } else if (args == null) {
+                        args = {};
+                      }
+                      return {
+                        function: { name: tc.function.name, arguments: args },
+                      };
+                    });
                 }
                 if (usage) {
                   ollamaMsg.eval_count = usage.completion_tokens;

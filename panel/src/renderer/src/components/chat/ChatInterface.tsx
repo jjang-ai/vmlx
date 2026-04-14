@@ -416,8 +416,20 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         content = parsed.find((p: any) => p.type === 'text')?.text ?? ''
         attachments = parsed
           .filter((p: any) => p.type === 'image_url' && p.image_url?.url)
-          .map((p: any) => ({ dataUrl: p.image_url.url, name: 'image' }))
-        if (attachments.length === 0) attachments = undefined
+          .map((p: any, i: number): ImageAttachment => {
+            // Reconstruct full ImageAttachment shape — id/type are synthetic
+            // on regenerate (original values are lost when persisted to DB).
+            const url: string = p.image_url.url
+            const mimeMatch =
+              typeof url === 'string' ? url.match(/^data:([^;]+);/) : null
+            return {
+              id: `regen-${Date.now()}-${i}`,
+              dataUrl: url,
+              name: 'image',
+              type: mimeMatch ? mimeMatch[1] : 'image/png',
+            }
+          })
+        if (attachments && attachments.length === 0) attachments = undefined
       }
     } catch { /* not JSON, plain text */ }
     handleSend(content, attachments)

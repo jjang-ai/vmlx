@@ -79,22 +79,38 @@ def openai_chat_response_to_ollama(openai_resp: dict, model: str) -> dict:
     content = choices[0]["message"]["content"] if choices else ""
     usage = openai_resp.get("usage", {})
     msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
-    # Forward tool calls if present (Ollama format: message.tool_calls)
+    # Forward tool calls if present. mlxstudio#72: Ollama's tool_calls schema
+    # expects `arguments` as an object, while OpenAI emits a JSON-encoded
+    # string. Parse it so Copilot / Continue.dev / other Ollama clients can
+    # consume it directly. Also preserve done_reason="tool_calls" — prior
+    # code was collapsing it to "stop", which hid the tool-call signal from
+    # clients that gate tool execution on that field.
     if choices:
         oai_tcs = choices[0].get("message", {}).get("tool_calls")
         if oai_tcs:
-            msg["tool_calls"] = [
-                {"function": {"name": tc["function"]["name"],
-                              "arguments": tc["function"]["arguments"]}}
-                for tc in oai_tcs if tc.get("function")
-            ]
+            _out_tcs: list[dict[str, Any]] = []
+            for tc in oai_tcs:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if not fn:
+                    continue
+                args = fn.get("arguments", "")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw": args}
+                elif args is None:
+                    args = {}
+                _out_tcs.append({"function": {"name": fn.get("name", ""), "arguments": args}})
+            if _out_tcs:
+                msg["tool_calls"] = _out_tcs
     finish_reason = choices[0].get("finish_reason", "stop") if choices else "stop"
     return {
         "model": model,
         "created_at": _now_iso(),
         "message": msg,
         "done": True,
-        "done_reason": "stop" if finish_reason == "tool_calls" else (finish_reason or "stop"),
+        "done_reason": finish_reason or "stop",
         "total_duration": 0,
         "eval_count": usage.get("completion_tokens", 0),
         "prompt_eval_count": usage.get("prompt_tokens", 0),
@@ -143,14 +159,30 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         if fr is not None:
             done = True
             done_reason = fr
-        # Capture tool calls from delta (Ollama format: message.tool_calls)
+        # Capture tool calls from delta. mlxstudio#72: parse stringified
+        # arguments into objects so Ollama clients (GitHub Copilot, Continue)
+        # can consume them. Skip entries with no name — those are OpenAI
+        # delta fragments carrying only partial arguments, which our engine
+        # shouldn't produce but we guard against anyway.
         oai_tcs = delta.get("tool_calls")
         if oai_tcs:
-            tool_calls_data = [
-                {"function": {"name": tc.get("function", {}).get("name", ""),
-                              "arguments": tc.get("function", {}).get("arguments", "")}}
-                for tc in oai_tcs if tc.get("function")
-            ]
+            _out_tcs: list[dict[str, Any]] = []
+            for tc in oai_tcs:
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = fn.get("name", "")
+                if not name:
+                    continue
+                args = fn.get("arguments", "")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args else {}
+                    except json.JSONDecodeError:
+                        args = {"_raw": args}
+                elif args is None:
+                    args = {}
+                _out_tcs.append({"function": {"name": name, "arguments": args}})
+            if _out_tcs:
+                tool_calls_data = _out_tcs
 
     msg: dict[str, Any] = {"role": "assistant", "content": content}
     if tool_calls_data:
@@ -162,7 +194,9 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         "done": done,
     }
     if done:
-        result["done_reason"] = "stop" if done_reason == "tool_calls" else (done_reason or "stop")
+        # Preserve done_reason="tool_calls" — clients like Copilot gate
+        # tool execution on this. Prior code collapsed it to "stop".
+        result["done_reason"] = done_reason or "stop"
         usage = chunk.get("usage", {})
         if usage:
             result["eval_count"] = usage.get("completion_tokens", 0)

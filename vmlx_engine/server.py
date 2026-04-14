@@ -3195,8 +3195,14 @@ async def ollama_ps():
 
 @app.get("/api/version", dependencies=[Depends(verify_api_key)])
 async def ollama_version():
-    """Ollama version shim for client compat checks."""
-    return {"version": "0.6.2"}
+    """Ollama version shim for client compat checks.
+
+    GitHub Copilot in VS Code gates on ``version >= 0.6.4`` (mlxstudio#72).
+    Real Ollama is on 0.12.x; we report a plausible recent real version so
+    other version-gated clients don't refuse to connect. Kept in sync with
+    panel/src/main/api-gateway.ts.
+    """
+    return {"version": "0.12.6"}
 
 
 @app.post("/api/show", dependencies=[Depends(verify_api_key)])
@@ -3303,13 +3309,91 @@ async def ollama_chat(fastapi_request: Request):
 
         messages, _, _ = extract_multimodal_content(chat_req.messages)
 
+    # mlxstudio#72: stateful Ollama NDJSON translation. vMLX's
+    # stream_chat_completion emits tool calls across two SSE chunks:
+    #   (1) delta with complete tool_calls + finish_reason=null
+    #   (2) empty delta + finish_reason="tool_calls"
+    # Real Ollama places tool_calls on the final `done:true` NDJSON line.
+    # The old stateless adapter put them on chunk (1) (done:false) and
+    # left chunk (2) with no tool_calls — GitHub Copilot, Continue.dev,
+    # and Cline all silently ignore the call in that shape.
+    #
+    # We buffer tool_calls from chunk (1) locally, skip the adapter's
+    # tool_calls emission entirely, and splice the buffered calls into
+    # the adapter's final done-chunk output before yielding it.
     async def ndjson_stream():
+        buffered_tcs: list[dict] = []  # ollama-shape {function:{name,arguments}}
         async for sse_line in stream_chat_completion(
             engine, messages, chat_req, fastapi_request=fastapi_request, **chat_kwargs
         ):
-            ndjson = openai_chat_chunk_to_ollama_ndjson(sse_line, model_name)
-            if ndjson:
-                yield ndjson
+            # Peek at the SSE line to harvest tool_calls and rewrite the
+            # chunk so the stateless adapter never sees them. `[DONE]` and
+            # non-data lines pass through untouched.
+            rewritten = sse_line
+            if sse_line.startswith("data: "):
+                _payload = sse_line[6:].strip()
+                if _payload and _payload != "[DONE]":
+                    try:
+                        _chunk = json.loads(_payload)
+                    except json.JSONDecodeError:
+                        _chunk = None
+                    if _chunk is not None:
+                        _choices = _chunk.get("choices") or []
+                        if _choices:
+                            _delta = _choices[0].get("delta", {}) or {}
+                            _dtcs = _delta.get("tool_calls")
+                            if _dtcs:
+                                for _tc in _dtcs:
+                                    _fn = _tc.get("function", {}) or {}
+                                    _name = _fn.get("name") or ""
+                                    _args = _fn.get("arguments", "")
+                                    if isinstance(_args, str):
+                                        try:
+                                            _args_obj = json.loads(_args) if _args else {}
+                                        except json.JSONDecodeError:
+                                            _args_obj = {"_raw": _args}
+                                    elif _args is None:
+                                        _args_obj = {}
+                                    else:
+                                        _args_obj = _args
+                                    if _name:
+                                        buffered_tcs.append(
+                                            {
+                                                "function": {
+                                                    "name": _name,
+                                                    "arguments": _args_obj,
+                                                }
+                                            }
+                                        )
+                                # Strip tool_calls from the chunk before it hits
+                                # the stateless adapter so we don't double-emit.
+                                _delta.pop("tool_calls", None)
+                                _choices[0]["delta"] = _delta
+                                _chunk["choices"] = _choices
+                                rewritten = f"data: {json.dumps(_chunk)}\n\n"
+                                # If this chunk has nothing useful left, skip it.
+                                if not _delta.get("content") and not _choices[0].get("finish_reason"):
+                                    continue
+
+            ndjson = openai_chat_chunk_to_ollama_ndjson(rewritten, model_name)
+            if not ndjson:
+                continue
+
+            # On the final done=true line, splice buffered tool_calls in.
+            if buffered_tcs:
+                try:
+                    _ndjson_obj = json.loads(ndjson)
+                    if _ndjson_obj.get("done") is True:
+                        _msg = _ndjson_obj.setdefault(
+                            "message", {"role": "assistant", "content": ""}
+                        )
+                        _msg["tool_calls"] = buffered_tcs
+                        _ndjson_obj["done_reason"] = "tool_calls"
+                        ndjson = json.dumps(_ndjson_obj) + "\n"
+                        buffered_tcs = []
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            yield ndjson
 
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
 
