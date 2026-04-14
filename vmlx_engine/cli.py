@@ -134,8 +134,10 @@ def serve_command(args):
         # Store full kwargs for forwarding to chat templates
         server._default_chat_template_kwargs = ct_kwargs
 
-    # Configure reasoning parser (strictly explicit)
+    # Configure reasoning parser (strictly explicit; "auto" and "none"
+    # fall through to registry/template auto-detection further down).
     parser_name = getattr(args, 'reasoning_parser', None)
+    _user_requested_auto = parser_name == "auto"
     if parser_name in ("auto", "none", None) or not parser_name:
         parser_name = None
 
@@ -163,6 +165,7 @@ def serve_command(args):
     # Auto-apply tool/reasoning parsers from model config registry when CLI
     # flags were not explicitly set.  This lets known models "just work" for
     # direct CLI users who don't pass --tool-call-parser / --reasoning-parser.
+    _registry_thinking_model = False
     try:
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
@@ -181,8 +184,154 @@ def serve_command(args):
                     logger.info(f"Auto-configured reasoning parser from registry: {_mc.reasoning_parser}")
                 except Exception as e:
                     logger.warning(f"Failed to auto-configure reasoning parser '{_mc.reasoning_parser}': {e}")
+            if getattr(_mc, "think_in_template", False):
+                _registry_thinking_model = True
     except Exception as e:
         logger.debug(f"Registry auto-apply skipped: {e}")
+
+    # Thinking-template detection & warning (mlxstudio user report: Raymond
+    # Wong, GLM-5.1-JANG_1L).
+    #
+    # Thinking models (GLM-5.1, DeepSeek-R1, Qwen3 Thinking, Mistral 4
+    # reasoning, etc.) inject a `<think>` sentinel into the assistant turn
+    # of their chat template. If no reasoning parser is wired up — either
+    # by an explicit `--reasoning-parser` flag or via the registry
+    # auto-apply above — the model's raw chain of thought streams into
+    # the `content` field and looks like rubbish to anyone using the
+    # server as a drop-in OpenAI endpoint for concise tasks like title
+    # generation.
+    #
+    # Detection priority:
+    #   1. Registry entry says `think_in_template=True` → thinking model.
+    #   2. Registry entry exists but `think_in_template=False` → TRUST
+    #      the registry. Some templates (Gemma 4, Qwen3) define an
+    #      `enable_thinking` jinja variable that's gated off by default
+    #      — those are NOT thinking-by-default and a naive template
+    #      probe would false-positive on them.
+    #   3. Registry has no entry (family=="unknown") → probe the model's
+    #      chat_template.jinja or tokenizer_config.json for a literal
+    #      `<think>` sentinel. Catches any new thinking model family
+    #      we haven't catalogued yet.
+    _chat_template_has_think = False
+    _registry_known = False
+    try:
+        from .model_config_registry import get_model_config_registry as _get_reg
+        _mc_check = _get_reg().lookup(args.model)
+        _registry_known = _mc_check.family_name != "unknown"
+    except Exception:
+        _registry_known = False
+
+    if not _registry_known:
+        try:
+            from pathlib import Path as _P
+            _mdir = _P(args.model)
+            if _mdir.is_dir():
+                _tpl_path = _mdir / "chat_template.jinja"
+                if _tpl_path.exists():
+                    _tpl_text = _tpl_path.read_text(errors="replace")
+                    # Only flag literal `<think>` opening tag — the
+                    # sentinel that thinking-by-default templates inject
+                    # into the assistant turn. Avoid matching
+                    # `<|think|>` (Gemma 4 channel marker) or
+                    # `strip_thinking` macro references.
+                    if "<think>" in _tpl_text:
+                        _chat_template_has_think = True
+                if not _chat_template_has_think:
+                    _tcfg = _mdir / "tokenizer_config.json"
+                    if _tcfg.exists():
+                        import json as _json
+                        _cfg = _json.loads(_tcfg.read_text())
+                        _inline = _cfg.get("chat_template") or ""
+                        if isinstance(_inline, list):
+                            _inline = " ".join(
+                                t.get("template", "") if isinstance(t, dict) else str(t)
+                                for t in _inline
+                            )
+                        if "<think>" in _inline:
+                            _chat_template_has_think = True
+        except Exception as _detect_e:
+            logger.debug(f"Thinking-template detection skipped: {_detect_e}")
+
+    _is_thinking_model = _registry_thinking_model or _chat_template_has_think
+    _thinking_default = getattr(server, "_default_enable_thinking", None)
+    _thinking_off = _thinking_default is False
+
+    # If the user asked for --reasoning-parser auto AND neither the
+    # registry nor anything else picked one, fall back to deepseek_r1 as
+    # the safe default for any model whose template contains <think>.
+    # DeepSeek R1's parser is the most lenient (accepts missing
+    # <think> sentinels, handles partial blocks) and works for GLM-5.1,
+    # DeepSeek-R1, Nemotron-R, Phi-4 Reasoning, and most unknown think-
+    # tag models. Explicit user requests (`--reasoning-parser qwen3`
+    # etc.) still win.
+    if (
+        _user_requested_auto
+        and _is_thinking_model
+        and not server._reasoning_parser
+    ):
+        try:
+            from .reasoning import get_parser
+            server._reasoning_parser = get_parser("deepseek_r1")()
+            logger.info(
+                "Reasoning parser auto-detected from chat template "
+                "(<think> sentinel found) → deepseek_r1"
+            )
+        except Exception as _auto_e:
+            logger.warning(f"--reasoning-parser auto fallback skipped: {_auto_e}")
+
+    if _is_thinking_model and not server._reasoning_parser and not _thinking_off:
+        # Prominent loud warning — this is the exact condition that made
+        # Raymond Wong think GLM-5.1-JANG_1L was broken. Tell the user
+        # what's going on and give them two one-line fixes.
+        _src = "registry" if _registry_thinking_model else "chat_template"
+        print("=" * 60, file=sys.stderr)
+        print("THINKING MODEL WARNING", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        print(
+            f"  This model is a THINKING model (detected via {_src}).",
+            file=sys.stderr,
+        )
+        print(
+            "  No reasoning parser is active and thinking is not disabled,",
+            file=sys.stderr,
+        )
+        print(
+            "  so the model's chain-of-thought WILL stream into the",
+            file=sys.stderr,
+        )
+        print(
+            "  `content` field of every response. Clients expecting a",
+            file=sys.stderr,
+        )
+        print(
+            "  terse answer (title generators, tool selectors, etc.) will",
+            file=sys.stderr,
+        )
+        print("  see what looks like rubbish.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("  Pick one:", file=sys.stderr)
+        print(
+            "    A) add  --reasoning-parser auto  to extract <think> into",
+            file=sys.stderr,
+        )
+        print(
+            "       a separate reasoning_content field, or",
+            file=sys.stderr,
+        )
+        print(
+            "    B) add  --default-enable-thinking false  to skip",
+            file=sys.stderr,
+        )
+        print(
+            "       reasoning entirely and go straight to the answer.",
+            file=sys.stderr,
+        )
+        print("=" * 60, file=sys.stderr)
+        logger.warning(
+            "Thinking model loaded without a reasoning parser — output "
+            "will include raw <think> blocks in content. See the "
+            "THINKING MODEL WARNING printed above for one-line fixes."
+        )
 
     # Security summary at startup
     print("=" * 60)
@@ -203,9 +352,22 @@ def serve_command(args):
         print("  Tool calling: Use --enable-auto-tool-choice to enable")
     if server._reasoning_parser:
         parser_display = type(server._reasoning_parser).__name__
-        print(f"  Reasoning: ENABLED (parser: {parser_display})")
+        _thinking_suffix = ""
+        if _is_thinking_model:
+            _thinking_suffix = "  [thinking model detected]"
+        print(f"  Reasoning: ENABLED (parser: {parser_display}){_thinking_suffix}")
     elif getattr(args, 'reasoning_parser', None):
         print(f"  Reasoning: requested '{args.reasoning_parser}' but no parser matched")
+    elif _is_thinking_model and _thinking_off:
+        print(
+            "  Reasoning: thinking-model detected, default_enable_thinking=false "
+            "(model will skip reasoning)"
+        )
+    elif _is_thinking_model:
+        print(
+            "  Reasoning: THINKING MODEL DETECTED but no parser active — "
+            "see warning above, output will include <think> blocks"
+        )
     else:
         print("  Reasoning: Use --reasoning-parser to enable")
     spec_model = getattr(args, 'speculative_model', None)
