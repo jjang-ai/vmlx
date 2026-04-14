@@ -570,6 +570,20 @@ def _load_jang_v2(
             )
             return model, tokenizer
 
+    # Gemma 4 native text MoE must be registered in mlx_lm.models BEFORE the
+    # skeleton load runs — otherwise gemma4 JANG models raise
+    # `ValueError: Model type gemma4 not supported` from mlx_lm.utils.
+    # load_model_with_fallback() registers it too, so this is redundant when
+    # called via the CLI path but critical for any direct caller of
+    # load_jang_model (benchmark scripts, test harnesses, distributed worker).
+    # The register function is idempotent and a no-op when mlx-lm ships
+    # gemma4 natively (0.31.2+).
+    try:
+        from ..models.gemma4_native_register import register_gemma4_native
+        register_gemma4_native()
+    except Exception as _g4_e:
+        logger.debug(f"gemma4 native register skipped: {_g4_e}")
+
     # Nemotron-H LatentMoE patch: must run BEFORE _load_model_skeleton creates
     # NemotronHBlock instances. For models with moe_latent_size set (e.g.,
     # Nemotron-3-Super-120B), experts operate on a latent dim (1024) rather than
