@@ -17,8 +17,8 @@ function buildCliEnv(): Record<string, string | undefined> {
 }
 
 /** Resolve the CLI spawn command + args using the same path as sessions.ts */
-function resolveCliSpawn(subcommandArgs: string[]): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
-  const engineResult = sessionManager.findEnginePath()
+async function resolveCliSpawn(subcommandArgs: string[]): Promise<{ cmd: string; args: string[]; env: Record<string, string | undefined> }> {
+  const engineResult = await sessionManager.findEnginePath()
   const env = buildCliEnv()
   if (engineResult?.type === 'bundled') {
     return {
@@ -58,7 +58,7 @@ function emitComplete(getWin: () => BrowserWindow | null, result: { success: boo
 
 /** Run a quick CLI command that buffers output and returns it. 30s timeout. */
 async function runQuickCommand(subcommand: string, args: string[]): Promise<{ success: boolean; output: string; error?: string }> {
-  const spawn_info = resolveCliSpawn([subcommand, ...args])
+  const spawn_info = await resolveCliSpawn([subcommand, ...args])
   return new Promise((resolve) => {
     const proc = spawn(spawn_info.cmd, spawn_info.args, {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -110,7 +110,7 @@ async function runStreamingCommand(
     return { success: false, error: 'Another operation is already running' }
   }
 
-  const spawn_info = resolveCliSpawn(cliArgs)
+  const spawn_info = await resolveCliSpawn(cliArgs)
   cancelled = false
   bufferedLogLines = []  // Clear previous buffer
 

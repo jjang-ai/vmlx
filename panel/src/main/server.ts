@@ -83,6 +83,7 @@ export interface ServerConfig {
   // Generation defaults
   defaultTemperature?: number
   defaultTopP?: number
+  defaultRepetitionPenalty?: number
 
   // Embedding model (separate from main model)
   embeddingModel?: string
