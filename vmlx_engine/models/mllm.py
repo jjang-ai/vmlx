@@ -729,6 +729,13 @@ class MLXMultimodalLM:
         from ..api.utils import resolve_to_local_path
         resolved_name = resolve_to_local_path(self.model_name)
 
+        # Apply mlx_vlm runtime compat patches (Qwen3-VL grid_thw coercion, #69).
+        try:
+            from ..utils.mlx_vlm_compat import apply as _apply_mlx_vlm_compat
+            _apply_mlx_vlm_compat()
+        except Exception as _e:
+            logger.debug(f"mlx_vlm compat patch skipped: {_e}")
+
         # JANG VL models: use JANG loader (handles mixed-precision + mlx-vlm sanitization)
         from ..utils.jang_loader import is_jang_model
         if is_jang_model(resolved_name):
@@ -1052,15 +1059,15 @@ class MLXMultimodalLM:
                 f"Failed to apply chat template: {e}, using last user message"
             )
 
-        # Strip only UNCLOSED <think> at the very end when thinking is OFF.
-        # Do NOT strip <think></think> (closed empty block) — that's the
-        # template's proper "don't think" signal.
-        if enable_thinking is False and formatted_prompt and "<think>" in formatted_prompt:
+        # When thinking is OFF, close any unclosed <think> in the prompt.
+        if enable_thinking is False and formatted_prompt:
             last_think = formatted_prompt.rfind("<think>")
             if last_think >= 0:
                 after = formatted_prompt[last_think + 7:]
                 if "</think>" not in after:
-                    formatted_prompt = formatted_prompt[:last_think].rstrip() + "\n"
+                    formatted_prompt = formatted_prompt[:last_think + 7] + "</think>\n"
+            elif "<think>" not in formatted_prompt:
+                formatted_prompt = formatted_prompt.rstrip() + "\n<think>\n</think>\n"
 
         if formatted_prompt is None:
             # Fallback to last user message if template fails

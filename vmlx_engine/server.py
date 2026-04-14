@@ -2753,6 +2753,11 @@ async def create_anthropic_message(
         elif chat_req.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
 
+    # Pass tools to engine so batched.py knows not to inject <think></think>
+    if chat_req.tools:
+        from .api.tool_calling import convert_tools_for_template
+        _msg_kwargs["tools"] = convert_tools_for_template(chat_req.tools)
+
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -2772,9 +2777,9 @@ async def create_anthropic_message(
             if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
                 stripped = _THINK_STRIP_RE.sub("", msg["content"]).strip()
                 if stripped != msg["content"]:
-                    if not stripped:
-                        continue
-                    msg = {**msg, "content": stripped}
+                    if not stripped and not msg.get("tool_calls"):
+                        continue  # Only drop if no tool_calls (GH mlxstudio #62)
+                    msg = {**msg, "content": stripped or None}
             cleaned.append(msg)
         messages_dump = cleaned
 
@@ -3278,6 +3283,12 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs["enable_thinking"] = bool(_ollama_ct_kwargs["enable_thinking"])
     elif _default_enable_thinking is not None:
         chat_kwargs["enable_thinking"] = _default_enable_thinking
+
+    # Pass tools to engine so batched.py knows not to inject <think></think>
+    # when tool calling is active (model needs to think to decide on tools)
+    if chat_req.tools:
+        from .api.tool_calling import convert_tools_for_template
+        chat_kwargs["tools"] = convert_tools_for_template(chat_req.tools)
 
     # Extract messages (same logic as create_chat_completion)
     if engine.is_mllm:
@@ -4393,9 +4404,12 @@ async def create_chat_completion(
                 if isinstance(content, str):
                     stripped = _THINK_STRIP_RE.sub("", content).strip()
                     if stripped != content:
-                        if not stripped:
-                            continue  # Drop assistant messages that were ONLY thinking
-                        msg = {**msg, "content": stripped}
+                        if not stripped and not msg.get("tool_calls"):
+                            continue  # Drop assistant messages that were ONLY thinking (no tool calls)
+                        # Preserve message if it has tool_calls — orphaned tool results
+                        # after dropping the assistant message causes template breakage
+                        # and repetition loops (GH mlxstudio #62).
+                        msg = {**msg, "content": stripped or None}
             cleaned.append(msg)
         messages = cleaned
 
@@ -4484,6 +4498,7 @@ async def create_chat_completion(
             chat_kwargs["reasoning_effort"] = "high"
         elif request.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
+
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -4647,6 +4662,12 @@ async def create_chat_completion(
         if not _suppress:
             _suppress = _ct_kwargs.get("enable_thinking") is False
         if _suppress:
+            # Recover truncated-think text into content when thinking is off.
+            # Without this, a model that ignores enable_thinking=False and emits
+            # <think>... but hits max_tokens before </think> produces a response
+            # with content=null and reasoning_content=null — the tokens are lost.
+            if not content_for_parsing and reasoning_text:
+                content_for_parsing = reasoning_text
             reasoning_text = None
 
     # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
@@ -5026,9 +5047,12 @@ async def create_response(
                 if isinstance(content, str):
                     stripped = _THINK_STRIP_RE.sub("", content).strip()
                     if stripped != content:
-                        if not stripped:
-                            continue  # Drop assistant messages that were ONLY thinking
-                        msg = {**msg, "content": stripped}
+                        if not stripped and not msg.get("tool_calls"):
+                            continue  # Drop assistant messages that were ONLY thinking (no tool calls)
+                        # Preserve message if it has tool_calls — orphaned tool results
+                        # after dropping the assistant message causes template breakage
+                        # and repetition loops (GH mlxstudio #62).
+                        msg = {**msg, "content": stripped or None}
             cleaned.append(msg)
         messages = cleaned
 
@@ -5112,6 +5136,7 @@ async def create_response(
             chat_kwargs["reasoning_effort"] = "high"
         elif _resp_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
+
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -5269,6 +5294,12 @@ async def create_response(
         if not _suppress:
             _suppress = _ct_kwargs.get("enable_thinking") is False
         if _suppress:
+            # Recover truncated-think text into content when thinking is off.
+            # Without this, a model that ignores enable_thinking=False and emits
+            # <think>... but hits max_tokens before </think> produces a response
+            # with content=null and reasoning_content=null — the tokens are lost.
+            if not content_for_parsing and reasoning_text:
+                content_for_parsing = reasoning_text
             reasoning_text = None
 
     # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
@@ -5850,23 +5881,15 @@ async def stream_chat_completion(
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
 
-                # When reasoning is suppressed (client requested enable_thinking=False
-                # but the model's template ignored it and still injected <think>),
-                # drop reasoning chunks so the user only sees the final answer.
-                # The model still thinks internally but the UI won't show any of it.
+                # When reasoning is suppressed, only emit actual content (after
+                # </think>). Reasoning tokens are dropped. The prompt-level fix
+                # (injecting <think></think> in batched.py/simple.py/mllm.py)
+                # should prevent the model from thinking at all. If the model
+                # still thinks despite the closed block, emit heartbeats so the
+                # UI knows the stream is alive while waiting for content.
                 if suppress_reasoning:
-                    emit_content = (
-                        delta_msg.content
-                    )  # Only emit actual content after </think>
+                    emit_content = delta_msg.content
                     emit_reasoning = None
-                    # MiniMax M2.5 + 2-bit JANG reasoning models can reason for
-                    # many seconds before closing </think>. If we `continue` on
-                    # every reasoning chunk, the SSE stream is silent the entire
-                    # time and the client UI appears hung ("loading forever").
-                    # Fix: emit a content=None heartbeat chunk so the client
-                    # knows the stream is alive and progressing — the UI can
-                    # exit its "loading" state and show a live working indicator
-                    # with token counts while the reasoning finishes internally.
                     if not emit_content and not output.finished:
                         heartbeat = ChatCompletionChunk(
                             id=response_id,
@@ -6217,25 +6240,65 @@ async def stream_chat_completion(
         yield f"data: {_dump_sse_json(fallback_chunk)}\n\n"
 
     # When reasoning is suppressed and the model produced ONLY reasoning (no content),
-    # emit a diagnostic so the client isn't left with a completely silent empty response.
+    # try to extract tool calls from reasoning before showing the diagnostic.
+    # MiniMax M2.7 and similar models may emit tool calls inside <think> blocks
+    # when reasoning OFF — the tool call parser needs to see the reasoning text.
     if suppress_reasoning and not content_was_emitted and accumulated_reasoning:
-        logger.info(
-            f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
-        )
-        diag_chunk = ChatCompletionChunk(
-            id=response_id,
-            created=_created_ts,
-            model=request.model,
-            choices=[
-                ChatCompletionChunkChoice(
+        # Last-chance tool call extraction from reasoning text
+        _has_tc_markers = any(m in accumulated_reasoning for m in _TOOL_CALL_MARKERS)
+        if _has_tc_markers and not _suppress_tools:
+            logger.info(f"Request {response_id}: tool call markers found in suppressed reasoning — extracting")
+            _tc_text = accumulated_reasoning.strip()
+            _tc_cleaned, _tc_calls = _parse_tool_calls_with_parser(_tc_text, request)
+            if _tc_calls:
+                # Emit tool calls as if they came from content
+                _tc_content = (_tc_cleaned or "").strip()
+                if _tc_content:
+                    tc_content_chunk = ChatCompletionChunk(
+                        id=response_id, created=_created_ts, model=request.model,
+                        choices=[ChatCompletionChunkChoice(
+                            delta=ChatCompletionChunkDelta(content=_tc_content),
+                            finish_reason=None,
+                        )],
+                    )
+                    yield f"data: {_dump_sse_json(tc_content_chunk)}\n\n"
+                tc_chunk = ChatCompletionChunk(
+                    id=response_id, created=_created_ts, model=request.model,
+                    choices=[ChatCompletionChunkChoice(
+                        delta=ChatCompletionChunkDelta(
+                            tool_calls=[{
+                                "index": i, "id": tc.id, "type": "function",
+                                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                            } for i, tc in enumerate(_tc_calls)],
+                        ),
+                        finish_reason="tool_calls",
+                    )],
+                )
+                yield f"data: {_dump_sse_json(tc_chunk)}\n\n"
+            else:
+                logger.info(f"Request {response_id}: tool markers found but parsing failed — emitting reasoning as content fallback")
+                diag_chunk = ChatCompletionChunk(
+                    id=response_id, created=_created_ts, model=request.model,
+                    choices=[ChatCompletionChunkChoice(
+                        delta=ChatCompletionChunkDelta(content=accumulated_reasoning),
+                        finish_reason="stop",
+                    )],
+                )
+                yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
+        else:
+            logger.info(
+                f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
+            )
+            diag_chunk = ChatCompletionChunk(
+                id=response_id, created=_created_ts, model=request.model,
+                choices=[ChatCompletionChunkChoice(
                     delta=ChatCompletionChunkDelta(
                         content="[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]",
                     ),
                     finish_reason="stop",
-                )
-            ],
-        )
-        yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
+                )],
+            )
+            yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
 
     # Safeguard: if model generated zero tokens (empty stream), emit a diagnostic
     # chunk so clients always get feedback instead of a silent empty response.
@@ -6603,26 +6666,17 @@ async def stream_responses_api(
                             continue
 
                         if not tool_call_buffering:
-                            # When reasoning is suppressed (client requested enable_thinking=False
-                            # but model forces it), drop reasoning entirely so the user only
-                            # sees the final answer after the model finishes thinking.
+                            # When reasoning is suppressed, only emit actual content.
+                            # Prompt-level <think></think> injection should prevent
+                            # the model from thinking. If it still does, emit
+                            # in_progress events so the client stays alive.
                             if suppress_reasoning:
-                                emit_content = (
-                                    delta_msg.content
-                                )  # Only actual content after </think>
+                                emit_content = delta_msg.content
                                 emit_reasoning = None
-                                # Heartbeat for Responses API: while the model is
-                                # inside a suppressed <think> block (MiniMax M2.5
-                                # etc.), emit a response.in_progress event so the
-                                # client knows the stream is still alive and can
-                                # display a working indicator instead of hanging.
                                 if not emit_content and not output.finished:
                                     yield _sse(
                                         "response.in_progress",
-                                        {
-                                            "type": "response.in_progress",
-                                            "output_index": 0,
-                                        },
+                                        {"type": "response.in_progress", "output_index": 0},
                                     )
                                     continue
                             else:
@@ -6970,7 +7024,19 @@ async def stream_responses_api(
             # If reasoning was suppressed and model produced reasoning, the response
             # is intentionally empty — don't show error fallback
             if suppress_reasoning and accumulated_reasoning:
-                display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
+                # Last-chance tool extraction from reasoning (mirrors Chat Completions path)
+                _has_tc = any(m in accumulated_reasoning for m in _TOOL_CALL_MARKERS)
+                if _has_tc and not _suppress_tools:
+                    logger.info(f"Request {response_id}: tool markers in suppressed reasoning — extracting (Responses API)")
+                    _tc_text = accumulated_reasoning.strip()
+                    _tc_cleaned, _tc_calls = _parse_tool_calls_with_parser(_tc_text, request)
+                    if _tc_calls:
+                        display_text = (_tc_cleaned or "").strip()
+                        # TODO: emit tool calls via Responses API format
+                    else:
+                        display_text = accumulated_reasoning
+                else:
+                    display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
                 logger.info(
                     f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
                 )

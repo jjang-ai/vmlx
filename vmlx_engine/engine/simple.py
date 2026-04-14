@@ -441,6 +441,15 @@ class SimpleEngine(BaseEngine):
                     prompt = check_and_inject_fallback_tools(
                         prompt, messages, template_tools, tokenizer, tpl_kwargs
                     )
+
+                    if thinking_enabled is False and not template_tools:
+                        last_think = prompt.rfind("<think>")
+                        if last_think >= 0:
+                            after_think = prompt[last_think + 7:]
+                            if "</think>" not in after_think:
+                                prompt = prompt[:last_think + 7] + "</think>\n"
+                        elif "<think>" not in prompt:
+                            prompt = prompt.rstrip() + "\n<think>\n</think>\n"
                 else:
                     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                     prompt += "\nassistant:"
@@ -743,6 +752,15 @@ class SimpleEngine(BaseEngine):
             prompt = check_and_inject_fallback_tools(
                 prompt, messages, template_tools, tokenizer, template_kwargs
             )
+
+            if thinking_enabled is False and not template_tools:
+                last_think = prompt.rfind("<think>")
+                if last_think >= 0:
+                    after_think = prompt[last_think + 7:]
+                    if "</think>" not in after_think:
+                        prompt = prompt[:last_think + 7] + "</think>\n"
+                elif "<think>" not in prompt:
+                    prompt = prompt.rstrip() + "\n<think>\n</think>\n"
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
             prompt += "\nassistant:"

@@ -397,6 +397,44 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     }
   }
 
+  // Regenerate: re-send the last user message
+  const handleRegenerate = async () => {
+    if (!chatId || loading) return
+    const lastUser = [...messages].reverse().find(m => m.role === 'user')
+    if (!lastUser) return
+    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant')
+    if (lastAssistant) {
+      try { await window.api.chat.deleteMessage(lastAssistant.id) } catch {}
+    }
+    setMessages(prev => prev.filter(m => m.id !== lastAssistant?.id))
+    // Handle multimodal content (JSON array with text + images)
+    let content = lastUser.content
+    let attachments: ImageAttachment[] | undefined
+    try {
+      const parsed = JSON.parse(content)
+      if (Array.isArray(parsed)) {
+        content = parsed.find((p: any) => p.type === 'text')?.text ?? ''
+        attachments = parsed
+          .filter((p: any) => p.type === 'image_url' && p.image_url?.url)
+          .map((p: any) => ({ dataUrl: p.image_url.url, name: 'image' }))
+        if (attachments.length === 0) attachments = undefined
+      }
+    } catch { /* not JSON, plain text */ }
+    handleSend(content, attachments)
+  }
+
+  // Edit & resend: truncate conversation at the edited message, resend with new content
+  const handleEdit = async (messageId: string, newContent: string) => {
+    if (!chatId || loading) return
+    const idx = messages.findIndex(m => m.id === messageId)
+    if (idx < 0) return
+    // Batch-delete all messages from this point forward (single SQL query)
+    const fromTs = messages[idx].timestamp
+    try { await window.api.chat.deleteMessagesFrom(chatId, fromTs) } catch {}
+    setMessages(prev => prev.slice(0, idx))
+    handleSend(newContent)
+  }
+
   if (!chatId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -433,6 +471,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         hideToolStatus={hideToolStatus}
         sessionId={sessionId}
         sessionEndpoint={sessionEndpoint}
+        onRegenerate={handleRegenerate}
+        onEdit={handleEdit}
       />
       {/* ask_user tool: inline question from model */}
       {askUserQuestion && chatId && (

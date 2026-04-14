@@ -173,6 +173,25 @@ def _find_config_path(model_path: str | Path) -> Optional[Path]:
         p = path / name
         if p.exists():
             return p
+    # Fallback: JANGTQ converter embeds jang_config inside config.json["jang"].
+    # Extract it to jang_config.json so the rest of the pipeline works.
+    # Falls back to /tmp if the model dir is read-only (HF cache, etc.).
+    cfg_path = path / "config.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            if "jang" in cfg and isinstance(cfg["jang"], dict):
+                jang_cfg_path = path / "jang_config.json"
+                try:
+                    jang_cfg_path.write_text(json.dumps(cfg["jang"], indent=2))
+                except OSError:
+                    import tempfile
+                    jang_cfg_path = Path(tempfile.gettempdir()) / f"jang_config_{path.name}.json"
+                    jang_cfg_path.write_text(json.dumps(cfg["jang"], indent=2))
+                logger.info(f"  Extracted jang_config from config.json['jang'] → {jang_cfg_path}")
+                return jang_cfg_path
+        except Exception:
+            pass
     return None
 
 
@@ -221,8 +240,14 @@ def _is_v2_model(model_path: Path) -> bool:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning(f"Failed to parse JANG config {config_path}: {e}")
         return False
-    version = cfg.get("format_version", "1.0")
+    # JANGTQ writer: integer `version` field, no `format_version`
+    version = cfg.get("format_version", cfg.get("version", "1.0"))
     if str(version).startswith("2"):
+        return True
+
+    # JANGTQ: weight_format=mxtq is always v2-shaped (standard safetensors,
+    # no .jang.safetensors repack needed, mmap load).
+    if cfg.get("weight_format") == "mxtq":
         return True
 
     # Check for v2 index file (standard safetensors index alongside jang_config)
@@ -231,6 +256,14 @@ def _is_v2_model(model_path: Path) -> bool:
         has_jang = any(model_path.glob("*.jang.safetensors"))
         if not has_jang:
             return True
+
+    # Fallback: standard `model-NNNNN-of-NNNNN.safetensors` shards without
+    # .jang.safetensors → treat as v2 (this covers JANGTQ models that don't
+    # ship an index file).
+    has_jang = any(model_path.glob("*.jang.safetensors"))
+    has_shards = any(model_path.glob("model-*.safetensors"))
+    if has_shards and not has_jang:
+        return True
 
     return False
 
@@ -455,6 +488,88 @@ def _load_jang_v2(
         bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
         config["quantization"] = {"group_size": block_size, "bits": min(bit_widths)}
 
+    # MXTQ / JANGTQ fast path ─────────────────────────────────────────────
+    # Detect tq_packed keys in the first shard. If present, delegate loading
+    # to jang_tools.load_jangtq.load_jangtq_model() which installs native
+    # TurboQuantLinear / TurboQuantSwitchLinear modules and applies all
+    # P3/P15/P17/P18 Metal-kernel optimizations (multiblock Hadamard, router
+    # mx.compile, thread-tiling OPT=10/20 sweet spot, QKV fusion). The
+    # dequant-and-requant fallback below stays in place for environments
+    # where jang_tools is unavailable.
+    _tq_weight_files = _get_v2_weight_files(path)
+    _is_mxtq_v2 = False
+    if _tq_weight_files:
+        try:
+            _tq_first_keys = list(mx.load(str(_tq_weight_files[0])).keys())
+            _is_mxtq_v2 = any(k.endswith(".tq_packed") for k in _tq_first_keys)
+            del _tq_first_keys
+        except Exception:
+            _is_mxtq_v2 = False
+
+    if _is_mxtq_v2:
+        # Step 1: try to import the fast-path entry point. Only an ImportError
+        # here justifies falling back to the dequant path (jang_tools missing).
+        try:
+            from jang_tools.load_jangtq import load_jangtq_model as _load_jangtq
+        except ImportError as _tq_ie:
+            logger.warning(
+                "  JANGTQ fast path unavailable (%s) — falling back to "
+                "dequant-and-requant path",
+                _tq_ie,
+            )
+            _load_jangtq = None
+
+        if _load_jangtq is not None:
+            logger.info(
+                "MXTQ/JANGTQ detected — using native TurboQuant fast path "
+                "(jang_tools.load_jangtq, P3/P15/P17/P18 Metal kernels)"
+            )
+            if filter_expert_keys:
+                logger.warning(
+                    "  filter_expert_keys=True ignored on JANGTQ fast path "
+                    "(smelt partial-expert loading is not TQ-aware yet)"
+                )
+            if layer_range is not None:
+                logger.warning(
+                    "  layer_range=%s ignored on JANGTQ fast path "
+                    "(distributed layer-split loading is not TQ-aware yet)",
+                    layer_range,
+                )
+            # Step 2: load. If THIS fails, the model is broken — propagate
+            # rather than silently waste 80 s in the fallback path.
+            model, tokenizer = _load_jangtq(path, skip_params_eval=skip_eval)
+
+            if not hasattr(model, "config"):
+                model.config = config
+
+            # Step 3: vmlx_engine-only post-hooks. Each is wrapped individually
+            # so a failure in one (e.g. cache patching on an unsupported model)
+            # does NOT discard a successful 60-GB load.
+            _model_cfg_tq = json.loads((path / "config.json").read_text())
+            if not skip_eval:
+                try:
+                    _set_wired_limit_for_model(_tq_weight_files)
+                except Exception as _wl_e:
+                    logger.warning(f"  set_wired_limit skipped: {_wl_e}")
+            try:
+                _patch_turboquant_make_cache(model, jang_cfg, _model_cfg_tq)
+            except Exception as _pt_e:
+                logger.warning(
+                    f"  TurboQuant cache patching failed ({_pt_e}); "
+                    f"model loaded but KV cache will be dense"
+                )
+                import traceback
+                logger.debug(traceback.format_exc())
+
+            elapsed = time.perf_counter() - start
+            actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
+            source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+            logger.info(
+                f"JANGTQ v2 loaded in {elapsed:.1f}s: {source_model} "
+                f"({actual_bits:.1f}-bit avg, native TQ, no dequant)"
+            )
+            return model, tokenizer
+
     # Nemotron-H LatentMoE patch: must run BEFORE _load_model_skeleton creates
     # NemotronHBlock instances. For models with moe_latent_size set (e.g.,
     # Nemotron-3-Super-120B), experts operate on a latent dim (1024) rather than
@@ -597,8 +712,96 @@ def _load_jang_v2(
     # and the model runs on uninitialized random experts → garbage output.
     _needs_gemma4_switch_remap = _text_cfg.get("model_type", "") == "gemma4_text" or _model_type == "gemma4"
 
+    # MXTQ detection: check first shard for tq_packed keys
+    _is_mxtq = False
+    _mxtq_seed = jang_cfg.get("mxtq_seed", 42)
+    _mxtq_bits_map = jang_cfg.get("mxtq_bits", {})
+    if weight_files:
+        try:
+            _first_keys = list(mx.load(str(weight_files[0])).keys())
+        except Exception:
+            _first_keys = []
+        _is_mxtq = any(k.endswith(".tq_packed") for k in _first_keys)
+        if _is_mxtq:
+            logger.info("  MXTQ/JANGTQ format detected — will dequant tq_packed weights to fp16")
+
     for sf in weight_files:
         weights = mx.load(str(sf))
+
+        # MXTQ dequant: detect tq_packed/tq_norms pairs, dequant to fp16,
+        # then re-quantize to affine (uint32 .weight + .scales + .biases)
+        # so the model's QuantizedLinear modules accept them. Per-expert 2D
+        # tensors are stored individually — sanitize() stacks them later.
+        if _is_mxtq:
+            tq_groups = {}
+            regular = {}
+            for k, v in weights.items():
+                if k.endswith(".tq_packed"):
+                    tq_groups.setdefault(k[:-10], {})["packed"] = v
+                elif k.endswith(".tq_norms"):
+                    tq_groups.setdefault(k[:-9], {})["norms"] = v
+                elif k.endswith(".tq_bits"):
+                    pass
+                else:
+                    regular[k] = v
+
+            if tq_groups:
+                try:
+                    from jang_tools.turboquant.codebook import compute_codebook
+                    from jang_tools.turboquant.rotation import generate_random_signs, hadamard_inverse
+                    from jang_tools.turboquant.pipeline import unpack_bits
+
+                    _tq_count = 0
+                    _q_bits = config.get("quantization", {}).get("bits", 2)
+                    _q_gs = block_size
+                    for base, parts in tq_groups.items():
+                        if "packed" not in parts or "norms" not in parts:
+                            continue
+                        packed = parts["packed"]
+                        norms = parts["norms"]
+                        bl = base.lower()
+                        if "shared_expert" in bl:
+                            bits = _mxtq_bits_map.get("shared_expert", 3)
+                        elif "expert" in bl:
+                            bits = _mxtq_bits_map.get("routed_expert", 2)
+                        else:
+                            bits = 2
+                        vals_per_u32 = 32 // bits
+
+                        # Dequant: tq_packed → fp16
+                        out_feat, packed_cols = packed.shape
+                        in_features = packed_cols * vals_per_u32
+                        cb = mx.array(compute_codebook(in_features, bits))
+                        signs = mx.array(generate_random_signs(in_features, _mxtq_seed))
+                        rows = []
+                        for r in range(out_feat):
+                            idx = unpack_bits(packed[r], bits, in_features)
+                            row = mx.take(cb, idx.astype(mx.uint32))
+                            rows.append(row)
+                        w = mx.stack(rows)
+                        w = w * norms[:, None].astype(w.dtype)
+                        dq = hadamard_inverse(w, signs).astype(mx.float16)
+                        mx.eval(dq)
+
+                        # Re-quantize to affine: fp16 → (uint32 packed, scales, biases)
+                        # This produces the standard triplet that QuantizedLinear expects.
+                        q_w, q_s, q_b = mx.quantize(dq, group_size=_q_gs, bits=_q_bits)
+                        mx.eval(q_w, q_s, q_b)
+                        regular[f"{base}.weight"] = q_w
+                        regular[f"{base}.scales"] = q_s
+                        regular[f"{base}.biases"] = q_b
+                        del dq, w, rows
+                        _tq_count += 1
+
+                    if _tq_count > 0:
+                        logger.info(f"  Dequanted+requanted {_tq_count} MXTQ tensors in shard {sf.name}")
+                except ImportError as ie:
+                    logger.warning(f"  MXTQ dequant failed (missing jang_tools): {ie}")
+                except Exception as e:
+                    logger.warning(f"  MXTQ dequant failed: {e}")
+
+            weights = regular
+
         # Nemotron-H: filter mtp/importance weights
         if _needs_fc_rename:
             weights = {
@@ -996,9 +1199,14 @@ def _load_jang_v2_vlm(
     # fall back to minimal sanitize for MoE models where gate_up_proj is already split.
     from mlx_vlm.utils import sanitize_weights
 
-    # Gemma 4: JANG stores expert keys as switch_mlp but model uses experts.switch_glu
-    _vlm_text_mt = config.get("text_config", {}).get("model_type", "")
-    _vlm_needs_gemma4_switch_remap = _vlm_text_mt == "gemma4_text"
+    # Gemma 4: JANG stores expert keys as switch_mlp but model uses experts.switch_glu.
+    # Fall through to top-level model_type if text_config.model_type is missing,
+    # and accept both "gemma4" and "gemma4_text" — some JANG variants have the top
+    # value in text_config, others leave it in the outer config (issue #71).
+    _vlm_text_mt = config.get("text_config", {}).get(
+        "model_type", config.get("model_type", "")
+    )
+    _vlm_needs_gemma4_switch_remap = _vlm_text_mt in ("gemma4", "gemma4_text")
 
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
@@ -1419,23 +1627,32 @@ def load_jang_model(
         raise FileNotFoundError(f"No JANG config found in {path}")
 
     jang_cfg = json.loads(config_path.read_text())
+    # JANGTQ writer emits {"version": 2, "weight_format": "mxtq", ...} and
+    # omits the legacy `format` field entirely. Accept that shape in addition
+    # to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
     fmt = jang_cfg.get("format")
+    weight_format = jang_cfg.get("weight_format")
+    if not fmt and weight_format == "mxtq":
+        fmt = "mxtq"
     if not fmt:
         raise ValueError(
-            f"JANG config {config_path.name} is missing 'format' field. "
-            f"Expected one of: {', '.join(JANG_FORMAT_VALUES)}"
+            f"JANG config {config_path.name} is missing 'format' / 'weight_format'. "
+            f"Expected one of: {', '.join(JANG_FORMAT_VALUES)} or weight_format=mxtq"
         )
-    if fmt not in JANG_FORMAT_VALUES:
+    if fmt not in JANG_FORMAT_VALUES and fmt != "mxtq":
         raise ValueError(
-            f"Not a JANG model: format='{fmt}' (expected {', '.join(JANG_FORMAT_VALUES)})"
+            f"Not a JANG model: format='{fmt}' (expected {', '.join(JANG_FORMAT_VALUES)} "
+            f"or weight_format=mxtq)"
         )
 
-    version = str(jang_cfg.get("format_version", "1.0"))
+    # Legacy: format_version string ("1.0"/"2.0"). JANGTQ: int version 2.
+    _raw_ver = jang_cfg.get("format_version", jang_cfg.get("version", "1.0"))
+    version = str(_raw_ver)
     try:
         major = int(version.split(".")[0])
     except ValueError:
         raise ValueError(
-            f"Invalid JANG format_version: '{version}' (expected numeric like '1.0' or '2.0')"
+            f"Invalid JANG version: '{version}' (expected numeric)"
         )
     if major > 2:
         raise ValueError(

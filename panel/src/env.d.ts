@@ -147,6 +147,8 @@ declare global {
         get: (id: string) => Promise<any>;
         update: (id: string, updates: any) => Promise<{ success: boolean }>;
         delete: (id: string) => Promise<{ success: boolean }>;
+        deleteMessage: (messageId: string) => Promise<{ success: boolean }>;
+        deleteMessagesFrom: (chatId: string, fromTimestamp: number) => Promise<{ success: boolean }>;
         search: (query: string) => Promise<any[]>;
         getMessages: (chatId: string) => Promise<any[]>;
         addMessage: (

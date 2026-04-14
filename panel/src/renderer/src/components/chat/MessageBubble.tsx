@@ -3,7 +3,7 @@ import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import DOMPurify from 'dompurify'
 import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react'
-import { Copy, Check, User, Sparkles } from 'lucide-react'
+import { Copy, Check, User, Sparkles, RefreshCw, Pencil } from 'lucide-react'
 import { ReasoningBox } from './ReasoningBox'
 import { ToolCallStatus } from './ToolCallStatus'
 import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
@@ -27,6 +27,9 @@ interface MessageBubbleProps {
   toolStatuses?: any[]
   sessionId?: string
   sessionEndpoint?: { host: string; port: number }
+  isLastAssistant?: boolean
+  onRegenerate?: () => void
+  onEdit?: (messageId: string, newContent: string) => void
 }
 
 // Custom renderer: wraps code blocks with a header bar (language label + copy button)
@@ -138,9 +141,11 @@ function useTypewriter(fullContent: string, isStreaming: boolean): string {
   return displayed
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, sessionId, sessionEndpoint }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, sessionId, sessionEndpoint, isLastAssistant, onRegenerate, onEdit }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [zoomedImage, setZoomedImage] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [editText, setEditText] = useState('')
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
@@ -294,8 +299,56 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
 
   // ─── User message: compact right-aligned bubble ───────────────────
   if (isUser) {
+    // Edit mode for user messages
+    if (editing && onEdit) {
+      return (
+        <div className="flex justify-end gap-2.5 ml-[5%] md:ml-[10%] lg:ml-[15%]">
+          <div className="flex flex-col items-end max-w-full w-full">
+            <textarea
+              value={editText}
+              onChange={e => setEditText(e.target.value)}
+              autoFocus
+              rows={3}
+              className="w-full max-w-lg px-3 py-2 bg-background border border-primary rounded-xl text-sm resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (editText.trim()) {
+                    onEdit(message.id, editText.trim())
+                    setEditing(false)
+                  }
+                }
+                if (e.key === 'Escape') setEditing(false)
+              }}
+            />
+            <div className="flex gap-2 mt-1.5">
+              <button onClick={() => setEditing(false)} className="text-xs text-muted-foreground hover:text-foreground px-2 py-1">Cancel</button>
+              <button onClick={() => { if (editText.trim()) { onEdit(message.id, editText.trim()); setEditing(false) } }} className="text-xs bg-primary text-primary-foreground px-3 py-1 rounded hover:bg-primary/90">Send</button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     return (
-      <div className="flex justify-end gap-2.5 ml-[5%] md:ml-[10%] lg:ml-[15%]">
+      <div className="flex justify-end gap-2.5 ml-[5%] md:ml-[10%] lg:ml-[15%] group">
+        {/* Edit button on hover */}
+        {onEdit && !isStreaming && (
+          <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={() => {
+                const parsed = parseContentArray(message.content)
+                const textOnly = parsed ? (parsed.find((p: any) => p.type === 'text')?.text ?? '') : message.content
+                setEditText(textOnly)
+                setEditing(true)
+              }}
+              className="text-muted-foreground/40 hover:text-foreground transition-colors p-1"
+              title="Edit & resend"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          </div>
+        )}
         <div className="flex flex-col items-end max-w-full">
           <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-md px-4 py-2.5 text-sm">
             {renderUserContent()}
@@ -357,6 +410,15 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
                   : <Copy className="h-3 w-3" />
                 }
               </button>
+              {isLastAssistant && onRegenerate && (
+                <button
+                  onClick={onRegenerate}
+                  className="text-muted-foreground/50 hover:text-foreground transition-colors"
+                  title="Regenerate response"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                </button>
+              )}
             </div>
           )}
         </div>

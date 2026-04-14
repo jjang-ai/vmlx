@@ -32,9 +32,11 @@ interface MessageListProps {
   hideToolStatus?: boolean
   sessionId?: string
   sessionEndpoint?: { host: string; port: number }
+  onRegenerate?: () => void
+  onEdit?: (messageId: string, newContent: string) => void
 }
 
-export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint }: MessageListProps) {
+export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint, onRegenerate, onEdit }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
@@ -107,19 +109,26 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
   return (
     <div className="relative flex-1 overflow-hidden">
       <div ref={containerRef} onScroll={handleScroll} onWheel={handleWheel} className="h-full overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5 w-full">
-        {messages.map(message => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            isStreaming={message.id === streamingMessageId}
-            metrics={message.id === streamingMessageId ? currentMetrics : message.metrics}
-            reasoningContent={reasoningMap?.[message.id]}
-            reasoningDone={reasoningDoneMap?.[message.id] ?? false}
-            toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
-            sessionId={sessionId}
-            sessionEndpoint={sessionEndpoint}
-          />
-        ))}
+        {(() => {
+          const lastAssistantIdx = messages.reduceRight((found: number, m, i) => found === -1 && m.role === 'assistant' ? i : found, -1)
+          return messages.map((message, idx) => {
+          return (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              isStreaming={message.id === streamingMessageId}
+              metrics={message.id === streamingMessageId ? currentMetrics : message.metrics}
+              reasoningContent={reasoningMap?.[message.id]}
+              reasoningDone={reasoningDoneMap?.[message.id] ?? false}
+              toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
+              sessionId={sessionId}
+              sessionEndpoint={sessionEndpoint}
+              isLastAssistant={idx === lastAssistantIdx}
+              onRegenerate={onRegenerate}
+              onEdit={onEdit}
+            />
+          )
+        })})()}
         <div ref={bottomRef} />
       </div>
 

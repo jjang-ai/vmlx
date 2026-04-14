@@ -83,6 +83,8 @@ const api = {
     get: (id: string) => ipcRenderer.invoke('chat:get', id),
     update: (id: string, updates: any) => ipcRenderer.invoke('chat:update', id, updates),
     delete: (id: string) => ipcRenderer.invoke('chat:delete', id),
+    deleteMessage: (messageId: string) => ipcRenderer.invoke('chat:deleteMessage', messageId),
+    deleteMessagesFrom: (chatId: string, fromTimestamp: number) => ipcRenderer.invoke('chat:deleteMessagesFrom', chatId, fromTimestamp),
     search: (query: string) => ipcRenderer.invoke('chat:search', query),
 
     // Messages

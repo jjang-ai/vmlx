@@ -1112,6 +1112,48 @@ class PagedCacheManager:
         with self._lock:
             self.request_tables.pop(request_id, None)
 
+    def release_request_refs(self, block_table: Optional[BlockTable]) -> int:
+        """Release request-held refs while keeping zero-ref blocks cache-resident.
+
+        This implements "cached but free" semantics:
+        - decrement one ref per block-table entry,
+        - when a block reaches ref_count==0, keep its hash entries intact,
+          but move it to the free LRU queue so memory pressure can reclaim it.
+
+        Returns:
+            Number of blocks that transitioned to ref_count==0.
+        """
+        if block_table is None:
+            return 0
+
+        with self._lock:
+            released = 0
+
+            for block_id in block_table.block_ids:
+                block = self.allocated_blocks.get(block_id)
+                if block is None or block.is_null:
+                    continue
+
+                if block.ref_count <= 0:
+                    logger.warning(
+                        f"release_request_refs: block {block_id} already has "
+                        f"ref_count={block.ref_count}; skipping"
+                    )
+                    continue
+
+                block.ref_count -= 1
+
+                # Keep cache mapping (block_hash/hash_value) so prefix hits can
+                # revive this block, but make it reclaimable via free LRU queue.
+                if block.ref_count == 0:
+                    if block.prev_free_block is None and block.next_free_block is None:
+                        self.free_block_queue.append(block)
+                        self.stats.allocated_blocks = max(0, self.stats.allocated_blocks - 1)
+                        self.stats.free_blocks += 1
+                    released += 1
+
+            return released
+
     def add_block_to_table(
         self,
         table: BlockTable,
@@ -1292,6 +1334,7 @@ class PagedCacheManager:
 
             needed = requested_blocks - self.free_block_queue.num_free_blocks
             self.evict_lru_blocks(needed)
+            self.stats.free_blocks = self.free_block_queue.num_free_blocks
 
             return self.free_block_queue.num_free_blocks >= requested_blocks
 

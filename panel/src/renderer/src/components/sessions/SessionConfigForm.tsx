@@ -75,21 +75,21 @@ export const DEFAULT_CONFIG: SessionConfig = {
   apiKey: '',
   rateLimit: 0,
   timeout: 300,
-  maxNumSeqs: 256,
+  maxNumSeqs: 5,
   prefillBatchSize: 512,
-  prefillStepSize: 2048,
+  prefillStepSize: 1024,
   completionBatchSize: 512,
   continuousBatching: true,
   enablePrefixCache: true,
   prefixCacheSize: 100,
   prefixCacheMaxBytes: 0,
   cacheMemoryMb: 0,
-  cacheMemoryPercent: 30,
+  cacheMemoryPercent: 10,
   cacheTtlMinutes: 0,
   noMemoryAwareCache: false,
   usePagedCache: true,
   pagedCacheBlockSize: 64,
-  maxCacheBlocks: 1000,
+  maxCacheBlocks: 500,
   kvCacheQuantization: 'none',
   kvCacheGroupSize: 64,
   enableDiskCache: true,
@@ -290,11 +290,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.maxNumSeqs}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (256)"
+          unlimitedLabel="Default (5)"
         />
         <SliderField
           label="Prefill Batch Size"
-          tooltip="Maximum number of concurrent prompts processed in parallel during the prefill (prompt processing) phase. Higher = more parallelism for multi-user workloads, more memory pressure during prompt ingest. Default 8."
+          tooltip="Maximum number of concurrent prompts processed in parallel during the prefill (prompt processing) phase. Higher = more parallelism for multi-user workloads, more memory pressure during prompt ingest."
           value={config.prefillBatchSize}
           onChange={v => onChange('prefillBatchSize', v)}
           min={1}
@@ -303,20 +303,20 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={512}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (8)"
+          unlimitedLabel="Default (512)"
         />
         <SliderField
           label="Prefill Step Size"
-          tooltip="Maximum number of tokens processed in a single prefill forward pass per sequence. Larger = fewer kernel launches and faster prefill, more transient memory. Reduce if you OOM mid-prompt on long contexts. Default 2048."
+          tooltip="Maximum number of tokens processed in a single prefill forward pass per sequence. Larger = fewer kernel launches and faster prefill, more transient memory. Reduce if you OOM mid-prompt on long contexts."
           value={config.prefillStepSize}
           onChange={v => onChange('prefillStepSize', v)}
           min={64}
           max={8192}
           step={64}
-          defaultValue={2048}
+          defaultValue={1024}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (2048)"
+          unlimitedLabel="Default (1024)"
         />
         <SliderField
           label="Completion Batch Size"
@@ -329,7 +329,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={512}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (32)"
+          unlimitedLabel="Default (512)"
         />
         <CheckField
           label="Smelt Mode"

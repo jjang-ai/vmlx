@@ -1397,7 +1397,11 @@ class BlockAwarePrefixCache:
             # Allocate new block
             block = self.paged_cache.allocate_block()
             if not block:
-                # Handle memory pressure
+                # First free low-priority entries (assistant -> user -> system)
+                # so their request refs drop and blocks can enter the free LRU queue.
+                self.release_low_priority(1)
+
+                # Then run block-level LRU eviction under memory pressure.
                 if not self.paged_cache.handle_memory_pressure(1):
                     logger.warning(f"Cannot allocate block for {request_id}")
                     break

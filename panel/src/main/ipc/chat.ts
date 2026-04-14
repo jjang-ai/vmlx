@@ -583,6 +583,16 @@ export function registerChatHandlers(
     return { success: true };
   });
 
+  ipcMain.handle("chat:deleteMessage", async (_, messageId: string) => {
+    db.deleteMessage(messageId);
+    return { success: true };
+  });
+
+  ipcMain.handle("chat:deleteMessagesFrom", async (_, chatId: string, fromTimestamp: number) => {
+    db.deleteMessagesFrom(chatId, fromTimestamp);
+    return { success: true };
+  });
+
   ipcMain.handle("chat:search", async (_, query: string) => {
     return db.searchChats(query);
   });
@@ -873,6 +883,19 @@ export function registerChatHandlers(
       // user messages when the server isn't ready yet.
       // When images are attached, store content as JSON array of content parts
       const hasAttachments = attachments && attachments.length > 0;
+      // mlxstudio#69: explicit image attachments override chatIsMultimodal
+      // detection. The user clicked "attach image" — that intent must be
+      // honored even when (a) the session lookup failed, (b) the session
+      // config has isMultimodal=false from an older save, or (c) the model
+      // dir's config.json doesn't expose vision_config. The downstream
+      // server will reject the request properly if the model truly cannot
+      // handle images, which is far better than silently dropping them.
+      if (hasAttachments && !chatIsMultimodal) {
+        console.log(
+          `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${attachments!.length} image(s)`,
+        );
+        chatIsMultimodal = true;
+      }
       const userContentForDb = hasAttachments
         ? JSON.stringify([
             ...(content.trim() ? [{ type: "text", text: content }] : []),

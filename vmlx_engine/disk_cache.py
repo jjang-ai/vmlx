@@ -895,12 +895,14 @@ class DiskCacheManager:
             try:
                 item = self._write_queue.get_nowait()
                 if isinstance(item[0], str) and item[0] == "__tq_native__":
-                    _, token_hash, tokens, tmp_path_str, file_name = item
+                    # 6-tuple: ("__tq_native__", token_hash, tokens, tmp_path, file_name, cache_type)
+                    _, token_hash, tokens, tmp_path_str, file_name = item[:5]
                     self._finalize_tq_native(
                         token_hash, tokens, tmp_path_str, file_name
                     )
                 else:
-                    token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                    # 5-tuple: (token_hash, tokens, data, metadata, cache_type)
+                    token_hash, tokens, cache_data_flat, cache_metadata_flat = item[:4]
                     self._write_cache(
                         token_hash, tokens, cache_data_flat, cache_metadata_flat
                     )

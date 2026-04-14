@@ -498,13 +498,10 @@ class BatchedEngine(BaseEngine):
         # Count non-system messages to detect multi-turn conversations
         non_system_msgs = sum(1 for m in messages if m.get("role") != "system")
 
-        if self._is_mllm and self._processor and not tools and non_system_msgs <= 2 and num_images > 0:
-            # Use mlx_vlm for single-turn MLLM ONLY when actual images are present.
-            # The mlx_vlm path inserts image placeholder tokens which differ from
-            # the standard tokenizer output — causing cache key mismatches on
-            # subsequent text-only turns. By gating on num_images > 0, text-only
-            # VL conversations always use the standard tokenizer path, ensuring
-            # consistent cache keys across all turns.
+        if self._is_mllm and self._processor and not tools and num_images > 0:
+            # Use mlx_vlm for MLLM when actual images are present (any turn count).
+            # Text-only VL conversations still use the standard tokenizer path,
+            # ensuring consistent cache keys across text-only turns.
             try:
                 from mlx_vlm.prompt_utils import apply_chat_template
                 from mlx_vlm.utils import load_config
@@ -546,13 +543,14 @@ class BatchedEngine(BaseEngine):
                     prompt = self._processor.apply_chat_template(
                         built_messages, **tpl_kwargs
                     )
-                    if enable_thinking is False and "<think>" in prompt:
-                        # Strip only UNCLOSED <think> at end (not <think></think> blocks)
+                    if enable_thinking is False and not tools:
                         last_think = prompt.rfind("<think>")
                         if last_think >= 0:
                             after = prompt[last_think + 7:]
                             if "</think>" not in after:
-                                prompt = prompt[:last_think].rstrip() + "\n"
+                                prompt = prompt[:last_think + 7] + "</think>\n"
+                        elif "<think>" not in prompt:
+                            prompt = prompt.rstrip() + "\n<think>\n</think>\n"
                 return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
@@ -645,18 +643,23 @@ class BatchedEngine(BaseEngine):
                 prompt, messages, tools, tokenizer, template_kwargs
             )
 
-            # Only strip an UNCLOSED <think> at the very end (generation prompt
-            # injection from templates that ignore enable_thinking=False).
-            # Do NOT strip <think></think> (closed empty block) — that's the
-            # template's proper "don't think" signal and must be preserved.
-            if enable_thinking is False:
-                # Check for unclosed <think> at end (no matching </think> after it)
+            # When thinking is OFF and no tools in request, close any unclosed
+            # <think> in the prompt. This tells the model "thinking already
+            # happened" and it should produce content directly.
+            # CRITICAL: skip this when tools are present — the model needs to
+            # think in order to decide whether to call a tool. The <think></think>
+            # injection suppresses not just thinking but also tool-call decision
+            # making, causing the model to produce a direct (often wrong) answer
+            # instead of calling the tool. Server-side reasoning suppression
+            # (heartbeats) handles the UX when tools are active.
+            if enable_thinking is False and not tools:
                 last_think = prompt.rfind("<think>")
                 if last_think >= 0:
                     after_think = prompt[last_think + 7:]
                     if "</think>" not in after_think:
-                        # Unclosed <think> at end — strip it
-                        prompt = prompt[:last_think].rstrip() + "\n"
+                        prompt = prompt[:last_think + 7] + "</think>\n"
+                elif "<think>" not in prompt:
+                    prompt = prompt.rstrip() + "\n<think>\n</think>\n"
             return prompt
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)

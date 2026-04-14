@@ -1021,6 +1021,12 @@ class DatabaseManager {
     this.db.prepare("DELETE FROM messages WHERE id = ?").run(messageId);
   }
 
+  /** Delete all messages in a chat at or after a given timestamp */
+  deleteMessagesFrom(chatId: string, fromTimestamp: number): void {
+    this.ensureOpen();
+    this.db.prepare("DELETE FROM messages WHERE chat_id = ? AND timestamp >= ?").run(chatId, fromTimestamp);
+  }
+
   getMessages(chatId: string): Message[] {
     this.ensureOpen();
     const stmt = this.db.prepare(

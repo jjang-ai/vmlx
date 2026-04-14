@@ -1798,8 +1798,13 @@ class MLLMScheduler:
                                     # Do NOT strip again here — double stripping collapses the
                                     # token list to near-zero length.
                                     truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
-                                    # L2: persist to disk before quantization
-                                    if self.disk_cache is not None:
+                                    # L2: persist to disk before quantization.
+                                    # Skip for hybrid models — the prompt-level disk cache
+                                    # can't reconstruct SSM state on fetch (mllm_batch_generator
+                                    # guards with `if not self._is_hybrid`), so writing is
+                                    # wasted I/O. Block-level disk cache (block_disk_store)
+                                    # still works for hybrid via the paged path.
+                                    if self.disk_cache is not None and not self._is_hybrid:
                                         try:
                                             self.disk_cache.store(token_list, cache_blocks)
                                         except Exception as de:
@@ -1840,8 +1845,8 @@ class MLLMScheduler:
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
                             if cache_to_store is not None:
-                                # L2: persist to disk (hybrid OK — truncate handles SSM layers)
-                                if self.disk_cache is not None:
+                                # L2: persist to disk (skip hybrid — SSM can't be reconstructed on fetch)
+                                if self.disk_cache is not None and not self._is_hybrid:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
                                     except Exception as de:
@@ -1876,7 +1881,7 @@ class MLLMScheduler:
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
                             if cache_to_store is not None:
-                                if self.disk_cache is not None:
+                                if self.disk_cache is not None and not self._is_hybrid:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
                                     except Exception as de:

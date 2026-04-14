@@ -349,6 +349,21 @@ def register_all(registry=None):
         )
     )
 
+    # GLM-5.1 (glm_moe_dsa): inherits deepseek_v32 architecture (MLA + MoE).
+    # Same fp32-SDPA fix applies. Uses DeepSeek R1 reasoning parser since
+    # GLM-5.1 emits <think>...</think> tags (same as DeepSeek V3.2).
+    _register(
+        ModelConfig(
+            family_name="glm5",
+            model_types=["glm_moe_dsa"],
+            cache_type="kv",
+            tool_parser="deepseek",
+            reasoning_parser="deepseek_r1",
+            think_in_template=True,
+            priority=20,
+        )
+    )
+
     # ── GLM family (CRITICAL: different reasoning parsers per variant) ──
 
     # GPT-OSS: Harmony <|channel|> protocol reasoning

@@ -134,7 +134,7 @@ class SSMCompanionCache:
     LRU eviction keeps it bounded.
     """
 
-    def __init__(self, max_entries: int = 50, model_key: str = ""):
+    def __init__(self, max_entries: int = 20, model_key: str = ""):
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         # Internal storage: key -> (states, is_complete) tuple.
