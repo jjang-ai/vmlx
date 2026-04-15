@@ -423,7 +423,7 @@ public actor ModelLibrary {
             modality = .image
         }
 
-        let displayName = deriveDisplayName(dir: dir, source: source)
+        let displayName = deriveDisplayName(dir: dir, source: source, config: json)
         let sizeBytes = totalWeightBytes(in: dir)
         let id = sha256(canonical.path)
 
@@ -443,21 +443,84 @@ public actor ModelLibrary {
         )
     }
 
-    private func deriveDisplayName(dir: URL, source: Source) -> String {
-        // HF cache: .../models--org--repo/snapshots/<rev>
-        // Walk up two dirs to get the "models--org--repo" segment.
-        let parent = dir.deletingLastPathComponent()  // snapshots/
-        let modelDir = parent.deletingLastPathComponent()  // models--org--repo
+    /// Resolve a human-readable display name for a model directory. Tries
+    /// in order:
+    ///
+    ///   1. HF cache layout (`.../models--<org>--<repo>/snapshots/<rev>`) —
+    ///      walks up two parents and rebuilds `org/repo`. Handles repo
+    ///      names with embedded hyphens correctly by only splitting on
+    ///      the FIRST `--` after the `models--` prefix.
+    ///
+    ///   2. `config.json` `_name_or_path` field — every HF model ships
+    ///      this; a clean `org/repo` string. Best fallback when the dir
+    ///      layout is non-standard (vendored checkouts, user-added dirs
+    ///      that point directly at a snapshot hash).
+    ///
+    ///   3. `jang_config.json` `model_name` field — JANG models stamp
+    ///      this during conversion so we honor it next.
+    ///
+    ///   4. If the dir itself looks like a snapshot hash (40-char hex),
+    ///      walk up one parent and retry. Prevents the UI from ever
+    ///      showing something like `11de96878523501bcaa86104e3c186de07ff9068`.
+    ///
+    ///   5. Final fallback: the dir's last path component as-is.
+    private func deriveDisplayName(
+        dir: URL,
+        source: Source,
+        config: [String: Any]
+    ) -> String {
+        // (1) HF cache layout. We only split on the FIRST `--` after
+        // `models--` so repos with hyphens (`Qwen3.5-VL-307B-A17B`)
+        // don't get mangled into multi-slash paths.
+        let parent = dir.deletingLastPathComponent()        // snapshots/
+        let modelDir = parent.deletingLastPathComponent()   // models--org--repo
         let name = modelDir.lastPathComponent
         if name.hasPrefix("models--") {
             let trimmed = String(name.dropFirst("models--".count))
-            let parts = trimmed.components(separatedBy: "--")
-            if parts.count >= 2 {
-                return "\(parts[0])/\(parts.dropFirst().joined(separator: "/"))"
+            if let sep = trimmed.range(of: "--") {
+                let org = String(trimmed[..<sep.lowerBound])
+                let repo = String(trimmed[sep.upperBound...])
+                if !org.isEmpty, !repo.isEmpty {
+                    return "\(org)/\(repo)"
+                }
             }
         }
+
+        // (2) config.json _name_or_path
+        if let np = config["_name_or_path"] as? String,
+           !np.isEmpty, !np.hasPrefix("/"), !looksLikeHash(np)
+        {
+            return np
+        }
+        // (3) jang_config.json model_name
+        if let jc = config["jang_config"] as? [String: Any],
+           let mn = jc["model_name"] as? String,
+           !mn.isEmpty, !looksLikeHash(mn)
+        {
+            return mn
+        }
+
+        // (4) bare snapshot-hash dir — walk up one.
+        let last = dir.lastPathComponent
+        if looksLikeHash(last) {
+            let up = parent.lastPathComponent
+            if !up.isEmpty, !looksLikeHash(up), up != "snapshots" {
+                return up
+            }
+            let upUp = modelDir.lastPathComponent
+            if !upUp.isEmpty, !looksLikeHash(upUp) {
+                return upUp
+            }
+        }
+
         _ = source
-        return dir.lastPathComponent
+        return last
+    }
+
+    /// Heuristic: 32+ hex chars → commit/snapshot hash, not a real name.
+    private func looksLikeHash(_ s: String) -> Bool {
+        guard s.count >= 32 else { return false }
+        return s.allSatisfy { $0.isHexDigit }
     }
 
     private func totalWeightBytes(in dir: URL) -> Int64 {
