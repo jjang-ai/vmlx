@@ -129,123 +129,130 @@ struct InputBar: View {
         return .handled
     }
 
+    // SwiftUI body deliberately broken into a small number of computed
+    // subviews. Keeping everything in one giant builder sends the Swift
+    // type-checker into exponential territory ("unable to type-check in
+    // reasonable time"). Each helper below stays well under that limit.
+
+    @ViewBuilder
+    private var attachedImages: some View {
+        if !vm.pendingImages.isEmpty {
+            HStack(spacing: Theme.Spacing.sm) {
+                ForEach(Array(vm.pendingImages.enumerated()), id: \.offset) { i, data in
+                    #if canImport(AppKit)
+                    if let img = NSImage(data: data) {
+                        thumbnailView(img: img, index: i)
+                    }
+                    #endif
+                }
+            }
+        }
+    }
+
+    #if canImport(AppKit)
+    @ViewBuilder
+    private func thumbnailView(img: NSImage, index: Int) -> some View {
+        Image(nsImage: img)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 40, height: 40)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+            .overlay(alignment: .topTrailing) {
+                Button { vm.pendingImages.remove(at: index) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .buttonStyle(.plain)
+                .offset(x: 4, y: -4)
+            }
+    }
+    #endif
+
+    private var attachButton: some View {
+        Button { showImporter = true } label: {
+            Image(systemName: "photo.badge.plus")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Theme.Colors.accent)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.surfaceHi)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Attach images (drag, paste, or pick from disk)")
+    }
+
+    private var sendButton: some View {
+        Button {
+            if vm.isGenerating { vm.stop() } else { vm.send() }
+        } label: {
+            Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Theme.Colors.textHigh)
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(buttonEnabled ? Theme.Colors.accent : Theme.Colors.surfaceHi)
+                )
+                .opacity(buttonEnabled ? 1.0 : 0.5)
+        }
+        .buttonStyle(.plain)
+        .disabled(!buttonEnabled)
+        .help(helpText)
+    }
+
+    private var textField: some View {
+        TextField(placeholderText, text: $vm.inputText, axis: .vertical)
+            .textFieldStyle(.plain)
+            .font(Theme.Typography.body)
+            .foregroundStyle(Theme.Colors.textHigh)
+            .lineLimit(1...8)
+            .onSubmit { if canSend { vm.send() } }
+            .onChange(of: vm.inputText) { _, _ in handleTextChange() }
+            .onKeyPress(.upArrow) { handleUpArrow() }
+            .onKeyPress(.downArrow) { handleDownArrow() }
+            .onKeyPress(.escape) { handleEscape() }
+            .onKeyPress(.return, phases: .down) { press in
+                if press.modifiers.contains(.command) {
+                    if canSend { vm.send() }
+                    return .handled
+                }
+                return .ignored
+            }
+    }
+
+    private func handleTextChange() {
+        if let idx = historyIndex, idx >= 0 {
+            let snapshot = userHistory()
+            if idx < snapshot.count && vm.inputText != snapshot[idx] {
+                historyIndex = nil
+            }
+        }
+    }
+
+    private var inputRow: some View {
+        HStack(alignment: .bottom, spacing: Theme.Spacing.sm) {
+            attachButton
+            textField
+            sendButton
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .fill(Theme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                        .stroke(Theme.Colors.border, lineWidth: 1)
+                )
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            if !vm.pendingImages.isEmpty {
-                HStack(spacing: Theme.Spacing.sm) {
-                    ForEach(Array(vm.pendingImages.enumerated()), id: \.offset) { i, data in
-                        #if canImport(AppKit)
-                        if let img = NSImage(data: data) {
-                            Image(nsImage: img)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 40, height: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                                .overlay(alignment: .topTrailing) {
-                                    Button { vm.pendingImages.remove(at: i) } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(Theme.Colors.textMid)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .offset(x: 4, y: -4)
-                                }
-                        }
-                        #endif
-                    }
-                }
-            }
-
-            HStack(alignment: .bottom, spacing: Theme.Spacing.sm) {
-                Button {
-                    showImporter = true
-                } label: {
-                    Image(systemName: "photo.badge.plus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Theme.Colors.accent)
-                        .frame(width: 28, height: 28)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .fill(Theme.Colors.surfaceHi)
-                        )
-                }
-                .buttonStyle(.plain)
-                .help("Attach images (drag, paste, or pick from disk)")
-
-                TextField(placeholderText, text: $vm.inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.textHigh)
-                    .lineLimit(1...8)
-                    .onSubmit { if canSend { vm.send() } }
-                    .onChange(of: vm.inputText) { _, _ in
-                        // Any keystroke while cycling drops us out of
-                        // history mode so the user can keep editing the
-                        // recalled text without arrow keys stealing focus.
-                        // We only want to reset when the change wasn't
-                        // driven by ourselves; a simple "did anything in
-                        // the field diverge from the history snapshot?"
-                        // check is enough here because we set the text
-                        // atomically in the arrow handlers.
-                        if let idx = historyIndex, idx >= 0 {
-                            let snapshot = userHistory()
-                            if idx < snapshot.count && vm.inputText != snapshot[idx] {
-                                historyIndex = nil
-                            }
-                        }
-                        // Audit R5 (P2): bump the engine idle timer on
-                        // every keystroke so the model doesn't deep-sleep
-                        // while the user is actively typing a long prompt.
-                        // ChatViewModel.bumpIdleTimer hops to the engine
-                        // actor and calls IdleTimer.reset() which is
-                        // idempotent + cheap to call on every char.
-                        vm.bumpIdleTimer()
-                    }
-                    .onKeyPress(.upArrow) { handleUpArrow() }
-                    .onKeyPress(.downArrow) { handleDownArrow() }
-                    .onKeyPress(.escape) { handleEscape() }
-                    // Cmd+Return sends even when the input is multi-line
-                    // (plain Return inserts a newline in multi-line mode).
-                    // Mirrors the shortcut most chat UIs use for power
-                    // users and is the #1 UX gap the audit flagged.
-                    .onKeyPress(.return, phases: .down) { press in
-                        if press.modifiers.contains(.command) {
-                            if canSend { vm.send() }
-                            return .handled
-                        }
-                        return .ignored
-                    }
-
-                Button {
-                    if vm.isGenerating {
-                        vm.stop()
-                    } else {
-                        vm.send()
-                    }
-                } label: {
-                    Image(systemName: vm.isGenerating ? "stop.fill" : "arrow.up")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Theme.Colors.textHigh)
-                        .frame(width: 28, height: 28)
-                        .background(
-                            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .fill(buttonEnabled ? Theme.Colors.accent : Theme.Colors.surfaceHi)
-                        )
-                        .opacity(buttonEnabled ? 1.0 : 0.5)
-                }
-                .buttonStyle(.plain)
-                .disabled(!buttonEnabled)
-                .help(helpText)
-            }
-            .padding(Theme.Spacing.md)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                    .fill(Theme.Colors.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                            .stroke(Theme.Colors.border, lineWidth: 1)
-                    )
-            )
+            attachedImages
+            inputRow
         }
         .padding(Theme.Spacing.lg)
         .fileImporter(
