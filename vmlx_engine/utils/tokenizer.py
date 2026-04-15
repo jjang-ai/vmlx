@@ -260,6 +260,275 @@ def _needs_tokenizer_fallback(model_name: str) -> bool:
     return any(pattern.lower() in model_lower for pattern in FALLBACK_MODELS)
 
 
+def _patch_mlx_lm_tokenizer_load() -> None:
+    """vmlx#80 root-cause fix: HF transformers' ``AutoTokenizer.from_pretrained``
+    does not auto-load ``chat_template.jinja`` from a model directory — only
+    ``tokenizer_config.json["chat_template"]`` is recognised natively. Every
+    mlx-community quant that ships its template as a separate jinja file
+    (gemma-4-31b-8bit, several recent mistral / qwen quants) hits a
+    ``ValueError: tokenizer.chat_template is not set`` on the FIRST chat
+    request.
+
+    The cleanest fix is to monkey-patch ``mlx_lm.tokenizer_utils.load`` ONCE
+    at vmlx_engine import time so EVERY downstream caller benefits — vmlx
+    direct loads, jang_tools.load_jangtq, smelt_loader, distributed worker,
+    test harnesses. Idempotent (guarded by ``_vmlx_chat_template_patched``).
+
+    The patch wraps the original ``load``, calls it normally, then probes
+    the wrapped tokenizer for a missing template and injects from
+    ``chat_template.jinja`` / ``chat_template.json`` in the model dir.
+
+    For mlx_vlm (which has its OWN ``tokenizer_utils.load`` not derived from
+    mlx_lm), ``_inject_chat_template_if_missing`` below is the second line of
+    defence — called from ``load_model_with_fallback`` after every return.
+    """
+    try:
+        from mlx_lm import tokenizer_utils as _tu
+    except Exception as _ie:
+        logger.debug(f"mlx_lm.tokenizer_utils not importable: {_ie}")
+        return
+
+    if getattr(_tu.load, "_vmlx_chat_template_patched", False):
+        return
+
+    _orig_load = _tu.load
+
+    def _patched_load(model_path, tokenizer_config_extra=None, eos_token_ids=None):
+        wrapper = _orig_load(
+            model_path,
+            tokenizer_config_extra=tokenizer_config_extra,
+            eos_token_ids=eos_token_ids,
+        )
+        # mlx_lm returns a TokenizerWrapper. Probe + inject on the inner
+        # tokenizer so .chat_template proxy access picks up the new value.
+        inner = getattr(wrapper, "_tokenizer", wrapper)
+        try:
+            existing = getattr(inner, "chat_template", None)
+            already_set = (isinstance(existing, str) and existing.strip()) or (
+                isinstance(existing, list) and existing
+            )
+            if already_set:
+                return wrapper
+        except Exception:
+            return wrapper
+
+        try:
+            from pathlib import Path as _P
+            mp = _P(model_path) if not isinstance(model_path, _P) else model_path
+            if not mp.is_dir():
+                return wrapper
+            jinja = mp / "chat_template.jinja"
+            if jinja.is_file():
+                inner.chat_template = jinja.read_text(encoding="utf-8")
+                logger.info(
+                    f"mlx_lm patch: injected chat_template.jinja for {mp.name}"
+                )
+                # Also flip TokenizerWrapper.has_chat_template (set in __init__,
+                # cached as bool) so apply_chat_template doesn't short-circuit
+                # if the wrapper checks it before delegating.
+                try:
+                    wrapper.has_chat_template = True
+                except Exception:
+                    pass
+                return wrapper
+            json_path = mp / "chat_template.json"
+            if json_path.is_file():
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                tpl = data.get("chat_template") if isinstance(data, dict) else None
+                if isinstance(tpl, str) and tpl.strip():
+                    inner.chat_template = tpl
+                    logger.info(
+                        f"mlx_lm patch: injected chat_template.json for {mp.name}"
+                    )
+                    try:
+                        wrapper.has_chat_template = True
+                    except Exception:
+                        pass
+        except Exception as _e:
+            logger.debug(f"mlx_lm chat_template injection failed: {_e}")
+        return wrapper
+
+    _patched_load._vmlx_chat_template_patched = True  # type: ignore[attr-defined]
+    _tu.load = _patched_load
+    # Also patch the re-export on mlx_lm.utils.load_tokenizer so callers
+    # importing from mlx_lm.utils get the patched version.
+    try:
+        from mlx_lm import utils as _mu
+        if hasattr(_mu, "load_tokenizer"):
+            _orig_lt = _mu.load_tokenizer
+            if not getattr(_orig_lt, "_vmlx_chat_template_patched", False):
+                def _patched_lt(model_path, tokenizer_config_extra=None, eos_token_ids=None):
+                    # _download then call the patched _tu.load above
+                    from mlx_lm.utils import _download as _dl
+                    p = _dl(
+                        model_path,
+                        allow_patterns=[
+                            "*.json",
+                            "*.py",
+                            "tokenizer.model",
+                            "*.tiktoken",
+                            "tiktoken.model",
+                            "*.txt",
+                            "*.jsonl",
+                            "*.jinja",
+                        ],
+                    )
+                    return _patched_load(
+                        p,
+                        tokenizer_config_extra=tokenizer_config_extra,
+                        eos_token_ids=eos_token_ids,
+                    )
+                _patched_lt._vmlx_chat_template_patched = True  # type: ignore[attr-defined]
+                _mu.load_tokenizer = _patched_lt
+    except Exception as _e:
+        logger.debug(f"mlx_lm.utils.load_tokenizer patch skipped: {_e}")
+    logger.info("vmlx: patched mlx_lm tokenizer load to inject chat_template.jinja")
+
+
+# Apply patch at import time so every caller benefits — even direct
+# jang_tools.load_jangtq calls that bypass load_model_with_fallback.
+try:
+    _patch_mlx_lm_tokenizer_load()
+except Exception as _patch_e:  # pragma: no cover
+    logger.debug(f"chat_template monkey-patch skipped: {_patch_e}")
+
+
+def _inject_chat_template_if_missing(tokenizer, model_path) -> str | None:
+    """vmlx#80 fix: HF transformers does NOT auto-load chat_template.jinja from
+    a model directory — only ``tokenizer_config.json["chat_template"]`` is
+    natively recognised. mlx-community quants (e.g. ``gemma-4-31b-8bit``) and
+    several JANG/JANGTQ variants ship the template as a separate
+    ``chat_template.jinja`` file. Without injection here, the FIRST call to
+    ``tokenizer.apply_chat_template(...)`` raises:
+
+        ValueError: Cannot use chat template functions because
+        tokenizer.chat_template is not set...
+
+    Resolution order (matches BatchedEngine._inject_fallback_chat_template):
+        1. ``chat_template.jinja`` in the model dir
+        2. ``chat_template.json`` in the model dir
+        3. The model_configs registry's ``chat_template_custom`` field
+
+    Returns the source description (e.g. ``"chat_template.jinja"``) on
+    success, ``None`` if no fallback was applied. No-op if the tokenizer
+    already has a non-empty template (e.g. baked into tokenizer_config.json).
+    """
+    if tokenizer is None:
+        return None
+
+    # Resolve the actual chat-template-bearing object. Three shapes seen in
+    # the wild:
+    #   - HF PreTrainedTokenizer / TokenizerFast: has .chat_template directly
+    #   - mlx_lm.TokenizerWrapper: proxies to ._tokenizer
+    #   - mlx_vlm Processor (Gemma4Processor, Qwen3VLProcessor, etc.): the
+    #     chat_template lives on .tokenizer
+    targets = []
+    if hasattr(tokenizer, "chat_template"):
+        targets.append(tokenizer)
+    inner = getattr(tokenizer, "_tokenizer", None)
+    if inner is not None and hasattr(inner, "chat_template"):
+        targets.append(inner)
+    proc_tok = getattr(tokenizer, "tokenizer", None)
+    if proc_tok is not None and hasattr(proc_tok, "chat_template"):
+        targets.append(proc_tok)
+
+    if not targets:
+        return None
+
+    # If ANY target already has a non-empty template, propagate it to all
+    # the others and bail (no injection needed).
+    for t in targets:
+        existing = getattr(t, "chat_template", None)
+        if isinstance(existing, str) and existing.strip():
+            for o in targets:
+                if o is not t and not (
+                    isinstance(getattr(o, "chat_template", None), str)
+                    and getattr(o, "chat_template").strip()
+                ):
+                    try:
+                        o.chat_template = existing
+                    except Exception:
+                        pass
+            return None
+        if isinstance(existing, list) and existing:
+            return None
+
+    try:
+        from pathlib import Path as _P
+        if model_path is None:
+            return None
+        mp = _P(model_path) if not isinstance(model_path, _P) else model_path
+        if not mp.is_dir():
+            return None
+        # 1. chat_template.jinja
+        jinja_path = mp / "chat_template.jinja"
+        if jinja_path.is_file():
+            tpl = jinja_path.read_text(encoding="utf-8")
+            for t in targets:
+                try:
+                    t.chat_template = tpl
+                except Exception:
+                    pass
+            # Flip TokenizerWrapper.has_chat_template if applicable
+            try:
+                if hasattr(tokenizer, "has_chat_template"):
+                    tokenizer.has_chat_template = True
+            except Exception:
+                pass
+            logger.info(
+                f"Chat template injected from chat_template.jinja for {mp.name}"
+            )
+            return "chat_template.jinja"
+        # 2. chat_template.json
+        json_path = mp / "chat_template.json"
+        if json_path.is_file():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            tpl = data.get("chat_template") if isinstance(data, dict) else None
+            if isinstance(tpl, str) and tpl.strip():
+                for t in targets:
+                    try:
+                        t.chat_template = tpl
+                    except Exception:
+                        pass
+                try:
+                    if hasattr(tokenizer, "has_chat_template"):
+                        tokenizer.has_chat_template = True
+                except Exception:
+                    pass
+                logger.info(
+                    f"Chat template injected from chat_template.json for {mp.name}"
+                )
+                return "chat_template.json"
+    except Exception as _ce:
+        logger.debug(f"chat_template.jinja/.json probe failed: {_ce}")
+
+    # 3. Registry fallback by family
+    try:
+        from ..model_config_registry import get_model_config_registry
+        mc = get_model_config_registry().lookup(str(model_path))
+        reg_tpl = getattr(mc, "chat_template_custom", None)
+        if isinstance(reg_tpl, str) and reg_tpl.strip():
+            for t in targets:
+                try:
+                    t.chat_template = reg_tpl
+                except Exception:
+                    pass
+            try:
+                if hasattr(tokenizer, "has_chat_template"):
+                    tokenizer.has_chat_template = True
+            except Exception:
+                pass
+            logger.info(
+                f"Chat template injected from registry ({mc.family_name}) "
+                f"for {mp.name if hasattr(mp, 'name') else model_path}"
+            )
+            return f"registry:{mc.family_name}"
+    except Exception as _re:
+        logger.debug(f"registry chat_template lookup failed: {_re}")
+
+    return None
+
+
 def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, skip_turboquant: bool = False):
     """
     Load model and tokenizer with fallback for non-standard tokenizers.
@@ -324,10 +593,14 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         if _smelt:
             from .smelt_loader import smelt_load
 
-            return smelt_load(local_model_path, expert_percent=_smelt_pct)
+            _m, _t = smelt_load(local_model_path, expert_percent=_smelt_pct)
+            _inject_chat_template_if_missing(_t, local_model_path)
+            return _m, _t
         from .jang_loader import load_jang_model
 
-        return load_jang_model(local_model_path)
+        _m, _t = load_jang_model(local_model_path)
+        _inject_chat_template_if_missing(_t, local_model_path)
+        return _m, _t
 
     # Check if model needs tokenizer fallback (e.g., Nemotron).
     # Pass resolved local path so _get_model_type_from_config can read config.json.
@@ -338,6 +611,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         model, tokenizer = _load_with_tokenizer_fallback(local_model_path, lazy=False)
         if not skip_turboquant:
             _apply_turboquant_to_model(model, local_model_path)
+        _inject_chat_template_if_missing(tokenizer, local_model_path)
         return model, tokenizer
 
     try:
@@ -346,6 +620,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         )
         if not skip_turboquant:
             _apply_turboquant_to_model(model, local_model_path)
+        _inject_chat_template_if_missing(tokenizer, local_model_path)
         return model, tokenizer
     except ValueError as e:
         # Fallback for models with non-standard tokenizers
@@ -356,6 +631,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
             )
             if not skip_turboquant:
                 _apply_turboquant_to_model(model, local_model_path)
+            _inject_chat_template_if_missing(tokenizer, local_model_path)
             return model, tokenizer
         else:
             raise
