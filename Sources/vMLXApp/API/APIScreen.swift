@@ -23,6 +23,11 @@ struct APIScreen: View {
     /// confirmation dialog; tapping Revoke flushes it via `revoke(id:)`.
     @State private var pendingRevokeId: String? = nil
 
+    /// Set of key ids whose full value the user has chosen to reveal.
+    /// Default is masked so sticky notes / screenshares don't leak the
+    /// raw bearer token. Copy works on the real value regardless.
+    @State private var revealedKeyIds: Set<String> = []
+
     // Live-edited endpoint settings (debounced into SettingsStore on change).
     @State private var hostBinding: String = "127.0.0.1"
     @State private var portBinding: Int = 8000
@@ -335,16 +340,35 @@ struct APIScreen: View {
     }
 
     private func keyRow(_ k: Database.APIKeyRow) -> some View {
-        HStack(spacing: Theme.Spacing.sm) {
+        let revealed = revealedKeyIds.contains(k.id)
+        // Mask all but the last 6 chars so the user can still tell keys
+        // apart by their tail. Raw copy goes through copyToPasteboard
+        // regardless of reveal state — that was a sharp edge in the
+        // prior revision where a hidden key had no way to copy.
+        let displayValue: String = {
+            if revealed { return k.value }
+            let tail = k.value.suffix(6)
+            return String(repeating: "•", count: max(8, k.value.count - 6)) + tail
+        }()
+        return HStack(spacing: Theme.Spacing.sm) {
             Text(k.label)
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text(k.value)
+            Text(displayValue)
                 .font(Theme.Typography.mono)
                 .foregroundStyle(Theme.Colors.textMid)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            Button {
+                if revealed { revealedKeyIds.remove(k.id) }
+                else        { revealedKeyIds.insert(k.id) }
+            } label: {
+                Image(systemName: revealed ? "eye.slash" : "eye")
+                    .foregroundStyle(Theme.Colors.textLow)
+            }
+            .buttonStyle(.plain)
+            .help(revealed ? "Hide key" : "Reveal key")
             Button("Copy") { copyToPasteboard(k.value) }
                 .buttonStyle(.plain)
                 .font(Theme.Typography.caption)

@@ -1002,12 +1002,18 @@ public actor Engine {
     }
 
     /// Generate a streaming completion. Mirrors `BatchedEngine.generate`.
-    /// TODO: port reasoning suppression (`<think></think>` injection),
-    ///       tool-call parser dispatch, prefix cache hit accounting.
-    /// TODO: plumb generation events into `self.logs` — one `.debug` per
-    ///       request entry (category "engine"), `.info` on completion with
-    ///       token counts, `.error` on exceptions. See `RequestLogger` for
-    ///       the HTTP-layer log format to stay consistent with.
+    ///
+    /// Generation flow:
+    /// - Reasoning suppression (when `enableThinking=false` and the model
+    ///   template does not already stamp `<think>` tags): see
+    ///   `Stream.buildChatMessages`:1210 which injects an empty
+    ///   `<think>\n</think>\n\n` assistant-role prefix so the model skips
+    ///   the reasoning block. §15 NO-REGRESSION fallthrough routes any
+    ///   leaked reasoning tokens to visible content.
+    /// - Tool-call parser dispatch: see `Stream.swift` toolCallParser
+    ///   wiring, model-aware via `CapabilityDetector.toolParser`.
+    /// - Prefix cache hit accounting: see `CacheCoordinator.prefixHit`
+    ///   and `MetricsCollector.recordTokenBatch(prefill:count:...)`.
     public func stream(
         request: ChatRequest
     ) -> AsyncThrowingStream<StreamChunk, Error> {
