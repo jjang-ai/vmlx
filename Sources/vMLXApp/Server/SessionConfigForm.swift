@@ -237,7 +237,18 @@ struct SessionConfigForm: View {
     }
 
     @ViewBuilder
+    // Per-session HTTP listener. vMLX runs one dedicated Hummingbird
+    // server per active session on its own port — the Gateway (global
+    // setting in Tray → Server) is a separate, optional multiplexer
+    // that routes by `ChatRequest.model` on top of these per-session
+    // ports. So it's valid to have this session bound loopback-only
+    // while the gateway serves the whole LAN, or vice versa.
     private var serverSection: some View {
+        Text("This session's dedicated HTTP listener. Per-session bind is independent from the global gateway — flip the Tray's Gateway toggle if you want one URL across all sessions instead.")
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textLow)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.bottom, Theme.Spacing.xs)
         textFieldRow("Host",
                      placeholder: globalDefaults.defaultHost,
                      value: Binding(
@@ -250,7 +261,7 @@ struct SessionConfigForm: View {
                         set: { s.port = Int($0); commit() }
                        ),
                        range: 1024...65535, step: 1, format: "%.0f")
-        toggleRow("LAN (bind 0.0.0.0)",
+        toggleRow("Allow LAN access (bind 0.0.0.0)",
                   Binding(
                     get: { s.lan ?? globalDefaults.defaultLAN },
                     set: { s.lan = $0; commit() }
