@@ -25,3 +25,23 @@ vMLX.xcodeproj/
 *.log
 *.tmp
 .preview/
+
+# Internal — never push to dev
+Tests/
+docs/SESSION-*.md
+docs/session-*.md
+AUDIT-*.md
+AUDIT-*.txt
+APP-SURFACE-AUDIT-*.md
+SWIFT-DEEP-NUANCE-AUDIT-*.md
+SWIFT-ENGINE-ISSUES-AUDIT.md
+SWIFT-NO-REGRESSION-CHECKLIST.md
+UX-AUDIT.md
+PROGRESS.md
+HANDOFF-*.md
+BENCHMARK-*.md
+FLASH-MOE-UI-AUDIT-*.md
+TEST-MATRIX-*.md
+.agents/
+.sisyphus/
+.playwright-mcp/
