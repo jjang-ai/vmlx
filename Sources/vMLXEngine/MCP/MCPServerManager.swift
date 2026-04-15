@@ -133,6 +133,32 @@ public actor MCPServerManager {
         }
     }
 
+    /// Stop a single server by name. Transitions the status to
+    /// `.disconnected`, tears down the subprocess/transport, and drops
+    /// its tool list from the shared catalog. Safe to call on an already-
+    /// stopped server — the tool cache and client map are both idempotent
+    /// on missing keys.
+    public func stopServer(_ name: String) async throws {
+        guard config.servers[name] != nil else {
+            throw MCPError.serverNotFound(name: name)
+        }
+        if let client = clients[name] {
+            await client.stop()
+            clients.removeValue(forKey: name)
+        }
+        tools.removeValue(forKey: name)
+        if let s = statuses[name] {
+            statuses[name] = MCPServerStatus(
+                name: s.name,
+                state: .disconnected,
+                transport: s.transport,
+                toolsCount: 0,
+                error: nil,
+                lastConnected: s.lastConnected
+            )
+        }
+    }
+
     /// Stop every running client and clear the tool cache.
     public func stopAll() async {
         for (name, client) in clients {
