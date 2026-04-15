@@ -60,6 +60,7 @@ from .step3p5_tool_parser import Step3p5ToolParser
 from .glm47_tool_parser import Glm47ToolParser
 from .minimax_tool_parser import MiniMaxToolParser
 from .gemma4_tool_parser import Gemma4ToolParser
+from .gemma3_tool_parser import Gemma3ToolParser
 
 __all__ = [
     # Base classes
@@ -81,4 +82,6 @@ __all__ = [
     "Glm47ToolParser",
     "Step3p5ToolParser",
     "MiniMaxToolParser",
+    "Gemma4ToolParser",
+    "Gemma3ToolParser",
 ]

@@ -369,7 +369,9 @@ _TOOL_CALL_MARKERS = [
     "<|tool_calls_section_begin|>",
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
+    "<\uff5ctool\u2581call\u2581begin\uff5c>",  # DeepSeek singular begin (GLM-5.1 emits this)
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
+    "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
 ]
 
 

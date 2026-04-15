@@ -1217,15 +1217,22 @@ class MLLMScheduler:
             else:
                 stop_tokens.add(tokenizer.eos_token_ids)
 
-        # Add extra eos_tokens from model config registry (e.g., <turn|> for Gemma 4)
+        # Add extra eos_tokens from model config registry.
+        # Includes ALL entries, not just [1:] — for MLLM models the
+        # tokenizer is loaded by mlx_vlm without the LLM-path eos override,
+        # so index 0 may NOT already be set on the tokenizer. Gemma 3 / 3n
+        # specifically: registry puts `<end_of_turn>` at index 0 but the
+        # tokenizer's built-in eos_token_id is `<eos>`, so without this
+        # the model loops emitting `<end_of_turn>` forever. Set semantics
+        # makes duplicates a no-op.
         model_name = getattr(tokenizer, 'name_or_path', None)
         if model_name:
             try:
                 from .model_config_registry import get_model_config_registry
                 registry = get_model_config_registry()
                 model_config = registry.lookup(model_name)
-                if model_config.eos_tokens and len(model_config.eos_tokens) > 1:
-                    for eos_str in model_config.eos_tokens[1:]:
+                if model_config.eos_tokens:
+                    for eos_str in model_config.eos_tokens:
                         try:
                             ids = tokenizer.encode(eos_str, add_special_tokens=False)
                             if len(ids) == 1:

@@ -67,17 +67,31 @@ class DeepSeekToolParser(ToolParser):
         """
         Extract tool calls from DeepSeek model output.
         """
-        # Check for tool calls marker
-        if self.TOOL_CALLS_START not in model_output:
+        # Accept either the full `<｜tool▁calls▁begin｜>…<｜tool▁calls▁end｜>`
+        # wrapper or just the inner `<｜tool▁call▁begin｜>…<｜tool▁call▁end｜>`
+        # block. Some DeepSeek/GLM-5.1 chat templates emit only the inner
+        # block (no plural wrapper) and the old strict check would return
+        # `tools_called=False` on those. Fallback-fixed for mlxstudio#71
+        # sibling regression report: DeepSeek-family tool calls silently
+        # drop when the plural wrapper is missing.
+        if self.TOOL_CALLS_START not in model_output and self.TOOL_CALL_START not in model_output:
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=model_output
             )
 
         tool_calls = []
 
-        # Extract content before tool calls
-        content_end = model_output.find(self.TOOL_CALLS_START)
-        content = model_output[:content_end].strip() if content_end > 0 else None
+        # Extract content before tool calls (prefer plural wrapper, then singular)
+        _first_marker = None
+        if self.TOOL_CALLS_START in model_output:
+            _first_marker = self.TOOL_CALLS_START
+        elif self.TOOL_CALL_START in model_output:
+            _first_marker = self.TOOL_CALL_START
+        if _first_marker:
+            content_end = model_output.find(_first_marker)
+            content = model_output[:content_end].strip() if content_end > 0 else None
+        else:
+            content = None
 
         # Try full pattern with type first
         matches = self.TOOL_CALL_PATTERN.findall(model_output)
@@ -140,7 +154,8 @@ class DeepSeekToolParser(ToolParser):
         """
         Extract tool calls from streaming DeepSeek model output.
         """
-        if self.TOOL_CALLS_START not in current_text:
+        # Accept both the plural wrapper and the bare inner block.
+        if self.TOOL_CALLS_START not in current_text and self.TOOL_CALL_START not in current_text:
             return {"content": delta_text}
 
         # If we see the end marker, parse the complete output

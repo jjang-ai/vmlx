@@ -482,13 +482,21 @@ def register_all(registry=None):
         )
     )
 
+    # Gemma 3 / Gemma 3n — Google's documented function-calling format is
+    # a `tool_code` Python-code-block, NOT hermes JSON. Was previously
+    # misconfigured with tool_parser="hermes" which silently failed to
+    # extract calls, leaving clients with raw `` ```tool_code\nfunc(..)\n``` ``
+    # in the content. Also needs `<end_of_turn>` in eos_tokens —
+    # without it Gemma 3/3n enters an infinite loop emitting the
+    # token after the first tool call.
     _register(
         ModelConfig(
             family_name="gemma3",
             model_types=["gemma3"],
             cache_type="kv",
-            tool_parser="hermes",
-            reasoning_parser="deepseek_r1",
+            tool_parser="gemma3",
+            reasoning_parser=None,
+            eos_tokens=["<end_of_turn>", "<eos>"],
             is_mllm=True,
             architecture_hints={"inject_pixel_values": True},
             priority=10,
@@ -500,8 +508,37 @@ def register_all(registry=None):
             family_name="gemma3_text",
             model_types=["gemma3_text"],
             cache_type="kv",
-            tool_parser="hermes",
-            reasoning_parser="deepseek_r1",
+            tool_parser="gemma3",
+            reasoning_parser=None,
+            eos_tokens=["<end_of_turn>", "<eos>"],
+            priority=8,
+        )
+    )
+
+    # Gemma 3n (E2B / E4B) — tiny text+vision+audio Gemma. Uses the same
+    # `tool_code` block format as Gemma 3. Previously unregistered,
+    # so fresh users of gemma-3n-E2B-it-4bit etc. got family="unknown"
+    # and no tool/reasoning parser auto-applied.
+    _register(
+        ModelConfig(
+            family_name="gemma3n",
+            model_types=["gemma3n"],
+            cache_type="kv",
+            tool_parser="gemma3",
+            reasoning_parser=None,
+            eos_tokens=["<end_of_turn>", "<eos>"],
+            is_mllm=True,
+            priority=10,
+        )
+    )
+    _register(
+        ModelConfig(
+            family_name="gemma3n_text",
+            model_types=["gemma3n_text"],
+            cache_type="kv",
+            tool_parser="gemma3",
+            reasoning_parser=None,
+            eos_tokens=["<end_of_turn>", "<eos>"],
             priority=8,
         )
     )
