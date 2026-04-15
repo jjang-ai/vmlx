@@ -5,6 +5,8 @@
 
 <h1 align="center">vMLX — Swift (dev branch)</h1>
 
+<p align="center"><strong>For a production Swift engine, please use <a href="https://osaurus.ai">osaurus.ai</a>.</strong></p>
+
 ---
 
 > # ⚠️ EXPERIMENTAL SANDBOX — NOT A REAL APP ⚠️
