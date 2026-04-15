@@ -200,7 +200,11 @@ struct SessionConfigForm: View {
         toggleRow("SSM companion",    boolBinding(\.enableSSMCompanion,    default: globalDefaults.enableSSMCompanion))
         toggleRow("Block disk cache", boolBinding(\.enableBlockDiskCache,  default: globalDefaults.enableBlockDiskCache))
         toggleRow("L2 disk cache",    boolBinding(\.enableDiskCache,       default: globalDefaults.enableDiskCache))
-        toggleRow("JANG repack",      boolBinding(\.enableJANG,            default: globalDefaults.enableJANG))
+        // JANG repack is NOT a user setting — JangLoader auto-detects
+        // jang_config.json at load time and activates itself. Showing a
+        // toggle here would let users disable it on a JANG model (which
+        // would silently fail to load the MXTQ weights) or enable it on
+        // a non-JANG model (no-op but confusing). Removed 2026-04-15.
 
         Picker("KV cache quantization", selection: Binding(
             get: { s.kvCacheQuantization ?? globalDefaults.kvCacheQuantization },
