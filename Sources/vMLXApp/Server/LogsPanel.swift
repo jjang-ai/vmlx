@@ -25,8 +25,24 @@ struct LogsPanel: View {
     @State private var compact: Bool = false
     @State private var reverseOrder: Bool = false
 
+    // User-scroll detection for the floating "↓" pill that mirrors
+    // Chat/Terminal scroll behavior. When the user scrolls up past the
+    // 60px threshold, autoScroll freezes and a pill with the unread
+    // count appears. Tapping it (or hitting Resume) snaps back.
+    @State private var userScrolledUp: Bool = false
+    @State private var unreadInScroll: Int = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
+    @State private var scrollOffset: CGFloat = 0
+
     // Subscribe task lifetime
     @State private var streamTask: Task<Void, Never>? = nil
+
+    /// Stream subscription level — always `.trace` so the panel sees
+    /// every event the engine emits. Per-view filtering happens
+    /// client-side via `visibleLines`. This way changing the level
+    /// picker is instant and never drops scrollback (UI-8).
+    private let streamMinLevel: LogStore.Level = .trace
 
     private let allCategories = ["engine", "server", "model", "cache", "tool", "mcp"]
     private let maxBuffer = 2000
@@ -52,7 +68,9 @@ struct LogsPanel: View {
             streamTask?.cancel()
             streamTask = nil
         }
-        .onChange(of: minLevel) { _, _ in restartStream() }
+        // UI-8: changing the level picker no longer drops the buffer.
+        // The stream subscribes at `.trace` and we filter client-side,
+        // so toggling INFO ↔ DEBUG is purely a re-filter.
     }
 
     // MARK: - Sub-views
@@ -139,28 +157,97 @@ struct LogsPanel: View {
     private var feedList: some View {
         let filtered = visibleLines
         return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: compact ? 1 : 3) {
-                    ForEach(filtered) { line in
-                        row(line)
-                            .id(line.id)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: compact ? 1 : 3) {
+                        ForEach(filtered) { line in
+                            row(line)
+                                .id(line.id)
+                        }
+                    }
+                    .padding(Theme.Spacing.sm)
+                    .background(
+                        GeometryReader { contentGeo in
+                            Color.clear
+                                .preference(key: LogContentHeightKey.self,
+                                            value: contentGeo.size.height)
+                                .preference(
+                                    key: LogScrollOffsetKey.self,
+                                    value: -contentGeo.frame(in: .named("logScroll")).minY
+                                )
+                        }
+                    )
+                }
+                .coordinateSpace(name: "logScroll")
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(key: LogViewportHeightKey.self,
+                                        value: geo.size.height)
+                    }
+                )
+                .frame(minHeight: 220, maxHeight: 420)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.background)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                .stroke(Theme.Colors.border, lineWidth: 1)
+                        )
+                )
+                .onPreferenceChange(LogContentHeightKey.self) { contentHeight = $0 }
+                .onPreferenceChange(LogViewportHeightKey.self) { viewportHeight = $0 }
+                .onPreferenceChange(LogScrollOffsetKey.self) { offset in
+                    scrollOffset = offset
+                    let distance = max(0, contentHeight - viewportHeight - offset)
+                    let nowUp = distance > 60
+                    if !nowUp && userScrolledUp {
+                        // User snapped back to the bottom — clear the pill.
+                        unreadInScroll = 0
+                    }
+                    userScrolledUp = nowUp
+                }
+                .onChange(of: filtered.count) { _, _ in
+                    guard autoScroll, !paused, !userScrolledUp,
+                          let last = filtered.last else { return }
+                    withAnimation(.linear(duration: 0.08)) {
+                        proxy.scrollTo(last.id, anchor: reverseOrder ? .top : .bottom)
                     }
                 }
-                .padding(Theme.Spacing.sm)
-            }
-            .frame(minHeight: 220, maxHeight: 420)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(Theme.Colors.background)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .stroke(Theme.Colors.border, lineWidth: 1)
-                    )
-            )
-            .onChange(of: filtered.count) { _, _ in
-                guard autoScroll, !paused, let last = filtered.last else { return }
-                withAnimation(.linear(duration: 0.08)) {
-                    proxy.scrollTo(last.id, anchor: reverseOrder ? .top : .bottom)
+
+                // Floating "scroll to bottom" pill — appears whenever
+                // the user scrolls up past the threshold, regardless of
+                // pause state. Tapping snaps back and clears the unread
+                // counter. UI-2.
+                if userScrolledUp, let last = filtered.last {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(last.id,
+                                           anchor: reverseOrder ? .top : .bottom)
+                        }
+                        userScrolledUp = false
+                        unreadInScroll = 0
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 11, weight: .semibold))
+                            if unreadInScroll > 0 {
+                                Text("\(unreadInScroll) new")
+                                    .font(Theme.Typography.caption)
+                            }
+                        }
+                        .foregroundStyle(Theme.Colors.textHigh)
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(
+                            Capsule()
+                                .fill(Theme.Colors.surfaceHi)
+                                .overlay(Capsule().stroke(Theme.Colors.border, lineWidth: 1))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(Theme.Spacing.md)
+                    .help("Scroll to newest log line")
                 }
             }
         }
@@ -258,13 +345,15 @@ struct LogsPanel: View {
     private func subscribeStream() async {
         streamTask?.cancel()
         let engine = app.engine
-        let level = minLevel
         let task = Task { @MainActor in
             // `engine.logs` is an actor-isolated `let`; crossing the actor
             // boundary to fetch it requires `await`. `subscribe` itself is
             // `nonisolated` so no further hop is needed.
             let store = await engine.logs
-            let stream = store.subscribe(minLevel: level)
+            // UI-8: subscribe at TRACE so we have everything client-side
+            // and changing the level picker is just a filter, not a
+            // resubscribe-and-drop-buffer cycle.
+            let stream = store.subscribe(minLevel: streamMinLevel)
             for await line in stream {
                 if Task.isCancelled { return }
                 if paused {
@@ -277,16 +366,22 @@ struct LogsPanel: View {
                     if lines.count > maxBuffer {
                         lines.removeFirst(lines.count - maxBuffer)
                     }
+                    // Track "while-scrolled-up" unread count so the pill
+                    // can show "↓ N new" without affecting the count of
+                    // explicitly-paused buffered lines.
+                    if userScrolledUp,
+                       LogFilter(minLevel: minLevel,
+                                 categories: selectedCategories.isEmpty ? nil : selectedCategories,
+                                 contains: searchText.isEmpty ? nil : searchText,
+                                 since: nil)
+                       .matches(line)
+                    {
+                        unreadInScroll += 1
+                    }
                 }
             }
         }
         streamTask = task
-    }
-
-    private func restartStream() {
-        lines.removeAll()
-        pendingLines.removeAll()
-        Task { await subscribeStream() }
     }
 
     private func flushPending() {
@@ -328,4 +423,19 @@ struct LogsPanel: View {
     private static func formatTime(_ d: Date) -> String {
         timeFormatter.string(from: d)
     }
+}
+
+// MARK: - Preference keys (UI-2)
+
+private struct LogContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct LogViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct LogScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

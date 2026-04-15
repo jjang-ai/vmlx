@@ -49,6 +49,7 @@ struct TrayItem: View {
     @State private var showCache = false
     @State private var showMoE = false
     @State private var showAdapter = false
+    @State private var showLogging = false
     @State private var showLogs = false
 
     var body: some View {
@@ -76,6 +77,9 @@ struct TrayItem: View {
                 disclosureGroup(
                     title: "Adapter", open: $showAdapter, icon: "puzzlepiece.fill"
                 ) { adapterSection }
+                disclosureGroup(
+                    title: "Logging", open: $showLogging, icon: "text.alignleft"
+                ) { loggingSection }
                 disclosureGroup(
                     title: "Recent logs", open: $showLogs, icon: "doc.text"
                 ) { logsSection }
@@ -543,6 +547,42 @@ struct TrayItem: View {
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: .medium))
             .foregroundColor(.accentColor)
+        }
+    }
+
+    // MARK: - Logging settings (UI-7)
+
+    /// Global default verbosity for the Hummingbird HTTP server's
+    /// per-request access log AND the inline "Recent logs" tail. Writes
+    /// `defaultLogLevel` into GlobalSettings; HTTPServerActor reads the
+    /// session-resolved value at start time so the next session bind
+    /// inherits the new ceiling without restarting the running server.
+    /// Categories map 1:1 to the strings emitted by Engine.log().
+    private var loggingSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Default level")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { draft.defaultLogLevel },
+                    set: { draft.defaultLogLevel = $0; schedulePush() }
+                )) {
+                    Text("TRACE").tag("trace")
+                    Text("DEBUG").tag("debug")
+                    Text("INFO").tag("info")
+                    Text("WARN").tag("warn")
+                    Text("ERROR").tag("error")
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 110)
+            }
+            Text("Sets the floor for new HTTP server bindings + the recent-logs tail. The Server tab's LogsPanel already sees TRACE and filters client-side, so changing this won't drop existing scrollback.")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
