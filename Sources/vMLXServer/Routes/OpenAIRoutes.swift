@@ -40,7 +40,7 @@ public enum OpenAIRoutes {
                     "id": e.displayName,
                     "object": "model",
                     "created": created,
-                    "owned_by": e.isJANG ? "dealignai" : "mlx-community",
+                    "owned_by": e.isJANG ? "jjang-ai" : "mlx-community",
                     // vMLX-specific enrichment (ignored by the OpenAI spec
                     // but surfaced to first-party clients like the app's
                     // own ModelPicker and `vmlxctl ls`).
