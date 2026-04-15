@@ -131,11 +131,18 @@ final class AppState {
         return nil
     }
 
-    /// Look up (or lazily create) the engine for a given session id.
+    /// Look up (or lazily create) the engine for a given session id. Newly
+    /// created engines are automatically bound to `HuggingFaceAuth.shared`
+    /// so gated-repo downloads triggered from that session pick up the
+    /// user's stored HF token without any extra plumbing.
     func engine(for id: UUID) -> Engine {
         if let e = engines[id] { return e }
         let fresh = Engine()
         engines[id] = fresh
+        Task { @MainActor in
+            let dm = await fresh.downloadManager
+            HuggingFaceAuth.shared.bind(dm)
+        }
         return fresh
     }
 
@@ -372,6 +379,15 @@ struct RootView: View {
             await state.observeDownloads { id in
                 openWindow(id: id)
             }
+        }
+        .task {
+            // HuggingFace token lifecycle: load from Keychain on launch,
+            // then bind the default engine's DownloadManager so every
+            // subsequent download picks up the stored token. Per-session
+            // engines bind lazily as they're created (see AppState.engine).
+            HuggingFaceAuth.shared.loadFromKeychain()
+            let defaultDM = await state.engine.downloadManager
+            HuggingFaceAuth.shared.bind(defaultDM)
         }
         .task {
             // Bind the TrayItem lifecycle callbacks once RootView mounts.

@@ -53,6 +53,7 @@ struct APIScreen: View {
                 endpointCard
                 sessionsCard
                 keysCard
+                HuggingFaceTokenCard()
                 snippetsCard
             }
             .padding(Theme.Spacing.xl)
