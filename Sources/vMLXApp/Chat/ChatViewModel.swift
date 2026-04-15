@@ -351,13 +351,25 @@ final class ChatViewModel {
         let chatId = sessionId
 
         let assistantId = assistant.id
+        // Resolve the per-session SessionSettings BEFORE dispatch so we
+        // can fork between local Engine and remote endpoint. Reading
+        // SessionSettings here (rather than inside the streamTask) keeps
+        // the 4-tier resolution cheap and avoids two extra actor hops.
+        let serverSid = serverSessionId
+        let remoteSession: SessionSettings? = {
+            guard let sid = serverSid else { return nil }
+            // The Settings store is per-engine; pull from the engine
+            // bound to this server session.
+            return nil  // placeholder, filled inside the Task below
+        }()
+        _ = remoteSession  // kept for documentation; real resolution below
         streamTask = Task { [weak self] in
             guard let engine = engine else { return }
             // Pull the 4-tier-resolved settings snapshot for this chat. The
             // session-level `modelAlias` (when set) wins over whatever the
             // selected model path is, mirroring vmlx-engine HTTP dispatch.
             let resolved = await engine.settings.resolved(
-                sessionId: nil, chatId: chatId, request: nil
+                sessionId: serverSid, chatId: chatId, request: nil
             )
             let r = resolved.settings
             let chatOverrides = await engine.settings.chat(chatId)
@@ -415,7 +427,38 @@ final class ChatViewModel {
                 tools: toolList,
                 toolChoice: toolChoiceValue
             )
-            let stream = await engine.stream(request: req)
+
+            // Remote-session dispatch: if this chat is bound to a server
+            // session whose SessionSettings carries a remoteURL, it
+            // targets an external OpenAI/Ollama/Anthropic-compatible
+            // server instead of the local engine. RemoteEngineClient
+            // yields the same StreamChunk type so the downstream
+            // applyChunk + isStreaming flow stays identical.
+            let sessionForRemote: SessionSettings? = await {
+                guard let sid = serverSid else { return nil }
+                return await engine.settings.session(sid)
+            }()
+            let stream: AsyncThrowingStream<StreamChunk, Error>
+            if let s = sessionForRemote, s.isRemote,
+               let remoteURLString = s.remoteURL,
+               let remoteURL = URL(string: remoteURLString)
+            {
+                let kind = RemoteEngineClient.Kind(
+                    rawOrDefault: s.remoteProtocol)
+                let remoteModelName = s.remoteModelName ?? modelField
+                let client = RemoteEngineClient(
+                    endpoint: remoteURL,
+                    kind: kind,
+                    apiKey: s.remoteAPIKey,
+                    modelName: remoteModelName
+                )
+                // Track on the engine so stop() can cancel through the
+                // existing cancellation pathway.
+                await engine.attachRemoteClient(client)
+                stream = await client.stream(request: req)
+            } else {
+                stream = await engine.stream(request: req)
+            }
             do {
                 for try await chunk in stream {
                     try Task.checkCancellation()

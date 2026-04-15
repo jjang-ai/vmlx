@@ -252,11 +252,29 @@ public actor Engine {
         streamTasksByID.removeValue(forKey: id)
     }
 
+    /// Currently bound RemoteEngineClient, when this engine is being used
+    /// as a thin proxy to an OpenAI/Ollama/Anthropic-compatible remote.
+    /// Set by the chat dispatch layer right before `client.stream(...)`
+    /// so a subsequent `cancelStream()` can also cancel the remote
+    /// HTTP task. Cleared automatically when a new client takes over.
+    private var remoteClient: RemoteEngineClient? = nil
+
+    /// Bind the remote client so cancelStream() can cancel the in-flight
+    /// HTTP request. ChatViewModel calls this just before invoking
+    /// `client.stream(request:)`. Setting overwrites any previous binding
+    /// — there's only ever one in-flight stream per engine actor.
+    public func attachRemoteClient(_ client: RemoteEngineClient) {
+        self.remoteClient = client
+    }
+
     /// Public cancel hook — the ChatViewModel stop button calls this
     /// through a task hop so the actor can reach `currentStreamTask`
     /// directly. Safe to call when no stream is active (no-op).
     public func cancelStream() {
         currentStreamTask?.cancel()
+        if let rc = remoteClient {
+            Task { await rc.cancelStream() }
+        }
     }
 
     /// Per-id cancel — used by `POST /v1/{chat,completions,responses}/{id}/cancel`.

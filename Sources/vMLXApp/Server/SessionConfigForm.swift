@@ -30,6 +30,7 @@ struct SessionConfigForm: View {
     @State private var openInference   = true
     @State private var openLifecycle   = true
     @State private var openServer      = true
+    @State private var openRemote      = false
     @State private var openAdvanced    = false
     @State private var openLogging     = false
 
@@ -55,6 +56,8 @@ struct SessionConfigForm: View {
                 disclosure("Lifecycle", isOn: $openLifecycle) { lifecycleSection }
                 divider
                 disclosure("Server", isOn: $openServer) { serverSection }
+                divider
+                disclosure("Remote endpoint (proxy mode)", isOn: $openRemote) { remoteSection }
                 divider
                 disclosure("Advanced", isOn: $openAdvanced) { advancedSection }
                 divider
@@ -280,6 +283,103 @@ struct SessionConfigForm: View {
                             commit()
                         }
                      ))
+    }
+
+    /// Remote-endpoint section: turns this session into a thin proxy to
+    /// an OpenAI / Ollama / Anthropic-compatible server. When enabled the
+    /// local engine's load() is skipped — Chat / Terminal dispatch goes
+    /// straight to the remote server via RemoteEngineClient. The model
+    /// path on disk is ignored (kept only as a display name).
+    @ViewBuilder
+    private var remoteSection: some View {
+        Toggle("Use remote endpoint instead of local engine",
+               isOn: remoteEnabledBinding)
+            .toggleStyle(.switch)
+
+        if s.remoteURL != nil {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                remoteEndpointRow
+                remoteProtocolRow
+                remoteModelNameRow
+                remoteAPIKeyRow
+                Text("This session will skip local model loading. All chat / terminal traffic for chats bound to it goes over HTTP to the remote endpoint above. The local engine surface (sleep, cache, gateway) stays inactive while remote mode is on.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, Theme.Spacing.md)
+        }
+    }
+
+    private var remoteEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { s.remoteURL != nil && !(s.remoteURL ?? "").isEmpty },
+            set: { on in
+                if on {
+                    if (s.remoteURL ?? "").isEmpty { s.remoteURL = "http://" }
+                } else {
+                    s.remoteURL = nil
+                    s.remoteAPIKey = nil
+                    s.remoteModelName = nil
+                    s.remoteProtocol = nil
+                }
+                commit()
+            }
+        )
+    }
+
+    private var remoteEndpointRow: some View {
+        HStack {
+            Text("Endpoint URL").frame(width: 140, alignment: .leading)
+            TextField("https://api.openai.com or http://192.168.1.50:8000",
+                      text: Binding(
+                        get: { s.remoteURL ?? "" },
+                        set: { s.remoteURL = $0; commit() }
+                      ))
+            .textFieldStyle(.roundedBorder)
+            .font(Theme.Typography.mono)
+        }
+    }
+
+    private var remoteProtocolRow: some View {
+        HStack {
+            Text("Protocol").frame(width: 140, alignment: .leading)
+            Picker("", selection: Binding(
+                get: { s.remoteProtocol ?? "openai" },
+                set: { s.remoteProtocol = $0; commit() }
+            )) {
+                Text("OpenAI-compatible").tag("openai")
+                Text("Ollama").tag("ollama")
+                Text("Anthropic").tag("anthropic")
+            }
+            .pickerStyle(.menu)
+        }
+    }
+
+    private var remoteModelNameRow: some View {
+        HStack {
+            Text("Model name").frame(width: 140, alignment: .leading)
+            TextField("e.g. gpt-4o-mini, llama3.1, claude-sonnet-4-5",
+                      text: Binding(
+                        get: { s.remoteModelName ?? "" },
+                        set: { s.remoteModelName = $0; commit() }
+                      ))
+            .textFieldStyle(.roundedBorder)
+            .font(Theme.Typography.mono)
+        }
+    }
+
+    private var remoteAPIKeyRow: some View {
+        HStack {
+            Text("API key").frame(width: 140, alignment: .leading)
+            SecureField("sk-... (left blank for unauthenticated remotes)",
+                        text: Binding(
+                          get: { s.remoteAPIKey ?? "" },
+                          set: { s.remoteAPIKey = $0.isEmpty ? nil : $0; commit() }
+                        ))
+            .textFieldStyle(.roundedBorder)
+            .font(Theme.Typography.mono)
+        }
     }
 
     @ViewBuilder

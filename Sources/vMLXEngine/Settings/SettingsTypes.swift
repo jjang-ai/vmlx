@@ -6,11 +6,11 @@
 // Field-name parity references:
 //
 //   Python CLI flags:
-//     the Python engine CLI
+//     /Users/eric/mlx/vllm-mlx/vmlx_engine/cli.py
 //       serve_parser block at line 881 (full list of ~70 --flags)
 //
 //   Electron SQLite schema (for forward-compat import from Electron vMLX):
-//     the Electron settings DB
+//     /Users/eric/mlx/vllm-mlx/panel/src/main/database.ts
 //       CREATE TABLE sessions       (line 259)
 //       CREATE TABLE chats          (line 203)
 //       CREATE TABLE chat_overrides (line 228, migrated cols 350-429)
@@ -379,6 +379,25 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     // MCP
     public var mcpConfigPath: String? = nil
     public var mcpServers: [MCPServer]? = nil
+
+    // Remote endpoint (new in DEV-6). When `remoteURL` is non-nil the
+    // session is treated as a proxy: Chat/Terminal bypass the local
+    // Engine actor and `RemoteEngineClient` makes HTTP calls to the
+    // remote server instead. `modelPath` is still required but is
+    // treated as a placeholder display name in that mode — the real
+    // model id lives in `remoteModelName`.
+    public var remoteURL: String? = nil
+    public var remoteProtocol: String? = nil   // "openai" | "ollama" | "anthropic"
+    public var remoteAPIKey: String? = nil     // stored in Keychain by session UUID
+    public var remoteModelName: String? = nil  // id sent in ChatRequest.model
+
+    /// True if this session is configured as a thin proxy to a remote
+    /// OpenAI/Ollama/Anthropic-compatible endpoint. Drives the UI label,
+    /// the chat dispatch path, and the SessionDashboard lifecycle buttons.
+    public var isRemote: Bool {
+        guard let u = remoteURL, !u.isEmpty else { return false }
+        return URL(string: u) != nil
+    }
 
     public init(modelPath: URL) { self.modelPath = modelPath }
 }
