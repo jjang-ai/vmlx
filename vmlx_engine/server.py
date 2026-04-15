@@ -2741,6 +2741,21 @@ async def create_anthropic_message(
         _msg_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
     elif _default_enable_thinking is not None:
         _msg_kwargs["enable_thinking"] = _default_enable_thinking
+    elif chat_req.tools:
+        # mlxstudio#71: Gemma 4 emits a <|channel>thought reasoning block
+        # before every tool call. With tools present and no explicit
+        # thinking preference, default OFF so the tool call emits
+        # immediately (~4x faster, no truncation).
+        try:
+            from .model_config_registry import get_model_config_registry as _gmcr
+            _mc_tools = _gmcr().lookup(_model_path or _model_name or chat_req.model)
+            if _mc_tools.family_name in ("gemma4", "gemma4_text"):
+                _msg_kwargs["enable_thinking"] = False
+                logger.info(
+                    f"Anthropic request: tools + Gemma 4 → enable_thinking=False"
+                )
+        except Exception:
+            pass
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (same as OpenAI path)
     if (
@@ -3289,6 +3304,21 @@ async def ollama_chat(fastapi_request: Request):
         chat_kwargs["enable_thinking"] = bool(_ollama_ct_kwargs["enable_thinking"])
     elif _default_enable_thinking is not None:
         chat_kwargs["enable_thinking"] = _default_enable_thinking
+    elif chat_req.tools:
+        # mlxstudio#71: Gemma 4 native tool-call flow uses a
+        # <|channel>thought reasoning block before the tool call,
+        # which can truncate under a small max_tokens budget. Default
+        # thinking OFF when tools are present on Gemma 4.
+        try:
+            from .model_config_registry import get_model_config_registry as _gmcr
+            _mc_tools = _gmcr().lookup(_model_path or _model_name or chat_req.model)
+            if _mc_tools.family_name in ("gemma4", "gemma4_text"):
+                chat_kwargs["enable_thinking"] = False
+                logger.info(
+                    f"Ollama request: tools + Gemma 4 → enable_thinking=False"
+                )
+        except Exception:
+            pass
 
     # Pass tools to engine so batched.py knows not to inject <think></think>
     # when tool calling is active (model needs to think to decide on tools)
@@ -4549,6 +4579,24 @@ async def create_chat_completion(
                     _enable = True
             except Exception:
                 pass
+        # mlxstudio#71: Gemma 4 natively emits a <|channel>thought block
+        # before every tool call — often 400+ chars of reasoning for a
+        # trivial selection — which blows past user-default max_tokens
+        # budgets and truncates the tool call mid-emit. When the request
+        # has tools AND the user didn't explicitly ask for thinking,
+        # default thinking OFF so Gemma 4 emits the tool call directly.
+        # The user can force thinking back on with explicit
+        # enable_thinking=true or chat_template_kwargs.enable_thinking=true.
+        # Regression report scannermobs on Gemma-4-26B-A4B-it-JANG_4M;
+        # live-verified thinking-OFF is 4x faster (1.0s vs 4.0s for 300
+        # tokens) and produces a complete tool call vs. a truncated one.
+        if _enable and request.tools and _mc.family_name in ("gemma4", "gemma4_text"):
+            logger.info(
+                f"Request {request.model}: tools present + Gemma 4 — "
+                f"defaulting enable_thinking=False for fast tool calling "
+                f"(mlxstudio#71). Set enable_thinking=true to force thinking."
+            )
+            _enable = False
         chat_kwargs["enable_thinking"] = _enable
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
@@ -5192,6 +5240,24 @@ async def create_response(
                     _enable = True
             except Exception:
                 pass
+        # mlxstudio#71: Gemma 4 natively emits a <|channel>thought block
+        # before every tool call — often 400+ chars of reasoning for a
+        # trivial selection — which blows past user-default max_tokens
+        # budgets and truncates the tool call mid-emit. When the request
+        # has tools AND the user didn't explicitly ask for thinking,
+        # default thinking OFF so Gemma 4 emits the tool call directly.
+        # The user can force thinking back on with explicit
+        # enable_thinking=true or chat_template_kwargs.enable_thinking=true.
+        # Regression report scannermobs on Gemma-4-26B-A4B-it-JANG_4M;
+        # live-verified thinking-OFF is 4x faster (1.0s vs 4.0s for 300
+        # tokens) and produces a complete tool call vs. a truncated one.
+        if _enable and request.tools and _mc.family_name in ("gemma4", "gemma4_text"):
+            logger.info(
+                f"Request {request.model}: tools present + Gemma 4 — "
+                f"defaulting enable_thinking=False for fast tool calling "
+                f"(mlxstudio#71). Set enable_thinking=true to force thinking."
+            )
+            _enable = False
         chat_kwargs["enable_thinking"] = _enable
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
