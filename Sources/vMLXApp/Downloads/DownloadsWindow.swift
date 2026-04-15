@@ -80,17 +80,129 @@ struct DownloadsWindow: View {
     }
 
     private var emptyView: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            Spacer()
-            Image(systemName: "tray")
-                .font(.system(size: 40))
-                .foregroundStyle(Theme.Colors.textLow)
-            Text("No downloads yet")
-                .font(Theme.Typography.bodyHi)
-                .foregroundStyle(Theme.Colors.textMid)
-            Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                HStack {
+                    Spacer()
+                    VStack(spacing: Theme.Spacing.sm) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 44, weight: .light))
+                            .foregroundStyle(Theme.Colors.accent)
+                        Text("No downloads yet")
+                            .font(Theme.Typography.title)
+                            .foregroundStyle(Theme.Colors.textHigh)
+                        Text("Download an MLX model from HuggingFace")
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.Colors.textMid)
+                    }
+                    Spacer()
+                }
+                .padding(.top, Theme.Spacing.xl)
+
+                instructionCard
+                hfTokenCallout
+                pathsCard
+            }
+            .padding(Theme.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var instructionCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Label("How to start a download", systemImage: "1.circle.fill")
+                .font(Theme.Typography.bodyHi)
+                .foregroundStyle(Theme.Colors.textHigh)
+
+            Text("From the **Image** tab, the model picker has a download button next to each Flux / Z-Image model. Click it and the download appears here automatically.")
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textMid)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("From the CLI:")
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textMid)
+                .padding(.top, Theme.Spacing.xs)
+
+            Text("vmlx pull mlx-community/Qwen3-32B-4bit")
+                .font(Theme.Typography.mono)
+                .foregroundStyle(Theme.Colors.textHigh)
+                .padding(Theme.Spacing.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.Colors.surfaceHi)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+        }
+        .padding(Theme.Spacing.lg)
+        .background(Theme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .stroke(Theme.Colors.border, lineWidth: 1)
+        )
+    }
+
+    private var hfTokenCallout: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Label("Gated repos (Llama, Gemma, Mistral large)", systemImage: "lock.shield")
+                .font(Theme.Typography.bodyHi)
+                .foregroundStyle(Theme.Colors.textHigh)
+            Text("Some models require accepting a license on HuggingFace. To download them:")
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textMid)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("1. Visit the model page on huggingface.co and click **Request access**.")
+                Text("2. In the **API** tab below, paste a HuggingFace token in the *HuggingFace access token* card and click **Save & Test**.")
+                Text("3. Retry the download — gated files will now succeed.")
+            }
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textMid)
+
+            HStack {
+                Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
+                    Label("Get a token", systemImage: "arrow.up.right.square")
+                        .font(Theme.Typography.body)
+                }
+                .foregroundStyle(Theme.Colors.accent)
+                Spacer()
+            }
+            .padding(.top, Theme.Spacing.xs)
+        }
+        .padding(Theme.Spacing.lg)
+        .background(Theme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .stroke(Theme.Colors.border, lineWidth: 1)
+        )
+    }
+
+    private var pathsCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Label("Where downloads land", systemImage: "folder")
+                .font(Theme.Typography.bodyHi)
+                .foregroundStyle(Theme.Colors.textHigh)
+            Text("Files are stored in the standard HuggingFace cache. The Server tab's Model Library auto-detects them on the next scan.")
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textMid)
+            Text("~/.cache/huggingface/hub/models--<org>--<repo>/snapshots/main/")
+                .font(Theme.Typography.mono)
+                .foregroundStyle(Theme.Colors.textMid)
+                .padding(Theme.Spacing.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.Colors.surfaceHi)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+            Text("Pause / cancel / retry are per-row in this window. Resumes use HTTP Range requests so paused downloads pick up from the exact byte they stopped — no re-downloading.")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textLow)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(Theme.Spacing.lg)
+        .background(Theme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .stroke(Theme.Colors.border, lineWidth: 1)
+        )
     }
 }
 

@@ -192,6 +192,54 @@ open vMLX.xcodeproj
 
 ---
 
+## Downloading models
+
+vMLX uses the standard HuggingFace cache layout, so anything you've
+already downloaded with `huggingface-cli` or `transformers` will be
+auto-detected on first launch.
+
+**Three ways to start a download:**
+
+1. **Image tab → model picker** — every Flux / Z-Image / Qwen Image
+   model has a Download button. The progress window pops open
+   automatically; nothing is ever silent.
+2. **CLI:** `.build/release/vmlx pull mlx-community/Qwen3-32B-4bit`
+3. **HTTP:** `POST /api/pull {"name":"<repo>"}` (Ollama-shape NDJSON
+   stream — useful for scripting from another machine).
+
+**Gated repos (Llama, Gemma, Mistral large):**
+
+Some models require accepting a license on huggingface.co before they
+can be downloaded. To use them with vMLX:
+
+1. Visit the model page on huggingface.co and click **Request access**.
+   Wait for approval.
+2. Generate a token at <https://huggingface.co/settings/tokens> (Read
+   scope is enough).
+3. In the app, open the **API** tab → **HuggingFace access token** card,
+   paste the token, click **Save & Test**. The token is stored in the
+   macOS Keychain (never in plaintext on disk) and pushed into every
+   download manager so subsequent gated downloads succeed.
+
+**Speed and resume:**
+
+Downloads stream directly to disk via `URLSessionDownloadTask` (no
+byte-by-byte async iteration overhead). A 5-second sliding-window speed
+metric drives the live MB/s readout — *not* a count of file shards.
+Pause/resume use HTTP `Range: bytes=N-` requests, so paused downloads
+pick up from the exact byte they stopped — no re-downloading.
+
+**Where files land:**
+
+```
+~/.cache/huggingface/hub/models--<org>--<repo>/snapshots/main/
+```
+
+The Server tab's Model Library scans this path plus any user-added
+directories. Add custom dirs from Server tab → Model Directories panel.
+
+---
+
 ## Runtime surfaces
 
 **CLI (`vmlxctl`)**
