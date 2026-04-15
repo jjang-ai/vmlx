@@ -211,6 +211,36 @@ final class AppState {
     var selectedModelPath: URL? = nil
     var activeSessionId: UUID? = nil
 
+    /// Per-session engine states. Populated by `startSession`'s observer for
+    /// every Server session AND by the default engine's observer (keyed by
+    /// `nil`-surrogate UUID below). Lets Chat / Terminal / anywhere else
+    /// answer "is any engine live?" without hitting the Engine actor
+    /// synchronously. The `engineState` field above only tracks whichever
+    /// engine is currently selected, so it missed engines the user loaded
+    /// in a Server session they haven't reselected.
+    var sessionEngineStates: [UUID: EngineState] = [:]
+
+    /// Surrogate UUID used as the `sessionEngineStates` key for the default
+    /// (non-session-bound) engine. Anything that checks "any engine live"
+    /// includes this slot so first-launch / Chat-only flows still count.
+    static let defaultEngineKey = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+    /// True when any tracked engine has a loaded model (running, standby,
+    /// or in-progress load). Used by `ChatViewModel.send()` so users who
+    /// loaded a model in Server tab can chat without being kicked back.
+    var hasAnyLiveEngine: Bool {
+        if engineStateIsLive(engineState) { return true }
+        return sessionEngineStates.values.contains(where: engineStateIsLive(_:))
+    }
+
+    /// First session id whose engine is currently live (running / standby /
+    /// loading). Returns nil when none. Callers use this to auto-bind
+    /// `ChatViewModel.serverSessionId` so streams route through the right
+    /// engine instead of the default fallback.
+    var firstLiveSessionId: UUID? {
+        sessionEngineStates.first(where: { $0.key != Self.defaultEngineKey && engineStateIsLive($0.value) })?.key
+    }
+
     /// Server-screen session list. Mirrors the Electron `sessions` IPC feed
     /// (`SessionsContext.tsx`). Each entry is a running *or* inactive model
     /// session with its per-session settings blob (port, model path, etc).
@@ -286,27 +316,80 @@ final class AppState {
     /// Always tracks the *active* engine (the one returned by `engine`).
     /// When the active engine swaps (user picks a different server session),
     /// `rebindEngineObserver()` cancels the old Task and re-subscribes.
-    private var engineObserver: Task<Void, Never>? = nil
-
     func observeEngine() async {
         rebindEngineObserver()
     }
 
+    /// Shared predicate: engine state implies a model is loaded (or in the
+    /// process of loading) so Chat can stream through it.
+    nonisolated func engineStateIsLive(_ s: EngineState) -> Bool {
+        switch s {
+        case .running, .standby: return true
+        case .loading: return true
+        case .stopped, .error: return false
+        }
+    }
+
+    /// Persistent per-engine observers. Rebinding the selected engine's
+    /// observer used to cancel whatever was previously observed, so the
+    /// moment the user switched session the previous session's state went
+    /// stale in `sessionEngineStates`. This dict keeps one observer per
+    /// bucket key (session UUID or default-engine surrogate) alive for
+    /// the lifetime of the engine — cancelled only when the engine is
+    /// explicitly removed from `engines`. That lets `hasAnyLiveEngine`
+    /// see EVERY live session, not just whichever one is selected.
+    private var sessionObservers: [UUID: Task<Void, Never>] = [:]
+
     func rebindEngineObserver() {
-        engineObserver?.cancel()
-        let current = engine
-        engineObserver = Task { @MainActor [weak self] in
+        ensureObserver(for: selectedServerSessionId ?? Self.defaultEngineKey)
+        // Seed `engineState` / `loadProgress` from whichever engine the UI
+        // should currently track so the SwiftUI view reflects the switch
+        // immediately (the observer's async stream below will keep it
+        // updated going forward).
+        let key = selectedServerSessionId ?? Self.defaultEngineKey
+        if let s = sessionEngineStates[key] {
+            engineState = s
+            if case .loading(let p) = s { loadProgress = p } else { loadProgress = nil }
+        }
+    }
+
+    /// Spin up (or reuse) an observer for the engine belonging to
+    /// `bucketKey`. Idempotent: calling twice is a no-op. Called from
+    /// `rebindEngineObserver` AND `startSession` so both the selected
+    /// engine and every started Server-session engine emit their state
+    /// into `sessionEngineStates` continuously.
+    func ensureObserver(for bucketKey: UUID) {
+        if sessionObservers[bucketKey] != nil { return }
+        let target: Engine
+        if bucketKey == Self.defaultEngineKey {
+            target = defaultEngine
+        } else if let e = engines[bucketKey] {
+            target = e
+        } else {
+            // Engine not yet created for this session — nothing to observe.
+            return
+        }
+        let observer = Task { @MainActor [weak self] in
             guard let self else { return }
-            for await next in await current.subscribeState() {
+            for await next in await target.subscribeState() {
                 if Task.isCancelled { break }
-                self.engineState = next
-                if case .loading(let p) = next {
-                    self.loadProgress = p
-                } else {
-                    self.loadProgress = nil
+                self.sessionEngineStates[bucketKey] = next
+                // Mirror to `engineState` / `loadProgress` only when this
+                // observer represents the currently-selected engine. Other
+                // engines still push into `sessionEngineStates` so global
+                // liveness checks work, but they don't clobber the UI.
+                let selected = self.selectedServerSessionId ?? Self.defaultEngineKey
+                if selected == bucketKey {
+                    self.engineState = next
+                    if case .loading(let p) = next {
+                        self.loadProgress = p
+                    } else {
+                        self.loadProgress = nil
+                    }
                 }
             }
         }
+        sessionObservers[bucketKey] = observer
     }
 
     /// Subscribe to the DownloadManager and keep `downloadJobs` in sync.

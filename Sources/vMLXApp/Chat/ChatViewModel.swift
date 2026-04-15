@@ -102,6 +102,93 @@ final class ChatViewModel {
         }
     }
 
+    /// Load the given model directly from Chat, without bouncing through
+    /// the Server tab. Creates a Server session if one doesn't exist for
+    /// this model path, reuses the existing one otherwise. Binds this
+    /// chat to the resulting session so future turns stream through it.
+    @MainActor
+    func startModel(at path: URL) async {
+        guard let app else { return }
+        // Reuse an existing session pointing at the same model, otherwise
+        // create a fresh one. Keeps the Server tab's session list from
+        // ballooning every time the user picks a model from Chat.
+        let existing = app.sessions.first { $0.modelPath == path }
+        let sid: UUID
+        if let s = existing {
+            sid = s.id
+        } else {
+            let newId = UUID()
+            var settings = SessionSettings(modelPath: path)
+            settings.displayName = path.lastPathComponent
+            let sessionEngine = app.engine(for: newId)
+            settings = await sessionEngine.applySessionSettings(newId, settings)
+            let newSession = Session(
+                id: newId,
+                displayName: settings.displayName ?? path.lastPathComponent,
+                modelPath: path,
+                family: "",
+                isJANG: false,
+                isMXTQ: false,
+                quantBits: nil,
+                host: settings.host ?? "127.0.0.1",
+                port: settings.port ?? 8000,
+                pid: nil,
+                latencyMs: nil,
+                state: .stopped,
+                loadProgress: nil
+            )
+            app.sessions.append(newSession)
+            sid = newId
+        }
+        self.serverSessionId = sid
+        app.selectedServerSessionId = sid
+        app.rebindEngineObserver()
+        app.ensureObserver(for: sid)
+        let eng = app.engine(for: sid)
+        let resolved = await eng.settings.resolved(sessionId: sid)
+        let opts = Engine.LoadOptions(modelPath: path, from: resolved)
+        do {
+            for try await event in await eng.load(opts) {
+                if case .failed(let msg) = event {
+                    app.flashBanner("Load failed: \(msg)")
+                    return
+                }
+            }
+        } catch {
+            app.flashBanner("Load failed: \(error)")
+        }
+    }
+
+    /// Stop the engine bound to this chat's server session (or the default
+    /// engine if unbound). Safe no-op when nothing is loaded.
+    @MainActor
+    func stopModel() async {
+        guard let app else { return }
+        let eng: Engine
+        if let sid = serverSessionId { eng = app.engine(for: sid) }
+        else { eng = app.engine }
+        await eng.stop()
+    }
+
+    /// True while the chat-bound engine is actively loading. UI uses this
+    /// to disable the Start button mid-load.
+    @MainActor
+    var isModelLoading: Bool {
+        guard let app else { return false }
+        let key = serverSessionId ?? AppState.defaultEngineKey
+        if case .loading = app.sessionEngineStates[key] { return true }
+        return false
+    }
+
+    /// True while the chat-bound engine has a model ready to stream.
+    @MainActor
+    var isModelReady: Bool {
+        guard let app else { return false }
+        let key = serverSessionId ?? AppState.defaultEngineKey
+        if let s = app.sessionEngineStates[key], app.engineStateIsLive(s) { return true }
+        return app.hasAnyLiveEngine
+    }
+
     func attach(_ app: AppState) {
         self.app = app
         reload()
@@ -263,14 +350,27 @@ final class ChatViewModel {
         // of falling back to `defaultEngine` when the user never linked
         // the chat to a session explicitly.
         if let appRef = app {
-            if serverSessionId == nil, let active = appRef.selectedServerSessionId {
-                serverSessionId = active
+            // Auto-bind this chat to a live session. Priority:
+            //   1. Already-bound server session (user picked it explicitly)
+            //   2. Currently-selected server session
+            //   3. Any engine the app sees as live (running / standby /
+            //      loading) — lets users who loaded a model in Server but
+            //      never "selected" that session still chat against it
+            if serverSessionId == nil {
+                if let active = appRef.selectedServerSessionId {
+                    serverSessionId = active
+                } else if let liveSid = appRef.firstLiveSessionId {
+                    serverSessionId = liveSid
+                    appRef.selectedServerSessionId = liveSid
+                }
             }
-            let running = appRef.engineState != .stopped && !isErrorState(appRef.engineState)
-            if !running {
-                bannerMessage = "Load a model in the Server tab first"
+            if !appRef.hasAnyLiveEngine {
+                bannerMessage = "No model loaded — use the model picker in the Chat top bar to start one."
                 appRef.flashBanner(bannerMessage ?? "")
-                appRef.mode = .server
+                // Do NOT force-switch modes. The Chat top bar has its own
+                // model picker + Start button; yanking users to Server
+                // made loading via Chat impossible (UX regression Eric
+                // reported 2026-04-15).
                 return
             }
         }
