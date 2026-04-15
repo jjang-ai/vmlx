@@ -1,157 +1,221 @@
-# vMLX — Swift
+<p align="center">
+  <img src="assets/vmlx.ai/svg/vmlx-lockup.svg#gh-light-mode-only" alt="vMLX" height="88" />
+  <img src="assets/vmlx.ai/svg/vmlx-lockup-light.svg#gh-dark-mode-only" alt="vMLX" height="88" />
+</p>
 
-**The entire MLX inference stack, from Metal kernels to SwiftUI, in a
-single SwiftPM package.** No external `path:` dependencies. No upstream
-drift risk. We control every layer — kernel compile flags, quant
-kernels, attention paths, scheduler, tokenizer, chat loop, HTTP
-routes, desktop UI.
-
-**Canonical home:** `./`
-**Build:** `swift build` → `.build/release/vmlx` CLI · `xcodegen` for the macOS app
-(4 unrelated Jinja-parser repros skip)
-**Binaries:** `vmlxctl` (CLI), `vMLX` (SwiftUI app)
+<h1 align="center">vMLX — Swift (dev branch)</h1>
 
 ---
 
-## Why this exists
+> # ⚠️ EXPERIMENTAL SANDBOX — NOT A REAL APP ⚠️
+>
+> **This `dev` branch is NOT a product. It is not meant to be used.
+> It is not meant to be "tested" the way you'd test an app.**
+>
+> This tree is an **experimental workbench** for trying new low-level
+> research directions that have no place in the stable user app yet.
+> Specifically:
+>
+> - **DDFlash / JANG-DFlash speculative decoding** — block-diffusion
+>   drafter + DDTree beam + coordinator-aware verify. See
+>   `Sources/vMLXLMCommon/DFlash/`.
+> - **JANG smelt** — partial-expert streaming / smelting. The UI flag
+>   is live; the Swift-side loader is not — Stream emits an honest
+>   per-request warning when the toggle is on.
+> - **JANGTQ / MXTQ quant formats** — native Swift repack, TurboQuant
+>   KV cache, MXTQ packed dequant (PRNG parity still WIP). See
+>   `Sources/vMLXLMCommon/JangMXTQDequant.swift`,
+>   `JangSpecBundleLoader.swift`, `TurboQuantKVCache` in
+>   `Sources/vMLXLMCommon/TurboQuant/`.
+> - **Flash MoE expert streaming** from SSD, cache coordinator work,
+>   hybrid-SSM + sliding-window disk round-trip, Llama 4 iRope, etc.
+>
+> If you want to **use** vMLX, run the stable Electron +
+> bundled-Python app at
+> **[jjang-ai/mlxstudio](https://github.com/jjang-ai/mlxstudio)**
+> (current release **v1.3.54**). That is the shipping product.
+>
+> If you want to **use** this Swift dev branch: don't. It's not for
+> that. It exists so a handful of people can try experimental engine
+> paths end-to-end and break things in isolation without putting user
+> installs at risk.
+>
+> **Do not treat dev DMGs as app beta builds.** `vdev-*` tags on
+> [mlxstudio releases](https://github.com/jjang-ai/mlxstudio/releases)
+> are engineering snapshots — prereleased so the five people touching
+> this tree can grab a notarized binary quickly. They are never
+> promoted to user channels. Do not file "this is broken" bug reports
+> against them as if they were products; reproductions welcome,
+> expectations of stability are not.
+>
+> Things break. APIs shift. Whole model families don't work yet. Cache
+> tiers have known correctness gaps. Multi-turn reuse is incomplete on
+> some hybrid paths. **Do not deploy this. Do not integrate it into
+> anything that matters. Do not rely on it for any production
+> workload.**
 
-Two forcing functions:
+---
 
-1. **App Store / sandbox.** Electron + bundled-Python can't ship to
-   MAS. Pure Swift + SwiftUI can.
-2. **Control the stack.** Every time we need a kernel tweak, a
-   scheduler change, or a quant path, we'd rather not coordinate with
-   upstream `mlx-swift`, `mlx-swift-examples`, or `vmlx-swift-lm`.
-   Vendor everything and commit fixes directly.
+## What this is
 
-As of 2026-04-13 PM, the vendoring is complete: `Cmlx` + all 8 MLX
-Swift targets live next to our `vMLX*` targets under one
-`Package.swift`.
+The entire MLX inference stack — Metal kernels, quant paths, attention
+paths, scheduler, tokenizer, chat loop, HTTP routes, desktop UI —
+in a single SwiftPM package. No external `path:` dependencies, no
+upstream drift risk. We control every layer, and when we need a
+change we commit it here directly instead of coordinating with
+`mlx-swift`, `mlx-swift-examples`, or `vmlx-swift-lm` upstreams.
+
+As of 2026-04-13 the vendoring is complete: `Cmlx` + all 8 MLX Swift
+targets live next to the `vMLX*` targets under one `Package.swift`
+(23 targets, 5 external deps only).
+
+**Binaries produced:**
+- `vmlxctl` — CLI (`serve`, `chat`, `pull`, `ls`, `dflash-smoke`)
+- `vMLX` — SwiftUI macOS app (5 modes: Chat, Server, Image, Terminal, API)
+
+---
+
+## Status & limitations
+
+Honest snapshot of the `dev` branch. Anything not listed here should be
+assumed broken or absent.
+
+### ✅ Works (live-verified today)
+
+| Area | State |
+|---|---|
+| Model load + text generation | ✅ Llama 3.2 1B, Qwen3 0.6B, Gemma 4 e2b (4-bit MLX) |
+| Full `swift build` | ✅ clean, all 23 targets |
+| Dev DMG build | ✅ notarized + stapled, `vdev-20260415-0612` shipped |
+| `vmlxctl chat / serve / pull / ls` | ✅ basic paths |
+| HTTP server: OpenAI `/v1/chat/completions`, `/v1/models` | ✅ streaming + non-streaming |
+| HTTP server: Ollama `/api/{chat,generate,tags,...}` | ✅ |
+| HTTP server: Anthropic `/v1/messages` | ✅ |
+| Admin: `/admin/{soft,deep}-sleep`, `/wake`, `/cache/*`, `/dflash/*` | ✅ |
+| Model library auto-scan (HuggingFace cache) | ✅ |
+| Model-family auto-detection (4-tier: JANG gold → silver → bronze → fallback) | ✅ |
+| Cache stack: paged (L1) + memory (L1.5) + disk (L2) + SSM companion | ✅ live, with known gaps below |
+| Prefix cache multi-turn reuse | ✅ standard path; ⚠️ partial on DFlash |
+| Sliding-window attention disk round-trip (Gemma 3/4, Mistral 4 maxKVSize) | ✅ via `.rotating` LayerKind |
+| BaichuanM1 `CacheList` disk serialization | ✅ via `.cachelist` LayerKind (F-G2) |
+| JANG-DFlash speculative decoding | ✅ text-only, MiniMax / Mistral 4 / DeepSeek V3 targets, coordinator-aware |
+| Flash MoE expert streaming (Phase 2b on some families) | ✅ opt-in per model |
+| TurboQuant KV cache integration | ✅ via `make_cache` patch |
+| Reasoning/tool parsers | ✅ 13 reasoning + 15 tool parsers registered |
+| §15 reasoning-off → content reroute | ✅ |
+| Logs: `LogStore` ring + SwiftUI `LogsPanel` + per-request `RequestLogger` | ✅ |
+| Settings: 4-tier merge (global → session → chat → request) | ✅ |
+| Download manager: HF auth, byte resume, progress bar | ✅ |
+| Embeddings endpoint | ✅ |
+| Whisper ASR `/v1/audio/transcriptions` | ✅ |
+| TTS `/v1/audio/speech` | ⚠️ placeholder tone backend only (Kokoro scaffolded) |
+| MCP stdio JSON-RPC + tool dispatch | ✅ |
+| Terminal mode with `bash` tool auto-inject | ✅ |
+| `/metrics` Prometheus endpoint | ✅ |
+
+### ⚠️ Partial / flaky
+
+- **MXTQ PRNG mismatch** — Swift `JangMXTQDequant` uses POSIX
+  `srand48`; Python writer uses NumPy PCG64. Sign sequences diverge →
+  some MXTQ bundles decode garbage weights. Known blocker for several
+  JANGTQ checkpoints. Fix: port PCG64 to Swift or re-seed the Python
+  writer.
+- **Engine.LoadOptions default drift** — stricter cache defaults
+  (`cacheMemoryPercent=0.10`, `maxCacheBlocks=500`) than
+  `GlobalSettings` (`0.30` / `1000`). Code paths that construct
+  `LoadOptions()` directly get smaller caches than configured.
+- **Smelt mode** — UI toggle + settings field exist, but the Swift
+  engine has no partial-expert-loader equivalent to Python's
+  `smelt_loader.py`. Labelled honestly as "Python engine only";
+  Stream emits a per-request warning when `smelt=true`.
+- **DFlash streaming reasoning split** — DFlash emits N-token blocks;
+  v1 routes all decoded text as `.content`. Client-side
+  reasoning-extractor still works after the fact, but live
+  `<think>...</think>` delta routing is not live on the DFlash path.
+- **DFlash tools/images** — falls back to standard path (logged) when
+  the request includes tools or images. Text-only path only for v1.
+- **xcodegen + SwiftPM app bundling** — the `xcodebuild archive` path
+  produces a bare executable instead of a `.app`. The ship-DMG script
+  assembles the bundle manually from DerivedData products. Root cause
+  not yet diagnosed.
+
+### ❌ Broken or not yet implemented
+
+- **Image generation `.generate()` bodies** — Flux / Qwen-Image /
+  Z-Image / SeedVR2 / FIBO DiT forward passes are still scaffolded.
+  Biggest user-visible gap versus the Electron app.
+- **Several model families stamped in silver table but no Swift class**
+  — CogVLM, Molmo, InternVL, Florence, GOT-OCR (F-G22), DeepSeek VL
+  (F-G10). Silver rows resolve but `Engine.load` falls through.
+- **FlashMoE family conformance gaps** — DeepSeek V3 (F-G6),
+  GLM-5 `glm_moe_dsa` (F-G7), Jamba (F-G8), Granite3 MoE (F-G9).
+  Protocol is ready, per-model `FlashMoEReplaceable` conformance
+  not wired.
+- **Tool-parser silver rows missing** — XLaM, Functionary (F-G11);
+  OlmoE, BailingMoe (F-G12). Fall through to `native`.
+- **Mistral 4 VLM dedicated text config** (F-G13), **Phi-4 reasoning
+  parser verification** (F-G14), **Llama 4 tool format verification**
+  (F-G15), **RWKVCache dedicated class** (F-G16), **MiniMax Lightning
+  Attention cache verification** (F-G17).
+- **CacheList multi-sub-cache walker** (F-G18) — partially addressed
+  by F-G2 for the `(Mamba, KV)` case; hypothetical `(Mamba, Rotating,
+  Full)` wrappers would still lose the second KV.
+- **Step-3.5 reasoning + tool-call interleave** (F-G19) — no test
+  coverage.
+- **GPT-OSS tool parser verification** (F-G20) — silver row stamps
+  `glm47` parser; unverified against real checkpoint.
+- **Gemma 4 image-token defensive assertion** (F-G21).
+- **PaliGemma template probe edge case** (F-G23).
+- **Kokoro neural TTS backend** — scaffolded in
+  `vMLXTTS/Kokoro/KokoroBackend.swift`; `/v1/audio/speech` returns
+  deterministic placeholder-tone WAV until the 9-step port lands.
+- **Whisper sliding-window for audio > 30s** — single-pass only; no
+  temperature fallback, no beam search, no word-level timestamps.
+- **Universal binary** — arm64-only. `HasDType` gates Float16 on
+  `#if !arch(x86_64)` upstream, so x86_64 slices won't type-check.
+- **App target bundling via xcodegen** — see above; manual assembly
+  works but needs proper fix.
 
 ---
 
 ## Stack layout
 
 ```
-swift/
-├── Package.swift                    # 21 local targets, 5 external deps
-├── Package.resolved
-├── project.yml                      # XcodeGen spec (optional)
-├── scripts/
-│   ├── build-release.sh             # xcodegen → archive → notarize → DMG
-│   └── notarize-only.sh             # resubmit-only path
-│
-├── Sources/
-│   │
-│   │ ─── MLX runtime (vendored from mlx-swift @ vmlx-0.31.3) ───
-│   ├── Cmlx/                        # ~23 MB — mlx + mlx-c C++ submodule
-│   │                                #   checkouts with vmlx-patches-0.31.3,
-│   │                                #   metallib staging, Metal kernels
-│   ├── MLX/                         # core tensor API
-│   ├── MLXNN/                       # nn.Module + layers
-│   ├── MLXFast/                     # scaled dot product, layer norm, rope
-│   ├── MLXFFT/                      # FFT ops
-│   ├── MLXLinalg/                   # cholesky, qr, svd, etc
-│   ├── MLXOptimizers/               # adamw, sgd, lion
-│   ├── MLXRandom/                   # rng + distribution ops
-│   │
-│   │ ─── vMLX layer (our code) ───
-│   ├── vMLXLMCommon/                # vendored mlx-swift-examples LMCommon
-│   │   ├── Cache/                   # KVCache, PagedCacheManager, SSM
-│   │   │                            #   companion, DiskCache, TQDiskSerializer,
-│   │   │                            #   ChunkedPrefillVLM helper
-│   │   ├── BatchEngine/             # continuous batching
-│   │   ├── FlashMoE/                # SSD-streamed expert loader (Phase 1 + 2a)
-│   │   ├── TurboQuant/              # TurboQuantKVCache
-│   │   ├── Evaluate.swift           # generate loop
-│   │   ├── LanguageModel.swift
-│   │   ├── KVCache.swift
-│   │   ├── JangMXTQDequant.swift    # MXTQ packed dequant w/ NumPyPCG64
-│   │   ├── NumPyPCG64.swift         # PCG64 parity for MXTQ sign generation
-│   │   ├── Load.swift
-│   │   └── ChunkedPrefillVLM.swift
-│   │
-│   ├── vMLXLLM/                     # LLM model implementations (~50)
-│   │   └── Models/                  # Qwen3/3MoE/3Next/3.5, Mistral, Mistral4,
-│   │                                #   MiniMax, Nemotron-H, Gemma4Text,
-│   │                                #   GLM4MoE, Jamba, FalconH1,
-│   │                                #   GraniteMoeHybrid, LFM2/LFM2MoE,
-│   │                                #   MiMoV2Flash, BaichuanM1, DeepSeekV3,
-│   │                                #   GPT-OSS, AfMoE, BailingMoe, …
-│   │
-│   ├── vMLXVLM/                     # Vision-language models (~15)
-│   │   └── Models/                  # Qwen25VL, Qwen2VL, Qwen3VL, Qwen35,
-│   │                                #   Qwen35MoE, Gemma3, Gemma4, Mistral3,
-│   │                                #   Mistral4VLM, Pixtral, Idefics3,
-│   │                                #   Paligemma, FastVLM, GlmOcr, LFM2VL
-│   │
-│   ├── vMLXEmbedders/               # embedding models
-│   │
-│   ├── vMLXFluxKit/                 # DiT + T5/CLIP + VAE + flow-match scheduler
-│   ├── vMLXFluxModels/              # Flux1 Schnell/Dev/Kontext/Fill, Flux2Klein,
-│   │                                #   QwenImage, ZImage, SeedVR2, FIBO
-│   ├── vMLXFluxVideo/               # WAN 3D video model
-│   ├── vMLXFlux/                    # public facade (ImageGenRequest,
-│   │                                #   FluxEngine, LatentSpace, WeightLoader,
-│   │                                #   JangSupport, ModelRegistry)
-│   │
-│   ├── vMLXEngine/                  # our wrapper over the vendored layers
-│   │   ├── Engine.swift             # load / stream / cache stats / mcp / flash moe
-│   │   ├── Stream.swift             # generation loop w/ tool dispatch + §15 routing
-│   │   ├── ChatRequest.swift
-│   │   ├── Settings/                # 4-tier global → session → chat → request
-│   │   ├── Cache/                   # CacheCoordinator (paged + disk + SSM)
-│   │   ├── Parsers/                 # reasoning + tool-call parser registries
-│   │   ├── Library/                 # ModelLibrary + DB + FSEvents watcher
-│   │   ├── MCP/                     # real stdio JSON-RPC 2.0 client
-│   │   ├── Tools/                   # BashTool + ToolDispatcher
-│   │   ├── ModelCapabilities.swift  # 4-tier auto-detection
-│   │   ├── CapabilityDetector.swift
-│   │   ├── DownloadManager.swift    # background resumable HF downloads
-│   │   ├── IdleTimer.swift
-│   │   ├── MetricsCollector.swift
-│   │   ├── FluxBackend.swift        # bridge to vMLXFlux
-│   │   └── ImageGen.swift
-│   │
-│   ├── vMLXServer/                  # Hummingbird routes
-│   │   ├── Server.swift
-│   │   ├── Routes/                  # OpenAI / Ollama / Anthropic / Admin / MCP
-│   │   ├── SSEEncoder.swift
-│   │   ├── JSONLEncoder.swift
-│   │   └── Auth.swift               # Bearer middleware
-│   │
-│   ├── vMLXApp/                     # SwiftUI app — 5 modes
-│   │   ├── vMLXApp.swift
-│   │   ├── Chat/                    # ChatScreen + ChatViewModel + MessageBubble
-│   │   ├── Server/                  # SessionDashboard + HTTPServerActor
-│   │   ├── Image/                   # ImageScreen + ImageModelPicker + Gallery
-│   │   ├── Terminal/                # TerminalScreen w/ bash tool
-│   │   ├── API/                     # APIScreen w/ LAN QR
-│   │   ├── Settings/
-│   │   ├── Downloads/
-│   │   └── Common/
-│   │
-│   ├── vMLXTheme/                   # Linear-inspired color/typography tokens
-│   │
-│   └── vMLXCLI/                     # `vmlxctl serve / chat / pull / ls`
-│       └── main.swift
-```
+Package.swift               23 local targets + 5 external deps
+project.yml                 XcodeGen spec for the .app wrapper
+scripts/
+  stage-metallib.sh         stages mlx.metallib next to SwiftPM binaries
 
-**23 targets.** **5 external deps only:** `swift-numerics`,
-`hummingbird`, `swift-argument-parser`, `swift-transformers`,
-`Jinja`. Nothing else.
+Sources/
+  Cmlx/                     vendored MLX + mlx-c C++ (metal kernels inline)
+                            + default.metallib (prebuilt, for SwiftPM)
+  MLX/ MLXNN/ MLXFast/      MLX Swift runtime (vendored from mlx-swift)
+  MLXFFT/ MLXLinalg/
+  MLXOptimizers/ MLXRandom/
 
-Audio targets (added 2026-04-14):
+  vMLXLMCommon/             caches, paged cache, SSM companion, TQ,
+                            Flash MoE, DFlash, evaluate loop, JANG loader,
+                            MXTQ dequant
+  vMLXLLM/                  ~50 LLM model classes
+  vMLXVLM/                  ~15 vision-language model classes
+  vMLXEmbedders/            embedding model classes
+  vMLXFluxKit/ vMLXFluxModels/ vMLXFluxVideo/ vMLXFlux/
+                            image / video generation stack (WIP)
+  vMLXWhisper/ vMLXTTS/     audio IO
+  vMLXEngine/               Engine actor: load, stream, cache, MCP,
+                            Flash MoE, DFlash, ModelCapabilities,
+                            CapabilityDetector, settings, metrics
+  vMLXServer/               Hummingbird routes:
+                              OpenAI / Ollama / Anthropic / Admin / MCP
+                              / Metrics / Gateway
+  vMLXApp/                  SwiftUI app (5 modes)
+  vMLXTheme/                Linear-inspired tokens
+  vMLXCLI/                  vmlxctl
 
-```
-│   ├── vMLXWhisper/                 # MLX Whisper ASR — WhisperLoader,
-│   │                                #   WhisperModel/Decoder/Tokenizer,
-│   │                                #   WhisperAudio (mel + resampling).
-│   │                                #   Auto-transcodes legacy .npz → .safetensors.
-│   ├── vMLXTTS/                     # TTS — TTSEngine facade + PlaceholderSynth
-│   │                                #   (deterministic 24 kHz WAV tone, real bytes).
-│   │                                #   Kokoro neural backend scaffolded (9-step plan
-│   │                                #   in KokoroBackend.swift), not live yet.
+vMLX/
+  Assets.xcassets/          app icon set
+  Info.plist                template (xcodegen fills $(...))
+  vMLX.entitlements         App Sandbox disabled (Terminal mode)
 ```
 
 ---
@@ -164,230 +228,125 @@ Audio targets (added 2026-04-14):
 git clone -b dev https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
-# CLI — SwiftPM produces .build/<target-triple>/<cfg>/vmlxctl
+# --- CLI (SwiftPM) ---
 swift build -c release
-# CRITICAL: colocate the Metal kernel library so binaries can load
-# models. Without this every load fails with "Failed to load the
-# default metallib." The helper copies `vmlx_Cmlx.bundle/default.metallib`
-# to `<build>/mlx.metallib` which is the first path mlx-swift's
-# `load_colocated_library` tries.
+# CRITICAL: colocate mlx.metallib next to the binary. Without this
+# every model load fails with "Failed to load the default metallib."
+# (This is because the SwiftPM flat bundle layout doesn't match what
+# `load_swiftpm_library` in device.cpp expects, so we fall through to
+# the first-try `load_colocated_library` path instead.)
 ./scripts/stage-metallib.sh release
 
-# macOS app — xcodegen wraps the SwiftPM vMLXApp target into a signable bundle
+./.build/release/vmlxctl serve --model /path/to/model
+./.build/release/vmlxctl chat  --model /path/to/model
+./.build/release/vmlxctl pull  mlx-community/Qwen3-32B-4bit
+./.build/release/vmlxctl list
+
+# --- SwiftUI app (Xcode archive path) ---
+# xcodegen produces vMLX.xcodeproj; current archive path builds a bare
+# executable, not a .app bundle (known bundling quirk). The ship-DMG
+# script manually assembles the .app from DerivedData products — see
+# PROGRESS.md for the exact steps until we fix the xcodegen config.
 xcodegen
 open vMLX.xcodeproj
-# Xcode → Run. Ad-hoc signing works for local dev; set your own DEVELOPMENT_TEAM
-# in project.yml if you want to distribute the .app.
-
-# Use the CLI
-.build/release/vmlx serve --model /path/to/model
-.build/release/vmlx chat  --model /path/to/model
-.build/release/vmlx pull  mlx-community/Qwen3-32B-4bit
-.build/release/vmlx list
-
-# Build the SwiftUI app via XcodeGen + sign + notarize + DMG
-./scripts/build-release.sh
 ```
 
-**Binaries after build:**
-
-```
-.build/arm64-apple-macosx/debug/vMLX       # SwiftUI app
-.build/arm64-apple-macosx/debug/vmlxctl    # CLI
-```
+arm64 only.
 
 ---
 
-## Downloading models
+## HTTP surfaces
 
-vMLX uses the standard HuggingFace cache layout, so anything you've
-already downloaded with `huggingface-cli` or `transformers` will be
-auto-detected on first launch.
+| Family | Endpoints |
+|---|---|
+| OpenAI | `/v1/{chat/completions, completions, responses, embeddings, models, rerank, images/generations, images/edits, audio/transcriptions, audio/speech}` |
+| Ollama | `/api/{chat, generate, embeddings, embed, tags, show, ps, version, pull}` |
+| Anthropic | `/v1/messages` (streaming, vision, `document`, `server_tool_use`) |
+| Admin | `/health`, `/admin/{soft-sleep, deep-sleep, wake, cache/stats, dflash, dflash/load, dflash/unload, models/:id}` |
+| MCP | `/v1/mcp/{tools, servers, execute}`, `/mcp/:server/:method` |
+| Metrics | `/metrics` (Prometheus text) |
+| Gateway | multiplexes single base-URL across N model sessions |
 
-**Three ways to start a download:**
-
-1. **Image tab → model picker** — every Flux / Z-Image / Qwen Image
-   model has a Download button. The progress window pops open
-   automatically; nothing is ever silent.
-2. **CLI:** `.build/release/vmlx pull mlx-community/Qwen3-32B-4bit`
-3. **HTTP:** `POST /api/pull {"name":"<repo>"}` (Ollama-shape NDJSON
-   stream — useful for scripting from another machine).
-
-**Gated repos (Llama, Gemma, Mistral large):**
-
-Some models require accepting a license on huggingface.co before they
-can be downloaded. To use them with vMLX:
-
-1. Visit the model page on huggingface.co and click **Request access**.
-   Wait for approval.
-2. Generate a token at <https://huggingface.co/settings/tokens> (Read
-   scope is enough).
-3. In the app, open the **API** tab → **HuggingFace access token** card,
-   paste the token, click **Save & Test**. The token is stored in the
-   macOS Keychain (never in plaintext on disk) and pushed into every
-   download manager so subsequent gated downloads succeed.
-
-**Speed and resume:**
-
-Downloads stream directly to disk via `URLSessionDownloadTask` (no
-byte-by-byte async iteration overhead). A 5-second sliding-window speed
-metric drives the live MB/s readout — *not* a count of file shards.
-Pause/resume use HTTP `Range: bytes=N-` requests, so paused downloads
-pick up from the exact byte they stopped — no re-downloading.
-
-**Where files land:**
-
-```
-~/.cache/huggingface/hub/models--<org>--<repo>/snapshots/main/
-```
-
-The Server tab's Model Library scans this path plus any user-added
-directories. Add custom dirs from Server tab → Model Directories panel.
+Responses API (`/v1/responses`) covers both string and structured
+`input` shapes (`message` / `function_call` / `function_call_output` /
+`input_text` / `input_image`), tools, `tool_choice`,
+`reasoning.effort` bucketing, and streams the full Responses event
+family (`response.created`, `output_item.added`, `output_text.delta`,
+`reasoning_summary_text.delta`, `function_call_arguments.delta`,
+`output_item.done`, `response.completed`, `[DONE]`).
 
 ---
 
-## Runtime surfaces
+## Roadmap / TODO
 
-**CLI (`vmlxctl`)**
-- `serve --model PATH [--host H] [--port P] [--api-key K] [--json-progress]`
-- `chat --model PATH [--system S]`
-- `pull REPO`
-- `ls`
+Tracked day-to-day in `PROGRESS.md`. High-level headline items in
+priority order:
 
-**HTTP server (`vMLXServer`)**
-- OpenAI: `/v1/{chat/completions, completions, responses, embeddings,
-  models, rerank, images/generations, images/edits,
-  audio/transcriptions, audio/speech}`
-  - `/v1/responses` — full Responses API: string + structured `input`
-    array (`message` / `function_call` / `function_call_output` /
-    `input_text` / `input_image`), tools, tool_choice,
-    `reasoning.effort` → reasoning_effort bucketing. Streaming SSE
-    emits the Responses event family (`response.created`,
-    `output_item.added`, `output_text.delta`,
-    `reasoning_summary_text.delta`, `function_call_arguments.delta`,
-    `output_item.done`, `response.completed`, `[DONE]`). Non-streaming
-    emits `output[]` with `reasoning` / `message` / `function_call`
-    blocks. See `Routes/OpenAIRoutes.swift` + `SSEEncoder.responsesStream`.
-  - `/v1/audio/transcriptions` — Whisper multipart form (file, model,
-    language, response_format, task, prompt, temperature). Formats:
-    `json` (default), `text`, `verbose_json`, `srt`, `vtt`. Lazy-loads
-    from `~/.cache/huggingface/hub`. Live-verified on
-    `mlx-community/whisper-tiny-mlx`.
-  - `/v1/audio/speech` — TTS returning real 24 kHz mono WAV. Currently
-    ships `PlaceholderSynth` tone backend (advertised via
-    `X-vMLX-TTS-Backend: placeholder-tone`). Kokoro neural backend
-    scaffolded — not yet live.
-- Ollama: `/api/{chat, generate, embeddings, embed, tags, show, ps,
-  version, pull}` — `/api/chat` honors `tools` (fixed 2026-04-14).
-- Anthropic: `/v1/messages` (streaming + vision blocks + `document` PDF
-  / text-url / image-url, `server_tool_use`, `web_search_tool_result`).
-- Admin: `/health`, `/admin/{soft-sleep, deep-sleep, wake,
-  cache/stats, models/:id}` — `wake` replays `lastLoadOptions` and
-  accepts `{model}` override.
-- MCP: `/v1/mcp/{tools, servers, execute}`, `/mcp/:server/:method`
-  (raw JSON-RPC 2.0 passthrough — body `{params:{...}}` or raw params
-  dict, e.g. `resources/list`, `prompts/get`).
+**Blockers for a first user-visible release:**
+1. **MXTQ PRNG parity** — currently produces garbage for some JANGTQ
+   bundles.
+2. **Image generation `.generate()` bodies** — Flux/Qwen-Image/Z-Image
+   forward passes still scaffolded.
+3. **xcodegen .app bundling** — manual assembly works; fix so
+   `xcodebuild archive` produces a proper `.app`.
 
-**SwiftUI app (`vMLX`)**
-- 5 modes: Chat, Server, Image, Terminal, API
-- Per-chat model picker, sessions sidebar, message bubbles with
-  streaming + reasoning + tool-call cards + MetricsStrip
-- Server tab with per-session HTTPServerActor wiring (real listener
-  per session)
-- Image tab with model picker + gen/edit forms + SQLite-backed gallery
-- Terminal tab with auto-injected bash tool + Up/Down command history
-- API tab with endpoint list + curl/Python/TS/Anthropic/Ollama
-  snippets + LAN QR code
+**Model-family coverage (F-G matrix — 23 items tracked):**
+- F-G1 ✅ SSMStateCache mediaSalt
+- F-G2 ✅ BaichuanM1 CacheList disk walker
+- F-G3 ✅ Llama 4 dedicated model class (iRope + MoE + ChunkedKVCache)
+- F-G4 ✅ Gemma 3 tool parser hermes → gemma4
+- F-G5 ✅ Gemma 3 mixed SWA+full detection
+- F-G6..F-G23 🟡 pending — see `PROGRESS.md` + `SWIFT-PER-FAMILY-MATRIX-2026-04-15.md`
+  - FlashMoE conformance: DeepSeek V3, GLM-5, Jamba, Granite3 MoE
+  - Missing Swift classes: DeepSeek VL, CogVLM, Molmo, InternVL,
+    Florence, GOT-OCR
+  - Tool parser silver rows: XLaM, Functionary, OlmoE, BailingMoe
+  - Verification: Phi-4 reasoning, Llama 4 tool format, MiniMax
+    Lightning Attention, GPT-OSS tool parser
+  - Cache correctness: RWKVCache dedicated class, CacheList multi-sub walker
+  - Defensive: Gemma 4 image token assertion, PaliGemma probe
+
+**Cache correctness tail:**
+- Engine.LoadOptions ↔ GlobalSettings default drift
+- Smelt partial-expert loader in Swift (or honestly strip the toggle)
+- DFlash streaming reasoning parser
+- DFlash tool-call path
+
+**Audio:**
+- Kokoro neural TTS backend (9-step port plan in `vMLXTTS/Kokoro/KokoroBackend.swift`)
+- Whisper long-form (sliding window, temperature fallback, word timestamps)
+- TTS mp3 / opus / flac transcoding
+
+**Build + shipping:**
+- xcodegen/SwiftPM application-bundle wrapping (see quirk above)
+- Automated ship-DMG script for future dev releases
 
 ---
 
-## Feature coverage
+## Related docs in-tree
 
-See `APP-SURFACE-AUDIT-2026-04-13.md` for the full per-surface
-REAL/STUB/MISSING inventory with file:line anchors. Quick summary:
-
-| Surface | REAL | STUB | MISSING |
-|---|---|---|---|
-| Chat (`vMLXApp/Chat/`) | 12 | 1 (edit+regenerate UI partial) | 0 |
-| Server (`vMLXApp/Server/`) | 10 | 0 | 0 |
-| Image (`vMLXApp/Image/`) | 5 | 1 (Flux `.generate()` bodies) | 0 |
-| Terminal (`vMLXApp/Terminal/`) | 8 | 0 | 0 |
-| API screen (`vMLXApp/API/`) | 7 | 0 | 0 |
-| Settings (`vMLXEngine/Settings/`) | 4 | 0 | 0 |
-| Engine (`vMLXEngine/`) | 10 | 1 (benchmark driver) | 0 |
-| Routes (`vMLXServer/Routes/`) | 23 | 1 (TTS neural backend = placeholder tone) | 0 |
-| CLI (`vMLXCLI/`) | 4 | 0 | 0 |
-| MCP | 7 | 0 | 0 |
-| Flash MoE | Phase 1 + 2a done; Phase 2b (model-side protocol conformance) + Phase 3 (engine wire-up) pending |
+- **`PROGRESS.md`** — per-session changelog, newest at top. Read this
+  first if you want to know what moved recently.
+- **`NO-REGRESSION-CHECKLIST.md`** — release regression matrix.
+- **`Sources/vMLXLMCommon/FlashMoE/README.md`** — Flash MoE phase
+  architecture.
+- **`SWIFT-PER-FAMILY-MATRIX-2026-04-15.md`** *(local only, not
+  pushed)* — per-family F-G1..F-G23 audit with file:line citations.
 
 ---
 
-## Audit docs in this tree
+## Not in this tree
 
-- **`PROGRESS.md`** — full session-by-session changelog, newest at top
-- **`APP-SURFACE-AUDIT-2026-04-13.md`** — per-surface REAL/STUB/MISSING
-- **`SWIFT-ENGINE-ISSUES-AUDIT.md`** — GH issue cross-reference
-  (`jjang-ai/vmlx` + `jjang-ai/mlxstudio`) against the Swift engine
-- **`AUDIT-2026-04-13-POST-VENDOR.md`** — hybrid SSM + parser
-  auto-dispatch + cross-cutting settings audit
-- **`UX-AUDIT.md`** — UI polish findings
-- **`SWIFT-NO-REGRESSION-CHECKLIST.md`** — per-release regression matrix
-- **`Sources/vMLXLMCommon/FlashMoE/README.md`** — Flash MoE Phase 1 /
-  2a architecture + Phase 2b / 3 roadmap
+- **Production Electron app** — `panel/` subtree kept for reference
+  but never built in this pipeline. Real v1.3.x releases come out of
+  `jjang-ai/vmlx` `main` branch via electron-builder.
+- **User documentation** — this README is a dev log, not a user
+  manual. User docs live on `jjang-ai/mlxstudio` when the Swift path
+  is mature enough to document for users.
 
 ---
 
-## Still remaining
+## Legal
 
-Prioritized list in `PROGRESS.md`. Headline items:
-
-- **Image gen `.generate()` bodies** — Flux/Qwen/Z/SeedVR2/FIBO DiT
-  forward passes. Biggest user-visible gap. (FluxBackend.editImage
-  wire-up landed 2026-04-14 — still needs model-side `.generate()`.)
-- **vision_embedding_cache.py port** — per-image cache for VLM
-  continuous batching.
-- **MCP Phase 2** — wire MCP tools into `Stream.swift` tool dispatch.
-- **Flash MoE Phase 2b** — per-model protocol conformance landed for
-  OlmoE, LFM2MoE, GLM4MoE, BailingMoe, PhiMoE, NemotronH SwitchMLP,
-  Gemma4 sibling layout, MiniMax, Mistral3 SwitchGLU (2026-04-14).
-  Remaining families TBD — tracked in Flash MoE README.
-
-### Known deferred items (2026-04-14)
-
-- **Kokoro neural TTS backend** — scaffolded in
-  `Sources/vMLXTTS/Kokoro/KokoroBackend.swift` with a 9-step port plan.
-  `/v1/audio/speech` currently returns deterministic WAV tones from
-  `PlaceholderSynth` (see `X-vMLX-TTS-Backend: placeholder-tone` response
-  header).
-- **TTS audio transcoding** — mp3 / opus / flac formats; only WAV emitted.
-- **Whisper temperature fallback** — single-temperature greedy only. No
-  beam search, no word-level timestamps, no sliding-window for audio
-  >30 s, no live verification against v3 (`n_mels=128`).
-
-**Speculative decoding (JANG-DFlash):** LIVE in the dev branch as of
-2026-04-15. Full integration in `Sources/vMLXLMCommon/DFlash/` with
-`Engine` lifecycle + CacheCoordinator plumbing + admin routes + UI
-toggle. Target families with tap adapters: MiniMax, Mistral 4, DeepSeek
-V3. Settings: `dflash`, `dflashDrafterPath`, `dflashBlockSize` (16),
-`dflashTopK` (4), `dflashNumPaths` (60), `dflashTapLayers`,
-`dflashTargetHiddenDim`. CLI: `vmlxctl serve --dflash --dflash-drafter
-PATH`. Admin: `GET /admin/dflash`, `POST /admin/dflash/{load,unload}`.
-Fallback is silent + logged when drafter/target/tools preclude the
-fast path. See `PROGRESS.md` for the full integration log.
-
-**Smelt mode:** Honest UX — the flag flows through settings but the
-Swift engine has no partial-expert-loading consumer yet (Python-only
-feature). Setting `smelt=true` logs a one-shot warning per request
-so users aren't silently no-op'd. Label in SessionConfigForm reads
-"Smelt mode (Python engine only)".
-
----
-
-## Archival notes
-
-optimization, softplus 7.62 → 3.69 µs, Python parity). That tree is
-kept as a git-history reference only — it has no origin remote and
-its push URL is set to an invalid string so it cannot accidentally
-be published. Future kernel edits land in
-`swift/Sources/Cmlx/` + `swift/Sources/MLX*/` in this repo and
-commit into this repo's git history.
+© 2026 Jinho Jang. Source licensed as-is, no warranty, dev-preview
+only. Do not redistribute dev DMGs to end users.
