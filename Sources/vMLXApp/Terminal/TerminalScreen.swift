@@ -420,6 +420,16 @@ struct TerminalTurn: Identifiable {
 private struct TerminalTurnView: View {
     let turn: TerminalTurn
 
+    /// Long-output collapse threshold (UI-6). Tool / model outputs over
+    /// this many lines render with a fold: first FOLD_HEAD lines, an
+    /// "expand N more lines" toggle, then the FOLD_TAIL trailing lines.
+    /// The full text is still copyable from the expanded view.
+    private static let foldThreshold = 80
+    private static let foldHead = 25
+    private static let foldTail = 15
+
+    @State private var expanded: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             HStack(spacing: Theme.Spacing.sm) {
@@ -434,11 +444,20 @@ private struct TerminalTurnView: View {
                         .foregroundStyle(code == 0 ? Theme.Colors.success : Theme.Colors.danger)
                 }
                 Spacer()
+                if foldedRanges != nil {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            expanded.toggle()
+                        }
+                    } label: {
+                        Text(expanded ? "Collapse" : "Show all \(lineCount) lines")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            Text(turn.text)
-                .font(turn.role == .user ? Theme.Typography.body : Theme.Typography.mono)
-                .foregroundStyle(Theme.Colors.textHigh)
-                .textSelection(.enabled)
+            outputBody
                 .padding(Theme.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
@@ -449,6 +468,55 @@ private struct TerminalTurnView: View {
                                 .stroke(Theme.Colors.border, lineWidth: 1)
                         )
                 )
+        }
+    }
+
+    /// Cached line-count + folded ranges so the chevron header label
+    /// doesn't have to re-split on every redraw.
+    private var lineCount: Int { turn.text.components(separatedBy: "\n").count }
+
+    /// Returns (head, hidden-count, tail) when the turn should be folded.
+    /// `nil` means render the full text. User-input turns are never folded
+    /// (they're typed by hand and short by definition).
+    private var foldedRanges: (head: String, hidden: Int, tail: String)? {
+        guard turn.role != .user else { return nil }
+        let lines = turn.text.components(separatedBy: "\n")
+        guard lines.count > Self.foldThreshold else { return nil }
+        let head = lines.prefix(Self.foldHead).joined(separator: "\n")
+        let tail = lines.suffix(Self.foldTail).joined(separator: "\n")
+        let hidden = lines.count - Self.foldHead - Self.foldTail
+        return (head, hidden, tail)
+    }
+
+    @ViewBuilder
+    private var outputBody: some View {
+        if let folded = foldedRanges, !expanded {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(folded.head).textSelection(.enabled)
+                HStack(spacing: 6) {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Colors.textLow)
+                    Text("\(folded.hidden) lines hidden")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textLow)
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, Theme.Spacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .fill(Theme.Colors.surfaceHi)
+                )
+                Text(folded.tail).textSelection(.enabled)
+            }
+            .font(turn.role == .user ? Theme.Typography.body : Theme.Typography.mono)
+            .foregroundStyle(Theme.Colors.textHigh)
+        } else {
+            Text(turn.text)
+                .font(turn.role == .user ? Theme.Typography.body : Theme.Typography.mono)
+                .foregroundStyle(Theme.Colors.textHigh)
+                .textSelection(.enabled)
         }
     }
 

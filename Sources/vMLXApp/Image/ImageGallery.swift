@@ -34,39 +34,62 @@ struct ImageGallery: View {
     let onDismissError: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                if let banner = errorBanner {
-                    errorView(banner)
-                }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    if let banner = errorBanner {
+                        errorView(banner)
+                    }
 
-                if isGenerating {
-                    ImageGenStateView(
-                        currentStep: currentStep,
-                        totalSteps: totalSteps,
-                        elapsedSeconds: elapsedSeconds,
-                        preview: preview,
-                        onStop: onStop
-                    )
-                }
+                    if isGenerating {
+                        ImageGenStateView(
+                            currentStep: currentStep,
+                            totalSteps: totalSteps,
+                            elapsedSeconds: elapsedSeconds,
+                            preview: preview,
+                            onStop: onStop
+                        )
+                        .id("generating")
+                    }
 
-                if images.isEmpty && !isGenerating {
-                    emptyState
-                } else {
-                    LazyVGrid(columns: [
-                        GridItem(.adaptive(minimum: 220), spacing: Theme.Spacing.lg)
-                    ], spacing: Theme.Spacing.lg) {
-                        ForEach(images) { img in
-                            ImageCard(
-                                image: img,
-                                onRedo: { onRedo(img) },
-                                onDelete: { onDelete(img) }
-                            )
+                    if images.isEmpty && !isGenerating {
+                        emptyState
+                    } else {
+                        LazyVGrid(columns: [
+                            GridItem(.adaptive(minimum: 220), spacing: Theme.Spacing.lg)
+                        ], spacing: Theme.Spacing.lg) {
+                            ForEach(images) { img in
+                                ImageCard(
+                                    image: img,
+                                    onRedo: { onRedo(img) },
+                                    onDelete: { onDelete(img) }
+                                )
+                                .id(img.id)
+                            }
                         }
                     }
                 }
+                .padding(Theme.Spacing.lg)
             }
-            .padding(Theme.Spacing.lg)
+            // UI-4: when a new image lands at the top of `images`,
+            // scroll back to it so the user actually sees their result
+            // without manually scrolling past the prompt bar. We anchor
+            // to .top because the gallery is sorted newest-first; the
+            // newest entry will always be the first array element.
+            // Also scroll to the live "generating" placeholder so the
+            // user follows the in-progress preview.
+            .onChange(of: images.first?.id) { _, newId in
+                guard let id = newId else { return }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo(id, anchor: .top)
+                }
+            }
+            .onChange(of: isGenerating) { _, nowGenerating in
+                guard nowGenerating else { return }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo("generating", anchor: .top)
+                }
+            }
         }
     }
 

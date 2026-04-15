@@ -295,7 +295,8 @@ struct SessionDashboard: View {
                 host: bindHost,
                 port: bindPort,
                 apiKey: resolved.settings.apiKey,
-                adminToken: resolved.settings.adminToken
+                adminToken: resolved.settings.adminToken,
+                logLevel: LogStore.Level(rawValue: resolved.settings.defaultLogLevel) ?? .info
             )
             if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
                 app.sessions[idx2].host = bindHost
