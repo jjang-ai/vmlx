@@ -360,8 +360,44 @@ final class ChatViewModel {
                 sessionId: nil, chatId: chatId, request: nil
             )
             let r = resolved.settings
-            let modelAlias = await engine.settings.chat(chatId)?.modelAlias
-            let modelField = modelAlias ?? fallbackModelPath
+            let chatOverrides = await engine.settings.chat(chatId)
+            let modelField = chatOverrides?.modelAlias ?? fallbackModelPath
+
+            // Tool execution: if the chat has any tool flag enabled we
+            // pass BashTool + MCP through to the engine. Stream.swift
+            // already handles multi-turn tool dispatch in-process via
+            // executeToolCall, so we don't need an outer loop here —
+            // tool_call / tool_status chunks stream back naturally and
+            // applyChunk renders them as InlineToolCallCard UI.
+            //
+            // Default is OFF: users opt in via ChatSettingsPopover →
+            // "Tools". Enabling "Shell tool" turns on bash specifically;
+            // enabling "Builtin tools" is the umbrella flag that also
+            // pulls in MCP / file / search tools when the engine wires
+            // them up.
+            let shellOn = chatOverrides?.shellEnabled ?? false
+            let builtinOn = chatOverrides?.builtinToolsEnabled ?? false
+            let toolsEnabled = shellOn || builtinOn
+            var toolList: [ChatRequest.Tool]? = chatOverrides?.tools
+            if toolsEnabled, shellOn {
+                var merged = toolList ?? []
+                if !merged.contains(where: { $0.function.name == "bash" }) {
+                    merged.append(BashTool.openAISchema)
+                }
+                toolList = merged
+            }
+            let toolChoiceValue: ChatRequest.ToolChoice? = {
+                guard toolsEnabled else { return nil }
+                if let raw = chatOverrides?.toolChoice {
+                    switch raw {
+                    case "none":     return ChatRequest.ToolChoice.none
+                    case "required": return .required
+                    default:         return .auto
+                    }
+                }
+                return .auto
+            }()
+
             let req = ChatRequest(
                 model: modelField,
                 messages: reqMessages,
@@ -376,8 +412,8 @@ final class ChatViewModel {
                 seed: nil,
                 enableThinking: r.defaultEnableThinking ?? reasoning,
                 reasoningEffort: nil,
-                tools: nil,
-                toolChoice: nil
+                tools: toolList,
+                toolChoice: toolChoiceValue
             )
             let stream = await engine.stream(request: req)
             do {
