@@ -496,7 +496,91 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
     print("=" * 60)
     print()
 
+    # Pre-flight checks for mlxstudio#74 (Hemanth Pai report).
+    # The user's quantize tracker hit 100% then "Conversion failed" with
+    # only a leaked-semaphore warning visible — meaning the real error
+    # was lost. These checks fail fast with actionable messages BEFORE
+    # spending hours on quantization.
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # 1. Filesystem sanity — refuse exFAT/FAT32 since safetensors
+        #    shards default to 5 GB and FAT-family caps single files at 4 GB
+        try:
+            import subprocess as _sp
+            _di = _sp.run(
+                ["diskutil", "info", str(output_dir)],
+                capture_output=True, text=True, timeout=5,
+            )
+            _fs_line = ""
+            for _l in (_di.stdout or "").splitlines():
+                if "File System Personality" in _l or "Type (Bundle)" in _l:
+                    _fs_line = _l.split(":", 1)[1].strip().lower()
+                    break
+            if _fs_line and any(bad in _fs_line for bad in ("exfat", "ms-dos", "fat32", "msdos")):
+                print(
+                    f"\nError: Output directory '{output_path}' is on a "
+                    f"{_fs_line.upper()} filesystem. JANG shards default to "
+                    f"5 GB but FAT-family filesystems cap single files at 4 "
+                    f"GB. Move the output directory to an APFS or HFS+ "
+                    f"volume (or reformat the external drive)."
+                )
+                sys.exit(1)
+            if _fs_line:
+                print(f"  Output filesystem: {_fs_line}")
+        except (FileNotFoundError, _sp.TimeoutExpired):
+            pass  # diskutil not available or slow — skip
+        except Exception as _fs_e:
+            logger.debug(f"Filesystem check skipped: {_fs_e}")
+
+        # 2. Disk space sanity — need at least ~target_bits/16 * source_size
+        try:
+            _src_bytes = sum(f.stat().st_size for f in Path(model_path).glob("*.safetensors"))
+            _src_gb = _src_bytes / (1024 ** 3)
+            _need_gb = _src_gb * (comp / 16.0) * 1.2  # 20% slack for index + tokenizer
+            import shutil as _sh
+            _free_bytes = _sh.disk_usage(str(output_dir)).free
+            _free_gb = _free_bytes / (1024 ** 3)
+            print(f"  Disk space: {_free_gb:.1f} GB free, ~{_need_gb:.1f} GB needed for output")
+            if _free_gb < _need_gb:
+                print(
+                    f"\nError: Insufficient disk space. Output needs ~"
+                    f"{_need_gb:.1f} GB but only {_free_gb:.1f} GB free at "
+                    f"'{output_path}'. Free up space or pick a different "
+                    f"output directory."
+                )
+                sys.exit(1)
+        except Exception as _ds_e:
+            logger.debug(f"Disk space check skipped: {_ds_e}")
+
+        # 3. Test write a small file to make sure output is writable
+        _probe = output_dir / ".jang_write_probe"
+        try:
+            _probe.write_bytes(b"probe")
+            _probe.unlink()
+        except OSError as _wp_e:
+            print(
+                f"\nError: Cannot write to output directory '{output_path}': "
+                f"{_wp_e}. Check permissions or pick a different output path."
+            )
+            sys.exit(1)
+    except SystemExit:
+        raise
+    except Exception as _pf_e:
+        logger.debug(f"Pre-flight checks raised: {_pf_e}")
+
+    # ──────────────────────────────────────────────────────────────────
+    # mlxstudio#74: error visibility hardening. The previous handler
+    # only printed traceback at DEBUG level, so users who didn't set
+    # `--log-level DEBUG` lost the real error and saw only a generic
+    # "JANG conversion failed: <oneline>" + the multiprocessing
+    # resource_tracker semaphore warning.
+    #
+    # Now: ALWAYS print full traceback to stderr, AND mirror it to
+    # `<output_dir>/convert_error.log` so the error survives any
+    # subsequent process kill / panel UI truncation.
+    # ──────────────────────────────────────────────────────────────────
     start_time = time.time()
+    _conv_error_log = output_dir / "convert_error.log"
 
     try:
         from jang_tools.convert import convert_model
@@ -511,12 +595,40 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
             use_awq=use_awq,
             awq_alpha=awq_alpha,
         )
+    except SystemExit:
+        raise
     except Exception as e:
         elapsed = time.time() - start_time
-        print(f"\nError: JANG conversion failed after {elapsed:.1f}s: {e}")
-        if logger.isEnabledFor(logging.DEBUG):
-            import traceback
-            traceback.print_exc()
+        import traceback as _tb
+        tb_text = _tb.format_exc()
+        # 1. Loud stderr — always, regardless of log level
+        sys.stderr.write("\n" + "=" * 60 + "\n")
+        sys.stderr.write(f"JANG CONVERSION FAILED after {elapsed:.1f}s\n")
+        sys.stderr.write(f"Error: {type(e).__name__}: {e}\n")
+        sys.stderr.write("=" * 60 + "\n")
+        sys.stderr.write(tb_text)
+        sys.stderr.write("=" * 60 + "\n")
+        sys.stderr.flush()
+        # 2. Mirror to convert_error.log inside the output dir so the
+        #    error survives any subprocess kill or UI clip.
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with open(_conv_error_log, "w") as f:
+                f.write(f"JANG conversion failed after {elapsed:.1f}s\n")
+                f.write(f"Source: {model_path}\n")
+                f.write(f"Output: {output_dir}\n")
+                f.write(f"Profile: {profile}\n")
+                f.write(f"Method: {args.jang_method}\n")
+                f.write(f"Calibration: {calibration_method}\n")
+                f.write(f"Error: {type(e).__name__}: {e}\n")
+                f.write("=" * 60 + "\n")
+                f.write(tb_text)
+            print(f"\n  Error log written to: {_conv_error_log}", file=sys.stderr)
+        except Exception as _le:
+            sys.stderr.write(f"  (could not write convert_error.log: {_le})\n")
+        # 3. Stdout copy too in case the panel only buffers one stream
+        print(f"\nError: JANG conversion failed after {elapsed:.1f}s: {type(e).__name__}: {e}")
+        print(f"See {_conv_error_log} for the full traceback.")
         sys.exit(1)
 
     elapsed = time.time() - start_time
