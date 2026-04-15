@@ -1,0 +1,77 @@
+# XcodeGen spec for the Developer ID notarized DMG build.
+#
+#   brew install xcodegen
+#   cd swift && xcodegen
+#   open vMLX.xcodeproj
+#
+# The SwiftPM workspace (Package.swift) builds everything for local dev.
+# This Xcode project wraps the SwiftPM `vMLXApp` target into a signed
+# `vMLX.app` bundle so `xcodebuild archive` + notarytool can ship a DMG.
+#
+# MAS submission was dropped when Terminal mode landed — see
+# memory/project_swift_terminal_mode.md for the decision record. App Sandbox
+# is EXPLICITLY DISABLED in vMLX/vMLX.entitlements.
+
+name: vMLX
+options:
+  bundleIdPrefix: ai.jangq.vmlx
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  defaultConfig: Release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_ENTITLEMENTS: vMLX/vMLX.entitlements
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_APP_SANDBOX: NO
+    PRODUCT_NAME: vMLX
+    MARKETING_VERSION: "2.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  vmlx:
+    path: .
+
+targets:
+  vMLX:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/vMLXApp
+      - path: vMLX/Assets.xcassets
+    info:
+      path: vMLX/Info.plist
+      properties:
+        CFBundleName: vMLX
+        CFBundleDisplayName: vMLX
+        CFBundleIdentifier: ai.jangq.vmlx
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSHumanReadableCopyright: "© 2026 Jinho Jang"
+        # TCC usage descriptions — without these, macOS 14+ silently
+        # denies access to the corresponding resource. Audit 2026-04-15.
+        NSLocalNetworkUsageDescription: "vMLX serves OpenAI/Ollama/Anthropic-compatible HTTP endpoints. Allow Local Network access so other devices on your Wi-Fi can reach the API server when LAN binding is enabled in Server settings."
+        NSAppleEventsUsageDescription: "vMLX uses Apple Events to reveal files in Finder and to coordinate with the system terminal when you run shell commands from Terminal mode."
+        NSMicrophoneUsageDescription: "vMLX needs microphone access if you record voice prompts for transcription via Whisper."
+        NSDownloadsFolderUsageDescription: "vMLX may save generated images and exported chats to your Downloads folder."
+        # Bonjour service browsing — used to discover other vMLX
+        # instances on the local network for inference forwarding.
+        NSBonjourServices:
+          - _vmlx._tcp
+          - _http._tcp
+    dependencies:
+      - package: vmlx
+        product: vMLXEngine
+      - package: vmlx
+        product: vMLXServer
+      - package: vmlx
+        product: vMLXTheme
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.jangq.vmlx
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

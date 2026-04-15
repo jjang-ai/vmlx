@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>vMLX</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.jangq.vmlx</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>vMLX</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>vMLX uses Apple Events to reveal files in Finder and to coordinate with the system terminal when you run shell commands from Terminal mode.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_vmlx._tcp</string>
+		<string>_http._tcp</string>
+	</array>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>vMLX may save generated images and exported chats to your Downloads folder.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Jinho Jang</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>vMLX serves OpenAI/Ollama/Anthropic-compatible HTTP endpoints. Allow Local Network access so other devices on your Wi-Fi can reach the API server when LAN binding is enabled in Server settings.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>vMLX needs microphone access if you record voice prompts for transcription via Whisper.</string>
+</dict>
+</plist>

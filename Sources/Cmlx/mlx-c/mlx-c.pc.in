@@ -1,0 +1,26 @@
+# Find MLX C
+#
+# Defines the following variables:
+#
+#   MLX_C_FOUND            : True if MLX C is found
+#   MLX_C_INCLUDE_DIRS     : Include directory
+#   MLX_C_LIBRARIES        : Libraries to link against
+#   MLX_C_CXX_FLAGS        : Additional compiler flags
+
+@PACKAGE_INIT@
+
+include(@PACKAGE_MLX_C_CMAKE_INSTALL_MODULE_DIR@/MLXCTargets.cmake)
+
+set_and_check(MLX_C_LIBRARY_DIRS @PACKAGE_CMAKE_INSTALL_LIBDIR@)
+set_and_check(MLX_C_INCLUDE_DIRS @PACKAGE_CMAKE_INSTALL_INCLUDEDIR@)
+set(MLX_C_LIBRARIES mlxc)
+
+find_library(MLX_C_LIBRARY mlxc PATHS ${MLX_C_LIBRARY_DIRS})
+
+# set_target_properties(mlxc PROPERTIES
+#    CXX_STANDARD 17
+#    INTERFACE_COMPILE_OPTIONS "${MLX_C_CXX_FLAGS}"
+# )
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(MLX_C DEFAULT_MSG MLX_C_LIBRARY MLX_C_INCLUDE_DIRS)

@@ -1,168 +1,27 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
 
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
+# Xcode build artifacts
 build/
-# But keep Electron build assets (DMG background, entitlements)
-!panel/build/
-panel/build/*
-!panel/build/dmg-background.png
-!panel/build/dmg-background@2x.png
-!panel/build/dmg-background.svg
-!panel/build/entitlements.mac.plist
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-/lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+DerivedData/
 
-# PyInstaller
-*.manifest
-*.spec
+# xcodegen output (committed only when regenerated)
+vMLX.xcodeproj/
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# Jupyter
-.ipynb_checkpoints
+# Signing secrets
+.env.signing
+*.p12
+*.cer
+*.mobileprovision
 
 # macOS
 .DS_Store
-.AppleDouble
-.LSOverride
 
-
-# Model files (too large for git)
-*.bin
-*.safetensors
-*.gguf
-*.ggml
-
-# Logs
+# Logs / temp
 *.log
-logs/
-
-# Temporary files
-tmp/
-temp/
 *.tmp
-
-# MLX cache
-.mlx_cache/
-
-# Git worktrees
-.worktrees/
-
-# Panel (Electron app)
-panel/node_modules/
-panel/dist/
-panel/out/
-panel/release/
-panel/bundled-python/
-panel/.DS_Store
-panel/.env
-
-# Production builds (contains .app with bundled Python ~1.4GB)
-productionapp/vMLX.app
-productionapp/*.dmg
-
-# Claude Code
-.claude/
-
-# Old development artifacts (removed from main)
-examples/
-PLANS/
-productionapp/
-BENCHMARK_RESULTS.md
-FIXES_SUMMARY.md
-PACKAGE_RELEASE_NOTES.md
-PRODUCTION_READY.md
-TEST_PLAN.md
-VERIFICATION.md
-deploy.sh
-gsm8k_*.json
-mcp.example.json
-mise.toml
-.pre-commit-config.yaml
-panel/.env.signing
-.agent/
-.github/
-nohup.out
-
-# Internal audit docs
-docs/audit-*
-docs/final-*
-docs/GITHUB-ISSUES-*
-docs/CROSS-CHECK-*
-docs/cross-check-*
-
-# Smelt / JANG MoE artifacts
-*.smt
-.smelt/
-# Internal implementation guides (for agents, not for release)
-docs/internal/
-
-# Private agentic workspaces
-.sisyphus/
-.agents/
-
-# TypeScript build info / incremental cache
-*.tsbuildinfo
-
-# Ad-hoc top-level benchmarks and scratch scripts (legit tests live under tests/)
-/benchmark_*.py
-/test_*.py
-/test_build_args.ts
+.preview/
