@@ -1,5 +1,6 @@
 import Foundation
 import CoreImage
+import MLXRandom
 import vMLXLMCommon
 
 // MARK: - Engine.stream — real generation loop
@@ -496,6 +497,16 @@ extension Engine {
                 "stream[iter=\(iteration)]: \(totalImageCount) image(s) attached")
         }
         let params = buildGenerateParameters(request: request, resolved: resolved)
+
+        // Seed for reproducibility (A1 fix). `GenerateParameters` has no
+        // seed field — MLX uses a global PRNG — so we set it via
+        // `MLXRandom.seed(_:)` right before generation. Only applied
+        // when the request explicitly supplies a seed; otherwise MLX's
+        // default counter keeps advancing normally so concurrent
+        // sessions don't stomp on each other's entropy.
+        if let seed = request.seed {
+            MLXRandom.seed(UInt64(bitPattern: Int64(seed)))
+        }
 
         // 4. Prepare LMInput inside the model container's actor isolation
         //    (context.processor is non-Sendable), then get an AsyncStream.

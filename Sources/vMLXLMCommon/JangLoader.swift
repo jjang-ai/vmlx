@@ -223,15 +223,43 @@ public struct JangLoader: Sendable {
         return nil
     }
 
-    /// Load and parse the JANG config from a model directory.
+    /// Load and parse the JANG config from a model directory. Errors
+    /// are wrapped with enough context for the user-facing banner to
+    /// point at the exact file and cause rather than "Failed to parse
+    /// JSON", which left users with no idea which of potentially many
+    /// config files was malformed (A3 fix).
     public static func loadConfig(at modelPath: URL) throws -> JangConfig {
         guard let configURL = findConfigPath(at: modelPath) else {
             throw JangLoaderError.configNotFound(modelPath.path)
         }
 
-        let data = try Data(contentsOf: configURL)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw JangLoaderError.invalidConfig("Failed to parse JSON")
+        let data: Data
+        do {
+            data = try Data(contentsOf: configURL)
+        } catch {
+            throw JangLoaderError.invalidConfig(
+                "Cannot read \(configURL.lastPathComponent) at \(configURL.path): \(error.localizedDescription)"
+            )
+        }
+
+        let raw: Any
+        do {
+            raw = try JSONSerialization.jsonObject(with: data)
+        } catch let parseError as NSError {
+            // NSError on JSONSerialization carries line/column in userInfo
+            // under NSDebugDescription and a readable message in
+            // localizedDescription. Surface both so the banner is useful.
+            let detail = (parseError.userInfo["NSDebugDescription"] as? String)
+                ?? parseError.localizedDescription
+            throw JangLoaderError.invalidConfig(
+                "\(configURL.lastPathComponent) is not valid JSON: \(detail)"
+            )
+        }
+
+        guard let json = raw as? [String: Any] else {
+            throw JangLoaderError.invalidConfig(
+                "\(configURL.lastPathComponent) must be a JSON object at the root"
+            )
         }
 
         return try parseConfig(from: json)
