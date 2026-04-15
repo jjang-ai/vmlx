@@ -381,6 +381,25 @@ struct TrayItem: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
+
+            // UI-11: Rate limit. 0 = unlimited. When > 0, RateLimitMiddleware
+            // enforces per-IP requests/minute on every bound listener
+            // (per-session servers AND the gateway). Change takes effect
+            // at the next listener start.
+            Divider().padding(.vertical, 4)
+            LabeledField("Rate limit (req/min/IP)") {
+                Stepper(
+                    value: Binding(
+                        get: { draft.rateLimit },
+                        set: { draft.rateLimit = max(0, $0); schedulePush() }),
+                    in: 0...10000, step: 10) {
+                    Text(draft.rateLimit == 0 ? "unlimited" : "\(draft.rateLimit)")
+                        .font(.system(size: 11, design: .monospaced))
+                }
+            }
+            Text("0 = unlimited. Applies to every new HTTP listener. Active listeners pick up on next (re)start.")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
         }
     }
 
