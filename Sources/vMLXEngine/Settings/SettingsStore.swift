@@ -299,6 +299,13 @@ public actor SettingsStore {
         if let v = s?.smelt { out.smelt = v; trace["smelt"] = .session } else { trace["smelt"] = .global }
         if let v = s?.smeltExperts { out.smeltExperts = v; trace["smeltExperts"] = .session } else { trace["smeltExperts"] = .global }
         if let v = s?.smeltMode { out.smeltMode = v; trace["smeltMode"] = .session } else { trace["smeltMode"] = .global }
+        if let v = s?.dflash { out.dflash = v; trace["dflash"] = .session } else { trace["dflash"] = .global }
+        if let v = s?.dflashDrafterPath { out.dflashDrafterPath = v; trace["dflashDrafterPath"] = .session } else { trace["dflashDrafterPath"] = .global }
+        if let v = s?.dflashBlockSize { out.dflashBlockSize = v; trace["dflashBlockSize"] = .session } else { trace["dflashBlockSize"] = .global }
+        if let v = s?.dflashTopK { out.dflashTopK = v; trace["dflashTopK"] = .session } else { trace["dflashTopK"] = .global }
+        if let v = s?.dflashNumPaths { out.dflashNumPaths = v; trace["dflashNumPaths"] = .session } else { trace["dflashNumPaths"] = .global }
+        if let v = s?.dflashTapLayers { out.dflashTapLayers = v; trace["dflashTapLayers"] = .session } else { trace["dflashTapLayers"] = .global }
+        if let v = s?.dflashTargetHiddenDim { out.dflashTargetHiddenDim = v; trace["dflashTargetHiddenDim"] = .session } else { trace["dflashTargetHiddenDim"] = .global }
         if let v = s?.distributed { out.distributed = v; trace["distributed"] = .session } else { trace["distributed"] = .global }
         if let v = s?.distributedHost { out.distributedHost = v; trace["distributedHost"] = .session } else { trace["distributedHost"] = .global }
         if let v = s?.distributedPort { out.distributedPort = v; trace["distributedPort"] = .session } else { trace["distributedPort"] = .global }

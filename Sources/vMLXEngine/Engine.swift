@@ -225,6 +225,21 @@ public actor Engine {
     /// waiting for the AsyncStream's onTermination to fire. This is the
     /// knob the stop button needs to actually interrupt a hanging prefill.
     internal var currentStreamTask: Task<Void, Never>?
+
+    // MARK: - JANG-DFlash speculative-decoding state
+    //
+    // Drafter + target adapter cached on the engine so `Stream.swift`
+    // can short-circuit into `JangDFlashSpecDec.cachedGenerate` when
+    // dflash is enabled, the target model conforms to JangDFlashTarget,
+    // and a drafter checkpoint is loaded. All three must be non-nil for
+    // the short-circuit to fire; anything else falls back cleanly to
+    // the standard token iterator with a structured log warning.
+    //
+    // See `EngineDFlash.swift` for the load / lifecycle surface.
+    internal var _dflashDrafter: Any?              // JangDFlashDrafter
+    internal var _dflashDrafterURL: URL?
+    internal var _dflashDrafterConfig: JangDFlashConfig?
+    internal var _dflashTarget: Any?               // any JangDFlashTarget
     /// Per-request task registry for `POST /v1/{chat,completions,responses}/{id}/cancel`.
     /// Keyed by the SSE id the route handler returned to the client. Multiple
     /// concurrent streams (rare but possible: parallel non-blocking requests)
@@ -684,6 +699,17 @@ public actor Engine {
                     // opt-in per-model (see `FlashMoEApply.swift`).
                     await self.applyFlashMoEIfEnabled(
                         container: container, opts: opts)
+                    // Bind a JANG-DFlash target adapter if the model
+                    // supports it. Only MiniMax family today — every
+                    // other model returns nil and `dflashIsReady()`
+                    // stays false so the stream path falls back to
+                    // the standard iterator.
+                    await self.bindDFlashTargetIfEligible(container: container)
+                    // Restore any previously-configured DFlash drafter
+                    // from persisted settings so the speculative-decode
+                    // path survives app relaunch. Runs AFTER bind so the
+                    // shape check can see the target adapter.
+                    await self.autoLoadDFlashDrafterIfConfigured()
                     await self.metrics.setQueueDepth(0)
                     await self.idleTimer.setConfig(.init(
                         softAfter: opts.idleSoftSec,
@@ -984,6 +1010,15 @@ public actor Engine {
         loadedJangConfig = nil
         lastLoadOptions = nil
         _activeAdapter = nil
+        // DFlash drafter + target adapter are tied to the loaded target —
+        // free them here so a subsequent load of a DIFFERENT target
+        // doesn't dispatch through a dead adapter. `dflashDrafterPath`
+        // settings persists so auto-load will rebuild on the next load
+        // if the next target is compatible.
+        _dflashDrafter = nil
+        _dflashDrafterURL = nil
+        _dflashDrafterConfig = nil
+        _dflashTarget = nil
         idleWatcher?.cancel()
         idleWatcher = nil
         transition(.stopped)

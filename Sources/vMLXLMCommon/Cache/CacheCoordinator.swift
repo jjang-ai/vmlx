@@ -220,7 +220,8 @@ public final class CacheCoordinator: @unchecked Sendable {
             if isHybrid {
                 ssmStates = ssmStateCache.fetch(
                     tokens: hashTokens,
-                    boundary: result.matchedTokens
+                    boundary: result.matchedTokens,
+                    mediaSalt: mediaSalt
                 )
             }
             let matched = result.matchedTokens
@@ -242,7 +243,8 @@ public final class CacheCoordinator: @unchecked Sendable {
             if let arrays = result.cache {
                 let matched = hashTokens.count - result.remainingTokens.count
                 let ssmStates = resolveSSMStates(
-                    forTokens: hashTokens, boundary: matched, diskArrays: arrays)
+                    forTokens: hashTokens, boundary: matched, diskArrays: arrays,
+                    mediaSalt: mediaSalt)
                 return .hit(
                     matchedTokens: matched,
                     remainingTokens: Array(tokens.dropFirst(matched)),
@@ -259,7 +261,8 @@ public final class CacheCoordinator: @unchecked Sendable {
             if let arrays = diskCache.fetch(tokens: hashTokens, mediaSalt: mediaSalt) {
                 let matched = hashTokens.count
                 let ssmStates = resolveSSMStates(
-                    forTokens: hashTokens, boundary: matched, diskArrays: arrays)
+                    forTokens: hashTokens, boundary: matched, diskArrays: arrays,
+                    mediaSalt: mediaSalt)
                 return .hit(
                     matchedTokens: matched,
                     remainingTokens: Array(tokens.dropFirst(matched)),
@@ -275,7 +278,8 @@ public final class CacheCoordinator: @unchecked Sendable {
                 if let arrays = diskCache.fetch(tokens: shorter, mediaSalt: mediaSalt) {
                     let matched = shorter.count
                     let ssmStates = resolveSSMStates(
-                        forTokens: shorter, boundary: matched, diskArrays: arrays)
+                        forTokens: shorter, boundary: matched, diskArrays: arrays,
+                        mediaSalt: mediaSalt)
                     return .hit(
                         matchedTokens: matched,
                         remainingTokens: Array(tokens.dropFirst(matched)),
@@ -306,10 +310,13 @@ public final class CacheCoordinator: @unchecked Sendable {
     private func resolveSSMStates(
         forTokens tokens: [Int],
         boundary: Int,
-        diskArrays: [String: MLXArray]
+        diskArrays: [String: MLXArray],
+        mediaSalt: String? = nil
     ) -> [MLXArray]? {
         guard isHybrid else { return nil }
-        if let l1 = ssmStateCache.fetch(tokens: tokens, boundary: boundary) {
+        if let l1 = ssmStateCache.fetch(
+            tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)
+        {
             return l1
         }
         guard let folded = TQDiskSerializer.ssmStates(from: diskArrays) else {
@@ -317,7 +324,8 @@ public final class CacheCoordinator: @unchecked Sendable {
         }
         // Warm L1 so the next fetch in this process is in-memory.
         ssmStateCache.store(
-            ssmStates: folded, tokens: tokens, boundary: boundary)
+            ssmStates: folded, tokens: tokens, boundary: boundary,
+            mediaSalt: mediaSalt)
         return folded
     }
 
@@ -466,7 +474,8 @@ public final class CacheCoordinator: @unchecked Sendable {
             ssmStateCache.store(
                 ssmStates: effective,
                 tokens: storeTokens,
-                boundary: boundary
+                boundary: boundary,
+                mediaSalt: mediaSalt
             )
         }
     }

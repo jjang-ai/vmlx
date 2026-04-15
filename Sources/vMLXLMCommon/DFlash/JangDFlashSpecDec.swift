@@ -345,16 +345,27 @@ public final class JangDFlashSpecDec {
         promptIDs: [Int],
         maxNewTokens: Int,
         eosTokenIDs: Set<Int> = [],
+        cache: [KVCache]? = nil,
+        prefixMatched: Int = 0,
         onBlock: ((JangDFlashBlockOutcome) -> Void)? = nil
-    ) throws -> [Int] {
+    ) throws -> (accepted: [Int], cache: [KVCache]) {
         precondition(!promptIDs.isEmpty, "promptIDs must not be empty")
         precondition(maxNewTokens > 0, "maxNewTokens must be positive")
+        precondition(prefixMatched >= 0 && prefixMatched <= promptIDs.count,
+                     "prefixMatched must be in [0, promptIDs.count]")
 
         let B = cfg.blockSize
-        let cache = target.makeCache()
+        let cache = cache ?? target.makeCache()
 
         // --- Prompt forward (builds cache + initial tap buffer) ---
-        let promptArr = MLXArray(promptIDs.map { Int32($0) }).reshaped(1, promptIDs.count)
+        // When `prefixMatched > 0`, the caller has pre-warmed the cache
+        // via a coordinator fetch (paged / memory / disk restore), so
+        // only the tail needs to be forwarded. cache.offset on each
+        // layer already reflects `prefixMatched`. See StreamDFlash for
+        // the orchestration.
+        let promptTail = Array(promptIDs.dropFirst(prefixMatched))
+        let forwardIDs = promptTail.isEmpty ? [promptIDs.last!] : promptTail
+        let promptArr = MLXArray(forwardIDs.map { Int32($0) }).reshaped(1, forwardIDs.count)
         let (promptLogits, promptTaps) = target.forwardWithTaps(
             inputs: promptArr,
             cache: cache,
@@ -427,7 +438,7 @@ public final class JangDFlashSpecDec {
                 // No candidates — accept just the current bonus as the only new token.
                 if accepted.count < maxNewTokens {
                     accepted.append(bonusID)
-                    if eosTokenIDs.contains(bonusID) { return accepted }
+                    if eosTokenIDs.contains(bonusID) { return (accepted: accepted, cache: cache) }
                 }
                 // We have no new bonus without running a commit forward.
                 // Break instead of looping forever.
@@ -547,7 +558,7 @@ public final class JangDFlashSpecDec {
                             verifyWallSec: verifyWall
                         )
                     )
-                    return accepted
+                    return (accepted: accepted, cache: cache)
                 }
             }
 
@@ -569,7 +580,7 @@ public final class JangDFlashSpecDec {
             }
         }
 
-        return accepted
+        return (accepted: accepted, cache: cache)
     }
 
     // Private helper so the `MLX.eval` / `asyncEval` identifier

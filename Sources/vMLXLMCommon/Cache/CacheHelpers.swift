@@ -421,6 +421,16 @@ private func restoreFromV2Arrays(
                 totalTokens = comp.offset
             }
 
+        case .cachelist(let comp):
+            // Restore a CacheList wrapper by sub-index (F-G2). Each sub
+            // carries its own kind payload; reseat them into the live
+            // CacheList at the matching position. Without this branch,
+            // BaichuanM1-style `(Mamba, KV)` pairs per layer were silently
+            // dropped and every turn cold-prefilled.
+            if let kvSeqLen = restoreCacheListLayer(comp, into: cache[i]) {
+                if totalTokens == 0 { totalTokens = kvSeqLen }
+            }
+
         case .skip:
             // Cache type we don't know how to persist. No-op.
             continue
@@ -428,6 +438,43 @@ private func restoreFromV2Arrays(
     }
 
     return totalTokens
+}
+
+/// Restore a CacheList wrapper by reseating each sub-cache into its
+/// matching nested slot (F-G2). Returns the KV sequence length when a
+/// `.standard` sub is present so the outer loop can drive `totalTokens`;
+/// returns nil when there is no KV sub to measure.
+private func restoreCacheListLayer(
+    _ comp: TQDiskSerializer.CacheListComponents,
+    into layer: any KVCache
+) -> Int? {
+    guard let cacheList = layer as? CacheList else { return nil }
+    var kvSeqLen: Int? = nil
+    let bound = min(comp.subs.count, cacheList.count)
+    for j in 0 ..< bound {
+        let sub = comp.subs[j]
+        let target = cacheList[j]
+        switch sub {
+        case .mamba(let mc):
+            if let mamba = target as? MambaCache {
+                mamba.state = [mc.state0, mc.state1]
+                mamba.offset = mc.offset
+            }
+        case .standard(let kv):
+            var keys = kv.keys
+            var values = kv.values
+            if keys.dtype == .float16 {
+                keys = keys.asType(.bfloat16)
+                values = values.asType(.bfloat16)
+            }
+            guard keys.shape.count >= 3, values.shape.count >= 3 else { continue }
+            restoreKVLayer(keys: keys, values: values, into: target)
+            if kvSeqLen == nil { kvSeqLen = keys.dim(2) }
+        case .skip:
+            continue
+        }
+    }
+    return kvSeqLen
 }
 
 /// Legacy v1 block-format restore. KV-only. Hybrid-unsafe; if any Mamba

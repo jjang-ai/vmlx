@@ -448,7 +448,11 @@ struct SessionConfigForm: View {
     @ViewBuilder
     private var advancedSection: some View {
         // Smelt — sub-controls hidden when off. Audit 2026-04-15 finding #4.
-        toggleRow("Smelt mode",
+        // NOTE: Smelt is not yet wired in the Swift engine (Python-only).
+        // The engine logs a one-shot warning per request when the flag is
+        // on so users aren't silently no-opped. See `EngineDFlash.swift`
+        // / `StreamDFlash.swift` for the integrated DFlash replacement.
+        toggleRow("Smelt mode (Python engine only)",
                   boolBinding(\.smelt, default: globalDefaults.smelt))
         if (s.smelt ?? globalDefaults.smelt) {
             textFieldRow("Smelt variant",
@@ -456,6 +460,37 @@ struct SessionConfigForm: View {
                          value: Binding(
                             get: { s.smeltMode ?? "" },
                             set: { s.smeltMode = $0.isEmpty ? nil : $0; commit() }
+                         ))
+        }
+
+        // JANG-DFlash speculative decoding — block diffusion drafter +
+        // DDTree beam. Targets: MiniMax, Mistral 4, DeepSeek V3.
+        // `dflashDrafterPath` must point at a compatible safetensors
+        // checkpoint; when unset the engine falls back to the standard
+        // token iterator silently (and logs why in the stream log).
+        toggleRow("DFlash speculative decoding",
+                  boolBinding(\.dflash, default: globalDefaults.dflash))
+        if (s.dflash ?? globalDefaults.dflash) {
+            textFieldRow("DFlash drafter path",
+                         placeholder: globalDefaults.dflashDrafterPath,
+                         value: Binding(
+                            get: { s.dflashDrafterPath ?? "" },
+                            set: { s.dflashDrafterPath = $0.isEmpty ? nil : $0; commit() }
+                         ))
+            ValidatedField(title: "DFlash block size",
+                           value: intBinding(\.dflashBlockSize, default: globalDefaults.dflashBlockSize),
+                           range: 1...64, step: 1)
+            ValidatedField(title: "DFlash top-K (per slot)",
+                           value: intBinding(\.dflashTopK, default: globalDefaults.dflashTopK),
+                           range: 1...16, step: 1)
+            ValidatedField(title: "DFlash num paths",
+                           value: intBinding(\.dflashNumPaths, default: globalDefaults.dflashNumPaths),
+                           range: 1...256, step: 1)
+            textFieldRow("DFlash tap layers (csv)",
+                         placeholder: globalDefaults.dflashTapLayers,
+                         value: Binding(
+                            get: { s.dflashTapLayers ?? "" },
+                            set: { s.dflashTapLayers = $0.isEmpty ? nil : $0; commit() }
                          ))
         }
 

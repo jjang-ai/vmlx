@@ -122,6 +122,7 @@ public enum LLMTypeRegistry {
                 return Mistral3TextModel(config)
             },
             "apertus": create(ApertusConfiguration.self, ApertusModel.init),
+            "llama4": create(Llama4Configuration.self, Llama4Model.init),
         ]
     }
 

@@ -35,24 +35,39 @@ public enum OpenAIRoutes {
             _ = await engine.modelLibrary.scan(force: false)
             let entries = await engine.modelLibrary.entries()
             let created = Int(Date().timeIntervalSince1970)
+            let dflashReady = await engine.dflashIsReady()
+            let dflashPath = await engine.dflashDrafterPath()?.path
+            let loadedPath = await engine.loadedModelPath?.path
             let data: [[String: Any]] = entries.map { e in
-                [
+                // Attach speculative-decoding metadata only to the
+                // currently-loaded model entry (a drafter is bound to
+                // one specific target at a time).
+                var speculative: [String: Any] = [:]
+                if dflashReady,
+                   let lp = loadedPath,
+                   e.canonicalPath.path == lp
+                {
+                    speculative["kind"] = "dflash"
+                    speculative["drafter"] = dflashPath as Any
+                }
+                var vmlx: [String: Any] = [
+                    "family": e.family,
+                    "modality": e.modality.rawValue,
+                    "size_bytes": e.totalSizeBytes,
+                    "is_jang": e.isJANG,
+                    "is_mxtq": e.isMXTQ,
+                    "quant_bits": e.quantBits as Any,
+                    "path": e.canonicalPath.path,
+                ]
+                if !speculative.isEmpty {
+                    vmlx["speculative_decoding"] = speculative
+                }
+                return [
                     "id": e.displayName,
                     "object": "model",
                     "created": created,
                     "owned_by": e.isJANG ? "dealignai" : "mlx-community",
-                    // vMLX-specific enrichment (ignored by the OpenAI spec
-                    // but surfaced to first-party clients like the app's
-                    // own ModelPicker and `vmlxctl ls`).
-                    "vmlx": [
-                        "family": e.family,
-                        "modality": e.modality.rawValue,
-                        "size_bytes": e.totalSizeBytes,
-                        "is_jang": e.isJANG,
-                        "is_mxtq": e.isMXTQ,
-                        "quant_bits": e.quantBits as Any,
-                        "path": e.canonicalPath.path,
-                    ],
+                    "vmlx": vmlx,
                 ]
             }
             return Self.json([

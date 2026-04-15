@@ -76,9 +76,10 @@ public final class SSMStateCache: @unchecked Sendable {
         ssmStates: [MLXArray],
         tokens: [Int],
         boundary: Int,
+        mediaSalt: String? = nil,
         isComplete: Bool = true
     ) {
-        let key = Self.makeKey(tokens: tokens, boundary: boundary)
+        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)
 
         lock.lock()
         defer { lock.unlock() }
@@ -123,16 +124,20 @@ public final class SSMStateCache: @unchecked Sendable {
     /// - Returns: Deep copies of the cached state arrays, or `nil` on a miss.
     /// Backward-compatible shim: forwards to `fetchEntry` and discards
     /// the completeness flag. New callers should prefer `fetchEntry`.
-    public func fetch(tokens: [Int], boundary: Int) -> [MLXArray]? {
-        fetchEntry(tokens: tokens, boundary: boundary)?.states
+    public func fetch(
+        tokens: [Int], boundary: Int, mediaSalt: String? = nil
+    ) -> [MLXArray]? {
+        fetchEntry(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)?.states
     }
 
     /// Fetch with completeness flag. Returns `FetchResult.isComplete=false`
     /// for partial-prefix entries that callers must NOT extend (re-derive
     /// instead). Mirrors Python's `(states, is_complete)` tuple semantics
     /// from `vmlx_engine/utils/ssm_companion_cache.py`.
-    public func fetchEntry(tokens: [Int], boundary: Int) -> FetchResult? {
-        let key = Self.makeKey(tokens: tokens, boundary: boundary)
+    public func fetchEntry(
+        tokens: [Int], boundary: Int, mediaSalt: String? = nil
+    ) -> FetchResult? {
+        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)
 
         lock.lock()
         defer { lock.unlock() }
@@ -185,9 +190,24 @@ public final class SSMStateCache: @unchecked Sendable {
     ///   - tokens: The full token sequence.
     ///   - boundary: How many tokens from the start to include in the hash.
     /// - Returns: A 64-character lowercase hex string.
-    public static func makeKey(tokens: [Int], boundary: Int) -> String {
+    public static func makeKey(
+        tokens: [Int], boundary: Int, mediaSalt: String? = nil
+    ) -> String {
         let prefix = Array(tokens.prefix(boundary))
         var hasher = SHA256()
+
+        // Audit F-G1 (P0): mix mediaSalt BEFORE tokens so VLM multi-turn
+        // requests with different images but the same text prefix produce
+        // different keys. The paged L1 and disk L2 tiers already do this
+        // via `CacheBlock.computeBlockHash` and `DiskCache.hashTokens` —
+        // the SSM companion tier was the only cache that hashed tokens
+        // alone, so it would HIT on image-B requests with stored
+        // image-A state and silently corrupt generation. Empty salt is
+        // the text-only path and hashes the same as pre-fix entries.
+        if let salt = mediaSalt, !salt.isEmpty {
+            hasher.update(data: Data("|media:".utf8))
+            hasher.update(data: Data(salt.utf8))
+        }
 
         prefix.withUnsafeBufferPointer { buffer in
             let rawBuffer = UnsafeRawBufferPointer(buffer)

@@ -613,6 +613,13 @@ public enum CapabilityDetector {
     /// interleaved linear-attention (SSM) layers. Used by the hybrid
     /// override above so newer hybrid VLMs are caught even when their
     /// model_type isn't in the legacy allowlist.
+    ///
+    /// Deliberately does NOT match `sliding_attention` — SWA-mixed
+    /// models (Gemma 3) have standard attention with a rotating ring
+    /// buffer, not SSM state. Conflating the two would incorrectly
+    /// activate the SSMStateCache companion path for a model that
+    /// has no SSM state to capture. See `hasMixedSlidingFullAttention`
+    /// (F-G5) for the SWA-hybrid case.
     private static func hasLinearAttentionLayer(in dict: [String: Any]) -> Bool {
         guard let types = dict["layer_types"] as? [String] else { return false }
         for t in types {
@@ -621,6 +628,42 @@ public enum CapabilityDetector {
                lower.contains("ssm") {
                 return true
             }
+        }
+        return false
+    }
+
+    /// F-G5 (2026-04-15): detect Gemma 3-style mixed `sliding_attention`
+    /// + `full_attention` layer interleave. Gemma 3 model classes already
+    /// return the correct per-layer cache mix (RotatingKVCache for SWA
+    /// layers + KVCacheSimple for full) from `newCache()`, and SLIDING-1
+    /// made disk L2 round-trip RotatingKVCache via the `.rotating`
+    /// LayerKind tag — so there is no active bug, but surfacing this
+    /// flag lets callers treat mixed-SWA models distinctly from both
+    /// pure-dense and SSM-hybrid in logs, diagnostics, and any future
+    /// cache-policy branching (e.g. disabling TQ on SWA layers where
+    /// the ring buffer compresses poorly).
+    public static func hasMixedSlidingFullAttention(
+        in config: [String: Any]
+    ) -> Bool {
+        if hasMixedSlidingFullLayerTypes(in: config) { return true }
+        if let text = config["text_config"] as? [String: Any],
+           hasMixedSlidingFullLayerTypes(in: text) {
+            return true
+        }
+        return false
+    }
+
+    private static func hasMixedSlidingFullLayerTypes(
+        in dict: [String: Any]
+    ) -> Bool {
+        guard let types = dict["layer_types"] as? [String] else { return false }
+        var sawSliding = false
+        var sawFull = false
+        for t in types {
+            let lower = t.lowercased()
+            if lower.contains("sliding_attention") { sawSliding = true }
+            if lower.contains("full_attention") { sawFull = true }
+            if sawSliding && sawFull { return true }
         }
         return false
     }

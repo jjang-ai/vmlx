@@ -99,6 +99,15 @@ public enum TQDiskSerializer {
         /// wrap-around context. Added 2026-04-15 — closes the central skip
         /// in CacheCoordinator.swift:424.
         case rotating = 6
+        /// `CacheList` wrapper (BaichuanM1 hybrid, FalconH1 sibling-mix).
+        /// Outer layer has sub-caches that each carry their own LayerKind
+        /// tag at the compound key `__layer_kind_{i}_{sub}__`. Deserialize
+        /// walks `__cachelist_{i}_count__` to discover sub-indices and
+        /// routes each to its kind-specific handler. Added 2026-04-15
+        /// (F-G2) — closes the silent-drop trap where the fallthrough
+        /// at the bottom of the if-else ladder tagged CacheList as
+        /// `.skip` and lost all inner state.
+        case cachelist = 7
         /// Cache type we don't know how to persist. On restore, treated as
         /// a forced miss for the affected layer only.
         case skip = 4
@@ -217,9 +226,47 @@ public enum TQDiskSerializer {
                     // restore knows not to fall through to KV decode.
                     result[kindKey(for: i)] = kindArray(.skip)
                 }
+            } else if let cacheList = layer as? CacheList {
+                // Audit F-G2 (P0): BaichuanM1 wraps (MambaCache, KVCacheSimple)
+                // pairs inside a CacheList per layer. The old fallthrough to
+                // `.skip` (line below) lost ALL inner state on disk persist
+                // — Mamba + KV silently dropped, validator rejected the
+                // entry on restore, forced full re-prefill every turn.
+                //
+                // Fix: walk the sub-caches and emit a separate per-sub
+                // LayerKind tag using the compound index `{i}_{sub}`. The
+                // outer layer is tagged `.cachelist` so the deserializer
+                // knows to walk sub-indices rather than expecting a
+                // single KV/Mamba/rotating payload at index `i`.
+                result[kindKey(for: i)] = kindArray(.cachelist)
+                result["__cachelist_\(i)_count__"] = metaInt32(Int32(cacheList.count))
+                for sub in 0 ..< cacheList.count {
+                    let inner = cacheList[sub]
+                    let compoundKey = "\(i)_\(sub)"
+                    let subKindKey = "__layer_kind_\(compoundKey)__"
+                    if let mamba = inner as? MambaCache {
+                        serializeMambaLayer(mamba, compoundIndex: compoundKey, into: &result)
+                        result[subKindKey] = kindArray(.mamba)
+                    } else if inner is KVCacheSimple || inner is TurboQuantKVCache {
+                        let state = inner.state
+                        if state.count >= 2 {
+                            result["kv_\(compoundKey)_keys"] = state[0]
+                            result["kv_\(compoundKey)_values"] = state[1]
+                            result[subKindKey] = kindArray(.kv)
+                        } else {
+                            result[subKindKey] = kindArray(.skip)
+                        }
+                    } else {
+                        // Rotating / QKV / TQ inside CacheList: rare, no
+                        // known production model ships this pattern.
+                        // Tag skip — inner state is lost but the outer
+                        // `.cachelist` tag keeps the validator happy.
+                        result[subKindKey] = kindArray(.skip)
+                    }
+                }
             } else {
-                // QuantizedKVCache, CacheList, unknown. Record an explicit
-                // skip so restore doesn't silently fall through to KV.
+                // Unknown cache class. Record an explicit skip so restore
+                // doesn't silently fall through to KV.
                 result[kindKey(for: i)] = kindArray(.skip)
             }
         }
@@ -285,14 +332,22 @@ public enum TQDiskSerializer {
         index i: Int,
         into result: inout [String: MLXArray]
     ) {
+        serializeMambaLayer(mamba, compoundIndex: "\(i)", into: &result)
+    }
+
+    /// Compound-index variant used by the CacheList walker (F-G2). The
+    /// `compoundIndex` is `"{outer}_{sub}"` so nested Mamba layers inside
+    /// a CacheList wrapper can be disambiguated.
+    private static func serializeMambaLayer(
+        _ mamba: MambaCache,
+        compoundIndex key: String,
+        into result: inout [String: MLXArray]
+    ) {
         let state = mamba.state
-        guard state.count >= 2 else {
-            // Mamba layer with incomplete state — nothing to persist.
-            return
-        }
-        result["mamba_\(i)_state0"] = state[0]
-        result["mamba_\(i)_state1"] = state[1]
-        result["__mamba_\(i)_offset__"] = metaInt32(Int32(mamba.offset))
+        guard state.count >= 2 else { return }
+        result["mamba_\(key)_state0"] = state[0]
+        result["mamba_\(key)_state1"] = state[1]
+        result["__mamba_\(key)_offset__"] = metaInt32(Int32(mamba.offset))
     }
 
     /// Serialize a single RotatingKVCache layer (sliding-window attention).
@@ -414,6 +469,22 @@ public enum TQDiskSerializer {
         public let bits: Int
     }
 
+    /// One sub-cache of a CacheList (F-G2). Carried inside
+    /// `CacheListComponents.subs` so the restore path can reseat Mamba
+    /// state + KV tensors into the right nested slot.
+    public enum CacheListSub {
+        case mamba(MambaLayerComponents)
+        case standard(KVLayerComponents)
+        case skip
+    }
+
+    /// CacheList wrapper state (F-G2). BaichuanM1 and similar hybrid
+    /// models wrap `(MambaCache, KVCacheSimple)` pairs inside a CacheList
+    /// per layer; this struct captures each sub-cache's kind + payload.
+    public struct CacheListComponents {
+        public let subs: [CacheListSub]
+    }
+
     /// Result of deserializing one cache layer from a dict.
     public enum LayerData {
         case tq(TQLayerComponents)
@@ -421,6 +492,7 @@ public enum TQDiskSerializer {
         case mamba(MambaLayerComponents)
         case qkv(QKVLayerComponents)
         case rotating(RotatingLayerComponents)
+        case cachelist(CacheListComponents)
         /// Layer was serialized as `.skip` (cache type we don't persist).
         case skip
     }
@@ -551,6 +623,12 @@ public enum TQDiskSerializer {
             case .rotating:
                 if let comp = deserializeRotatingLayer(index: i, from: arrays) {
                     out.append(IndexedLayerData(index: i, data: .rotating(comp)))
+                } else {
+                    out.append(IndexedLayerData(index: i, data: .skip))
+                }
+            case .cachelist:
+                if let comp = deserializeCacheListLayer(index: i, from: arrays) {
+                    out.append(IndexedLayerData(index: i, data: .cachelist(comp)))
                 } else {
                     out.append(IndexedLayerData(index: i, data: .skip))
                 }
@@ -736,6 +814,73 @@ public enum TQDiskSerializer {
             offset: Int(m[3]),
             idx: Int(m[4])
         )
+    }
+
+    /// Deserialize a CacheList wrapper layer (F-G2). Reads
+    /// `__cachelist_{i}_count__` to discover how many sub-caches the outer
+    /// layer holds, then per-sub reads the compound-keyed kind tag
+    /// (`__layer_kind_{i}_{sub}__`) and routes each sub to its kind-specific
+    /// payload readers. Returns nil only when the count metadata is missing
+    /// (treat as `.skip`); individual sub-cache misses degrade to
+    /// `CacheListSub.skip` so one bad sub doesn't void the rest.
+    private static func deserializeCacheListLayer(
+        index i: Int,
+        from arrays: [String: MLXArray]
+    ) -> CacheListComponents? {
+        guard let countArr = arrays["__cachelist_\(i)_count__"] else {
+            return nil
+        }
+        let count = Int(readMetaInt32(countArr))
+        guard count > 0 else { return nil }
+
+        var subs: [CacheListSub] = []
+        subs.reserveCapacity(count)
+        for sub in 0 ..< count {
+            let compoundKey = "\(i)_\(sub)"
+            let subKindKey = "__layer_kind_\(compoundKey)__"
+            guard let kindArr = arrays[subKindKey] else {
+                subs.append(.skip)
+                continue
+            }
+            let raw = readMetaInt32(kindArr)
+            guard let kind = LayerKind(rawValue: raw) else {
+                subs.append(.skip)
+                continue
+            }
+            switch kind {
+            case .mamba:
+                if let s0 = arrays["mamba_\(compoundKey)_state0"],
+                   let s1 = arrays["mamba_\(compoundKey)_state1"]
+                {
+                    let offset: Int
+                    if let offArr = arrays["__mamba_\(compoundKey)_offset__"] {
+                        offset = Int(readMetaInt32(offArr))
+                    } else {
+                        offset = 0
+                    }
+                    subs.append(.mamba(MambaLayerComponents(
+                        state0: s0, state1: s1, offset: offset
+                    )))
+                } else {
+                    subs.append(.skip)
+                }
+            case .kv:
+                if let keys = arrays["kv_\(compoundKey)_keys"],
+                   let values = arrays["kv_\(compoundKey)_values"]
+                {
+                    subs.append(.standard(KVLayerComponents(
+                        keys: keys, values: values
+                    )))
+                } else {
+                    subs.append(.skip)
+                }
+            default:
+                // Rotating / TQ / QKV inside CacheList not emitted by
+                // serialize — keep parallel with the serialize skip path.
+                subs.append(.skip)
+            }
+        }
+        return CacheListComponents(subs: subs)
     }
 
     // MARK: - Helpers

@@ -164,8 +164,14 @@ Audio targets (added 2026-04-14):
 git clone -b dev https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
-# CLI — SwiftPM produces .build/release/vmlx
+# CLI — SwiftPM produces .build/<target-triple>/<cfg>/vmlxctl
 swift build -c release
+# CRITICAL: colocate the Metal kernel library so binaries can load
+# models. Without this every load fails with "Failed to load the
+# default metallib." The helper copies `vmlx_Cmlx.bundle/default.metallib`
+# to `<build>/mlx.metallib` which is the first path mlx-swift's
+# `load_colocated_library` tries.
+./scripts/stage-metallib.sh release
 
 # macOS app — xcodegen wraps the SwiftPM vMLXApp target into a signable bundle
 xcodegen
@@ -358,8 +364,22 @@ Prioritized list in `PROGRESS.md`. Headline items:
   beam search, no word-level timestamps, no sliding-window for audio
   >30 s, no live verification against v3 (`n_mels=128`).
 
-Deferred per user directive: speculative decoding (replaced by
-jang-spec), smelt mode (deprecated).
+**Speculative decoding (JANG-DFlash):** LIVE in the dev branch as of
+2026-04-15. Full integration in `Sources/vMLXLMCommon/DFlash/` with
+`Engine` lifecycle + CacheCoordinator plumbing + admin routes + UI
+toggle. Target families with tap adapters: MiniMax, Mistral 4, DeepSeek
+V3. Settings: `dflash`, `dflashDrafterPath`, `dflashBlockSize` (16),
+`dflashTopK` (4), `dflashNumPaths` (60), `dflashTapLayers`,
+`dflashTargetHiddenDim`. CLI: `vmlxctl serve --dflash --dflash-drafter
+PATH`. Admin: `GET /admin/dflash`, `POST /admin/dflash/{load,unload}`.
+Fallback is silent + logged when drafter/target/tools preclude the
+fast path. See `PROGRESS.md` for the full integration log.
+
+**Smelt mode:** Honest UX — the flag flows through settings but the
+Swift engine has no partial-expert-loading consumer yet (Python-only
+feature). Setting `smelt=true` logs a one-shot warning per request
+so users aren't silently no-op'd. Label in SessionConfigForm reads
+"Smelt mode (Python engine only)".
 
 ---
 

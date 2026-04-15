@@ -229,11 +229,14 @@ public enum ModelTypeTable {
         .init(family: "gemma4_text", modelTypes: ["gemma4_text"],
               toolParser: "gemma4", reasoningParser: "gemma4",
               priority: 4),
+        // Gemma 3 shares Gemma 4's tool format (F-G4 2026-04-15):
+        // the prior "hermes" stamp silently dropped tool calls because
+        // Gemma 3 emits the same `<tool_call>...` envelope gemma4 parses.
         .init(family: "gemma3", modelTypes: ["gemma3"],
-              toolParser: "hermes", reasoningParser: "deepseek_r1",
+              toolParser: "gemma4", reasoningParser: "deepseek_r1",
               isMLLM: true, priority: 10),
         .init(family: "gemma3_text", modelTypes: ["gemma3_text"],
-              toolParser: "hermes", reasoningParser: "deepseek_r1",
+              toolParser: "gemma4", reasoningParser: "deepseek_r1",
               priority: 8),
         .init(family: "gemma", modelTypes: ["gemma", "gemma2"],
               priority: 30),

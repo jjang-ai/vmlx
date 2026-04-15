@@ -229,6 +229,21 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var enablePld: Bool = false            // cli.py --enable-pld
     public var pldSummaryInterval: Int = 487      // cli.py --pld-summary-interval default=487
 
+    // JANG-DFlash speculative decoding (block diffusion drafter + DDTree).
+    // Swift-native: implementation lives in
+    // `Sources/vMLXLMCommon/DFlash/JangDFlashSpecDec.swift`. Requires a
+    // target model conforming to `JangDFlashTarget` (MiniMax only today)
+    // and a safetensors drafter checkpoint at `dflashDrafterPath`. When
+    // enabled but any precondition is missing the engine logs a warning
+    // and falls back to the standard token iterator.
+    public var dflash: Bool = false
+    public var dflashDrafterPath: String = ""
+    public var dflashBlockSize: Int = 16            // JangDFlashSpecConfig.blockSize
+    public var dflashTopK: Int = 4                  // JangDFlashSpecConfig.topK
+    public var dflashNumPaths: Int = 60             // JangDFlashSpecConfig.numPaths
+    public var dflashTapLayers: String = "10,22,34,46,58"  // comma-sep int indices
+    public var dflashTargetHiddenDim: Int = 3072    // JangDFlashSpecConfig.targetHiddenDim
+
     // Tool calling
     public var enableAutoToolChoice: Bool = false // cli.py --enable-auto-tool-choice
     public var defaultToolParser: String = ""      // cli.py --tool-call-parser default=None (auto-detected from model)
@@ -371,6 +386,15 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var smelt: Bool? = nil
     public var smeltExperts: Int? = nil
     public var smeltMode: String? = nil
+
+    // DFlash (per-session overrides)
+    public var dflash: Bool? = nil
+    public var dflashDrafterPath: String? = nil
+    public var dflashBlockSize: Int? = nil
+    public var dflashTopK: Int? = nil
+    public var dflashNumPaths: Int? = nil
+    public var dflashTapLayers: String? = nil
+    public var dflashTargetHiddenDim: Int? = nil
 
     public var distributed: Bool? = nil
     public var distributedHost: String? = nil
