@@ -30,6 +30,7 @@ struct SessionConfigForm: View {
     @State private var openInference   = true
     @State private var openLifecycle   = true
     @State private var openServer      = true
+    @State private var openAuth        = false
     @State private var openRemote      = false
     @State private var openAdvanced    = false
     @State private var openLogging     = false
@@ -66,13 +67,15 @@ struct SessionConfigForm: View {
 
                 if isRemote {
                     // Remote mode: only Inference + Server (the
-                    // listener that proxy clients hit) + Logging make
-                    // sense. Local engine/cache/lifecycle/advanced
+                    // listener that proxy clients hit) + Auth + Logging
+                    // make sense. Local engine/cache/lifecycle/advanced
                     // don't run, so suppress them rather than show
                     // dead controls.
                     disclosure("Inference defaults", isOn: $openInference) { inferenceSection }
                     divider
                     disclosure("Server (local listener)", isOn: $openServer) { serverSection }
+                    divider
+                    disclosure("Auth", isOn: $openAuth) { authSection }
                     divider
                     disclosure("Logging", isOn: $openLogging) { loggingSection }
                 } else {
@@ -86,6 +89,8 @@ struct SessionConfigForm: View {
                     disclosure("Lifecycle", isOn: $openLifecycle) { lifecycleSection }
                     divider
                     disclosure("Server", isOn: $openServer) { serverSection }
+                    divider
+                    disclosure("Auth", isOn: $openAuth) { authSection }
                     divider
                     disclosure("Advanced", isOn: $openAdvanced) { advancedSection }
                     divider
@@ -126,6 +131,17 @@ struct SessionConfigForm: View {
                 RoundedRectangle(cornerRadius: Theme.Radius.sm)
                     .fill(Theme.Colors.surfaceHi)
             )
+            // Model alias lives here (not in serverSection) because it's
+            // a model-identity concern — what name the model advertises
+            // in /v1/models and chat-completion responses — not part of
+            // the HTTP listener config. It also applies in remote mode
+            // as a local display override.
+            textFieldRow("Served as",
+                         placeholder: modelPath.lastPathComponent,
+                         value: Binding(
+                            get: { s.modelAlias ?? "" },
+                            set: { s.modelAlias = $0.isEmpty ? nil : $0; commit() }
+                         ))
         }
     }
 
@@ -266,12 +282,12 @@ struct SessionConfigForm: View {
     }
 
     @ViewBuilder
-    // Per-session HTTP listener. vMLX runs one dedicated Hummingbird
-    // server per active session on its own port — the Gateway (global
-    // setting in Tray → Server) is a separate, optional multiplexer
-    // that routes by `ChatRequest.model` on top of these per-session
-    // ports. So it's valid to have this session bound loopback-only
-    // while the gateway serves the whole LAN, or vice versa.
+    // Per-session HTTP listener binding ONLY. Authentication and CORS
+    // live in `authSection` below — those are security-policy concerns,
+    // not HTTP-listener concerns, and the two got confused when they
+    // shared a section. Model alias (how the model identifies itself in
+    // API responses) moved to `modelSection` since it's model-identity,
+    // not network plumbing. See project_vmlx_session_sections.md.
     private var serverSection: some View {
         Text("This session's dedicated HTTP listener. Per-session bind is independent from the global gateway — flip the Tray's Gateway toggle if you want one URL across all sessions instead.")
             .font(Theme.Typography.caption)
@@ -295,20 +311,23 @@ struct SessionConfigForm: View {
                     get: { s.lan ?? globalDefaults.defaultLAN },
                     set: { s.lan = $0; commit() }
                   ))
-        textFieldRow("Model alias",
-                     placeholder: modelPath.lastPathComponent,
-                     value: Binding(
-                        get: { s.modelAlias ?? "" },
-                        set: { s.modelAlias = $0.isEmpty ? nil : $0; commit() }
-                     ))
+    }
+
+    /// Authentication + CORS policy. Was tangled into `serverSection`.
+    /// Split out because you can (and often want to) change auth
+    /// without restarting the HTTP listener, and users looking for
+    /// "where do I set the API key" should NOT have to read past
+    /// host/port/LAN fields.
+    @ViewBuilder
+    private var authSection: some View {
         textFieldRow("API key",
-                     placeholder: "(inherit)",
+                     placeholder: "(inherit global)",
                      value: Binding(
                         get: { s.apiKey ?? "" },
                         set: { s.apiKey = $0.isEmpty ? nil : $0; commit() }
                      ))
         textFieldRow("Admin token",
-                     placeholder: "(inherit)",
+                     placeholder: "(inherit global)",
                      value: Binding(
                         get: { s.adminToken ?? "" },
                         set: { s.adminToken = $0.isEmpty ? nil : $0; commit() }
@@ -436,9 +455,22 @@ struct SessionConfigForm: View {
                          ))
         }
 
-        // Flash MoE — slot bank slider hidden when off. Audit finding #1.
+        // Flash MoE — slot bank slider hidden when off. When user flips
+        // the toggle ON, auto-populate slotBank from the global default
+        // if still nil, so the slider shows a real number instead of 0.
+        // Audit finding B5: toggling flashMoe with slotBank still nil
+        // produced a silently-broken (bank=0) load.
         toggleRow("Flash MoE",
-                  boolBinding(\.flashMoe, default: globalDefaults.flashMoe))
+                  Binding<Bool>(
+                    get: { s.flashMoe ?? globalDefaults.flashMoe },
+                    set: { newValue in
+                        s.flashMoe = newValue
+                        if newValue, s.flashMoeSlotBank == nil {
+                            s.flashMoeSlotBank = globalDefaults.flashMoeSlotBank
+                        }
+                        commit()
+                    }
+                  ))
         if (s.flashMoe ?? globalDefaults.flashMoe) {
             ValidatedField(title: "Flash MoE slot bank",
                            value: intBinding(\.flashMoeSlotBank, default: globalDefaults.flashMoeSlotBank),
