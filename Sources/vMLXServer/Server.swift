@@ -15,6 +15,7 @@ public struct Server {
     public let host: String
     public let port: Int
     public let apiKey: String?
+    public let adminToken: String?
     public let logLevel: LogStore.Level
     public let tlsKeyPath: String?
     public let tlsCertPath: String?
@@ -25,6 +26,7 @@ public struct Server {
         host: String = "127.0.0.1",
         port: Int = 8000,
         apiKey: String? = nil,
+        adminToken: String? = nil,
         logLevel: LogStore.Level = .info,
         tlsKeyPath: String? = nil,
         tlsCertPath: String? = nil,
@@ -34,6 +36,7 @@ public struct Server {
         self.host = host
         self.port = port
         self.apiKey = apiKey
+        self.adminToken = adminToken
         self.logLevel = logLevel
         self.tlsKeyPath = tlsKeyPath
         self.tlsCertPath = tlsCertPath
@@ -63,6 +66,8 @@ public struct Server {
         ))
         // Bearer auth (no-op if apiKey == nil)
         router.add(middleware: BearerAuthMiddleware(apiKey: apiKey))
+        // Admin-token auth for /admin/* and /v1/cache/* (no-op if nil).
+        router.add(middleware: AdminAuthMiddleware(adminToken: adminToken))
         // Per-IP rate limit (no-op if rateLimitPerMinute == 0).
         if rateLimitPerMinute > 0 {
             router.add(middleware: RateLimitMiddleware(
