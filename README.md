@@ -173,7 +173,7 @@ swift test                          # 225 tests, ~15s
 # Run the CLI from SwiftPM
 swift run vmlxctl serve --model /path/to/model
 swift run vmlxctl chat  --model /path/to/model
-swift run vmlxctl pull  dealignai/Qwen3-32B-JANG_4L
+swift run vmlxctl pull  mlx-community/Qwen3-32B-4bit
 swift run vmlxctl ls
 
 # Build the SwiftUI app via XcodeGen + sign + notarize + DMG
