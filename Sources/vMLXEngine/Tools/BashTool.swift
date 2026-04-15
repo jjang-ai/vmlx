@@ -173,6 +173,15 @@ public actor BashTool {
 
         // Foreground with optional timeout. We poll because Process.waitUntilExit
         // blocks the actor; instead we yield in a Task and race the timeout.
+        // Audit R2 (P2): also race a cancellation watcher that calls
+        // process.terminate() when the parent task is cancelled. Without
+        // this, clicking Stop while a long-running command (e.g. `find /`,
+        // `sleep 100`) is in flight leaves the subprocess running until
+        // it finishes naturally — wasted CPU + the user's stop button is
+        // a lie. The timeout watcher at line 187 already had the right
+        // pattern; we just add a third task that watches for cancellation
+        // and terminates the subprocess too. Task.sleep is cancel-aware
+        // so the watcher exits promptly when the parent is cancelled.
         let timeoutSec = inv.timeoutSeconds ?? 120
         let deadline = Date().addingTimeInterval(timeoutSec)
         var timedOut = false
@@ -192,8 +201,22 @@ public actor BashTool {
                     process.terminate()
                 }
             }
+            // R2: cancellation watcher. Polls Task.isCancelled and
+            // terminates the subprocess on flip.
+            group.addTask { [process] in
+                while process.isRunning {
+                    if Task.isCancelled {
+                        if process.isRunning { process.terminate() }
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
             await group.next()
             group.cancelAll()
+        }
+        if Task.isCancelled {
+            killed = true
         }
 
         if Date() >= deadline && process.isRunning == false {

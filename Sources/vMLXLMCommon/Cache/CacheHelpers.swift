@@ -78,6 +78,21 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
     guard let firstBlock = blocks.first, let firstData = firstBlock.cacheData else { return 0 }
     let numBlockLayers = firstData.count
 
+    // Audit R4 (P1): paged-block validator. Belt-and-suspenders on top of
+    // the inline layer-count guard at line 105 — surfaces a structured
+    // log instead of a silent return-0 so operators can see WHY a paged
+    // hit was downgraded to a miss.
+    let validator = CacheValidator(modelLayerCount: cache.count)
+    let cachedTokenCount = blocks.reduce(0) { $0 + ($1.tokenIds.count) }
+    let outcome = validator.validatePagedBlocks(
+        blockCount: blocks.count,
+        layerCountPerBlock: numBlockLayers,
+        cachedTokenCount: cachedTokenCount)
+    if case .reject = outcome {
+        CacheValidator.logReject(outcome, tier: "paged")
+        return 0
+    }
+
     // Build mapping: block layer index → cache layer index
     // Only KVCacheSimple, QuantizedKVCache, TurboQuantKVCache, and CacheList-with-KV layers are KV-bearing
     var kvCacheIndices: [Int] = []
@@ -288,6 +303,31 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
 ///   attention layer's key tensor sequence dim, or `0` if nothing matched.
 @discardableResult
 public func restoreFromDiskArrays(_ arrays: [String: MLXArray], into cache: [any KVCache]) -> Int {
+    // Audit R4 (P1): wire CacheValidator into the disk restore entry point.
+    // Catches the silent-corruption class where a stale disk entry from a
+    // different model (or older checkpoint) gets pulled into the live KV
+    // cache with mismatched layer counts. The validator inspects the
+    // `__layer_kind_*` tags in the dict, compares them to the live cache's
+    // layer count, and rejects mismatches with a warn log so the caller
+    // re-prefills cleanly instead of corrupting state.
+    let validator = CacheValidator(modelLayerCount: cache.count)
+    let cachedTokenCount: Int = {
+        // Quick token-count probe from the first KV/standard entry. Best-
+        // effort — if no kv_*_keys are present (e.g. all-Mamba layers),
+        // the validator will see 0 and fall through to layer-count check.
+        for (key, arr) in arrays where key.hasSuffix("_keys") && arr.shape.count >= 3 {
+            return arr.shape[2]
+        }
+        return 0
+    }()
+    let outcome = validator.validateDiskArrays(
+        keys: Array(arrays.keys),
+        cachedTokenCount: cachedTokenCount)
+    if case .reject = outcome {
+        CacheValidator.logReject(outcome, tier: "disk")
+        return 0
+    }
+
     let version = TQDiskSerializer.formatVersion(of: arrays)
     if version >= 2 {
         return restoreFromV2Arrays(arrays, into: cache)

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 #if canImport(Darwin)
 import Darwin
@@ -406,6 +407,70 @@ public actor Engine {
     /// peer-bound listener can slip past loopback-only detection and
     /// the bind will fail later with a confusing "address in use".
     /// Audit finding #4.
+    /// Build a content-aware cache fingerprint for a model path.
+    ///
+    /// Format: `<basename>:<hash16>` where `hash16` is the first 16 hex
+    /// chars of `SHA256(absolutePath || config.json bytes)`. Falls back
+    /// to `SHA256(absolutePath)` only when config.json is missing or
+    /// unreadable.
+    ///
+    /// Why a content-aware key:
+    ///   - Same checkpoint at two different paths → same key (correct dedup)
+    ///   - Different checkpoints with same basename → different keys
+    ///   - A re-quantized version of the same model → different key
+    ///     because config.json carries the quant metadata
+    ///
+    /// Audit R3 (P0): the previous `lastPathComponent` key collided
+    /// between HF cache snapshots whose canonical paths happen to end
+    /// with the same filename (e.g. two different model orgs both shipping
+    /// `Qwen3.safetensors`). Loading the second model after the first
+    /// would hit stale L2 disk entries with mismatched layer counts and
+    /// silently corrupt the live KV cache restore.
+    public static func fingerprintModelKey(for modelPath: URL) -> String {
+        let absolute = modelPath.standardizedFileURL.path
+        let basename = modelPath.lastPathComponent
+
+        // Try config.json first — it captures arch + quant metadata.
+        // Fall back to weight directory listing if config.json is missing
+        // (e.g. raw safetensors-only directories).
+        var hasher = SHA256()
+        hasher.update(data: Data(absolute.utf8))
+
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        let modelDir: URL = {
+            if fm.fileExists(atPath: absolute, isDirectory: &isDir), isDir.boolValue {
+                return modelPath
+            }
+            return modelPath.deletingLastPathComponent()
+        }()
+
+        let configURL = modelDir.appendingPathComponent("config.json")
+        if let data = try? Data(contentsOf: configURL), data.count > 0 {
+            hasher.update(data: data)
+        } else {
+            // Fall back to a directory listing snapshot — captures file
+            // names and sizes without reading every weight file. Good
+            // enough to distinguish two checkpoints that share a name.
+            if let entries = try? fm.contentsOfDirectory(
+                at: modelDir, includingPropertiesForKeys: [.fileSizeKey])
+            {
+                for entry in entries.sorted(by: { $0.path < $1.path }) {
+                    hasher.update(data: Data(entry.lastPathComponent.utf8))
+                    if let size = (try? entry.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                        var s = Int64(size)
+                        withUnsafeBytes(of: &s) { hasher.update(bufferPointer: $0) }
+                    }
+                }
+            }
+        }
+
+        let digest = hasher.finalize()
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        let short = String(hex.prefix(16))
+        return "\(basename):\(short)"
+    }
+
     public static func isPortFree(_ port: Int, lan: Bool = false) -> Bool {
         #if canImport(Darwin)
         if !probe(port: port, addr: 0x7f000001) { return false }   // 127.0.0.1
@@ -923,7 +988,22 @@ public actor Engine {
                 .info, category: "cache",
                 "L2 disk cache enabled (v2 unified format).")
         }
-        cfg.modelKey = opts.modelPath.lastPathComponent
+        // Audit R3 (P0): modelKey was previously `lastPathComponent` only,
+        // which collides between two HF cache snapshots that happen to end
+        // with the same filename (e.g.
+        //   ~/.cache/huggingface/hub/models--orgA--Qwen3/snapshots/abc/Qwen3.safetensors
+        //   ~/.cache/huggingface/hub/models--orgB--Qwen3/snapshots/def/Qwen3.safetensors
+        // ) — both load with `Qwen3.safetensors` as the disk-cache key,
+        // and loading the second model hits stale entries from the first
+        // (different layer counts → KV cache restore corruption → garbled
+        // output or crash). Fingerprint the model content via SHA-256 of
+        // `(absolute path || config.json bytes)` so:
+        //   - Same checkpoint at different paths → same key (correct dedup)
+        //   - Different checkpoints with same basename → different keys
+        //   - A re-quantized version of the same model → different key
+        //     (config.json carries the quant metadata)
+        // Format: `<basename>:<hash16>` — keeps logs readable AND unique.
+        cfg.modelKey = Engine.fingerprintModelKey(for: opts.modelPath)
         let coord = CacheCoordinator(config: cfg)
 
         // Flip hybrid mode if the loaded model has interleaved SSM layers
@@ -1001,28 +1081,43 @@ public actor Engine {
     /// `streamTasksByID[id]` so `cancelStream(id:)` can target this
     /// specific request. Routes that mint an OpenAI/Anthropic SSE id call
     /// this so per-request cancellation works under parallel load.
+    ///
+    /// Audit R1 (P1): the previous implementation registered the pump
+    /// task via a detached `Task { await registerStreamTask(...) }` AFTER
+    /// returning the AsyncStream, so a fast-fire `cancelStream(id:)`
+    /// could beat the registration and silently no-op. This `async`
+    /// variant performs the registration ON the actor BEFORE returning,
+    /// so any subsequent `cancelStream(id:)` call sees the entry. The
+    /// non-async overload below preserves the legacy contract for callers
+    /// that don't care about cancellation under fast-fire.
     public func stream(
         request: ChatRequest,
         id: String
-    ) -> AsyncThrowingStream<StreamChunk, Error> {
+    ) async -> AsyncThrowingStream<StreamChunk, Error> {
         let upstream = streamReal(request: request)
-        return AsyncThrowingStream { continuation in
-            let pump = Task { [weak self] in
-                do {
-                    for try await chunk in upstream {
-                        continuation.yield(chunk)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
+        // Construct the pump wrapper via a continuation so we can capture
+        // the pump Task BEFORE starting it, register it on the actor, and
+        // only THEN let the consumer start draining. The wrapper itself
+        // is a Task so cancellation propagates to the inner `for try await`.
+        let (downstream, continuation) = AsyncThrowingStream.makeStream(of: StreamChunk.self)
+        let pump = Task { [weak self] in
+            do {
+                for try await chunk in upstream {
+                    continuation.yield(chunk)
                 }
-                await self?.unregisterStreamTask(id: id)
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: error)
             }
-            Task { [weak self] in
-                await self?.registerStreamTask(id: id, task: pump)
-            }
-            continuation.onTermination = { _ in pump.cancel() }
+            await self?.unregisterStreamTask(id: id)
         }
+        // Synchronously register on the actor — we're already inside the
+        // Engine actor's isolation context because this method is
+        // `async` and called via `await engine.stream(...)`. No detached
+        // Task hop, no race window.
+        registerStreamTask(id: id, task: pump)
+        continuation.onTermination = { _ in pump.cancel() }
+        return downstream
     }
 
     // MARK: - HTTP route entry points (stubs — wired but not implemented)
