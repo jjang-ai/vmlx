@@ -25,11 +25,11 @@ struct ChatScreen: View {
                                   loadProgress: app.loadProgress,
                                   isStreaming: vm.isGenerating,
                                   hasContent: !(vm.messages.last?.content.isEmpty ?? true)) {
-                    app.mode = .server
+                    // Start in Chat — don't kick the user to Server.
+                    // Resolves the picked model alias (or the global
+                    // selectedModelPath) and loads it right here.
+                    Task { await startFromBanner() }
                 } onRetry: {
-                    // Caller hint — ChatViewModel can re-send when the engine
-                    // state flips to .running. For now we just clear the error
-                    // banner; the user can hit send again.
                     vm.bannerMessage = nil
                 }
 
@@ -45,6 +45,17 @@ struct ChatScreen: View {
             // Publish the vm to AppState so global Cmd-N / Cmd-Shift-T /
             // Cmd-K shortcuts and the command bar can drive it.
             app.chatViewModelRef = vm
+        }
+        .task(id: app.mode) {
+            // Ensure the default-engine observer is live whenever Chat
+            // is on screen. First launch race: observeEngine() fires
+            // from RootView.task but the Chat ViewModel may not have a
+            // bound server session yet; we want hasAnyLiveEngine to be
+            // accurate the moment the user picks Chat mode.
+            app.ensureObserver(for: AppState.defaultEngineKey)
+            if let sid = app.selectedServerSessionId {
+                app.ensureObserver(for: sid)
+            }
         }
         .onDisappear {
             if app.chatViewModelRef === vm { app.chatViewModelRef = nil }
@@ -81,6 +92,30 @@ struct ChatScreen: View {
             .hidden()
             .frame(width: 0, height: 0)
         )
+    }
+
+    /// Start whatever model is currently picked, directly from Chat.
+    /// Resolves the model URL from (in order): the active chat's
+    /// `modelAlias` setting → the global `selectedModelPath`.
+    @MainActor
+    private func startFromBanner() async {
+        var aliasOpt: String? = nil
+        if let chatId = vm.activeSessionId {
+            aliasOpt = await app.engine.settings.chat(chatId)?.modelAlias
+        }
+        let alias = aliasOpt ?? app.selectedModelPath?.lastPathComponent ?? ""
+        if alias.isEmpty {
+            app.flashBanner("Pick a model in the chat top bar first.")
+            return
+        }
+        let entries = await app.engine.modelLibrary.entries()
+        let match = entries.first(where: { $0.displayName == alias })
+            ?? entries.first(where: { $0.canonicalPath.lastPathComponent == alias })
+        guard let entry = match else {
+            app.flashBanner("Model `\(alias)` not found in the library.")
+            return
+        }
+        await vm.startModel(at: entry.canonicalPath)
     }
 }
 
