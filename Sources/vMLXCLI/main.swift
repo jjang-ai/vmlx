@@ -32,6 +32,8 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .shortAndLong) var host: String = "127.0.0.1"
     @Option(name: .shortAndLong) var port: Int = 8000
     @Option(name: .long) var apiKey: String?
+    @Option(name: .long, help: "Admin token for /admin/* and /v1/cache/* routes. Without it those endpoints are open.")
+    var adminToken: String?
     @Flag(name: .long, help: "Print progress as JSON-lines to stderr for scripting.")
     var jsonProgress: Bool = false
 
@@ -246,6 +248,7 @@ struct Serve: AsyncParsableCommand {
             ? "https" : "http"
         let server = Server(
             engine: engine, host: host, port: port, apiKey: apiKey,
+            adminToken: adminToken ?? resolvedSettings.adminToken,
             tlsKeyPath: resolvedSettings.sslKeyFile.isEmpty ? nil : resolvedSettings.sslKeyFile,
             tlsCertPath: resolvedSettings.sslCertFile.isEmpty ? nil : resolvedSettings.sslCertFile,
             rateLimitPerMinute: resolvedSettings.rateLimit

@@ -49,7 +49,9 @@ actor HTTPServerActor {
     ///   - port: The TCP port to bind.
     ///   - apiKey: Optional bearer token; when nil, `BearerAuthMiddleware`
     ///     is a no-op and every request is admitted.
-    func start(host: String, port: Int, apiKey: String?) async throws {
+    ///   - adminToken: Optional admin-token; when nil, `AdminAuthMiddleware`
+    ///     is a no-op. When set, gates `/admin/*` and `/v1/cache/*`.
+    func start(host: String, port: Int, apiKey: String?, adminToken: String? = nil) async throws {
         // If we're already running on the same endpoint, nothing to do.
         if let task = runTask, host == self.host, port == self.port, !task.isCancelled {
             return
@@ -75,6 +77,7 @@ actor HTTPServerActor {
             host: host,
             port: port,
             apiKey: apiKey,
+            adminToken: adminToken,
             logLevel: .info
         )
         runTask = Task {

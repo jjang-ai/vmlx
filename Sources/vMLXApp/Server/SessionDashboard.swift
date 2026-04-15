@@ -278,7 +278,8 @@ struct SessionDashboard: View {
             try await http.start(
                 host: bindHost,
                 port: bindPort,
-                apiKey: resolved.settings.apiKey
+                apiKey: resolved.settings.apiKey,
+                adminToken: resolved.settings.adminToken
             )
             if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
                 app.sessions[idx2].host = bindHost
