@@ -237,6 +237,22 @@ struct SessionDashboard: View {
         let eng = app.engine(for: id)
         app.selectedServerSessionId = id
         app.rebindEngineObserver()
+
+        // Remote sessions skip the local engine load + HTTP listener
+        // entirely. The session is a thin proxy — Chat / Terminal will
+        // dispatch directly to the configured remote endpoint via
+        // RemoteEngineClient. We just mark the session "running" so the
+        // UI lifecycle indicator flips green.
+        let remoteSettings = await eng.settings.session(id)
+        if let r = remoteSettings, r.isRemote {
+            if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
+                app.sessions[idx2].host = r.remoteURL ?? ""
+                app.sessions[idx2].port = 0
+                app.sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
+            }
+            return
+        }
+
         var opts = Engine.LoadOptions(modelPath: s.modelPath)
         let resolved = await eng.settings.resolved(sessionId: id)
         opts = Engine.LoadOptions(modelPath: s.modelPath, from: resolved)
