@@ -45,3 +45,4 @@ TEST-MATRIX-*.md
 .agents/
 .sisyphus/
 .playwright-mcp/
+.env.signing.example
