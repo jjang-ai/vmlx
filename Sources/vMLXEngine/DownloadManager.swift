@@ -269,6 +269,7 @@ public actor DownloadManager {
                 || f.hasSuffix(".json")
                 || f.hasSuffix(".txt")
                 || f.hasSuffix(".model")
+                || f.hasSuffix(".jinja")
         }
     }
 

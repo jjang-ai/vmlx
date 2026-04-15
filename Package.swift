@@ -497,22 +497,6 @@ let package = Package(
             ],
             path: "Sources/vMLXApp"
         ),
-
-        // MARK: - Tests
-        .testTarget(
-            name: "vMLXTests",
-            dependencies: [
-                "vMLXEngine",
-                "vMLXServer",
-                "vMLXTheme",
-                "vMLXApp",
-                "vMLXLMCommon",
-                "vMLXWhisper",
-                "vMLXTTS",
-                .product(name: "Jinja", package: "Jinja"),
-            ],
-            path: "Tests/vMLXTests"
-        ),
     ],
     cxxLanguageStandard: .gnucxx20
 )

@@ -7,7 +7,7 @@ kernels, attention paths, scheduler, tokenizer, chat loop, HTTP
 routes, desktop UI.
 
 **Canonical home:** `./`
-**Build:** `swift build` → clean · `swift test` → 225/225 passing
+**Build:** `swift build` → `.build/release/vmlx` CLI · `xcodegen` for the macOS app
 (4 unrelated Jinja-parser repros skip)
 **Binaries:** `vmlxctl` (CLI), `vMLX` (SwiftUI app)
 
@@ -135,11 +135,6 @@ swift/
 │   │
 │   └── vMLXCLI/                     # `vmlxctl serve / chat / pull / ls`
 │       └── main.swift
-│
-└── Tests/
-    └── vMLXTests/                   # 225 tests covering parsers, paged cache,
-                                     #   MCP, Flash MoE, chat template repro,
-                                     #   VLM multi-turn, reasoning dispatch, …
 ```
 
 **23 targets.** **5 external deps only:** `swift-numerics`,
@@ -164,17 +159,25 @@ Audio targets (added 2026-04-14):
 ## Build
 
 ```sh
-cd .
+# Requires: macOS 14+, Xcode 15.4+ (Swift 5.10), xcodegen (brew install xcodegen)
 
-swift build                         # ~1 min clean debug
-swift build -c release              # ~90s release
-swift test                          # 225 tests, ~15s
+git clone -b dev https://github.com/jjang-ai/vmlx.git
+cd vmlx
 
-# Run the CLI from SwiftPM
-swift run vmlxctl serve --model /path/to/model
-swift run vmlxctl chat  --model /path/to/model
-swift run vmlxctl pull  mlx-community/Qwen3-32B-4bit
-swift run vmlxctl ls
+# CLI — SwiftPM produces .build/release/vmlx
+swift build -c release
+
+# macOS app — xcodegen wraps the SwiftPM vMLXApp target into a signable bundle
+xcodegen
+open vMLX.xcodeproj
+# Xcode → Run. Ad-hoc signing works for local dev; set your own DEVELOPMENT_TEAM
+# in project.yml if you want to distribute the .app.
+
+# Use the CLI
+.build/release/vmlx serve --model /path/to/model
+.build/release/vmlx chat  --model /path/to/model
+.build/release/vmlx pull  mlx-community/Qwen3-32B-4bit
+.build/release/vmlx list
 
 # Build the SwiftUI app via XcodeGen + sign + notarize + DMG
 ./scripts/build-release.sh
