@@ -146,6 +146,36 @@ final class AppState {
         return fresh
     }
 
+    /// Ensure the gateway listener is running per current GlobalSettings.
+    /// Safe to call from any session-start path — if the user has the
+    /// toggle off, this is a no-op. If on, binds to (gatewayHost,
+    /// gatewayPort) using the apiKey + adminToken from global settings.
+    /// Idempotent: calling while already running does nothing.
+    func ensureGatewayRunning() async {
+        let global = await engine.settings.global()
+        guard global.gatewayEnabled else { return }
+        let host = global.gatewayLAN ? "0.0.0.0" : "127.0.0.1"
+        let level = LogStore.Level(rawValue: global.defaultLogLevel) ?? .info
+        do {
+            try await gateway.start(
+                host: host,
+                port: global.gatewayPort,
+                apiKey: global.apiKey,
+                adminToken: global.adminToken,
+                logLevel: level,
+                defaultEngine: engine
+            )
+        } catch {
+            flashBanner("Gateway failed to start on \(host):\(global.gatewayPort) — \(error)")
+        }
+    }
+
+    /// Tear down the gateway listener. Called when the user flips the
+    /// toggle off from the Tray. Idempotent.
+    func stopGateway() async {
+        await gateway.stop()
+    }
+
     /// Tear down a per-session engine (called from SessionDashboard delete).
     func removeEngine(for id: UUID) {
         if let e = engines.removeValue(forKey: id) {
@@ -162,6 +192,11 @@ final class AppState {
     /// first `httpServer(for:)` call; started on `SessionDashboard.startSession`
     /// and stopped on `stopSession`/`deleteSession`. See `HTTPServerActor`.
     var httpServers: [UUID: HTTPServerActor] = [:]
+
+    /// Gateway supervisor — single port that fans out to per-session
+    /// engines by ChatRequest.model. Lazy: only spun up if the user
+    /// flips on `GlobalSettings.gatewayEnabled` from the Tray.
+    let gateway = GatewayActor()
 
     /// Look up (or lazily create) the HTTP server supervisor for a session.
     func httpServer(for id: UUID) -> HTTPServerActor {
@@ -379,6 +414,13 @@ struct RootView: View {
             await state.observeDownloads { id in
                 openWindow(id: id)
             }
+        }
+        .task {
+            // UI-9: if the gateway was on last session, bring it back up
+            // at launch. Session registrations happen as each session
+            // starts, so an empty model list on first boot just returns
+            // a 404 until a session loads — fine behavior.
+            await state.ensureGatewayRunning()
         }
         .task {
             // HuggingFace token lifecycle: load from Keychain on launch,

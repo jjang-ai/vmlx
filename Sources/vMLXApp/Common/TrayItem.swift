@@ -339,6 +339,48 @@ struct TrayItem: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundColor(.accentColor)
             }
+
+            // UI-9: Gateway — single base URL that fans /v1/chat/completions
+            // out to every loaded session by `model` field. Disabled by
+            // default; flip on + pick a port and SDK clients get one URL
+            // regardless of how many sessions you're running.
+            Divider().padding(.vertical, 4)
+            Toggle(
+                "Gateway (one URL, many models)",
+                isOn: Binding(
+                    get: { draft.gatewayEnabled },
+                    set: { on in
+                        draft.gatewayEnabled = on
+                        schedulePush()
+                        Task {
+                            if on { await app.ensureGatewayRunning() }
+                            else  { await app.stopGateway() }
+                        }
+                    }))
+                .font(.system(size: 11))
+                .toggleStyle(.switch)
+            if draft.gatewayEnabled {
+                LabeledField("Gateway port") {
+                    Stepper(
+                        value: Binding(
+                            get: { draft.gatewayPort },
+                            set: { draft.gatewayPort = $0; schedulePush() }),
+                        in: 1024...65535) {
+                        Text("\(draft.gatewayPort)")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                }
+                Toggle(
+                    "Gateway LAN (bind 0.0.0.0)",
+                    isOn: Binding(
+                        get: { draft.gatewayLAN },
+                        set: { draft.gatewayLAN = $0; schedulePush() }))
+                    .font(.system(size: 11))
+                    .toggleStyle(.switch)
+                Text("SDK base URL: http://\(draft.gatewayLAN ? "0.0.0.0" : "127.0.0.1"):\(draft.gatewayPort)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
