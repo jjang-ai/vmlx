@@ -118,8 +118,15 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     /// recommended in production).
     public var maxPromptTokens: Int = 262_144
 
-    // KV cache quantization
-    public var kvCacheQuantization: String = "none"  // cli.py --kv-cache-quantization: none|q4|q8
+    // KV cache quantization. `none | q4 | q8 | turboquant`. Default is
+    // `turboquant` so every chat session gets ~3.6x KV memory savings
+    // with zero generation-speed overhead — the bit budget is set by
+    // `turboQuantBits` below (4 bits per side = sweet spot). When
+    // `enableTurboQuant=false`, generation falls back to plain
+    // `KVCacheSimple` (the `none` behavior). For legacy paths that
+    // explicitly want the symmetric 4/8-bit MLX quantizer, set to `q4`
+    // or `q8` and the generation loop will use that instead.
+    public var kvCacheQuantization: String = "turboquant"  // cli.py --kv-cache-quantization: none|q4|q8|turboquant
     public var kvCacheGroupSize: Int = 64            // cli.py --kv-cache-group-size
 
     // Disk caches.
@@ -144,9 +151,11 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
 
     // L1.5 byte-budgeted memory cache (MemoryAwarePrefixCache). Sits
     // between the paged L1 and disk L2, storing whole-prompt KV payloads
-    // with LRU + memory-pressure eviction. Off by default; enable for
-    // long multi-turn sessions on constrained-RAM hardware.
-    public var enableMemoryCache: Bool = false
+    // with LRU + memory-pressure eviction. Default ON — the combined
+    // L1/L1.5/L2 stack gives the best multi-turn cache hit rate and
+    // the memory pressure monitor drops entries before vmsignal fires,
+    // so there is no OOM risk on constrained-RAM hardware.
+    public var enableMemoryCache: Bool = true
     public var memoryCachePercent: Double = 0.30
     public var memoryCacheTTLMinutes: Double = 0
 
@@ -253,10 +262,22 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var embeddingModel: String = ""           // cli.py --embedding-model
 
     // Idle lifecycle — NOT in cli.py. Python has no auto-sleep; sleep is
-    // admin-only via `/admin/soft-sleep` + `/admin/deep-sleep`. We default
-    // auto-sleep OFF to match that behavior. Users who want auto-sleep
-    // opt in via SessionConfigForm's Lifecycle section.
-    public var idleEnabled: Bool = false
+    // admin-only via `/admin/soft-sleep` + `/admin/deep-sleep`.
+    //
+    // Default ON for the Swift/desktop app because:
+    //   * Users leave sessions running between short conversations, and
+    //     holding ~30 GB of weights resident hurts every other app on
+    //     an M-series Mac that shares unified memory.
+    //   * Both transitions are transparent — `softSleep` only drops
+    //     caches (weights stay hot), and any HTTP request wakes the
+    //     engine automatically before dispatch (see
+    //     `OpenAIRoutes`/`GatewayServer` — `wakeFromStandby()`).
+    //   * Chat / Terminal paths also call `wakeFromStandby()` before
+    //     streaming (B2/B3 fix) so there's no user-visible stall.
+    //
+    // Users who dislike the behavior can turn it off in the Lifecycle
+    // section of SessionConfigForm.
+    public var idleEnabled: Bool = true
     public var idleSoftSec: Double = 300             // vMLX-only UI (used only when idleEnabled)
     public var idleDeepSec: Double = 900             // vMLX-only UI (used only when idleEnabled)
     public var wakeTimeout: Int = 300                // cli.py --wake-timeout default=300
