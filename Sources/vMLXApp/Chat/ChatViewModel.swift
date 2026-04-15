@@ -492,6 +492,24 @@ final class ChatViewModel {
         return false
     }
 
+    /// Audit R5 (P2): public wrapper for InputBar keystroke handler.
+    /// Hops to the engine actor and calls `bumpIdleTimer()` so the
+    /// model doesn't deep-sleep while the user is actively typing a
+    /// long prompt. `IdleTimer.reset()` is idempotent so calling on
+    /// every char is cheap. No-op when no engine is available (e.g.
+    /// server session that hasn't started yet).
+    public func bumpIdleTimer() {
+        let appRef = app
+        let sid = serverSessionId
+        Task {
+            let engine: Engine? = {
+                if let sid { return appRef?.engine(for: sid) }
+                return appRef?.engine
+            }()
+            await engine?.bumpIdleTimer()
+        }
+    }
+
     private func finishOk(_ id: UUID) {
         isGenerating = false
         if let i = messages.firstIndex(where: { $0.id == id }) {

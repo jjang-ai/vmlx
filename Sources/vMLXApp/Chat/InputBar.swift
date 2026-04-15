@@ -193,6 +193,13 @@ struct InputBar: View {
                                 historyIndex = nil
                             }
                         }
+                        // Audit R5 (P2): bump the engine idle timer on
+                        // every keystroke so the model doesn't deep-sleep
+                        // while the user is actively typing a long prompt.
+                        // ChatViewModel.bumpIdleTimer hops to the engine
+                        // actor and calls IdleTimer.reset() which is
+                        // idempotent + cheap to call on every char.
+                        vm.bumpIdleTimer()
                     }
                     .onKeyPress(.upArrow) { handleUpArrow() }
                     .onKeyPress(.downArrow) { handleDownArrow() }
