@@ -20,6 +20,8 @@ struct CachePanel: View {
     @State private var diskExpanded: Bool = true
     @State private var ssmExpanded: Bool = true
     @State private var clearInFlight: Bool = false
+    @State private var warmInFlight: Bool = false
+    @State private var warmStatus: String? = nil
     @State private var showClearConfirm: Bool = false
 
     var body: some View {
@@ -240,7 +242,46 @@ struct CachePanel: View {
 
     private var footer: some View {
         HStack {
+            if let status = warmStatus {
+                Text(status)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textMid)
+            }
             Spacer()
+
+            // Warm button: replays the last 5 user messages through the
+            // engine at max_tokens=1 so the prefix cache populates
+            // naturally. Useful after a clear, or after switching models
+            // to repopulate common system prompts. Disabled while a
+            // clear is in flight to avoid racing with empty state.
+            Button {
+                Task { await warmFromRecent() }
+            } label: {
+                HStack(spacing: 4) {
+                    if warmInFlight {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "flame.fill")
+                    }
+                    Text(warmInFlight ? "Warming…" : "Warm from recent")
+                        .font(Theme.Typography.caption)
+                }
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.xs)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.surfaceHi)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                .stroke(Theme.Colors.border, lineWidth: 1)
+                        )
+                )
+                .foregroundStyle(Theme.Colors.textHigh)
+            }
+            .buttonStyle(.plain)
+            .disabled(warmInFlight || clearInFlight)
+            .help("Prefills the prefix cache with your 5 most recent user prompts so the next send has a warm cache hit.")
+
             Button {
                 showClearConfirm = true
             } label: {
@@ -400,6 +441,37 @@ struct CachePanel: View {
         await engine.clearCaches()
         clearInFlight = false
         await refresh()
+    }
+
+    /// Warm the prefix cache by replaying the 5 most recent user messages
+    /// through the engine at max_tokens=1. Mirrors what the
+    /// `POST /v1/cache/warm` admin endpoint does so the UI affordance
+    /// and the HTTP API stay in lockstep.
+    private func warmFromRecent() async {
+        guard let engine = app.activeEngine else {
+            warmStatus = "Load a model first"
+            return
+        }
+        warmInFlight = true
+        defer { warmInFlight = false }
+
+        let recent = Database.shared
+            .recentUserPrompts(limit: 5)
+            .filter { !$0.isEmpty }
+        guard !recent.isEmpty else {
+            warmStatus = "No recent prompts to warm from"
+            return
+        }
+        do {
+            let modelName = app.selectedModelPath?.lastPathComponent ?? ""
+            let warmed = try await engine.cacheWarm(
+                prompts: recent, model: modelName
+            )
+            warmStatus = "Warmed \(warmed) prompt\(warmed == 1 ? "" : "s")"
+            await refresh()
+        } catch {
+            warmStatus = "Warm failed: \(error)"
+        }
     }
 
     // MARK: - Value extractors

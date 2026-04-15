@@ -428,6 +428,15 @@ final class ChatViewModel {
                 toolChoice: toolChoiceValue
             )
 
+            // JIT wake: if this engine is in soft/deep standby (idle timer
+            // fired, user manually slept it, or wake was skipped), bring
+            // it back online before dispatching. HTTP routes do this at
+            // every entry point (OpenAIRoutes, Ollama, Anthropic,
+            // Gateway); the in-app Chat path used to skip it, which made
+            // the first send after idle-sleep error with "Engine
+            // unloaded". wakeFromStandby is a no-op for `.running`.
+            await engine.wakeFromStandby()
+
             // Remote-session dispatch: if this chat is bound to a server
             // session whose SessionSettings carries a remoteURL, it
             // targets an external OpenAI/Ollama/Anthropic-compatible
@@ -533,24 +542,6 @@ final class ChatViewModel {
     private func isErrorState(_ s: EngineState) -> Bool {
         if case .error = s { return true }
         return false
-    }
-
-    /// Audit R5 (P2): public wrapper for InputBar keystroke handler.
-    /// Hops to the engine actor and calls `bumpIdleTimer()` so the
-    /// model doesn't deep-sleep while the user is actively typing a
-    /// long prompt. `IdleTimer.reset()` is idempotent so calling on
-    /// every char is cheap. No-op when no engine is available (e.g.
-    /// server session that hasn't started yet).
-    public func bumpIdleTimer() {
-        let appRef = app
-        let sid = serverSessionId
-        Task {
-            let engine: Engine? = {
-                if let sid { return appRef?.engine(for: sid) }
-                return appRef?.engine
-            }()
-            await engine?.bumpIdleTimer()
-        }
     }
 
     private func finishOk(_ id: UUID) {

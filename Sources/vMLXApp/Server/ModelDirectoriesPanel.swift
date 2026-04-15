@@ -24,12 +24,20 @@ struct ModelDirectoriesPanel: View {
     @State private var bannerMessage: String? = nil
     @State private var dirToConfirmRemove: URL? = nil
 
+    /// Free-form repo input for starting arbitrary HuggingFace downloads
+    /// without having to leave the Server tab. Format: `{org}/{repo}`,
+    /// same as `vmlx pull`.
+    @State private var pullRepo: String = ""
+    @State private var isEnqueuing: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             header
             defaultDirRow
             customDirsList
             footer
+            Divider().background(Theme.Colors.border)
+            pullRepoRow
             if let msg = bannerMessage {
                 bannerView(msg)
             }
@@ -154,6 +162,77 @@ struct ModelDirectoriesPanel: View {
                     .foregroundStyle(Theme.Colors.textLow)
             }
         }
+    }
+
+    /// Free-form repo download. Lets the user pull any HuggingFace repo
+    /// directly from the Server tab without bouncing over to Image. The
+    /// Downloads window auto-opens on first progress event so there is
+    /// no silent-download behavior. HF token (from Keychain) is injected
+    /// automatically via the default DownloadManager binding.
+    private var pullRepoRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text("Download by HuggingFace repo")
+                .font(Theme.Typography.bodyHi)
+                .foregroundStyle(Theme.Colors.textHigh)
+            HStack(spacing: Theme.Spacing.sm) {
+                TextField("mlx-community/Qwen3-32B-4bit",
+                          text: $pullRepo)
+                    .textFieldStyle(.plain)
+                    .font(Theme.Typography.mono)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .fill(Theme.Colors.surfaceHi)
+                    )
+                    .onSubmit { Task { await enqueuePull() } }
+
+                Button {
+                    Task { await enqueuePull() }
+                } label: {
+                    HStack(spacing: 4) {
+                        if isEnqueuing {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.down.circle.fill")
+                        }
+                        Text(isEnqueuing ? "Starting…" : "Download")
+                    }
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .fill(Theme.Colors.accent)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isEnqueuing
+                          || pullRepo.trimmingCharacters(in: .whitespaces).isEmpty
+                          || !pullRepo.contains("/"))
+                .help("Queue a HuggingFace repo download. Progress opens in the Downloads window.")
+            }
+            Text("Enter `{org}/{repo}` format. Gated repos require a HuggingFace token in the API tab.")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textLow)
+        }
+    }
+
+    private func enqueuePull() async {
+        let repo = pullRepo.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !repo.isEmpty, repo.contains("/") else {
+            bannerMessage = "Enter a repo in {org}/{repo} format"
+            return
+        }
+        isEnqueuing = true
+        defer { isEnqueuing = false }
+        let displayName = repo.split(separator: "/").last.map(String.init) ?? repo
+        _ = await app.downloadManager.enqueue(
+            repo: repo, displayName: displayName
+        )
+        bannerMessage = "Queued \(repo) — opening Downloads window…"
+        pullRepo = ""
     }
 
     private func bannerView(_ msg: String) -> some View {

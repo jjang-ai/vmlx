@@ -322,6 +322,31 @@ final class Database {
         sqlite3_finalize(stmt)
     }
 
+    /// Return the `limit` most recent distinct user prompts across every
+    /// chat session, newest first. Used by CachePanel's "Warm from recent"
+    /// action to prefill the prefix cache without leaking session context
+    /// (we only want distinct prompt strings, not the ordered history).
+    func recentUserPrompts(limit: Int) -> [String] {
+        let sql = """
+            SELECT DISTINCT content FROM messages
+            WHERE role = 'user' AND content != ''
+            ORDER BY created_at DESC
+            LIMIT ?
+            """
+        var stmt: OpaquePointer?
+        var out: [String] = []
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int(stmt, 1, Int32(limit))
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let cstr = sqlite3_column_text(stmt, 0) {
+                    out.append(String(cString: cstr))
+                }
+            }
+        }
+        sqlite3_finalize(stmt)
+        return out
+    }
+
     func deleteMessages(after createdAt: Date, in sessionId: UUID) {
         let sql = "DELETE FROM messages WHERE session_id=? AND created_at>=?"
         var stmt: OpaquePointer?
