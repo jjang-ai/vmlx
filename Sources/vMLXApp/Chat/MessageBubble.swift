@@ -295,22 +295,89 @@ private struct TypingDots: View {
 /// horizontal line of `·`-separated entries in the caption / textLow style.
 private struct MetricsStrip: View {
     let usage: StreamChunk.Usage
+    @State private var expanded: Bool = false
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            ForEach(Array(items.enumerated()), id: \.offset) { i, item in
-                if i > 0 {
-                    Text("·")
-                        .font(Theme.Typography.caption)
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    expanded.toggle()
+                }
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    ForEach(Array(items.enumerated()), id: \.offset) { i, item in
+                        if i > 0 {
+                            Text("·")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Colors.textLow)
+                        }
+                        Text(item)
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textLow)
+                    }
+                    Spacer()
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textLow)
                 }
-                Text(item)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.textLow)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                detailGrid
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Theme.Spacing.xs)
+    }
+
+    /// Full metric breakdown. Shown on tap. Mirrors what the Electron
+    /// MetricsStripExpanded component surfaces: token split, throughput,
+    /// timing, cache attribution. Missing fields fall back to "—" so the
+    /// grid shape stays stable whether or not a metric was captured.
+    private var detailGrid: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider().background(Theme.Colors.border.opacity(0.5))
+            detailColumns([
+                ("Prompt tokens",     "\(usage.promptTokens)"),
+                ("Completion tokens", "\(usage.completionTokens)"),
+                ("Cached tokens",     "\(usage.cachedTokens)"),
+                ("Total tokens",      "\(usage.promptTokens + usage.completionTokens)"),
+            ])
+            detailColumns([
+                ("TTFT",     usage.ttftMs.map { String(format: "%.0fms", $0) } ?? "—"),
+                ("Prefill",  usage.prefillMs.map { String(format: "%.0fms", $0) } ?? "—"),
+                ("Total",    usage.totalMs.map { String(format: "%.2fs", $0 / 1000) } ?? "—"),
+            ])
+            detailColumns([
+                ("Decode t/s",  usage.tokensPerSecond.map { String(format: "%.1f", $0) } ?? "—"),
+                ("Prefill t/s", usage.promptTokensPerSecond.map { String(format: "%.0f", $0) } ?? "—"),
+                ("Cache tier",  usage.cacheDetail ?? "—"),
+            ])
+        }
+        .padding(Theme.Spacing.sm)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(Theme.Colors.surface)
+        )
+    }
+
+    private func detailColumns(_ pairs: [(String, String)]) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+            ForEach(Array(pairs.enumerated()), id: \.offset) { _, pair in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pair.0)
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.Colors.textLow)
+                    Text(pair.1)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
     private var items: [String] {
