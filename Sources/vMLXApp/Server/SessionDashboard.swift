@@ -303,14 +303,23 @@ struct SessionDashboard: View {
                 app.sessions[idx2].port = bindPort
                 app.sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
             }
+            // UI-9 gateway registration: now that the model is loaded and
+            // the library scan is fresh, register every display name with
+            // the gateway so its /v1/chat/completions handler can route
+            // incoming requests by `model` field. The gateway listener
+            // itself starts/stops based on GlobalSettings.gatewayEnabled.
+            await app.gateway.registerEngine(eng)
+            await app.ensureGatewayRunning()
         } catch {
             app.flashBanner("HTTP listener failed: \(error)")
         }
     }
 
     private func stopSession(_ id: UUID) async {
+        let eng = app.engine(for: id)
+        await app.gateway.unregisterEngine(eng)
         await app.httpServer(for: id).stop()
-        await app.engine(for: id).stop()
+        await eng.stop()
         if let idx = app.sessions.firstIndex(where: { $0.id == id }) {
             app.sessions[idx].pid = nil
         }

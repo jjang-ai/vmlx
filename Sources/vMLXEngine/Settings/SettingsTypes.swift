@@ -68,6 +68,15 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var defaultLogLevel: String = "info"    // cli.py --log-level
     public var allowedOrigins: [String] = ["*"]    // cli.py --allowed-origins / CORS
 
+    // MARK: Gateway (multi-engine multiplexer, UI-9)
+    /// When true, vMLX binds an additional Hummingbird listener that
+    /// dispatches /v1/chat/completions etc. by ChatRequest.model field
+    /// to the matching session's Engine. Per-session listeners keep
+    /// running unchanged. Off by default — opt in from Tray → Server.
+    public var gatewayEnabled: Bool = false
+    public var gatewayPort: Int = 8080
+    public var gatewayLAN: Bool = false
+
     // MARK: Engine load — defaults mirror `vmlx_engine/cli.py` except
     // two Mac-specific tunings noted below.
     public var engineKind: EngineKindCodable = .batched
