@@ -40,7 +40,7 @@ public enum OpenAIRoutes {
                     "id": e.displayName,
                     "object": "model",
                     "created": created,
-                    "owned_by": e.isJANG ? "jjang-ai" : "mlx-community",
+                    "owned_by": e.isJANG ? "dealignai" : "mlx-community",
                     // vMLX-specific enrichment (ignored by the OpenAI spec
                     // but surfaced to first-party clients like the app's
                     // own ModelPicker and `vmlxctl ls`).
@@ -126,6 +126,12 @@ public enum OpenAIRoutes {
                     if let fr = chunk.finishReason { finishReason = fr }
                     if let u = chunk.usage { usage = u }
                 }
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -301,6 +307,12 @@ public enum OpenAIRoutes {
                     if let fr = chunk.finishReason { finishReason = fr }
                     if let u = chunk.usage { usage = u }
                 }
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -512,6 +524,12 @@ public enum OpenAIRoutes {
                     if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
                     if let u = chunk.usage { usage = u }
                 }
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -582,6 +600,12 @@ public enum OpenAIRoutes {
             do {
                 let result = try await engine.embeddings(request: obj)
                 return Self.json(result)
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -669,6 +693,12 @@ public enum OpenAIRoutes {
             do {
                 let result = try await engine.editImage(request: request)
                 return Self.json(result)
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -788,6 +818,12 @@ public enum OpenAIRoutes {
                 default:
                     return Self.json(["text": text])
                 }
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -820,6 +856,12 @@ public enum OpenAIRoutes {
                 var buf = ByteBuffer()
                 buf.writeBytes(result.audio)
                 return Response(status: .ok, headers: headers, body: .init(byteBuffer: buf))
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -845,6 +887,12 @@ public enum OpenAIRoutes {
             do {
                 let result = try await engine.rerank(request: obj)
                 return Self.json(result)
+            } catch let err as EngineError {
+                // invalidRequest → 400; everything else → 500.
+                if case .invalidRequest(let msg) = err {
+                    return Self.errorJSON(.badRequest, msg)
+                }
+                return Self.errorJSON(.internalServerError, "\(err)")
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }

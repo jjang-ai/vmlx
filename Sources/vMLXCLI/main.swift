@@ -315,11 +315,29 @@ struct Pull: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Download a model from HuggingFace")
     @Argument var repo: String
 
+    /// Explicit HF token override. If not set, falls back to the macOS
+    /// Keychain entry written by the GUI's HuggingFaceTokenCard, then to
+    /// the `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` env vars. This order
+    /// matches what `huggingface-cli download` does so CI flows work.
+    @Option(name: .long, help: "HuggingFace token for gated repos. Falls back to Keychain then HF_TOKEN env.")
+    var hfToken: String?
+
     func run() async throws {
-        // Use the standalone DownloadManager actor (same one the SwiftUI
-        // app drives via its Downloads window). Subscribe to events and
-        // block until we see `.completed` or `.failed` for our job.
+        // Resolve the HF token: explicit flag → Keychain → env var.
+        // An anonymous call is fine for public repos; gated models
+        // return 401/403 which the DownloadManager surfaces as a
+        // human-readable error.
+        let token = hfToken
+            ?? KeychainHelper.load(.hfToken)
+            ?? ProcessInfo.processInfo.environment["HF_TOKEN"]
+            ?? ProcessInfo.processInfo.environment["HUGGING_FACE_HUB_TOKEN"]
+
         let manager = DownloadManager()
+        if let token, !token.isEmpty {
+            await manager.setHFAuthToken(token)
+            print("Using HuggingFace token: \(token.prefix(6))…")
+        }
+
         let displayName = repo.split(separator: "/").last.map(String.init) ?? repo
         let jobId = await manager.enqueue(repo: repo, displayName: displayName)
 

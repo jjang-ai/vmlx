@@ -284,6 +284,12 @@ struct TerminalScreen: View {
             ))
         }
 
+        // JIT wake: same idle-sleep recovery as ChatViewModel. Terminal
+        // sessions share the engine with Chat, so an idle-sleep during
+        // a long terminal conversation used to leave the next command
+        // stranded. wakeFromStandby is a no-op when .running.
+        await engine.wakeFromStandby()
+
         // Inject the bash tool schema. Let the model choose when to call it.
         let tools: [ChatRequest.Tool] = [BashTool.openAISchema]
 
