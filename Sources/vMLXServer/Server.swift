@@ -98,6 +98,7 @@ public struct Server {
         OllamaRoutes.register(on: router, engine: engine)
         AnthropicRoutes.register(on: router, engine: engine)
         MCPRoutes.register(on: router, engine: engine)
+        MetricsRoutes.register(on: router, engine: engine)
 
         // TLS: if both key and cert paths are present, build a TLSConfiguration
         // and use the TLS-wrapped HTTP/1 server. Otherwise plain HTTP. The

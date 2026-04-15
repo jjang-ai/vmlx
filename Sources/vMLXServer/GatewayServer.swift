@@ -126,6 +126,11 @@ public struct GatewayServer {
             ])
         }
 
+        // GET /metrics — Prometheus-format metrics per registered engine.
+        // Each engine gets its own `session="session_N"` label set so
+        // scrapers can distinguish concurrent sessions inside one gateway.
+        MetricsRoutes.registerGateway(on: router, enumerate: enumerate)
+
         // GET /health — gateway-level health check. Lists every routed model.
         router.get("/health") { _, _ -> Response in
             let engines = await enumerate()
