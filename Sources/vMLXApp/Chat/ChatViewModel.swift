@@ -249,18 +249,27 @@ final class ChatViewModel {
 
     func send() {
         guard let sessionId = activeSessionId else { return }
-        // No-model guard: if no model is loaded, surface a banner with a
-        // "Open Server tab" action and abort. Without this the request fans
-        // out with an empty model string and the user sees a confusing stub
-        // error. Mirrors Electron's `ChatInterface.tsx` `handleSend` guard.
+        // No-model guard: surface a banner + jump to Server mode if there
+        // is genuinely no loaded model anywhere. `engineState` already
+        // tracks the selected server session's engine (see `vMLXApp.engine`
+        // computed var), so "running, not error" is the real signal. We do
+        // NOT gate on `selectedModelPath` because that field is only set
+        // by the command bar / onboarding; users who load via the Server
+        // tab leave it nil while their server-session engine is live.
+        // Pre-fix behavior was to bounce those users back to Server with
+        // a confusing "Load a model first" banner despite the model being
+        // loaded. Also auto-bind `serverSessionId` to the active server
+        // session so the stream routes through the right engine instead
+        // of falling back to `defaultEngine` when the user never linked
+        // the chat to a session explicitly.
         if let appRef = app {
-            let hasModel = (appRef.selectedModelPath != nil) &&
-                           appRef.engineState != .stopped &&
-                           !isErrorState(appRef.engineState)
-            if !hasModel {
+            if serverSessionId == nil, let active = appRef.selectedServerSessionId {
+                serverSessionId = active
+            }
+            let running = appRef.engineState != .stopped && !isErrorState(appRef.engineState)
+            if !running {
                 bannerMessage = "Load a model in the Server tab first"
                 appRef.flashBanner(bannerMessage ?? "")
-                // Switch user straight to Server mode so the CTA is one click.
                 appRef.mode = .server
                 return
             }
