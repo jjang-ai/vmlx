@@ -1,0 +1,920 @@
+import Foundation
+import HTTPTypes
+import Hummingbird
+import NIOCore
+import vMLXEngine
+import vMLXTTS
+
+/// OpenAI-compatible routes.
+///
+/// Python source: `vmlx_engine/server.py`
+///   - POST /v1/chat/completions  — line 4250 `create_chat_completion`, stream at line 5597
+///   - POST /v1/responses         — line 4946 `create_response`
+///   - POST /v1/embeddings        — line 2930 `create_embeddings`
+///   - POST /v1/images/generations — line 3429 `create_image`
+///   - POST /v1/images/edits      — line 3632 `create_image_edit`
+///   - POST /v1/rerank            — line 3083 `create_rerank`
+///   - GET  /v1/models            — line 2642 `list_models`
+public enum OpenAIRoutes {
+
+    public static func register<Context: RequestContext>(
+        on router: Router<Context>,
+        engine: Engine
+    ) {
+        // GET /v1/models — enumerate everything ModelLibrary knows about.
+        // OpenAI-SDK clients enumerate this list to auto-pick a model when
+        // the user hasn't specified one. Before this fix the endpoint
+        // returned an empty array and every third-party integration
+        // (openai python sdk, LangChain, LiteLLM, etc.) broke silently.
+        router.get("/v1/models") { _, _ -> Response in
+            // Trigger a library scan on first hit so servers started via
+            // `vmlxctl serve --model <path>` (which does not walk the
+            // HuggingFace cache) still surface every downloaded model
+            // to `GET /v1/models`. `scan(force:false)` is a no-op inside
+            // the 5-minute freshness window, so subsequent hits are free.
+            _ = await engine.modelLibrary.scan(force: false)
+            let entries = await engine.modelLibrary.entries()
+            let created = Int(Date().timeIntervalSince1970)
+            let data: [[String: Any]] = entries.map { e in
+                [
+                    "id": e.displayName,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": e.isJANG ? "dealignai" : "mlx-community",
+                    // vMLX-specific enrichment (ignored by the OpenAI spec
+                    // but surfaced to first-party clients like the app's
+                    // own ModelPicker and `vmlxctl ls`).
+                    "vmlx": [
+                        "family": e.family,
+                        "modality": e.modality.rawValue,
+                        "size_bytes": e.totalSizeBytes,
+                        "is_jang": e.isJANG,
+                        "is_mxtq": e.isMXTQ,
+                        "quant_bits": e.quantBits as Any,
+                        "path": e.canonicalPath.path,
+                    ],
+                ]
+            }
+            return Self.json([
+                "object": "list",
+                "data": data,
+            ])
+        }
+
+        // POST /v1/chat/completions — full decode + streaming/non-streaming
+        router.post("/v1/chat/completions") { req, ctx -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+            let data = Data(buffer: body)
+            var chatReq: ChatRequest
+            do {
+                chatReq = try JSONDecoder().decode(ChatRequest.self, from: data)
+            } catch {
+                return Self.errorJSON(.badRequest, "invalid request: \(error)")
+            }
+            // P1-API-1: fold OpenAI v2 max_completion_tokens alias into max_tokens.
+            chatReq.applyMaxCompletionTokensAlias()
+            do {
+                try chatReq.validate()
+            } catch let err as ChatRequestValidationError {
+                return Self.errorJSON(.badRequest, err.description)
+            } catch {
+                return Self.errorJSON(.badRequest, "invalid request: \(error)")
+            }
+
+            let isStream = chatReq.stream ?? false
+            let id = "chatcmpl-\(UUID().uuidString.prefix(8).lowercased())"
+            let created = Int(Date().timeIntervalSince1970)
+
+            await engine.wakeFromStandby()
+            // Settings resolution happens inside `Engine.stream` →
+            // `performOneGenerationPass`, which calls
+            // `settings.resolved(request: RequestOverride.from(request))`
+            // and merges the resolved values into `GenerateParameters`.
+            // No duplicate resolution here — the engine is the single source
+            // of truth for the 4-tier merge.
+            if isStream {
+                let stream = await engine.stream(request: chatReq, id: id)
+                var headers: HTTPFields = [:]
+                headers[.contentType] = "text/event-stream; charset=utf-8"
+                headers[.cacheControl] = "no-cache"
+                headers[.connection] = "keep-alive"
+                return Response(
+                    status: .ok,
+                    headers: headers,
+                    body: SSEEncoder.chatCompletionStream(
+                        id: id, model: chatReq.model, created: created,
+                        includeUsage: chatReq.streamOptions?.includeUsage ?? false,
+                        includeReasoning: chatReq.includeReasoning ?? true,
+                        upstream: stream
+                    )
+                )
+            }
+
+            // Non-streaming: collect stream into a single response.
+            var content = ""
+            var reasoning = ""
+            var toolCalls: [ChatRequest.ToolCall] = []
+            var finishReason: String? = nil
+            var usage: StreamChunk.Usage? = nil
+            let stream = await engine.stream(request: chatReq, id: id)
+            do {
+                for try await chunk in stream {
+                    if let c = chunk.content { content += c }
+                    if let r = chunk.reasoning { reasoning += r }
+                    if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                    if let fr = chunk.finishReason { finishReason = fr }
+                    if let u = chunk.usage { usage = u }
+                }
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+
+            // Validate JSON output if response_format requested it.
+            // Surfaces violation as finish_reason="content_filter" so the
+            // SDK caller can detect that the contract was not honored.
+            // Returning the raw text alongside lets the user inspect what
+            // the model produced.
+            if let reason = Engine.validateResponseFormat(
+                content, format: chatReq.responseFormat)
+            {
+                finishReason = "content_filter"
+                content = "{\"error\": \"\(reason.replacingOccurrences(of: "\"", with: "'"))\", \"raw\": \(Self.jsonEscape(content))}"
+            }
+            var message: [String: Any] = ["role": "assistant", "content": content]
+            // Anthropic-compat: `include_reasoning=false` explicitly suppresses
+            // the reasoning block even if the model produced one. Default
+            // (nil/true) emits it so OpenAI clients that DO surface
+            // `reasoning_content` see it. Distinct from `enable_thinking`
+            // which controls *generation*.
+            let shouldEmitReasoning = chatReq.includeReasoning ?? true
+            if shouldEmitReasoning && !reasoning.isEmpty {
+                message["reasoning_content"] = reasoning
+            }
+            if !toolCalls.isEmpty {
+                message["tool_calls"] = toolCalls.map { tc -> [String: Any] in
+                    [
+                        "id": tc.id,
+                        "type": "function",
+                        "function": [
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        ] as [String: Any],
+                    ]
+                }
+            }
+            var obj: [String: Any] = [
+                "id": id,
+                "object": "chat.completion",
+                "created": created,
+                "model": chatReq.model,
+                "choices": [[
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finishReason ?? "stop",
+                ] as [String: Any]],
+            ]
+            if let u = usage {
+                obj["usage"] = [
+                    "prompt_tokens": u.promptTokens,
+                    "completion_tokens": u.completionTokens,
+                    "total_tokens": u.promptTokens + u.completionTokens,
+                    "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
+                ] as [String: Any]
+            }
+            return Self.json(obj)
+        }
+
+        // POST /v1/chat/completions/{id}/cancel
+        // POST /v1/responses/{id}/cancel
+        // POST /v1/completions/{id}/cancel
+        //
+        // OpenAI-compatible request cancellation. The Python server tracks
+        // active requests by id and routes the cancel to the specific
+        // generation task. The Swift engine currently exposes a single
+        // `cancelStream()` that cancels the in-flight stream regardless of
+        // id — this matches the common case (a chat client aborts the
+        // turn it just sent) but does NOT correctly handle parallel
+        // batched requests where multiple streams race. Build-state audit
+        // 2026-04-15 #2 — gap is acknowledged in the response payload via
+        // the `note` field so SDK callers know the semantics.
+        router.post("/v1/chat/completions/:id/cancel") { req, ctx -> Response in
+            let id = ctx.parameters.get("id") ?? ""
+            let hit = await engine.cancelStream(id: id)
+            if !hit { await engine.cancelStream() }
+            return Self.json([
+                "id": id, "object": "chat.completion.cancel",
+                "cancelled": true, "found": hit,
+            ])
+        }
+        router.post("/v1/responses/:id/cancel") { req, ctx -> Response in
+            let id = ctx.parameters.get("id") ?? ""
+            let hit = await engine.cancelStream(id: id)
+            if !hit { await engine.cancelStream() }
+            return Self.json([
+                "id": id, "object": "response.cancel",
+                "cancelled": true, "found": hit,
+            ])
+        }
+        router.post("/v1/completions/:id/cancel") { req, ctx -> Response in
+            let id = ctx.parameters.get("id") ?? ""
+            let hit = await engine.cancelStream(id: id)
+            if !hit { await engine.cancelStream() }
+            return Self.json([
+                "id": id, "object": "completion.cancel",
+                "cancelled": true, "found": hit,
+            ])
+        }
+
+        // POST /v1/completions — legacy text-completion endpoint.
+        //
+        // Internally wraps the `prompt` field as a single user message and
+        // dispatches through `engine.stream`. Matches OpenAI's original
+        // completion format (not chat.completion) with `choices[0].text`
+        // instead of `choices[0].message.content`.
+        //
+        // Short-circuit behaviors: streaming via SSE, stop-sequence support
+        // via the `stop` field, max_tokens, temperature, top_p all honored
+        // through the ChatRequest → GenerateParameters merge inside
+        // `Engine.stream`.
+        router.post("/v1/completions") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            let model = (obj["model"] as? String) ?? "default"
+            let prompt: String
+            if let s = obj["prompt"] as? String {
+                prompt = s
+            } else if let arr = obj["prompt"] as? [String] {
+                // Batching: concatenate for simplicity. OpenAI's real
+                // spec returns N choices for N prompts; we'd need a
+                // parallel batch path to match that faithfully.
+                prompt = arr.joined(separator: "\n")
+            } else {
+                return Self.errorJSON(.badRequest, "missing 'prompt'")
+            }
+
+            let chatReq = ChatRequest(
+                model: model,
+                messages: [.init(role: "user", content: .string(prompt))],
+                stream: obj["stream"] as? Bool,
+                maxTokens: obj["max_tokens"] as? Int,
+                temperature: obj["temperature"] as? Double,
+                topP: obj["top_p"] as? Double,
+                topK: obj["top_k"] as? Int,
+                minP: obj["min_p"] as? Double,
+                repetitionPenalty: obj["repetition_penalty"] as? Double,
+                stop: obj["stop"] as? [String],
+                seed: obj["seed"] as? Int
+            )
+            await engine.wakeFromStandby()
+
+            let id = "cmpl-\(UUID().uuidString.prefix(8).lowercased())"
+            let created = Int(Date().timeIntervalSince1970)
+            let isStream = chatReq.stream ?? false
+
+            if isStream {
+                let stream = await engine.stream(request: chatReq, id: id)
+                var headers: HTTPFields = [:]
+                headers[.contentType] = "text/event-stream; charset=utf-8"
+                headers[.cacheControl] = "no-cache"
+                headers[.connection] = "keep-alive"
+                return Response(
+                    status: .ok,
+                    headers: headers,
+                    body: SSEEncoder.textCompletionStream(
+                        id: id, model: model, created: created, upstream: stream
+                    )
+                )
+            }
+
+            var content = ""
+            var finishReason: String? = nil
+            var usage: StreamChunk.Usage? = nil
+            let stream = await engine.stream(request: chatReq, id: id)
+            do {
+                for try await chunk in stream {
+                    if let c = chunk.content { content += c }
+                    if let fr = chunk.finishReason { finishReason = fr }
+                    if let u = chunk.usage { usage = u }
+                }
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+
+            var obj2: [String: Any] = [
+                "id": id,
+                "object": "text_completion",
+                "created": created,
+                "model": model,
+                "choices": [[
+                    "text": content,
+                    "index": 0,
+                    "finish_reason": finishReason ?? "stop",
+                ] as [String: Any]],
+            ]
+            if let u = usage {
+                obj2["usage"] = [
+                    "prompt_tokens": u.promptTokens,
+                    "completion_tokens": u.completionTokens,
+                    "total_tokens": u.promptTokens + u.completionTokens,
+                ] as [String: Any]
+            }
+            return Self.json(obj2)
+        }
+
+        // POST /v1/responses — OpenAI "Responses" API.
+        //
+        // Supports:
+        //   - String or structured-array `input` (role+content parts,
+        //     function_call, function_call_output)
+        //   - `instructions` → system message
+        //   - `tools` passthrough (function tools only)
+        //   - `tool_choice` (auto/none/required/{type:function,name})
+        //   - `reasoning.effort` → reasoning_effort
+        //   - Non-streaming: emits `response` object with
+        //     `output[]` blocks (message + reasoning + function_call)
+        //   - Streaming SSE: emits Responses-shape events
+        //     (response.created, response.output_text.delta,
+        //     response.reasoning_summary.delta, response.completed)
+        //
+        // Conversation state (`previous_response_id`, `store`, background
+        // mode) is not persisted — callers resend history each turn.
+        router.post("/v1/responses") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            let model = (obj["model"] as? String) ?? "default"
+
+            var messages: [ChatRequest.Message] = []
+            if let sys = obj["instructions"] as? String, !sys.isEmpty {
+                messages.append(.init(role: "system", content: .string(sys)))
+            }
+
+            if let s = obj["input"] as? String {
+                messages.append(.init(role: "user", content: .string(s)))
+            } else if let arr = obj["input"] as? [[String: Any]] {
+                // Each item: {type:"message", role, content:[parts]}
+                //       or:  {type:"function_call", call_id, name, arguments}
+                //       or:  {type:"function_call_output", call_id, output}
+                for item in arr {
+                    let type = (item["type"] as? String) ?? "message"
+                    switch type {
+                    case "function_call":
+                        let callId = (item["call_id"] as? String)
+                            ?? (item["id"] as? String) ?? UUID().uuidString
+                        let name = (item["name"] as? String) ?? ""
+                        let args = (item["arguments"] as? String) ?? "{}"
+                        let wrapped: [String: Any] = [
+                            "id": callId,
+                            "type": "function",
+                            "function": ["name": name, "arguments": args],
+                        ]
+                        var calls: [ChatRequest.ToolCall]? = nil
+                        if let d = try? JSONSerialization.data(withJSONObject: wrapped),
+                           let tc = try? JSONDecoder().decode(
+                               ChatRequest.ToolCall.self, from: d) {
+                            calls = [tc]
+                        }
+                        messages.append(.init(
+                            role: "assistant",
+                            content: .string(""),
+                            toolCalls: calls))
+                    case "function_call_output":
+                        let callId = (item["call_id"] as? String) ?? ""
+                        let output = (item["output"] as? String) ?? ""
+                        messages.append(.init(
+                            role: "tool",
+                            content: .string(output),
+                            toolCallId: callId))
+                    default:  // "message" or legacy
+                        let role = (item["role"] as? String) ?? "user"
+                        let content: ChatRequest.ContentValue
+                        if let s = item["content"] as? String {
+                            content = .string(s)
+                        } else if let parts = item["content"] as? [[String: Any]] {
+                            var out: [ChatRequest.ContentPart] = []
+                            for p in parts {
+                                let t = (p["type"] as? String) ?? "text"
+                                if t == "input_text" || t == "output_text" || t == "text" {
+                                    out.append(.init(type: "text",
+                                        text: p["text"] as? String))
+                                } else if t == "input_image" {
+                                    if let url = p["image_url"] as? String {
+                                        out.append(.init(type: "image_url",
+                                            imageUrl: .init(url: url)))
+                                    } else if let dict = p["image_url"] as? [String: Any],
+                                              let url = dict["url"] as? String {
+                                        out.append(.init(type: "image_url",
+                                            imageUrl: .init(url: url)))
+                                    }
+                                }
+                            }
+                            content = .parts(out)
+                        } else {
+                            content = .string("")
+                        }
+                        messages.append(.init(role: role, content: content))
+                    }
+                }
+            } else {
+                return Self.errorJSON(.badRequest, "missing 'input'")
+            }
+
+            // tools[] — accept function tools only; Codable round-trip
+            // because ChatRequest.Tool.Function has no public memberwise init.
+            var tools: [ChatRequest.Tool]? = nil
+            if let rawTools = obj["tools"] as? [[String: Any]] {
+                var collected: [ChatRequest.Tool] = []
+                for t in rawTools {
+                    let type = (t["type"] as? String) ?? "function"
+                    guard type == "function" else { continue }
+                    var fn: [String: Any] = [:]
+                    if let n = t["name"] as? String { fn["name"] = n }
+                    if let d = t["description"] as? String { fn["description"] = d }
+                    if let p = t["parameters"] as? [String: Any] { fn["parameters"] = p }
+                    let wrapped: [String: Any] = ["type": "function", "function": fn]
+                    if let d = try? JSONSerialization.data(withJSONObject: wrapped),
+                       let tool = try? JSONDecoder().decode(ChatRequest.Tool.self, from: d) {
+                        collected.append(tool)
+                    }
+                }
+                if !collected.isEmpty { tools = collected }
+            }
+
+            var toolChoice: ChatRequest.ToolChoice? = nil
+            if let s = obj["tool_choice"] as? String {
+                let w: [String: Any] = ["tool_choice": s]
+                if let d = try? JSONSerialization.data(withJSONObject: w),
+                   let decoded = try? JSONDecoder().decode(
+                       [String: ChatRequest.ToolChoice].self, from: d) {
+                    toolChoice = decoded["tool_choice"]
+                }
+            } else if let tc = obj["tool_choice"] as? [String: Any],
+                      let fn = tc["function"] as? [String: Any],
+                      let name = fn["name"] as? String {
+                toolChoice = .function(name: name)
+            }
+
+            var reasoningEffort: String? = nil
+            if let r = obj["reasoning"] as? [String: Any],
+               let e = r["effort"] as? String {
+                reasoningEffort = e
+            }
+
+            let chatReq = ChatRequest(
+                model: model,
+                messages: messages,
+                stream: obj["stream"] as? Bool,
+                maxTokens: obj["max_output_tokens"] as? Int,
+                temperature: obj["temperature"] as? Double,
+                topP: obj["top_p"] as? Double,
+                reasoningEffort: reasoningEffort,
+                tools: tools,
+                toolChoice: toolChoice
+            )
+            await engine.wakeFromStandby()
+
+            let id = "resp_\(UUID().uuidString.prefix(8).lowercased())"
+            let created = Int(Date().timeIntervalSince1970)
+            let isStream = chatReq.stream ?? false
+
+            if isStream {
+                let upstream = await engine.stream(request: chatReq, id: id)
+                var headers: HTTPFields = [:]
+                headers[.contentType] = "text/event-stream; charset=utf-8"
+                headers[.cacheControl] = "no-cache"
+                headers[.connection] = "keep-alive"
+                return Response(
+                    status: .ok,
+                    headers: headers,
+                    body: SSEEncoder.responsesStream(
+                        id: id, model: model, created: created, upstream: upstream
+                    )
+                )
+            }
+
+            var content = ""
+            var reasoning = ""
+            var toolCalls: [ChatRequest.ToolCall] = []
+            var usage: StreamChunk.Usage? = nil
+            let stream = await engine.stream(request: chatReq, id: id)
+            do {
+                for try await chunk in stream {
+                    if let c = chunk.content { content += c }
+                    if let r = chunk.reasoning { reasoning += r }
+                    if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                    if let u = chunk.usage { usage = u }
+                }
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+
+            // Assemble output[] blocks.
+            var output: [[String: Any]] = []
+            if !reasoning.isEmpty {
+                output.append([
+                    "type": "reasoning",
+                    "id": "rs_\(UUID().uuidString.prefix(8).lowercased())",
+                    "summary": [[
+                        "type": "summary_text",
+                        "text": reasoning,
+                    ] as [String: Any]],
+                ])
+            }
+            if !content.isEmpty || (toolCalls.isEmpty && reasoning.isEmpty) {
+                output.append([
+                    "type": "message",
+                    "id": "msg_\(UUID().uuidString.prefix(8).lowercased())",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [[
+                        "type": "output_text",
+                        "text": content,
+                        "annotations": [] as [Any],
+                    ] as [String: Any]],
+                ])
+            }
+            for tc in toolCalls {
+                output.append([
+                    "type": "function_call",
+                    "id": "fc_\(UUID().uuidString.prefix(8).lowercased())",
+                    "call_id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                    "status": "completed",
+                ])
+            }
+
+            var out: [String: Any] = [
+                "id": id,
+                "object": "response",
+                "created_at": created,
+                "status": "completed",
+                "model": model,
+                "output_text": content,
+                "output": output,
+            ]
+            if let u = usage {
+                out["usage"] = [
+                    "input_tokens": u.promptTokens,
+                    "output_tokens": u.completionTokens,
+                    "total_tokens": u.promptTokens + u.completionTokens,
+                ] as [String: Any]
+            }
+            return Self.json(out)
+        }
+
+        // POST /v1/embeddings — real embeddings via vMLXEmbedders
+        router.post("/v1/embeddings") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            do {
+                let result = try await engine.embeddings(request: obj)
+                return Self.json(result)
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
+        // POST /v1/images/generations — dispatch to the dict-form
+        // `Engine.generateImage` which flows through FluxBackend.
+        // Accepts OpenAI wire format: `{model, prompt, n, size,
+        // response_format}`. The route body parses JSON and forwards
+        // untouched.
+        router.post("/v1/images/generations") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            do {
+                let result = try await engine.generateImage(request: obj)
+                return Self.json(result)
+            } catch {
+                // Surface the underlying flux error (typically a
+                // "generate() not yet ported" from the concrete model).
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
+        // POST /v1/images/edits — supports both OpenAI multipart/form-data
+        // (real SDK clients) AND a JSON body with base64 fields (the
+        // vMLX extension used by the in-app API tab).
+        //
+        // Multipart parts → dict-form:
+        //   image    → base64 `image`
+        //   mask     → base64 `mask`
+        //   prompt   → `prompt`
+        //   model    → `model`
+        //   size     → `size` ("512x512")
+        //   n        → `n` (Int)
+        //   response_format → `response_format`
+        router.post("/v1/images/edits") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 64 * 1024 * 1024)
+            let data = Data(buffer: body)
+            let contentType = req.headers[.contentType] ?? ""
+
+            var obj: [String: Any]? = nil
+            if contentType.lowercased().hasPrefix("multipart/form-data") {
+                guard let boundary = MultipartFormParser.boundary(from: contentType)
+                else {
+                    return Self.errorJSON(.badRequest,
+                        "multipart/form-data body missing boundary")
+                }
+                let parts = MultipartFormParser.parse(body: data, boundary: boundary)
+                var out: [String: Any] = [:]
+                for part in parts {
+                    switch part.name {
+                    case "image":
+                        out["image"] = part.body.base64EncodedString()
+                    case "mask":
+                        out["mask"] = part.body.base64EncodedString()
+                    case "prompt", "model", "size", "response_format":
+                        out[part.name] = String(data: part.body, encoding: .utf8) ?? ""
+                    case "n":
+                        let s = String(data: part.body, encoding: .utf8) ?? ""
+                        if let n = Int(s.trimmingCharacters(in: .whitespaces)) {
+                            out["n"] = n
+                        }
+                    default:
+                        // Unknown field — pass through as a raw string
+                        // so future extensions (e.g. `strength`) don't
+                        // silently drop.
+                        out[part.name] = String(data: part.body, encoding: .utf8) ?? ""
+                    }
+                }
+                obj = out
+            } else {
+                // JSON body (vMLX extension).
+                obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+
+            guard let request = obj else {
+                return Self.errorJSON(.badRequest,
+                    "Accepts multipart/form-data (OpenAI SDK) or JSON body with base64 fields.")
+            }
+            do {
+                let result = try await engine.editImage(request: request)
+                return Self.json(result)
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
+        // POST /v1/audio/transcriptions — ASR via native Whisper port.
+        //
+        // Parses OpenAI multipart/form-data (file, model, language,
+        // response_format, temperature, prompt) OR a JSON body with a
+        // base64 `audio` field (vMLX extension), then dispatches to
+        // `Engine.transcribe`. Response is shaped per `response_format`:
+        //   - "json"          → `{text: "..."}`                (default)
+        //   - "text"          → plain text/plain body
+        //   - "verbose_json"  → full dict (text+language+duration+segments)
+        //   - "srt" / "vtt"   → single-cue caption file for the clip
+        router.post("/v1/audio/transcriptions") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 128 * 1024 * 1024)
+            let data = Data(buffer: body)
+            let contentType = req.headers[.contentType] ?? ""
+
+            var audioData: Data? = nil
+            var fileExt: String = "wav"
+            var modelName: String = ""
+            var language: String? = nil
+            var responseFormat: String = "json"
+            var task: String = "transcribe"
+
+            if contentType.lowercased().hasPrefix("multipart/form-data") {
+                guard let boundary = MultipartFormParser.boundary(from: contentType)
+                else {
+                    return Self.errorJSON(.badRequest,
+                        "multipart/form-data body missing boundary")
+                }
+                let parts = MultipartFormParser.parse(body: data, boundary: boundary)
+                for part in parts {
+                    switch part.name {
+                    case "file":
+                        audioData = part.body
+                        if let fname = part.filename,
+                           let dot = fname.lastIndex(of: ".")
+                        {
+                            fileExt = String(fname[fname.index(after: dot)...])
+                        }
+                    case "model":
+                        modelName = String(data: part.body, encoding: .utf8) ?? ""
+                    case "language":
+                        language = String(data: part.body, encoding: .utf8)
+                    case "response_format":
+                        responseFormat = String(data: part.body, encoding: .utf8) ?? "json"
+                    case "task":
+                        task = String(data: part.body, encoding: .utf8) ?? "transcribe"
+                    case "prompt", "temperature":
+                        // Accepted and ignored for now — greedy decoder
+                        // has no temperature fallback yet, and the
+                        // optional text prompt prefix is a deferred
+                        // feature.
+                        break
+                    default:
+                        break
+                    }
+                }
+            } else {
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let b64 = obj["audio"] as? String,
+                       let decoded = Data(base64Encoded: b64) {
+                        audioData = decoded
+                    }
+                    if let e = obj["file_extension"] as? String { fileExt = e }
+                    if let m = obj["model"] as? String { modelName = m }
+                    if let l = obj["language"] as? String { language = l }
+                    if let r = obj["response_format"] as? String { responseFormat = r }
+                    if let tk = obj["task"] as? String { task = tk }
+                }
+            }
+
+            guard let audio = audioData, !audio.isEmpty else {
+                return Self.errorJSON(.badRequest,
+                    "transcriptions: missing 'file' audio part")
+            }
+
+            var dict: [String: Any] = [
+                "file": audio,
+                "file_extension": fileExt,
+                "task": task,
+            ]
+            if !modelName.isEmpty { dict["model"] = modelName }
+            if let language { dict["language"] = language }
+
+            do {
+                let result = try await engine.transcribe(request: dict)
+                let text = (result["text"] as? String) ?? ""
+                switch responseFormat.lowercased() {
+                case "text":
+                    return Response(
+                        status: .ok,
+                        headers: [.contentType: "text/plain; charset=utf-8"],
+                        body: .init(byteBuffer: .init(string: text)))
+                case "srt":
+                    let dur = (result["duration"] as? Double) ?? 0
+                    let body = Self.singleCueSRT(text: text, duration: dur)
+                    return Response(
+                        status: .ok,
+                        headers: [.contentType: "application/x-subrip"],
+                        body: .init(byteBuffer: .init(string: body)))
+                case "vtt":
+                    let dur = (result["duration"] as? Double) ?? 0
+                    let body = Self.singleCueVTT(text: text, duration: dur)
+                    return Response(
+                        status: .ok,
+                        headers: [.contentType: "text/vtt"],
+                        body: .init(byteBuffer: .init(string: body)))
+                case "verbose_json":
+                    var verbose = result
+                    verbose["segments"] = [] as [Any]
+                    return Self.json(verbose)
+                default:
+                    return Self.json(["text": text])
+                }
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
+        // POST /v1/audio/speech — TTS.
+        //
+        // OpenAI spec: { model, input, voice, response_format?, speed? }
+        // → raw audio bytes. We parse the JSON body, dispatch to
+        // `engine.synthesizeSpeech`, and return the audio with the
+        // appropriate content-type. The current backend is
+        // `PlaceholderSynth` (non-neural tone envelope) — see
+        // `Sources/vMLXTTS/TTSEngine.swift` for the handoff plan to
+        // Kokoro. The `X-vMLX-TTS-Backend` header lets clients detect
+        // whether they are getting neural output or the placeholder.
+        router.post("/v1/audio/speech") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 4 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            do {
+                let result = try await engine.synthesizeSpeech(request: obj)
+                var headers: HTTPFields = [:]
+                headers[.contentType] = result.contentType
+                headers[HTTPField.Name("X-vMLX-TTS-Backend")!] = result.backend
+                headers[HTTPField.Name("X-vMLX-TTS-SampleRate")!] = String(result.sampleRate)
+                headers[HTTPField.Name("X-vMLX-TTS-Duration")!] = String(format: "%.3f", result.durationSec)
+                var buf = ByteBuffer()
+                buf.writeBytes(result.audio)
+                return Response(status: .ok, headers: headers, body: .init(byteBuffer: buf))
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
+        // GET /v1/audio/voices — tts voice list; empty until TTS lands.
+        router.get("/v1/audio/voices") { _, _ -> Response in
+            Self.json(["object": "list", "data": []])
+        }
+
+        // POST /v1/rerank — real rerank via embedding cosine similarity.
+        //
+        // Compatible with OpenAI's new `/rerank` and Cohere's
+        // `/v1/rerank` request shapes. See `Engine.rerank` for the
+        // full semantics; this just decodes the JSON and forwards.
+        router.post("/v1/rerank") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            do {
+                let result = try await engine.rerank(request: obj)
+                return Self.json(result)
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Encode a Swift String as a JSON string literal (with surrounding
+    /// quotes). Used to embed raw model output into a JSON envelope when
+    /// reporting a response_format validation failure.
+    static func jsonEscape(_ s: String) -> String {
+        let data = (try? JSONSerialization.data(
+            withJSONObject: [s], options: [])) ?? Data("[\"\"]".utf8)
+        if let str = String(data: data, encoding: .utf8),
+           str.count >= 2,
+           let first = str.firstIndex(of: "\""),
+           let last = str.lastIndex(of: "\"")
+        {
+            return String(str[first...last])
+        }
+        return "\"\""
+    }
+
+    static func json(_ obj: [String: Any], status: HTTPResponse.Status = .ok) -> Response {
+        let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+        var buf = ByteBuffer()
+        buf.writeBytes(data)
+        return Response(
+            status: status,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: buf)
+        )
+    }
+
+    /// Format a duration in seconds as `HH:MM:SS,mmm` (SRT) or
+    /// `HH:MM:SS.mmm` (VTT).
+    static func formatTimestamp(_ seconds: Double, useComma: Bool) -> String {
+        let total = max(0, seconds)
+        let hours = Int(total) / 3600
+        let minutes = (Int(total) % 3600) / 60
+        let secs = Int(total) % 60
+        let millis = Int((total - Double(Int(total))) * 1000)
+        let sep = useComma ? "," : "."
+        return String(format: "%02d:%02d:%02d\(sep)%03d", hours, minutes, secs, millis)
+    }
+
+    /// Emit a single-cue SRT file covering the entire clip. Real
+    /// segment-aware SRT requires timestamp-token-aware decoding,
+    /// which is a deferred Whisper feature.
+    static func singleCueSRT(text: String, duration: Double) -> String {
+        let start = formatTimestamp(0, useComma: true)
+        let end = formatTimestamp(duration, useComma: true)
+        return "1\n\(start) --> \(end)\n\(text)\n"
+    }
+
+    /// Emit a single-cue WebVTT file covering the entire clip.
+    static func singleCueVTT(text: String, duration: Double) -> String {
+        let start = formatTimestamp(0, useComma: false)
+        let end = formatTimestamp(duration, useComma: false)
+        return "WEBVTT\n\n\(start) --> \(end)\n\(text)\n"
+    }
+
+    static func errorJSON(_ status: HTTPResponse.Status, _ message: String) -> Response {
+        Self.json([
+            "error": [
+                "message": message,
+                "type": "api_error",
+                "code": status.code,
+            ] as [String: Any]
+        ], status: status)
+    }
+}

@@ -1,8 +1,0 @@
-CORRECTNESS:  
-The function correctly identifies duplicate values in the list and returns them in a list. However, there is a logical flaw: it only adds a value to `dupes` if it is *not already in* the `dupes` list. This means that if a value appears multiple times, it will only be included once — which is correct for detecting unique duplicates. But the condition `lst[i] == lst[j]` is redundant since the outer loop ensures `i < j`, and the value is only added when it's first encountered. The logic works for identifying distinct duplicate values, but it does not guarantee that all duplicates are found — for example, if a value appears three times, it will still only be added once. That is acceptable for "finding dupes" as in "distinct values that appear more than once." However, the function does not handle edge cases like empty lists or single-element lists correctly (it would return an empty list in those cases, which is fine). Overall, correctness is acceptable for the stated purpose.
-
-PERFORMANCE:  
-The function has a time complexity of O(n²) due to the nested loops. For large lists, this becomes inefficient. Additionally, the `in` operation on the `dupes` list (which is O(k) where k is the size of `dupes`) results in an overall time complexity of O(n²k), which degrades further as the list grows. A more efficient approach would be to use a set to track seen values, reducing the lookup time to O(1). This would bring the complexity down to O(n). Performance is poor for large inputs and not scalable.
-
-STYLE:  
-The code is readable but could be improved. The variable `dupes` is used to store duplicates, but the name is ambiguous — it could be clearer as `unique_duplicates` or `distinct_dupes`.

@@ -1,0 +1,664 @@
+import Foundation
+
+/// Wire-compatible chat request. Mirrors the Python `ChatRequest` Pydantic model
+/// in vmlx_engine/server.py so the Swift HTTP server can decode the same payloads.
+public struct ChatRequest: Codable, Sendable {
+    public var model: String
+    public var messages: [Message]
+    public var stream: Bool?
+    public var maxTokens: Int?
+    public var temperature: Double?
+    public var topP: Double?
+    public var topK: Int?
+    public var minP: Double?
+    public var repetitionPenalty: Double?
+    public var stop: [String]?
+    public var seed: Int?
+    public var enableThinking: Bool?
+    public var reasoningEffort: String?
+    public var tools: [Tool]?
+    public var toolChoice: ToolChoice?
+    /// Optional session scope — vMLX extension. When set, the 4-tier
+    /// settings resolver merges session-level overrides on top of the
+    /// global defaults. Non-OpenAI field; ignored by clients that don't
+    /// know about it.
+    public var sessionId: String?
+    /// Optional chat scope — vMLX extension. When set, chat-level
+    /// overrides merge on top of session + global. Non-OpenAI.
+    public var chatId: String?
+
+    // MARK: - Decoded-but-unsupported OpenAI parameters
+    //
+    // These fields are accepted from the wire so the client's JSON
+    // decodes cleanly, but `validate()` rejects them with a
+    // structured 400 so the caller knows their request won't be
+    // honored instead of getting silently-dropped nonsense back.
+    //
+    // Remove a field from the reject list below AND extend
+    // `Engine.stream` to actually honor it when real support
+    // lands. Until then, failing loud beats failing silent.
+
+    /// OpenAI `n` — number of completions to generate per request.
+    /// vMLX always generates one. `n > 1` is rejected with 400.
+    public var n: Int?
+
+    /// OpenAI `logprobs` — when true, include token logprobs in
+    /// the response. Not implemented; rejected with 400.
+    public var logprobs: Bool?
+
+    /// OpenAI `top_logprobs` — how many logprobs to include per
+    /// position. Requires `logprobs == true`. Not implemented.
+    public var topLogprobs: Int?
+
+    /// OpenAI `frequency_penalty` — distinct from
+    /// `repetition_penalty`. Not implemented; rejected with 400.
+    public var frequencyPenalty: Double?
+
+    /// OpenAI `presence_penalty` — distinct from
+    /// `repetition_penalty`. Not implemented; rejected with 400.
+    public var presencePenalty: Double?
+
+    /// OpenAI `logit_bias` — per-token sampling bias dictionary.
+    /// Not implemented; rejected with 400 when non-empty.
+    public var logitBias: [String: Double]?
+
+    /// OpenAI `response_format` — JSON-object / JSON-schema
+    /// structured output. `text` (or nil) yields plain text; `json_object`
+    /// biases sampling toward valid JSON via a prompt-level system message
+    /// injection and a final-output validation pass; `json_schema`
+    /// additionally validates against the provided schema.
+    public var responseFormat: ResponseFormat?
+
+    /// OpenAI `stream_options` — per-stream configuration. Currently
+    /// honors `include_usage`: when true, the final SSE frame before
+    /// `[DONE]` carries a usage payload (prompt/completion/total tokens
+    /// plus cached breakdown). Default is false per OpenAI spec.
+    public var streamOptions: StreamOptions?
+
+    /// Anthropic-compat extension: when true, `reasoning_content` is
+    /// included in non-streaming responses (streaming already emits it
+    /// as a separate delta key). Distinct from `enable_thinking`, which
+    /// controls *whether* reasoning is generated at all.
+    public var includeReasoning: Bool?
+
+    /// OpenAI `chat_template_kwargs` — per-request template variables
+    /// merged into the Jinja render context alongside `reasoning_effort`.
+    /// Lets callers pass model-specific switches (e.g. `enable_tools`,
+    /// `assistant_prefix`) without a CLI rebuild.
+    public var chatTemplateKwargs: [String: JSONValue]?
+
+    public struct ResponseFormat: Codable, Sendable {
+        public var type: String?
+        public var jsonSchema: JSONSchemaSpec?
+
+        public init(type: String? = nil, jsonSchema: JSONSchemaSpec? = nil) {
+            self.type = type
+            self.jsonSchema = jsonSchema
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case jsonSchema = "json_schema"
+        }
+    }
+
+    /// OpenAI `response_format.json_schema` envelope.
+    /// `schema` holds the JSON Schema draft used for validation.
+    public struct JSONSchemaSpec: Codable, Sendable {
+        public var name: String?
+        public var description: String?
+        public var schema: JSONValue?
+        public var strict: Bool?
+
+        public init(name: String? = nil, description: String? = nil,
+                    schema: JSONValue? = nil, strict: Bool? = nil) {
+            self.name = name
+            self.description = description
+            self.schema = schema
+            self.strict = strict
+        }
+    }
+
+    public struct StreamOptions: Codable, Sendable {
+        public var includeUsage: Bool?
+        public init(includeUsage: Bool? = nil) {
+            self.includeUsage = includeUsage
+        }
+        enum CodingKeys: String, CodingKey {
+            case includeUsage = "include_usage"
+        }
+    }
+
+    public struct Message: Codable, Sendable {
+        public var role: String   // "system" | "user" | "assistant" | "tool"
+        public var content: ContentValue?
+        public var name: String?
+        public var toolCalls: [ToolCall]?
+        public var toolCallId: String?
+
+        public init(
+            role: String,
+            content: ContentValue? = nil,
+            name: String? = nil,
+            toolCalls: [ToolCall]? = nil,
+            toolCallId: String? = nil
+        ) {
+            self.role = role
+            self.content = content
+            self.name = name
+            self.toolCalls = toolCalls
+            self.toolCallId = toolCallId
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case role, content, name
+            case toolCalls = "tool_calls"
+            case toolCallId = "tool_call_id"
+        }
+    }
+
+    public init(
+        model: String,
+        messages: [Message],
+        stream: Bool? = nil,
+        maxTokens: Int? = nil,
+        temperature: Double? = nil,
+        topP: Double? = nil,
+        topK: Int? = nil,
+        minP: Double? = nil,
+        repetitionPenalty: Double? = nil,
+        stop: [String]? = nil,
+        seed: Int? = nil,
+        enableThinking: Bool? = nil,
+        reasoningEffort: String? = nil,
+        tools: [Tool]? = nil,
+        toolChoice: ToolChoice? = nil,
+        sessionId: String? = nil,
+        chatId: String? = nil
+    ) {
+        self.model = model
+        self.messages = messages
+        self.stream = stream
+        self.maxTokens = maxTokens
+        self.temperature = temperature
+        self.topP = topP
+        self.topK = topK
+        self.minP = minP
+        self.repetitionPenalty = repetitionPenalty
+        self.stop = stop
+        self.seed = seed
+        self.enableThinking = enableThinking
+        self.reasoningEffort = reasoningEffort
+        self.tools = tools
+        self.toolChoice = toolChoice
+        self.sessionId = sessionId
+        self.chatId = chatId
+    }
+
+    /// Multimodal content: either a plain string OR an array of parts (text/image_url).
+    public enum ContentValue: Codable, Sendable {
+        case string(String)
+        case parts([ContentPart])
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if let s = try? c.decode(String.self) { self = .string(s); return }
+            self = .parts(try c.decode([ContentPart].self))
+        }
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .string(let s): try c.encode(s)
+            case .parts(let p):  try c.encode(p)
+            }
+        }
+    }
+
+    public struct ContentPart: Codable, Sendable {
+        public var type: String   // "text" | "image_url"
+        public var text: String?
+        public var imageUrl: ImageURL?
+        public struct ImageURL: Codable, Sendable {
+            public var url: String
+            public var detail: String?
+
+            public init(url: String, detail: String? = nil) {
+                self.url = url
+                self.detail = detail
+            }
+
+            /// Decode the URL field to raw image bytes. Handles four formats:
+            ///  1. `data:image/...;base64,<b64>` (OpenAI chat vision)
+            ///  2. `file:///absolute/path.png`
+            ///  3. `http(s)://host/path.png`
+            ///  4. bare base64 (Ollama `images: [String]`)
+            public func loadImageData() async -> Data? {
+                let raw = url
+                // Data URL
+                if raw.hasPrefix("data:") {
+                    if let comma = raw.firstIndex(of: ",") {
+                        let b64 = String(raw[raw.index(after: comma)...])
+                        return Data(base64Encoded: b64,
+                                    options: .ignoreUnknownCharacters)
+                    }
+                    return nil
+                }
+                // File URL
+                if raw.hasPrefix("file://") {
+                    if let u = URL(string: raw) {
+                        return try? Data(contentsOf: u)
+                    }
+                    return nil
+                }
+                // HTTP(S) URL
+                if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
+                    guard let u = URL(string: raw) else { return nil }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: u)
+                        return data
+                    } catch {
+                        return nil
+                    }
+                }
+                // Bare base64 (Ollama convention)
+                return Data(base64Encoded: raw, options: .ignoreUnknownCharacters)
+            }
+        }
+
+        public init(type: String, text: String? = nil, imageUrl: ImageURL? = nil) {
+            self.type = type
+            self.text = text
+            self.imageUrl = imageUrl
+        }
+
+        enum CodingKeys: String, CodingKey { case type, text; case imageUrl = "image_url" }
+    }
+
+    public struct Tool: Codable, Sendable {
+        public var type: String   // "function"
+        public var function: Function
+        public init(type: String, function: Function) {
+            self.type = type
+            self.function = function
+        }
+        public struct Function: Codable, Sendable {
+            public var name: String
+            public var description: String?
+            public var parameters: JSONValue?
+            public init(name: String, description: String?, parameters: JSONValue?) {
+                self.name = name
+                self.description = description
+                self.parameters = parameters
+            }
+        }
+    }
+
+    public struct ToolCall: Codable, Sendable {
+        public var id: String
+        public var type: String
+        public var function: Function
+        public struct Function: Codable, Sendable {
+            public var name: String
+            public var arguments: String
+        }
+    }
+
+    public enum ToolChoice: Codable, Sendable {
+        case auto
+        case none
+        case required
+        case function(name: String)
+
+        public init(from decoder: Decoder) throws {
+            if let s = try? decoder.singleValueContainer().decode(String.self) {
+                switch s {
+                case "auto": self = .auto
+                case "none": self = .none
+                case "required": self = .required
+                default: self = .function(name: s)
+                }
+                return
+            }
+            // {"type":"function","function":{"name":"..."}}
+            struct Wrap: Codable { let function: F; struct F: Codable { let name: String } }
+            let w = try decoder.singleValueContainer().decode(Wrap.self)
+            self = .function(name: w.function.name)
+        }
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .auto: try c.encode("auto")
+            case .none: try c.encode("none")
+            case .required: try c.encode("required")
+            case .function(let n): try c.encode(n)
+            }
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case model, messages, stream, temperature, stop, seed, tools
+        case maxTokens = "max_tokens"
+        case topP = "top_p"
+        case topK = "top_k"
+        case minP = "min_p"
+        case repetitionPenalty = "repetition_penalty"
+        case enableThinking = "enable_thinking"
+        case reasoningEffort = "reasoning_effort"
+        case toolChoice = "tool_choice"
+        case sessionId = "session_id"
+        case chatId = "chat_id"
+        case n
+        case logprobs
+        case topLogprobs = "top_logprobs"
+        case frequencyPenalty = "frequency_penalty"
+        case presencePenalty = "presence_penalty"
+        case logitBias = "logit_bias"
+        case responseFormat = "response_format"
+        case streamOptions = "stream_options"
+        case includeReasoning = "include_reasoning"
+        case chatTemplateKwargs = "chat_template_kwargs"
+        case thinkingBudget = "thinking_budget"
+        case maxToolIterations = "max_tool_iterations"
+        case maxCompletionTokens = "max_completion_tokens"
+    }
+
+    /// OpenAI v2 alias for `max_tokens`. Stored as-is via Codable
+    /// auto-synthesis; the route handler folds it into `maxTokens` via
+    /// `applyMaxCompletionTokensAlias()` after decoding. Audit P1-API-1.
+    public var maxCompletionTokens: Int?
+
+    /// Post-decode hook that folds `max_completion_tokens` into
+    /// `max_tokens` when the latter is nil. Idempotent; safe to call
+    /// multiple times. Route handlers should call this once on every
+    /// decoded ChatRequest before passing it to `Engine.stream()`.
+    public mutating func applyMaxCompletionTokensAlias() {
+        if maxTokens == nil, let v = maxCompletionTokens, v > 0 {
+            maxTokens = v
+        }
+    }
+
+    /// Anthropic-compat extension: caps the number of tokens generated
+    /// inside the reasoning/`<think>` segment. When the budget is
+    /// exhausted mid-reasoning, the engine force-closes the block
+    /// (injects `</think>`) and continues with visible content.
+    /// 0 disables the cap.
+    public var thinkingBudget: Int?
+
+    /// vMLX extension: per-request override for the max number of
+    /// tool-execution iterations the outer loop will run. Falls back to
+    /// `defaultMaxToolIterations` from the settings tier when nil. Caps
+    /// runaway tool loops from the request layer instead of forcing a
+    /// session-wide setting change.
+    public var maxToolIterations: Int?
+
+    /// Validate field ranges + structure. Throws `ChatRequestValidationError`
+    /// with a descriptive message on any out-of-range or malformed input.
+    ///
+    /// Called from the HTTP route handlers before dispatching to
+    /// `Engine.stream(request:)` so bad client input surfaces as a
+    /// clean 400 Bad Request instead of a mid-stream fatal.
+    /// Ranges mirror OpenAI / Anthropic spec bounds where both specs
+    /// agree, and pick the wider interval otherwise.
+    public func validate() throws {
+        if messages.isEmpty {
+            throw ChatRequestValidationError(
+                field: "messages", reason: "must be non-empty")
+        }
+        for (idx, m) in messages.enumerated() {
+            let role = m.role
+            let validRoles: Set<String> = [
+                "system", "user", "assistant", "tool", "developer", "function",
+            ]
+            if !validRoles.contains(role) {
+                let allowed = validRoles.sorted().joined(separator: ", ")
+                throw ChatRequestValidationError(
+                    field: "messages[\(idx)].role",
+                    reason: "unknown role `\(role)` — expected one of \(allowed)")
+            }
+        }
+        if let t = temperature, !(t >= 0 && t <= 2) {
+            throw ChatRequestValidationError(
+                field: "temperature", reason: "must be in [0, 2], got \(t)")
+        }
+        if let p = topP, !(p > 0 && p <= 1) {
+            throw ChatRequestValidationError(
+                field: "top_p", reason: "must be in (0, 1], got \(p)")
+        }
+        if let k = topK, k < 0 {
+            throw ChatRequestValidationError(
+                field: "top_k", reason: "must be >= 0, got \(k)")
+        }
+        if let p = minP, !(p >= 0 && p <= 1) {
+            throw ChatRequestValidationError(
+                field: "min_p", reason: "must be in [0, 1], got \(p)")
+        }
+        if let rp = repetitionPenalty, !(rp > 0 && rp <= 5) {
+            throw ChatRequestValidationError(
+                field: "repetition_penalty",
+                reason: "must be in (0, 5], got \(rp)")
+        }
+        if let mt = maxTokens, mt <= 0 {
+            throw ChatRequestValidationError(
+                field: "max_tokens", reason: "must be > 0, got \(mt)")
+        }
+        if let s = stop, s.count > 16 {
+            throw ChatRequestValidationError(
+                field: "stop",
+                reason: "at most 16 stop sequences supported, got \(s.count)")
+        }
+
+        // MARK: Decoded-but-not-yet-fully-implemented OpenAI fields.
+        //
+        // **Silent accept.** Every mainstream OpenAI client (openai-python,
+        // openai-node, LangChain, LiteLLM, LlamaIndex, Open WebUI, Cline,
+        // Aider, Continue.dev, Chatbox) always sends `presence_penalty=0`,
+        // `frequency_penalty=0`, often `logprobs=false`, often
+        // `response_format={"type":"text"}` as defaults from their config.
+        // Returning 400 on these breaks every single SDK round-trip on the
+        // first request, regardless of whether the user actually meant to
+        // toggle the feature. The Swift engine previously rejected all five
+        // — broke ~100% of OpenAI SDK callers in the wild.
+        //
+        // The new contract: validate **range** of values that ARE present,
+        // accept-silently otherwise. The values are still parsed and
+        // available on `ChatRequest` for any future implementation; we just
+        // don't fail the request when they're set to a no-op default OR a
+        // value we can't honor yet. Range-checking still rejects nonsense
+        // (`presence_penalty=42`, `top_p=-1`).
+        //
+        // The `n != 1` case stays a hard reject because vMLX truly cannot
+        // produce multiple completions in one pass — silently producing
+        // one when the caller asked for five would corrupt downstream code.
+        if let n = n, n != 1 {
+            throw ChatRequestValidationError(
+                field: "n",
+                reason: "vMLX generates exactly one completion per request; `n=\(n)` is not supported. Issue multiple requests or use batching.")
+        }
+        if let fp = frequencyPenalty, !(fp >= -2 && fp <= 2) {
+            throw ChatRequestValidationError(
+                field: "frequency_penalty",
+                reason: "must be in [-2, 2], got \(fp)")
+        }
+        if let pp = presencePenalty, !(pp >= -2 && pp <= 2) {
+            throw ChatRequestValidationError(
+                field: "presence_penalty",
+                reason: "must be in [-2, 2], got \(pp)")
+        }
+        if let tlp = topLogprobs, !(tlp >= 0 && tlp <= 20) {
+            throw ChatRequestValidationError(
+                field: "top_logprobs",
+                reason: "must be in [0, 20], got \(tlp)")
+        }
+        // logprobs / logit_bias / response_format are all accepted as-is;
+        // the engine ignores them for now and the response simply omits
+        // the corresponding fields. Clients that strictly require them
+        // can detect the absence in the response payload.
+    }
+}
+
+/// Thrown by `ChatRequest.validate()` when an input field is
+/// out-of-range or malformed. Route handlers catch this and return
+/// a 400 response with `{"error": {"message": ..., "type": "invalid_request_error"}}`.
+public struct ChatRequestValidationError: Error, CustomStringConvertible, Sendable {
+    public let field: String
+    public let reason: String
+    public init(field: String, reason: String) {
+        self.field = field
+        self.reason = reason
+    }
+    public var description: String {
+        "invalid request: \(field): \(reason)"
+    }
+}
+
+/// One streaming delta emitted by `Engine.stream`. Maps 1:1 to OpenAI SSE chunks.
+///
+/// Field semantics — matches `vmlx_engine/server.py::_stream_chat_completions`:
+/// - `content` — visible assistant text. May be empty during reasoning phase.
+/// - `reasoning` — `<think>` content. UI must render this OR fall through to
+///   content when `enable_thinking == false` to honor §15 of NO-REGRESSION.
+/// - `toolCallDelta` — incremental tool-call argument streaming
+///   (`tool_calls[].function.arguments` arrives in chunks like content).
+/// - `toolStatus` — non-final tool-call lifecycle events (started/running/done)
+///   used by the chat UI's `InlineToolCall` cards.
+/// - `finishReason` — final chunk sets this; UI uses to flip streaming → done.
+/// - `usage` — final chunk carries metrics; per-message UI strip reads this.
+public struct StreamChunk: Sendable {
+    public var content: String?
+    public var reasoning: String?
+    public var toolCalls: [ChatRequest.ToolCall]?
+    public var toolCallDelta: ToolCallDelta?
+    public var toolStatus: ToolStatus?
+    public var finishReason: String?
+    public var usage: Usage?
+
+    public init(
+        content: String? = nil,
+        reasoning: String? = nil,
+        toolCalls: [ChatRequest.ToolCall]? = nil,
+        toolCallDelta: ToolCallDelta? = nil,
+        toolStatus: ToolStatus? = nil,
+        finishReason: String? = nil,
+        usage: Usage? = nil
+    ) {
+        self.content = content
+        self.reasoning = reasoning
+        self.toolCalls = toolCalls
+        self.toolCallDelta = toolCallDelta
+        self.toolStatus = toolStatus
+        self.finishReason = finishReason
+        self.usage = usage
+    }
+
+    /// Per-message metrics surfaced under each assistant turn. Mirrors
+    /// `panel/src/renderer/src/lib/chat-utils.ts::getMetricsItems` 1:1.
+    public struct Usage: Sendable {
+        public var promptTokens: Int
+        public var completionTokens: Int
+        public var cachedTokens: Int
+        /// Generation throughput (decoded tokens / second).
+        public var tokensPerSecond: Double?
+        /// Prefill throughput (prompt tokens / second).
+        public var promptTokensPerSecond: Double?
+        /// Time to first token (ms).
+        public var ttftMs: Double?
+        /// Prefill wall-clock time (ms). Populated from
+        /// `GenerateCompletionInfo.promptTime * 1000` on the final chunk;
+        /// `nil` on partial usage emissions during streaming.
+        public var prefillMs: Double?
+        /// Total wall-clock time from request received to final chunk (ms).
+        public var totalMs: Double?
+        /// Human-readable cache breakdown e.g. `"paged+ssm(23)+tq"`.
+        public var cacheDetail: String?
+        /// `true` when this usage is a live partial emitted DURING the stream
+        /// (not the authoritative final totals). UI can use this to drive a
+        /// "live" indicator without disturbing the finalized metrics strip.
+        public var isPartial: Bool
+
+        public init(
+            promptTokens: Int = 0,
+            completionTokens: Int = 0,
+            cachedTokens: Int = 0,
+            tokensPerSecond: Double? = nil,
+            promptTokensPerSecond: Double? = nil,
+            ttftMs: Double? = nil,
+            prefillMs: Double? = nil,
+            totalMs: Double? = nil,
+            cacheDetail: String? = nil,
+            isPartial: Bool = false
+        ) {
+            self.promptTokens = promptTokens
+            self.completionTokens = completionTokens
+            self.cachedTokens = cachedTokens
+            self.tokensPerSecond = tokensPerSecond
+            self.promptTokensPerSecond = promptTokensPerSecond
+            self.ttftMs = ttftMs
+            self.prefillMs = prefillMs
+            self.totalMs = totalMs
+            self.cacheDetail = cacheDetail
+            self.isPartial = isPartial
+        }
+    }
+
+    /// Incremental tool-call streaming. One delta per OpenAI chunk —
+    /// `index` identifies which tool call is being appended to.
+    public struct ToolCallDelta: Sendable {
+        public var index: Int
+        public var id: String?
+        public var name: String?
+        public var argumentsDelta: String?
+        public init(index: Int, id: String? = nil, name: String? = nil, argumentsDelta: String? = nil) {
+            self.index = index
+            self.id = id
+            self.name = name
+            self.argumentsDelta = argumentsDelta
+        }
+    }
+
+    /// Tool-call lifecycle event for the inline tool-call card UI.
+    public struct ToolStatus: Sendable {
+        public enum Phase: String, Sendable { case started, running, done, error }
+        public var toolCallId: String
+        public var name: String
+        public var phase: Phase
+        public var message: String?
+        public init(toolCallId: String, name: String, phase: Phase, message: String? = nil) {
+            self.toolCallId = toolCallId
+            self.name = name
+            self.phase = phase
+            self.message = message
+        }
+    }
+}
+
+/// Minimal JSON value type for tool parameter passthrough.
+public indirect enum JSONValue: Codable, Sendable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null; return }
+        if let b = try? c.decode(Bool.self) { self = .bool(b); return }
+        if let n = try? c.decode(Double.self) { self = .number(n); return }
+        if let s = try? c.decode(String.self) { self = .string(s); return }
+        if let a = try? c.decode([JSONValue].self) { self = .array(a); return }
+        if let o = try? c.decode([String: JSONValue].self) { self = .object(o); return }
+        throw DecodingError.dataCorruptedError(in: c, debugDescription: "unknown JSON value")
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .null:        try c.encodeNil()
+        case .bool(let b): try c.encode(b)
+        case .number(let n): try c.encode(n)
+        case .string(let s): try c.encode(s)
+        case .array(let a):  try c.encode(a)
+        case .object(let o): try c.encode(o)
+        }
+    }
+}

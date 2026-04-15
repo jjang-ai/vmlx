@@ -1,8 +1,0 @@
-CORRECTNESS:  
-The function correctly identifies duplicate values in the list and returns them in a list. However, there is a logical flaw: if a value appears multiple times, it will only be added to `dupes` the first time it is compared with a later element. This means that even if a value appears three times, it will still only appear once in the output — which is correct for detecting *distinct* duplicates. But the condition `lst[i] not in dupes` is checked *after* the comparison, and since `dupes` is built incrementally, it avoids duplicates in the output. So the function returns a list of unique values that appear more than once — which is the intended behavior. However, the function does not handle the case where the list is empty or has only one element correctly (it returns an empty list in those cases, which is fine). Overall, correctness is acceptable for the stated goal.
-
-PERFORMANCE:  
-The function has a time complexity of O(n²) due to the nested loops, and for each comparison, it performs a membership check (`lst[i] not in dupes`) which is O(k) in the worst case (where k is the size of `dupes`). This results in an overall time complexity of approximately O(n² × k), which degrades significantly for large inputs. Additionally, the `in` operation on `dupes` is inefficient because `dupes` is a list, not a set. A more efficient approach would be to use a set to track seen values, reducing the lookup time to O(1). Performance is therefore suboptimal, especially for large or repeated lists.
-
-STYLE:  
-The function is readable and straightforward, but it could be improved for clarity and Pythonic style. The variable names (`dupes`, `i`, `j`) are fine, but the logic could be more clearly

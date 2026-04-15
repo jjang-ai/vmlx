@@ -1,3 +1,0 @@
-Okay, the user is asking what we were last working on together. Let me check my conversation history. Wait, I don't have access to previous conversations. Each session is stateless, so I can't recall past interactions. I need to inform the user that I don't have memory of past conversations. I should let them know that I can't remember previous topics and offer to help with something new. Keep it friendly and helpful.
-
-I don't have access to our previous conversations, as each session is independent and I don't retain memory of past interactions. However, I'm happy to help you with anything new! What would you like to work on today? 😊

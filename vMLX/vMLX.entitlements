@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- NOTE: App Sandbox is INTENTIONALLY DISABLED.
+         Terminal mode needs full shell access (BashTool runs `/bin/bash -c ...`
+         via Foundation.Process), and the agentic loops need to read/write
+         arbitrary paths the user picks on the fly. MAS distribution was
+         dropped because of this — we ship Developer ID notarized DMGs only.
+         Decision record: memory/project_swift_terminal_mode.md
+    -->
+
+    <!-- Hardened runtime still enforced via ENABLE_HARDENED_RUNTIME=YES.
+         The following runtime exceptions are required by the ML stack:
+         - allow-jit / allow-unsigned-executable-memory: MLX Metal kernels
+           build shaders at runtime.
+         - disable-library-validation: mlx-swift loads Metal dylibs.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!--
+      Required for the Whisper python3 transcode path (WhisperLoader
+      shells `python3 -m mlx.core` to convert legacy `.npz` weights to
+      `.safetensors`). Without this entitlement the child process can't
+      inherit DYLD_LIBRARY_PATH / PYTHONPATH from the user's shell, so
+      any non-system python3 install fails to find MLX.
+    -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <!--
+      MLX Metal kernel JIT trips W^X (writeable + executable memory)
+      faults on some macOS 14.x point releases when generating a fresh
+      Metal shader pipeline. Disabling executable-page-protection lets
+      the JIT page flip read→exec without the kernel killing the
+      process. Standard for every MLX-backed app shipping under
+      hardened runtime.
+    -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+</dict>
+</plist>

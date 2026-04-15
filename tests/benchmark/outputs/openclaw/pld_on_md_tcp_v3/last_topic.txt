@@ -1,4 +1,0 @@
-Okay, the user is asking what we were last working on together. Hmm, I need to check my conversation history. Wait, as an AI, I don't have memory of past interactions beyond the current session. Each conversation is stateless unless there's a context provided. Since this is the start of a new chat, there's no prior context. I should inform the user that I don't have access to previous conversations and offer to help with something new. Make sure to be friendly and helpful.
-
-
-I don't have access to our previous conversations or memory of past interactions—each chat session is new and independent! 😊 But I'm here to help you with whatever you'd like to work on now. What would you like to tackle today?

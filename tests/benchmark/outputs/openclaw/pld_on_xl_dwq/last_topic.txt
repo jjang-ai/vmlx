@@ -1,5 +1,0 @@
-Okay, the user is asking, "What were we last working on together?" Hmm, I need to check the conversation history to see what we were discussing before. But wait, looking at the current context, there's no previous conversation history provided. The user might think we had a prior discussion, but since this is the start of our chat, there's nothing to reference.
-
-I should let them know that I don't have access to past conversations. Maybe they're confused or think I remember previous interactions. I need to clarify that each session is independent. Let me make sure to be friendly and offer help with whatever they need now. Yeah, that makes sense. Keep it clear
-
-It seems like this is the start of our conversation! I don't have access to past interactions, so I can't recall what we might have worked on before. But I'm here to help with whatever you need now! 😊 What would you like to tackle today?
