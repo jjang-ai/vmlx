@@ -38,6 +38,17 @@ struct SessionConfigForm: View {
     // so the user sees what value will be inherited if they leave it empty.
     @State private var globalDefaults: GlobalSettings = GlobalSettings()
 
+    /// True when this session is configured to proxy to a remote HTTP
+    /// endpoint. In remote mode, all the local-only settings (Engine,
+    /// Cache, Lifecycle, Advanced) are inert — the local MLX loader
+    /// never runs — so we hide those sections entirely instead of
+    /// showing settings that silently do nothing. Inference defaults
+    /// still apply because we forward them as request parameters to
+    /// the remote.
+    private var isRemote: Bool {
+        (s.remoteURL?.isEmpty == false)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -47,21 +58,39 @@ struct SessionConfigForm: View {
 
                 modelSection
                 divider
-                disclosure("Engine", isOn: $openEngine) { engineSection }
-                divider
-                disclosure("Cache", isOn: $openCache) { cacheSection }
-                divider
-                disclosure("Inference defaults", isOn: $openInference) { inferenceSection }
-                divider
-                disclosure("Lifecycle", isOn: $openLifecycle) { lifecycleSection }
-                divider
-                disclosure("Server", isOn: $openServer) { serverSection }
-                divider
+                // Remote-endpoint toggle sits first after the model row
+                // so users immediately see the fork: local engine vs
+                // proxy-to-remote. Below sections flip based on this.
                 disclosure("Remote endpoint (proxy mode)", isOn: $openRemote) { remoteSection }
                 divider
-                disclosure("Advanced", isOn: $openAdvanced) { advancedSection }
-                divider
-                disclosure("Logging", isOn: $openLogging) { loggingSection }
+
+                if isRemote {
+                    // Remote mode: only Inference + Server (the
+                    // listener that proxy clients hit) + Logging make
+                    // sense. Local engine/cache/lifecycle/advanced
+                    // don't run, so suppress them rather than show
+                    // dead controls.
+                    disclosure("Inference defaults", isOn: $openInference) { inferenceSection }
+                    divider
+                    disclosure("Server (local listener)", isOn: $openServer) { serverSection }
+                    divider
+                    disclosure("Logging", isOn: $openLogging) { loggingSection }
+                } else {
+                    // Local engine mode: full stack.
+                    disclosure("Engine", isOn: $openEngine) { engineSection }
+                    divider
+                    disclosure("Cache", isOn: $openCache) { cacheSection }
+                    divider
+                    disclosure("Inference defaults", isOn: $openInference) { inferenceSection }
+                    divider
+                    disclosure("Lifecycle", isOn: $openLifecycle) { lifecycleSection }
+                    divider
+                    disclosure("Server", isOn: $openServer) { serverSection }
+                    divider
+                    disclosure("Advanced", isOn: $openAdvanced) { advancedSection }
+                    divider
+                    disclosure("Logging", isOn: $openLogging) { loggingSection }
+                }
             }
             .font(Theme.Typography.body)
             .foregroundStyle(Theme.Colors.textHigh)
