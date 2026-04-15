@@ -411,6 +411,51 @@ public class DeepseekV3ModelInner: Module {
 
         return norm(h)
     }
+
+    /// Forward pass that also captures per-layer hidden states at each
+    /// requested decoder index. Used by JANG-DFlash to feed target
+    /// hiddens into the drafter's KV injection (see DFlash §4.1).
+    ///
+    /// DeepSeek V3 uses MLA attention — the internal compressed K/V
+    /// representations are not a stable tap surface, so the tap is the
+    /// **post-decoder-block residual hidden state** (same `h` as standard
+    /// forward). This matches MiniMax / Mistral 4 semantics and the
+    /// drafter's distillation contract.
+    ///
+    /// - Parameters:
+    ///   - inputs: token ID tensor `[B, L]`
+    ///   - cache:  optional per-layer KV caches (may be nil for cacheless)
+    ///   - tapLayers: decoder indices whose post-layer hidden state to
+    ///     capture
+    ///   - providedMask: when non-nil, replaces the auto-built causal
+    ///     mask (used for tree-attention verification during spec-dec)
+    func callAsFunctionWithTaps(
+        _ inputs: MLXArray,
+        cache: [KVCache]?,
+        tapLayers: Set<Int>,
+        providedMask: MLXFast.ScaledDotProductAttentionMaskMode? = nil
+    ) -> (output: MLXArray, taps: [Int: MLXArray]) {
+        var h = embedTokens(inputs)
+
+        let mask: MLXFast.ScaledDotProductAttentionMaskMode
+        if let providedMask {
+            mask = providedMask
+        } else {
+            mask = createAttentionMask(h: h, cache: cache?.first)
+        }
+
+        var taps: [Int: MLXArray] = [:]
+        taps.reserveCapacity(tapLayers.count)
+
+        for (i, layer) in layers.enumerated() {
+            h = layer(h, mask: mask, cache: cache?[i])
+            if tapLayers.contains(i) {
+                taps[i] = h
+            }
+        }
+
+        return (norm(h), taps)
+    }
 }
 
 public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAModel {
@@ -429,6 +474,21 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
         let out = model(inputs, cache: cache)
         return lmHead(out)
+    }
+
+    /// Forward pass that exposes per-layer hidden-state taps alongside
+    /// the logits. Wraps `DeepseekV3ModelInner.callAsFunctionWithTaps`
+    /// and routes the final hidden state through `lm_head` the same way
+    /// as the standard forward.
+    public func callAsFunctionWithTaps(
+        _ inputs: MLXArray,
+        cache: [KVCache]?,
+        tapLayers: Set<Int>,
+        providedMask: MLXFast.ScaledDotProductAttentionMaskMode? = nil
+    ) -> (logits: MLXArray, taps: [Int: MLXArray]) {
+        let (out, taps) = model.callAsFunctionWithTaps(
+            inputs, cache: cache, tapLayers: tapLayers, providedMask: providedMask)
+        return (lmHead(out), taps)
     }
 
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
@@ -480,5 +540,39 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
 
     public var loraLayers: [Module] {
         model.layers
+    }
+}
+
+// MARK: - JANG-DFlash target adapter
+//
+// Bridges `DeepseekV3Model.callAsFunctionWithTaps(...)` to the
+// architecture-agnostic `JangDFlashTarget` protocol defined in
+// vMLXLMCommon/DFlash/JangDFlashSpecDec.swift. Mirrors
+// `MiniMaxDFlashTarget` — kept as an adapter (rather than a direct
+// conformance) so vMLXLMCommon stays model-agnostic.
+public final class DeepseekV3DFlashTarget: JangDFlashTarget {
+    public let model: DeepseekV3Model
+
+    public init(_ model: DeepseekV3Model) { self.model = model }
+
+    public func forwardWithTaps(
+        inputs: MLXArray,
+        cache: [KVCache]?,
+        tapLayers: Set<Int>,
+        providedMask: MLXFast.ScaledDotProductAttentionMaskMode?
+    ) -> (logits: MLXArray, taps: [Int: MLXArray]) {
+        return model.callAsFunctionWithTaps(
+            inputs,
+            cache: cache,
+            tapLayers: tapLayers,
+            providedMask: providedMask
+        )
+    }
+
+    public func makeCache() -> [KVCache] {
+        // Same disambiguation trick used in `MiniMaxDFlashTarget` — pass
+        // `parameters: nil` explicitly so the compiler picks the
+        // non-deprecated overload of `makePromptCache`.
+        return makePromptCache(model: model, parameters: nil)
     }
 }

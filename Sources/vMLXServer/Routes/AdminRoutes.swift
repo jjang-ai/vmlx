@@ -68,6 +68,54 @@ public enum AdminRoutes {
             }
         }
 
+        // JANG-DFlash admin surface. `/admin/dflash` returns a JSON
+        // status blob; `/admin/dflash/load` takes `{"path": "..."}`
+        // and loads the drafter checkpoint; `/admin/dflash/unload`
+        // drops the current drafter. Mirrors Python's planned
+        // speculative-decode admin routes (v1.3.x).
+        router.get("/admin/dflash") { _, _ -> Response in
+            let ready = await engine.dflashIsReady()
+            let path = await engine.dflashDrafterPath()?.path
+            let settings = await engine.settings.global()
+            return OpenAIRoutes.json([
+                "enabled": settings.dflash,
+                "ready": ready,
+                "drafter_path": path as Any,
+                "block_size": settings.dflashBlockSize,
+                "top_k": settings.dflashTopK,
+                "num_paths": settings.dflashNumPaths,
+                "tap_layers": settings.dflashTapLayers,
+                "target_hidden_dim": settings.dflashTargetHiddenDim,
+            ])
+        }
+
+        router.post("/admin/dflash/load") { req, _ -> Response in
+            var req = req
+            guard let buf = try? await req.collectBody(upTo: 64 * 1024),
+                  let obj = try? JSONSerialization.jsonObject(with: Data(buffer: buf))
+                      as? [String: Any],
+                  let path = obj["path"] as? String, !path.isEmpty
+            else {
+                return OpenAIRoutes.errorJSON(.badRequest, "missing `path` field")
+            }
+            do {
+                try await engine.loadDFlashDrafter(from: URL(fileURLWithPath: path))
+                let ready = await engine.dflashIsReady()
+                return OpenAIRoutes.json([
+                    "status": "loaded",
+                    "ready": ready,
+                    "drafter_path": path,
+                ])
+            } catch {
+                return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
+        router.post("/admin/dflash/unload") { _, _ -> Response in
+            await engine.unloadDFlashDrafter()
+            return OpenAIRoutes.json(["status": "unloaded"])
+        }
+
         router.get("/admin/cache/stats") { _, _ -> Response in
             // Alias of /v1/cache/stats
             do {

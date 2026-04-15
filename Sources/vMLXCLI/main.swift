@@ -93,6 +93,25 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "PEM TLS cert file. Set together with --ssl-keyfile to enable HTTPS.")
     var sslCertfile: String?
 
+    // JANG-DFlash speculative decoding. All flags opt-in; --dflash alone
+    // enables the feature and the bundled defaults match the MiniMax-M2.7
+    // checkpoint shape. Requires a target model that conforms to
+    // JangDFlashTarget (MiniMax family today).
+    @Flag(name: .long, help: "Enable JANG-DFlash speculative decoding.")
+    var dflash: Bool = false
+    @Option(name: .long, help: "Path to a JangDFlashDrafter safetensors checkpoint.")
+    var dflashDrafter: String?
+    @Option(name: .long, help: "DFlash block size B (default 16).")
+    var dflashBlockSize: Int = 16
+    @Option(name: .long, help: "DFlash per-slot top-k for DDTree (default 4).")
+    var dflashTopK: Int = 4
+    @Option(name: .long, help: "DFlash max paths kept after lattice beam (default 60).")
+    var dflashNumPaths: Int = 60
+    @Option(name: .long, help: "Comma-separated target-layer indices whose hidden states feed the drafter.")
+    var dflashTapLayers: String = "10,22,34,46,58"
+    @Option(name: .long, help: "Target model hidden dim (default 3072 for MiniMax-M2.7).")
+    var dflashTargetHiddenDim: Int = 3072
+
     func run() async throws {
         let engine = Engine()
 
@@ -135,6 +154,16 @@ struct Serve: AsyncParsableCommand {
             if rateLimit > 0 { g.rateLimit = rateLimit; dirty = true }
             if let key = sslKeyfile, !key.isEmpty { g.sslKeyFile = key; dirty = true }
             if let cert = sslCertfile, !cert.isEmpty { g.sslCertFile = cert; dirty = true }
+            if dflash {
+                g.dflash = true
+                g.dflashBlockSize = dflashBlockSize
+                g.dflashTopK = dflashTopK
+                g.dflashNumPaths = dflashNumPaths
+                g.dflashTapLayers = dflashTapLayers
+                g.dflashTargetHiddenDim = dflashTargetHiddenDim
+                if let d = dflashDrafter, !d.isEmpty { g.dflashDrafterPath = d }
+                dirty = true
+            }
             if dirty { await engine.settings.setGlobal(g) }
         }
 
@@ -199,6 +228,26 @@ struct Serve: AsyncParsableCommand {
         } catch {
             FileHandle.standardError.write(Data("[load] failed: \(error)\n".utf8))
             throw ExitCode.failure
+        }
+
+        // Load the DFlash drafter AFTER the target model is up so the
+        // target adapter is already bound and `dflashIsReady()` flips
+        // to true the moment the drafter lands. Failure to load is a
+        // warning, not a fatal — the user probably wants the server
+        // up regardless and can re-point the drafter path via settings.
+        if dflash, let d = dflashDrafter, !d.isEmpty {
+            let url = URL(fileURLWithPath: d)
+            do {
+                try await engine.loadDFlashDrafter(from: url)
+                FileHandle.standardError.write(Data(
+                    "[dflash] drafter loaded from \(url.lastPathComponent)\n".utf8))
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "[dflash] drafter load FAILED: \(error)\n".utf8))
+            }
+        } else if dflash {
+            let msg = "[dflash] --dflash set but --dflash-drafter omitted; DFlash will fall back to the standard path per request.\n"
+            FileHandle.standardError.write(Data(msg.utf8))
         }
 
         // Install a graceful shutdown handler for SIGTERM + SIGINT.
@@ -682,12 +731,13 @@ enum DFlashSmokeImpl {
         if cached {
             FileHandle.standardError.write(Data(
                 "[dflash-smoke] using cached-KV generate path\n".utf8))
-            generated = try specDec.cachedGenerate(
+            let (accepted, _) = try specDec.cachedGenerate(
                 promptIDs: promptIDs,
                 maxNewTokens: maxNewTokens,
                 eosTokenIDs: eosSet,
                 onBlock: onBlockCallback
             )
+            generated = accepted
         } else {
             FileHandle.standardError.write(Data(
                 "[dflash-smoke] using v1 cacheless generate path\n".utf8))

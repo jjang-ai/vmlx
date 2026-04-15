@@ -346,6 +346,32 @@ extension Engine {
             sessionId: resolvedSessionId,
             chatId: resolvedChatId,
             request: RequestOverride.from(request))
+
+        // DFlash short-circuit. When enabled + target model supports it +
+        // drafter is loaded + request has no tools/images, run JANG-DFlash
+        // speculative decoding instead of the standard token iterator.
+        // Any precondition miss returns nil → we fall through silently.
+        // See `StreamDFlash.swift`.
+        if let tc = try await self.tryDFlashGenerationPass(
+            request: request,
+            resolved: resolved,
+            continuation: continuation
+        ) {
+            return tc
+        }
+
+        // Smelt mode is a dead setting in the Swift engine today —
+        // the Python bundled engine implements partial expert loading
+        // via `vmlx_engine/utils/smelt_loader.py`, but the Swift port
+        // has no equivalent load-path consumer yet. When a user enables
+        // it here we emit a one-shot warning so they don't silently
+        // get full-precision experts while expecting memory savings.
+        if resolved.settings.smelt {
+            await self.log(.warn, "engine",
+                "smelt mode is enabled but not wired in the Swift engine "
+                + "(Python-only). Loading full experts. This warning fires "
+                + "once per request — set smelt=false in Settings to silence.")
+        }
         // Default-off matches Python v1.3.36 server.py and §15 contract:
         // when neither the request nor resolved settings specify a value
         // (OpenAI clients that never send enable_thinking), reasoning must

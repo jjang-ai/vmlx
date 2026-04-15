@@ -110,11 +110,15 @@ import PackageDescription
         .define("MLX_USE_ACCELERATE"),
         .define("ACCELERATE_NEW_LAPACK"),
         .define("_METAL_"),
-        // Bundle identity must match what mlx-swift's device.cpp
-        // `load_swiftpm_library` looks up. It hard-codes the name
-        // `mlx-swift_Cmlx` — if we renamed the bundle on the Swift side
-        // we'd break Metal kernel loading at runtime. Leave as-is.
-        .define("SWIFTPM_BUNDLE", to: "\"mlx-swift_Cmlx\""),
+        // Bundle identity must match what SwiftPM actually produces for
+        // this target. SwiftPM names bundles `${package}_${target}`, and
+        // since our package is `vmlx` (not `mlx-swift`), the bundle is
+        // `vmlx_Cmlx`. The older `mlx-swift_Cmlx` comment here was a
+        // stale copy-paste from the upstream repo — keeping it meant
+        // `load_swiftpm_library` searched for a bundle name that never
+        // existed in our build, silent-failing every model load with
+        // "Failed to load the default metallib." (2026-04-15 fix.)
+        .define("SWIFTPM_BUNDLE", to: "\"vmlx_Cmlx\""),
         .define("METAL_PATH", to: "\"default.metallib\""),
     ]
     let linkerSettings: [LinkerSetting] = [
@@ -198,6 +202,17 @@ let cmlx = Target.target(
         "mlx/mlx/distributed/jaccl/mesh.cpp",
         "mlx/mlx/distributed/jaccl/ring.cpp",
         "mlx/mlx/distributed/jaccl/utils.cpp",
+    ],
+    resources: [
+        // Pre-built Metal library. `mlx-swift`'s `device.cpp`
+        // `load_swiftpm_library` looks for `default.metallib` inside the
+        // SwiftPM bundle `mlx-swift_Cmlx` at runtime. Without this the
+        // SwiftPM debug build (vmlxctl + the app's .build variant) can't
+        // load any model: "Failed to load the default metallib."
+        //
+        // Build with the helper at `scripts/build-metallib.sh` OR copy
+        // a known-good prebuilt .metallib from a prior Xcode archive.
+        .copy("default.metallib"),
     ],
     cSettings: [
         .headerSearchPath("mlx"),
