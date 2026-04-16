@@ -297,7 +297,10 @@ class Mistral4MoEGate: Module {
         let gates = matmul(x, weight.transposed())
         let scores = softmax(gates, axis: -1, precise: true)
 
-        let inds = argPartition(MLXArray(0) - scores, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
+        // Negate via unary `-` — scalar-subtract with an untyped zero
+        // scalar pays an extra AsType + broadcast dispatch every routing
+        // step. See SWIFT-NO-REGRESSION-CHECKLIST §27.
+        let inds = argPartition(-scores, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
         var wts = takeAlong(scores, inds, axis: -1)
 
         if normTopkProb {

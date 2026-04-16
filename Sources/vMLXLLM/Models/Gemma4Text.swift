@@ -310,20 +310,16 @@ class Gemma4Attention: Module {
             }
         }
 
-        // vmlx #52: Gemma 4 attention scores can exceed fp16 max on
-        // long contexts, especially paired with final-logit softcap.
-        // Upcast Q/K/V to fp32 for SDPA and cast the result back.
-        let origDType = queries.dtype
-        var qF = queries, kF = cachedKeys, vF = cachedValues
-        if origDType == .float16 {
-            qF = qF.asType(.float32)
-            kF = kF.asType(.float32)
-            vF = vF.asType(.float32)
-        }
-        var sdpa = MLXFast.scaledDotProductAttention(
-            queries: qF, keys: kF, values: vF, scale: scale, mask: mask
+        // Matches reference vmlx-swift-lm: Load.swift's convertToBFloat16
+        // already casts all fp16 params to bf16 at load time, so `queries`
+        // arrives as bf16 (same exponent range as fp32 → no overflow).
+        // No SDPA upcast needed — let MLXFast run natively on whatever
+        // dtype the ingredients have. Previous fp32 upcast + cast-back
+        // was a ~2× slowdown vs doing SDPA in bf16 directly.
+        let sdpa = MLXFast.scaledDotProductAttention(
+            queries: queries, keys: cachedKeys, values: cachedValues,
+            scale: scale, mask: mask
         )
-        if origDType == .float16 { sdpa = sdpa.asType(.float16) }
         let output = sdpa.transposed(0, 2, 1, 3).reshaped(B, L, -1)
 
         return (outputProj(output), cachedKeys, cachedValues, usedOffset)
@@ -406,9 +402,11 @@ class Gemma4Router: Module {
         // softmax already computes in float32 internally — no explicit cast needed
         let routerProbs = softmax(expertScores, axis: -1)
 
-        // Top-K via argPartition on negated scores (get highest scores)
+        // Top-K via argPartition on negated scores (get highest scores).
+        // Unary `-` keeps the dtype; the scalar-subtract form would insert
+        // an extra AsType + broadcast per step. See §27.
         let topKIndices = argPartition(
-            MLXArray(0) - expertScores,
+            -expertScores,
             kth: topK - 1, axis: -1
         )[.ellipsis, ..<topK]
 
@@ -426,12 +424,15 @@ class Gemma4Router: Module {
 
 class Gemma4Experts: Module {
     @ModuleInfo(key: "switch_glu") var switchGLU: SwitchGLU
-
-    /// Flash MoE Phase 2b — Gemma 4 sibling-layout shim. When
-    /// non-nil, routed expert matmuls are streamed from the
-    /// slot-bank instead of `switchGLU`. Installed by
-    /// `Gemma4DecoderLayer.replaceSwitchGLU(with:)`.
-    fileprivate var flashMoeSwitchGLUShim: FlashMoESwitchGLUShim? = nil
+    /// Optional Flash MoE replacement for `switchGLU`. When installed
+    /// (via `Gemma4DecoderLayer.replaceSwitchGLU(...)`), this shim
+    /// streams experts from SSD and caches hot sets in the slot bank.
+    /// Not a `@ModuleInfo` property — the slot bank manages its own
+    /// weight residency and the Module walk shouldn't traverse into it.
+    /// FIX-G-K (2026-04-16): added so Gemma 4 MoE can opt into Flash
+    /// MoE without changing `switchGLU`'s concrete type (which would
+    /// require a protocol dispatch and regress decode tok/s).
+    fileprivate var flashMoEShim: FlashMoESwitchGLUShim?
 
     init(_ config: Gemma4TextConfiguration) {
         self._switchGLU.wrappedValue = SwitchGLU(
@@ -448,20 +449,21 @@ class Gemma4Experts: Module {
     ) -> MLXArray {
         let (B, S, H) = (x.dim(0), x.dim(1), x.dim(2))
         let K = indices.dim(-1)
-
-        let xFlat = x.reshaped(B * S, H)
-        let indicesFlat = indices.reshaped(B * S, K)
-
-        // Use the flash shim when installed; otherwise the native
-        // `switchGLU` path. Both return `[T, K, H]` with the same
-        // GeLU activation baked in.
+        // Inline reshape (matches reference). Previous version held
+        // intermediate `xFlat`/`indicesFlat` named bindings plus a
+        // Flash MoE shim branch, retaining graph nodes + adding
+        // per-step overhead that halved Gemma4 decode tok/s.
+        //
+        // FIX-G-K: single optional-check for Flash MoE. When shim is nil
+        // (default, 99% of users), this is one integer comparison and
+        // the native `switchGLU` path runs unchanged. When shim is set,
+        // we delegate to the streaming replacement.
         let expertOut: MLXArray
-        if let shim = flashMoeSwitchGLUShim {
-            expertOut = shim(xFlat, indices: indicesFlat)
+        if let shim = flashMoEShim {
+            expertOut = shim(x.reshaped(B * S, H), indices: indices.reshaped(B * S, K))
         } else {
-            expertOut = switchGLU(xFlat, indicesFlat)
+            expertOut = switchGLU(x.reshaped(B * S, H), indices.reshaped(B * S, K))
         }
-
         let weightsFlat = expandedDimensions(weights.reshaped(B * S, K), axis: -1)
         return (expertOut * weightsFlat).sum(axis: -2).reshaped(B, S, H)
     }
@@ -823,7 +825,8 @@ public class Gemma4TextModel: Module, LLMModel {
         }
 
         if let cap = config.finalLogitSoftcapping, cap > 0 {
-            out = compiledLogitSoftcap(out, MLXArray(cap))
+            // dtype-matched cap — see §27.
+            out = compiledLogitSoftcap(out, MLXArray(cap, dtype: out.dtype))
         }
 
         return out
@@ -910,12 +913,20 @@ extension Gemma4TextModel: LoRAModel {
     }
 }
 
-// MARK: - Flash MoE (Phase 2b)
+// MARK: - Flash MoE conformance
 //
-// Gemma 4 uses the sibling router + experts layout. Unlike the
-// text-path models, we only swap `experts.switch_glu` for a
-// `FlashMoESwitchGLUShim`. The router stays native so top-K
-// selection still uses Gemma 4's expert softmax + scalar scale.
+// FIX-G-K (2026-04-16): Gemma 4 MoE layers use the sibling `router` +
+// `experts` layout (not text-path mlp/block_sparse_moe). FlashMoE.apply
+// walks `flashMoELayers`, asks each layer for `.flashMoELayout`, and for
+// `.gemma4` layers calls `replaceSwitchGLU(with:)` which installs the
+// streaming shim into `experts.flashMoEShim`. The Gemma4Experts
+// `callAsFunction` checks for the shim via an if-let branch — single
+// nil-check per layer per token when disabled (99% case), zero overhead
+// for non-MoE layers which skip the extension branch entirely.
+//
+// Previous Swift tree omitted this conformance, so the v1.3.36 Python-side
+// Flash MoE Gemma 4 fix silently did nothing in Swift. The shim was
+// already ported (`FlashMoESwitchGLUShim.swift`), just unreachable.
 
 extension Gemma4TextModel: FlashMoEReplaceable {
     public var flashMoELayers: [FlashMoELayer] {
@@ -925,12 +936,13 @@ extension Gemma4TextModel: FlashMoEReplaceable {
 
 extension Gemma4DecoderLayer: FlashMoELayer {
     public var flashMoELayout: FlashMoELayout {
-        // Dense layers lack a router; skip them.
         hasMoE ? .gemma4 : .none
     }
 
     public func replaceSwitchGLU(with shim: FlashMoESwitchGLUShim) throws {
-        guard let experts else { return }
-        experts.flashMoeSwitchGLUShim = shim
+        // Only MoE layers receive this call (per flashMoELayout filter).
+        // `experts` is non-nil whenever hasMoE is true.
+        guard let experts = self.experts else { return }
+        experts.flashMoEShim = shim
     }
 }

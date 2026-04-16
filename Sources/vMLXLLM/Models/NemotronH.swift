@@ -43,8 +43,15 @@ private protocol NemotronHMixer: Module {
 // MARK: - Activations
 
 /// Squared ReLU activation: relu(x)^2
+///
+/// Scalar zero is typed to `x.dtype` so `MLX.maximum` doesn't silently
+/// promote the bfloat16/fp16 activations to fp32 on every call. The
+/// untyped form costs ~400 AsType ops per decode step across the 26
+/// Mamba+attention layers of Nemotron-Cascade-30B and was the dominant
+/// remaining decode-time tax after TurboQuant KV was turned off
+/// (reference commit `d4e4e45`: 45 → 110 tok/s on M4 Max).
 private func relu2(_ x: MLXArray) -> MLXArray {
-    let y = MLX.maximum(x, MLXArray(0))
+    let y = MLX.maximum(x, MLXArray(0, dtype: x.dtype))
     return y * y
 }
 
@@ -392,7 +399,9 @@ private func groupExpertSelect(
         scores = flattened(scores, start: -2, end: -1)
     }
 
-    // Get top-k experts
+    // Unary `-` preserves dtype; scalar `MLXArray(0)` defaults fp32 and
+    // force-promotes bf16 operands (AsType cascade). See §27 +
+    // mlp_bfloat16_upcast.md.
     let inds = argPartition(-scores, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
     var finalScores = takeAlong(origScores, inds, axis: -1)
 

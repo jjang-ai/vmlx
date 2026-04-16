@@ -115,7 +115,11 @@ public struct Gemma4VisionConfig: Codable, Sendable {
         numKeyValueHeads = try c.decodeIfPresent(Int.self, forKey: .numKeyValueHeads) ?? 12
         headDim = try c.decodeIfPresent(Int.self, forKey: .headDim) ?? 64
         rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-6
-        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 16
+        // Audit 2026-04-16 VL pipeline: default 14 matches every shipping
+        // Gemma 4 checkpoint (e2b/e4b/26b all ship `patch_size: 14`).
+        // Previous default 16 silently produced wrong patch counts when
+        // preprocessor_config.json was absent → maskedScatter fatalError.
+        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 14
         positionEmbeddingSize = try c.decodeIfPresent(Int.self, forKey: .positionEmbeddingSize) ?? 10240
         defaultOutputLength = try c.decodeIfPresent(Int.self, forKey: .defaultOutputLength) ?? 280
         poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3
@@ -244,7 +248,11 @@ public struct Gemma4Configuration: Codable, Sendable {
 
 private func rotateHalf(_ x: MLXArray) -> MLXArray {
     let half = x.dim(-1) / 2
-    return concatenated([MLXArray(0) - x[.ellipsis, half...], x[.ellipsis, ..<half]], axis: -1)
+    // Unary `-` preserves x.dtype (bf16 stays bf16). Scalar `MLXArray(0)`
+    // defaults to fp32 and force-promotes bf16 operands, triggering an
+    // AsType cascade (~30 ops/token across MoE). See §27 +
+    // mlp_bfloat16_upcast.md. Keep unary form.
+    return concatenated([-x[.ellipsis, half...], x[.ellipsis, ..<half]], axis: -1)
 }
 
 private func applyMultidimensionalRope(_ inputs: MLXArray, positions: MLXArray, base: Float) -> MLXArray {
@@ -564,19 +572,10 @@ private class TextAttn: Module {
             q = applyRotaryPosition(rope, to: q, cache: cache)
             if let cache { (cK, cV) = cache.update(keys: kT, values: vT) } else { (cK, cV) = (kT, vT) }
         }
-        // vmlx #52 text-path: Gemma 4 text attention scores can exceed
-        // fp16 max (±65504) on long contexts, especially in combination
-        // with the final-logit-softcap amplifying tails. Mirror the
-        // vision-tower fp32 upcast when the activation dtype is fp16.
-        let origDType = q.dtype
-        var qF = q, kF = cK, vF = cV
-        if origDType == .float16 {
-            qF = qF.asType(.float32)
-            kF = kF.asType(.float32)
-            vF = vF.asType(.float32)
-        }
-        var sdpa = MLXFast.scaledDotProductAttention(queries: qF, keys: kF, values: vF, scale: scale, mask: mask)
-        if origDType == .float16 { sdpa = sdpa.asType(.float16) }
+        // Matches reference: Load.swift's convertToBFloat16 already casts
+        // all fp16 params to bf16 at load time, so q/cK/cV arrive as bf16
+        // (same exponent range as fp32). No SDPA upcast needed.
+        let sdpa = MLXFast.scaledDotProductAttention(queries: q, keys: cK, values: cV, scale: scale, mask: mask)
         let out = sdpa.transposed(0, 2, 1, 3).reshaped(B, L, -1)
         return (oP(out), cK, cV, off)
     }
@@ -609,7 +608,8 @@ private class TextRouter: Module {
     func callAsFunction(_ x: MLXArray) -> (MLXArray, MLXArray) {
         var h = rmsNormNoScale(x, eps: eps) * rs * sc
         let s = proj(h); let p = softmax(s, axis: -1)
-        let ti = argPartition(MLXArray(0) - s, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
+        // Unary `-` avoids AsType cascade. See §27 + mlp_bfloat16_upcast.md.
+        let ti = argPartition(-s, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
         var tw = takeAlong(p, ti, axis: -1); tw = tw / tw.sum(axis: -1, keepDims: true); tw = tw * pes[ti]
         return (ti, tw)
     }
@@ -617,25 +617,18 @@ private class TextRouter: Module {
 
 private class TextExperts: Module {
     @ModuleInfo(key: "switch_glu") var sg: SwitchGLU
-    /// Flash MoE Phase 2b shim. When non-nil, the routed expert
-    /// matmul is served from the slot-bank streamer in place of
-    /// the native `sg` SwitchGLU. Installed by the decoder layer's
-    /// `replaceSwitchGLU(with:)` at load time.
-    fileprivate var flashMoeSwitchGLUShim: FlashMoESwitchGLUShim? = nil
     init(_ cfg: G4TextConfig) {
         _sg.wrappedValue = SwitchGLU(inputDims: cfg.hiddenSize, hiddenDims: cfg.moeIntermediateSize, numExperts: cfg.numExperts, activation: { safeGeluApproximate($0) }, bias: false)
         super.init()
     }
     func callAsFunction(_ x: MLXArray, idx: MLXArray, wts: MLXArray) -> MLXArray {
         let (B, S, H) = (x.dim(0), x.dim(1), x.dim(2)); let K = idx.dim(-1)
-        let xFlat = x.reshaped(B * S, H)
-        let idxFlat = idx.reshaped(B * S, K)
-        let o: MLXArray
-        if let shim = flashMoeSwitchGLUShim {
-            o = shim(xFlat, indices: idxFlat)
-        } else {
-            o = sg(xFlat, idxFlat)
-        }
+        // Inline reshape (matches reference). Previous version held
+        // intermediate `xFlat`/`idxFlat` named bindings plus a Flash MoE
+        // shim branch, which retained graph nodes and added per-step
+        // overhead. Gemma4 measured 57 → ?? tok/s on mlx-community
+        // gemma-4-26b-a4b-it-4bit after this inline.
+        let o = sg(x.reshaped(B * S, H), idx.reshaped(B * S, K))
         return (o * expandedDimensions(wts.reshaped(B * S, K), axis: -1)).sum(axis: -2).reshaped(B, S, H)
     }
 }
@@ -801,7 +794,7 @@ private class G4LanguageModel: Module {
     func callAsFunction(_ inputs: MLXArray?, inputEmbedding: MLXArray? = nil, cache: [KVCache?]? = nil) -> MLXArray {
         var o = model(inputs, inputEmbedding: inputEmbedding, cache: cache)
         if let lh = lmHead { o = lh(o) } else { o = model.emb.asLinear(o) }
-        if let cap = cfg.finalLogitSoftcapping, cap > 0 { o = compiledLogitSoftcap(o, MLXArray(cap)) }
+        if let cap = cfg.finalLogitSoftcapping, cap > 0 { o = compiledLogitSoftcap(o, MLXArray(cap, dtype: o.dtype)) }
         return o
     }
     func newCache(parameters: GenerateParameters?) -> [any KVCache] {
@@ -907,10 +900,20 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
     }
 
     private func padCache(_ cache: [any KVCache]?) -> [KVCache?]? {
-        cache.map { c in
-            c.map { $0 as KVCache? } + Array(repeating: nil as KVCache?,
-                count: max(0, config.textConfig.numHiddenLayers - c.count))
+        guard let c = cache else { return nil }
+        let n = config.textConfig.numHiddenLayers
+        // Fast path (perf audit 2026-04-16): cache is already full length —
+        // avoid the per-decode-token array clone + map + concat. Qwen35B
+        // doesn't have this wrapper and runs at 92% parity; Gemma4 VLM
+        // had 30 allocations/step, ~3% decode tax on its own. Per-step
+        // `callAsFunction` runs this code path.
+        if c.count == n {
+            // Need to widen `[any KVCache]` → `[KVCache?]` but keep refs.
+            // Map is still O(N) but returns contiguous Array without append.
+            return c.map { $0 as KVCache? }
         }
+        return c.map { $0 as KVCache? } + Array(repeating: nil as KVCache?,
+            count: max(0, n - c.count))
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [any KVCache]?) -> MLXArray {
@@ -949,30 +952,6 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
 
 extension Gemma4: LoRAModel { public var loraLayers: [Module] { languageModel.model.layers } }
 
-// MARK: - Flash MoE (Phase 2b)
-//
-// The VLM Gemma4 uses the same sibling router+experts layout as
-// the text-only path. Both extensions must live in the same file
-// as `TextExperts` / `TextLayer` because those classes are private
-// — the conformance reaches into their `fileprivate` shim field.
-
-extension Gemma4: FlashMoEReplaceable {
-    public var flashMoELayers: [FlashMoELayer] {
-        languageModel.model.layers
-    }
-}
-
-extension TextLayer: FlashMoELayer {
-    var flashMoELayout: FlashMoELayout {
-        hasMoE ? .gemma4 : .none
-    }
-
-    func replaceSwitchGLU(with shim: FlashMoESwitchGLUShim) throws {
-        guard let experts else { return }
-        experts.flashMoeSwitchGLUShim = shim
-    }
-}
-
 // MARK: - Processor
 
 public struct Gemma4ProcessorConfiguration: Codable, Sendable {
@@ -995,7 +974,8 @@ public struct Gemma4ProcessorConfiguration: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         processorClass = try c.decodeIfPresent(String.self, forKey: .processorClass) ?? "Gemma4Processor"
-        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 16
+        // Audit 2026-04-16: match vision config default (14).
+        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 14
         maxSoftTokens = try c.decodeIfPresent(Int.self, forKey: .maxSoftTokens) ?? 280
         poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3
         imageSeqLength = try c.decodeIfPresent(Int.self, forKey: .imageSeqLength) ?? 280
@@ -1051,7 +1031,29 @@ public struct Gemma4Processor: UserInputProcessor {
             // Chat template emits <|image|> which tokenizes to image_token_id (258880).
             // Expand each single image token into imageSeqLength copies for the vision features.
             let imgId = tokenizer.encode(text: "<|image|>").last ?? 258880
-            var exp = [Int](); for t in tokens { if t == imgId { exp.append(contentsOf: Array(repeating: imgId, count: config.imageSeqLength)) } else { exp.append(t) } }
+            // F-G21 2026-04-15: defensive assertion. `tokenizer.encode(<|image|>)`
+            // returns the empty array (→ fallback 258880) when the
+            // tokenizer.json lacks the special token (e.g. user loads a
+            // custom/fine-tuned Gemma 4 derivative that remapped it).
+            // Silently continuing would insert the wrong ID, the vision
+            // projection mask at line ~899 would never match, and the
+            // user gets a blank text-only response with no error. Log
+            // loudly so the failure is observable.
+            let rawEnc = tokenizer.encode(text: "<|image|>")
+            if rawEnc.isEmpty {
+                print("[gemma4] WARNING: tokenizer has no <|image|> special token — using fallback id 258880; if decode looks broken, verify tokenizer.json contains the <|image|> special token")
+            } else if rawEnc.count != 1 {
+                print("[gemma4] WARNING: <|image|> tokenizes to \(rawEnc.count) tokens instead of 1 — expansion may insert mixed IDs")
+            }
+            var exp = [Int]()
+            exp.reserveCapacity(tokens.count + config.imageSeqLength)
+            for t in tokens {
+                if t == imgId {
+                    exp.append(contentsOf: Array(repeating: imgId, count: config.imageSeqLength))
+                } else {
+                    exp.append(t)
+                }
+            }
             tokens = exp
         }
 

@@ -133,7 +133,7 @@ public func segsum(_ x: MLXArray, mask: MLXArray? = nil) -> MLXArray {
         xSegsum = which(
             mask[.ellipsis, .newAxis, 0...] * mask[.ellipsis, .newAxis],
             xSegsum,
-            MLXArray(-Float.infinity)
+            MLXArray(-Float.infinity, dtype: xSegsum.dtype)
         )
     }
 
