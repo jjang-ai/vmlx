@@ -197,28 +197,30 @@ class TestSuppressReasoningDrop:
     """
 
     def test_suppress_reasoning_drop_in_source(self):
-        """Verify suppress_reasoning drop logic exists in streaming."""
+        """v1.3.56 §15: verify reasoning REDIRECTS to emit_content under suppress.
+        (Not a drop — a redirect, so the UI never shows empty body when the model
+        ignores enable_thinking=False.)"""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # When suppress_reasoning is True:
-        # emit_content = delta_msg.content (only actual content after </think>)
-        # emit_reasoning = None
         assert "suppress_reasoning" in source
         assert "emit_reasoning = None" in source
-        assert "emit_content = delta_msg.content" in source
+        # v1.3.56 boundary-delta fix: parts-based concat so BOTH reasoning and
+        # content get emitted when a single delta carries both (see §15 /
+        # §18 and think_parser.py:200-203 boundary case).
+        assert "_parts.append(delta_msg.reasoning)" in source
+        assert "_parts.append(delta_msg.content)" in source
 
-    def test_suppress_reasoning_not_double_accumulated(self):
-        """Reasoning must NOT be added to accumulated_content (V3-H1 fix).
-        Tool-call markers in reasoning are detected via delta_msg.reasoning check,
-        not by polluting accumulated_content."""
+    def test_suppress_reasoning_mirrors_into_accumulated_content(self):
+        """v1.3.56 §15.3: under suppress_reasoning, reasoning MUST mirror into
+        accumulated_content so content_was_emitted and tool-call marker
+        detection stay honest with what the client actually saw after the
+        reasoning → content redirect."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # V3-H1: removed accumulated_content += delta_msg.reasoning to prevent
-        # reasoning text from polluting content and triggering false tool-call detection
-        assert "accumulated_content += delta_msg.reasoning" not in source
-        # Tool detection via reasoning is still done via delta_msg.reasoning check
+        # The mirror line is what makes §15 safe for marker detection.
+        assert "accumulated_content += delta_msg.reasoning" in source
         assert "delta_msg.reasoning" in source
 
 

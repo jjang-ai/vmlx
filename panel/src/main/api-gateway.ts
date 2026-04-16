@@ -764,7 +764,12 @@ export class ApiGateway extends EventEmitter {
     if (opts.repeat_penalty != null)
       openaiBody.repetition_penalty = opts.repeat_penalty;
     if (parsed.tools) openaiBody.tools = parsed.tools;
-    if (parsed.think) openaiBody.enable_thinking = true;
+    // Ollama `think` is tri-state: true=on, false=off, undefined=default.
+    // Node gateway previously only handled truthy, silently dropping `think: false`
+    // so Copilot/Ollama clients that request thinking-OFF were ignored and the
+    // model kept reasoning. Matches vmlx_engine/api/ollama_adapter.py line 48.
+    if (parsed.think !== undefined && parsed.think !== null)
+      openaiBody.enable_thinking = Boolean(parsed.think);
     if (parsed.format)
       openaiBody.response_format =
         typeof parsed.format === "string"
@@ -1197,17 +1202,38 @@ export class ApiGateway extends EventEmitter {
     const session = this.resolveSession(parsed.name || parsed.model);
     if (!session) return this.sendJson(res, 404, { error: "model not found" });
 
+    // mlxstudio#72 — Copilot (Ollama spec v0.20.x) gates on `capabilities`.
+    // Compute from the saved session config; fall back to permissive defaults.
+    let cfg: any = {};
+    try {
+      cfg = session.config ? JSON.parse(session.config) : {};
+    } catch (_) {
+      cfg = {};
+    }
+    const capabilities: string[] = ["completion"];
+    const toolParser = cfg.toolCallParser || cfg.toolParser;
+    if (!toolParser || toolParser !== "none") capabilities.push("tools");
+    if (cfg.isMultimodal === true || cfg.modelType === "vlm")
+      capabilities.push("vision");
+    const rp = cfg.reasoningParser;
+    if (rp && rp !== "none") capabilities.push("thinking");
+    capabilities.push("insert");
+
+    const modelName = session.servedModelName || session.modelName;
     this.sendJson(res, 200, {
       modelfile: "",
       parameters: "",
       template: "",
       details: {
+        parent_model: "",
         format: "mlx",
-        family: "",
-        parameter_size: "",
-        quantization_level: "",
+        family: (cfg.family || cfg.modelFamily || "mlx") as string,
+        families: [(cfg.family || cfg.modelFamily || "mlx") as string],
+        parameter_size: cfg.parameterSize || "",
+        quantization_level: cfg.quantization || cfg.bits ? String(cfg.quantization || `${cfg.bits}bit`) : "",
       },
-      model_info: { name: session.servedModelName || session.modelName },
+      model_info: { name: modelName },
+      capabilities,
     });
   }
 

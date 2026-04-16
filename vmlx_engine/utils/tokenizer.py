@@ -502,7 +502,8 @@ def _inject_chat_template_if_missing(tokenizer, model_path) -> str | None:
     except Exception as _ce:
         logger.debug(f"chat_template.jinja/.json probe failed: {_ce}")
 
-    # 3. Registry fallback by family
+    # 3. Registry fallback by family (chat_template_custom field)
+    mc = None
     try:
         from ..model_config_registry import get_model_config_registry
         mc = get_model_config_registry().lookup(str(model_path))
@@ -525,6 +526,40 @@ def _inject_chat_template_if_missing(tokenizer, model_path) -> str | None:
             return f"registry:{mc.family_name}"
     except Exception as _re:
         logger.debug(f"registry chat_template lookup failed: {_re}")
+
+    # 4. Bundled fallback: vmlx_engine/chat_templates/{family}.jinja
+    # vmlx#80 (Flor1an-B, 2026-04-15): mlx-community/gemma-4-31b-8bit ships
+    # NO chat template at all — not a sidecar jinja, not in tokenizer_config,
+    # and there's no registry chat_template_custom. For well-known families
+    # we bundle a canonical copy lifted from an mlx-community quant that does
+    # ship it (e.g. gemma-4-26b-a4b-it-4bit). Keyed by family_name so it
+    # covers gemma4 + gemma4_text + any future Gemma 4 registry entry.
+    if mc is not None:
+        try:
+            from pathlib import Path as _P2
+            family = getattr(mc, "family_name", None)
+            if family:
+                pkg_dir = _P2(__file__).parent.parent  # vmlx_engine/
+                bundled = pkg_dir / "chat_templates" / f"{family}.jinja"
+                if bundled.is_file():
+                    tpl = bundled.read_text(encoding="utf-8")
+                    for t in targets:
+                        try:
+                            t.chat_template = tpl
+                        except Exception:
+                            pass
+                    try:
+                        if hasattr(tokenizer, "has_chat_template"):
+                            tokenizer.has_chat_template = True
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"Chat template injected from bundled {family}.jinja "
+                        f"for {mp.name if hasattr(mp, 'name') else model_path}"
+                    )
+                    return f"bundled:{family}.jinja"
+        except Exception as _be:
+            logger.debug(f"bundled chat_template probe failed: {_be}")
 
     return None
 

@@ -76,9 +76,24 @@ def _now_iso() -> str:
 def openai_chat_response_to_ollama(openai_resp: dict, model: str) -> dict:
     """Convert non-streaming OpenAI chat response to Ollama format."""
     choices = openai_resp.get("choices", [])
-    content = choices[0]["message"]["content"] if choices else ""
+    # A thinking model may omit `content` entirely if every token was reasoning
+    # (rare but observed on Qwen3 with small max_tokens). Use .get() so we
+    # don't KeyError — `thinking` mapping below carries the reasoning across.
+    content = (choices[0].get("message", {}).get("content") if choices else "") or ""
     usage = openai_resp.get("usage", {})
     msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
+    # Ollama 0.3.12+ `thinking` field in message.
+    # Without this mapping, thinking models (Qwen3 auto, MiniMax, DeepSeek-R1)
+    # produced empty content for Ollama clients because their reasoning was
+    # routed to `reasoning_content` which the adapter never forwarded. Copilot
+    # and Continue.dev show nothing when the assistant message has empty content.
+    if choices:
+        _reasoning = (
+            choices[0].get("message", {}).get("reasoning_content")
+            or choices[0].get("message", {}).get("reasoning")
+        )
+        if _reasoning:
+            msg["thinking"] = _reasoning
     # Forward tool calls if present. mlxstudio#72: Ollama's tool_calls schema
     # expects `arguments` as an object, while OpenAI emits a JSON-encoded
     # string. Parse it so Copilot / Continue.dev / other Ollama clients can
@@ -152,9 +167,17 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         }) + "\n"
 
     tool_calls_data = None
+    thinking_delta = ""
     if choices:
         delta = choices[0].get("delta", {})
         content = delta.get("content", "")
+        # Map delta.reasoning → message.thinking. Without this every streaming
+        # chunk of a thinking model produced empty content for Ollama clients
+        # (Copilot, Continue.dev) — the model was generating reasoning but the
+        # adapter dropped it. Ollama 0.3.12+ wire format uses `thinking`.
+        _r = delta.get("reasoning") or delta.get("reasoning_content")
+        if _r:
+            thinking_delta = _r
         fr = choices[0].get("finish_reason")
         if fr is not None:
             done = True
@@ -185,8 +208,16 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
                 tool_calls_data = _out_tcs
 
     msg: dict[str, Any] = {"role": "assistant", "content": content}
+    if thinking_delta:
+        msg["thinking"] = thinking_delta
     if tool_calls_data:
         msg["tool_calls"] = tool_calls_data
+    # Skip fully-empty deltas (no content, no thinking, no tool calls, not done).
+    # Prior code emitted chunks with content="" for every reasoning token and
+    # every heartbeat — Ollama clients (Copilot) handle these as "nothing new"
+    # but ollama's own CLI ignores them too, and they inflate NDJSON bandwidth.
+    if not done and not content and not thinking_delta and not tool_calls_data:
+        return None
     result: dict[str, Any] = {
         "model": model,
         "created_at": _now_iso(),

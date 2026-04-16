@@ -775,6 +775,28 @@ class MLXMultimodalLM:
                 self.model, self.processor = load(self.model_name)
             self.config = load_config(self.model_name)
 
+            # vmlx#80 follow-up (Flor1an-B, 2026-04-15): mlx_vlm.load() is a
+            # DIFFERENT code path from utils.tokenizer.load_model_with_fallback,
+            # so neither the monkey-patch of mlx_lm.tokenizer_utils.load nor
+            # the wrapper-level _inject_chat_template_if_missing ever fire for
+            # standard mlx-community MLLM quants like gemma-4-31b-8bit. These
+            # models ship the chat template as a sidecar chat_template.jinja
+            # that HF AutoTokenizer silently ignores, and the engine crashes
+            # the first time apply_chat_template is called inside batched.py.
+            # Fix: inject the sidecar template directly into the processor
+            # (and its inner tokenizer) right after load, before the engine
+            # is marked loaded. Idempotent — bails out if a template is
+            # already present.
+            try:
+                from ..utils.tokenizer import _inject_chat_template_if_missing as _inj
+                _injected = _inj(self.processor, self.model_name)
+                if _injected:
+                    logger.info(
+                        f"MLLM chat template injected from {_injected} for {self.model_name}"
+                    )
+            except Exception as _e:
+                logger.debug(f"MLLM chat_template injection skipped: {_e}")
+
             # TurboQuant: auto-enable for ALL MLX VLM models
             _lang = getattr(self.model, 'language_model', None)
             if _lang is not None and hasattr(_lang, 'layers'):

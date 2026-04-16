@@ -3224,19 +3224,45 @@ async def ollama_version():
 
 @app.post("/api/show", dependencies=[Depends(verify_api_key)])
 async def ollama_show(fastapi_request: Request):
-    """Ollama-compatible model info."""
+    """Ollama-compatible model info.
+
+    Ollama spec v0.20.x adds a ``capabilities`` list that GitHub Copilot
+    gates on to decide whether to surface a model (mlxstudio#72 follow-up).
+    Without it, Copilot drops all vMLX models from its picker.
+    """
     name = _resolve_model_name()
+    capabilities = ["completion"]
+    # Tool calling — assume present unless parser explicitly disabled
+    _tp = globals().get("_tool_parser")
+    if _tp is not None and getattr(_tp, "__name__", "") != "None":
+        capabilities.append("tools")
+    else:
+        capabilities.append("tools")  # permissive default — most models support tools
+    # Vision — on when engine is MLLM mode
+    try:
+        _eng = globals().get("_engine")
+        if _eng is not None and getattr(_eng, "is_mllm", False):
+            capabilities.append("vision")
+    except Exception:
+        pass
+    # Thinking — on when a reasoning parser is configured
+    if globals().get("_reasoning_parser") is not None:
+        capabilities.append("thinking")
+    capabilities.append("insert")
     return {
         "modelfile": "",
         "parameters": "",
         "template": "",
         "details": {
+            "parent_model": "",
             "format": "mlx",
-            "family": "",
+            "family": "mlx",
+            "families": ["mlx"],
             "parameter_size": "",
             "quantization_level": "",
         },
         "model_info": {"name": name},
+        "capabilities": capabilities,
     }
 
 
@@ -5965,11 +5991,20 @@ async def stream_chat_completion(
                         f"[reasoning-debug] content={repr((delta_msg.content or '')[:30])}, reasoning={repr((delta_msg.reasoning or '')[:30])}, suppress={suppress_reasoning}"
                     )
 
-                # Accumulate for marker detection (before buffering check)
+                # Accumulate for marker detection (before buffering check).
+                # §15 NO-REGRESSION: when suppress_reasoning is on, reasoning
+                # is redirected to emit_content below — mirror that here so
+                # accumulated_content reflects what the client actually sees
+                # (keeps marker detection + content_was_emitted honest).
+                # Mirror UNCONDITIONALLY under suppress so the boundary delta
+                # case ("reason</think>answer" → delta with BOTH fields set)
+                # doesn't drop the reasoning half that emit_content will stream.
                 if delta_msg.content:
                     accumulated_content += delta_msg.content
                 if delta_msg.reasoning:
                     accumulated_reasoning += delta_msg.reasoning
+                    if suppress_reasoning:
+                        accumulated_content += delta_msg.reasoning
 
                 # Check for tool call markers — separate logic for content vs reasoning:
                 # - Content: check accumulated_content (markers can span deltas)
@@ -6033,14 +6068,24 @@ async def stream_chat_completion(
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
 
-                # When reasoning is suppressed, only emit actual content (after
-                # </think>). Reasoning tokens are dropped. The prompt-level fix
-                # (injecting <think></think> in batched.py/simple.py/mllm.py)
-                # should prevent the model from thinking at all. If the model
-                # still thinks despite the closed block, emit heartbeats so the
-                # UI knows the stream is alive while waiting for content.
+                # §15 NO-REGRESSION: when reasoning is suppressed AND the model
+                # thinks anyway (ignores enable_thinking=False — Flor1an-B style
+                # vmlx#80 follow-up), we MUST route reasoning → content so the
+                # UI never shows "N tokens generated" with an empty body. Empty
+                # heartbeats alone leave the chat blank at end-of-stream.
+                #
+                # Boundary delta case: the parser can return BOTH reasoning AND
+                # content in a single chunk when `</think>answer` lands inside
+                # one delta (think_parser.py lines 200–203, 220–223, 246–249).
+                # Concatenate in natural order (reasoning → content) instead of
+                # `or`, which would drop the content half.
                 if suppress_reasoning:
-                    emit_content = delta_msg.content
+                    _parts = []
+                    if delta_msg.reasoning:
+                        _parts.append(delta_msg.reasoning)
+                    if delta_msg.content:
+                        _parts.append(delta_msg.content)
+                    emit_content = "".join(_parts) if _parts else None
                     emit_reasoning = None
                     if not emit_content and not output.finished:
                         heartbeat = ChatCompletionChunk(
@@ -6769,11 +6814,19 @@ async def stream_responses_api(
                         # to token tracking and usage emission below.
                         continue
                     else:
-                        # Accumulate for marker detection (before buffering check)
+                        # Accumulate for marker detection (before buffering check).
+                        # §15: when suppress_reasoning redirects reasoning → content
+                        # via emit below, mirror it here so accumulated_content
+                        # matches client-visible output (Responses API parity).
+                        # Mirror UNCONDITIONALLY under suppress so the boundary
+                        # delta case ("reason</think>answer" with both fields set)
+                        # doesn't drop half the output.
                         if delta_msg.content:
                             accumulated_content += delta_msg.content
                         if delta_msg.reasoning:
                             accumulated_reasoning += delta_msg.reasoning
+                            if suppress_reasoning:
+                                accumulated_content += delta_msg.reasoning
 
                         # Check for tool call markers in content and reasoning
                         if tool_call_active and not tool_call_buffering:
@@ -6818,12 +6871,21 @@ async def stream_responses_api(
                             continue
 
                         if not tool_call_buffering:
-                            # When reasoning is suppressed, only emit actual content.
-                            # Prompt-level <think></think> injection should prevent
-                            # the model from thinking. If it still does, emit
-                            # in_progress events so the client stays alive.
+                            # §15 NO-REGRESSION: when suppress_reasoning is on
+                            # and the model still thinks (ignores enable_thinking
+                            # =False), route reasoning → content so the Response
+                            # API never finishes with zero visible output. See
+                            # vmlx#80 follow-up / Flor1an-B report 2026-04-15.
+                            # Concatenate BOTH fields (reasoning first, then
+                            # content) so boundary deltas like "reason</think>answer"
+                            # don't drop the content half.
                             if suppress_reasoning:
-                                emit_content = delta_msg.content
+                                _parts_r = []
+                                if delta_msg.reasoning:
+                                    _parts_r.append(delta_msg.reasoning)
+                                if delta_msg.content:
+                                    _parts_r.append(delta_msg.content)
+                                emit_content = "".join(_parts_r) if _parts_r else None
                                 emit_reasoning = None
                                 if not emit_content and not output.finished:
                                     yield _sse(

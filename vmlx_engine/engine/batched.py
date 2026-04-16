@@ -331,7 +331,8 @@ class BatchedEngine(BaseEngine):
         except Exception as e:
             logger.debug(f"chat_template file probe failed: {e}")
 
-        # 3. Registry fallback by family
+        # 3. Registry fallback by family (chat_template_custom)
+        mc = None
         try:
             from ..model_config_registry import get_model_config_registry
             mc = get_model_config_registry().lookup(self._model_name or "")
@@ -341,6 +342,25 @@ class BatchedEngine(BaseEngine):
                 return f"registry:{mc.family_name}"
         except Exception as e:
             logger.debug(f"registry chat_template lookup failed: {e}")
+
+        # 4. Bundled chat-template fallback keyed by family.
+        # vmlx#80 (Flor1an-B, 2026-04-15): mlx-community/gemma-4-31b-8bit
+        # ships NO chat_template (no sidecar, not in tokenizer_config,
+        # no registry chat_template_custom). Bundle a canonical copy
+        # at vmlx_engine/chat_templates/{family}.jinja and fall back
+        # to it as the last resort.
+        if mc is not None:
+            try:
+                from pathlib import Path as _P
+                family = getattr(mc, "family_name", None)
+                if family:
+                    pkg_dir = _P(__file__).parent.parent  # vmlx_engine/
+                    bundled = pkg_dir / "chat_templates" / f"{family}.jinja"
+                    if bundled.is_file():
+                        tokenizer.chat_template = bundled.read_text(encoding="utf-8")
+                        return f"bundled:{family}.jinja"
+            except Exception as e:
+                logger.debug(f"bundled chat_template lookup failed: {e}")
 
         return None
 
