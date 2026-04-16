@@ -26,12 +26,24 @@ public func loadWeights(
     // Resolve symlinks (mlxstudio uses symlinked model directories)
     let modelDirectory = modelDirectory.resolvingSymlinksInPath()
 
-    // JANGTQ-native detection: presence of the runtime sidecar means the
-    // bundle ships tq_packed/tq_norms tensors that should be consumed RAW
-    // by TurboQuantSwitchGLU — we must NOT run the MXTQ→affine expander,
-    // the per-layer quant inference, or the MoE-gate dequant.
+    // JANGTQ-native detection: two signals, either one flips the bundle
+    // into the native path (tq_packed/tq_norms stay RAW, no MXTQ→affine
+    // expansion, no per-layer quant inference, no MoE-gate dequant).
+    //  1. `jang_config.json -> weight_format == "mxtq"` — the canonical
+    //     signal matching Python `jang_tools.load_jangtq` detection.
+    //     Preferred because it doesn't require the optional sidecar.
+    //  2. `jangtq_runtime.safetensors` sidecar present — legacy signal
+    //     retained for bundles that still ship a sidecar.
+    // Before 2026-04-16 we only checked (2), which silently misrouted
+    // MiniMax-M2.7-JANGTQ-CRACK (no sidecar — signs regenerate at
+    // runtime from mxtq_seed) through the affine expander, which then
+    // blew up because the expansion didn't match the TQ-native model
+    // shape. See `/Users/eric/jang/jang-tools/jang_tools/load_jangtq.py`
+    // for the Python reference loader.
     let jangtqSidecarURL = modelDirectory.appendingPathComponent("jangtq_runtime.safetensors")
-    let isJANGTQNative = FileManager.default.fileExists(atPath: jangtqSidecarURL.path)
+    let isJANGTQNative =
+        (jangConfig?.weightFormat == "mxtq")
+        || FileManager.default.fileExists(atPath: jangtqSidecarURL.path)
 
     // .jangspec bundle: per-expert blobs + hot-core safetensors + flat index.
     // Read everything via JangSpecBundleLoader, which produces a {key: MLXArray}
@@ -112,10 +124,16 @@ public func loadWeights(
         }
     }
 
-    // JANGTQ native: load the signs/codebook sidecar into the runtime cache
-    // before model.update() so TurboQuantSwitchGLU has everything it needs
-    // on first forward.
-    if isJANGTQNative {
+    // JANGTQ native: optionally load signs/codebook sidecar into the runtime
+    // cache before model.update(). Sidecar is OPTIONAL per Python
+    // `load_jangtq.py` — when absent, `TurboQuantSwitchLinear` regenerates
+    // sign sequences at runtime from `mxtq_seed` via `NumPyPCG64`. Skip
+    // gracefully when not present instead of throwing (previously this
+    // only ran when the file existed, but we now also enter this branch
+    // from the jang_config.weight_format path which may not have a sidecar).
+    if isJANGTQNative,
+       FileManager.default.fileExists(atPath: jangtqSidecarURL.path)
+    {
         do {
             try JANGTQRuntimeCache.shared.loadSidecar(from: jangtqSidecarURL)
         } catch {

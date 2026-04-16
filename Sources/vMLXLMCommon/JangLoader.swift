@@ -168,6 +168,14 @@ public struct JangConfig: Sendable {
     /// Top-level MXTQ bits map (`shared_expert` / `routed_expert` / …).
     /// Same reasoning as `mxtqSeed`.
     public let mxtqBits: [String: Int]?
+    /// Top-level `weight_format` field. When `"mxtq"` the bundle ships
+    /// `.tq_packed` / `.tq_norms` tensors that MUST stay in that form
+    /// for the native TurboQuant kernels (P3/P17). The MXTQ→affine
+    /// expander in `Load.swift` would corrupt these, so the loader
+    /// branches on this to stay out of the way. Matches Python
+    /// `jang_tools/load_jangtq.py` which uses the same config field.
+    /// Values seen: "mxtq" (JANGTQ native), absent / other (affine JANG).
+    public let weightFormat: String?
 
     public init(
         format: String = "jang",
@@ -178,7 +186,8 @@ public struct JangConfig: Sendable {
         runtime: JangRuntime = JangRuntime(),
         turboquant: JangTurboQuant = JangTurboQuant(),
         mxtqSeed: Int? = nil,
-        mxtqBits: [String: Int]? = nil
+        mxtqBits: [String: Int]? = nil,
+        weightFormat: String? = nil
     ) {
         self.format = format
         self.formatVersion = formatVersion
@@ -186,6 +195,7 @@ public struct JangConfig: Sendable {
         self.sourceModel = sourceModel
         self.architecture = architecture
         self.runtime = runtime
+        self.weightFormat = weightFormat
         self.turboquant = turboquant
         self.mxtqSeed = mxtqSeed
         self.mxtqBits = mxtqBits
@@ -358,6 +368,16 @@ public struct JangLoader: Sendable {
             mxtqBits = nil
         }
 
+        // Top-level weight_format — when set to "mxtq", the bundle keeps
+        // .tq_packed/.tq_norms tensors for native TurboQuant consumption
+        // (P3/P17 Metal kernels), and the MXTQ→affine expander must NOT
+        // run. This replaces the stale sidecar-file heuristic in Load.swift
+        // which only fired when a jangtq_runtime.safetensors was present
+        // (that sidecar is optional — Python regenerates signs at runtime
+        // from mxtqSeed). Matches `jang_tools.load_jangtq` weightFormat
+        // gating. 2026-04-16 fix for MiniMax-M2.7-JANGTQ-CRACK load.
+        let weightFormat = json["weight_format"] as? String
+
         return JangConfig(
             format: format,
             formatVersion: formatVersion,
@@ -367,7 +387,8 @@ public struct JangLoader: Sendable {
             runtime: runtime,
             turboquant: turboquant,
             mxtqSeed: mxtqSeed,
-            mxtqBits: mxtqBits
+            mxtqBits: mxtqBits,
+            weightFormat: weightFormat
         )
     }
 
