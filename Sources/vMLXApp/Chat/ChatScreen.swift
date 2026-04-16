@@ -390,7 +390,7 @@ private struct ChatTopBar: View {
 /// via the existing Server-tab flow — we just flash a banner and nudge
 /// the user to the Server tab (same pattern as the current
 /// `ChatViewModel.send()` guard).
-private struct ChatModelPicker: View {
+struct ChatModelPicker: View {
     @Environment(AppState.self) private var app
     @Bindable var vm: ChatViewModel
 
@@ -530,7 +530,7 @@ private struct ChatModelPicker: View {
 /// live, shows a red "Stop" button that calls `vm.stopModel()`. Also
 /// renders a spinner during `.loading` so the user has live feedback
 /// instead of having to bounce to the Server tab to watch progress.
-private struct ChatEngineControl: View {
+struct ChatEngineControl: View {
     @Environment(AppState.self) private var app
     @Bindable var vm: ChatViewModel
 

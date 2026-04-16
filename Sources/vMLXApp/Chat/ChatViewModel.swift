@@ -181,12 +181,15 @@ final class ChatViewModel {
     }
 
     /// True while the chat-bound engine has a model ready to stream.
+    /// Only checks the chat's OWN bound engine — we used to fall back to
+    /// `hasAnyLiveEngine`, but that caused the Stop button to appear in
+    /// chats whose engine wasn't the one actually streaming.
     @MainActor
     var isModelReady: Bool {
         guard let app else { return false }
         let key = serverSessionId ?? AppState.defaultEngineKey
         if let s = app.sessionEngineStates[key], app.engineStateIsLive(s) { return true }
-        return app.hasAnyLiveEngine
+        return false
     }
 
     func attach(_ app: AppState) {
@@ -356,7 +359,26 @@ final class ChatViewModel {
             //   3. Any engine the app sees as live (running / standby /
             //      loading) — lets users who loaded a model in Server but
             //      never "selected" that session still chat against it
-            if serverSessionId == nil {
+            //
+            // Re-bind when the selected server session has changed AND the
+            // currently-bound session isn't live anymore. This keeps a chat
+            // from being yanked away from a live stream, but picks up the
+            // user's new Server-tab selection once the old engine is gone.
+            let currentKey = serverSessionId ?? AppState.defaultEngineKey
+            let currentIsLive: Bool = {
+                if let s = appRef.sessionEngineStates[currentKey], appRef.engineStateIsLive(s) { return true }
+                return false
+            }()
+            let currentSessionExists = serverSessionId.map { sid in appRef.sessions.contains(where: { $0.id == sid }) } ?? false
+            let shouldRebind: Bool = {
+                if serverSessionId == nil { return true }
+                if appRef.selectedServerSessionId != serverSessionId,
+                   (!currentSessionExists || !currentIsLive) {
+                    return true
+                }
+                return false
+            }()
+            if shouldRebind {
                 if let active = appRef.selectedServerSessionId {
                     serverSessionId = active
                 } else if let liveSid = appRef.firstLiveSessionId {

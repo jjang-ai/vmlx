@@ -27,8 +27,8 @@ public actor Engine {
         public var kind: EngineKind = .batched
         public var maxNumSeqs: Int = 5
         public var prefillStepSize: Int = 1024
-        public var cacheMemoryPercent: Double = 0.10
-        public var maxCacheBlocks: Int = 500
+        public var cacheMemoryPercent: Double = 0.30
+        public var maxCacheBlocks: Int = 1000
         public var enableTurboQuant: Bool = true
         public var enableJANG: Bool = true
         public var enablePrefixCache: Bool = true

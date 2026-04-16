@@ -106,12 +106,28 @@ final class AppState {
     private let defaultEngine = Engine()
     var engines: [UUID: Engine] = [:]
 
+    /// Session UUID that was last successfully loaded in a previous app
+    /// run, if any. Populated in `init()` from UserDefaults and consumed
+    /// by `RootView.task { await state.observeEngine() }` to auto-restore
+    /// the last session. Cleared once handled so we don't keep reloading
+    /// on every `observeEngine` restart.
+    var lastLoadedSessionIdOnLaunch: UUID? = nil
+
     init() {
         // Recover from any force-quit mid-stream BEFORE the UI reads
         // SQLite. Flips `is_streaming = 1` rows back to 0 and tags them
         // with ` [interrupted]`. Called exactly once on app launch,
         // ahead of every ChatViewModel.attach(app:).
         Database.shared.markAllStreamingAsInterrupted()
+
+        // Pick up the last-loaded session id so we can auto-restore it
+        // once SessionStore has populated `sessions`. Actual reload is
+        // kicked off from `RootView.task` after the sessions list has
+        // been hydrated.
+        if let s = UserDefaults.standard.string(forKey: "vmlx.lastLoadedSessionId"),
+           let uid = UUID(uuidString: s) {
+            lastLoadedSessionIdOnLaunch = uid
+        }
     }
 
     /// The engine currently driving UI events. Resolves to the engine of the
@@ -494,6 +510,34 @@ struct RootView: View {
         .background(Theme.Colors.background)
         .task { await state.observeEngine() }
         .task {
+            // Auto-restore last-loaded session. If the user had a session
+            // running when they quit last time, bring it back up silently
+            // so they don't have to re-click Start every launch. Silent
+            // no-op when the session was deleted or the model path went
+            // away — the user can just pick a new one.
+            guard let sid = state.lastLoadedSessionIdOnLaunch else { return }
+            state.lastLoadedSessionIdOnLaunch = nil  // one-shot
+            // Give SessionStore a moment to hydrate `sessions`. A single
+            // await yields enough for the init-time observers to populate
+            // the array from disk before we probe it.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard let s = state.sessions.first(where: { $0.id == sid }) else { return }
+            guard FileManager.default.fileExists(atPath: s.modelPath.path) else { return }
+            state.ensureObserver(for: sid)
+            let eng = state.engine(for: sid)
+            let resolved = await eng.settings.resolved(sessionId: sid)
+            let opts = Engine.LoadOptions(modelPath: s.modelPath, from: resolved)
+            do {
+                for try await event in await eng.load(opts) {
+                    if case .failed = event { return }
+                }
+                state.selectedServerSessionId = sid
+                state.rebindEngineObserver()
+            } catch {
+                // Silent — last-session restore is a courtesy, not a promise.
+            }
+        }
+        .task {
             await state.observeDownloads { id in
                 openWindow(id: id)
             }
@@ -529,7 +573,18 @@ struct RootView: View {
                         let stream = await eng.load(opts)
                         for try await _ in stream {}
                     } else if let path = st.selectedModelPath {
-                        let opts = Engine.LoadOptions(modelPath: path)
+                        // Pull merged GlobalSettings (cacheMemoryPercent,
+                        // maxCacheBlocks, enableTurboQuant/JANG/etc.) so the
+                        // Tray-initiated Start runs with the SAME config as
+                        // the Server-tab Start path. Before this, the Tray
+                        // fell back to LoadOptions struct-literal defaults
+                        // (0.10 / 500) which differ from GlobalSettings
+                        // (0.30 / 1000) — every Tray Start silently halved
+                        // the cache budget.
+                        let resolved = await eng.settings.resolved(
+                            sessionId: st.selectedServerSessionId,
+                            chatId: nil)
+                        let opts = Engine.LoadOptions(modelPath: path, from: resolved)
                         let stream = await eng.load(opts)
                         for try await _ in stream {}
                     } else {

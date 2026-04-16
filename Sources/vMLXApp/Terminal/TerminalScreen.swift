@@ -113,6 +113,14 @@ struct TerminalScreen: View {
             Text("Terminal")
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
+            // Reuse the Chat tab's model picker + Start/Stop control so
+            // Terminal users get the same engine-lifecycle affordance Chat
+            // users have. Both widgets require a ChatViewModel; we borrow
+            // the app-wide ref that ChatScreen publishes on appear.
+            if let chatVM = state.chatViewModelRef {
+                ChatModelPicker(vm: chatVM)
+                ChatEngineControl(vm: chatVM)
+            }
             Spacer()
             Text(cwd.path)
                 .font(Theme.Typography.mono)

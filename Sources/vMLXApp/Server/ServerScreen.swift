@@ -45,14 +45,15 @@ struct ServerScreen: View {
         return app.sessions.first(where: { $0.id == id })
     }
 
-    /// Mirror AppState.engineState + loadProgress into the selected session's
-    /// copy so the single-session Phase-3 world stays in sync. When
-    /// multi-engine lands each Session will feed off its own Engine actor
-    /// instead of the shared one.
+    /// Mirror AppState.sessionEngineStates + loadProgress into every matching
+    /// session's copy so all session cards paint with fresh state — not just
+    /// whichever one the user has selected right now. Multi-engine-aware.
     private func syncSelected() {
-        guard let id = app.selectedServerSessionId ?? app.sessions.first?.id else { return }
-        guard let idx = app.sessions.firstIndex(where: { $0.id == id }) else { return }
-        app.sessions[idx].state = app.engineState
-        app.sessions[idx].loadProgress = app.loadProgress
+        for (key, state) in app.sessionEngineStates {
+            if key == AppState.defaultEngineKey { continue }
+            guard let idx = app.sessions.firstIndex(where: { $0.id == key }) else { continue }
+            app.sessions[idx].state = state
+            app.sessions[idx].loadProgress = app.loadProgress
+        }
     }
 }
