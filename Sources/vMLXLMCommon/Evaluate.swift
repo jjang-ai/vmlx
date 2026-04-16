@@ -717,9 +717,12 @@ public struct TokenIterator: TokenIteratorProtocol {
         // misses. Previously any image/video bypassed the cache entirely,
         // wasting a full vision-tower encode and prefill on every turn.
         var inputForPrepare = input
-        let hasRotatingCache = self.cache.contains { $0 is RotatingKVCache }
-        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty,
-           !hasRotatingCache {
+        // SLIDING-1: legacy `!hasRotatingCache` fetch guard removed.
+        // TQDiskSerializer v2 round-trips RotatingKVCache via the
+        // `.rotating` LayerKind, so sliding-window layers now participate
+        // in the same fetch/restore path as standard KV. Reference
+        // commit `bf942a8`.
+        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty {
             let result = coordinator.fetch(
                 tokens: promptTokenIds, mediaSalt: mediaSalt,
                 genPromptLen: genPromptLen)

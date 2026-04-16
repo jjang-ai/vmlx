@@ -392,13 +392,18 @@ public actor BatchEngine {
         // Check multi-tier cache for a prefix match before running full prefill.
         // On cache hit, restore KV state and only prefill remaining tokens.
         var inputForPrepare = slot.originalInput
-        let hasRotatingCache = slot.cache.contains { $0 is RotatingKVCache }
-        // VLM inputs are now supported via `mediaSalt` (pixel fingerprint
-        // mixed into the cache-coordinator key) so "same text + same image"
-        // hits while "same text + different image" misses. RotatingKVCache
-        // is still skipped because its sliding-window semantics are
-        // incompatible with partial restore. Port of reference `ed989f2`.
-        if let coordinator = cacheCoordinator, !hasRotatingCache {
+        // VLM inputs: `mediaSalt` (pixel fingerprint) mixes into the
+        // coordinator key so "same text + same image" hits while "same
+        // text + different image" misses (reference `ed989f2`).
+        //
+        // SLIDING-1 (reference `bf942a8`): the legacy `!hasRotatingCache`
+        // guard is removed. TQDiskSerializer v2 round-trips the ring
+        // buffer + 5-tuple metaState via `.rotating` LayerKind, so
+        // sliding-window models (Gemma3/Gemma4 SWA, Mistral3/4, MiMoV2Flash,
+        // BaichuanM1, Qwen3.5-VL inherited sliding layers) are now
+        // first-class L2 citizens and hit paged + disk on the same path
+        // as standard KV.
+        if let coordinator = cacheCoordinator {
             let tokenIds = slot.originalInput.text.tokens.asArray(Int.self)
             let mediaSalt = computeMediaSalt(for: slot.originalInput)
             let result = coordinator.fetch(
@@ -641,17 +646,13 @@ public actor BatchEngine {
         // Store prompt cache state for completed (non-cancelled) generations.
         // Extract real KV data and SSM states from the slot's cache.
         //
-        // GUARD: skip the store entirely when the slot has any RotatingKVCache
-        // layers. Rotating caches (sliding-window attention) compress to
-        // window_size and the FETCH path already refuses them at
-        // BatchEngine.swift:396. Storing them is pure waste — extractLayerData
-        // walks every layer (KV + SSM), serializes 100s of MB to disk, and
-        // every subsequent fetch silently throws it all away. On long-context
-        // hybrid models this caused both the steady-state cratering and the
-        // rolling pool-pressure that bled into adjacent slots. Symmetric with
-        // the fetch guard — fix #1 from the user's batch.
-        let hasRotatingCache = slot.cache.contains { $0 is RotatingKVCache }
-        if reason != .cancelled, !hasRotatingCache, let coordinator = cacheCoordinator {
+        // SLIDING-1 (reference `bf942a8`): the legacy `!hasRotatingCache`
+        // store guard is removed — `TQDiskSerializer.serialize(cache:)`
+        // now writes `.rotating` LayerKind entries (ring buffer + 5-tuple
+        // metaState) so RotatingKVCache round-trips cleanly. The store no
+        // longer wastes a full KV extraction on sliding layers; the
+        // coordinator hands them straight to the v2 serializer.
+        if reason != .cancelled, let coordinator = cacheCoordinator {
             let promptTokens = slot.originalInput.text.tokens.asArray(Int.self)
             let perLayerData = extractLayerData(from: slot.cache)
             let ssmStates: [MLXArray]? = coordinator.isHybrid
