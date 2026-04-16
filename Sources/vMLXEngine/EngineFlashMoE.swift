@@ -127,8 +127,16 @@ extension Engine {
         else { return nil }
         func lookup(_ dict: [String: Any]) -> (Int, Int)? {
             let layers = dict["num_hidden_layers"] as? Int
+            // Audit 2026-04-16 Gemma 4 perf fix: add `top_k_experts`
+            // (Gemma 4's config key) and `num_selected_experts` (some
+            // DeepSeek derivatives). Before this, Gemma 4 26B-A4B
+            // returned nil → slot bank stuck at UI default 256 → ~40
+            // tok/s because the 240-activation working-set thrashed
+            // the LRU bank on every decode step.
             let k = dict["num_experts_per_tok"] as? Int
                 ?? dict["moe_top_k"] as? Int
+                ?? dict["top_k_experts"] as? Int
+                ?? dict["num_selected_experts"] as? Int
                 ?? dict["top_k"] as? Int
             if let l = layers, let kk = k { return (l, kk) }
             return nil

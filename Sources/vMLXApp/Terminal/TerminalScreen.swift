@@ -113,14 +113,6 @@ struct TerminalScreen: View {
             Text("Terminal")
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
-            // Reuse the Chat tab's model picker + Start/Stop control so
-            // Terminal users get the same engine-lifecycle affordance Chat
-            // users have. Both widgets require a ChatViewModel; we borrow
-            // the app-wide ref that ChatScreen publishes on appear.
-            if let chatVM = state.chatViewModelRef {
-                ChatModelPicker(vm: chatVM)
-                ChatEngineControl(vm: chatVM)
-            }
             Spacer()
             Text(cwd.path)
                 .font(Theme.Typography.mono)
@@ -392,7 +384,17 @@ struct TerminalScreen: View {
         let stdout = (obj["stdout"] as? String) ?? ""
         let stderr = (obj["stderr"] as? String) ?? ""
         let exitCode = Int32((obj["exit_code"] as? Int) ?? 0)
+        // Audit 2026-04-16 UX: `timed_out` and `killed` were silently
+        // dropped. Prepend a visible banner so the user knows whether
+        // empty output came from a timeout vs a no-output success.
+        let timedOut = (obj["timed_out"] as? Bool) ?? false
+        let killed = (obj["killed"] as? Bool) ?? false
         var parts: [String] = []
+        if timedOut {
+            parts.append("⏱ command timed out (process terminated)")
+        } else if killed {
+            parts.append("⚠ command killed before completion")
+        }
         if !stdout.isEmpty { parts.append(stdout) }
         if !stderr.isEmpty { parts.append(stderr) }
         return (parts.joined(separator: "\n"), exitCode)

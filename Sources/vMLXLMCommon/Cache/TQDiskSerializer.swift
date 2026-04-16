@@ -256,11 +256,21 @@ public enum TQDiskSerializer {
                         } else {
                             result[subKindKey] = kindArray(.skip)
                         }
+                    } else if let rot = inner as? RotatingKVCache {
+                        // F-G18 (2026-04-15): was `.skip` before. Rotating
+                        // inside CacheList previously lost its ring buffer
+                        // + keep/maxSize/step/offset/idx metaState on disk
+                        // persist. Restore simply falls back to cold prefill
+                        // via `.skip` tag if the deserializer doesn't
+                        // understand the compound key, which is still the
+                        // current behavior for this branch until the
+                        // corresponding deserialize walker is wired.
+                        serializeRotatingLayer(rot, compoundIndex: compoundKey, into: &result)
                     } else {
-                        // Rotating / QKV / TQ inside CacheList: rare, no
-                        // known production model ships this pattern.
-                        // Tag skip — inner state is lost but the outer
-                        // `.cachelist` tag keeps the validator happy.
+                        // QKV / TQ inside CacheList: rarer still, no known
+                        // production model ships these patterns. Tag skip —
+                        // inner state is lost but the outer `.cachelist`
+                        // tag keeps the validator happy.
                         result[subKindKey] = kindArray(.skip)
                     }
                 }
@@ -362,18 +372,26 @@ public enum TQDiskSerializer {
         index i: Int,
         into result: inout [String: MLXArray]
     ) {
+        serializeRotatingLayer(rot, compoundIndex: "\(i)", into: &result)
+    }
+
+    /// Compound-index variant for RotatingKVCache layers living inside a
+    /// CacheList. Audit F-G18 (2026-04-15): was tagged `.skip` before,
+    /// silently dropping rotation state for any model that wraps Rotating
+    /// in CacheList (uncommon but BaichuanM1-shaped architectures may).
+    private static func serializeRotatingLayer(
+        _ rot: RotatingKVCache,
+        compoundIndex key: String,
+        into result: inout [String: MLXArray]
+    ) {
+        let kindK = "__layer_kind_\(key)__"
         let state = rot.state
         guard state.count == 2 else {
-            // Pre-prefill — nothing useful to persist.
-            result[kindKey(for: i)] = kindArray(.skip)
+            result[kindK] = kindArray(.skip)
             return
         }
-        result["rot_\(i)_keys"] = state[0]
-        result["rot_\(i)_values"] = state[1]
-        // metaState is `[keep, maxSize, step, offset, idx]` per
-        // RotatingKVCache.swift:614. Pack into a single Int32 array so we
-        // round-trip cleanly through safetensors (1D arrays survive,
-        // 0-dim scalars don't — see metaInt32 comment).
+        result["rot_\(key)_keys"] = state[0]
+        result["rot_\(key)_values"] = state[1]
         let meta = rot.metaState
         if meta.count == 5,
            let keep = Int32(meta[0]),
@@ -382,11 +400,10 @@ public enum TQDiskSerializer {
            let offset = Int32(meta[3]),
            let idx = Int32(meta[4])
         {
-            result["__rot_\(i)_meta__"] = MLXArray([keep, maxSize, step, offset, idx])
-            result[kindKey(for: i)] = kindArray(.rotating)
+            result["__rot_\(key)_meta__"] = MLXArray([keep, maxSize, step, offset, idx])
+            result[kindK] = kindArray(.rotating)
         } else {
-            // metaState shape changed unexpectedly — refuse to persist.
-            result[kindKey(for: i)] = kindArray(.skip)
+            result[kindK] = kindArray(.skip)
         }
     }
 

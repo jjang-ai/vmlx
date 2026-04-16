@@ -292,6 +292,12 @@ public final class MemoryAwarePrefixCache<Payload>: @unchecked Sendable {
     /// can truncate the KV payload to match. When `nil`, reverse
     /// prefix hits are disabled (always report a miss).
     public let truncate: ((Payload, Int) -> Payload?)?
+    /// OS memory pressure listener (macOS `DispatchSource`). Wired at
+    /// init so we react to `.warning` / `.critical` events instantly
+    /// instead of waiting for the next `store()` call's 60-second
+    /// polling tick. Cancelled in deinit to release the source.
+    /// FIX-G-B (2026-04-16): reactive eviction on pressure events.
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     // MARK: - Init
 
@@ -317,6 +323,60 @@ public final class MemoryAwarePrefixCache<Payload>: @unchecked Sendable {
             lruTail[t] = nil
             bytesByType[t] = 0
         }
+
+        // FIX-G-B: wire an OS memory pressure listener so eviction
+        // reacts instantly to `.warning` / `.critical` events. The
+        // existing polling in `checkMemoryPressure()` stays as a
+        // fallback (runs at most once per 60s on store()).
+        //
+        // `.warning`  → shrink to 50% of baseline, evict eagerly
+        // `.critical` → shrink to minimum (100 MB), evict everything
+        //               except system-tier pinned entries
+        //
+        // DispatchSource handlers run on the global utility queue
+        // (not main), so we must acquire `lock` before mutating
+        // any state. No-op on Linux (Foundation has no memory-pressure
+        // source) — `DispatchSource.makeMemoryPressureSource` is
+        // Darwin-only, so the whole block is `#if canImport(Darwin)`.
+        #if canImport(Darwin)
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: DispatchQueue.global(qos: .utility)
+        )
+        self.memoryPressureSource = source
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let event = source.data
+            self.lock.withLock {
+                if event.contains(.critical) {
+                    // Shrink to minimum, evict everything except system tier.
+                    self.maxMemoryBytes = 100 * 1024 * 1024
+                    // Drop every non-system entry regardless of LRU position.
+                    // Evict until below 100 MB or only system entries remain.
+                    while self.currentMemoryBytes > self.maxMemoryBytes,
+                          !self.entries.isEmpty
+                    {
+                        if !self.evictLRU() { break }
+                    }
+                } else if event.contains(.warning) {
+                    // Shrink to 50% of baseline, evict eagerly.
+                    self.maxMemoryBytes = max(
+                        self.baselineMemoryBytes / 2,
+                        100 * 1024 * 1024)
+                    while self.currentMemoryBytes > self.maxMemoryBytes,
+                          !self.entries.isEmpty
+                    {
+                        if !self.evictLRU() { break }
+                    }
+                }
+            }
+        }
+        source.resume()
+        #endif
+    }
+
+    deinit {
+        memoryPressureSource?.cancel()
     }
 
     // MARK: - Fetch

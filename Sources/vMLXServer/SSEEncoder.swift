@@ -104,18 +104,24 @@ public enum SSEEncoder {
             try await writer.write(allocator.buffer(string: "data: \(finalChunk)\n\n"))
 
             if includeUsage, let u = lastUsage {
+                var usageDict: [String: Any] = [
+                    "prompt_tokens": u.promptTokens,
+                    "completion_tokens": u.completionTokens,
+                    "total_tokens": u.promptTokens + u.completionTokens,
+                    "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
+                ]
+                if let tps = u.tokensPerSecond { usageDict["tokens_per_second"] = tps }
+                if let ppt = u.promptTokensPerSecond { usageDict["prompt_tokens_per_second"] = ppt }
+                if let ttft = u.ttftMs { usageDict["ttft_ms"] = ttft }
+                if let pm = u.prefillMs { usageDict["prefill_ms"] = pm }
+                if let tm = u.totalMs { usageDict["total_ms"] = tm }
                 let usageObj: [String: Any] = [
                     "id": id,
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
                     "choices": [],
-                    "usage": [
-                        "prompt_tokens": u.promptTokens,
-                        "completion_tokens": u.completionTokens,
-                        "total_tokens": u.promptTokens + u.completionTokens,
-                        "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
-                    ] as [String: Any],
+                    "usage": usageDict,
                 ]
                 let j = Self.asciiJSON(usageObj)
                 try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))

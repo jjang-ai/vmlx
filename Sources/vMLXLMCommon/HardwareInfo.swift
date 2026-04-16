@@ -36,16 +36,27 @@ public enum HardwareInfo {
     ///
     /// Re-enable when Apple fixes the Metal JIT in a future macOS update.
     public static var isCompiledDecodeSupported: Bool {
-        // Env override for perf experiments. Set VMLX_FORCE_COMPILE_DECODE=1
-        // to opt into compile(shapeless:true) and compile(inputs:outputs:)
-        // fusion paths. Known to crash on M1/M2/M4 Pro under certain macOS
-        // Tahoe builds (MLX #3329/#3201/#3256) — use at your own risk and
-        // back out if you see `Index out of range` during decode.
-        if ProcessInfo.processInfo.environment["VMLX_FORCE_COMPILE_DECODE"] == "1" {
-            return true
+        // Re-enabled per vmlx-swift-lm @ 2026-04-13. Direct measurement on M4 Max +
+        // mlx-swift osaurus-0.31.3 showed the MLX#3329/#3201/#3256 "Index out of
+        // range" crash was tied to the WHOLE-MODEL compile path
+        // (`setupCompiledDecode` + `CompilableKVCache`), NOT the small fixed-shape
+        // micro-fusions this flag actually gates (compiledSwiGLU, compiledGeGLU,
+        // softcap, sigmoid-gate, precise_swiglu). Keeping the flag off disabled
+        // every per-op fusion across every MoE / attention / norm path, burning
+        // an extra Metal dispatch per SwiGLU/GeGLU/softcap per decode token.
+        // Measured: +1.9 tok/s on Qwen3.5-35B; multiple tok/s on dense models
+        // where SwiGLU dominates per-layer cost.
+        //
+        // The whole-model compile path is still gated separately by
+        // `GenerateParameters.enableCompiledDecode` and stays off by default —
+        // flipping this flag cannot revive the original crash. If a site-specific
+        // crash ever reappears, opt THAT site out individually.
+        //
+        // Escape hatch: `VMLX_DISABLE_COMPILE_DECODE=1` forces it back off.
+        if ProcessInfo.processInfo.environment["VMLX_DISABLE_COMPILE_DECODE"] == "1" {
+            return false
         }
-        // Disabled by default on all hardware — macOS Tahoe Metal JIT bug.
-        return false
+        return true
     }
 
     /// Returns `true` if running on Apple Silicon hardware.

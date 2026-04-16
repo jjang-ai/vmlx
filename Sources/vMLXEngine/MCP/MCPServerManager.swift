@@ -183,7 +183,12 @@ public actor MCPServerManager {
     /// Flattened tool catalog across every connected server, with
     /// namespacing via `server__tool` in `fullName`.
     public func listTools() -> [MCPTool] {
-        tools.values.flatMap { $0 }
+        // Sort by server name for deterministic ordering across runs —
+        // `tools` is a dict and iteration order was nondeterministic, so
+        // the merged tool catalog reached the model in different orders
+        // per restart, changing sampling when the model tie-breaks on
+        // tool position. Audit 2026-04-15.
+        return tools.keys.sorted().flatMap { tools[$0] ?? [] }
     }
 
     public func listServers() -> [MCPServerStatus] {

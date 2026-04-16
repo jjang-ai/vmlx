@@ -24,7 +24,11 @@ public enum OllamaRoutes {
         engine: Engine
     ) {
         router.get("/api/version") { _, _ -> Response in
-            OpenAIRoutes.json(["version": "0.1.0-vmlx"])
+            // Pin to a recent Ollama version string. VS Code Copilot and
+            // Open WebUI feature-gate on >= 0.6.4 (NO-REGRESSION-CHECKLIST §8f);
+            // the older "0.1.0-vmlx" silently disabled tool-call paths in
+            // those clients. Mirrors Python server.py at v1.3.50.
+            OpenAIRoutes.json(["version": "0.12.6"])
         }
 
         // GET /api/tags — enumerate local models.

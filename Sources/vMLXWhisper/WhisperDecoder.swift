@@ -23,6 +23,19 @@ public struct TranscribeResult: Sendable {
     public let language: String
     public let durationSeconds: Double
     public let tokens: [Int]
+    /// `true` when the caller handed in audio longer than the 30s
+    /// Whisper chunk. The returned `text` only reflects the first 30s.
+    /// Audit 2026-04-15 (untouched-surface #8).
+    public let truncatedToThirtySeconds: Bool
+
+    public init(text: String, language: String, durationSeconds: Double,
+                tokens: [Int], truncatedToThirtySeconds: Bool = false) {
+        self.text = text
+        self.language = language
+        self.durationSeconds = durationSeconds
+        self.tokens = tokens
+        self.truncatedToThirtySeconds = truncatedToThirtySeconds
+    }
 }
 
 public enum WhisperDecoder {
@@ -69,10 +82,18 @@ public enum WhisperDecoder {
         let generated = Array(tokens[promptLen ..< tokens.count])
         let text = tokenizer.decode(generated)
         let effectiveLang = language ?? "en"
+        // Warn when the caller handed in >30s of audio — we only decode
+        // the first chunk. Follow-up: stitched chunked decoding via
+        // seek offsets + timestamp tokens.
+        let truncated = durationSec > 30.5
+        if truncated {
+            print("[whisper] WARNING: audio is \(Int(durationSec))s but decoder only processes the first 30s; tail silently dropped until chunked decoding lands")
+        }
         return TranscribeResult(
             text: text.trimmingCharacters(in: .whitespacesAndNewlines),
             language: effectiveLang,
             durationSeconds: durationSec,
-            tokens: generated)
+            tokens: generated,
+            truncatedToThirtySeconds: truncated)
     }
 }

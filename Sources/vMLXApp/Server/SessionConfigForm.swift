@@ -166,12 +166,6 @@ struct SessionConfigForm: View {
 
     @ViewBuilder
     private var cacheSection: some View {
-        ValidatedField(title: "Cache memory %",
-                       value: doubleBinding(\.cacheMemoryPercent,
-                                            default: globalDefaults.cacheMemoryPercent,
-                                            transformGet: { $0 * 100 },
-                                            transformSet: { $0 / 100 }),
-                       range: 0...100, step: 1, format: "%.0f%%")
         ValidatedField(title: "Max cache blocks",
                        value: intBinding(\.maxCacheBlocks, default: globalDefaults.maxCacheBlocks),
                        range: 16...10000, step: 16)
@@ -196,10 +190,38 @@ struct SessionConfigForm: View {
         }
 
         toggleRow("TurboQuant",       boolBinding(\.enableTurboQuant,      default: globalDefaults.enableTurboQuant))
+        // TQ bits stepper gated on the TurboQuant toggle. Audit 2026-04-16:
+        // was only in Tray; per-session override is now possible.
+        if s.enableTurboQuant ?? globalDefaults.enableTurboQuant {
+            Stepper(value: Binding(
+                get: { s.turboQuantBits ?? globalDefaults.turboQuantBits },
+                set: { s.turboQuantBits = $0; commit() }
+            ), in: 3...8, step: 1) {
+                Text("TurboQuant bits: \(s.turboQuantBits ?? globalDefaults.turboQuantBits)")
+            }
+            .padding(.leading, 20)
+        }
         toggleRow("Prefix cache",     boolBinding(\.enablePrefixCache,     default: globalDefaults.enablePrefixCache))
         toggleRow("SSM companion",    boolBinding(\.enableSSMCompanion,    default: globalDefaults.enableSSMCompanion))
         toggleRow("Block disk cache", boolBinding(\.enableBlockDiskCache,  default: globalDefaults.enableBlockDiskCache))
         toggleRow("L2 disk cache",    boolBinding(\.enableDiskCache,       default: globalDefaults.enableDiskCache))
+        // Directory + GB cap: previously only in Tray, not per-session.
+        // Audit 2026-04-16 — disk cache dir was unconfigurable anywhere
+        // per-session; users with external SSDs couldn't redirect the
+        // cache off the boot volume.
+        if s.enableDiskCache ?? globalDefaults.enableDiskCache {
+            TextField("Disk cache directory (empty = default)", text: Binding(
+                get: { s.diskCacheDir ?? globalDefaults.diskCacheDir },
+                set: { s.diskCacheDir = $0; commit() }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .padding(.leading, 20)
+            ValidatedField(title: "Disk cache max (GB)",
+                           value: doubleBinding(\.diskCacheMaxGB,
+                                                default: globalDefaults.diskCacheMaxGB),
+                           range: 1...1000, step: 1, format: "%.0f GB")
+                .padding(.leading, 20)
+        }
         // JANG repack is NOT a user setting — JangLoader auto-detects
         // jang_config.json at load time and activates itself. Showing a
         // toggle here would let users disable it on a JANG model (which
@@ -210,11 +232,18 @@ struct SessionConfigForm: View {
             get: { s.kvCacheQuantization ?? globalDefaults.kvCacheQuantization },
             set: { s.kvCacheQuantization = $0; commit() }
         )) {
-            Text("None").tag("none")
-            Text("Q4").tag("q4")
+            // Audit 2026-04-16: lead with TurboQuant (default + recommended).
+            // "None" removed — users shouldn't accidentally downgrade from
+            // TQ to raw fp16 KV cache; the advanced fixed-bit options stay
+            // available for comparison/testing.
+            Text("TurboQuant").tag("turboquant")
             Text("Q8").tag("q8")
+            Text("Q4").tag("q4")
         }
         .pickerStyle(.segmented)
+        Text("TurboQuant adapts per-layer bits from the KV distribution; Q4/Q8 are fixed-width fallbacks.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -447,40 +476,36 @@ struct SessionConfigForm: View {
 
     @ViewBuilder
     private var advancedSection: some View {
-        // Smelt toggle REMOVED from the UI (2026-04-15 post-UX-audit).
-        // The Swift engine has no partial-expert-loader consumer yet and
-        // the toggle was a foot-gun: users flipped it on, got no behavior
-        // change, and only saw a one-shot log warning buried in the log
-        // panel. The GlobalSettings.smelt field + per-request warning in
-        // Stream.swift remain so the setting round-trips cleanly with
-        // Python-engine configs, but the UI is hidden until the Swift
-        // load path actually implements partial expert loading.
+        // Smelt — sub-controls hidden when off. Audit 2026-04-15 finding #4.
+        // NOTE: Smelt is not yet wired in the Swift engine (Python-only).
+        // The engine logs a one-shot warning per request when the flag is
+        // on so users aren't silently no-opped. See `EngineDFlash.swift`
+        // / `StreamDFlash.swift` for the integrated DFlash replacement.
+        toggleRow("Smelt mode (Python engine only)",
+                  boolBinding(\.smelt, default: globalDefaults.smelt))
+        if (s.smelt ?? globalDefaults.smelt) {
+            textFieldRow("Smelt variant",
+                         placeholder: globalDefaults.smeltMode,
+                         value: Binding(
+                            get: { s.smeltMode ?? "" },
+                            set: { s.smeltMode = $0.isEmpty ? nil : $0; commit() }
+                         ))
+        }
 
         // JANG-DFlash speculative decoding — block diffusion drafter +
         // DDTree beam. Targets: MiniMax, Mistral 4, DeepSeek V3.
         // `dflashDrafterPath` must point at a compatible safetensors
         // checkpoint; when unset the engine falls back to the standard
         // token iterator silently (and logs why in the stream log).
-        // DFlash can't be enabled without a drafter path — the engine silently
-        // falls back to the standard token iterator if we skip this guard, and
-        // users end up wondering why "DFlash on" doesn't change anything. The
-        // drafter-path field is rendered BEFORE the toggle (and unconditionally)
-        // so users have somewhere to put the path before they can flip DFlash on.
-        textFieldRow("DFlash drafter path",
-                     placeholder: globalDefaults.dflashDrafterPath,
-                     value: Binding(
-                        get: { s.dflashDrafterPath ?? "" },
-                        set: { s.dflashDrafterPath = $0.isEmpty ? nil : $0; commit() }
-                     ))
-        let dflashDrafterResolved = (s.dflashDrafterPath ?? globalDefaults.dflashDrafterPath)
-        let dflashCanToggle = !dflashDrafterResolved.trimmingCharacters(in: .whitespaces).isEmpty
         toggleRow("DFlash speculative decoding",
                   boolBinding(\.dflash, default: globalDefaults.dflash))
-            .disabled(!dflashCanToggle)
-            .help(dflashCanToggle
-                  ? "Enable JANG-DFlash block-diffusion speculative decoding."
-                  : "Set a DFlash drafter checkpoint path first — the toggle has no effect without one.")
         if (s.dflash ?? globalDefaults.dflash) {
+            textFieldRow("DFlash drafter path",
+                         placeholder: globalDefaults.dflashDrafterPath,
+                         value: Binding(
+                            get: { s.dflashDrafterPath ?? "" },
+                            set: { s.dflashDrafterPath = $0.isEmpty ? nil : $0; commit() }
+                         ))
             ValidatedField(title: "DFlash block size",
                            value: intBinding(\.dflashBlockSize, default: globalDefaults.dflashBlockSize),
                            range: 1...64, step: 1)

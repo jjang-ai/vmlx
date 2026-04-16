@@ -25,11 +25,11 @@ struct ChatScreen: View {
                                   loadProgress: app.loadProgress,
                                   isStreaming: vm.isGenerating,
                                   hasContent: !(vm.messages.last?.content.isEmpty ?? true)) {
-                    // Start in Chat — don't kick the user to Server.
-                    // Resolves the picked model alias (or the global
-                    // selectedModelPath) and loads it right here.
-                    Task { await startFromBanner() }
+                    app.mode = .server
                 } onRetry: {
+                    // Caller hint — ChatViewModel can re-send when the engine
+                    // state flips to .running. For now we just clear the error
+                    // banner; the user can hit send again.
                     vm.bannerMessage = nil
                 }
 
@@ -45,17 +45,6 @@ struct ChatScreen: View {
             // Publish the vm to AppState so global Cmd-N / Cmd-Shift-T /
             // Cmd-K shortcuts and the command bar can drive it.
             app.chatViewModelRef = vm
-        }
-        .task(id: app.mode) {
-            // Ensure the default-engine observer is live whenever Chat
-            // is on screen. First launch race: observeEngine() fires
-            // from RootView.task but the Chat ViewModel may not have a
-            // bound server session yet; we want hasAnyLiveEngine to be
-            // accurate the moment the user picks Chat mode.
-            app.ensureObserver(for: AppState.defaultEngineKey)
-            if let sid = app.selectedServerSessionId {
-                app.ensureObserver(for: sid)
-            }
         }
         .onDisappear {
             if app.chatViewModelRef === vm { app.chatViewModelRef = nil }
@@ -92,30 +81,6 @@ struct ChatScreen: View {
             .hidden()
             .frame(width: 0, height: 0)
         )
-    }
-
-    /// Start whatever model is currently picked, directly from Chat.
-    /// Resolves the model URL from (in order): the active chat's
-    /// `modelAlias` setting → the global `selectedModelPath`.
-    @MainActor
-    private func startFromBanner() async {
-        var aliasOpt: String? = nil
-        if let chatId = vm.activeSessionId {
-            aliasOpt = await app.engine.settings.chat(chatId)?.modelAlias
-        }
-        let alias = aliasOpt ?? app.selectedModelPath?.lastPathComponent ?? ""
-        if alias.isEmpty {
-            app.flashBanner("Pick a model in the chat top bar first.")
-            return
-        }
-        let entries = await app.engine.modelLibrary.entries()
-        let match = entries.first(where: { $0.displayName == alias })
-            ?? entries.first(where: { $0.canonicalPath.lastPathComponent == alias })
-        guard let entry = match else {
-            app.flashBanner("Model `\(alias)` not found in the library.")
-            return
-        }
-        await vm.startModel(at: entry.canonicalPath)
     }
 }
 
@@ -293,13 +258,6 @@ private struct ChatTopBar: View {
             // up on the next turn via `engine.settings.chat(chatId)`.
             ChatModelPicker(vm: vm)
 
-            // In-chat Start / Stop button — lets users load or unload a
-            // model without bouncing to the Server tab. Picks the model
-            // either from the chat's persisted `modelAlias` (set via
-            // `ChatModelPicker` above) or from the currently-selected
-            // global path. Disabled mid-load.
-            ChatEngineControl(vm: vm)
-
             Toggle(isOn: $vm.reasoningEnabled) {
                 Text("Reasoning")
                     .font(Theme.Typography.caption)
@@ -390,7 +348,7 @@ private struct ChatTopBar: View {
 /// via the existing Server-tab flow — we just flash a banner and nudge
 /// the user to the Server tab (same pattern as the current
 /// `ChatViewModel.send()` guard).
-struct ChatModelPicker: View {
+private struct ChatModelPicker: View {
     @Environment(AppState.self) private var app
     @Bindable var vm: ChatViewModel
 
@@ -520,119 +478,5 @@ struct ChatModelPicker: View {
         var chat = await app.engine.settings.chat(chatId) ?? .init()
         chat.modelAlias = alias
         await app.engine.settings.setChat(chatId, chat)
-    }
-}
-
-/// In-chat Start / Stop control. When the engine is stopped, shows a
-/// green "Start" button that calls `vm.startModel(at:)` against the
-/// currently-picked model (ChatModelPicker stores a displayName alias;
-/// we resolve it back to a URL via the ModelLibrary). When an engine is
-/// live, shows a red "Stop" button that calls `vm.stopModel()`. Also
-/// renders a spinner during `.loading` so the user has live feedback
-/// instead of having to bounce to the Server tab to watch progress.
-struct ChatEngineControl: View {
-    @Environment(AppState.self) private var app
-    @Bindable var vm: ChatViewModel
-
-    @State private var entries: [ModelLibrary.ModelEntry] = []
-    @State private var isBusy: Bool = false
-
-    var body: some View {
-        Group {
-            if vm.isModelLoading {
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.mini)
-                    Text("Loading…")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.textMid)
-                }
-                .padding(.horizontal, Theme.Spacing.sm)
-                .padding(.vertical, 4)
-            } else if vm.isModelReady {
-                Button {
-                    Task { await stop() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "stop.fill").font(.system(size: 10))
-                        Text("Stop").font(Theme.Typography.caption)
-                    }
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Theme.Colors.danger.opacity(0.18))
-                    )
-                    .foregroundStyle(Theme.Colors.danger)
-                }
-                .buttonStyle(.plain)
-                .disabled(isBusy)
-                .help("Stop the engine for this chat session")
-            } else {
-                Button {
-                    Task { await start() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "play.fill").font(.system(size: 10))
-                        Text("Start").font(Theme.Typography.caption)
-                    }
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Theme.Colors.accent.opacity(0.18))
-                    )
-                    .foregroundStyle(Theme.Colors.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(isBusy)
-                .help("Start the model currently selected in the picker")
-            }
-        }
-        .task { await refreshEntries() }
-    }
-
-    @MainActor
-    private func refreshEntries() async {
-        entries = await app.engine.modelLibrary.entries()
-        if entries.isEmpty {
-            _ = await app.engine.modelLibrary.scan(force: false)
-            entries = await app.engine.modelLibrary.entries()
-        }
-    }
-
-    @MainActor
-    private func start() async {
-        guard !isBusy else { return }
-        isBusy = true
-        defer { isBusy = false }
-        // Resolve the current chat's modelAlias → library entry → URL.
-        var aliasOpt: String? = nil
-        if let chatId = vm.activeSessionId {
-            aliasOpt = await app.engine.settings.chat(chatId)?.modelAlias
-        }
-        let alias = aliasOpt ?? app.selectedModelPath?.lastPathComponent ?? ""
-        if alias.isEmpty {
-            app.flashBanner("Pick a model first — use the model picker in the Chat top bar.")
-            return
-        }
-        // Library lookup by displayName. Fall back to any entry whose
-        // canonicalPath's lastPathComponent matches — this handles users
-        // who picked a model by raw path via the global selector.
-        await refreshEntries()
-        let match = entries.first(where: { $0.displayName == alias })
-            ?? entries.first(where: { $0.canonicalPath.lastPathComponent == alias })
-        guard let entry = match else {
-            app.flashBanner("Model `\(alias)` not found in the library.")
-            return
-        }
-        await vm.startModel(at: entry.canonicalPath)
-    }
-
-    @MainActor
-    private func stop() async {
-        guard !isBusy else { return }
-        isBusy = true
-        defer { isBusy = false }
-        await vm.stopModel()
     }
 }

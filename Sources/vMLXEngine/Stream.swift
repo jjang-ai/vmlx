@@ -276,9 +276,32 @@ extension Engine {
                 throw EngineError.toolCallRepetition(signature)
             }
 
-            // Execute each tool call server-side and append results as
-            // `tool` role messages. `executeToolCall` dispatches on
-            // `function.name` — currently only `bash` is wired.
+            // Split tool calls: server-side vs client-side.
+            //
+            // Audit 2026-04-16: previously ALL tool calls were routed
+            // through `executeToolCall`. Client-registered tools (via
+            // `request.tools`) that weren't `bash` or MCP-namespaced
+            // returned `"Unknown tool"` which then got fed back to the
+            // model as a tool result — the client never saw
+            // `finish_reason: "tool_calls"` and couldn't execute their
+            // own tool. Now: if ANY collected call names a tool that's
+            // only in `request.tools` (not `bash`, not MCP namespaced),
+            // exit the loop with a terminal `finish_reason: "tool_calls"`
+            // chunk so the client can execute.
+            let internalNames = Self.knownInternalToolNames(
+                collectedCalls: collectedCalls)
+            let hasClientTool = collectedCalls.contains { !internalNames.contains($0.function.name) }
+            if hasClientTool {
+                await self.log(.info, "engine",
+                    "tool_calls emitted for client-side execution — exiting tool loop")
+                continuation.yield(StreamChunk(
+                    toolCalls: collectedCalls,
+                    finishReason: "tool_calls"
+                ))
+                return
+            }
+            // Execute each internal tool call server-side and append results
+            // as `tool` role messages.
             // P2-STREAM-7: check cancellation BEFORE and AFTER each tool
             // execution. The "after" check matters when bash takes
             // multiple seconds and the user clicks stop mid-execution —
@@ -302,6 +325,25 @@ extension Engine {
         }
         await self.log(.warn, "engine",
             "stream: hit maxToolIterations (\(maxIters)) — exiting loop")
+    }
+
+    /// Classify tool calls as internal (bash, MCP-namespaced) vs client-
+    /// registered. Any call whose name is neither `bash` nor contains
+    /// `__` is assumed to be a client-side tool that the model emitted
+    /// in response to `request.tools`; the engine should stop the loop
+    /// and emit `finish_reason: "tool_calls"` so the client can run it.
+    /// Audit 2026-04-16.
+    private static func knownInternalToolNames(
+        collectedCalls: [ChatRequest.ToolCall]
+    ) -> Set<String> {
+        var names = Set<String>()
+        for c in collectedCalls {
+            let n = c.function.name
+            if n == "bash" || n.contains("__") {
+                names.insert(n)
+            }
+        }
+        return names
     }
 
     /// Build a stable signature for a batch of tool calls. Used by the
@@ -377,7 +419,7 @@ extension Engine {
         // (OpenAI clients that never send enable_thinking), reasoning must
         // route to content so `delta.content` is never empty.
         // Fixes vmlx #67 (streaming empty content) + #6 (think-seed missing).
-        let effectiveThinking: Bool = request.enableThinking
+        var effectiveThinking: Bool = request.enableThinking
             ?? resolved.enableThinking
             ?? false
 
@@ -414,12 +456,29 @@ extension Engine {
         // etc. — `thinkInTemplate=true`), the stream-time content router in
         // this file still routes stray reasoning chunks to visible content
         // when `effectiveThinking=false`, honoring §15 NO-REGRESSION.
+        // Family-aware image marker. VLM processors do a literal split on
+        // their family's image token — the wrong marker silently produces
+        // a text-only prompt with zero visual tokens expanded. See
+        // `buildChatMessages` comment for the per-family table.
+        let imageMarker: String = {
+            let fam = (caps?.family ?? "").lowercased()
+            let mt = (caps?.modelType ?? "").lowercased()
+            if fam.contains("gemma") || mt.contains("gemma") || mt.contains("paligemma") {
+                return "<|image|>"
+            }
+            if fam.contains("mistral") || mt.contains("mistral") || mt.contains("pixtral") {
+                return "[IMG]"
+            }
+            // Qwen / Llava / Idefics / SmolVLM / FastVLM / LFM2 / GlmOcr etc.
+            return "<image>"
+        }()
         let chatMessages = await Engine.buildChatMessages(
             from: request,
             effectiveThinking: effectiveThinking,
             modelStampsThink: modelStampsThink,
             responseFormatInstruction: Engine.responseFormatInstruction(
-                from: request.responseFormat))
+                from: request.responseFormat),
+            imageMarker: imageMarker)
 
         // Merge MCP tools into the spec list the model sees.
         //
@@ -485,6 +544,23 @@ extension Engine {
                 }
                 mergedTools = merged
             }
+        }
+
+        // Gemma 4 thinking+tools collision guard (Round 16 / mlxstudio#71).
+        // Gemma 4's chat template double-stamps `<think>` blocks when tools
+        // are present AND reasoning is on, producing garbled output with
+        // interleaved tool calls inside reasoning tags. Python v1.3.54
+        // auto-disables reasoning when both conditions hold. Port the same
+        // behavior to Swift — checked AFTER MCP merge so MCP-added tools
+        // also trigger the guard.
+        if effectiveThinking,
+           let tools = mergedTools, !tools.isEmpty,
+           let fam = caps?.family.lowercased(),
+           fam.hasPrefix("gemma")
+        {
+            effectiveThinking = false
+            await self.log(.warn, "engine",
+                "Gemma + tools: auto-disabling thinking to prevent chat-template double-stamp (parity with Python v1.3.54 mlxstudio#71)")
         }
 
         let toolSpecs: [ToolSpec]? = mergedTools.map { buildToolSpecs(from: $0) }
@@ -560,10 +636,11 @@ extension Engine {
         let stopUnion: [String] = {
             var out: [String] = []
             if let s = request.stop { out.append(contentsOf: s) }
-            // Note: settings.stopSequences is read via resolved earlier in
-            // performOneGenerationPass when the parameters are built. The
-            // request.stop list is the user-facing surface that flows
-            // through OpenAI/Ollama wire format unchanged.
+            // Note: stopSequences is not a GlobalSettings field today —
+            // it flows into the matcher via the 4-tier resolver through
+            // `RequestOverride.stopSequences` → `request.stop` above.
+            // Audit 2026-04-15 initial claim that GlobalSettings had a
+            // silent-drop was a false positive.
             return out
         }()
         let stopMatcher = AhoCorasickMatcher(patterns: stopUnion)
@@ -600,12 +677,26 @@ extension Engine {
         // Reset per-request state. `thinkInPrompt` tracks whether the chat
         // template already stamped a `<think>` (Qwen3/MiniMax/Step/NemotronH
         // families do, see `modelStampsThink` above).
+        // Round 16 / Rank 11 (§15 NO-REGRESSION): Harmony/GPT-OSS channel
+        // markers must only be considered active when the template stamps
+        // think tags AND the caller actually requested reasoning. With the
+        // old `harmonyActive: modelStampsThink` wiring, a Qwen3/MiniMax/Step
+        // model with `enableThinking=false` still ran the harmony branch,
+        // swallowing tokens destined for visible content and producing the
+        // "reasoning OFF stuck UI" regression documented in
+        // `feedback_reasoning_off_ui_stuck.md`.
+        let harmonyActive = modelStampsThink && effectiveThinking
         reasoningParser?.resetState(
             thinkInPrompt: modelStampsThink,
-            harmonyActive: modelStampsThink
+            harmonyActive: harmonyActive
         )
         var parserPrevious = ""
         var parserCurrent = ""
+        // Latched flag: set true once a reasoning/channel marker has appeared
+        // in the stream. Used by the cold-path optimization to skip the full
+        // reasoning parser on text-only non-thinking turns (per-token parser
+        // scan was O(N²) across decode). See Stream.swift:~910.
+        var seenReasoningMarker = false
 
         // Accumulator for tool calls emitted during this pass. We BUFFER
         // these instead of yielding them directly so the outer tool-loop
@@ -626,7 +717,15 @@ extension Engine {
         // lookups are idempotent and O(tokens). We discard our fetch result
         // (generate() will re-fetch and use it) and only keep the
         // hit-count + tier label for surfacing in Usage.
-        let coordinator = self.cacheCoordinator
+        //
+        // Perf A/B killswitch: `VMLX_DISABLE_CACHE_COORD=1` bypasses the
+        // coordinator entirely so the server path uses the same `cache=nil,
+        // cacheCoordinator=nil` shape as `vmlx bench-direct`. Isolates
+        // whether per-step coordinator work contributes to the Gemma 4
+        // decode gap between bench-direct (97 tok/s) and serve (~63 tok/s).
+        let coordinator: CacheCoordinator? =
+            (ProcessInfo.processInfo.environment["VMLX_DISABLE_CACHE_COORD"] == "1")
+            ? nil : self.cacheCoordinator
         struct CachePreFetch: Sendable {
             let matched: Int
             let detail: String
@@ -701,7 +800,28 @@ extension Engine {
                 var preFetch = CachePreFetch(matched: 0, detail: "miss")
                 if let coord = coordinator {
                     let tokenIds = lmInput.text.tokens.asArray(Int.self)
-                    switch coord.fetch(tokens: tokenIds, genPromptLen: genPromptLen) {
+                    // Audit 2026-04-16: pass isMLLM for VLM pipeline so
+                    // SSM companion key uses N-1 boundary (Python parity
+                    // `ssm_companion_cache.py:22`). Derived from the
+                    // detected model capability — .vision modality is
+                    // the MLLM batch generator's domain.
+                    let isMLLM = (await self.modelCapabilities?.modality == .vision)
+                    // FIX-G-O (2026-04-16): compute mediaSalt here and pass
+                    // to fetch() so VL multi-turn can hit prior-turn cache.
+                    // Previously mediaSalt was only computed + passed on the
+                    // STORE path (via `iterator.mediaSalt` captured in
+                    // `cacheStoreAction`), leaving fetch() with nil salt —
+                    // so VL request's fetch key was text-only while store
+                    // key was text+media, guaranteeing cached=0 on every
+                    // multi-turn VL request. Documented in
+                    // PERF-VL-MULTITURN-2026-04-16.md candidate #3.
+                    let preFetchSalt = computeMediaSalt(for: lmInput)
+                    switch coord.fetch(
+                        tokens: tokenIds,
+                        mediaSalt: preFetchSalt,
+                        genPromptLen: genPromptLen,
+                        isMLLM: isMLLM
+                    ) {
                     case .hit(let matched, _, let tier, _, _, _):
                         preFetch = CachePreFetch(
                             matched: matched,
@@ -755,6 +875,18 @@ extension Engine {
         let partialEmitInterval: TimeInterval = 0.5
         let partialEmitEveryNChunks = 16
 
+        // Per-token metrics actor-hop killswitch. `await self.metrics.recordTokenBatch`
+        // is a hop to MetricsCollector (a separate actor) executed on every
+        // decode tick. Default keeps the per-token recording for live TPS
+        // accuracy; `VMLX_DISABLE_PER_TOKEN_METRICS=1` replaces it with a
+        // single final batch recording at end-of-stream for A/B measurement.
+        let perTokenMetricsDisabled =
+            ProcessInfo.processInfo.environment["VMLX_DISABLE_PER_TOKEN_METRICS"] == "1"
+        // Elapsed wall-clock accumulator used when per-token recording is
+        // disabled. Rolled into ONE `recordTokenBatch` call at .info time.
+        var accumulatedDecodeMs: Double = 0
+        var accumulatedDecodeTokens = 0
+
         var lastChunkAt = prefillStart
         for await event in stream {
             if Task.isCancelled { break }
@@ -763,20 +895,17 @@ extension Engine {
                 let chunkNow = Date()
                 if firstTokenAt == nil { firstTokenAt = chunkNow }
 
-                // Per-chunk decode throughput — feeds MetricsCollector's
-                // rolling 5s window so PerformancePanel's tok/s tile and
-                // sparkline update LIVE during the stream (previously only
-                // painted on the final chunk when cumulative batches were
-                // recorded all at once, causing a "dead" sparkline during
-                // long generations).
                 let tickMs = chunkNow.timeIntervalSince(lastChunkAt) * 1000
                 lastChunkAt = chunkNow
                 decodedChunkCount += 1
-                await self.metrics.recordTokenBatch(
-                    prefill: false, count: 1, durationMs: tickMs)
+                if perTokenMetricsDisabled {
+                    accumulatedDecodeMs += tickMs
+                    accumulatedDecodeTokens += 1
+                } else {
+                    await self.metrics.recordTokenBatch(
+                        prefill: false, count: 1, durationMs: tickMs)
+                }
 
-                // Live partial-usage emission — surface rolling tok/s in
-                // the chat metrics strip without waiting for `.info`.
                 let sinceLast = chunkNow.timeIntervalSince(lastPartialEmitAt)
                 if sinceLast >= partialEmitInterval
                     || decodedChunkCount % partialEmitEveryNChunks == 0
@@ -827,7 +956,28 @@ extension Engine {
                 // feedback_reasoning_off_ui_stuck.md.
                 var splitReasoning = ""
                 var splitContent = ""
-                if let parser = reasoningParser {
+                // HOT PATH OPT (perf audit 2026-04-16 per partner review):
+                // The reasoning parser's `parseAccumulated(current)` scans the
+                // full growing string per token = O(N²) total. For text-only
+                // non-thinking requests (90%+ of traffic), this burns 30-50%
+                // of decode throughput with zero output benefit. Skip when:
+                //   - caller disabled thinking (`!effectiveThinking`), AND
+                //   - no reasoning-start marker has appeared in the stream
+                //
+                // Cache `seenReasoningMarker` as a latched flag so we only
+                // pay the substring scan once per token (constant work), not
+                // a full re-parse. Once latched, fall back to the full parser
+                // path for correctness on late-marker streams.
+                if !seenReasoningMarker && (
+                    text.contains("<think>")
+                    || text.contains("<|channel|>")
+                    || text.contains("[THINK]")
+                ) {
+                    seenReasoningMarker = true
+                }
+                let useFullParser = (reasoningParser != nil)
+                    && (effectiveThinking || seenReasoningMarker)
+                if useFullParser, let parser = reasoningParser {
                     parserPrevious = parserCurrent
                     parserCurrent += text
                     if let delta = parser.extractReasoningStreaming(
@@ -838,6 +988,13 @@ extension Engine {
                         if let r = delta.reasoning { splitReasoning += r }
                         if let c = delta.content { splitContent += c }
                     }
+                } else if reasoningParser != nil {
+                    // Cold path: parser installed but no marker + reasoning off.
+                    // Route delta straight to content with zero parser work.
+                    // Do NOT append to parserCurrent — that would be O(N) waste.
+                    // If a marker later appears, `seenReasoningMarker` latches
+                    // and the next token routes through the full parser.
+                    splitContent = text
                 } else {
                     // Hand-rolled fallback path — held back in buffer for
                     // partial-tag safety. Unchanged from the original impl.
@@ -947,8 +1104,22 @@ extension Engine {
                 // parses the full tool call when enough bytes have accrued.
                 // BUFFER into `collectedToolCalls` — the outer tool-loop
                 // executes them between passes.
-                _ = streamingAcc.feed(splitContent)
-                if streamingAcc.buffered, let parser = toolParser {
+                //
+                // Skip entirely when the request has no tools AND no tool
+                // parser installed — the accumulator's `feed()` grows an
+                // unbounded buffer and scans 12 tool-call markers every
+                // token. On a 200-token response this is O(N²) wasted
+                // work (≈1M substring comparisons total) with zero output
+                // effect. Tool parser will be nil when neither the loaded
+                // model stamped a `toolParser` capability nor the user
+                // supplied `request.tools`. 2026-04-16 gemma4 decode
+                // investigation — measured kill factor per-token.
+                let haveToolsOrParser = toolParser != nil
+                    || (mergedTools?.isEmpty == false)
+                if haveToolsOrParser {
+                    _ = streamingAcc.feed(splitContent)
+                }
+                if haveToolsOrParser, streamingAcc.buffered, let parser = toolParser {
                     let parsed = parser.parse(streamingAcc.current)
                     if !parsed.isEmpty {
                         for p in parsed {
@@ -1077,6 +1248,13 @@ extension Engine {
                     prefill: true,
                     count: info.promptTokenCount,
                     durationMs: info.promptTime * 1000)
+                if perTokenMetricsDisabled && accumulatedDecodeTokens > 0 {
+                    // Flush the batched decode tally as a single hop.
+                    await self.metrics.recordTokenBatch(
+                        prefill: false,
+                        count: accumulatedDecodeTokens,
+                        durationMs: accumulatedDecodeMs)
+                }
                 await self.metrics.recordRequest(latencyMs: totalMs)
                 await self.log(.info, "engine",
                     "stream done[iter=\(iteration)]: \(info.generationTokenCount) toks, "
@@ -1108,11 +1286,15 @@ extension Engine {
         // stripped tokens and installs the clean state in the companion
         // cache so the next turn's prefix fetch hits.
         //
-        // Re-enters `container.perform` so it runs under the same actor
-        // isolation as the main generate path and has access to the
-        // `LanguageModel` instance. Cost: ~1 extra chunked prefill pass
-        // per turn (~1–2 seconds on a 2K prompt). Users who want lower
-        // per-turn latency can disable via `enableSSMReDerive`.
+        // FIX-G-A (2026-04-16): dispatch to a detached Task so the
+        // re-derive runs AFTER the current stream returns, without
+        // blocking the ModelContext actor for ~1-2s. Previously ran
+        // synchronously inside `container.perform` which stalled the
+        // next request while the re-derive finished. The detached Task
+        // still acquires the container (sequentially) but the current
+        // user's request is already complete. Escape hatch via
+        // `VMLX_DISABLE_SSM_RE_DERIVE_ASYNC=1` keeps the old
+        // synchronous behavior for debug / A/B.
         //
         // Finding #1 from the deep hybrid audit 2026-04-14 — before
         // this wire-up, `maybeReDeriveSSMState` was unreachable dead
@@ -1123,13 +1305,34 @@ extension Engine {
            capturedGenPromptLen > 0,
            resolved.settings.enableSSMReDerive
         {
-            await container.perform { (ctx: ModelContext) in
-                maybeReDeriveSSMState(
-                    coordinator: coord,
-                    model: ctx.model,
-                    promptTokenIds: capturedPromptIds,
-                    genPromptLen: capturedGenPromptLen,
-                    enableSSMReDerive: true)
+            let syncReDeriveForced =
+                ProcessInfo.processInfo.environment["VMLX_DISABLE_SSM_RE_DERIVE_ASYNC"] == "1"
+            if syncReDeriveForced {
+                await container.perform { (ctx: ModelContext) in
+                    maybeReDeriveSSMState(
+                        coordinator: coord,
+                        model: ctx.model,
+                        promptTokenIds: capturedPromptIds,
+                        genPromptLen: capturedGenPromptLen,
+                        enableSSMReDerive: true)
+                }
+            } else {
+                // Capture inputs into a Sendable closure and fire-and-forget.
+                // Task is detached so the Engine actor doesn't wait on it.
+                let captureCoord = coord
+                let captureIds = capturedPromptIds
+                let captureGP = capturedGenPromptLen
+                let captureContainer = container
+                Task.detached(priority: .utility) {
+                    await captureContainer.perform { (ctx: ModelContext) in
+                        maybeReDeriveSSMState(
+                            coordinator: captureCoord,
+                            model: ctx.model,
+                            promptTokenIds: captureIds,
+                            genPromptLen: captureGP,
+                            enableSSMReDerive: true)
+                    }
+                }
             }
         }
 
@@ -1168,7 +1371,8 @@ extension Engine {
         from request: ChatRequest,
         effectiveThinking: Bool,
         modelStampsThink: Bool = false,
-        responseFormatInstruction: String? = nil
+        responseFormatInstruction: String? = nil,
+        imageMarker: String = "<image>"
     ) async -> [Chat.Message] {
         var out: [Chat.Message] = []
         out.reserveCapacity(request.messages.count + 1)
@@ -1184,7 +1388,12 @@ extension Engine {
         // a global image-budget cap across the full conversation. This
         // preserves §VLM-MULTITURN: images from turn 1 + turn 2 BOTH reach
         // the processor on turn 3, so the model can cross-reference them.
-        var decoded: [(role: Chat.Message.Role, text: String, images: [UserInput.Image])] = []
+        var decoded: [(
+            role: Chat.Message.Role,
+            text: String,
+            images: [UserInput.Image],
+            videos: [UserInput.Video]
+        )] = []
         decoded.reserveCapacity(request.messages.count)
         for msg in request.messages {
             let role: Chat.Message.Role
@@ -1200,7 +1409,8 @@ extension Engine {
             // We still run extraction unconditionally so an assistant turn
             // that references a prior image round-trips correctly.
             let images = await extractImages(from: msg.content)
-            decoded.append((role: role, text: text, images: images))
+            let videos = await extractVideos(from: msg.content)
+            decoded.append((role: role, text: text, images: images, videos: videos))
         }
 
         // Cap total images across the conversation. If we're over budget,
@@ -1226,8 +1436,67 @@ extension Engine {
             )
         }
 
+        // VL image marker auto-insertion (perf+correctness audit 2026-04-16).
+        // The VLM processor pipeline (both Gemma4 and Qwen2.5-VL) expects the
+        // rendered prompt text to contain a special image placeholder token
+        // that the chat template / processor expands to N soft-image tokens.
+        // Both UIs (OpenAI `image_url` parts + Ollama `images:` array) strip
+        // or never emit this marker — so if the user sends ONLY images +
+        // caption text, the chat template stamps no image tokens and the
+        // model literally responds "I don't see an image". Live repro on
+        // Gemma4 E4B: prompt_tokens jumps 32 → 313 after marker insertion
+        // and the model correctly identifies the image.
+        //
+        // Marker tokens (Python v1.3.29 and upstream mlx-vlm agree):
+        //   gemma4     → "<|image|>"
+        //   gemma3     → "<|image|>"
+        //   paligemma  → "<|image|>"
+        //   qwen2_vl   → "<image>"
+        //   qwen2_5_vl → "<image>"
+        //   qwen3_vl   → "<image>"
+        //   idefics3   → "<image>"
+        //   smolvlm2   → "<image>"
+        //   llava*     → "<image>"
+        //   pixtral    → "[IMG]"
+        //   mistral3   → "[IMG]"
+        //   mistral4   → "[IMG]"
+        //
+        // Family-aware marker selection: each VLM processor does a literal
+        // split on its own token, so the WRONG marker means zero image
+        // tokens are expanded and the model sees pure text ("I don't see
+        // an image"). Caller passes the family-appropriate marker based on
+        // `modelCapabilities.family`. Default `<image>` is the most common
+        // form (Qwen / Llava / Idefics family) and mostly-tolerant for
+        // unknown families since many processors also accept it.
         for d in decoded {
-            out.append(Chat.Message(role: d.role, content: d.text, images: d.images))
+            var renderedText = d.text
+            // Check for ANY of the known markers so we don't double-insert
+            // if the user already included one in the prompt themselves.
+            let hasAnyMarker =
+                renderedText.contains("<|image|>")
+                || renderedText.contains("<image>")
+                || renderedText.contains("[IMG]")
+            if !d.images.isEmpty && !hasAnyMarker {
+                // One marker per image, prefixed before the text. No newline
+                // between marker and text — some chat templates split on
+                // whitespace and the newline breaks image-token expansion.
+                // Python engine convention: concat directly.
+                let markers = String(repeating: imageMarker, count: d.images.count)
+                renderedText = markers + renderedText
+            }
+            // Video marker auto-insert for Qwen-family VLMs (Qwen2.5-VL,
+            // Qwen3-VL) that use `<video>` as the video placeholder. Other
+            // families don't accept video today — no per-family branch
+            // needed yet; Qwen is the only video-capable family we register.
+            if !d.videos.isEmpty && !renderedText.contains("<video>") {
+                let vMarkers = String(repeating: "<video>", count: d.videos.count)
+                renderedText = vMarkers + renderedText
+            }
+            out.append(Chat.Message(
+                role: d.role,
+                content: renderedText,
+                images: d.images,
+                videos: d.videos))
         }
         let hasTools = !(request.tools?.isEmpty ?? true)
         // P1-STREAM-5: when response_format is set (json_object/json_schema),
@@ -1347,15 +1616,81 @@ extension Engine {
     static func extractImages(
         from content: ChatRequest.ContentValue?
     ) async -> [UserInput.Image] {
-        guard case .parts(let parts) = content else { return [] }
-        var out: [UserInput.Image] = []
-        for part in parts where part.type == "image_url" {
-            guard let imageURL = part.imageUrl else { continue }
-            guard let data = await imageURL.loadImageData() else { continue }
-            guard let ci = CIImage(data: data) else { continue }
-            out.append(.ciImage(ci))
+        // Debug: log what shape we got.
+        switch content {
+        case .none:
+            FileHandle.standardError.write(Data("[vmlx][vl][debug] content is nil\n".utf8))
+            return []
+        case .some(.string):
+            // Text-only content is the common case — don't spam the logs.
+            return []
+        case .some(.parts(let parts)):
+            let kinds = parts.map { $0.type }.joined(separator: ",")
+            FileHandle.standardError.write(Data(
+                "[vmlx][vl][debug] content parts=\(parts.count) types=[\(kinds)]\n".utf8))
+            var out: [UserInput.Image] = []
+            for part in parts where part.type == "image_url" {
+                guard let imageURL = part.imageUrl else {
+                    FileHandle.standardError.write(Data(
+                        "[vmlx][vl][debug] image_url part missing imageUrl field\n".utf8))
+                    continue
+                }
+                FileHandle.standardError.write(Data(
+                    "[vmlx][vl][debug] loading image from: \(imageURL.url.prefix(60))…\n".utf8))
+                guard let data = await imageURL.loadImageData() else {
+                    let tag = imageURL.url.prefix(80)
+                    FileHandle.standardError.write(Data(
+                        "[vmlx][vl] image URL fetch/decode failed: \(tag)…\n".utf8))
+                    continue
+                }
+                FileHandle.standardError.write(Data(
+                    "[vmlx][vl][debug] image bytes=\(data.count)\n".utf8))
+                guard let ci = CIImage(data: data) else {
+                    FileHandle.standardError.write(Data(
+                        "[vmlx][vl] CIImage decode failed (\(data.count) bytes) — possibly a non-image format; text-only reply will follow\n".utf8))
+                    continue
+                }
+                FileHandle.standardError.write(Data(
+                    "[vmlx][vl][debug] CIImage loaded OK, extent=\(ci.extent)\n".utf8))
+                out.append(.ciImage(ci))
+            }
+            return out
         }
-        return out
+    }
+
+    /// Extract video parts from a `ChatRequest.Message.content` multimodal
+    /// payload into `UserInput.Video` values. Each part must have
+    /// `type == "video_url"` and a `video_url.url` string; supported
+    /// URL shapes include `file://`, `http(s)://`, `data:video/*;base64,`
+    /// and bare absolute paths. FIX-G-P (2026-04-16) — adds HTTP-API video
+    /// ingestion for Qwen2.5-VL / Qwen3-VL (previously only UserInput-level
+    /// callers could supply videos, server path silently dropped them).
+    ///
+    /// HTTP and data URLs are staged to the system temp dir so
+    /// `AVURLAsset` can mmap them. Temp files live for the process
+    /// lifetime; callers should clean up via OS-managed temp sweep.
+    static func extractVideos(
+        from content: ChatRequest.ContentValue?
+    ) async -> [UserInput.Video] {
+        switch content {
+        case .none, .some(.string):
+            return []
+        case .some(.parts(let parts)):
+            var out: [UserInput.Video] = []
+            for part in parts where part.type == "video_url" {
+                guard let videoURL = part.videoUrl,
+                      let localURL = await videoURL.loadVideoLocalURL()
+                else {
+                    FileHandle.standardError.write(Data(
+                        "[vmlx][vl] video_url fetch/decode failed\n".utf8))
+                    continue
+                }
+                FileHandle.standardError.write(Data(
+                    "[vmlx][vl][debug] video staged at \(localURL.path)\n".utf8))
+                out.append(.url(localURL))
+            }
+            return out
+        }
     }
 
     /// Convert OpenAI-style tools to vmlx-swift-lm ToolSpec dicts. JSON
@@ -1397,6 +1732,19 @@ extension Engine {
         params.repetitionPenalty = Float(
             request.repetitionPenalty ?? resolved.repetitionPenalty)
 
+        // Whole-model compiled decode (perf audit 2026-04-16). Enabling
+        // `enableCompiledDecode` wraps the entire model forward pass in
+        // `compile(shapeless: true)` at decode time — collapses the
+        // MoE routing + attention + FFN into ONE Metal dispatch per step
+        // (vs N separate dispatches). Matches Inferencer.app's approach
+        // which achieves 100 tok/s on Qwen 35B A3B MoE per reference's
+        // own SWIFT-PERF-FIXES.md. Requires CompilableKVCache which
+        // uses fixed-size buffers so compile() can trace through the
+        // forward. Enable via `VMLX_COMPILED_DECODE=1` env for A/B.
+        if ProcessInfo.processInfo.environment["VMLX_COMPILED_DECODE"] == "1" {
+            params.enableCompiledDecode = true
+        }
+
         // TurboQuant KV-cache compression. Default on for every model
         // (MLX + JANG alike) per user directive. `enableTurboQuant`
         // in GlobalSettings defaults to true, and `turboQuantBits`
@@ -1419,11 +1767,32 @@ extension Engine {
         // exclusion. Skip TQ wiring entirely when the loaded model is
         // MLA — let it use the native MLA cache instead.
         let cacheTypeIsMLA = (self.modelCapabilities?.cacheType == "mla")
-        if resolved.settings.enableTurboQuant && !cacheTypeIsMLA {
-            // JANG models declare their own TurboQuant bit widths in
-            // `jang_config.json -> turboquant`. Honor those when present so
-            // the cache matches the model's calibration. Fall back to the
-            // global `turboQuantBits` setting for plain MLX models.
+        // Runtime override for A/B perf testing. `VMLX_DISABLE_TURBO_QUANT=1`
+        // forces TQ KV compression off without rebuilding or mucking with
+        // settings files, so we can measure the decode-time cost of the TQ
+        // compress+dequant cycle in isolation.
+        let tqDisabledViaEnv =
+            ProcessInfo.processInfo.environment["VMLX_DISABLE_TURBO_QUANT"] == "1"
+
+        // JANG auto-activation: if the loaded model's `jang_config.json`
+        // declares `"turboquant": {"enabled": true, ...}`, activate TQ
+        // REGARDLESS of the global `enableTurboQuant` flag. These models
+        // are calibrated with specific bit widths per layer role and expect
+        // the KV to be compressed at generate-time. The global flag only
+        // governs MLX-format models without a calibrated TQ block.
+        // Matches Engine.swift:36-41 documented intent.
+        //
+        // Precedence:
+        //   1. MLA model       → skip (layer shape incompatible)
+        //   2. env killswitch  → skip
+        //   3. JANG calibrated → activate with jang bits
+        //   4. global toggle   → activate with global turboQuantBits
+        //   5. otherwise       → skip (default OFF post 2026-04-16 audit)
+        let jangTQEnabled = (self.loadedJangConfig?.turboquant.enabled == true)
+        let shouldActivateTQ = !cacheTypeIsMLA && !tqDisabledViaEnv && (
+            jangTQEnabled || resolved.settings.enableTurboQuant
+        )
+        if shouldActivateTQ {
             let keyBits: Int
             let valueBits: Int
             if let tq = self.loadedJangConfig?.turboquant, tq.enabled {

@@ -569,6 +569,7 @@ public enum AnthropicRoutes {
             switch tcType {
             case "auto": toolChoice = .auto
             case "any":  toolChoice = .required
+            case "none": toolChoice = .none
             case "tool":
                 if let name = tc["name"] as? String {
                     toolChoice = .function(name: name)
@@ -603,7 +604,8 @@ public enum AnthropicRoutes {
             enableThinking: (body["thinking"] as? [String: Any])?["type"] as? String == "enabled",
             reasoningEffort: effort,
             tools: tools,
-            toolChoice: toolChoice
+            toolChoice: toolChoice,
+            includeReasoning: body["include_reasoning"] as? Bool
         )
     }
 }

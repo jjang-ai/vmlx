@@ -34,7 +34,7 @@ public final class QwenImage: ImageGenerator, @unchecked Sendable {
     public func generate(_ request: ImageGenRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: FluxError.notImplemented(
-                "QwenImage.generate — port from mflux/models/qwen/variants/txt2img/qwen_image.py"))
+                "Qwen-Image txt2img isn't runnable yet on vMLX Swift. Use Z-Image Turbo for txt2img; the Electron vMLX.app has full Qwen-Image support. Audit 2026-04-15."))
         }
     }
 }
@@ -69,7 +69,7 @@ public final class QwenImageEdit: ImageEditor, @unchecked Sendable {
     public func edit(_ request: ImageEditRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: FluxError.notImplemented(
-                "QwenImageEdit.edit — port from mflux/models/qwen/variants/edit/qwen_image_edit.py"))
+                "Qwen-Image-Edit isn't runnable yet on vMLX Swift. Use the Electron vMLX.app for full image-edit support. Audit 2026-04-15."))
         }
     }
 }

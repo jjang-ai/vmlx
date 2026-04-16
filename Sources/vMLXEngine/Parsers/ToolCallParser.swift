@@ -376,18 +376,24 @@ public final class DeepSeekToolCallParser: ToolCallParser {
     public init() {}
 
     public func extractToolCalls(_ modelOutput: String, request: ChatRequest?) -> ExtractedToolCallInformation {
-        guard modelOutput.contains(Self.callsBegin) else {
+        // Round 16 / Rank 8: DeepSeek R1 emits `<think>...</think>` blocks
+        // before tool-call markers. Strip reasoning blocks first so a mention
+        // of the marker inside the think block never false-matches, and the
+        // cleaned prefix content we return to callers doesn't contain dangling
+        // think tags. Parity with Python v1.3.54 deepseek_v3 parser.
+        let source = ParserUtils.stripThinkTags(modelOutput)
+        guard source.contains(Self.callsBegin) else {
             return ExtractedToolCallInformation(toolsCalled: false, toolCalls: [], content: modelOutput)
         }
         let cleanedContent: String
-        if let r = modelOutput.range(of: Self.callsBegin) {
-            cleanedContent = String(modelOutput[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let r = source.range(of: Self.callsBegin) {
+            cleanedContent = String(source[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             cleanedContent = ""
         }
         let pattern = #"(?s)<｜tool▁call▁begin｜>(.*?)<｜tool▁sep｜>(.*?)\n```json\n(.*?)\n```<｜tool▁call▁end｜>"#
         var calls: [ParsedToolCall] = []
-        for m in ParserUtils.regexMatches(modelOutput, pattern: pattern) where m.count >= 4 {
+        for m in ParserUtils.regexMatches(source, pattern: pattern) where m.count >= 4 {
             let name = m[2].trimmingCharacters(in: .whitespacesAndNewlines)
             let args = m[3]
             calls.append(ParsedToolCall(id: generateToolId(), name: name, arguments: args))
@@ -395,7 +401,7 @@ public final class DeepSeekToolCallParser: ToolCallParser {
         // Simple fallback: <｜tool▁call▁begin｜>name\n{...}<｜tool▁call▁end｜>
         if calls.isEmpty {
             let simple = #"(?s)<｜tool▁call▁begin｜>(.*?)<｜tool▁call▁end｜>"#
-            for m in ParserUtils.regexMatches(modelOutput, pattern: simple) where m.count >= 2 {
+            for m in ParserUtils.regexMatches(source, pattern: simple) where m.count >= 2 {
                 let body = m[1]
                 // Extract name (first line) and args (rest if JSON-like)
                 let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)

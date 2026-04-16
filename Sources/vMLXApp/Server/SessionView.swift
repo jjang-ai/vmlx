@@ -101,15 +101,15 @@ struct SessionView: View {
                 Text("Starting…")
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.textMid)
-                buttonTile("Cancel", color: Theme.Colors.danger) { Task { await app.engine(for: session.id).stop() } }
+                buttonTile("Cancel", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
             case .running:
-                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine(for: session.id).stop() } }
+                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
             case .standby:
-                buttonTile("Wake", color: Theme.Colors.accent) { Task { await app.engine(for: session.id).wakeFromStandby() } }
-                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine(for: session.id).stop() } }
+                buttonTile("Wake", color: Theme.Colors.accent) { Task { await app.engine.wakeFromStandby() } }
+                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
             case .error:
                 buttonTile("Reconnect", color: Theme.Colors.accent) { Task { await startSession() } }
-                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine(for: session.id).stop() } }
+                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
             }
         }
     }
@@ -131,11 +131,10 @@ struct SessionView: View {
     }
 
     private func startSession() async {
-        let eng = app.engine(for: session.id)
-        let resolved = await eng.settings.resolved(sessionId: session.id)
+        let resolved = await app.engine.settings.resolved(sessionId: session.id)
         let opts = Engine.LoadOptions(modelPath: session.modelPath, from: resolved)
         do {
-            for try await event in await eng.load(opts) {
+            for try await event in await app.engine.load(opts) {
                 if case .failed(let msg) = event {
                     app.flashBanner("Engine load failed: \(msg)")
                 }

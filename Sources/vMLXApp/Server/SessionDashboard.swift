@@ -268,10 +268,6 @@ struct SessionDashboard: View {
             return
         }
 
-        // Persist this as the "last loaded session" so the next launch
-        // can auto-reload it. Only written on successful load.
-        UserDefaults.standard.set(id.uuidString, forKey: "vmlx.lastLoadedSessionId")
-
         // After the model is loaded, start the per-session HTTP listener
         // so external clients (OpenAI/Ollama/Anthropic) can hit it. This
         // replaces the previous dead path where `Start Session` only

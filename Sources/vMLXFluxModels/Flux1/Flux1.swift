@@ -48,8 +48,13 @@ public final class Flux1Schnell: ImageGenerator, @unchecked Sendable {
 
     public func generate(_ request: ImageGenRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
         AsyncThrowingStream { continuation in
+            // User-facing: the model is registered (visible in picker) but
+            // the DiT + dual-encoder forward passes aren't ported yet.
+            // Return a clear error rather than a stub trace. Production
+            // users should prefer Z-Image or wait for the Flux port to land.
+            // Audit 2026-04-15 (untouched-surface #3).
             continuation.finish(throwing: FluxError.notImplemented(
-                "Flux1Schnell.generate — port from mflux/models/flux/variants/txt2img/flux.py"))
+                "Flux1 Schnell isn't runnable yet on vMLX Swift. Use Z-Image Turbo (prompt-conditional) or the Electron vMLX.app (full Flux support). Track vmlx-swift port progress in the README."))
         }
     }
 }
@@ -85,7 +90,7 @@ public final class Flux1Dev: ImageGenerator, @unchecked Sendable {
     public func generate(_ request: ImageGenRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: FluxError.notImplemented(
-                "Flux1Dev.generate — port from mflux/models/flux/variants/txt2img/flux.py"))
+                "Flux1 Dev isn't runnable yet on vMLX Swift. Use Z-Image Turbo or the Electron vMLX.app. Audit 2026-04-15."))
         }
     }
 }
@@ -122,7 +127,7 @@ public final class Flux1Kontext: ImageEditor, @unchecked Sendable {
     public func edit(_ request: ImageEditRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: FluxError.notImplemented(
-                "Flux1Kontext.edit — port from mflux/models/flux/variants/kontext/flux_kontext.py"))
+                "Flux1 Kontext edit isn't runnable yet on vMLX Swift. Use Qwen-Image-Edit (inpaint) or the Electron vMLX.app for full Flux Kontext support."))
         }
     }
 }
@@ -159,7 +164,7 @@ public final class Flux1Fill: ImageEditor, @unchecked Sendable {
     public func edit(_ request: ImageEditRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.finish(throwing: FluxError.notImplemented(
-                "Flux1Fill.edit — port from mflux/models/flux/variants/fill/flux_fill.py"))
+                "Flux1 Fill inpaint isn't runnable yet on vMLX Swift. Use Qwen-Image-Edit or the Electron vMLX.app for full Flux Fill support."))
         }
     }
 }
