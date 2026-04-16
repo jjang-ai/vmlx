@@ -83,11 +83,17 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // Mac override: single-user laptop doesn't benefit from 256-way batch
     // concurrency (Python server default); 5 is the sweet spot for 1-user chat.
     public var maxNumSeqs: Int = 5                 // cli.py default=256 (server), 5 (vMLX Mac)
-    public var prefillBatchSize: Int = 8           // cli.py --prefill-batch-size default=8
+    // Python engine has separate prefill_batch_size (how many prompts to
+    // chunk together during prefill) and completion_batch_size (how many
+    // requests to decode in parallel). Swift's BatchEngine collapses both
+    // into `maxNumSeqs` (max concurrent sequences) + `prefillStepSize`
+    // (tokens per forward-pass step). The separate Python knobs would be
+    // orphan fields in Swift (set but never read), so they're intentionally
+    // absent. Use `maxNumSeqs` for request concurrency and `prefillStepSize`
+    // for per-step prompt chunking.
     // Mac override: 1024 prefill step keeps first-token latency low on
     // long prompts where 2048 would stall the first render tick.
     public var prefillStepSize: Int = 1024         // cli.py default=2048 (server), 1024 (vMLX Mac)
-    public var completionBatchSize: Int = 32      // cli.py --completion-batch-size
     public var continuousBatching: Bool = true    // cli.py --continuous-batching
     public var streamInterval: Int = 1            // cli.py --stream-interval
 
@@ -95,10 +101,8 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var enablePrefixCache: Bool = true     // cli.py --enable-prefix-cache / --disable-prefix-cache
     public var prefixCacheSize: Int = 100         // cli.py --prefix-cache-size
     public var prefixCacheMaxBytes: Int64 = 0     // cli.py --prefix-cache-max-bytes (0 = unlimited)
-    public var cacheMemoryPercent: Double = 0.30  // cli.py --cache-memory-percent default=0.30
     public var cacheMemoryMB: Int = 0             // cli.py --cache-memory-mb (0 = auto)
     public var memoryAwareCache: Bool = true      // inverse of cli.py --no-memory-aware-cache
-    public var cacheTtlMinutes: Double = 0        // cli.py --cache-ttl-minutes
 
     // Paged cache
     public var usePagedCache: Bool = true         // cli.py --use-paged-cache
@@ -119,14 +123,17 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var maxPromptTokens: Int = 262_144
 
     // KV cache quantization. `none | q4 | q8 | turboquant`. Default is
-    // `turboquant` so every chat session gets ~3.6x KV memory savings
-    // with zero generation-speed overhead — the bit budget is set by
-    // `turboQuantBits` below (4 bits per side = sweet spot). When
-    // `enableTurboQuant=false`, generation falls back to plain
-    // `KVCacheSimple` (the `none` behavior). For legacy paths that
-    // explicitly want the symmetric 4/8-bit MLX quantizer, set to `q4`
-    // or `q8` and the generation loop will use that instead.
-    public var kvCacheQuantization: String = "turboquant"  // cli.py --kv-cache-quantization: none|q4|q8|turboquant
+    // `none` as of perf audit 2026-04-16 — the previous `turboquant`
+    // default carried a 40-96% decode-speed tax on MoE / hybrid models:
+    // Nemotron-Cascade-2-30B-A3B 2.4 → 59.8 tok/s (25× speedup),
+    // Gemma-4-26B-A4B 34.9 → 49.0 tok/s (+40%), Qwen3.5-9B 69.5 → 78.3
+    // tok/s (+13%). The TQ compress+dequant cycle per decode step on the
+    // attention-half of layers dominated generation time. Users who need
+    // the 4× KV memory headroom for long contexts can opt back in via
+    // settings, and JANG models with a calibrated `turboquant` block in
+    // `jang_config.json` still auto-activate TQ via the
+    // `loadedJangConfig?.turboquant` path in `Stream.buildGenerateParameters`.
+    public var kvCacheQuantization: String = "none"  // cli.py --kv-cache-quantization: none|q4|q8|turboquant
     public var kvCacheGroupSize: Int = 64            // cli.py --kv-cache-group-size
 
     // Disk caches.
@@ -178,7 +185,15 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // `KVCacheSimple` layers and skips `MambaCache`/`RotatingKVCache`/
     // `CacheList` — Nemotron-H, Qwen3-Next, Jamba, FalconH1 etc. keep
     // their SSM paths untouched.
-    public var enableTurboQuant: Bool = true
+    // Default-OFF per perf audit 2026-04-16. Flipped from true because the
+    // compress+dequant cycle dominated decode throughput on MoE/hybrid
+    // models (see `kvCacheQuantization` docstring above for measurements).
+    // JANG models with calibrated `turboquant` blocks in their
+    // `jang_config.json` still auto-activate TQ through the explicit
+    // `loadedJangConfig?.turboquant` check in Stream.swift — that path
+    // does NOT read this flag so calibrated models keep their ship-time
+    // behavior.
+    public var enableTurboQuant: Bool = false
     public var turboQuantBits: Int = 4
 
     // Hybrid-SSM companion cache re-derive. When a thinking-template
@@ -362,9 +377,6 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var engineKind: EngineKindCodable? = nil
     public var maxNumSeqs: Int? = nil
     public var prefillStepSize: Int? = nil
-    public var prefillBatchSize: Int? = nil
-    public var completionBatchSize: Int? = nil
-    public var cacheMemoryPercent: Double? = nil
     public var maxCacheBlocks: Int? = nil
 
     public var enableTurboQuant: Bool? = nil
@@ -374,6 +386,12 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var enableSSMCompanion: Bool? = nil
     public var enableBlockDiskCache: Bool? = nil
     public var enableDiskCache: Bool? = nil
+    // Per-session disk-cache dir + cap. Added 2026-04-16 because the
+    // SessionConfigForm UI lets users redirect the cache to an external
+    // SSD per session; the field was missing on SessionSettings, blocking
+    // the Release build.
+    public var diskCacheDir: String? = nil
+    public var diskCacheMaxGB: Double? = nil
     public var enableMemoryCache: Bool? = nil
     public var memoryCachePercent: Double? = nil
     public var memoryCacheTTLMinutes: Double? = nil

@@ -280,9 +280,8 @@ public actor SettingsStore {
         if let v = s?.engineKind { out.engineKind = v; trace["engineKind"] = .session } else { trace["engineKind"] = .global }
         if let v = s?.maxNumSeqs { out.maxNumSeqs = v; trace["maxNumSeqs"] = .session } else { trace["maxNumSeqs"] = .global }
         if let v = s?.prefillStepSize { out.prefillStepSize = v; trace["prefillStepSize"] = .session } else { trace["prefillStepSize"] = .global }
-        if let v = s?.prefillBatchSize { out.prefillBatchSize = v; trace["prefillBatchSize"] = .session } else { trace["prefillBatchSize"] = .global }
-        if let v = s?.completionBatchSize { out.completionBatchSize = v; trace["completionBatchSize"] = .session } else { trace["completionBatchSize"] = .global }
-        if let v = s?.cacheMemoryPercent { out.cacheMemoryPercent = v; trace["cacheMemoryPercent"] = .session } else { trace["cacheMemoryPercent"] = .global }
+        if let v = s?.memoryCachePercent { out.memoryCachePercent = v; trace["memoryCachePercent"] = .session } else { trace["memoryCachePercent"] = .global }
+        if let v = s?.memoryCacheTTLMinutes { out.memoryCacheTTLMinutes = v; trace["memoryCacheTTLMinutes"] = .session } else { trace["memoryCacheTTLMinutes"] = .global }
         if let v = s?.maxCacheBlocks { out.maxCacheBlocks = v; trace["maxCacheBlocks"] = .session } else { trace["maxCacheBlocks"] = .global }
         if let v = s?.enableTurboQuant { out.enableTurboQuant = v; trace["enableTurboQuant"] = .session } else { trace["enableTurboQuant"] = .global }
         if let v = s?.turboQuantBits { out.turboQuantBits = v; trace["turboQuantBits"] = .session } else { trace["turboQuantBits"] = .global }
@@ -291,6 +290,8 @@ public actor SettingsStore {
         if let v = s?.enableSSMCompanion { out.enableSSMCompanion = v; trace["enableSSMCompanion"] = .session } else { trace["enableSSMCompanion"] = .global }
         if let v = s?.enableBlockDiskCache { out.enableBlockDiskCache = v; trace["enableBlockDiskCache"] = .session } else { trace["enableBlockDiskCache"] = .global }
         if let v = s?.enableDiskCache { out.enableDiskCache = v; trace["enableDiskCache"] = .session } else { trace["enableDiskCache"] = .global }
+        if let v = s?.diskCacheDir { out.diskCacheDir = v; trace["diskCacheDir"] = .session } else { trace["diskCacheDir"] = .global }
+        if let v = s?.diskCacheMaxGB { out.diskCacheMaxGB = v; trace["diskCacheMaxGB"] = .session } else { trace["diskCacheMaxGB"] = .global }
         if let v = s?.kvCacheQuantization { out.kvCacheQuantization = v; trace["kvCacheQuantization"] = .session } else { trace["kvCacheQuantization"] = .global }
         if let v = s?.flashMoe { out.flashMoe = v; trace["flashMoe"] = .session } else { trace["flashMoe"] = .global }
         if let v = s?.flashMoeSlotBank { out.flashMoeSlotBank = v; trace["flashMoeSlotBank"] = .session } else { trace["flashMoeSlotBank"] = .global }
@@ -339,6 +340,15 @@ public actor SettingsStore {
         if let v = s?.mcpConfigPath { out.mcpConfigPath = v; trace["mcpConfigPath"] = .session } else { trace["mcpConfigPath"] = .global }
         if let v = s?.mcpServers { out.mcpServers = v; trace["mcpServers"] = .session } else { trace["mcpServers"] = .global }
 
+        // Audit 2026-04-16 UX #3: synchronize `enableTurboQuant` and
+        // `kvCacheQuantization`. The SessionConfigForm picker writes
+        // `kvCacheQuantization` ("none"/"q4"/"q8"/"turboquant") while
+        // `Stream.buildGenerateParameters` reads the `enableTurboQuant`
+        // Bool. These two could disagree, leaving TQ on when the picker
+        // said "none" or TQ off when the picker said "turboquant". Canonical
+        // source of truth is the string; derive the Bool from it.
+        // If the string is anything else (q4/q8/none), TQ is off.
+        out.enableTurboQuant = (out.kvCacheQuantization.lowercased() == "turboquant")
         return ResolvedSettings(settings: out, trace: trace)
     }
 
@@ -366,7 +376,6 @@ extension Engine.LoadOptions {
         self.kind = (r.engineKind == .simple) ? .simple : .batched
         self.maxNumSeqs = r.maxNumSeqs
         self.prefillStepSize = r.prefillStepSize
-        self.cacheMemoryPercent = r.cacheMemoryPercent
         self.maxCacheBlocks = r.maxCacheBlocks
         self.enableTurboQuant = r.enableTurboQuant
         self.enableJANG = r.enableJANG
@@ -376,5 +385,36 @@ extension Engine.LoadOptions {
         self.idleSoftSec = r.idleSoftSec
         self.idleDeepSec = r.idleDeepSec
         self.idleEnabled = r.idleEnabled
+        // Cache stack
+        self.enableMemoryCache = r.enableMemoryCache
+        self.enableDiskCache = r.enableDiskCache
+        self.diskCacheDir = r.diskCacheDir
+        self.diskCacheMaxGB = r.diskCacheMaxGB
+        self.enableBlockDiskCache = r.enableBlockDiskCache
+        self.blockDiskCacheDir = r.blockDiskCacheDir
+        self.blockDiskCacheMaxGB = r.blockDiskCacheMaxGB
+        self.kvCacheQuantization = r.kvCacheQuantization
+        self.kvCacheGroupSize = r.kvCacheGroupSize
+        self.turboQuantBits = r.turboQuantBits
+        self.enableSSMReDerive = r.enableSSMReDerive
+        // Smelt + Flash MoE
+        self.smelt = r.smelt
+        self.smeltExperts = r.smeltExperts
+        self.smeltMode = r.smeltMode
+        self.flashMoe = r.flashMoe
+        self.flashMoeSlotBank = r.flashMoeSlotBank
+        self.flashMoePrefetch = r.flashMoePrefetch
+        self.flashMoeIoSplit = r.flashMoeIoSplit
+        // DFlash
+        self.dflash = r.dflash
+        self.dflashDrafterPath = r.dflashDrafterPath
+        self.dflashBlockSize = r.dflashBlockSize
+        self.dflashTopK = r.dflashTopK
+        self.dflashNumPaths = r.dflashNumPaths
+        self.dflashTapLayers = r.dflashTapLayers
+        self.dflashTargetHiddenDim = r.dflashTargetHiddenDim
+        // Parser overrides
+        self.defaultToolParser = r.defaultToolParser
+        self.defaultReasoningParser = r.defaultReasoningParser
     }
 }
