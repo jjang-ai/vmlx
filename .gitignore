@@ -36,12 +36,21 @@ APP-SURFACE-AUDIT-*.md
 SWIFT-DEEP-NUANCE-AUDIT-*.md
 SWIFT-ENGINE-ISSUES-AUDIT.md
 SWIFT-NO-REGRESSION-CHECKLIST.md
+SWIFT-PER-FAMILY-MATRIX-*.md
+SWIFT-REGRESSION-*.md
 UX-AUDIT.md
 PROGRESS.md
 HANDOFF-*.md
 BENCHMARK-*.md
 FLASH-MOE-UI-AUDIT-*.md
 TEST-MATRIX-*.md
+# Top-level internal audit artefacts ONLY — leading `/` anchors these
+# to the repo root so `docs/PERF-MOE-HALF-SPEED-ROOT-CAUSE.md` (a
+# reference doc that SHOULD ship) isn't accidentally swept up.
+/PERF-*.md
+/GEMMA4-*.md
+/WHY-*.md
+/REGRESSION-GUARD-*.md
 .agents/
 .sisyphus/
 .playwright-mcp/
