@@ -91,7 +91,35 @@ public enum VLMTypeRegistry {
         "qwen2_5_vl": create(Qwen25VLConfiguration.self, Qwen25VL.init),
         "qwen3_vl": create(Qwen3VLConfiguration.self, Qwen3VL.init),
         "qwen3_5": create(Qwen35Configuration.self, Qwen35.init),
-        "qwen3_5_moe": create(Qwen35Configuration.self, Qwen35MoE.init),
+        "qwen3_5_moe": { data in
+            // Sniff weight_format. JANGTQ-quantized Qwen3.5/3.6 VLMs declare
+            // `weight_format: "mxtq"` and route to Qwen35MoEJANGTQ so the
+            // routed-expert MoE runs through TurboQuantSwitchGLU. Affine
+            // VLMs fall through to the standard Qwen35MoE class.
+            struct FormatCheck: Codable {
+                let weightFormat: String?
+                let textConfig: TextConfigCheck?
+                enum CodingKeys: String, CodingKey {
+                    case weightFormat = "weight_format"
+                    case textConfig = "text_config"
+                }
+                struct TextConfigCheck: Codable {
+                    let weightFormat: String?
+                    enum CodingKeys: String, CodingKey {
+                        case weightFormat = "weight_format"
+                    }
+                }
+            }
+            if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
+                check.weightFormat == "mxtq" || check.textConfig?.weightFormat == "mxtq"
+            {
+                let config = try JSONDecoder.json5().decode(
+                    Qwen35MoEJANGTQConfiguration.self, from: data)
+                return Qwen35MoEJANGTQ(config)
+            }
+            let config = try JSONDecoder.json5().decode(Qwen35Configuration.self, from: data)
+            return Qwen35MoE(config)
+        },
         "idefics3": create(Idefics3Configuration.self, Idefics3.init),
         "gemma3": create(Gemma3Configuration.self, Gemma3.init),
         "smolvlm": create(SmolVLM2Configuration.self, SmolVLM2.init),
