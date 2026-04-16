@@ -194,6 +194,14 @@ let cmlx = Target.target(
         "mlx/mlx/io/gguf_quants.cpp",
         "mlx/mlx/backend/metal/kernels",
         "mlx/mlx/backend/metal/nojit_kernels.cpp",
+        // Exclude the generated `.metal` sources so Xcode's MetalLink
+        // phase does NOT produce a `default.metallib` in the bundle —
+        // that collides with `resources: [.copy("default.metallib")]`
+        // below and trips "Multiple commands produce …/default.metallib"
+        // during `xcodebuild archive`. The pre-built `default.metallib`
+        // under `Sources/Cmlx/` (or staged via `scripts/stage-metallib.sh`)
+        // is the single source of truth.
+        "mlx-generated/metal",
         "mlx/mlx/distributed/mpi/mpi.cpp",
         "mlx/mlx/distributed/ring/ring.cpp",
         "mlx/mlx/distributed/nccl/nccl.cpp",
