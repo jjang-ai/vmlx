@@ -382,7 +382,8 @@ class Gemma3nMLP: Module {
         let inputsMean = mean(inputs, axis: -1, keepDims: true)
         let inputsStd = std(inputs, axis: -1, keepDims: true)
         let cutoffX = inputsMean + inputsStd * stdMultiplier.asType(inputsStd.dtype)
-        return safeGeluApproximate(maximum(MLXArray(0), inputs - cutoffX))
+        // dtype-matched zero — see SWIFT-NO-REGRESSION-CHECKLIST §27.
+        return safeGeluApproximate(maximum(MLXArray(0, dtype: inputs.dtype), inputs - cutoffX))
     }
 }
 

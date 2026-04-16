@@ -277,6 +277,9 @@ public struct TopPSampler: LogitSampler {
         }
         self.topK = topK > 0 ? topK : nil
         self.minP = minP > 0 ? MLXArray(minP) : nil
+        // lint-ok: negInf is only consumed by `sample()` which first
+        // upcasts logits to fp32 (see line 287), so fp32 negInf is the
+        // correct dtype here. See SWIFT-NO-REGRESSION-CHECKLIST §27.
         self.negInf = MLXArray(-Float.infinity)
         self.randomState = MLXRandom.RandomState()
     }

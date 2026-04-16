@@ -216,7 +216,9 @@ private class M4MoEGate: Module {
     }
     func callAsFunction(_ x: MLXArray) -> (MLXArray, MLXArray) {
         let scores = softmax(matmul(x, weight.transposed()), axis: -1, precise: true)
-        let inds = argPartition(MLXArray(0) - scores, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
+        // See SWIFT-NO-REGRESSION-CHECKLIST §27 — unary `-` avoids the
+        // per-step AsType + broadcast paid by the scalar-subtract form.
+        let inds = argPartition(-scores, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
         var wts = takeAlong(scores, inds, axis: -1)
         if normTopk { wts = wts / wts.sum(axis: -1, keepDims: true) }
         wts = wts * scalingFactor
