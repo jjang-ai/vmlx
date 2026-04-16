@@ -533,8 +533,8 @@ struct TrayItem: View {
             slider(
                 label: "Cache memory %",
                 value: Binding(
-                    get: { draft.cacheMemoryPercent * 100 },
-                    set: { draft.cacheMemoryPercent = $0 / 100; schedulePush() }),
+                    get: { draft.memoryCachePercent * 100 },
+                    set: { draft.memoryCachePercent = $0 / 100; schedulePush() }),
                 range: 5...80, step: 1,
                 format: "%.0f%%")
             LabeledField("Max cache blocks") {
@@ -774,15 +774,7 @@ struct TrayItem: View {
     // MARK: - State-derived flags / strings
 
     private var modelName: String {
-        if let p = app.selectedModelPath { return p.lastPathComponent }
-        // Fall back to the first running session's model path — users who
-        // load models via the Server tab (not the global selector) leave
-        // `selectedModelPath` nil, so the tray used to read "(no model)"
-        // while something was actively streaming.
-        if let running = app.sessions.first(where: { $0.isRunning }) {
-            return running.modelPath.lastPathComponent
-        }
-        return "(no model)"
+        app.selectedModelPath?.lastPathComponent ?? "(no model)"
     }
 
     private var stateLabel: String {

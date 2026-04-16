@@ -102,96 +102,6 @@ final class ChatViewModel {
         }
     }
 
-    /// Load the given model directly from Chat, without bouncing through
-    /// the Server tab. Creates a Server session if one doesn't exist for
-    /// this model path, reuses the existing one otherwise. Binds this
-    /// chat to the resulting session so future turns stream through it.
-    @MainActor
-    func startModel(at path: URL) async {
-        guard let app else { return }
-        // Reuse an existing session pointing at the same model, otherwise
-        // create a fresh one. Keeps the Server tab's session list from
-        // ballooning every time the user picks a model from Chat.
-        let existing = app.sessions.first { $0.modelPath == path }
-        let sid: UUID
-        if let s = existing {
-            sid = s.id
-        } else {
-            let newId = UUID()
-            var settings = SessionSettings(modelPath: path)
-            settings.displayName = path.lastPathComponent
-            let sessionEngine = app.engine(for: newId)
-            settings = await sessionEngine.applySessionSettings(newId, settings)
-            let newSession = Session(
-                id: newId,
-                displayName: settings.displayName ?? path.lastPathComponent,
-                modelPath: path,
-                family: "",
-                isJANG: false,
-                isMXTQ: false,
-                quantBits: nil,
-                host: settings.host ?? "127.0.0.1",
-                port: settings.port ?? 8000,
-                pid: nil,
-                latencyMs: nil,
-                state: .stopped,
-                loadProgress: nil
-            )
-            app.sessions.append(newSession)
-            sid = newId
-        }
-        self.serverSessionId = sid
-        app.selectedServerSessionId = sid
-        app.rebindEngineObserver()
-        app.ensureObserver(for: sid)
-        let eng = app.engine(for: sid)
-        let resolved = await eng.settings.resolved(sessionId: sid)
-        let opts = Engine.LoadOptions(modelPath: path, from: resolved)
-        do {
-            for try await event in await eng.load(opts) {
-                if case .failed(let msg) = event {
-                    app.flashBanner("Load failed: \(msg)")
-                    return
-                }
-            }
-        } catch {
-            app.flashBanner("Load failed: \(error)")
-        }
-    }
-
-    /// Stop the engine bound to this chat's server session (or the default
-    /// engine if unbound). Safe no-op when nothing is loaded.
-    @MainActor
-    func stopModel() async {
-        guard let app else { return }
-        let eng: Engine
-        if let sid = serverSessionId { eng = app.engine(for: sid) }
-        else { eng = app.engine }
-        await eng.stop()
-    }
-
-    /// True while the chat-bound engine is actively loading. UI uses this
-    /// to disable the Start button mid-load.
-    @MainActor
-    var isModelLoading: Bool {
-        guard let app else { return false }
-        let key = serverSessionId ?? AppState.defaultEngineKey
-        if case .loading = app.sessionEngineStates[key] { return true }
-        return false
-    }
-
-    /// True while the chat-bound engine has a model ready to stream.
-    /// Only checks the chat's OWN bound engine — we used to fall back to
-    /// `hasAnyLiveEngine`, but that caused the Stop button to appear in
-    /// chats whose engine wasn't the one actually streaming.
-    @MainActor
-    var isModelReady: Bool {
-        guard let app else { return false }
-        let key = serverSessionId ?? AppState.defaultEngineKey
-        if let s = app.sessionEngineStates[key], app.engineStateIsLive(s) { return true }
-        return false
-    }
-
     func attach(_ app: AppState) {
         self.app = app
         reload()
@@ -339,60 +249,19 @@ final class ChatViewModel {
 
     func send() {
         guard let sessionId = activeSessionId else { return }
-        // No-model guard: surface a banner + jump to Server mode if there
-        // is genuinely no loaded model anywhere. `engineState` already
-        // tracks the selected server session's engine (see `vMLXApp.engine`
-        // computed var), so "running, not error" is the real signal. We do
-        // NOT gate on `selectedModelPath` because that field is only set
-        // by the command bar / onboarding; users who load via the Server
-        // tab leave it nil while their server-session engine is live.
-        // Pre-fix behavior was to bounce those users back to Server with
-        // a confusing "Load a model first" banner despite the model being
-        // loaded. Also auto-bind `serverSessionId` to the active server
-        // session so the stream routes through the right engine instead
-        // of falling back to `defaultEngine` when the user never linked
-        // the chat to a session explicitly.
+        // No-model guard: if no model is loaded, surface a banner with a
+        // "Open Server tab" action and abort. Without this the request fans
+        // out with an empty model string and the user sees a confusing stub
+        // error. Mirrors Electron's `ChatInterface.tsx` `handleSend` guard.
         if let appRef = app {
-            // Auto-bind this chat to a live session. Priority:
-            //   1. Already-bound server session (user picked it explicitly)
-            //   2. Currently-selected server session
-            //   3. Any engine the app sees as live (running / standby /
-            //      loading) — lets users who loaded a model in Server but
-            //      never "selected" that session still chat against it
-            //
-            // Re-bind when the selected server session has changed AND the
-            // currently-bound session isn't live anymore. This keeps a chat
-            // from being yanked away from a live stream, but picks up the
-            // user's new Server-tab selection once the old engine is gone.
-            let currentKey = serverSessionId ?? AppState.defaultEngineKey
-            let currentIsLive: Bool = {
-                if let s = appRef.sessionEngineStates[currentKey], appRef.engineStateIsLive(s) { return true }
-                return false
-            }()
-            let currentSessionExists = serverSessionId.map { sid in appRef.sessions.contains(where: { $0.id == sid }) } ?? false
-            let shouldRebind: Bool = {
-                if serverSessionId == nil { return true }
-                if appRef.selectedServerSessionId != serverSessionId,
-                   (!currentSessionExists || !currentIsLive) {
-                    return true
-                }
-                return false
-            }()
-            if shouldRebind {
-                if let active = appRef.selectedServerSessionId {
-                    serverSessionId = active
-                } else if let liveSid = appRef.firstLiveSessionId {
-                    serverSessionId = liveSid
-                    appRef.selectedServerSessionId = liveSid
-                }
-            }
-            if !appRef.hasAnyLiveEngine {
-                bannerMessage = "No model loaded — use the model picker in the Chat top bar to start one."
+            let hasModel = (appRef.selectedModelPath != nil) &&
+                           appRef.engineState != .stopped &&
+                           !isErrorState(appRef.engineState)
+            if !hasModel {
+                bannerMessage = "Load a model in the Server tab first"
                 appRef.flashBanner(bannerMessage ?? "")
-                // Do NOT force-switch modes. The Chat top bar has its own
-                // model picker + Start button; yanking users to Server
-                // made loading via Chat impossible (UX regression Eric
-                // reported 2026-04-15).
+                // Switch user straight to Server mode so the CTA is one click.
+                appRef.mode = .server
                 return
             }
         }
@@ -692,7 +561,9 @@ final class ChatViewModel {
             messages[i].isStreaming = false
             Database.shared.upsertMessage(messages[i])
         }
-        bannerMessage = "Engine not yet wired: \(msg)"
+        // Audit 2026-04-16 UX: was "Engine not yet wired: …" — leftover
+        // scaffold string visible to end users on any stream failure.
+        bannerMessage = "Generation failed: \(msg)"
         app?.flashBanner(bannerMessage ?? "")
     }
 }

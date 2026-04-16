@@ -87,6 +87,19 @@ public class SwitchGLU: Module {
     let isSiluActivation: Bool
     let isGeluActivation: Bool
 
+    // Fused gate+up gatherQuantizedMM cache. On decode (few-token batches),
+    // concatenate gate_proj.weight and up_proj.weight along the output axis
+    // once and dispatch a single wider kernel instead of two narrower ones.
+    // Halves Metal dispatches for Qwen/MiniMax/Gemma4/GLM4 MoE decode.
+    // Ported from vmlx-swift-lm @ 2026-04-15.
+    private var fusedGateUpWeight: MLXArray? = nil
+    private var fusedGateUpScales: MLXArray? = nil
+    private var fusedGateUpBiases: MLXArray? = nil
+    private var fusedGroupSize: Int = 64
+    private var fusedBits: Int = 4
+    private var fusedMode: QuantizationMode = .affine
+    private var fusionAttempted: Bool = false
+
     public init(
         inputDims: Int,
         hiddenDims: Int,
@@ -119,7 +132,54 @@ public class SwitchGLU: Module {
         super.init()
     }
 
+    /// Build the fused gate+up weight cache on first call. Guarded by
+    /// `fusionAttempted` so it runs exactly once per SwitchGLU instance.
+    /// Skipped via `BENCH_NO_FUSED_GATE_UP=1` for A/B. Only works when both
+    /// projections are `QuantizedSwitchLinear` with matching quant params.
+    private func ensureFusedGateUp() {
+        if fusionAttempted { return }
+        fusionAttempted = true
+        if ProcessInfo.processInfo.environment["BENCH_NO_FUSED_GATE_UP"] == "1" { return }
+        guard let g = gateProj as? QuantizedSwitchLinear,
+              let u = upProj as? QuantizedSwitchLinear,
+              g.groupSize == u.groupSize,
+              g.bits == u.bits,
+              g.mode == u.mode
+        else { return }
+        let fusedW = concatenated([g.weight, u.weight], axis: -2)
+        let fusedS = concatenated([g.scales, u.scales], axis: -2)
+        var fusedB: MLXArray? = nil
+        if let gb = g.biases, let ub = u.biases {
+            fusedB = concatenated([gb, ub], axis: -2)
+        }
+        // Force eager materialization so the first decode doesn't pay
+        // the concat cost mid-generation. asyncEval schedules immediately
+        // but doesn't block the caller, so we pay concat latency on the
+        // GPU side in parallel with any other load-time work.
+        asyncEval(fusedW)
+        asyncEval(fusedS)
+        if let fb = fusedB { asyncEval(fb) }
+        self.fusedGateUpWeight = fusedW
+        self.fusedGateUpScales = fusedS
+        self.fusedGateUpBiases = fusedB
+        self.fusedGroupSize = g.groupSize
+        self.fusedBits = g.bits
+        self.fusedMode = g.mode
+    }
+
     public func callAsFunction(_ x: MLXArray, _ indices: MLXArray) -> MLXArray {
+        ensureFusedGateUp()
+
+        // Fused gate+up is a net WIN for decode (compute-bound, single wide
+        // matmul has better GPU occupancy) and a net LOSS for prefill
+        // (memory-bandwidth bound, two narrower matmuls have better cache
+        // locality). Threshold 32 admits single-token + a few prompt tokens
+        // as "decode-shaped" and bounces large prefill chunks to the
+        // two-call path. Override via BENCH_FUSED_GATE_UP_THRESHOLD.
+        let decodeThreshold: Int =
+            Int(ProcessInfo.processInfo.environment["BENCH_FUSED_GATE_UP_THRESHOLD"] ?? "32") ?? 32
+        let useFused = (fusedGateUpWeight != nil) && (indices.size <= decodeThreshold)
+
         var x = MLX.expandedDimensions(x, axes: [-2, -3])
 
         let doSort = indices.size >= 64
@@ -131,16 +191,38 @@ public class SwitchGLU: Module {
             (x, idx, inverseOrder) = gatherSort(x: x, indices: indices)
         }
 
-        let xUp = upProj(x, idx, sortedIndices: doSort)
-        let xGate = gateProj(x, idx, sortedIndices: doSort)
-        // Use compiled fused activation when possible (2x fewer Metal dispatches)
         let activated: MLXArray
-        if isSiluActivation {
-            activated = compiledSwiGLU(xGate, xUp)
-        } else if isGeluActivation {
-            activated = compiledGeGLU(xGate, xUp)
+        if useFused, let fusedW = fusedGateUpWeight, let fusedS = fusedGateUpScales {
+            // FUSED PATH — single gatherQuantizedMM for gate+up combined,
+            // then split and apply compiled SwiGLU/GeGLU.
+            let combined = MLX.gatherQuantizedMM(
+                x, fusedW,
+                scales: fusedS, biases: fusedGateUpBiases,
+                rhsIndices: idx, transpose: true,
+                groupSize: fusedGroupSize, bits: fusedBits, mode: fusedMode,
+                sortedIndices: doSort)
+            let splits = MLX.split(combined, parts: 2, axis: -1)
+            let xGate = splits[0]
+            let xUp = splits[1]
+            if isSiluActivation {
+                activated = compiledSwiGLU(xGate, xUp)
+            } else if isGeluActivation {
+                activated = compiledGeGLU(xGate, xUp)
+            } else {
+                activated = activation(xGate) * xUp
+            }
         } else {
-            activated = activation(xGate) * xUp
+            // Fallback: two-call path for non-quantized models, prefill
+            // batches above threshold, or feature-flag off.
+            let xUp = upProj(x, idx, sortedIndices: doSort)
+            let xGate = gateProj(x, idx, sortedIndices: doSort)
+            if isSiluActivation {
+                activated = compiledSwiGLU(xGate, xUp)
+            } else if isGeluActivation {
+                activated = compiledGeGLU(xGate, xUp)
+            } else {
+                activated = activation(xGate) * xUp
+            }
         }
         x = downProj(activated, idx, sortedIndices: doSort)
 

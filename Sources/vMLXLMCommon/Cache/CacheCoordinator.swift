@@ -128,7 +128,9 @@ public final class CacheCoordinator: @unchecked Sendable {
             self.memoryCache = nil
         }
 
-        self.ssmStateCache = SSMStateCache(maxEntries: config.ssmMaxEntries)
+        self.ssmStateCache = SSMStateCache(
+            maxEntries: config.ssmMaxEntries,
+            modelKey: config.modelKey)
     }
 
     // MARK: - Hybrid Flag
@@ -200,8 +202,19 @@ public final class CacheCoordinator: @unchecked Sendable {
     public func fetch(
         tokens: [Int],
         mediaSalt: String? = nil,
-        genPromptLen: Int = 0
+        genPromptLen: Int = 0,
+        isMLLM: Bool = false
     ) -> CacheFetchResult {
+        // MLLM N-1 alignment (2026-04-15 parity fix): Python MLLM batch
+        // generator stores SSM companion at `prompt_len - 1`, LLM
+        // scheduler at `prompt_len`. See ssm_companion_cache.py:22.
+        // For hybrid VLM multi-turn, this saved one token of state per
+        // turn and the mismatch caused cache misses. `ssmBoundary` below
+        // subtracts 1 for MLLM fetches so we look up at the same key the
+        // storing side used.
+        func ssmBoundary(_ matched: Int) -> Int {
+            isMLLM ? max(0, matched - 1) : matched
+        }
         // The hash key for every sub-cache is the prompt WITHOUT its
         // trailing generation-prompt suffix. On a hit at `matched`, the
         // caller still needs to replay the gen-prompt tokens, so we
@@ -220,7 +233,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             if isHybrid {
                 ssmStates = ssmStateCache.fetch(
                     tokens: hashTokens,
-                    boundary: result.matchedTokens,
+                    boundary: ssmBoundary(result.matchedTokens),
                     mediaSalt: mediaSalt
                 )
             }
@@ -243,7 +256,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             if let arrays = result.cache {
                 let matched = hashTokens.count - result.remainingTokens.count
                 let ssmStates = resolveSSMStates(
-                    forTokens: hashTokens, boundary: matched, diskArrays: arrays,
+                    forTokens: hashTokens, boundary: ssmBoundary(matched), diskArrays: arrays,
                     mediaSalt: mediaSalt)
                 return .hit(
                     matchedTokens: matched,
@@ -261,7 +274,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             if let arrays = diskCache.fetch(tokens: hashTokens, mediaSalt: mediaSalt) {
                 let matched = hashTokens.count
                 let ssmStates = resolveSSMStates(
-                    forTokens: hashTokens, boundary: matched, diskArrays: arrays,
+                    forTokens: hashTokens, boundary: ssmBoundary(matched), diskArrays: arrays,
                     mediaSalt: mediaSalt)
                 return .hit(
                     matchedTokens: matched,
@@ -360,7 +373,8 @@ public final class CacheCoordinator: @unchecked Sendable {
         ssmStates: [MLXArray]?,
         cache: [any KVCache]? = nil,
         mediaSalt: String? = nil,
-        genPromptLen: Int = 0
+        genPromptLen: Int = 0,
+        isMLLM: Bool = false
     ) {
         // For thinking / chat-template models, the last `genPromptLen`
         // tokens are the chat template's generation-prompt suffix.
@@ -470,7 +484,13 @@ public final class CacheCoordinator: @unchecked Sendable {
         // for fastest same-process reuse. Disk persistence is handled by
         // TQDiskSerializer above when we have the raw cache.
         if isHybrid, let effective = effectiveSSMStates, !effective.isEmpty {
-            let boundary = min(storeTotal, blockLayerData.count * blockSize)
+            // MLLM N-1 alignment (2026-04-15): Python MLLM batch generator
+            // stores at prompt_len-1 to match how VL prefill consumes the
+            // media prefix. Store and fetch must agree on the boundary
+            // key, so `isMLLM=true` callers (ChunkedPrefillVLM path)
+            // subtract one token here and in `fetch()`.
+            let base = min(storeTotal, blockLayerData.count * blockSize)
+            let boundary = isMLLM ? max(0, base - 1) : base
             ssmStateCache.store(
                 ssmStates: effective,
                 tokens: storeTokens,

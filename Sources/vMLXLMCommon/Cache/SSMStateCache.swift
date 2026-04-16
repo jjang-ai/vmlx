@@ -53,12 +53,21 @@ public final class SSMStateCache: @unchecked Sendable {
     // MARK: - Initialization
 
     /// Creates a new SSM state cache.
-    /// - Parameter maxEntries: Maximum number of entries before LRU eviction
-    ///   kicks in. Defaults to 50.
-    public init(maxEntries: Int = 50) {
+    /// - Parameters:
+    ///   - maxEntries: Maximum number of entries before LRU eviction
+    ///     kicks in. Defaults to 50.
+    ///   - modelKey: Stable identifier for the loaded model. Mixed into
+    ///     every key so hot-swapping models in-process can't collide on
+    ///     the same prompt prefix. Empty/`nil` = pre-fix parity.
+    public init(maxEntries: Int = 50, modelKey: String? = nil) {
         self.maxEntries = maxEntries
+        self.modelKey = modelKey
         self.entries = []
     }
+
+    /// Mixed into every cache key. Set once at init time by
+    /// `CacheCoordinator` based on `CacheCoordinatorConfig.modelKey`.
+    private let modelKey: String?
 
     // MARK: - Public API
 
@@ -79,7 +88,7 @@ public final class SSMStateCache: @unchecked Sendable {
         mediaSalt: String? = nil,
         isComplete: Bool = true
     ) {
-        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)
+        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt, modelKey: modelKey)
 
         lock.lock()
         defer { lock.unlock() }
@@ -137,7 +146,7 @@ public final class SSMStateCache: @unchecked Sendable {
     public func fetchEntry(
         tokens: [Int], boundary: Int, mediaSalt: String? = nil
     ) -> FetchResult? {
-        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)
+        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt, modelKey: modelKey)
 
         lock.lock()
         defer { lock.unlock() }
@@ -191,10 +200,22 @@ public final class SSMStateCache: @unchecked Sendable {
     ///   - boundary: How many tokens from the start to include in the hash.
     /// - Returns: A 64-character lowercase hex string.
     public static func makeKey(
-        tokens: [Int], boundary: Int, mediaSalt: String? = nil
+        tokens: [Int], boundary: Int, mediaSalt: String? = nil,
+        modelKey: String? = nil
     ) -> String {
         let prefix = Array(tokens.prefix(boundary))
         var hasher = SHA256()
+
+        // Mix modelKey FIRST so hot-swapping models in-process can't
+        // collide on the same prompt prefix. Mirrors the salt added to
+        // `DiskCache.hashTokens` and `CacheBlock.computeBlockHash`.
+        // Without this, switching from model A → model B on the same
+        // prompt prefix would HIT model A's stored SSM state and produce
+        // corrupted decode. Audit finding 2026-04-15 (cache audit #3).
+        if let mk = modelKey, !mk.isEmpty {
+            hasher.update(data: Data("|model:".utf8))
+            hasher.update(data: Data(mk.utf8))
+        }
 
         // Audit F-G1 (P0): mix mediaSalt BEFORE tokens so VLM multi-turn
         // requests with different images but the same text prefix produce

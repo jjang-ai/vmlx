@@ -20,7 +20,7 @@ struct VMLX: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "vmlx",
         abstract: "vMLX — local LLM server (Swift)",
-        subcommands: [Serve.self, Chat.self, Pull.self, List.self, DFlashSmoke.self],
+        subcommands: [Serve.self, Chat.self, Pull.self, List.self, DFlashSmoke.self, BenchDirect.self],
         defaultSubcommand: Serve.self
     )
 }
@@ -73,6 +73,15 @@ struct Serve: AsyncParsableCommand {
     var defaultRepetitionPenalty: Double?
     @Option(name: .long, help: "Default enable_thinking (true|false). Per-request overrides win.")
     var defaultEnableThinking: Bool?
+    // Audit 2026-04-15: flags that had settings fields but no CLI surface.
+    @Option(name: .long, help: "Default top-k (0 = disabled).")
+    var defaultTopK: Int?
+    @Option(name: .long, help: "Default min-p (0..1). Per-request overrides win.")
+    var defaultMinP: Double?
+    @Option(name: .long, help: "Default max_tokens when client omits it.")
+    var defaultMaxTokens: Int?
+    @Option(name: .long, help: "Request inactivity timeout (seconds). 0 = no timeout.")
+    var timeout: Double?
 
     // Chat template overrides — mirror `cli.py --chat-template`.
     // `--chat-template` accepts either a path to a .jinja file OR an
@@ -112,6 +121,65 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "Target model hidden dim (default 3072 for MiniMax-M2.7).")
     var dflashTargetHiddenDim: Int = 3072
 
+    // FIX-G-H (2026-04-16): CLI flag coverage for engine-perf knobs that
+    // previously could only be set via the SwiftUI settings panel. Each
+    // flag is opt-in: absence leaves the existing settings value alone.
+    // CLI writes win over SQLite for the session lifetime.
+
+    // TurboQuant KV-cache compression
+    @Flag(name: [.customLong("disable-turbo-quant")], help: "Disable TurboQuant KV compression (override settings).")
+    var disableTurboQuant: Bool = false
+    @Flag(name: [.customLong("enable-turbo-quant")], help: "Enable TurboQuant KV compression globally.")
+    var enableTurboQuant: Bool = false
+    @Option(name: .long, help: "TurboQuant KV bit width (3-8; default 4).")
+    var turboQuantBits: Int?
+
+    // KV quantization (classic, not TurboQuant)
+    @Option(name: .long, help: "KV cache quantization: none | q4 | q8 | turboquant.")
+    var kvCacheQuantization: String?
+    @Option(name: .long, help: "KV quantization group size (default 64).")
+    var kvCacheGroupSize: Int?
+
+    // Prefix cache
+    @Flag(name: [.customLong("disable-prefix-cache")], help: "Disable L1 paged prefix cache.")
+    var disablePrefixCache: Bool = false
+    @Flag(name: [.customLong("enable-prefix-cache")], help: "Explicitly enable L1 paged prefix cache (default on).")
+    var enablePrefixCache: Bool = false
+
+    // L1.5 memory cache
+    @Flag(name: [.customLong("disable-memory-cache")], help: "Disable L1.5 byte-budgeted memory cache.")
+    var disableMemoryCache: Bool = false
+    @Option(name: .long, help: "Memory cache percent of available RAM (0.05-0.80).")
+    var memoryCachePercent: Double?
+    @Option(name: .long, help: "Memory cache TTL in minutes (0 = no TTL).")
+    var memoryCacheTtlMinutes: Double?
+
+    // L2 disk cache — negative flag to complement the existing positive.
+    @Flag(name: [.customLong("disable-disk-cache")], help: "Disable L2 on-disk cache.")
+    var disableDiskCache: Bool = false
+
+    // Flash MoE expert streaming
+    @Flag(name: [.customLong("flash-moe")], help: "Enable Flash MoE expert streaming (SSD-backed experts).")
+    var flashMoe: Bool = false
+    @Option(name: .long, help: "Flash MoE slot bank size (<=64 triggers auto-sizing from layers × experts_per_tok × 1.5).")
+    var flashMoeSlotBank: Int?
+    @Option(name: .long, help: "Flash MoE prefetch policy: none | temporal.")
+    var flashMoePrefetch: String?
+    @Option(name: .long, help: "Flash MoE I/O parallelism (default 4).")
+    var flashMoeIoSplit: Int?
+
+    // Smelt partial-expert loading
+    @Flag(name: [.customLong("smelt")], help: "Enable smelt mode (partial expert loading).")
+    var smelt: Bool = false
+    @Option(name: .long, help: "Smelt expert count (default 50).")
+    var smeltExperts: Int?
+    @Option(name: .long, help: "Smelt mode: default | aggressive.")
+    var smeltMode: String?
+
+    // SSM re-derive
+    @Flag(name: [.customLong("disable-ssm-re-derive")], help: "Disable post-generation SSM re-derive for hybrid+thinking models.")
+    var disableSsmReDerive: Bool = false
+
     func run() async throws {
         let engine = Engine()
 
@@ -134,6 +202,10 @@ struct Serve: AsyncParsableCommand {
             if let p = defaultTopP { g.defaultTopP = p; dirty = true }
             if let r = defaultRepetitionPenalty { g.defaultRepetitionPenalty = r; dirty = true }
             if let e = defaultEnableThinking { g.defaultEnableThinking = e; dirty = true }
+            if let k = defaultTopK { g.defaultTopK = k; dirty = true }
+            if let m = defaultMinP { g.defaultMinP = m; dirty = true }
+            if let mt = defaultMaxTokens { g.defaultMaxTokens = mt; dirty = true }
+            if let to = timeout { g.requestTimeout = to; dirty = true }
             if let tpl = chatTemplate, !tpl.isEmpty {
                 // Auto-detect: if the value names an existing file, read it
                 // in as the template body. Otherwise treat it as inline.
@@ -164,6 +236,33 @@ struct Serve: AsyncParsableCommand {
                 if let d = dflashDrafter, !d.isEmpty { g.dflashDrafterPath = d }
                 dirty = true
             }
+            // FIX-G-H: engine-perf CLI overrides. Each one opt-in, absence
+            // leaves the existing settings value alone. Disable flags win
+            // over enable flags when both are somehow set (shouldn't happen
+            // but guards against accidental both-flagged).
+            if disableTurboQuant { g.enableTurboQuant = false; dirty = true }
+            else if enableTurboQuant { g.enableTurboQuant = true; dirty = true }
+            if let bits = turboQuantBits { g.turboQuantBits = bits; dirty = true }
+            if let q = kvCacheQuantization, !q.isEmpty { g.kvCacheQuantization = q; dirty = true }
+            if let gs = kvCacheGroupSize { g.kvCacheGroupSize = gs; dirty = true }
+            if disablePrefixCache { g.enablePrefixCache = false; dirty = true }
+            else if enablePrefixCache { g.enablePrefixCache = true; dirty = true }
+            if disableMemoryCache { g.enableMemoryCache = false; dirty = true }
+            if let p = memoryCachePercent { g.memoryCachePercent = p; dirty = true }
+            if let t = memoryCacheTtlMinutes { g.memoryCacheTTLMinutes = t; dirty = true }
+            if disableDiskCache { g.enableDiskCache = false; dirty = true }
+            if flashMoe {
+                g.flashMoe = true; dirty = true
+                if let sb = flashMoeSlotBank { g.flashMoeSlotBank = sb }
+                if let pf = flashMoePrefetch, !pf.isEmpty { g.flashMoePrefetch = pf }
+                if let io = flashMoeIoSplit { g.flashMoeIoSplit = io }
+            }
+            if smelt {
+                g.smelt = true; dirty = true
+                if let e = smeltExperts { g.smeltExperts = e }
+                if let m = smeltMode, !m.isEmpty { g.smeltMode = m }
+            }
+            if disableSsmReDerive { g.enableSSMReDerive = false; dirty = true }
             if dirty { await engine.settings.setGlobal(g) }
         }
 
@@ -250,47 +349,20 @@ struct Serve: AsyncParsableCommand {
             FileHandle.standardError.write(Data(msg.utf8))
         }
 
-        // Install a graceful shutdown handler for SIGTERM + SIGINT.
+        // Graceful shutdown is handled by Hummingbird's ServiceGroup,
+        // which wires SIGTERM + SIGINT to its internal cancellation
+        // token (see `Application.runService(gracefulShutdownSignals:)`
+        // — default is `[.sigterm, .sigint]`). On signal receipt it
+        // stops accepting new connections, drains in-flight requests,
+        // then returns from `server.run()`. We just run post-return
+        // cleanup below.
         //
-        // Without this, a `docker stop`, `systemctl restart`, or a
-        // Ctrl-C at the terminal kills the process mid-request and
-        // any in-flight settings writes queued on the 500ms
-        // SettingsStore debounce window are lost. The handler flushes
-        // pending writes + calls `engine.stop()` (which cancels any
-        // active stream task and releases the model), then exits
-        // cleanly. Bounded to 2s so a wedged store can't block
-        // termination forever — matches the vMLXApp `willTerminate`
-        // timeout pattern.
-        //
-        // We use `DispatchSourceSignal` rather than the legacy
-        // `signal()` callback because that API is unsafe from Swift
-        // concurrency contexts — DispatchSource fires its handler on
-        // a queue we own and plays nicely with the async runtime.
-        // Apple's Dispatch sources require the matching
-        // `signal(..., SIG_IGN)` first so the default action
-        // (process exit) doesn't race the source handler.
-        let shutdownQueue = DispatchQueue(label: "vmlx.shutdown")
-        let sigterm = DispatchSource.makeSignalSource(signal: SIGTERM, queue: shutdownQueue)
-        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: shutdownQueue)
-        signal(SIGTERM, SIG_IGN)
-        signal(SIGINT, SIG_IGN)
-        nonisolated(unsafe) let engineCapture = engine
-        let shutdownHandler: @Sendable () -> Void = {
-            FileHandle.standardError.write(Data(
-                "[vmlx] graceful shutdown: flushing settings...\n".utf8))
-            let sem = DispatchSemaphore(value: 0)
-            Task.detached {
-                await engineCapture.settings.flushPending()
-                await engineCapture.stop()
-                sem.signal()
-            }
-            _ = sem.wait(timeout: .now() + .seconds(2))
-            Darwin.exit(0)
-        }
-        sigterm.setEventHandler(handler: shutdownHandler)
-        sigint.setEventHandler(handler: shutdownHandler)
-        sigterm.resume()
-        sigint.resume()
+        // PRIOR BUG (smoke test 2026-04-15): we used to install our own
+        // DispatchSource handlers AND `signal(SIGTERM, SIG_IGN)` here.
+        // That collided with Hummingbird's ServiceGroup signal wiring
+        // — the process exited silently the moment any signal arrived
+        // (including implicit SIGPIPE from a dying parent shell).
+        // Dropping our custom setup fixed it.
 
         let resolvedSettings = await engine.settings.global()
         let scheme = (!resolvedSettings.sslKeyFile.isEmpty && !resolvedSettings.sslCertFile.isEmpty)
@@ -302,8 +374,32 @@ struct Serve: AsyncParsableCommand {
             tlsCertPath: resolvedSettings.sslCertFile.isEmpty ? nil : resolvedSettings.sslCertFile,
             rateLimitPerMinute: resolvedSettings.rateLimit
         )
+        // Announce via stderr (unbuffered) AND stdout so both redirected
+        // and terminal invocations show the URL. `print` uses block-
+        // buffered stdout when redirected to a file, which used to hide
+        // this line entirely when the process exited quickly for any
+        // reason.
+        FileHandle.standardError.write(Data(
+            "vmlx serving \(model) at \(scheme)://\(host):\(port)\n".utf8))
         print("vmlx serving \(model) at \(scheme)://\(host):\(port)")
-        try await server.run()
+        do {
+            try await server.run()
+            FileHandle.standardError.write(Data(
+                "[vmlx] graceful shutdown: flushing settings + stopping engine...\n".utf8))
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[vmlx] server.run() threw: \(error) — attempting cleanup\n".utf8))
+        }
+        // Post-shutdown cleanup — flush any pending debounced settings
+        // writes to SQLite, then release the model. Bounded to 2s so a
+        // wedged store can't block process exit forever.
+        let cleanupSem = DispatchSemaphore(value: 0)
+        Task.detached { [engine] in
+            await engine.settings.flushPending()
+            await engine.stop()
+            cleanupSem.signal()
+        }
+        _ = cleanupSem.wait(timeout: .now() + .seconds(2))
     }
 }
 
@@ -937,6 +1033,128 @@ enum DFlashSmokeImpl {
             verifyWallSec: verifyWall,
             treeSize: n,
             acceptedTokens: accepted
+        )
+    }
+}
+
+// MARK: - bench-direct: bypass vMLXEngine, drive model via TokenIterator
+//
+// vmlx-swift-lm benchmarks Qwen3.5-35B-A3B at ~98 tok/s on M4 Max.
+// The vmlx model files are byte-identical to vmlx-swift-lm. The 3× gap
+// observed via vmlxctl serve must be in the engine wrapping (metrics,
+// settings, prefix cache, chat-template, HTTP serialization, tool parser),
+// not in the kernels. This subcommand proves that by loading the model
+// via LLMModelFactory directly and decoding through TokenIterator with a
+// tight-loop mirror of vmlx-swift-lm's TestRunner main.swift:613-640.
+//
+// Per-token decode() is deliberately avoided in the hot loop — collect
+// all token IDs, decode at the end. The vmlx-swift-lm bench notes
+// "per-token decode() serializes GPU/CPU and kills throughput".
+
+struct BenchDirect: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "bench-direct",
+        abstract: "Decode bench bypassing vMLXEngine — proves the kernel path is fast"
+    )
+
+    @Option(name: .shortAndLong) var model: String
+    @Option(name: .long) var prompt: String = "Explain quantum mechanics briefly."
+    @Option(name: .long) var maxTokens: Int = 128
+    @Flag(name: .long, inversion: .prefixedNo, help: "Run a 6-token warmup before the timed pass.") var warmup: Bool = true
+
+    func run() async throws {
+        let url = URL(fileURLWithPath: model)
+        FileHandle.standardError.write(Data("[bench-direct] loading \(model)\n".utf8))
+        let loader = TransformersTokenizerLoader()
+        let t0 = Date()
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: url, using: loader
+        )
+        let loadDt = Date().timeIntervalSince(t0)
+        FileHandle.standardError.write(Data(
+            "[bench-direct] loaded in \(String(format: "%.2f", loadDt))s\n".utf8))
+
+        let promptCopy = prompt
+        let n = maxTokens
+        let doWarmup = warmup
+        let result = try await container.perform { (ctx: ModelContext) in
+            try await BenchDirectImpl.run(
+                ctx: ctx, prompt: promptCopy, maxTokens: n, warmup: doWarmup)
+        }
+
+        print("")
+        print("=== bench-direct (no vMLXEngine) ===")
+        print("  model:       \(model)")
+        print("  prompt:      \(prompt)")
+        print("  load wall:   \(String(format: "%.2f", loadDt))s")
+        print("  prefill:     \(String(format: "%.2f", result.prefillSec))s (\(result.promptTokens) prompt tok)")
+        print("  decode wall: \(String(format: "%.2f", result.decodeSec))s")
+        print("  generated:   \(result.tokens.count) tokens")
+        print("  decode rate: \(String(format: "%.2f", Double(result.tokens.count) / max(result.decodeSec, 1e-6))) tok/s")
+        print("")
+        print("--- output ---")
+        print(result.text)
+        print("---")
+    }
+}
+
+enum BenchDirectImpl {
+    struct BenchResult: Sendable {
+        var text: String
+        var tokens: [Int]
+        var promptTokens: Int
+        var prefillSec: Double
+        var decodeSec: Double
+    }
+
+    static func run(
+        ctx: ModelContext, prompt: String, maxTokens: Int, warmup: Bool
+    ) async throws -> BenchResult {
+        // Tokenize prompt + prepare input via the model's processor (handles
+        // chat template if needed; otherwise falls back to raw encode).
+        let userInput = UserInput(prompt: prompt)
+        let input = try await ctx.processor.prepare(input: userInput)
+        let promptTokensCount = input.text.tokens.dim(input.text.tokens.ndim - 1)
+
+        // Warmup: a tiny TokenIterator pass so the first compile + cache
+        // alloc don't pollute the timed pass.
+        if warmup {
+            let warmIter = try TokenIterator(
+                input: input, model: ctx.model,
+                parameters: GenerateParameters(maxTokens: 4, temperature: 0)
+            )
+            for _ in warmIter.prefix(4) {}
+        }
+
+        let prefillStart = Date()
+        let iterator = try TokenIterator(
+            input: input, model: ctx.model,
+            parameters: GenerateParameters(maxTokens: maxTokens, temperature: 0)
+        )
+        // The first .next() call drives prefill. Time it separately from
+        // the steady-state decode loop.
+        var iter = iterator
+        guard let firstToken = iter.next() else {
+            return BenchResult(text: "", tokens: [], promptTokens: promptTokensCount,
+                               prefillSec: Date().timeIntervalSince(prefillStart),
+                               decodeSec: 0)
+        }
+        let prefillDt = Date().timeIntervalSince(prefillStart)
+
+        var tokens: [Int] = [firstToken]
+        let decodeStart = Date()
+        for token in iter {
+            if tokens.count >= maxTokens { break }
+            tokens.append(token)
+        }
+        let decodeDt = Date().timeIntervalSince(decodeStart)
+
+        // Decode all tokens at once at the end (per vmlx-swift-lm note:
+        // per-token decode in hot loop serializes GPU/CPU).
+        let text = ctx.tokenizer.decode(tokenIds: tokens)
+        return BenchResult(
+            text: text, tokens: tokens, promptTokens: promptTokensCount,
+            prefillSec: prefillDt, decodeSec: decodeDt
         )
     }
 }

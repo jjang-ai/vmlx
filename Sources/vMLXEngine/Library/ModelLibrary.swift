@@ -499,6 +499,27 @@ public actor ModelLibrary {
         {
             return mn
         }
+        // (3b) sibling jang_config.json with nested source_model.name.
+        // Modern JANG packs keep jang_config.json as a separate file
+        // next to config.json; the repack metadata lives in
+        // `source_model.name` (e.g. "mlx-community/Qwen3.5-VL-307B-A17B").
+        // Audit #246 A4 (2026-04-15).
+        let jangURL = dir.appendingPathComponent("jang_config.json")
+        if let jdata = try? Data(contentsOf: jangURL),
+           let jobj = try? JSONSerialization.jsonObject(with: jdata) as? [String: Any]
+        {
+            if let sm = jobj["source_model"] as? [String: Any],
+               let nm = sm["name"] as? String,
+               !nm.isEmpty, !looksLikeHash(nm)
+            {
+                return nm
+            }
+            if let nm = jobj["model_name"] as? String,
+               !nm.isEmpty, !looksLikeHash(nm)
+            {
+                return nm
+            }
+        }
 
         // (4) bare snapshot-hash dir — walk up one.
         let last = dir.lastPathComponent

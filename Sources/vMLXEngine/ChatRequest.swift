@@ -173,6 +173,7 @@ public struct ChatRequest: Codable, Sendable {
         reasoningEffort: String? = nil,
         tools: [Tool]? = nil,
         toolChoice: ToolChoice? = nil,
+        includeReasoning: Bool? = nil,
         sessionId: String? = nil,
         chatId: String? = nil
     ) {
@@ -191,6 +192,7 @@ public struct ChatRequest: Codable, Sendable {
         self.reasoningEffort = reasoningEffort
         self.tools = tools
         self.toolChoice = toolChoice
+        self.includeReasoning = includeReasoning
         self.sessionId = sessionId
         self.chatId = chatId
     }
@@ -215,9 +217,66 @@ public struct ChatRequest: Codable, Sendable {
     }
 
     public struct ContentPart: Codable, Sendable {
-        public var type: String   // "text" | "image_url"
+        public var type: String   // "text" | "image_url" | "video_url"
         public var text: String?
         public var imageUrl: ImageURL?
+        public var videoUrl: VideoURL?
+        public struct VideoURL: Codable, Sendable {
+            public var url: String
+            public init(url: String) {
+                self.url = url
+            }
+            /// Returns a local file URL that `AVURLAsset` can consume.
+            /// - For `file://` inputs, returns the URL as-is.
+            /// - For `http(s)://`, downloads bytes to a temp file and
+            ///   returns that file URL.
+            /// - For bare paths, wraps them in `file://`.
+            /// - For `data:` URLs, decodes the base64 body to a temp file
+            ///   under the system temp dir.
+            /// Returns nil on fetch/decode failure.
+            public func loadVideoLocalURL() async -> URL? {
+                let raw = url
+                if raw.hasPrefix("file://") {
+                    return URL(string: raw)
+                }
+                if raw.hasPrefix("/") {
+                    return URL(fileURLWithPath: raw)
+                }
+                if raw.hasPrefix("data:") {
+                    guard let comma = raw.firstIndex(of: ","),
+                          let bytes = Data(
+                            base64Encoded: String(raw[raw.index(after: comma)...]),
+                            options: .ignoreUnknownCharacters)
+                    else { return nil }
+                    // Best-effort extension — default to .mp4 when not provided.
+                    let ext = raw.contains("video/mp4") ? "mp4"
+                           : raw.contains("video/quicktime") ? "mov"
+                           : "mp4"
+                    let tmp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("vmlx-video-\(UUID().uuidString).\(ext)")
+                    do {
+                        try bytes.write(to: tmp)
+                        return tmp
+                    } catch {
+                        return nil
+                    }
+                }
+                if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
+                    guard let u = URL(string: raw) else { return nil }
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: u)
+                        let ext = (u.pathExtension.isEmpty ? "mp4" : u.pathExtension)
+                        let tmp = FileManager.default.temporaryDirectory
+                            .appendingPathComponent("vmlx-video-\(UUID().uuidString).\(ext)")
+                        try data.write(to: tmp)
+                        return tmp
+                    } catch {
+                        return nil
+                    }
+                }
+                return nil
+            }
+        }
         public struct ImageURL: Codable, Sendable {
             public var url: String
             public var detail: String?
@@ -265,13 +324,23 @@ public struct ChatRequest: Codable, Sendable {
             }
         }
 
-        public init(type: String, text: String? = nil, imageUrl: ImageURL? = nil) {
+        public init(
+            type: String,
+            text: String? = nil,
+            imageUrl: ImageURL? = nil,
+            videoUrl: VideoURL? = nil
+        ) {
             self.type = type
             self.text = text
             self.imageUrl = imageUrl
+            self.videoUrl = videoUrl
         }
 
-        enum CodingKeys: String, CodingKey { case type, text; case imageUrl = "image_url" }
+        enum CodingKeys: String, CodingKey {
+            case type, text
+            case imageUrl = "image_url"
+            case videoUrl = "video_url"
+        }
     }
 
     public struct Tool: Codable, Sendable {
@@ -489,10 +558,17 @@ public struct ChatRequest: Codable, Sendable {
                 field: "top_logprobs",
                 reason: "must be in [0, 20], got \(tlp)")
         }
-        // logprobs / logit_bias / response_format are all accepted as-is;
-        // the engine ignores them for now and the response simply omits
-        // the corresponding fields. Clients that strictly require them
-        // can detect the absence in the response payload.
+        // Reject logprobs explicitly — silently dropping it broke LangChain
+        // logprob-classifier callers (audit 2026-04-15). Until token-level
+        // logprob collection is wired into Evaluate.swift, surface a clean
+        // 400 so callers know to fall back. logit_bias / response_format
+        // are still accepted as-is (engine ignores them and the response
+        // omits the corresponding fields).
+        if logprobs == true {
+            throw ChatRequestValidationError(
+                field: "logprobs",
+                reason: "logprobs not yet supported by the vMLX Swift engine")
+        }
     }
 }
 

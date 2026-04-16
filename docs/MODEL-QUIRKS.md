@@ -3,7 +3,7 @@
 Non-obvious per-family behaviors the Python engine handles that must be
 preserved in the Swift rewrite. Ranked by how many times each quirk has
 caused a production regression. Authoritative Python sources live under
-the Python `vmlx_engine` package.
+`/Users/eric/mlx/vllm-mlx/vmlx_engine/`.
 
 ## Global mechanisms
 
@@ -126,5 +126,5 @@ templates DO stamp their own — so reasoning-off uses §15 fallthrough
 
 ## References
 
-- Python source of truth: `vmlx_engine/engine/simple.py` (`_ct_kwargs`), `vmlx_engine/model_configs.py` (silver allowlist), `vmlx_engine/utils/ssm_companion_cache.py` (hybrid detection)
+- Python source of truth: `/Users/eric/mlx/vllm-mlx/vmlx_engine/engine/simple.py` (`_ct_kwargs`), `vmlx_engine/model_configs.py` (silver allowlist), `vmlx_engine/utils/ssm_companion_cache.py` (hybrid detection)
 - Memory archive: `project_nemotron_jang.md`, `project_mistral4_compat.md`, `feedback_reasoning_off_ui_stuck.md`, `project_cache_matrix_audit_2026_03_28c.md`, `project_flash_moe_slot_bank_sizing.md`, `project_session_2026_04_04.md` (Gemma 4 `<image>` fix)

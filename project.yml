@@ -23,9 +23,9 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    DEVELOPMENT_TEAM: ""
-    CODE_SIGN_STYLE: Automatic
-    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: 55KGF2S5AY
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Developer ID Application"
     CODE_SIGN_ENTITLEMENTS: vMLX/vMLX.entitlements
     ENABLE_HARDENED_RUNTIME: YES
     ENABLE_APP_SANDBOX: NO

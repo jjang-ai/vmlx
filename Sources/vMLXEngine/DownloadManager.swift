@@ -527,21 +527,12 @@ public actor DownloadManager {
         return dir
     }
 
-    /// Support-directory location for resume tokens — survives restart.
-    /// `~/Library/Application Support/vMLX/downloads/<jobId>.resume`
-    public static func resumeTokenDir() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support")
-        let dir = base.appendingPathComponent("vMLX").appendingPathComponent("downloads")
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
+    // `resumeTokenDir` was removed 2026-04-15 per audit finding (lifecycle
+    // #6). The helper was declared but never referenced — partial-download
+    // state is derived entirely from on-disk file size + a `Range` header,
+    // which is simpler and survives restart without a sidecar token file.
+    // NSURLSession-native resume data was never wired up, so the helper
+    // was misleading dead code.
 }
 
 /// Thread-safe running total for KVO progress observation.

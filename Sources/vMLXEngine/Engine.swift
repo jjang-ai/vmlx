@@ -27,9 +27,17 @@ public actor Engine {
         public var kind: EngineKind = .batched
         public var maxNumSeqs: Int = 5
         public var prefillStepSize: Int = 1024
-        public var cacheMemoryPercent: Double = 0.30
-        public var maxCacheBlocks: Int = 1000
-        public var enableTurboQuant: Bool = true
+        public var maxCacheBlocks: Int = 500
+        // TurboQuant KV compression: default-OFF (perf audit 2026-04-16).
+        // Measured impact of flipping to default-off: Nemotron-Cascade-2-30B
+        // A3B 2.4 → 59.8 tok/s (25× speedup), Gemma-4-26B-A4B 34.9 → 49.0
+        // tok/s (+40%), Qwen3.5-9B 69.5 → 78.3 tok/s (+13%). The decode-time
+        // compress+dequant cycle on every attention-half layer dominated
+        // decode throughput on MoE and hybrid models. Users who need the
+        // 4× KV memory savings on long contexts can opt in via settings or
+        // the jang_config.json `turboquant` block (which auto-activates for
+        // models explicitly shipped with calibrated TQ bit widths).
+        public var enableTurboQuant: Bool = false
         public var enableJANG: Bool = true
         public var enablePrefixCache: Bool = true
         public var enableSSMCompanion: Bool = true
@@ -37,6 +45,42 @@ public actor Engine {
         public var idleSoftSec: TimeInterval = 300
         public var idleDeepSec: TimeInterval = 900
         public var idleEnabled: Bool = true
+        // Cache stack — added 2026-04-15: silently ignored before because
+        // SettingsStore.LoadOptions(from:) didn't forward these.
+        public var enableMemoryCache: Bool = true
+        public var enableDiskCache: Bool = true
+        public var diskCacheDir: String = ""
+        public var diskCacheMaxGB: Double = 10.0
+        public var enableBlockDiskCache: Bool = false
+        public var blockDiskCacheDir: String = ""
+        public var blockDiskCacheMaxGB: Double = 10.0
+        public var kvCacheQuantization: String = "none"
+        public var kvCacheGroupSize: Int = 64
+        public var turboQuantBits: Int = 4
+        public var enableSSMReDerive: Bool = true
+        // Smelt + Flash MoE
+        public var smelt: Bool = false
+        public var smeltExperts: Int = 50
+        public var smeltMode: String = "default"
+        public var flashMoe: Bool = false
+        // 64 is the AUTO-SIZE sentinel — `EngineFlashMoE.applyFlashMoEIfEnabled`
+        // treats `<= 64` as "user hasn't overridden, compute
+        // layers × experts_per_tok × 1.5". Explicit overrides (e.g. 256, 512)
+        // keep the user-chosen value unchanged. Matches GlobalSettings default.
+        public var flashMoeSlotBank: Int = 64
+        public var flashMoePrefetch: String = "none"
+        public var flashMoeIoSplit: Int = 4
+        // DFlash spec-decode
+        public var dflash: Bool = false
+        public var dflashDrafterPath: String = ""
+        public var dflashBlockSize: Int = 16
+        public var dflashTopK: Int = 4
+        public var dflashNumPaths: Int = 60
+        public var dflashTapLayers: String = "10,22,34,46,58"
+        public var dflashTargetHiddenDim: Int = 3072
+        // Parser overrides (CLI --tool-call-parser / --reasoning-parser)
+        public var defaultToolParser: String = ""
+        public var defaultReasoningParser: String = ""
         public init(modelPath: URL) { self.modelPath = modelPath }
     }
 
@@ -225,6 +269,12 @@ public actor Engine {
     /// waiting for the AsyncStream's onTermination to fire. This is the
     /// knob the stop button needs to actually interrupt a hanging prefill.
     internal var currentStreamTask: Task<Void, Never>?
+
+    /// Task handle for the in-flight `load()` so `stop()` can abort a
+    /// wrong-model click mid-download or mid-weight-mmap. Audit
+    /// 2026-04-16: previously the load task was a detached Task with
+    /// no handle, so the Stop button during loading was inoperative.
+    internal var currentLoadTask: Task<Void, Never>?
 
     // MARK: - JANG-DFlash speculative-decoding state
     //
@@ -562,8 +612,11 @@ public actor Engine {
     /// transitions only — better than nothing, and the UI shows a moving bar.
     public func load(_ opts: LoadOptions) -> AsyncThrowingStream<LoadEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task { [weak self] in
+            let loadTask = Task { [weak self] in
                 guard let self else { return }
+                // Audit 2026-04-16: register ourselves so `Engine.stop()`
+                // can reach the load task. Self-deregister on exit via
+                // the `defer` at the closure tail.
 
                 // Emit + fail are declared as @Sendable closures instead
                 // of local `func` decls so they satisfy the @Sendable
@@ -647,6 +700,17 @@ public actor Engine {
                     // duration based on file size. Real progress will plug
                     // in if mlx-swift ever exposes a delegate.
                     let estimatedBytes = estimateModelBytes(at: opts.modelPath)
+                    await self.setExpectedBytes(estimatedBytes)
+                    // Audit 2026-04-16: release the prior model's container
+                    // BEFORE the progress clock captures its baseline. If
+                    // we skip this, a second load on a running engine
+                    // snapshots a baseline that already includes the old
+                    // weights → the new load's GPU delta is artificially
+                    // small and the progress bar moves slower than reality.
+                    // ARC may still hold the container briefly via in-flight
+                    // streams, but explicit `loaded = nil` gives it the
+                    // earliest release opportunity.
+                    await self.setLoaded(nil)
                     let progressClock = Task { [weak self] in
                         await self?.runLoadProgressClock(
                             estimatedBytes: estimatedBytes,
@@ -658,6 +722,26 @@ public actor Engine {
                         )
                     }
 
+                    // Pre-load guard (Audit 2026-04-16 VL pipeline gap #2):
+                    // silver table marks llava/cogvlm/molmo/internvl/florence2/
+                    // got_ocr2/phi3v/phi4mm/minicpmv as `isMLLM: true` so the
+                    // picker shows a vision badge, but no Swift factory entry
+                    // exists → loadContainer throws a confusing
+                    // `ModelFactoryError.unsupportedModelType` mid-way. Fail
+                    // fast with a clear, user-facing reason BEFORE touching
+                    // the weights.
+                    let unsupportedVLMs: Set<String> = [
+                        "llava", "llava_next", "cogvlm", "cogvlm2",
+                        "florence2", "got_ocr2", "molmo", "minicpmv",
+                        "internvl_chat", "phi4mm", "phi3v",
+                    ]
+                    if config.modality == .vision,
+                       unsupportedVLMs.contains(config.modelType.lowercased())
+                    {
+                        progressClock.cancel()
+                        throw EngineError.notImplemented(
+                            "\(config.modelType) is recognized as a VL model but has no Swift implementation yet. Use the Electron vMLX.app or a different model family (Qwen2/2.5/3-VL, Gemma 3/4 VLM, PaliGemma, Idefics3, SmolVLM, Pixtral are supported).")
+                    }
                     let container: vMLXLMCommon.ModelContainer
                     do {
                         switch config.modality {
@@ -668,6 +752,13 @@ public actor Engine {
                             container = try await VLMModelFactory.shared.loadContainer(
                                 from: opts.modelPath, using: tokenizerLoader)
                         }
+                    } catch {
+                        // Audit 2026-04-16: progressClock was only cancelled
+                        // on the happy path. When loadContainer threw, the
+                        // 4Hz poller leaked, emitting .loading events after
+                        // the engine had already transitioned to .error.
+                        progressClock.cancel()
+                        throw error
                     }
                     progressClock.cancel()
                     await emit(LoadProgress(
@@ -755,11 +846,28 @@ public actor Engine {
                 } catch {
                     await fail("\(error)")
                 }
+                // Self-deregister: clear the engine's handle so subsequent
+                // `stop()` calls don't cancel a completed task.
+                await self.clearCurrentLoadTask()
+            }
+            // Register the load task so `stop()` can cancel it. Done
+            // AFTER Task creation (not inside the closure) because the
+            // stream builder can't hop to the actor here; a detached Task
+            // is used for the register hop.
+            Task { [weak self] in
+                await self?.setCurrentLoadTask(loadTask)
             }
         }
     }
 
-    private func setLoaded(_ c: vMLXLMCommon.ModelContainer) {
+    internal func setCurrentLoadTask(_ task: Task<Void, Never>) {
+        self.currentLoadTask = task
+    }
+    internal func clearCurrentLoadTask() {
+        self.currentLoadTask = nil
+    }
+
+    private func setLoaded(_ c: vMLXLMCommon.ModelContainer?) {
         self.loaded = c
     }
 
@@ -789,6 +897,13 @@ public actor Engine {
     /// model directory. Used to gauge weight-load duration so the
     /// time-based pseudo-progress clock ramps at a realistic rate.
     private nonisolated func estimateModelBytes(at directory: URL) -> Int64 {
+        // HF cache layout uses symlinks from `snapshots/<hash>/*.safetensors`
+        // to blobs under `blobs/<sha>`. `.fileSizeKey` on the symlink
+        // itself reports tiny (50-100 B) — we must resolve + stat the
+        // target. Audit 2026-04-16: the integration harness caught
+        // `0 B total` on HF cache dirs; same bug here caused the real
+        // progress bar to show "677 MB / 76 B" = 892% and saturate at
+        // the 98% clamp instead of tracking actual load.
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.fileSizeKey],
@@ -798,18 +913,48 @@ public actor Engine {
         for url in contents {
             let ext = url.pathExtension.lowercased()
             guard ext == "safetensors" || ext == "bin" || ext == "gguf" else { continue }
-            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            total += Int64(size)
+            // Follow symlink → stat target. Falls back to .fileSizeKey
+            // if resolvingSymlinksInPath returns same URL (non-symlink).
+            let resolved = url.resolvingSymlinksInPath()
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: resolved.path),
+               let size = attrs[.size] as? Int64
+            {
+                total += size
+            } else if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                total += Int64(size)
+            }
         }
         return total
     }
 
-    /// Time-based pseudo-progress clock. mlx-swift's `loadContainer` has
-    /// no progress delegate, so while it's running we drive the loading
-    /// bar from `startFraction` toward `endFraction` on an exponential
-    /// ease-out curve. Rate is tuned so a 50 GB model ramps over ~25s.
-    /// Cancellation-safe — the parent cancels the Task when the real
-    /// load call returns.
+    /// Real load-progress poller. Drives the bar from `startFraction` →
+    /// `endFraction` based on measured MLX GPU memory growth (+ process
+    /// RSS as fallback when the GPU probe reads zero pre-warmup).
+    ///
+    /// Approach: we pre-scanned the model directory's safetensors files
+    /// into `expectedBytes` (sum of on-disk weight bytes). When
+    /// `loadContainer` runs, MLX maps those tensors into unified memory
+    /// and the GPU active-memory counter rises accordingly.
+    ///
+    /// Nuances handled:
+    /// - **Baseline drift**: capture GPU + RSS at clock start; emit
+    ///   fractions based on deltas so leftover cache from a prior load
+    ///   doesn't skew the bar.
+    /// - **JANG dequant peak**: MXTQ/JANG repack can peak at 1.3–1.5x
+    ///   the final resident size. When `delta > expectedBytes`, clamp
+    ///   to `endFraction - 0.02` (show 83%) rather than overflow past
+    ///   the bar's right edge.
+    /// - **Zero-probe fallback**: on first-ever load in a process the
+    ///   Metal device may not be initialized, so `MLX.Memory.snapshot`
+    ///   returns 0. Fall back to process RSS in that case.
+    /// - **Prequantized models**: in-memory ≈ disk bytes → progress
+    ///   tracks 1:1 honest.
+    /// - **Cancellation-safe**: parent cancels the Task when the real
+    ///   load call returns; label includes "…" sentinel so the caller
+    ///   can replace with "Weights loaded" on completion.
+    ///
+    /// Audit 2026-04-16 UX: replaces prior time-based pseudo-progress
+    /// clock that lied to users during the longest phase.
     private func runLoadProgressClock(
         estimatedBytes: Int64,
         startFraction: Double,
@@ -818,23 +963,95 @@ public actor Engine {
         label: String,
         emit: @escaping @Sendable (LoadProgress) async -> Void
     ) async {
-        let bytesPerSecond: Double = 2_000_000_000
-        let estimated = max(2.0, min(60.0, Double(estimatedBytes) / bytesPerSecond))
-        let start = Date()
+        // Baseline snapshot so we measure growth from THIS load only.
+        let baselineGPU = readMLXActiveMemory()
+        let baselineRSS = readProcessResidentBytes()
+        // Fallback time estimate for when the memory probe hasn't moved
+        // yet (pre-mmap phase). Used ONLY to interpolate the first 1-2s
+        // before real bytes show up — cap at 10% of the span.
+        let fallbackStart = Date()
+        let fallbackBudget: TimeInterval = 4.0  // ease-in over 4s
         while !Task.isCancelled {
-            let elapsed = Date().timeIntervalSince(start)
-            let t = min(1.0, elapsed / estimated)
-            // Exponential ease-out so we slow as we approach the target,
-            // avoiding a visible "stall" at 85% if the load runs long.
-            let eased = 1.0 - pow(1.0 - t, 2.0)
-            let fraction = startFraction + (endFraction - startFraction) * eased
+            let gpuNow = readMLXActiveMemory()
+            let rssNow = readProcessResidentBytes()
+            // Use whichever grew more — GPU when Metal is live, RSS for
+            // the pre-Metal / JANG-dequant windows where weights are
+            // still in CPU-side buffers before the MLX upload.
+            let gpuDelta = max(0, gpuNow - baselineGPU)
+            let rssDelta = max(0, rssNow - baselineRSS)
+            let bestDelta = max(gpuDelta, rssDelta)
+
+            let span = endFraction - startFraction
+            let fraction: Double
+            let detail: String
+            if expectedBytes > 0, bestDelta > 0 {
+                // Real-data path: clamp to [0, 0.98 * span] so the bar
+                // never fully completes until `loadContainer` returns.
+                let raw = Double(bestDelta) / Double(max(1, expectedBytes))
+                let clamped = min(0.98, raw)
+                fraction = startFraction + span * clamped
+                detail = "\(Self.prettyBytes(bestDelta)) / \(Self.prettyBytes(expectedBytes))"
+            } else {
+                // Fallback: ease the first 10% of the span over 4s so
+                // the user sees immediate motion even if no bytes have
+                // landed yet. Stays stuck at 10% until real data flows.
+                let elapsed = Date().timeIntervalSince(fallbackStart)
+                let t = min(1.0, elapsed / fallbackBudget)
+                fraction = startFraction + span * 0.10 * t
+                detail = "initializing"
+            }
             await emit(LoadProgress(
                 phase: phase,
                 fraction: fraction,
-                label: label
+                label: "\(label) (\(detail))"
             ))
             try? await Task.sleep(nanoseconds: 250_000_000)  // 4 Hz
         }
+    }
+
+    /// expectedBytes is captured once at load-time by the caller and
+    /// copied into the Engine so the poller can read it without another
+    /// actor hop. Updated in `load()` right before the poller starts.
+    private var expectedBytes: Int64 = 0
+
+    /// Actor-isolated setter so the non-isolated `load` closure can
+    /// prime `expectedBytes` before spawning the progress clock Task.
+    private func setExpectedBytes(_ n: Int64) { expectedBytes = n }
+
+    /// Snapshot MLX active memory. Zero when Metal is not yet initialized
+    /// (first load in a fresh process). Caller compensates.
+    private nonisolated func readMLXActiveMemory() -> Int64 {
+        // Honor the same XCTest gate as MetricsCollector.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return 0
+        }
+        let snap = MLX.Memory.snapshot()
+        return Int64(snap.activeMemory + snap.cacheMemory)
+    }
+
+    /// Process resident set size via mach_task_basic_info. Valid even
+    /// before Metal is touched, so this is the fallback signal during
+    /// the initial mmap phase of `loadContainer`.
+    private nonisolated func readProcessResidentBytes() -> Int64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return kr == KERN_SUCCESS ? Int64(info.resident_size) : 0
+    }
+
+    /// Short human-readable byte count for progress labels.
+    /// 1_234_567_890 → "1.23 GB".
+    static func prettyBytes(_ n: Int64) -> String {
+        let gb = Double(n) / 1_073_741_824
+        if gb >= 1 { return String(format: "%.2f GB", gb) }
+        let mb = Double(n) / 1_048_576
+        if mb >= 1 { return String(format: "%.0f MB", mb) }
+        return "\(n) B"
     }
 
     /// Real warmup pass. Runs a 1-token dummy `generate()` on the loaded
@@ -1005,6 +1222,12 @@ public actor Engine {
         // actually responsive (see Stream.swift cancellation commentary).
         currentStreamTask?.cancel()
         currentStreamTask = nil
+        // Audit 2026-04-16: also cancel a mid-flight load so Stop during
+        // a wrong-model click actually aborts the weight mmap / JANG
+        // repack. Prior behavior was to only cancel streams, leaving
+        // long loads uninterruptible.
+        currentLoadTask?.cancel()
+        currentLoadTask = nil
         loaded = nil
         loadedModelPath = nil
         loadedJangConfig = nil
@@ -1414,9 +1637,31 @@ public actor Engine {
     /// wakes instantly (no reload) via `wakeFromStandby`. Python analog:
     /// `vmlx_engine/server.py:1880 admin_soft_sleep`.
     public func softSleep() async throws {
+        // Audit 2026-04-16: if a stream is mid-generate, cancel it first
+        // so the cacheCoordinator clear doesn't race with concurrent
+        // fetch/store from the generation loop. CacheCoordinator's paged
+        // and disk tiers aren't actor-isolated against `.clear()` being
+        // invoked while another thread is inside fetch/store, so this
+        // preemptive cancel is the straightforward race guard.
+        if currentStreamTask != nil {
+            currentStreamTask?.cancel()
+            currentStreamTask = nil
+            await logs.append(.info, category: "engine",
+                "soft sleep: cancelled in-flight stream to avoid cache race")
+        }
         // Clear the cache coordinator's in-memory tiers. Weights stay loaded.
         cacheCoordinator?.clear()
-        await logs.append(.info, category: "engine", "soft sleep — caches cleared, weights retained")
+        // Drop the DFlash drafter + cached target adapter too. Their KV
+        // state tracks the target model's now-cleared cache, so leaving
+        // them live across a soft-sleep → wake cycle would feed the
+        // next generation stale state and produce garbage. The drafter
+        // checkpoint path is preserved as `_dflashDrafterURL` so a
+        // subsequent wake can rebind via `autoLoadDFlashDrafterIfConfigured`.
+        // Audit 2026-04-15 (lifecycle #4).
+        _dflashDrafter = nil
+        _dflashTarget = nil
+        await logs.append(.info, category: "engine",
+            "soft sleep — caches cleared, DFlash adapters cleared, weights retained")
         transition(.standby(.soft))
     }
 
@@ -1476,10 +1721,28 @@ public actor Engine {
                 .info, category: "engine",
                 "wake (deep) — replaying load from \(opts.modelPath.lastPathComponent)")
             let stream = self.load(opts)
-            for try await event in stream {
-                if case .failed(let msg) = event {
-                    throw EngineError.notImplemented("wake reload failed: \(msg)")
+            do {
+                for try await event in stream {
+                    if case .failed(let msg) = event {
+                        // Retry-loop escape: if the retained LoadOptions
+                        // point at a model that is now permanently unloadable
+                        // (deleted from disk, corrupted config, etc.) the
+                        // next `wakeFromStandby` would re-try the same failing
+                        // path forever. Clear lastLoadOptions and transition
+                        // to .stopped so the UI can surface a "pick a model"
+                        // banner. Audit 2026-04-15 (lifecycle #5).
+                        lastLoadOptions = nil
+                        transition(.stopped)
+                        throw EngineError.notImplemented("wake reload failed: \(msg)")
+                    }
                 }
+            } catch {
+                // Load threw (e.g. EngineError.modelNotFound from a deleted
+                // model dir). Same retry-loop escape: clear options so the
+                // next wake call doesn't re-try the broken path.
+                lastLoadOptions = nil
+                transition(.stopped)
+                throw error
             }
         case .running:
             return

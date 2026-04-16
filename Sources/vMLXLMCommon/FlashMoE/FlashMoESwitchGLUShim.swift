@@ -70,6 +70,14 @@ public final class FlashMoESwitchGLUShim: Module {
         let idxFlat = indices.reshaped([-1, K])
         let T = xFlat.dim(0)
 
+        // Audit 2026-04-16 Gemma 4 perf fix: hoist the GPU→CPU sync ONCE.
+        // Previously this called `idxFlat[t, k].item()` inside a nested
+        // T×K loop, forcing 8 GPU flushes per decode token (T=1, K=8) just
+        // to read routing indices — each an eval barrier in the MLX graph.
+        // `asArray(Int32.self)` collapses all T×K values into a single
+        // synchronization so expert loading can start immediately.
+        let flatArray = idxFlat.asArray(Int32.self)
+
         // Gather unique expert IDs across the flat batch, load in parallel.
         var unique = Set<Int>()
         var idxListPerToken: [[Int]] = []
@@ -78,7 +86,7 @@ public final class FlashMoESwitchGLUShim: Module {
             var row: [Int] = []
             row.reserveCapacity(K)
             for k in 0..<K {
-                let e = Int(idxFlat[t, k].item(Int32.self))
+                let e = Int(flatArray[t * K + k])
                 row.append(e)
                 unique.insert(e)
             }

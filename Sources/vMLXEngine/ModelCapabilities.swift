@@ -140,6 +140,9 @@ public enum ModelTypeTable {
         .init(family: "qwen3_5_moe", modelTypes: ["qwen3_5_moe"],
               toolParser: "qwen", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 4),
+        .init(family: "qwen3_5_text", modelTypes: ["qwen3_5_text"],
+              toolParser: "qwen", reasoningParser: "qwen3",
+              thinkInTemplate: true, priority: 4),
         .init(family: "qwen3", modelTypes: ["qwen3"],
               toolParser: "qwen", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 10),
@@ -238,6 +241,10 @@ public enum ModelTypeTable {
         .init(family: "gemma3_text", modelTypes: ["gemma3_text"],
               toolParser: "gemma4", reasoningParser: "deepseek_r1",
               priority: 8),
+        .init(family: "gemma3n", modelTypes: ["gemma3n"],
+              cacheType: "hybrid",
+              toolParser: "gemma4", reasoningParser: "gemma4",
+              priority: 6),
         .init(family: "gemma", modelTypes: ["gemma", "gemma2"],
               priority: 30),
         .init(family: "paligemma", modelTypes: ["paligemma", "paligemma2"],
@@ -260,6 +267,15 @@ public enum ModelTypeTable {
         .init(family: "hermes", modelTypes: ["hermes"],
               toolParser: "hermes", priority: 30),
 
+        // ── XLaM (tool-calling LLM family) + Functionary ──
+        // F-G11 2026-04-15: silver rows so these don't fall through to
+        // the bronze heuristic. XLaM ships its own envelope format;
+        // Functionary uses a distinct `<|function_call|>` preamble.
+        .init(family: "xlam", modelTypes: ["xlam"],
+              toolParser: "xlam", priority: 10),
+        .init(family: "functionary", modelTypes: ["functionary"],
+              toolParser: "functionary", priority: 10),
+
         // ── Nemotron ──
         .init(family: "nemotron", modelTypes: ["nemotron"],
               toolParser: "nemotron", reasoningParser: "deepseek_r1",
@@ -274,14 +290,24 @@ public enum ModelTypeTable {
               priority: 20),
 
         // ── IBM Granite ──
-        .init(family: "granite", modelTypes: ["granite", "granite_moe"],
+        .init(family: "granite",
+              modelTypes: ["granite", "granite_moe", "granitemoe"],
               toolParser: "granite", priority: 20),
+        .init(family: "granite_moe_hybrid",
+              modelTypes: ["granite_moe_hybrid", "granitemoehybrid"],
+              cacheType: "hybrid",
+              toolParser: "granite", priority: 5),
 
         // ── MiniMax ──
         .init(family: "minimax",
               modelTypes: ["minimax", "minimax_m2", "minimax_m2_5"],
               toolParser: "minimax", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 20),
+        .init(family: "kimi_k25",
+              modelTypes: ["kimi_k25", "deepseek_v2", "deepseek_v32"],
+              cacheType: "mla",
+              toolParser: "kimi", reasoningParser: "deepseek_r1",
+              priority: 10),
 
         // ── Kimi / Moonshot ──
         .init(family: "kimi", modelTypes: ["kimi_k2"],
@@ -289,10 +315,31 @@ public enum ModelTypeTable {
               priority: 20),
 
         // ── Misc LLMs ──
+        // Audit 2026-04-16: silver rows for families registered in
+        // LLMTypeRegistry but falling through to bronze heuristic with
+        // wrong defaults (no tool parser, maybe wrong cache policy).
+        .init(family: "smollm3", modelTypes: ["smollm3"], priority: 15),
+        .init(family: "nanochat", modelTypes: ["nanochat"], priority: 15),
+        .init(family: "afmoe", modelTypes: ["afmoe"], priority: 15),
+        .init(family: "bitnet", modelTypes: ["bitnet"], priority: 15),
+        .init(family: "llama4_text",
+              modelTypes: ["llama4_text"],
+              toolParser: "llama", priority: 5),
+        .init(family: "ernie4_5",
+              modelTypes: ["ernie4_5", "ernie4_5_moe"],
+              priority: 15),
+        .init(family: "exaone_moe",
+              modelTypes: ["exaone_moe"],
+              priority: 15),
         .init(family: "internlm",
               modelTypes: ["internlm", "internlm2", "internlm3"], priority: 20),
         .init(family: "exaone", modelTypes: ["exaone", "exaone3"], priority: 20),
-        .init(family: "olmo", modelTypes: ["olmo", "olmo2"], priority: 20),
+        .init(family: "olmo", modelTypes: ["olmo", "olmo2", "olmo3"], priority: 20),
+        // F-G12 2026-04-15: explicit silver rows for MoE variants.
+        .init(family: "olmoe", modelTypes: ["olmoe"],
+              priority: 10),
+        .init(family: "bailing_moe", modelTypes: ["bailing_moe"],
+              priority: 10),
         .init(family: "starcoder", modelTypes: ["starcoder2"], priority: 30),
         .init(family: "stablelm", modelTypes: ["stablelm"], priority: 30),
         .init(family: "baichuan", modelTypes: ["baichuan"], priority: 30),
@@ -331,6 +378,14 @@ public enum ModelTypeTable {
         // ── Hybrid SSM ──
         .init(family: "jamba", modelTypes: ["jamba"],
               cacheType: "hybrid", priority: 10),
+        .init(family: "baichuan_m1", modelTypes: ["baichuan_m1"],
+              cacheType: "hybrid", priority: 5),
+        .init(family: "mimo_v2_flash", modelTypes: ["mimo_v2_flash"],
+              cacheType: "hybrid", priority: 5),
+        .init(family: "lfm2", modelTypes: ["lfm2"],
+              cacheType: "hybrid", priority: 5),
+        .init(family: "lfm2_moe", modelTypes: ["lfm2_moe"],
+              cacheType: "hybrid", priority: 5),
     ]
 
     /// Look up the best matching entry for a given HF `model_type`. Among

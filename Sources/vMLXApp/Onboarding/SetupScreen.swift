@@ -157,20 +157,8 @@ struct SetupScreen: View {
                 Button(step == 0 ? "Get Started" : "Next") { step += 1 }
                     .buttonStyle(.borderedProminent)
             } else {
-                Button("Finish") {
-                    // If the user picked a model in step 2, auto-load it
-                    // into a fresh session and land them on Chat. This is
-                    // what first-launch users actually want — otherwise
-                    // they're dropped on an empty screen with no running
-                    // engine and have to re-click the model picker.
-                    if let picked = selected {
-                        let path = picked.canonicalPath
-                        app.mode = .chat
-                        Task { await app.chatViewModelRef?.startModel(at: path) }
-                    }
-                    app.markFirstLaunchComplete()
-                }
-                .buttonStyle(.borderedProminent)
+                Button("Finish") { app.markFirstLaunchComplete() }
+                    .buttonStyle(.borderedProminent)
             }
         }
         .padding(Theme.Spacing.lg)

@@ -23,6 +23,12 @@ public enum JSONLEncoder {
 
             var finishReason: String? = nil
             var lastUsage: StreamChunk.Usage? = nil
+            // Tool-call buffer: VS Code Copilot and Open WebUI read
+            // tool_calls ONLY from the final done:true chunk with
+            // done_reason="tool_calls". Inline tool_calls on delta chunks
+            // are ignored by those clients. Mirrors the stateful wrapper
+            // from vmlx_engine/api/ollama_adapter.py added in v1.3.50.
+            var toolCallBuffer: [[String: Any]] = []
 
             do {
                 for try await chunk in upstream {
@@ -31,7 +37,7 @@ public enum JSONLEncoder {
                         message["thinking"] = reasoning
                     }
                     if let tcs = chunk.toolCalls, !tcs.isEmpty {
-                        message["tool_calls"] = tcs.map { tc -> [String: Any] in
+                        let encoded = tcs.map { tc -> [String: Any] in
                             let args = Self.parseJSONObject(tc.function.arguments) ?? [:]
                             return [
                                 "function": [
@@ -40,6 +46,10 @@ public enum JSONLEncoder {
                                 ] as [String: Any]
                             ]
                         }
+                        // Keep delta emission for clients that read inline,
+                        // AND buffer for the final chunk.
+                        message["tool_calls"] = encoded
+                        toolCallBuffer.append(contentsOf: encoded)
                     }
                     let obj: [String: Any] = [
                         "model": model,
@@ -63,12 +73,21 @@ public enum JSONLEncoder {
                 return
             }
 
+            // Final chunk: splice buffered tool_calls into message and
+            // upgrade done_reason to "tool_calls" when any were seen.
+            // This is the shape Copilot/Open WebUI dispatch on.
+            var finalMessage: [String: Any] = ["role": "assistant", "content": ""]
+            var doneReason = finishReason ?? "stop"
+            if !toolCallBuffer.isEmpty {
+                finalMessage["tool_calls"] = toolCallBuffer
+                doneReason = "tool_calls"
+            }
             var finalObj: [String: Any] = [
                 "model": model,
                 "created_at": createdAt,
-                "message": ["role": "assistant", "content": ""] as [String: Any],
+                "message": finalMessage,
                 "done": true,
-                "done_reason": finishReason ?? "stop",
+                "done_reason": doneReason,
             ]
             if let u = lastUsage {
                 finalObj["prompt_eval_count"] = u.promptTokens

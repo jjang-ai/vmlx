@@ -82,6 +82,9 @@ public final class FlashMoEBlock: Module, UnaryLayer {
         let scoresFlat = scores.reshaped([T, K])
 
         // 3. Collect unique expert IDs and parallel-load.
+        // Audit 2026-04-16 Gemma 4 perf fix: single eval barrier instead
+        // of T×K per-index .item() GPU flushes.
+        let flatInds = indsFlat.asArray(Int32.self)
         var unique = Set<Int>()
         var indsPerToken: [[Int]] = []
         indsPerToken.reserveCapacity(T)
@@ -89,7 +92,7 @@ public final class FlashMoEBlock: Module, UnaryLayer {
             var row: [Int] = []
             row.reserveCapacity(K)
             for k in 0..<K {
-                let e = Int(indsFlat[t, k].item(Int32.self))
+                let e = Int(flatInds[t * K + k])
                 row.append(e)
                 unique.insert(e)
             }

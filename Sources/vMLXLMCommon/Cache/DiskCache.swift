@@ -65,15 +65,21 @@ public final class DiskCache: @unchecked Sendable {
         // Enable WAL mode for better concurrent read performance
         executeSQL("PRAGMA journal_mode=WAL")
 
-        // Create the index table
+        // Create the index table. `last_accessed_at` drives true LRU
+        // eviction — bumped on every hit so frequently-used prompts
+        // survive even when their file is older than newer unused
+        // entries. Audit 2026-04-16 replaces FIFO-by-created_at.
         executeSQL("""
             CREATE TABLE IF NOT EXISTS cache_entries (
                 hash TEXT PRIMARY KEY,
                 token_count INTEGER,
                 file_size INTEGER,
-                created_at REAL DEFAULT (julianday('now'))
+                created_at REAL DEFAULT (julianday('now')),
+                last_accessed_at REAL DEFAULT (julianday('now'))
             )
             """)
+        // Migration for pre-existing DBs that lack the column.
+        executeSQL("ALTER TABLE cache_entries ADD COLUMN last_accessed_at REAL DEFAULT (julianday('now'))")
     }
 
     deinit {
@@ -164,7 +170,13 @@ public final class DiskCache: @unchecked Sendable {
 
         do {
             let (arrays, _) = try loadArraysAndMetadata(url: url)
-            lock.withLock { hits += 1 }
+            lock.withLock {
+                hits += 1
+                // Bump last_accessed_at so this entry moves to the end
+                // of the eviction queue. True LRU — frequently-replayed
+                // prompts never get evicted by newer idle entries.
+                bumpAccessTime(hash: hash)
+            }
             return arrays
         } catch {
             // A failed deserialize is almost always a corrupt safetensors
@@ -273,9 +285,18 @@ public final class DiskCache: @unchecked Sendable {
     private func insertEntry(hash: String, tokenCount: Int, fileSize: Int) {
         guard let db else { return }
 
+        // UPSERT: on conflict, preserve `created_at` (entry's first-seen
+        // timestamp) and bump `last_accessed_at` so true LRU works. Plain
+        // INSERT OR REPLACE would reset both columns via DEFAULT, making
+        // the LRU-on-hit bump pointless because the next store overwrites
+        // it. Audit 2026-04-16.
         let sql = """
-            INSERT OR REPLACE INTO cache_entries (hash, token_count, file_size)
+            INSERT INTO cache_entries (hash, token_count, file_size)
             VALUES (?, ?, ?)
+            ON CONFLICT(hash) DO UPDATE SET
+                token_count = excluded.token_count,
+                file_size = excluded.file_size,
+                last_accessed_at = julianday('now')
             """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -284,6 +305,23 @@ public final class DiskCache: @unchecked Sendable {
             sqlite3_bind_text(stmt, 1, cStr, -1, nil)
             sqlite3_bind_int64(stmt, 2, Int64(tokenCount))
             sqlite3_bind_int64(stmt, 3, Int64(fileSize))
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    /// Bump `last_accessed_at` to the current time for a given entry.
+    /// Called on every hit so true-LRU eviction moves freshly-used
+    /// prompts to the end of the eviction queue. Runs under the shared
+    /// SQLite lock; caller is responsible for `lock.withLock {…}`.
+    /// Audit 2026-04-16.
+    private func bumpAccessTime(hash: String) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        let sql = "UPDATE cache_entries SET last_accessed_at = julianday('now') WHERE hash = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        hash.withCString { cStr in
+            sqlite3_bind_text(stmt, 1, cStr, -1, nil)
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
@@ -310,7 +348,9 @@ public final class DiskCache: @unchecked Sendable {
         var accumulated: Int64 = 0
         let excess = totalSize - Int64(maxSizeBytes)
 
-        if sqlite3_prepare_v2(db, "SELECT hash, file_size FROM cache_entries ORDER BY created_at ASC", -1, &stmt, nil) == SQLITE_OK {
+        // True LRU: evict oldest ACCESSED first so hot prompts survive
+        // even when they were created earlier than a cold recent load.
+        if sqlite3_prepare_v2(db, "SELECT hash, file_size FROM cache_entries ORDER BY last_accessed_at ASC", -1, &stmt, nil) == SQLITE_OK {
             while sqlite3_step(stmt) == SQLITE_ROW, accumulated < excess {
                 if let cStr = sqlite3_column_text(stmt, 0) {
                     let hash = String(cString: cStr)

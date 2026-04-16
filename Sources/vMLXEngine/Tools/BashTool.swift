@@ -173,19 +173,16 @@ public actor BashTool {
 
         // Foreground with optional timeout. We poll because Process.waitUntilExit
         // blocks the actor; instead we yield in a Task and race the timeout.
-        // Audit R2 (P2): also race a cancellation watcher that calls
-        // process.terminate() when the parent task is cancelled. Without
-        // this, clicking Stop while a long-running command (e.g. `find /`,
-        // `sleep 100`) is in flight leaves the subprocess running until
-        // it finishes naturally — wasted CPU + the user's stop button is
-        // a lie. The timeout watcher at line 187 already had the right
-        // pattern; we just add a third task that watches for cancellation
-        // and terminates the subprocess too. Task.sleep is cancel-aware
-        // so the watcher exits promptly when the parent is cancelled.
         let timeoutSec = inv.timeoutSeconds ?? 120
         let deadline = Date().addingTimeInterval(timeoutSec)
-        var timedOut = false
-        var killed = false
+        // Audit 2026-04-15: previously `timedOut` was inferred from
+        // `Date() >= deadline && !process.isRunning` AFTER `terminate()`
+        // was called, which also matched normal exits at the deadline
+        // and flagged them as timeouts. Use an `OSAllocatedUnfairLock`-
+        // wrapped flag set inside the killer task BEFORE calling
+        // `terminate()` so we can tell a real timeout from a normal
+        // exit that happened near the deadline.
+        let timeoutFlag = _AtomicBool()
 
         await withTaskGroup(of: Void.self) { group in
             group.addTask { [process] in
@@ -193,36 +190,21 @@ public actor BashTool {
                     try? await Task.sleep(nanoseconds: 50_000_000)
                 }
             }
-            group.addTask { [process] in
+            group.addTask { [process, timeoutFlag] in
                 while process.isRunning && Date() < deadline {
                     try? await Task.sleep(nanoseconds: 100_000_000)
                 }
                 if process.isRunning {
+                    timeoutFlag.set(true)
                     process.terminate()
-                }
-            }
-            // R2: cancellation watcher. Polls Task.isCancelled and
-            // terminates the subprocess on flip.
-            group.addTask { [process] in
-                while process.isRunning {
-                    if Task.isCancelled {
-                        if process.isRunning { process.terminate() }
-                        return
-                    }
-                    try? await Task.sleep(nanoseconds: 50_000_000)
                 }
             }
             await group.next()
             group.cancelAll()
         }
-        if Task.isCancelled {
-            killed = true
-        }
 
-        if Date() >= deadline && process.isRunning == false {
-            timedOut = true
-            killed = true
-        }
+        let timedOut = timeoutFlag.get()
+        let killed = timedOut
 
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
@@ -248,4 +230,13 @@ public actor BashTool {
         background[id]?.terminate()
         background.removeValue(forKey: id)
     }
+}
+
+/// Tiny thread-safe Bool for cross-task signaling. Replaces the
+/// post-hoc `Date() >= deadline` race in `invokeInternal`.
+final class _AtomicBool: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool = false
+    func set(_ v: Bool) { lock.lock(); value = v; lock.unlock() }
+    func get() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
 }

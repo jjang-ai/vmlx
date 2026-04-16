@@ -53,6 +53,35 @@ public func loadWeights(
                 if url.lastPathComponent == "jangtq_runtime.safetensors" {
                     continue
                 }
+                // Defensive pre-check: Cloudflare / HuggingFace sometimes return
+                // an HTML error page instead of the LFS blob when the download
+                // rate-limits or auth fails. The resulting "shard" is a few
+                // hundred bytes of `<!DOCTYPE HTML>...`, which MLX rejects with
+                // the opaque "Invalid json header length" error. Catch this
+                // specific mode here and surface a user-actionable message.
+                // Live-triggered by MiniMax-M2.7-JANGTQ-CRACK shards 01 + 61
+                // on 2026-04-16 (partial download — the HTML error pages were
+                // saved instead of the real 1 GB LFS blobs).
+                let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+                let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+                if size > 0 && size < 10_000 {
+                    let head: Data? = {
+                        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+                        defer { try? handle.close() }
+                        return handle.readData(ofLength: 32)
+                    }()
+                    if let h = head,
+                       let s = String(data: h, encoding: .utf8)?.lowercased(),
+                       s.hasPrefix("<!doctype html") || s.hasPrefix("<html")
+                    {
+                        throw JangLoaderError.loadFailed(
+                            "Shard \(url.lastPathComponent) is a \(size)-byte HTML "
+                          + "error page, not a safetensors blob. The download "
+                          + "from HuggingFace failed — re-fetch this file. "
+                          + "(Common cause: Cloudflare / auth returned HTML "
+                          + "when the LFS blob request was rate-limited.)")
+                    }
+                }
                 let (w, m) = try loadArraysAndMetadata(url: url)
                 for (key, value) in w {
                     weights[key] = value
@@ -71,7 +100,12 @@ public func loadWeights(
     // layout. No-op for non-MXTQ JANG models.
     if let jangConfig, !isJANGTQNative {
         do {
-            _ = try dequantizeJangMXTQ(weights: &weights, jangConfig: jangConfig)
+            _ = try dequantizeJangMXTQ(
+                weights: &weights,
+                jangConfig: jangConfig,
+                mxtqSeed: jangConfig.mxtqSeed ?? 42,
+                mxtqBits: jangConfig.mxtqBits
+            )
         } catch {
             print("[loadWeights] MXTQ dequant failed: \(error)")
             throw error
