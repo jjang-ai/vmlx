@@ -4,12 +4,13 @@ import vMLXTheme
 
 /// UI model for one server session shown in the dashboard. Mirrors the
 /// Electron `Session` interface (`sessions/SessionCard.tsx:5-22`) with only
-/// the fields the Swift Server screen currently renders. Additional fields
-/// (remoteUrl, type=remote, config JSON) land when multi-engine arrives.
+/// the fields the Swift Server screen currently renders.
 ///
-/// Phase 3 note: `state` is currently a mirror of the single global
-/// `AppState.engineState` for the one-and-only active session. When
-/// multi-process lands, each Session will have its own live state feed.
+/// `state` + `loadProgress` are fed by `AppState.observePerSessionEngine(_:engine:)`
+/// — a long-lived subscription to THIS session's own `Engine.subscribeState()`,
+/// keyed by session id in `AppState.perSessionStateObservers`. Each Session
+/// card reflects its own engine's lifecycle independently of which session
+/// is currently selected in the UI.
 struct Session: Identifiable, Equatable {
     let id: UUID
     var displayName: String
@@ -48,8 +49,11 @@ struct Session: Identifiable, Equatable {
 
 /// Top-level Server screen dashboard — lists all sessions grouped by
 /// Running / Inactive, with a "+" button that opens the model picker to
-/// create a new session. Single-session is the current reality; the data
-/// model is multi-session-ready so phase 4 can flip it on without a rewrite.
+/// create a new session. Multi-session: each row in `app.sessions` has
+/// its own `Engine` actor (`AppState.engines[UUID]`) and its own state
+/// observer (`AppState.perSessionStateObservers[UUID]`), so background
+/// engines keep their `state` up to date even when another session is
+/// selected in the UI.
 struct SessionDashboard: View {
     @Environment(AppState.self) private var app
     @Binding var selection: UUID?

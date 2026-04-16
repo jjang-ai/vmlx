@@ -135,6 +135,15 @@ final class AppState {
     /// created engines are automatically bound to `HuggingFaceAuth.shared`
     /// so gated-repo downloads triggered from that session pick up the
     /// user's stored HF token without any extra plumbing.
+    ///
+    /// Phase 4 multi-engine: every newly-created engine also gets a
+    /// long-lived state observer keyed by session id, so each `Session`
+    /// row in `sessions` reflects ITS OWN engine's load / running /
+    /// standby / error state — not a mirror of whichever engine is
+    /// currently selected. Without this, a background engine's state
+    /// change (e.g. idle auto-sleep) never reaches its card in
+    /// SessionDashboard because the global `engineObserver` only
+    /// subscribes to `self.engine` (the selected one).
     func engine(for id: UUID) -> Engine {
         if let e = engines[id] { return e }
         let fresh = Engine()
@@ -152,7 +161,45 @@ final class AppState {
             guard let self else { return }
             await self.forwardDownloadEvents(from: dm)
         }
+        observePerSessionEngine(id, engine: fresh)
         return fresh
+    }
+
+    /// Per-session engine state observers. Keyed by session id, NOT by
+    /// the currently-selected session, so background sessions still
+    /// have their `Session.state` kept in sync with their engine's
+    /// lifecycle. Replaces the Phase-3 single-mirror model where only
+    /// the selected engine's state was observed.
+    private var perSessionStateObservers: [UUID: Task<Void, Never>] = [:]
+
+    /// Start a long-lived subscription to `engine.subscribeState()` and
+    /// mirror each state event into the matching `sessions[idx].state`
+    /// and `.loadProgress`. Cancels any prior observer for this id so
+    /// calling `engine(for:)` on an existing id is a no-op.
+    func observePerSessionEngine(_ id: UUID, engine: Engine) {
+        perSessionStateObservers[id]?.cancel()
+        perSessionStateObservers[id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await next in await engine.subscribeState() {
+                if Task.isCancelled { break }
+                guard let idx = self.sessions.firstIndex(where: { $0.id == id })
+                else { continue }
+                self.sessions[idx].state = next
+                if case .loading(let p) = next {
+                    self.sessions[idx].loadProgress = p
+                } else {
+                    self.sessions[idx].loadProgress = nil
+                }
+            }
+        }
+    }
+
+    /// Cancel the per-session state observer for a removed session.
+    /// Called from session-delete paths in `SessionDashboard` so we
+    /// don't leak observer tasks after the Engine actor is dropped.
+    func stopObservingPerSessionEngine(_ id: UUID) {
+        perSessionStateObservers[id]?.cancel()
+        perSessionStateObservers.removeValue(forKey: id)
     }
 
     /// Pipes events from a per-engine DownloadManager into the shared
@@ -215,7 +262,10 @@ final class AppState {
     }
 
     /// Tear down a per-session engine (called from SessionDashboard delete).
+    /// Cancels the per-session state observer first so we don't leak a
+    /// Task writing into a removed session's array slot.
     func removeEngine(for id: UUID) {
+        stopObservingPerSessionEngine(id)
         if let e = engines.removeValue(forKey: id) {
             Task { await e.stop() }
         }
@@ -252,8 +302,13 @@ final class AppState {
     /// Server-screen session list. Mirrors the Electron `sessions` IPC feed
     /// (`SessionsContext.tsx`). Each entry is a running *or* inactive model
     /// session with its per-session settings blob (port, model path, etc).
-    /// Phase 3 wires this to SettingsStore + the live engine state of the
-    /// single active session; multi-process multi-engine support lands later.
+    ///
+    /// Each row's `state` / `loadProgress` is maintained by a dedicated
+    /// per-session observer spawned in `engine(for:)` — see
+    /// `perSessionStateObservers` and `observePerSessionEngine(_:engine:)`.
+    /// Multiple engines coexist concurrently; the global `engineState` /
+    /// `loadProgress` pair tracks only the CURRENTLY-SELECTED session
+    /// (driven by `rebindEngineObserver`).
     var sessions: [Session] = []
     /// The session the ServerScreen is currently focused on. Initially the
     /// only active session (if any); SessionDashboard drives this.
