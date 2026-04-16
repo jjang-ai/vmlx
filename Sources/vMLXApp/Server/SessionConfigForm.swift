@@ -447,36 +447,40 @@ struct SessionConfigForm: View {
 
     @ViewBuilder
     private var advancedSection: some View {
-        // Smelt — sub-controls hidden when off. Audit 2026-04-15 finding #4.
-        // NOTE: Smelt is not yet wired in the Swift engine (Python-only).
-        // The engine logs a one-shot warning per request when the flag is
-        // on so users aren't silently no-opped. See `EngineDFlash.swift`
-        // / `StreamDFlash.swift` for the integrated DFlash replacement.
-        toggleRow("Smelt mode (Python engine only)",
-                  boolBinding(\.smelt, default: globalDefaults.smelt))
-        if (s.smelt ?? globalDefaults.smelt) {
-            textFieldRow("Smelt variant",
-                         placeholder: globalDefaults.smeltMode,
-                         value: Binding(
-                            get: { s.smeltMode ?? "" },
-                            set: { s.smeltMode = $0.isEmpty ? nil : $0; commit() }
-                         ))
-        }
+        // Smelt toggle REMOVED from the UI (2026-04-15 post-UX-audit).
+        // The Swift engine has no partial-expert-loader consumer yet and
+        // the toggle was a foot-gun: users flipped it on, got no behavior
+        // change, and only saw a one-shot log warning buried in the log
+        // panel. The GlobalSettings.smelt field + per-request warning in
+        // Stream.swift remain so the setting round-trips cleanly with
+        // Python-engine configs, but the UI is hidden until the Swift
+        // load path actually implements partial expert loading.
 
         // JANG-DFlash speculative decoding — block diffusion drafter +
         // DDTree beam. Targets: MiniMax, Mistral 4, DeepSeek V3.
         // `dflashDrafterPath` must point at a compatible safetensors
         // checkpoint; when unset the engine falls back to the standard
         // token iterator silently (and logs why in the stream log).
+        // DFlash can't be enabled without a drafter path — the engine silently
+        // falls back to the standard token iterator if we skip this guard, and
+        // users end up wondering why "DFlash on" doesn't change anything. The
+        // drafter-path field is rendered BEFORE the toggle (and unconditionally)
+        // so users have somewhere to put the path before they can flip DFlash on.
+        textFieldRow("DFlash drafter path",
+                     placeholder: globalDefaults.dflashDrafterPath,
+                     value: Binding(
+                        get: { s.dflashDrafterPath ?? "" },
+                        set: { s.dflashDrafterPath = $0.isEmpty ? nil : $0; commit() }
+                     ))
+        let dflashDrafterResolved = (s.dflashDrafterPath ?? globalDefaults.dflashDrafterPath)
+        let dflashCanToggle = !dflashDrafterResolved.trimmingCharacters(in: .whitespaces).isEmpty
         toggleRow("DFlash speculative decoding",
                   boolBinding(\.dflash, default: globalDefaults.dflash))
+            .disabled(!dflashCanToggle)
+            .help(dflashCanToggle
+                  ? "Enable JANG-DFlash block-diffusion speculative decoding."
+                  : "Set a DFlash drafter checkpoint path first — the toggle has no effect without one.")
         if (s.dflash ?? globalDefaults.dflash) {
-            textFieldRow("DFlash drafter path",
-                         placeholder: globalDefaults.dflashDrafterPath,
-                         value: Binding(
-                            get: { s.dflashDrafterPath ?? "" },
-                            set: { s.dflashDrafterPath = $0.isEmpty ? nil : $0; commit() }
-                         ))
             ValidatedField(title: "DFlash block size",
                            value: intBinding(\.dflashBlockSize, default: globalDefaults.dflashBlockSize),
                            range: 1...64, step: 1)

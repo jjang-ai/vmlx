@@ -244,43 +244,53 @@ public final class FlashMoEExpertLoader: @unchecked Sendable {
         // MLX.Swift exposes `MLXArray(bytes:shape:dtype:)`-style initializers
         // through Data conversion helpers — we follow the same pattern as
         // JangMXTQDequant's raw-bytes loader.
+        // Explicit intermediate typed arrays: under the xcodebuild
+        // Swift compiler, the overload resolution for
+        // `MLXArray(Array(ptr), shape)` picks the wrong init and fails
+        // with "cannot convert Array<Float16> to [Int]". Annotating each
+        // intermediate as the element array forces the typed generic
+        // init. SwiftPM was tolerating this under looser inference.
         switch dtype {
         case "F16":
             let arr = data.withUnsafeBytes { raw -> MLXArray in
                 let ptr = raw.bindMemory(to: Float16.self)
-                return MLXArray(Array(ptr), shape)
+                let values: [Float16] = Array(ptr)
+                return MLXArray(values, shape)
             }
             return arr
         case "BF16":
-            // Reinterpret as Float16 storage, then convert dtype to bfloat16
-            // after construction — MLX preserves the raw 2-byte layout.
             let arr = data.withUnsafeBytes { raw -> MLXArray in
                 let ptr = raw.bindMemory(to: Float16.self)
-                return MLXArray(Array(ptr), shape)
+                let values: [Float16] = Array(ptr)
+                return MLXArray(values, shape)
             }
-            return arr.asType(.bfloat16)
+            return arr.asType(DType.bfloat16)
         case "F32":
             let arr = data.withUnsafeBytes { raw -> MLXArray in
                 let ptr = raw.bindMemory(to: Float.self)
-                return MLXArray(Array(ptr), shape)
+                let values: [Float] = Array(ptr)
+                return MLXArray(values, shape)
             }
             return arr
         case "U32":
             let arr = data.withUnsafeBytes { raw -> MLXArray in
                 let ptr = raw.bindMemory(to: UInt32.self)
-                return MLXArray(Array(ptr), shape)
+                let values: [UInt32] = Array(ptr)
+                return MLXArray(values, shape)
             }
             return arr
         case "I32":
             let arr = data.withUnsafeBytes { raw -> MLXArray in
                 let ptr = raw.bindMemory(to: Int32.self)
-                return MLXArray(Array(ptr), shape)
+                let values: [Int32] = Array(ptr)
+                return MLXArray(values, shape)
             }
             return arr
         case "U8":
             let arr = data.withUnsafeBytes { raw -> MLXArray in
                 let ptr = raw.bindMemory(to: UInt8.self)
-                return MLXArray(Array(ptr), shape)
+                let values: [UInt8] = Array(ptr)
+                return MLXArray(values, shape)
             }
             return arr
         default:

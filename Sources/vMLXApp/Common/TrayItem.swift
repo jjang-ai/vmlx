@@ -774,7 +774,15 @@ struct TrayItem: View {
     // MARK: - State-derived flags / strings
 
     private var modelName: String {
-        app.selectedModelPath?.lastPathComponent ?? "(no model)"
+        if let p = app.selectedModelPath { return p.lastPathComponent }
+        // Fall back to the first running session's model path — users who
+        // load models via the Server tab (not the global selector) leave
+        // `selectedModelPath` nil, so the tray used to read "(no model)"
+        // while something was actively streaming.
+        if let running = app.sessions.first(where: { $0.isRunning }) {
+            return running.modelPath.lastPathComponent
+        }
+        return "(no model)"
     }
 
     private var stateLabel: String {
