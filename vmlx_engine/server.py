@@ -1126,12 +1126,26 @@ def _normalize_model_name(model_name: str) -> str:
         "~/.mlxstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
         → "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
+        HF cache paths (walk up past snapshots/<hash>):
+        "~/.cache/huggingface/hub/models--JANGQ-AI--Gemma-4-26B-A4B-it-JANG_2L/snapshots/695690b3…"
+        → "JANGQ-AI/Gemma-4-26B-A4B-it-JANG_2L"
+
         "mlx-community/Llama-3.2-3B-Instruct-4bit"
         → "mlx-community/Llama-3.2-3B-Instruct-4bit" (unchanged)
     """
     if os.path.sep in model_name or model_name.startswith("/"):
-        # Local path — extract last two components as "org/model"
         parts = model_name.rstrip("/").split("/")
+        # HuggingFace hub cache layout: .../hub/models--<org>--<repo>/snapshots/<hash>[/...]
+        # When loaded from there, raw path tail is "snapshots/<hash>" which is
+        # useless as a display name. Walk up to find the "models--..." marker
+        # and decode it back to "org/repo".
+        for part in parts:
+            if part.startswith("models--") and "--" in part[len("models--"):]:
+                marker = part[len("models--"):]
+                # HF uses double-dash as separator between org and repo segments.
+                seg = marker.split("--", 1)
+                if len(seg) == 2 and seg[0] and seg[1]:
+                    return f"{seg[0]}/{seg[1]}"
         if len(parts) >= 2:
             return f"{parts[-2]}/{parts[-1]}"
         return parts[-1]
