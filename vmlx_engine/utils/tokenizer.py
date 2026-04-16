@@ -118,6 +118,7 @@ _STANDARD_ARCHITECTURES = {
     # Qwen
     "qwen3_5",
     "qwen3_5_moe",
+    "qwen3_5_moe_text",  # Qwen3.6-35B-A3B inner text_config.model_type
     "qwen3",
     "qwen3_moe",
     "qwen3_vl",

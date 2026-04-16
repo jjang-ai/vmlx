@@ -217,6 +217,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Qwen family ──
   'qwen3_5': 'qwen3.5',
   'qwen3_5_moe': 'qwen3.5-moe',
+  'qwen3_5_moe_text': 'qwen3.5-moe', // Qwen3.6-35B-A3B inner text_config model_type
   'qwen3': 'qwen3',
   'qwen3_next': 'qwen3-next',
   'qwen3_moe': 'qwen3-moe',

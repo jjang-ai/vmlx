@@ -107,7 +107,11 @@ def register_all(registry=None):
     _register(
         ModelConfig(
             family_name="qwen3_5_moe",
-            model_types=["qwen3_5_moe"],
+            # qwen3_5_moe_text is the inner text_config.model_type for Qwen3.6-35B-A3B
+            # (VLM wrapper: architectures=Qwen3_5MoeForConditionalGeneration). Without
+            # registering it, the text_config disambiguator in the registry misses it
+            # and falls back to default — no reasoning parser, no tool parser.
+            model_types=["qwen3_5_moe", "qwen3_5_moe_text"],
             cache_type="kv",
             eos_tokens=["<|im_end|>"],
             tool_parser="qwen",

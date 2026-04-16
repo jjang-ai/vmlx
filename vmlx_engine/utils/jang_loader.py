@@ -1160,21 +1160,67 @@ def _load_jang_v2_vlm(
         del data
         gc.collect()
 
+    # MXTQ detection: check first shard for tq_packed keys (JANGTQ VLM support).
+    # JANGTQ emits {"version":2, "weight_format":"mxtq"} and stores weights as
+    # `.tq_packed` + `.tq_norms` triplets instead of affine `.scales` + `.biases`.
+    # Text loader at line ~730 has two paths: (a) fast path via jang_tools (mlx_lm
+    # only, no vision tower), (b) dequant+requant fallback. VLM wrapper MUST go
+    # through the fallback because jang_tools.load_jangtq doesn't build a vision
+    # tower. Without this detection, quantized_suffixes stays empty, nn.quantize
+    # doesn't quantize anything, weights load as zeros, and the first SSM layer
+    # crashes with `[reshape] Cannot infer the shape of an empty array` (Qwen 3.6
+    # JANGTQ_2L / Qwen3.5-VL-*-JANGTQ* path).
+    _vlm_is_mxtq = any(k.endswith(".tq_packed") for k in all_weight_keys)
+    _vlm_mxtq_seed = jang_cfg.get("mxtq_seed", 42)
+    _vlm_mxtq_bits_map = jang_cfg.get("mxtq_bits", {})
+    if _vlm_is_mxtq:
+        # Live-verified 2026-04-16 on Qwen3.6-35B-A3B-JANGTQ_2L: dequant+requant
+        # (2-bit MXTQ codebook → 2-bit affine scales/biases) loses too much
+        # information for VLM quality. Output degenerates to gibberish while
+        # the regular JANG_2L (non-TQ) variant of the same model works cleanly
+        # through the standard affine quant path.
+        #
+        # The correct fix is to plumb `jang_tools.load_jangtq` (P3/P15/P17/P18
+        # Metal kernels, no dequant) through the VLM wrapper so TurboQuantLinear
+        # / TurboQuantSwitchLinear modules replace the language_model experts
+        # while the vision tower stays standard-affine. That's a non-trivial
+        # refactor (load_jangtq_model in jang_tools is currently mlx_lm-only).
+        #
+        # Until that lands, refuse the load with a clear recovery path rather
+        # than silently producing garbage output.
+        raise NotImplementedError(
+            "JANGTQ (weight_format=mxtq) with VLM wrapper is not yet supported. "
+            "The lossy dequant→requant fallback degrades VLM output too much.\n"
+            "\n"
+            "For now, use the regular JANG variant of this model (e.g. "
+            "Qwen3.6-35B-A3B-JANG_2L instead of Qwen3.6-35B-A3B-JANGTQ_2L). "
+            "The non-TQ JANG variant runs through the standard affine-quant "
+            "path and produces correct output.\n"
+            "\n"
+            "Tracking: JANGTQ+VL fast path integration."
+        )
+
     # Build set of quantized module paths from weight keys
     # Weight keys (safetensors): model.language_model.layers.0.mlp.gate_proj.scales
     # Module paths (nn.quantize): language_model.model.layers.0.mlp.gate_proj
     # These don't match — build a suffix set for robust matching
     quantized_suffixes = set()
     for k in all_weight_keys:
+        _qpath = None
         if k.endswith(".scales"):
-            qpath = k[: -len(".scales")]
-            quantized_suffixes.add(qpath)
+            _qpath = k[: -len(".scales")]
+        elif _vlm_is_mxtq and k.endswith(".tq_packed"):
+            # MXTQ: the `base` of tq_packed/tq_norms becomes the quantized module
+            # suffix once we dequant+requant below into scales/biases.
+            _qpath = k[: -len(".tq_packed")]
+        if _qpath is not None:
+            quantized_suffixes.add(_qpath)
             # Also add sanitize-remapped paths so nn.quantize() can match
             # module paths that differ from raw weight keys (e.g., Gemma 4
             # JANG uses switch_mlp.* but model expects experts.switch_glu.*)
-            if ".switch_mlp." in qpath:
+            if ".switch_mlp." in _qpath:
                 quantized_suffixes.add(
-                    qpath.replace(".switch_mlp.", ".experts.switch_glu.")
+                    _qpath.replace(".switch_mlp.", ".experts.switch_glu.")
                 )
 
     quantization = {"group_size": block_size, "bits": default_bits}
@@ -1227,6 +1273,127 @@ def _load_jang_v2_vlm(
         shard_weights = {
             k: v for k, v in shard_weights.items() if not k.endswith(".importance")
         }
+        # MXTQ dequant+requant for VLM path. Mirrors _load_jang_v2 text
+        # loader at line ~745. Detect .tq_packed + .tq_norms pairs, dequant
+        # to fp16 via codebook+hadamard math, then re-quantize to affine
+        # uint32 / scales / biases so QuantizedLinear modules accept them.
+        # Per-expert 2D tensors are stored individually — sanitize() stacks
+        # them later. Fixes Qwen 3.6 JANGTQ+VL empty-tensor crash.
+        if _vlm_is_mxtq:
+            tq_groups = {}
+            regular = {}
+            for k, v in shard_weights.items():
+                if k.endswith(".tq_packed"):
+                    tq_groups.setdefault(k[:-10], {})["packed"] = v
+                elif k.endswith(".tq_norms"):
+                    tq_groups.setdefault(k[:-9], {})["norms"] = v
+                elif k.endswith(".tq_bits"):
+                    pass
+                else:
+                    regular[k] = v
+
+            if tq_groups:
+                try:
+                    from jang_tools.turboquant.codebook import compute_codebook
+                    from jang_tools.turboquant.rotation import (
+                        generate_random_signs,
+                        hadamard_inverse,
+                    )
+                    from jang_tools.turboquant.pipeline import unpack_bits
+
+                    _tq_count = 0
+                    _q_bits = default_bits
+                    _q_gs = block_size
+                    for base, parts in tq_groups.items():
+                        if "packed" not in parts or "norms" not in parts:
+                            continue
+                        packed = parts["packed"]
+                        norms = parts["norms"]
+                        bl = base.lower()
+                        if "shared_expert" in bl:
+                            bits = _vlm_mxtq_bits_map.get("shared_expert", 3)
+                        elif "expert" in bl:
+                            bits = _vlm_mxtq_bits_map.get("routed_expert", 2)
+                        else:
+                            bits = 2
+                        vals_per_u32 = 32 // bits
+                        # VLM JANGTQ writers stack MoE experts as 3D tensors
+                        # (num_experts, out_feat, packed_cols). Text loader assumed
+                        # 2D per-expert keys; for VLM we must dequant+requant per
+                        # expert and stack back to 3D so downstream sanitize() can
+                        # feed SwitchGLU.
+                        is_3d = packed.ndim == 3
+                        if is_3d:
+                            num_experts, out_feat, packed_cols = packed.shape
+                        else:
+                            out_feat, packed_cols = packed.shape
+                        in_features = packed_cols * vals_per_u32
+                        cb = mx.array(compute_codebook(in_features, bits))
+                        signs = mx.array(
+                            generate_random_signs(in_features, _vlm_mxtq_seed)
+                        )
+
+                        def _dequant_2d(packed_2d, norms_1d):
+                            rows = []
+                            for r in range(packed_2d.shape[0]):
+                                idx = unpack_bits(packed_2d[r], bits, in_features)
+                                row = mx.take(cb, idx.astype(mx.uint32))
+                                rows.append(row)
+                            w_ = mx.stack(rows)
+                            w_ = w_ * norms_1d[:, None].astype(w_.dtype)
+                            return hadamard_inverse(w_, signs).astype(mx.float16)
+
+                        if is_3d:
+                            # Batch all experts: build lazy ops per expert and
+                            # stack results before ONE mx.eval. Per-expert
+                            # mx.eval kills lazy fusion and makes load
+                            # ~sequential — see _load_jang_v2 text path which
+                            # also avoids per-row eval.
+                            per_expert_qw = []
+                            per_expert_qs = []
+                            per_expert_qb = []
+                            for e in range(num_experts):
+                                dq_e = _dequant_2d(packed[e], norms[e])
+                                qw_e, qs_e, qb_e = mx.quantize(
+                                    dq_e, group_size=_q_gs, bits=_q_bits
+                                )
+                                per_expert_qw.append(qw_e)
+                                per_expert_qs.append(qs_e)
+                                per_expert_qb.append(qb_e)
+                            stacked_w = mx.stack(per_expert_qw)
+                            stacked_s = mx.stack(per_expert_qs)
+                            stacked_b = mx.stack(per_expert_qb)
+                            mx.eval(stacked_w, stacked_s, stacked_b)
+                            regular[f"{base}.weight"] = stacked_w
+                            regular[f"{base}.scales"] = stacked_s
+                            regular[f"{base}.biases"] = stacked_b
+                            del per_expert_qw, per_expert_qs, per_expert_qb
+                        else:
+                            dq = _dequant_2d(packed, norms)
+                            mx.eval(dq)
+                            q_w, q_s, q_b = mx.quantize(
+                                dq, group_size=_q_gs, bits=_q_bits
+                            )
+                            mx.eval(q_w, q_s, q_b)
+                            regular[f"{base}.weight"] = q_w
+                            regular[f"{base}.scales"] = q_s
+                            regular[f"{base}.biases"] = q_b
+                            del dq
+                        _tq_count += 1
+
+                    if _tq_count > 0:
+                        logger.info(
+                            f"  Dequanted+requanted {_tq_count} MXTQ VLM tensors in shard {sf.name}"
+                        )
+                except ImportError as _ie:
+                    logger.warning(
+                        f"  MXTQ VLM dequant failed (missing jang_tools): {_ie}"
+                    )
+                except Exception as _e:
+                    logger.warning(f"  MXTQ VLM dequant failed: {_e}")
+
+            shard_weights = regular
+
         # Gemma 4 switch_mlp → experts.switch_glu remap (before sanitize)
         if _vlm_needs_gemma4_switch_remap:
             shard_weights = {
@@ -1597,9 +1764,20 @@ def load_jang_vlm_model(
         raise FileNotFoundError(f"No JANG config found in {path}")
 
     jang_cfg = json.loads(config_path.read_text())
+    # JANGTQ writer emits {"version": 2, "weight_format": "mxtq", ...} and
+    # omits the legacy `format` field entirely. Accept that shape in addition
+    # to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope. Mirrors the text
+    # loader at line ~1649 — without this, Qwen 3.6 JANGTQ_2L (VLM wrapper
+    # model_type=qwen3_5_moe) hit `ValueError: Not a JANG model: format='None'`.
     fmt = jang_cfg.get("format")
-    if not fmt or fmt not in JANG_FORMAT_VALUES:
-        raise ValueError(f"Not a JANG model: format='{fmt}'")
+    weight_format = jang_cfg.get("weight_format")
+    if not fmt and weight_format == "mxtq":
+        fmt = "mxtq"
+    if not fmt or (fmt not in JANG_FORMAT_VALUES and fmt != "mxtq"):
+        raise ValueError(
+            f"Not a JANG VLM: format='{fmt}' weight_format='{weight_format}' "
+            f"(expected one of {', '.join(JANG_FORMAT_VALUES)} or weight_format=mxtq)"
+        )
 
     # v2: instant load
     if _is_v2_model(path):
