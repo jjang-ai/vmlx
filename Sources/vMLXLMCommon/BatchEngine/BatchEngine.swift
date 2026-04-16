@@ -393,12 +393,18 @@ public actor BatchEngine {
         // On cache hit, restore KV state and only prefill remaining tokens.
         var inputForPrepare = slot.originalInput
         let hasRotatingCache = slot.cache.contains { $0 is RotatingKVCache }
-        if let coordinator = cacheCoordinator,
-           slot.originalInput.image == nil, slot.originalInput.video == nil,
-           !hasRotatingCache {
+        // VLM inputs are now supported via `mediaSalt` (pixel fingerprint
+        // mixed into the cache-coordinator key) so "same text + same image"
+        // hits while "same text + different image" misses. RotatingKVCache
+        // is still skipped because its sliding-window semantics are
+        // incompatible with partial restore. Port of reference `ed989f2`.
+        if let coordinator = cacheCoordinator, !hasRotatingCache {
             let tokenIds = slot.originalInput.text.tokens.asArray(Int.self)
+            let mediaSalt = computeMediaSalt(for: slot.originalInput)
             let result = coordinator.fetch(
-                tokens: tokenIds, genPromptLen: slot.genPromptLen)
+                tokens: tokenIds,
+                mediaSalt: mediaSalt,
+                genPromptLen: slot.genPromptLen)
             if case .hit(_, let remaining, let detail, let blocks, let ssmStates, let diskArrays) = result {
                 var restored = false
                 if !blocks.isEmpty {
@@ -670,12 +676,22 @@ public actor BatchEngine {
             )
         }
 
-        // Always release pool pressure on slot completion — fix #2 from the
-        // user's batch. `Memory.clearCache()` walks the MLX allocator's free
-        // pool and returns large blocks to the OS. Costs ~microseconds, but
-        // prevents the rolling-pressure-into-adjacent-slots bleed that
-        // cratered long-context decode throughput. Cheap insurance.
-        MLX.Memory.clearCache()
+        // Long-context pool-pressure relief. The global memoryPurgeInterval
+        // (256 decode steps) is too coarse when a single long request
+        // allocates several GB of activations before releasing the pool
+        // back to the allocator — without a boundary purge, that pressure
+        // bleeds into the next slot and craters its decode throughput.
+        //
+        // Short chats skip the extra C call; only requests whose prompt
+        // was big enough to actually pressure the pool trigger it. Port
+        // of reference `ed989f2` (4096-token threshold; previously
+        // unconditional here which cost ~100µs per short chat request
+        // for no benefit).
+        let longContextPurgeThreshold = 4096
+        if slot.promptTokenCount >= longContextPurgeThreshold {
+            MLX.Memory.clearCache()
+            stepsSinceMemoryPurge = 0
+        }
 
         slot.continuation.yield(.info(GenerateCompletionInfo(
             promptTokenCount: slot.promptTokenCount,
