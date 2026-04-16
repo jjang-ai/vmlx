@@ -1174,31 +1174,52 @@ def _load_jang_v2_vlm(
     _vlm_mxtq_seed = jang_cfg.get("mxtq_seed", 42)
     _vlm_mxtq_bits_map = jang_cfg.get("mxtq_bits", {})
     if _vlm_is_mxtq:
-        # Live-verified 2026-04-16 on Qwen3.6-35B-A3B-JANGTQ_2L: dequant+requant
-        # (2-bit MXTQ codebook → 2-bit affine scales/biases) loses too much
-        # information for VLM quality. Output degenerates to gibberish while
-        # the regular JANG_2L (non-TQ) variant of the same model works cleanly
-        # through the standard affine quant path.
-        #
-        # The correct fix is to plumb `jang_tools.load_jangtq` (P3/P15/P17/P18
-        # Metal kernels, no dequant) through the VLM wrapper so TurboQuantLinear
-        # / TurboQuantSwitchLinear modules replace the language_model experts
-        # while the vision tower stays standard-affine. That's a non-trivial
-        # refactor (load_jangtq_model in jang_tools is currently mlx_lm-only).
-        #
-        # Until that lands, refuse the load with a clear recovery path rather
-        # than silently producing garbage output.
-        raise NotImplementedError(
-            "JANGTQ (weight_format=mxtq) with VLM wrapper is not yet supported. "
-            "The lossy dequant→requant fallback degrades VLM output too much.\n"
-            "\n"
-            "For now, use the regular JANG variant of this model (e.g. "
-            "Qwen3.6-35B-A3B-JANG_2L instead of Qwen3.6-35B-A3B-JANGTQ_2L). "
-            "The non-TQ JANG variant runs through the standard affine-quant "
-            "path and produces correct output.\n"
-            "\n"
-            "Tracking: JANGTQ+VL fast path integration."
+        # JANGTQ VLM fast path via jang_tools.load_jangtq_vlm — mirrors the
+        # text-side fast path at line ~509. Uses the same P3/P15/P17/P18
+        # Metal kernels (TurboQuantLinear / TurboQuantSwitchLinear) for the
+        # language_model's quantized modules while wiring up mlx_vlm's
+        # vision_tower + processor. No dequant, no requant — preserves
+        # output quality. Replaces the earlier lossy dequant-and-requant
+        # fallback that produced gibberish on Qwen3.6-35B-A3B-JANGTQ_2L.
+        try:
+            from jang_tools.load_jangtq_vlm import load_jangtq_vlm_model as _load_vlm
+        except ImportError as _ie:
+            raise RuntimeError(
+                f"JANGTQ VLM requires jang_tools.load_jangtq_vlm but import failed: {_ie}\n"
+                f"Make sure jang_tools ≥ the one including load_jangtq_vlm.py is installed "
+                f"into this Python environment."
+            ) from _ie
+        logger.info(
+            "MXTQ/JANGTQ VLM detected — using native TurboQuant fast path "
+            "(jang_tools.load_jangtq_vlm, P3/P15/P17/P18 Metal kernels)"
         )
+        if filter_expert_keys:
+            logger.warning(
+                "  filter_expert_keys=True ignored on JANGTQ VLM fast path "
+                "(smelt partial-expert loading is not TQ-aware yet)"
+            )
+        _vlm_model, _vlm_processor = _load_vlm(path)
+
+        # Match the rest of the VLM-path post-processing that would normally
+        # fire at the bottom of this function: attach config if missing and
+        # return. Also patch TurboQuant make_cache for the language model so
+        # the KV cache knows about the TQ layers.
+        if not hasattr(_vlm_model, "config"):
+            _vlm_model.config = config
+        try:
+            _lang = getattr(_vlm_model, "language_model", None)
+            if _lang is not None:
+                _patch_turboquant_make_cache(_lang, jang_cfg, config)
+        except Exception as _pe:
+            logger.warning(f"  TurboQuant make_cache patch skipped: {_pe}")
+        elapsed = time.perf_counter() - start
+        actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
+        logger.info(
+            f"JANGTQ VLM loaded in {elapsed:.1f}s (fast path) — "
+            f"{actual_bits:.1f}-bit avg" if actual_bits else
+            f"JANGTQ VLM loaded in {elapsed:.1f}s (fast path)"
+        )
+        return _vlm_model, _vlm_processor
 
     # Build set of quantized module paths from weight keys
     # Weight keys (safetensors): model.language_model.layers.0.mlp.gate_proj.scales
