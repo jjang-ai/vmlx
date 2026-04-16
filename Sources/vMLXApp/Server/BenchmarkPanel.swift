@@ -9,10 +9,10 @@ import vMLXTheme
 /// `bench_results` table in `vmlx.sqlite3` keyed by (model_id, suite, date).
 ///
 /// Electron parity: `panel/src/renderer/src/components/sessions/BenchmarkPanel.tsx`.
-/// Phase 3 scope: works against the stub `Engine.benchmark` which emits
-/// `.failed` immediately. When the real generation loop lands, all four
-/// display paths (progress, live label, final numbers, history) will light up
-/// without a second round of UI work.
+/// Wired end-to-end against the real generation loop in `Engine.benchmark`
+/// (Engine.swift ~2127: `runDecodeBench`, `runPrefillBench`,
+/// `runCacheMultiturnBench`). All four display paths — progress bar + live
+/// label + final numbers + last-20 history — are live.
 struct BenchmarkPanel: View {
     @Environment(AppState.self) private var app
     let sessionId: UUID
