@@ -39,7 +39,36 @@ public enum LLMTypeRegistry {
             "qwen3_moe": create(Qwen3MoEConfiguration.self, Qwen3MoEModel.init),
             "qwen3_next": create(Qwen3NextConfiguration.self, Qwen3NextModel.init),
             "qwen3_5": create(Qwen35Configuration.self, Qwen35Model.init),
-            "qwen3_5_moe": create(Qwen35Configuration.self, Qwen35MoEModel.init),
+            "qwen3_5_moe": { data in
+                // Sniff weight_format at the top level. JANGTQ-quantized
+                // checkpoints declare `weight_format: "mxtq"` — route to
+                // the JANGTQ model so the routed-expert MoE projections
+                // run through TurboQuantSwitchGLU. Affine MoE checkpoints
+                // (no weight_format key) fall through to Qwen35MoEModel.
+                struct FormatCheck: Codable {
+                    let weightFormat: String?
+                    let textConfig: TextConfigCheck?
+                    enum CodingKeys: String, CodingKey {
+                        case weightFormat = "weight_format"
+                        case textConfig = "text_config"
+                    }
+                    struct TextConfigCheck: Codable {
+                        let weightFormat: String?
+                        enum CodingKeys: String, CodingKey {
+                            case weightFormat = "weight_format"
+                        }
+                    }
+                }
+                if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
+                    check.weightFormat == "mxtq" || check.textConfig?.weightFormat == "mxtq"
+                {
+                    let config = try JSONDecoder.json5().decode(
+                        Qwen35JANGTQConfiguration.self, from: data)
+                    return Qwen35JANGTQModel(config)
+                }
+                let config = try JSONDecoder.json5().decode(Qwen35Configuration.self, from: data)
+                return Qwen35MoEModel(config)
+            },
             "qwen3_5_text": create(Qwen35TextConfiguration.self, Qwen35TextModel.init),
         ]
     }
@@ -53,6 +82,17 @@ public enum LLMTypeRegistry {
             "openelm": create(OpenElmConfiguration.self, OpenELMModel.init),
             "internlm2": create(InternLM2Configuration.self, InternLM2Model.init),
             "deepseek_v3": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            // Audit 2026-04-16 parity: deepseek_v2 + deepseek_v32 + kimi_k25
+            // all share the DeepSeek V3 MLA architecture. Python `mlx_lm`
+            // has dedicated files for each (deepseek_v2.py, deepseek_v32.py,
+            // kimi_k25.py) but the Swift V3 model class handles the same
+            // weights. Registering aliases prevents hard load failures
+            // on real HF configs that declare any of these model_types.
+            "deepseek_v2": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            "deepseek_v32": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            "kimi_k25": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            // MiniMax M2.5 shares M2's architecture — reuses same model class.
+            "minimax_m2_5": create(MiniMaxConfiguration.self, MiniMaxModel.init),
             "granite": create(GraniteConfiguration.self, GraniteModel.init),
             "granitemoehybrid": create(
                 GraniteMoeHybridConfiguration.self, GraniteMoeHybridModel.init),
@@ -76,13 +116,36 @@ public enum LLMTypeRegistry {
                 return MiniMaxModel(config)
             },
             "glm4": create(GLM4Configuration.self, GLM4Model.init),
-            "glm4_moe": create(GLM4MoEConfiguration.self, GLM4MoEModel.init),
+            "glm4_moe": { data in
+                // Sniff weight_format. JANGTQ-quantized GLM 5.1 declares
+                // `weight_format: "mxtq"` and routes to the JANGTQ model
+                // so routed-expert MoE projections run through
+                // TurboQuantSwitchGLU. Affine GLM 4 / 5.1 fall through.
+                struct FormatCheck: Codable {
+                    let weightFormat: String?
+                    enum CodingKeys: String, CodingKey { case weightFormat = "weight_format" }
+                }
+                if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
+                    check.weightFormat == "mxtq"
+                {
+                    let config = try JSONDecoder.json5().decode(
+                        GLM4MoEJANGTQConfiguration.self, from: data)
+                    return GLM4MoEJANGTQModel(config)
+                }
+                let config = try JSONDecoder.json5().decode(GLM4MoEConfiguration.self, from: data)
+                return GLM4MoEModel(config)
+            },
             "glm4_moe_lite": create(GLM4MoELiteConfiguration.self, GLM4MoELiteModel.init),
             "acereason": create(Qwen2Configuration.self, Qwen2Model.init),
             "falcon_h1": create(FalconH1Configuration.self, FalconH1Model.init),
             "bitnet": create(BitnetConfiguration.self, BitnetModel.init),
             "smollm3": create(SmolLM3Configuration.self, SmolLM3Model.init),
             "ernie4_5": create(Ernie45Configuration.self, Ernie45Model.init),
+            // Audit 2026-04-16 registry parity: ERNIE 4.5 MoE shares the
+            // same config/model class as the dense variant — aliased to
+            // prevent hard-load failure on HF checkpoints that declare
+            // `model_type: ernie4_5_moe`.
+            "ernie4_5_moe": create(Ernie45Configuration.self, Ernie45Model.init),
             "lfm2": create(LFM2Configuration.self, LFM2Model.init),
         ]
     }
@@ -91,6 +154,7 @@ public enum LLMTypeRegistry {
         [
             "baichuan_m1": create(BaichuanM1Configuration.self, BaichuanM1Model.init),
             "exaone4": create(Exaone4Configuration.self, Exaone4Model.init),
+            "exaone_moe": create(Exaone4Configuration.self, Exaone4Model.init),
             "gpt_oss": create(GPTOSSConfiguration.self, GPTOSSModel.init),
             "lille-130m": create(Lille130mConfiguration.self, Lille130mModel.init),
             "olmoe": create(OlmoEConfiguration.self, OlmoEModel.init),
@@ -101,7 +165,7 @@ public enum LLMTypeRegistry {
             "nanochat": create(NanoChatConfiguration.self, NanoChatModel.init),
             "nemotron_h": create(NemotronHConfiguration.self, NemotronHModel.init),
             "afmoe": create(AfMoEConfiguration.self, AfMoEModel.init),
-            "jamba_3b": create(JambaConfiguration.self, JambaModel.init),
+            "jamba": create(JambaConfiguration.self, JambaModel.init),
             "mistral3": { data in
                 // Mistral3 VLM may wrap Mistral4 text decoder — check text_config.model_type
                 struct TextConfigCheck: Codable {
@@ -123,6 +187,8 @@ public enum LLMTypeRegistry {
             },
             "apertus": create(ApertusConfiguration.self, ApertusModel.init),
             "llama4": create(Llama4Configuration.self, Llama4Model.init),
+            // Llama 4 text-only variant reuses the same Llama4 class.
+            "llama4_text": create(Llama4Configuration.self, Llama4Model.init),
         ]
     }
 
