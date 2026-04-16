@@ -9,10 +9,15 @@ import AppKit
 /// available on GitHub. Wired at the top of `RootView` so it stacks above
 /// `DownloadStatusBar`.
 ///
-/// Phase 3 ships with a **stub version service** — the real fetcher against
-/// `https://api.github.com/repos/jjang-ai/mlxstudio/releases/latest` slots
-/// into `UpdateAvailableService.check()` later. UI is done now so there's
-/// nothing to wire on release day.
+/// Calls `UpdateAvailableService.check()` on appear and every 6 hours
+/// while the window is alive. The service hits
+/// `https://api.github.com/repos/jjang-ai/mlxstudio/releases/latest`,
+/// throttled to one network request per hour via UserDefaults, and
+/// compares the returned `tag_name` (with a leading `v` stripped)
+/// against this bundle's `CFBundleShortVersionString` using the
+/// pure-Swift `compareVersions` semver helper. Banner appears only
+/// when remote > local; network failures return the last cached
+/// `UpdateInfo` so the UI isn't brittle on flaky links.
 struct UpdateAvailableBanner: View {
     @State private var latest: UpdateInfo? = nil
 
