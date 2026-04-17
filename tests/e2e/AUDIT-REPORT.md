@@ -108,6 +108,29 @@ tps drop > 30% blocks the run.
 1. **JANGTQ 5-way concurrent burst** — still crashes (`tryCoalescingPreviousComputeCommandEncoder`). Custom MXTQ kernels likely use a non-default stream that the double-drain doesn't reach. 3-way concurrent is the realistic production ceiling and passes cleanly.
 2. **Tool-call roundtrip on small models** — Qwen3-0.6B / Gemma-e4b don't reliably cite tool results in the follow-up. Model-scale behavior, not engine.
 3. **UI automation** — harness is API-level. SwiftUI view rendering + status indicators are not covered programmatically; human spot-check required for visual regression.
+4. **VL 3-way concurrent after image request** (iter-24): Qwen3.5-VL-4B hits the same `tryCoalescingPreviousComputeCommandEncoder` assertion when 3 concurrent text requests arrive after a prior vision_chat. VL preprocessor leaves open encoders that the end-of-gen eval+sync barrier doesn't drain. Single-image requests and pure-text traffic are unaffected; the practical mitigation is serialized use (matrix vl suite still reports 8/9). Fix candidate: pre-gen drain barrier on VL path, or a dedicated `VLPreprocessStream.synchronize()` after image feature extraction.
+5. **Shim-based streaming tool parser** (iter-22): the `parse()` shim in `Stream.swift` currently returns `[]` — the Swift tool parser registry is only exercised by the non-streaming `/v1/chat/completions` endpoint. Wiring the shim to `extractToolCalls` worked for Llama `<|python_tag|>` but double-emitted Qwen/Hermes calls (native vmlx-swift-lm parser + shim both fire on the same buffer). Proper fix requires a per-token streaming parser with explicit end-of-call delimiters per format — deferred until the small-model tool-call accuracy is meaningful enough to justify.
+
+## Iter-21/22/23/24 follow-ups (2026-04-17)
+
+- **Deterministic** test contract tightened to "warm-stable r2==r3" to tolerate Metal cold-kernel ULP drift (r1 can diverge).
+- Added `ipython` marker to Silver-tier Llama detection so Llama 3.2 models pick up the Llama tool parser.
+- Extended `LlamaToolCallParser` to handle `<|python_tag|>{"name":...,"parameters|parameters_json|arguments":...}` + semicolon-separated multi-call tails + `<|eot_id|>`/`<|eom_id|>` suffixes.
+- `vmlxctl serve` now accepts `--embedding-model` alone (no `--model` required) → embedding-only server topology. Restored `/v1/embeddings` → `dim=1024` in the harness embedding suite.
+- Harness routes `embedding` suite via `--embedding-model` (was `--model`).
+
+## Tier-2 matrix snapshot (iter-23)
+
+| model | pass | fail | tps | peak case |
+|-------|------|------|-----|-----------|
+| qwen3-0.6b-8bit          | 29 | 1 | 377.1 | deterministic warm-stable |
+| llama-3.2-1b-4bit        | 27 | 3 | 163.0 | tool_call still small-model limited |
+| gemma-4-e2b-it-4bit      | 28 | 2 | 39.8  | tool_roundtrip flaky |
+| qwen3-embedding-0.6b     | 5  | 1 | -     | embed suite now wired via `--embedding-model` (iter-23 fix) |
+| gemma-4-e4b-it-4bit      | 28 | 2 | 34.0  | tool_roundtrip flaky |
+| qwen3.5-vl-4b-jang-4s    | 8  | 1 | 38.3  | **concurrent 1/3 (Metal crash, see Open #4)** |
+
+All tier-1 models at `verify.sh` pass (green) vs baseline.
 
 ## Known Swift-vendor drift
 
