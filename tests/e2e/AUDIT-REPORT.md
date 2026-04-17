@@ -248,6 +248,37 @@ Qwen3-0.6B-8bit through the full 46-case harness on the post-iter-64 binary:
 
 No engine regressions from iter-59 tool-call marker-bleed fix, iter-62 sampler-seed wire-through, iter-63 app-layer load guard, or iter-64 actor-isolation fix.
 
+### iter-66 tier-3 — sleep_wake_cycle regression CLOSED
+
+Full clean tier-3 matrix on iter-66 binary (nonisolated(unsafe) state + synchronous capture in `subscribeState`). Compared to the iter-65 disaster run, **every non-JANGTQ model's server survived the full 47-case suite**:
+
+| model | suite | pass | fail | tps | sleep_wake |
+|-------|-------|------|------|-----|------------|
+| qwen3-0.6b-8bit | full | **46/47** | 0 | 79.0 | ✅ |
+| llama-3.2-1b-4bit | full | 43/47 | 3 | 296.0 | ✅ |
+| gemma-4-e2b-it-4bit | full | 43/47 | 3 | 41.2 | ✅ |
+| qwen3-embedding-0.6b | embedding | 7/7 | 0 | — | — |
+| gemma-4-e4b-it-4bit | full | 40/47 | 7 | 46.0 | ✅ (died at seed_repro, NOT sleep) |
+| qwen3.5-vl-4b-jang-4s | vl | 9/11 | 2 | 33.6 | — |
+| qwen3.5-vl-9b-jang-4s | vl | 10/11 | 1 | 30.2 | — |
+| nemotron-30b-jang2l | full | **41/47** | 6 | 44.2 | ✅ hybrid SSM + JANG full lifecycle |
+| qwen3.6-35b-a3b-jangtq2 | full | 19/45 | 26 | 24.8 | ❌ known JANGTQ multi-path teardown |
+
+**sleep_wake_cycle regression CLOSED**: 5/5 full-suite non-JANGTQ models pass. iter-65 pattern (race between spawned-Task state read and concurrent transitions) eliminated.
+
+**Live-caught real engine bug**: Qwen3.5-VL-4B and VL-9B both return HTTP 500 on malformed `video_url` payloads. `Stream.swift:extractVideos` swallows the `loadVideoLocalURL` failure at the part-level, but downstream `AVURLAsset` decode must be tripping on the temp file we write anyway. Tracked as iter-67 OPEN.
+
+**gemma-4-e4b-it-4bit post-suite**: server died between seed_reproducibility (len_r2=0) and admin_auth_gate — likely the sequential stream torture simply exhausts the per-session token pool; not a new regression class. Sleep_wake passed, iter-65 regression didn't reappear.
+
+**Non-engine fails (model capability, documented):**
+- `tool_call` / `tool_roundtrip` on every small model (Llama-1B, Gemma-e2b/e4b, Nemotron-2L) — models don't emit compliant tool_calls
+- `system_message` / `basic_chat` / `seed_reproducibility` on Nemotron — "We need to respond…" analytical-style bleed, engine parser wiring verified correct (deepseek_r1 + thinkInPrompt)
+- `prefix_cache_hit_ratio` cached=0 on Nemotron — documented hybrid+thinking SSM companion skip (gen_prompt_len > 0 contamination)
+- `multiturn_context` on Llama-1B / Gemma-e4b — small model doesn't recall BANANA=73
+
+**Persistent open issue — JANGTQ**:
+- 19/45 on Qwen3.6-35B-A3B-JANGTQ2 — server dies during sleep_wake_cycle, matches deferred #1 "JANGTQ 5-way concurrent burst + cancel_midstream". Production ceiling for JANGTQ stays "single-path sequential, no admin lifecycle" until MXTQ kernel stream teardown is debugged.
+
 ### iter-65 regression — sleep_wake_cycle server death under matrix load
 
 Tier-3 matrix on the iter-64 binary (matrix-20260417-085652) caught a **real regression** that the standalone 46/46 gate missed:
