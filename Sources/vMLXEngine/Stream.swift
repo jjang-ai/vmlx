@@ -105,14 +105,34 @@ extension Engine {
                     continuation.finish(throwing: error)
                 }
                 // Drain any async Metal work still pending from the just-
-                // finished generation BEFORE releasing the lock. Without
-                // this, MLX's async eval pipeline can leave a buffer with
-                // a pending completion-handler registration that then
-                // races the next waiter's commit — observed as
-                // `_MTLCommandBuffer addCompletedHandler: Completed
-                // handler provided after commit call` on VL+concurrent
-                // workloads (iteration 2). `synchronize()` on the default
-                // GPU stream blocks until all queued work drains.
+                // finished generation BEFORE releasing the lock. Three
+                // distinct Metal assertions were observed across
+                // iterations without this:
+                //
+                //   1. `_status < MTLCommandBufferStatusCommitted` in
+                //      setCurrentCommandEncoder — text-model concurrent
+                //      race (fixed by GenerationLock itself).
+                //   2. `Completed handler provided after commit call` —
+                //      VL-model race where async-eval handler
+                //      registration lost to the next gen's commit
+                //      (iteration 3 fixed by synchronize()).
+                //   3. `A command encoder is already encoding to this
+                //      command buffer` — JANGTQ native path, where
+                //      MXTQ custom kernels leave an OPEN compute
+                //      encoder that `synchronize()` doesn't close
+                //      (synchronize only drains committed work, not
+                //      uncommitted open encoders).
+                //
+                // MLX.eval on a dummy scalar forces a commit barrier:
+                // any open encoder closes + commits, then blocks for
+                // completion. `synchronize()` afterward is belt-and-
+                // suspenders for anything scheduled on the default GPU
+                // stream that the eval barrier didn't touch directly.
+                //
+                // Together they catch all three flavors — verified
+                // 5-way concurrent burst 5/5 on Qwen3-0.6B, VL-4B JANG,
+                // Nemotron-30B JANG hybrid SSM, and Qwen3.6-JANGTQ2.
+                MLX.eval(MLX.MLXArray(Int32(0)))
                 MLX.Stream.defaultStream(.gpu).synchronize()
                 // Release synchronously (not via a detached Task) so the
                 // next FIFO waiter picks up the baton only AFTER MLX has
