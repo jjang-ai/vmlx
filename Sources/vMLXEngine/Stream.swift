@@ -129,11 +129,17 @@ extension Engine {
                 // suspenders for anything scheduled on the default GPU
                 // stream that the eval barrier didn't touch directly.
                 //
-                // Together they catch all three flavors — verified
-                // 5-way concurrent burst 5/5 on Qwen3-0.6B, VL-4B JANG,
-                // Nemotron-30B JANG hybrid SSM, and Qwen3.6-JANGTQ2.
+                // We also drain the CPU stream: some MXTQ helper ops
+                // (index bookkeeping, scalar setup for the custom
+                // kernels) run on the CPU stream, and if they're still
+                // in flight when the next waiter commits GPU work that
+                // depends on them, Metal trips
+                // `tryCoalescingPreviousComputeCommandEncoder: A
+                // command encoder is already encoding to this command
+                // buffer`.
                 MLX.eval(MLX.MLXArray(Int32(0)))
                 MLX.Stream.defaultStream(.gpu).synchronize()
+                MLX.Stream.defaultStream(.cpu).synchronize()
                 // Release synchronously (not via a detached Task) so the
                 // next FIFO waiter picks up the baton only AFTER MLX has
                 // quiesced and the actor state is clean.
