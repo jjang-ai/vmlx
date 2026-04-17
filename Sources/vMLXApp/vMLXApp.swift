@@ -613,6 +613,138 @@ final class AppState {
         }
     }
 
+    // MARK: - Public session lifecycle
+    //
+    // These three helpers used to live as `private func`s inside
+    // `SessionDashboard`. Lifted onto `AppState` so non-server surfaces
+    // (Chat model picker, Terminal, tray, etc.) can start / stop / create
+    // sessions WITHOUT the user having to pivot to the Server tab —
+    // repeated user ask: "way to directly easily start/stop models from
+    // the chat page". SessionDashboard now calls through here so both
+    // surfaces share the same lifecycle path (no drift between buttons).
+
+    /// Look up an existing session row for a model path, or return nil if
+    /// none exists yet. Comparison uses `standardizedFileURL` so a
+    /// resolved HF snapshot path matches the session's stored path even
+    /// when symlinks / double-slashes differ.
+    @MainActor
+    func sessionId(forModelPath url: URL) -> UUID? {
+        let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
+        return sessions.first { s in
+            s.modelPath.standardizedFileURL.resolvingSymlinksInPath() == canonical
+        }?.id
+    }
+
+    /// Create a fresh server session row for this model path and append
+    /// it to `sessions`. Does NOT start the engine — caller must follow up
+    /// with `startSession(_:)`. Returns the new session id.
+    @MainActor
+    func createSession(forModel url: URL) async -> UUID {
+        let id = UUID()
+        var settings = SessionSettings(modelPath: url)
+        settings.displayName = SessionHeuristics.displayName(url)
+        let eng = engine(for: id)
+        selectedServerSessionId = id
+        rebindEngineObserver()
+        settings = await eng.applySessionSettings(id, settings)
+        let session = Session(
+            id: id,
+            displayName: settings.displayName ?? SessionHeuristics.displayName(url),
+            modelPath: url,
+            family: SessionHeuristics.family(url),
+            isJANG: SessionHeuristics.isJANG(url),
+            isMXTQ: SessionHeuristics.isMXTQ(url),
+            quantBits: nil,
+            host: settings.host ?? "127.0.0.1",
+            port: settings.port ?? 8000,
+            pid: nil,
+            latencyMs: nil,
+            state: .stopped,
+            loadProgress: nil
+        )
+        sessions.append(session)
+        return id
+    }
+
+    /// Start (= load weights + bring up HTTP listener) the session with
+    /// this id. Mirrors the previous `SessionDashboard.startSession`
+    /// flow. Safe to call for a session that is already running — the
+    /// engine's `load(_:)` is idempotent.
+    @MainActor
+    func startSession(_ id: UUID) async {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let s = sessions[idx]
+        let eng = engine(for: id)
+        selectedServerSessionId = id
+        rebindEngineObserver()
+
+        let remoteSettings = await eng.settings.session(id)
+        if let r = remoteSettings, r.isRemote {
+            if let idx2 = sessions.firstIndex(where: { $0.id == id }) {
+                sessions[idx2].host = r.remoteURL ?? ""
+                sessions[idx2].port = 0
+                sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
+            }
+            return
+        }
+
+        let resolved = await eng.settings.resolved(sessionId: id)
+        let opts = Engine.LoadOptions(modelPath: s.modelPath, from: resolved)
+        do {
+            for try await event in await eng.load(opts) {
+                if case .failed(let msg) = event {
+                    flashBanner("Engine load failed: \(msg)")
+                    return
+                }
+            }
+        } catch {
+            flashBanner("Engine load failed: \(error)")
+            return
+        }
+
+        let lanOn = resolved.settings.defaultLAN
+        let bindHost = lanOn
+            ? "0.0.0.0"
+            : (resolved.settings.defaultHost.isEmpty ? "127.0.0.1" : resolved.settings.defaultHost)
+        let http = httpServer(for: id)
+        do {
+            try await http.start(
+                host: bindHost,
+                port: s.port,
+                apiKey: resolved.settings.apiKey,
+                adminToken: resolved.settings.adminToken,
+                logLevel: LogStore.Level(rawValue: resolved.settings.defaultLogLevel) ?? .info
+            )
+            if let idx2 = sessions.firstIndex(where: { $0.id == id }) {
+                sessions[idx2].host = bindHost
+                sessions[idx2].port = s.port
+                sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
+            }
+            await gateway.registerEngine(eng)
+            await ensureGatewayRunning()
+        } catch {
+            flashBanner("HTTP listener failed: \(error)")
+            await eng.stop()
+            if let idx2 = sessions.firstIndex(where: { $0.id == id }) {
+                sessions[idx2].pid = nil
+            }
+        }
+    }
+
+    /// Stop (= unload + tear down HTTP listener) the session with this id.
+    /// Safe for already-stopped sessions — engine.stop() + http.stop()
+    /// are both idempotent.
+    @MainActor
+    func stopSession(_ id: UUID) async {
+        let eng = engine(for: id)
+        await gateway.unregisterEngine(eng)
+        await httpServer(for: id).stop()
+        await eng.stop()
+        if let idx = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[idx].pid = nil
+        }
+    }
+
     /// Subscribe to the DownloadManager and keep `downloadJobs` in sync.
     /// On the first `.started` event, opens the Downloads window via the
     /// provided `openWindow` closure — nothing silent, ever.

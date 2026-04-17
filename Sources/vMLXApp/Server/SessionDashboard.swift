@@ -204,143 +204,21 @@ struct SessionDashboard: View {
     }
 
     // MARK: - Session lifecycle actions
+    //
+    // Thin wrappers around `AppState.createSession` / `startSession` /
+    // `stopSession`. The real logic lives on AppState so other surfaces
+    // (Chat model picker's ▶/■ buttons, tray) share the exact same load
+    // path. Keep the view-specific side effects (selection binding,
+    // popover dismissal) local to the dashboard.
 
     private func createSession(for url: URL) async {
-        let id = UUID()
-        var settings = SessionSettings(modelPath: url)
-        // Friendly display name walks up the path past HF cache-internal
-        // segments (`snapshots`, commit SHAs) and `models--org--name`
-        // wrappers. Prevents brand-new sessions from pointing at a HF
-        // snapshot dir and showing a 40-char hex hash as the card title.
-        settings.displayName = SessionHeuristics.displayName(url)
-        // Instantiate a dedicated Engine for this session and select it so
-        // `app.engine` resolves to the new one for subsequent calls.
-        let sessionEngine = app.engine(for: id)
-        app.selectedServerSessionId = id
-        app.rebindEngineObserver()
-        settings = await sessionEngine.applySessionSettings(id, settings)
-        let session = Session(
-            id: id,
-            displayName: settings.displayName ?? SessionHeuristics.displayName(url),
-            modelPath: url,
-            family: detectFamily(url),
-            isJANG: detectJANG(url),
-            isMXTQ: detectMXTQ(url),
-            quantBits: nil,
-            host: settings.host ?? "127.0.0.1",
-            port: settings.port ?? 8000,
-            pid: nil,
-            latencyMs: nil,
-            state: .stopped,
-            loadProgress: nil
-        )
-        app.sessions.append(session)
+        let id = await app.createSession(forModel: url)
         selection = id
         showCreatePopover = false
     }
 
-    private func startSession(_ id: UUID) async {
-        guard let idx = app.sessions.firstIndex(where: { $0.id == id }) else { return }
-        let s = app.sessions[idx]
-        let eng = app.engine(for: id)
-        app.selectedServerSessionId = id
-        app.rebindEngineObserver()
-
-        // Remote sessions skip the local engine load + HTTP listener
-        // entirely. The session is a thin proxy — Chat / Terminal will
-        // dispatch directly to the configured remote endpoint via
-        // RemoteEngineClient. We just mark the session "running" so the
-        // UI lifecycle indicator flips green.
-        let remoteSettings = await eng.settings.session(id)
-        if let r = remoteSettings, r.isRemote {
-            if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
-                app.sessions[idx2].host = r.remoteURL ?? ""
-                app.sessions[idx2].port = 0
-                app.sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
-            }
-            return
-        }
-
-        var opts = Engine.LoadOptions(modelPath: s.modelPath)
-        let resolved = await eng.settings.resolved(sessionId: id)
-        opts = Engine.LoadOptions(modelPath: s.modelPath, from: resolved)
-        do {
-            for try await event in await eng.load(opts) {
-                if case .failed(let msg) = event {
-                    app.flashBanner("Engine load failed: \(msg)")
-                    return
-                }
-            }
-        } catch {
-            app.flashBanner("Engine load failed: \(error)")
-            return
-        }
-
-        // After the model is loaded, start the per-session HTTP listener
-        // so external clients (OpenAI/Ollama/Anthropic) can hit it. This
-        // replaces the previous dead path where `Start Session` only
-        // loaded the model and left the tray stuck on PID:nil.
-        //
-        // LAN toggle resolution: if the per-session `lan` flag (or the
-        // global default) is true, bind to `0.0.0.0` so other machines
-        // on the LAN can reach the gateway. Otherwise use the explicit
-        // host field (defaulting to 127.0.0.1) so loopback stays the
-        // safe default for single-machine use.
-        let lanOn = resolved.settings.defaultLAN
-        let bindHost: String
-        if lanOn {
-            bindHost = "0.0.0.0"
-        } else {
-            bindHost = resolved.settings.defaultHost.isEmpty
-                ? "127.0.0.1"
-                : resolved.settings.defaultHost
-        }
-        let bindPort = s.port
-
-        let http = app.httpServer(for: id)
-        do {
-            try await http.start(
-                host: bindHost,
-                port: bindPort,
-                apiKey: resolved.settings.apiKey,
-                adminToken: resolved.settings.adminToken,
-                logLevel: LogStore.Level(rawValue: resolved.settings.defaultLogLevel) ?? .info
-            )
-            if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
-                app.sessions[idx2].host = bindHost
-                app.sessions[idx2].port = bindPort
-                app.sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
-            }
-            // UI-9 gateway registration: now that the model is loaded and
-            // the library scan is fresh, register every display name with
-            // the gateway so its /v1/chat/completions handler can route
-            // incoming requests by `model` field. The gateway listener
-            // itself starts/stops based on GlobalSettings.gatewayEnabled.
-            await app.gateway.registerEngine(eng)
-            await app.ensureGatewayRunning()
-        } catch {
-            // HTTP bind failure leaves the engine LOADED but not serving —
-            // card would keep showing "Running" while external clients hit
-            // connection-refused. Stop the engine so the session's state
-            // transitions cleanly back to `.stopped`, matching the UI
-            // contract that "Running" means "reachable".
-            app.flashBanner("HTTP listener failed: \(error)")
-            await eng.stop()
-            if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
-                app.sessions[idx2].pid = nil
-            }
-        }
-    }
-
-    private func stopSession(_ id: UUID) async {
-        let eng = app.engine(for: id)
-        await app.gateway.unregisterEngine(eng)
-        await app.httpServer(for: id).stop()
-        await eng.stop()
-        if let idx = app.sessions.firstIndex(where: { $0.id == id }) {
-            app.sessions[idx].pid = nil
-        }
-    }
+    private func startSession(_ id: UUID) async { await app.startSession(id) }
+    private func stopSession(_ id: UUID)  async { await app.stopSession(id) }
 
     private func wakeSession(_ id: UUID) async {
         await app.engine(for: id).wakeFromStandby()

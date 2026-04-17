@@ -1252,6 +1252,44 @@ PY
     emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1] + " [" + sys.argv[2] + "]"))' "${note:0:60}" "$color_tag")}"
 }
 
+case_seed_reproducibility() {
+    # Sampler determinism contract. Same seed + same prompt + same temp
+    # SHOULD yield identical output. But the prefix-cache and Metal
+    # kernel warmup introduce cold-path vs warm-path non-determinism:
+    # request-1 computes KV fresh; request-2 may fetch from cache where
+    # the stored floats diverge in the last ULP from fresh-compute.
+    # Mirror `case_deterministic`'s warm-stable pattern — fire three
+    # requests, require r2==r3 after r1 warmup.
+    # Seed wiring was #A1 in the cap-phase audit (MLXRandom.seed
+    # applied in Stream.swift just before generate). This gate prevents
+    # reintroduction of "seed silently dropped".
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local body
+    body=$(cat <<JSON
+{"model":"$model_id","messages":[{"role":"user","content":"Invent a fictional planet name."}],"max_tokens":20,"temperature":1.0,"seed":424242}
+JSON
+)
+    local r1=/tmp/vmlx-seed1.json r2=/tmp/vmlx-seed2.json r3=/tmp/vmlx-seed3.json
+    curl -s --max-time 45 -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body" > "$r1"
+    curl -s --max-time 45 -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body" > "$r2"
+    curl -s --max-time 45 -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body" > "$r3"
+    python3 <<'PY'
+import json
+def c(p):
+    try: return json.load(open(p)).get("choices",[{}])[0].get("message",{}).get("content","") or ""
+    except Exception: return ""
+a, b, d = c("/tmp/vmlx-seed1.json"), c("/tmp/vmlx-seed2.json"), c("/tmp/vmlx-seed3.json")
+# Warm-stable: once the cache path is primed, r2 and r3 should match.
+# Still enforce non-empty so an empty-reply bug doesn't pass vacuously.
+ok = (b == d) and len(b) > 0
+print(json.dumps({"name":"seed_reproducibility","ok":ok,
+    "notes":f"r2==r3={b==d} r1==r2={a==b} len_r2={len(b)} sample={b[:40]!r}"}))
+PY
+}
+
 case_video_url_handling() {
     # Negative edge case — feed a *malformed* video_url and assert the
     # server neither crashes nor 500s. Either outcome is acceptable:
@@ -2028,6 +2066,7 @@ suite_full() {
     case_unsupported_params
     case_multiturn_context
     case_unicode_roundtrip
+    case_seed_reproducibility
 }
 
 suite_vl() {
