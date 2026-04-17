@@ -290,6 +290,43 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_tool_choice_required() {
+    # When `tool_choice: "required"` is set, the engine MUST emit a tool
+    # call. If the model produces only text, the engine should surface a
+    # clean error (Stream.swift throws EngineError.toolChoiceNotSatisfied)
+    # rather than silently violating the contract. Test the positive
+    # path: a tool-friendly prompt should get tc >= 1.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 17+25?\"}],\"max_tokens\":60,\"temperature\":0,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"add\",\"description\":\"Add two numbers\",\"parameters\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}}}],\"tool_choice\":\"required\"}")
+    echo "$resp" > /tmp/vmlx-toolreq.json
+    python3 <<'PY'
+import json
+try:
+    r = json.load(open("/tmp/vmlx-toolreq.json"))
+    # Either a tool call is emitted OR the engine surfaces a clean error
+    # (toolChoiceNotSatisfied maps to 500 w/ structured message).
+    if "error" in r:
+        msg = (r.get("error") or {}).get("message","")
+        ok = "tool_choice" in msg.lower() or "not satisfied" in msg.lower()
+        print(json.dumps({"name":"tool_choice_required","ok":ok,
+            "notes":f"engine refused (contract-preserving error): {msg[:80]}"}))
+    else:
+        ch = (r.get("choices") or [{}])[0]
+        msg = ch.get("message") or {}
+        tc = msg.get("tool_calls") or []
+        finish = ch.get("finish_reason")
+        ok = len(tc) >= 1 and finish == "tool_calls"
+        name = tc[0].get("function",{}).get("name") if tc else None
+        print(json.dumps({"name":"tool_choice_required","ok":ok,
+            "notes":f"tc={len(tc)} finish={finish} name={name!r}"[:140]}))
+except Exception as e:
+    print(json.dumps({"name":"tool_choice_required","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
 case_tool_choice_none() {
     # When `tool_choice: "none"` is set, the engine MUST NOT emit any
     # tool_calls even if tools are provided. This matters for agent
@@ -1704,6 +1741,7 @@ suite_full() {
     case_json_schema
     case_legacy_completions
     case_tool_choice_none
+    case_tool_choice_required
 }
 
 suite_vl() {
