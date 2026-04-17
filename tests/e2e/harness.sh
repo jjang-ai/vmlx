@@ -290,6 +290,64 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_legacy_completions() {
+    # /v1/completions is the PRE-chat OpenAI endpoint. Still widely
+    # used by text-only systems (autocomplete widgets, instruct-only
+    # fine-tuned models, some RAG pipelines). Response:
+    #   id           : "cmpl-*"
+    #   object       : "text_completion"
+    #   model        : str
+    #   created      : int
+    #   choices[0]   : { text:str, index=0, finish_reason }
+    #   usage        : { prompt_tokens, completion_tokens, total_tokens }
+    # Different from chat (choices[0].text, not choices[0].message.content).
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"prompt\":\"The capital of France is\",\"max_tokens\":20,\"temperature\":0}")
+    echo "$resp" > /tmp/vmlx-legacy.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-legacy.json"))
+    probs = []
+    if not isinstance(d.get("id"), str) or not d["id"].startswith("cmpl-"):
+        probs.append(f"id={d.get('id')!r}")
+    if d.get("object") != "text_completion":
+        probs.append(f"object={d.get('object')}")
+    if not isinstance(d.get("created"), int):
+        probs.append("created")
+    if not isinstance(d.get("model"), str):
+        probs.append("model")
+    choices = d.get("choices") or []
+    text = ""
+    if not choices:
+        probs.append("no choices")
+    else:
+        c0 = choices[0]
+        if c0.get("index") != 0:
+            probs.append(f"choices[0].index={c0.get('index')}")
+        if not isinstance(c0.get("text"), str):
+            probs.append("choices[0].text")
+        text = c0.get("text") or ""
+        if c0.get("finish_reason") not in {"stop","length","content_filter"}:
+            probs.append(f"finish_reason={c0.get('finish_reason')}")
+    usage = d.get("usage") or {}
+    for k in ("prompt_tokens","completion_tokens","total_tokens"):
+        if not isinstance(usage.get(k), int):
+            probs.append(f"usage.{k}")
+    # Content sanity: completion should not be empty
+    if not text:
+        probs.append("empty text")
+    ok = not probs
+    notes = ("schema=ok" if not probs else f"GAP:{probs}") + f" text={text[:40]!r}"
+    print(json.dumps({"name":"legacy_completions","ok":ok,"notes":notes[:140]}))
+except Exception as e:
+    print(json.dumps({"name":"legacy_completions","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
 case_json_schema() {
     # response_format:{type:"json_schema",...} is stricter than json_object:
     # server must return content that parses as JSON AND conforms to the
@@ -1609,6 +1667,7 @@ suite_full() {
     case_anthropic_stream
     case_ollama_stream
     case_json_schema
+    case_legacy_completions
 }
 
 suite_vl() {
