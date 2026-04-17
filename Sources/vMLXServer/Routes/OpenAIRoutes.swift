@@ -642,9 +642,19 @@ public enum OpenAIRoutes {
                 let result = try await engine.generateImage(request: obj)
                 return Self.json(result)
             } catch {
-                // Surface the underlying flux error (typically a
-                // "generate() not yet ported" from the concrete model).
-                return Self.errorJSON(.internalServerError, "\(error)")
+                // iter-68: classify user errors (unknown model, missing
+                // required field) as 400 instead of 500. The underlying
+                // FluxBackend error carries its category in the message
+                // substring — `"no model entry for"` is the canonical
+                // shape emitted by `FluxBackend.generate` / `editImage`.
+                let msg = "\(error)"
+                let isUserError = msg.contains("no model entry for")
+                    || msg.contains("missing required")
+                    || msg.contains("unknown model")
+                return Self.errorJSON(
+                    isUserError ? .badRequest : .internalServerError,
+                    msg
+                )
             }
         }
 
