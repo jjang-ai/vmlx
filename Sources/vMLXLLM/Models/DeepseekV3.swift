@@ -305,6 +305,13 @@ class DeepseekV3MoE: Module, UnaryLayer {
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     var gate: MoEGate
     @ModuleInfo(key: "shared_experts") var sharedExperts: DeepseekV3MLP?
+    /// Flash MoE drop-in replacement for the `switchMLP + weighted-sum`
+    /// path. When set (via `DeepseekV3DecoderLayer.replaceMoEBlock`), the
+    /// block owns routing + expert load + weighted aggregation. The
+    /// sharedExperts path stays native and is added on top. Single
+    /// if-let check per MoE layer per token; not a `@ModuleInfo` because
+    /// the block manages its own weight residency via the slot bank.
+    fileprivate var flashMoeShim: FlashMoEBlock?
 
     init(config: DeepseekV3Configuration) {
         self.config = config
@@ -327,9 +334,16 @@ class DeepseekV3MoE: Module, UnaryLayer {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let (indices, scores) = gate(x)
-        var y = switchMLP(x, indices)
-        y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2)
+        var y: MLXArray
+        if let shim = flashMoeShim {
+            // FlashMoEBlock handles router + expert load + weighted sum
+            // in one call using its installed `router` closure.
+            y = shim(x)
+        } else {
+            let (indices, scores) = gate(x)
+            y = switchMLP(x, indices)
+            y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2)
+        }
 
         if let shared = sharedExperts {
             y = y + shared(x)
@@ -540,6 +554,50 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
 
     public var loraLayers: [Module] {
         model.layers
+    }
+}
+
+// MARK: - Flash MoE conformance (F-G6)
+//
+// DeepSeek V3 MoE: router (MoEGate with sigmoid + group selection +
+// e_score_correction_bias) + switch_mlp (SwitchGLU) + optional
+// shared_experts (DeepseekV3MLP, added AFTER the expert output).
+//
+// Layout pattern: single-block replacement via `flashMoeShim` field on
+// `DeepseekV3MoE` (same pattern as Gemma4TextModel fix, Gap K). The
+// shim owns router+load+weighted-sum; the shared_experts path stays
+// native and is summed on top. Dense layers (firstKDenseReplace) return
+// `.none` so the traversal skips them.
+//
+// Router closure captures the existing MoEGate, so Flash MoE decode
+// uses identical routing math as the native path. The only change is
+// expert matmul: native runs SwitchGLU inline, Flash MoE streams
+// experts via the slot bank from SSD.
+
+extension DeepseekV3Model: FlashMoEReplaceable {
+    public var flashMoELayers: [FlashMoELayer] {
+        model.layers
+    }
+}
+
+extension DeepseekV3DecoderLayer: FlashMoELayer {
+    public var flashMoELayout: FlashMoELayout {
+        (mlp is DeepseekV3MoE) ? .textPathSwitchGLU : .none
+    }
+
+    public func replaceMoEBlock(with block: FlashMoEBlock) throws {
+        guard let moe = mlp as? DeepseekV3MoE else { return }
+        // Capture the native gate so Flash MoE decode uses the same
+        // sigmoid + group selection + e_score_correction_bias math.
+        let gate = moe.gate
+        let topK = moe.numExpertsPerTok
+        block.topK = topK
+        block.router = { x in
+            return gate(x)
+        }
+        // Install the shim. DeepseekV3MoE.callAsFunction branches on
+        // `flashMoeShim` and still runs sharedExperts on top natively.
+        moe.flashMoeShim = block
     }
 }
 

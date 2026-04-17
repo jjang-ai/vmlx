@@ -1141,10 +1141,19 @@ enum BenchDirectImpl {
         }
         let prefillDt = Date().timeIntervalSince(prefillStart)
 
-        var tokens: [Int] = [firstToken]
+        // EOS-aware stop set: drop generation the moment an EOS lands so
+        // the decoded text doesn't include the EOS token's literal form
+        // (e.g. MiniMax-M2.7 uses eos_token="[e~[" which would otherwise
+        // print as tail garbage). Mirrors generateLoopTask's stop check.
+        var stopIds: Set<Int> = []
+        if let eos = ctx.tokenizer.eosTokenId { stopIds.insert(eos) }
+        if let unk = ctx.tokenizer.unknownTokenId { stopIds.insert(unk) }
+
+        var tokens: [Int] = stopIds.contains(firstToken) ? [] : [firstToken]
         let decodeStart = Date()
         for token in iter {
             if tokens.count >= maxTokens { break }
+            if stopIds.contains(token) { break }
             tokens.append(token)
         }
         let decodeDt = Date().timeIntervalSince(decodeStart)

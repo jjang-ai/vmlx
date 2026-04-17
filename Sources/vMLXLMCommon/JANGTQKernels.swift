@@ -313,13 +313,46 @@ public final class JANGTQRuntimeCache: @unchecked Sendable {
     }
 
     public func signs(inFeatures: Int, seed: Int) -> MLXArray? {
-        lock.lock(); defer { lock.unlock() }
-        return signsByKey["signs.\(inFeatures).\(seed)"]
+        let key = "signs.\(inFeatures).\(seed)"
+        lock.lock()
+        if let hit = signsByKey[key] {
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
+        // MISS → regenerate from seed using the same NumPyPCG64 stream the
+        // Python side uses. Matches `jang_tools/turboquant/tq_kernel.py:_get_signs`
+        // which has the same lazy cache. Sidecar is OPTIONAL for JANGTQ
+        // bundles — when absent (common on MiniMax-M2.7-JANGTQ-CRACK and
+        // all Qwen3.6-JANGTQ_2L), this path computes the signs on-demand
+        // and caches them for subsequent calls. 2026-04-16.
+        let generated = NumPyPCG64.generateRandomSigns(dim: inFeatures, seed: seed)
+        lock.lock()
+        signsByKey[key] = generated
+        lock.unlock()
+        return generated
     }
 
     public func codebook(inFeatures: Int, bits: Int) -> MLXArray? {
-        lock.lock(); defer { lock.unlock() }
-        return codebookByKey["codebook.\(inFeatures).\(bits)"]
+        let key = "codebook.\(inFeatures).\(bits)"
+        lock.lock()
+        if let hit = codebookByKey[key] {
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
+        // MISS → regenerate Lloyd-Max codebook from (dim, bits) using the
+        // Swift port at `TurboQuant/TQCodebook.swift:computeCodebook`.
+        // Matches Python `compute_codebook` lazy cache at
+        // `jang_tools/turboquant/codebook.py:48`. ~200 Lloyd-Max iterations;
+        // results get cached so this is a one-time cost per unique
+        // `(inFeatures, bits)` pair.
+        let centroids = TQCodebook.computeCodebook(dim: inFeatures, bits: bits)
+        let arr = MLXArray(centroids)
+        lock.lock()
+        codebookByKey[key] = arr
+        lock.unlock()
+        return arr
     }
 }
 

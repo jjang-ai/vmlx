@@ -338,6 +338,9 @@ class JambaSparseMoeBlock: Module {
 
     @ModuleInfo(key: "router") var router: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
+    /// Flash MoE drop-in for router+switch_mlp+weighted-sum path.
+    /// See DeepseekV3MoE.flashMoeShim for pattern rationale. F-G8.
+    fileprivate var flashMoeShim: FlashMoEBlock?
 
     public init(_ config: JambaConfiguration) {
         self.numExpertsPerTok = config.numExpertsPerTok
@@ -352,6 +355,9 @@ class JambaSparseMoeBlock: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        if let shim = flashMoeShim {
+            return shim(x)
+        }
         let gates = router(x)
         let k = numExpertsPerTok
         let inds = stopGradient(MLX.argPartition(-gates, kth: k - 1, axis: -1)[.ellipsis, ..<k])
@@ -579,5 +585,47 @@ extension JambaModel: LoRAModel {
             }
             return nil
         }
+    }
+}
+
+// MARK: - Flash MoE conformance (F-G8)
+//
+// Jamba is a hybrid SSM model: `JambaDecoderLayer` interleaves
+// attention / mamba mixers, both routing into the same `feedForward`
+// slot which is either `JambaSparseMoeBlock` (MoE layers) or `JambaMLP`
+// (dense layers). Flash MoE targets only the MoE layers; dense layers
+// return `.none` and are skipped.
+//
+// The SSM/attention sub-block lives in separate `@ModuleInfo` slots
+// (`self_attn` / `mamba`) and is never touched — Flash MoE stays on
+// the feed-forward side of the residual, same as Qwen3MoE / MiniMax.
+
+extension JambaModel: FlashMoEReplaceable {
+    public var flashMoELayers: [FlashMoELayer] {
+        model.layers
+    }
+}
+
+extension JambaDecoderLayer: FlashMoELayer {
+    public var flashMoELayout: FlashMoELayout {
+        isSparseMoe ? .textPathSwitchGLU : .none
+    }
+
+    public func replaceMoEBlock(with block: FlashMoEBlock) throws {
+        guard let moe = feedForward as? JambaSparseMoeBlock else { return }
+        let router = moe.router
+        let topK = moe.numExpertsPerTok
+        block.topK = topK
+        block.router = { x in
+            // Jamba router is softmax(topK(router(x))) — same math as
+            // JambaSparseMoeBlock.callAsFunction pre-expert path.
+            let gates = router(x)
+            let inds = stopGradient(
+                MLX.argPartition(-gates, kth: topK - 1, axis: -1)[.ellipsis, ..<topK])
+            let scores = MLX.softmax(
+                MLX.takeAlong(gates, inds, axis: -1), axis: -1, precise: true)
+            return (indices: inds, scores: scores)
+        }
+        moe.flashMoeShim = block
     }
 }
