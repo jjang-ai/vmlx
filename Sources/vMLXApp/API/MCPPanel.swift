@@ -21,6 +21,11 @@ struct MCPPanel: View {
     @State private var lastError: String? = nil
     @State private var pollTask: Task<Void, Never>? = nil
     @State private var reloading: Bool = false
+    // CRUD sheet state: `editorDraft` is non-nil iff the add/edit sheet
+    // is on screen. A fresh draft (from "Add server") has an empty
+    // name; an edit draft is pre-populated from the saved config.
+    @State private var editorDraft: MCPServerDraft? = nil
+    @State private var confirmDelete: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -51,6 +56,33 @@ struct MCPPanel: View {
             pollTask?.cancel()
             pollTask = nil
         }
+        .sheet(item: $editorDraft) { draft in
+            MCPServerEditor(
+                draft: draft,
+                existingNames: Set(servers.map { $0.name }),
+                onSave: { saved in
+                    editorDraft = nil
+                    Task { await upsert(saved) }
+                },
+                onCancel: { editorDraft = nil }
+            )
+            .frame(minWidth: 540, minHeight: 420)
+        }
+        .alert("Remove MCP server?",
+               isPresented: Binding(
+                get: { confirmDelete != nil },
+                set: { if !$0 { confirmDelete = nil } })
+        ) {
+            Button("Cancel", role: .cancel) { confirmDelete = nil }
+            Button("Remove", role: .destructive) {
+                if let name = confirmDelete {
+                    confirmDelete = nil
+                    Task { await remove(name) }
+                }
+            }
+        } message: {
+            Text("\"\(confirmDelete ?? "")\" will be removed from mcp.json and stopped if running. This action is not undoable from the app.")
+        }
     }
 
     // MARK: - Sub-views
@@ -66,6 +98,13 @@ struct MCPPanel: View {
             Text("\(servers.count) configured · \(tools.count) tools")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
+            Button {
+                editorDraft = MCPServerDraft.newDraft()
+            } label: {
+                Label("Add server", systemImage: "plus")
+            }
+            .buttonStyle(.bordered)
+            .help("Add a new MCP server to mcp.json")
         }
     }
 
@@ -148,6 +187,24 @@ struct MCPPanel: View {
                     ? "Stop MCP server \(status.name)"
                     : "Start MCP server \(status.name)")
                 .help(status.state == .connected ? "Stop server" : "Start server")
+                Button {
+                    Task { await beginEdit(status.name) }
+                } label: {
+                    Image(systemName: "pencil")
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit MCP server \(status.name)")
+                .help("Edit configuration")
+                Button {
+                    confirmDelete = status.name
+                } label: {
+                    Image(systemName: "trash")
+                        .foregroundStyle(Theme.Colors.danger)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove MCP server \(status.name)")
+                .help("Remove from mcp.json")
             }
             // Error row — only shown on `.error` state. Previously the
             // panel only showed the state-pill color-coded red with no
@@ -274,6 +331,48 @@ struct MCPPanel: View {
         }
     }
 
+    // Resolve the config path that `upsertMCPServer` / `removeMCPServer`
+    // should write to. Prefer the explicit path the user typed/picked;
+    // fall back to nil so the engine lands on the default search path.
+    private func resolvedConfigURL() -> URL? {
+        let p = configPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return p.isEmpty ? nil : URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
+    }
+
+    /// Pull the current config off the engine so we can pre-fill the
+    /// editor with everything the user already saved (command, args,
+    /// env, url, enabled, timeout). Falls back to a minimal stdio draft
+    /// when the manager doesn't know the name — shouldn't happen in
+    /// practice because the row is rendered from `listServers()`.
+    private func beginEdit(_ name: String) async {
+        let cfg = await app.engine.mcp.currentConfig()
+        if let existing = cfg.servers[name] {
+            editorDraft = MCPServerDraft(existing: existing)
+        } else {
+            editorDraft = MCPServerDraft.newDraft(name: name)
+        }
+    }
+
+    private func upsert(_ server: MCPServerConfig) async {
+        lastError = nil
+        do {
+            try await app.engine.upsertMCPServer(server, configPath: resolvedConfigURL())
+            await refreshOnce()
+        } catch {
+            lastError = "Save failed: \(error)"
+        }
+    }
+
+    private func remove(_ name: String) async {
+        lastError = nil
+        do {
+            try await app.engine.removeMCPServer(name, configPath: resolvedConfigURL())
+            await refreshOnce()
+        } catch {
+            lastError = "Remove failed: \(error)"
+        }
+    }
+
     private func toggleServer(_ status: MCPServerStatus) async {
         lastError = nil
         let mcp = await app.engine.mcp
@@ -310,5 +409,220 @@ struct MCPPanel: View {
         case .disconnected: return Theme.Colors.textLow
         case .error:        return Theme.Colors.danger
         }
+    }
+}
+
+// MARK: - Editor draft + sheet
+
+/// Mutable, text-friendly mirror of `MCPServerConfig` that the form
+/// binds to. Array/dict fields (`args`, `env`) are edited as newline-
+/// separated text and split on save — a full KV editor was overkill
+/// for the 1–8 entries a typical server needs.
+///
+/// `id` matches the server name when editing an existing row; fresh
+/// drafts start with a UUID so the `.sheet(item:)` presentation key
+/// doesn't collide with a stale name.
+struct MCPServerDraft: Identifiable, Equatable {
+    var id: String
+    var isNew: Bool
+    var name: String
+    var transport: MCPTransport
+    var command: String
+    var argsText: String   // newline-separated
+    var envText: String    // newline-separated KEY=VALUE
+    var url: String
+    var enabled: Bool
+    var timeoutSeconds: Double
+    var skipSecurityValidation: Bool
+
+    static func newDraft(name: String = "") -> MCPServerDraft {
+        MCPServerDraft(
+            id: UUID().uuidString,
+            isNew: true,
+            name: name,
+            transport: .stdio,
+            command: "",
+            argsText: "",
+            envText: "",
+            url: "",
+            enabled: true,
+            timeoutSeconds: 30,
+            skipSecurityValidation: false
+        )
+    }
+
+    init(existing: MCPServerConfig) {
+        self.id = existing.name
+        self.isNew = false
+        self.name = existing.name
+        self.transport = existing.transport
+        self.command = existing.command ?? ""
+        self.argsText = (existing.args ?? []).joined(separator: "\n")
+        self.envText = (existing.env ?? [:])
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "\n")
+        self.url = existing.url ?? ""
+        self.enabled = existing.enabled
+        self.timeoutSeconds = existing.timeout
+        self.skipSecurityValidation = existing.skipSecurityValidation
+    }
+
+    init(
+        id: String, isNew: Bool, name: String, transport: MCPTransport,
+        command: String, argsText: String, envText: String, url: String,
+        enabled: Bool, timeoutSeconds: Double, skipSecurityValidation: Bool
+    ) {
+        self.id = id
+        self.isNew = isNew
+        self.name = name
+        self.transport = transport
+        self.command = command
+        self.argsText = argsText
+        self.envText = envText
+        self.url = url
+        self.enabled = enabled
+        self.timeoutSeconds = timeoutSeconds
+        self.skipSecurityValidation = skipSecurityValidation
+    }
+
+    /// Build an `MCPServerConfig` from the draft, validating required
+    /// fields per transport. Returns `(config, nil)` on success or
+    /// `(nil, "reason")` on failure — surfaced inline in the sheet.
+    func build() -> (MCPServerConfig?, String?) {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        if trimmedName.isEmpty { return (nil, "Name is required") }
+        let args = argsText
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var env: [String: String] = [:]
+        for line in envText.split(whereSeparator: { $0.isNewline }) {
+            let raw = String(line).trimmingCharacters(in: .whitespaces)
+            if raw.isEmpty { continue }
+            guard let eq = raw.firstIndex(of: "=") else {
+                return (nil, "Env line missing '=': \(raw)")
+            }
+            let key = String(raw[..<eq]).trimmingCharacters(in: .whitespaces)
+            let value = String(raw[raw.index(after: eq)...])
+            if key.isEmpty { return (nil, "Env key empty in line: \(raw)") }
+            env[key] = value
+        }
+        let cfg = MCPServerConfig(
+            name: trimmedName,
+            transport: transport,
+            command: transport == .stdio ? command.trimmingCharacters(in: .whitespaces) : nil,
+            args: args.isEmpty ? nil : args,
+            env: env.isEmpty ? nil : env,
+            url: transport == .sse ? url.trimmingCharacters(in: .whitespaces) : nil,
+            enabled: enabled,
+            timeout: max(1, timeoutSeconds),
+            skipSecurityValidation: skipSecurityValidation
+        )
+        if let reason = cfg.validateShape() { return (nil, reason) }
+        return (cfg, nil)
+    }
+}
+
+struct MCPServerEditor: View {
+    @State var draft: MCPServerDraft
+    let existingNames: Set<String>
+    let onSave: (MCPServerConfig) -> Void
+    let onCancel: () -> Void
+    @State private var error: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text(draft.isNew ? "Add MCP server" : "Edit \(draft.name)")
+                .font(Theme.Typography.bodyHi)
+                .foregroundStyle(Theme.Colors.textHigh)
+
+            Form {
+                Section {
+                    TextField("Name", text: $draft.name)
+                        .disabled(!draft.isNew)  // renaming changes the dict key
+                        .help(draft.isNew
+                            ? "Unique identifier — also the prefix on every tool name (server__tool)"
+                            : "Renaming requires remove+add — use a separate step")
+                    Picker("Transport", selection: $draft.transport) {
+                        Text("stdio (subprocess)").tag(MCPTransport.stdio)
+                        Text("sse (remote URL)").tag(MCPTransport.sse)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if draft.transport == .stdio {
+                    Section("stdio") {
+                        TextField("Command", text: $draft.command)
+                            .help("Absolute path or PATH-resolvable executable")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Args (one per line)")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Colors.textLow)
+                            TextEditor(text: $draft.argsText)
+                                .frame(minHeight: 60, maxHeight: 120)
+                                .font(Theme.Typography.mono)
+                        }
+                    }
+                } else {
+                    Section("sse") {
+                        TextField("URL", text: $draft.url)
+                            .help("Full https:// URL of the MCP SSE endpoint")
+                    }
+                }
+                Section("Environment") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("KEY=VALUE per line")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textLow)
+                        TextEditor(text: $draft.envText)
+                            .frame(minHeight: 60, maxHeight: 120)
+                            .font(Theme.Typography.mono)
+                    }
+                }
+                Section("Runtime") {
+                    Toggle("Enabled", isOn: $draft.enabled)
+                    HStack {
+                        Text("Timeout")
+                        Slider(value: $draft.timeoutSeconds, in: 1...300, step: 1) {
+                            Text("Timeout seconds")
+                        }
+                        Text("\(Int(draft.timeoutSeconds))s")
+                            .monospacedDigit()
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                    Toggle("Skip security validation (dev only)",
+                           isOn: $draft.skipSecurityValidation)
+                }
+            }
+
+            if let err = error {
+                Text(err)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.danger)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button(draft.isNew ? "Add" : "Save") {
+                    if draft.isNew && existingNames.contains(
+                        draft.name.trimmingCharacters(in: .whitespaces)
+                    ) {
+                        error = "A server named '\(draft.name)' already exists."
+                        return
+                    }
+                    let (cfg, reason) = draft.build()
+                    if let reason {
+                        error = reason
+                    } else if let cfg {
+                        onSave(cfg)
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(Theme.Spacing.lg)
     }
 }
