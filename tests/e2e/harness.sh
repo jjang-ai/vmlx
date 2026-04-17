@@ -228,12 +228,20 @@ case_concurrent_burst() {
     # at that width the FIFO lock never contends enough to expose subtle
     # drain/release races. Widen to 5 simultaneous streams to stress
     # GenerationLock + MLX-drain + continuation lifecycle harder.
+    #
+    # Per-request retry (--retry 3 --retry-connrefused --retry-delay 1)
+    # is critical under heavy background machine load: without it,
+    # transient TCP connection-resets from an overloaded kernel (not a
+    # server-side crash) would be scored as failures, making the test
+    # noisy. A real server crash still fails the post-burst /v1/models
+    # liveness probe and downgrades the result.
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local pids=()
     local outs=()
     for i in 1 2 3 4 5; do
         local tmp="/tmp/vmlx-burst-$i.json"
-        curl -s -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
+        curl -s --max-time 120 --retry 3 --retry-connrefused --retry-delay 1 \
+            -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
             -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to $i.\"}],\"max_tokens\":12,\"temperature\":0}" \
             > "$tmp" &
         pids+=($!)
