@@ -140,18 +140,27 @@ extension Engine {
                 // command encoder is already encoding to this command
                 // buffer`.
                 //
-                // SKIP the eval barrier on CancellationError paths —
-                // the just-interrupted gen left a pending completion
-                // handler on an in-flight buffer that our fresh eval
-                // then collides with, tripping
-                // `addCompletedHandler: Completed handler provided
-                // after commit call`. Reproduced intermittently (~1/2
-                // runs) on `case_cancel_midstream`. Under cancel we
-                // rely on synchronize() alone — which waits for the
-                // pending commit to drain without scheduling new work.
-                if !wasCancelled {
-                    MLX.eval(MLX.MLXArray(Int32(0)))
+                // On CancellationError: give MLX's internal async-eval
+                // pipeline a small window to propagate cancellation
+                // through before we drain. Without this window,
+                // synchronize() races the still-open command encoder
+                // from the interrupted gen and the NEXT request then
+                // trips either
+                //   `addCompletedHandler: Completed handler provided
+                //    after commit call`, OR
+                //   `_status < MTLCommandBufferStatusCommitted at
+                //    setCurrentCommandEncoder:`
+                // depending on how far the encoder had progressed.
+                //
+                // 150 ms is conservative — picked by bisection against
+                // `case_cancel_midstream` on Qwen3-0.6B under background
+                // load. After the delay, run the SAME eval + dual-sync
+                // barrier as the happy path: eval on a fresh scalar
+                // commits any remnant encoder, then the sync pair drains.
+                if wasCancelled {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
                 }
+                MLX.eval(MLX.MLXArray(Int32(0)))
                 MLX.Stream.defaultStream(.gpu).synchronize()
                 MLX.Stream.defaultStream(.cpu).synchronize()
                 // Release synchronously (not via a detached Task) so the
