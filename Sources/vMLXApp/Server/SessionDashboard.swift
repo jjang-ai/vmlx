@@ -315,7 +315,16 @@ struct SessionDashboard: View {
             await app.gateway.registerEngine(eng)
             await app.ensureGatewayRunning()
         } catch {
+            // HTTP bind failure leaves the engine LOADED but not serving —
+            // card would keep showing "Running" while external clients hit
+            // connection-refused. Stop the engine so the session's state
+            // transitions cleanly back to `.stopped`, matching the UI
+            // contract that "Running" means "reachable".
             app.flashBanner("HTTP listener failed: \(error)")
+            await eng.stop()
+            if let idx2 = app.sessions.firstIndex(where: { $0.id == id }) {
+                app.sessions[idx2].pid = nil
+            }
         }
     }
 
