@@ -150,3 +150,27 @@ Results per model are archived in `tests/e2e/results/*.jsonl`.
 Multi-turn prefix cache on Nemotron: **t2 actually equals t1** despite
 the prompt growing by 2 messages — the hybrid-SSM companion cache is
 pulling the system+user1 tokens out of paged memory as expected.
+
+### 📊 Iteration 4-8 — extended suite + JANGTQ + larger VL + Gemma4
+
+Extended suite (16 cases) adds: `concurrent_burst` (5-way), `cancel_midstream`,
+`tool_call`, `tool_roundtrip`, `stream_usage`, `large_context`.
+
+| model | size | concurrent | burst 5-way | cancel | usage | ctx 5k | total |
+|-------|------|------------|-------------|--------|-------|--------|-------|
+| Qwen3-0.6B-8bit | 0.6 GB | 3/3 ✅ | 5/5 ✅ | ✅ | ✅ | ✅ | 16/16 ✅ |
+| Qwen3.5-VL-9B-JANG_4S-CRACK | 6 GB | 3/3 ✅ | — | — | — | — | 6/6 ✅ (vl suite) |
+| gemma-4-e4b-it-4bit | 4.9 GB | 3/3 ✅ | 5/5 ✅ | ✅ | ✅ | ✅ | 14/16 (tool-call model refuses) |
+| Qwen3.6-35B-A3B-JANGTQ2 | 11 GB | 3/3 ✅ | crash@5 | — | — | — | 7/13 (3-way ok; 5-way MXTQ kernel race) |
+
+Metal concurrency fix stack (each iteration closed one assertion class):
+1. `_status < MTLCommandBufferStatusCommitted` → GenerationLock (iter 1)
+2. `Completed handler provided after commit call` on VL concur → GPU synchronize (iter 3)
+3. `tryCoalescingPreviousComputeCommandEncoder` on JANGTQ concur → CPU synchronize (iter 5)
+4. `Completed handler provided after commit call` on cancel-followup → skip eval barrier on CancellationError (iter 7)
+
+### 🧰 Audit helpers
+
+- `tests/e2e/audit-disk.sh` — walks HF cache + user dirs, prints every
+  model dir that has a config.json + weight shards with resolved size.
+  Use before a matrix sweep: `tests/e2e/audit-disk.sh > today.txt && diff yesterday.txt today.txt`.
