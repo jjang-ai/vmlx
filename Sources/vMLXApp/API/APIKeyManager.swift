@@ -19,6 +19,11 @@ final class APIKeyManager {
 
     private init() {
         cached = Database.shared.allAPIKeys()
+        // First-launch migration: mirror every stored API key's value
+        // from plaintext SQLite into macOS Keychain so future reads
+        // prefer the Keychain-backed path. No-op on every subsequent
+        // launch once the items are present.
+        KeychainAPIKeyStore.migrateFromSQLiteIfNeeded(rows: cached)
     }
 
     // MARK: - API
@@ -28,9 +33,23 @@ final class APIKeyManager {
         return cached
     }
 
+    /// Fetch the authoritative key material for `id`. Prefers Keychain
+    /// (migrated rows + newly-generated rows) and falls back to the
+    /// SQLite plaintext `value` column for any row that hasn't been
+    /// migrated yet (should be zero after `init`'s migration runs).
+    func resolveValue(id: String) -> String? {
+        if let v = KeychainAPIKeyStore.load(id: id) { return v }
+        return Database.shared.allAPIKeys().first(where: { $0.id == id })?.value
+    }
+
     /// Generates a 32-char URL-safe random key with the `vmlx_` prefix.
     /// Schema matches `server.py::BearerAuthMiddleware` — the middleware just
     /// does a byte-equals compare, so prefix is purely cosmetic.
+    ///
+    /// Writes the key material to both Keychain (authoritative) and
+    /// SQLite (legacy / middleware-compat) so the bearer-auth path
+    /// keeps working during the migration grace period while consumers
+    /// transition to `resolveValue(id:)`.
     @discardableResult
     func generate(label: String) -> Database.APIKeyRow {
         let value = "vmlx_" + Self.randomURLSafe(length: 32)
@@ -41,12 +60,14 @@ final class APIKeyManager {
             createdAt: Date(),
             lastUsedAt: nil
         )
+        KeychainAPIKeyStore.save(id: row.id, value: value)
         Database.shared.insertAPIKey(row)
         reloadAndBroadcast()
         return row
     }
 
     func revoke(id: String) {
+        KeychainAPIKeyStore.delete(id: id)
         Database.shared.deleteAPIKey(id: id)
         reloadAndBroadcast()
     }
