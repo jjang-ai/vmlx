@@ -109,6 +109,36 @@ public func loadWeights(
         }
     }
 
+    // JANGTQ native-path validation. When `jang_config.weight_format ==
+    // "mxtq"` (or the sidecar is present) we're committed to the
+    // TurboQuant-native code path — we skipped the affine expander and
+    // will run `TurboQuantSwitchGLU` over the loaded weights. If the
+    // bundle ACTUALLY ships no `.tq_packed` tensors the expander would
+    // have rebuilt them anyway, but the native path trusts them to be
+    // there and crashes deep in `model.update` with a parameter-count
+    // mismatch that points at the wrong layer. Catch it here with an
+    // actionable message instead.
+    //
+    // The validation is cheap — we already have `weights.keys` enumerated —
+    // and it fires only on the native path, so affine-JANG load is
+    // unaffected.
+    if isJANGTQNative {
+        let hasTQPacked = weights.keys.contains { $0.hasSuffix(".tq_packed") }
+        if !hasTQPacked {
+            throw JangLoaderError.loadFailed(
+                "Bundle declares weight_format=\"mxtq\" (or ships "
+              + "jangtq_runtime.safetensors) but contains no .tq_packed "
+              + "tensors. This is a misconfigured JANGTQ bundle — either "
+              + "(a) set weight_format to the affine value if the bundle "
+              + "is not TurboQuant-native, (b) re-run jang_tools' "
+              + "convert_qwen35_jangtq / convert_glm4_jangtq / "
+              + "convert_minimax_jangtq to regenerate .tq_packed shards, "
+              + "or (c) delete jangtq_runtime.safetensors if this is an "
+              + "affine JANG bundle. See /Users/eric/jang/jang-tools/ for "
+              + "the Python reference loader.")
+        }
+    }
+
     // JANG MXTQ (TurboQuant-packed) dequantization.
     // Detects `.tq_packed` keys and rewrites them into affine
     // (.weight/.scales/.biases) triplets BEFORE per-model sanitize so that

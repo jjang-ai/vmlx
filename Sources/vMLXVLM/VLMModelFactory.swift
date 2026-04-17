@@ -92,28 +92,17 @@ public enum VLMTypeRegistry {
         "qwen3_vl": create(Qwen3VLConfiguration.self, Qwen3VL.init),
         "qwen3_5": create(Qwen35Configuration.self, Qwen35.init),
         "qwen3_5_moe": { data in
-            // Sniff weight_format. JANGTQ-quantized Qwen3.5/3.6 VLMs declare
-            // `weight_format: "mxtq"` and route to Qwen35MoEJANGTQ so the
-            // routed-expert MoE runs through TurboQuantSwitchGLU. Affine
-            // VLMs fall through to the standard Qwen35MoE class.
-            struct FormatCheck: Codable {
-                let weightFormat: String?
-                let textConfig: TextConfigCheck?
-                enum CodingKeys: String, CodingKey {
-                    case weightFormat = "weight_format"
-                    case textConfig = "text_config"
-                }
-                struct TextConfigCheck: Codable {
-                    let weightFormat: String?
-                    enum CodingKeys: String, CodingKey {
-                        case weightFormat = "weight_format"
-                    }
-                }
-            }
-            if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
-                check.weightFormat?.lowercased() == "mxtq"
-                 || check.textConfig?.weightFormat?.lowercased() == "mxtq"
-            {
+            // Sniff weight_format (top-level OR nested text_config,
+            // case-insensitive). JANGTQ-quantized Qwen3.5 / 3.6 VLMs
+            // declare `weight_format: "mxtq"` and route to
+            // Qwen35MoEJANGTQ so the routed-expert MoE runs through
+            // TurboQuantSwitchGLU. Affine VLMs fall through to the
+            // standard Qwen35MoE class.
+            //
+            // Uses the shared `vMLXLLM.FormatSniff.isMXTQ` so the four
+            // factory entries (LLM qwen3_5_moe / minimax_m2 / glm4_moe
+            // + this VLM entry) stay in lock-step.
+            if FormatSniff.isMXTQ(from: data) {
                 let config = try JSONDecoder.json5().decode(
                     Qwen35MoEJANGTQConfiguration.self, from: data)
                 return Qwen35MoEJANGTQ(config)

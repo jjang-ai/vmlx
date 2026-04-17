@@ -17,7 +17,6 @@
 // One canonical sniffer keeps the four factory entries in lock-step.
 
 import Foundation
-import vMLXLMCommon
 
 public enum FormatSniff {
 
