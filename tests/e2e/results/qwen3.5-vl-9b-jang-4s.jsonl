@@ -1,0 +1,9 @@
+{"name":"start","ok":true,"notes":"model=Qwen3.5-VL-9B-JANG_4S-CRACK suite=vl"}
+{"name":"server_start","ok":true,"notes":"pid=60326"}
+{"name":"models_list","ok":true,"notes":"39 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":599,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 49, "tokens": 202, "tps": 20.6, "notes": "decode_ms=9771"}
+{"name":"vision_chat","ok":true,"notes":" Red"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":872,"notes":"t1=682ms t2=872ms"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"done","ok":true}
