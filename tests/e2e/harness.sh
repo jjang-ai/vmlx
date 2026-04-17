@@ -956,6 +956,59 @@ print(json.dumps({"name":"stream_usage","ok":ok=="true","notes":note[:80]}))
 PY
 }
 
+case_ollama_stream() {
+    # Ollama NDJSON streaming: /api/chat?stream=true emits one JSON object
+    # per newline. All intermediate chunks have done=false; final chunk has
+    # done=true plus done_reason, eval_count, prompt_eval_count. Missing
+    # the terminal done=true chunk hangs ollama-python's iterator. Gate:
+    #   * ≥2 chunks received
+    #   * every line parses as JSON
+    #   * all non-terminal chunks: done=false + message.role=assistant
+    #   * terminal chunk: done=true + done_reason str
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"user","content":"Say hi"}],
+    "stream": True,
+    "options": {"temperature":0,"num_predict":6},
+}
+proc = subprocess.Popen(
+    ["curl","-sN","-X","POST","$BASE/api/chat",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    stdout=subprocess.PIPE, text=True)
+chunks = []
+parse_fail = 0
+for line in proc.stdout:
+    line = line.strip()
+    if not line: continue
+    try:
+        chunks.append(json.loads(line))
+    except Exception:
+        parse_fail += 1
+try:
+    proc.wait(timeout=2)
+except Exception:
+    proc.kill()
+# Intermediate chunks: done=false, msg.role=assistant
+intermediate_ok = True
+for c in chunks[:-1]:
+    if c.get("done") is True:
+        intermediate_ok = False; break
+    msg = c.get("message") or {}
+    if msg.get("role") != "assistant":
+        intermediate_ok = False; break
+# Terminal chunk
+terminal = chunks[-1] if chunks else {}
+terminal_ok = (terminal.get("done") is True
+               and isinstance(terminal.get("done_reason"), str))
+ok = len(chunks) >= 2 and parse_fail == 0 and intermediate_ok and terminal_ok
+notes = f"chunks={len(chunks)} parseFail={parse_fail} interOk={intermediate_ok} term={{done={terminal.get('done')},reason={terminal.get('done_reason')}}}"
+print(json.dumps({"name":"ollama_stream","ok":ok,"notes":notes[:160]}))
+PY
+}
+
 case_anthropic_stream() {
     # Anthropic SSE streaming uses a different protocol than OpenAI:
     #   event: message_start         (outer Message envelope, usage=0)
@@ -1507,6 +1560,7 @@ suite_full() {
     case_ollama_version
     case_stream_usage_opt_out
     case_anthropic_stream
+    case_ollama_stream
 }
 
 suite_vl() {
