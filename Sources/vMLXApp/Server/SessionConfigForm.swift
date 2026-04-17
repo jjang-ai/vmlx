@@ -35,6 +35,13 @@ struct SessionConfigForm: View {
     @State private var openAdvanced    = false
     @State private var openLogging     = false
 
+    /// Set to `true` when the user toggles "Allow LAN access" ON — gates
+    /// the `.confirmationDialog(...)` at the view root that asks the user
+    /// to confirm exposing the HTTP listener to every device on the
+    /// Wi-Fi. Flipping the toggle OFF is always safe (local-only) and
+    /// bypasses this prompt.
+    @State private var pendingLANEnable: Bool = false
+
     // Global defaults snapshot — shown as placeholder text behind each field
     // so the user sees what value will be inherited if they leave it empty.
     @State private var globalDefaults: GlobalSettings = GlobalSettings()
@@ -103,6 +110,28 @@ struct SessionConfigForm: View {
         }
         .frame(maxHeight: 520)
         .task { await load() }
+        // LAN-bind confirmation dialog. Exposing the HTTP listener to
+        // `0.0.0.0` surfaces the engine to every device on the same
+        // network — users should explicitly opt in, not silently toggle
+        // a switch and discover later. Canceling keeps the per-session
+        // lan flag off (set to false rather than leaving nil so the
+        // absence of a flag doesn't defeat the prompt on next toggle).
+        .confirmationDialog(
+            "Bind server to 0.0.0.0?",
+            isPresented: $pendingLANEnable,
+            titleVisibility: .visible
+        ) {
+            Button("Enable LAN access", role: .destructive) {
+                s.lan = true
+                commit()
+            }
+            Button("Cancel", role: .cancel) {
+                s.lan = false
+                commit()
+            }
+        } message: {
+            Text("Every device on your Wi-Fi will be able to reach this session's HTTP server. Make sure you trust the network before enabling — nothing gates access beyond the optional API-key bearer token. You can turn this off again at any time.")
+        }
     }
 
     private var divider: some View {
@@ -339,10 +368,21 @@ struct SessionConfigForm: View {
                         set: { s.port = Int($0); commit() }
                        ),
                        range: 1024...65535, step: 1, format: "%.0f")
+        // LAN bind intercepts the write: flipping ON exposes the engine's
+        // HTTP listener to every device on the Wi-Fi, so we surface a
+        // confirmation dialog before persisting. Flipping OFF is always
+        // safe (local-only).
         toggleRow("Allow LAN access (bind 0.0.0.0)",
                   Binding(
                     get: { s.lan ?? globalDefaults.defaultLAN },
-                    set: { s.lan = $0; commit() }
+                    set: { newValue in
+                        if newValue {
+                            pendingLANEnable = true
+                        } else {
+                            s.lan = false
+                            commit()
+                        }
+                    }
                   ))
     }
 
