@@ -222,17 +222,25 @@ public actor Engine {
         await metrics.recordTokenBatch(prefill: prefill, count: count, durationMs: durationMs)
     }
 
-    /// Multi-subscriber state broadcast. The UI layer should subscribe via
-    /// `Engine.subscribeState()` and re-render on every emission. Currently
-    /// stubbed as a single-subscriber stream — graduate to a multicast
-    /// channel (e.g. AsyncChannel) when more than one consumer needs it.
-    private var stateContinuation: AsyncStream<EngineState>.Continuation?
-    private lazy var stateStreamStorage: AsyncStream<EngineState> = {
-        AsyncStream { cont in
-            self.stateContinuation = cont
-            cont.yield(self.state)
-        }
-    }()
+    /// Multi-subscriber state broadcast. Each call to `subscribeState()`
+    /// returns a FRESH AsyncStream with its own continuation; `transition`
+    /// fans out to every live continuation.
+    ///
+    /// iter-64 FIX: previously a single shared AsyncStream served every
+    /// subscriber. Since AsyncStream is single-subscriber by design,
+    /// multiple consumers racing the same stream's iterator caused events
+    /// to be delivered to only ONE of them per yield — which is exactly
+    /// what the user reported: clicking Start in the Server tab did not
+    /// update the card's status/log/button. The per-session observer
+    /// (`observePerSessionEngine`) and the global-selection observer
+    /// (`rebindEngineObserver`) were stealing events from each other,
+    /// leaving one of them perpetually stale.
+    ///
+    /// The fan-out is O(N) in subscriber count; realistically that's
+    /// ≤ 3 (per-session observer + global observer + occasional tray /
+    /// CLI probe). Continuation table is self-cleaning: when a subscriber
+    /// drops its iterator, the onTermination handler removes it.
+    private var stateSubscribers: [UUID: AsyncStream<EngineState>.Continuation] = [:]
 
     /// Idle lifecycle timer. On `.softSleep` we transition to
     /// `.standby(.soft)` and attempt the (currently stub) `softSleep()`; on
@@ -630,15 +638,50 @@ public actor Engine {
         }
     }
 
-    /// Subscribe to engine lifecycle transitions. Hot stream — replays current
-    /// state to new subscribers, then yields every transition.
+    /// Subscribe to engine lifecycle transitions. Hot stream — replays
+    /// current state to new subscribers, then yields every transition.
+    /// Multi-subscriber: each call returns a fresh AsyncStream with its
+    /// own continuation registered in `stateSubscribers`. See iter-64
+    /// comment on the declaration of `stateSubscribers` above.
     public func subscribeState() -> AsyncStream<EngineState> {
-        stateStreamStorage
+        AsyncStream { [weak self] cont in
+            guard let self else {
+                cont.finish()
+                return
+            }
+            let id = UUID()
+            // Actor-isolated `state` can't be read from this nonisolated
+            // closure — move the read INTO the Task so it's awaited.
+            Task { [weak self] in
+                guard let self else { return }
+                let current = await self.state
+                await self.registerStateSubscriber(id, continuation: cont)
+                cont.yield(current)
+            }
+            cont.onTermination = { [weak self] _ in
+                Task { [weak self] in
+                    await self?.unregisterStateSubscriber(id)
+                }
+            }
+        }
+    }
+
+    private func registerStateSubscriber(
+        _ id: UUID,
+        continuation: AsyncStream<EngineState>.Continuation
+    ) {
+        stateSubscribers[id] = continuation
+    }
+
+    private func unregisterStateSubscriber(_ id: UUID) {
+        stateSubscribers.removeValue(forKey: id)
     }
 
     private func transition(_ next: EngineState) {
         state = next
-        stateContinuation?.yield(next)
+        for cont in stateSubscribers.values {
+            cont.yield(next)
+        }
     }
 
     /// Load a model from disk with progress events.

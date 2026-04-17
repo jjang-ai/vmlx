@@ -1961,6 +1961,14 @@ extension Engine {
         params.minP = Float(request.minP ?? resolved.minP)
         params.repetitionPenalty = Float(
             request.repetitionPenalty ?? resolved.repetitionPenalty)
+        // iter-64: sampler seed. Samplers in Evaluate.swift hold
+        // private RandomState instances that ignore the global
+        // MLXRandom.seed() call earlier in stream(); this plumbs the
+        // user-supplied seed through to them. Without this, two
+        // requests with the same `seed` produced different output.
+        if let seed = request.seed {
+            params.samplerSeed = UInt64(bitPattern: Int64(seed))
+        }
 
         // Whole-model compiled decode (perf audit 2026-04-16). Enabling
         // `enableCompiledDecode` wraps the entire model forward pass in

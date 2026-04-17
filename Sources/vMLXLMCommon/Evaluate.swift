@@ -145,6 +145,12 @@ public struct GenerateParameters: Sendable {
     /// number of tokens to consider for frequency penalty
     public var frequencyContextSize: Int
 
+    /// Optional seed for the sampler's private `MLXRandom.RandomState`.
+    /// Added as a stored-only property (NOT wired through `init`) so
+    /// build targets that link `GenerateParameters` don't need a relink.
+    /// Callers mutate via direct assignment: `p.samplerSeed = 42`.
+    public var samplerSeed: UInt64? = nil
+
     public init(
         maxTokens: Int? = nil,
         maxKVSize: Int? = nil,
@@ -195,9 +201,11 @@ public struct GenerateParameters: Sendable {
         if temperature == 0 {
             return ArgMaxSampler()
         } else if usesTopP || usesTopK || usesMinP {
-            return TopPSampler(temperature: temperature, topP: topP, topK: topK, minP: minP)
+            return TopPSampler(
+                temperature: temperature, topP: topP, topK: topK, minP: minP,
+                seed: samplerSeed)
         } else {
-            return CategoricalSampler(temperature: temperature)
+            return CategoricalSampler(temperature: temperature, seed: samplerSeed)
         }
     }
 
@@ -268,7 +276,10 @@ public struct TopPSampler: LogitSampler {
     let negInf: MLXArray
     let randomState: MLXRandom.RandomState
 
-    public init(temperature: Float, topP: Float = 1.0, topK: Int = 0, minP: Float = 0.0) {
+    public init(
+        temperature: Float, topP: Float = 1.0, topK: Int = 0, minP: Float = 0.0,
+        seed: UInt64? = nil
+    ) {
         self.temp = MLXArray(temperature)
         if topP > 0 && topP < 1 {
             self.topP = MLXArray(topP)
@@ -281,7 +292,11 @@ public struct TopPSampler: LogitSampler {
         // upcasts logits to fp32 (see line 287), so fp32 negInf is the
         // correct dtype here. See SWIFT-NO-REGRESSION-CHECKLIST §27.
         self.negInf = MLXArray(-Float.infinity)
-        self.randomState = MLXRandom.RandomState()
+        // iter-64: honor caller-supplied seed. Prior code ignored
+        // MLXRandom.seed() set by Stream.swift because RandomState is
+        // per-instance — caught via case_seed_reproducibility harness.
+        self.randomState = seed.map(MLXRandom.RandomState.init(seed:))
+            ?? MLXRandom.RandomState()
     }
 
     public func sample(logits: MLXArray) -> MLXArray {
@@ -347,9 +362,11 @@ public struct CategoricalSampler: LogitSampler {
     let temp: MLXArray
     let randomState: MLXRandom.RandomState
 
-    public init(temperature: Float) {
+    public init(temperature: Float, seed: UInt64? = nil) {
         self.temp = MLXArray(temperature)
-        self.randomState = MLXRandom.RandomState()
+        // iter-64: honor caller-supplied seed (see TopPSampler comment).
+        self.randomState = seed.map(MLXRandom.RandomState.init(seed:))
+            ?? MLXRandom.RandomState()
     }
 
     public func sample(logits: MLXArray) -> MLXArray {
