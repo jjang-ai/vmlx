@@ -104,6 +104,22 @@ struct vMLXApp: App {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             }
 
+            // Edit menu — wire Cmd-Z to ChatViewModel's in-memory undo
+            // stack for destructive actions (delete session, delete
+            // message, clear-all). Replaces the default "Undo" group
+            // so SwiftUI doesn't route Cmd-Z to the system text-edit
+            // undo (which wouldn't know about our DB-backed actions).
+            CommandGroup(replacing: .undoRedo) {
+                Button(appState.chatViewModelRef?.topUndoLabel.map { "Undo \($0)" }
+                       ?? "Undo") {
+                    if let label = appState.chatViewModelRef?.undo() {
+                        appState.flashBanner("Undid: \(label)")
+                    }
+                }
+                .keyboardShortcut("z", modifiers: [.command])
+                .disabled(appState.chatViewModelRef?.topUndoLabel == nil)
+            }
+
             // View menu — tab switching. Cmd-1..Cmd-5 route to the five
             // top-level modes so keyboard users can navigate without
             // touching the sidebar.
