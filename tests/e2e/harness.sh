@@ -290,6 +290,59 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_unsupported_params() {
+    # ChatRequest.validate() has a nuanced policy per the doc:
+    #  * n != 1 → HARD 400 (vMLX cannot produce multiple completions;
+    #    silent one-when-five-asked would corrupt downstream code).
+    #  * logprobs=true → HARD 400 (not implemented, surfaced explicitly).
+    #  * frequency_penalty / presence_penalty / top_logprobs / response_format
+    #    within range → SILENT ACCEPT — every SDK (openai-python,
+    #    openai-node, LangChain, Cline, Aider, Continue.dev, Open-WebUI,
+    #    Chatbox, LiteLLM, LlamaIndex) ships these as default 0/false
+    #    from user config. Returning 400 breaks ~100% of SDK round-trips
+    #    on the first request. Range checks still reject nonsense
+    #    (frequency_penalty=42, presence_penalty=-99).
+    # Test enforces both halves of the contract so a future "reject all
+    # unknowns" drift is caught, and a future "silently accept n=5"
+    # drift is caught.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess
+base = {
+    "model": "$model_id",
+    "messages": [{"role":"user","content":"hi"}],
+    "max_tokens": 4,
+}
+cases = [
+    # Must 400 (hard reject)
+    ("n_gt_1",                 {"n": 2},                       "reject"),
+    ("logprobs_true",          {"logprobs": True},             "reject"),
+    ("frequency_penalty_range",{"frequency_penalty": 42},      "reject"),
+    ("presence_penalty_range", {"presence_penalty": -99},      "reject"),
+    # Must 200 (silent accept — SDK defaults)
+    ("frequency_penalty_zero", {"frequency_penalty": 0},       "accept"),
+    ("presence_penalty_zero",  {"presence_penalty": 0},        "accept"),
+    ("logprobs_false",         {"logprobs": False},            "accept"),
+]
+fails = []
+for name, extras, want in cases:
+    body = dict(base); body.update(extras)
+    p = subprocess.run(
+        ["curl","-s","-o","/dev/null","-w","%{http_code}",
+         "-X","POST","$BASE/v1/chat/completions",
+         "-H","content-type: application/json","-d", json.dumps(body)],
+        capture_output=True, text=True)
+    code = p.stdout.strip() or "000"
+    got = "reject" if code.startswith("4") else ("accept" if code == "200" else f"HTTP{code}")
+    if got != want:
+        fails.append(f"{name}:want={want},got={got}")
+ok = not fails
+notes = f"contract={len(cases)-len(fails)}/{len(cases)}"
+if fails: notes += f" fails={fails}"
+print(json.dumps({"name":"unsupported_params","ok":ok,"notes":notes[:180]}))
+PY
+}
+
 case_system_message() {
     # System-role messages set behavior; a regression that silently
     # treats system role as user would fail to constrain the model.
@@ -1803,6 +1856,7 @@ suite_full() {
     case_tool_choice_required
     case_temperature_variance
     case_system_message
+    case_unsupported_params
 }
 
 suite_vl() {
