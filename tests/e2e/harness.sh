@@ -397,7 +397,7 @@ case_stop_sequences() {
     # from the emitted content.
     python3 <<PY
 import json, sys
-r = json.loads('''$resp''')
+r = json.loads(r'''$resp''')
 c = r.get("choices",[{}])[0]
 finish = c.get("finish_reason","?")
 content = c.get("message",{}).get("content","")
@@ -595,7 +595,7 @@ case_ollama_version() {
     python3 <<PY
 import json, re
 try:
-    d = json.loads('''$body''')
+    d = json.loads(r'''$body''')
     v = d.get("version", "")
     m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", v)
     ok = bool(m) and (int(m.group(1)), int(m.group(2)), int(m.group(3))) >= (0, 6, 2)
@@ -825,7 +825,7 @@ PY
     tc_args=$(echo "$parsed" | cut -d'|' -f3)
     # Step 2: send tool result back, expect prose answer mentioning 42
     local body2
-    body2=$(python3 -c '
+    body2=$(MID="$model_id" TCID="$tc_id" TCNAME="$tc_name" TCARGS="$tc_args" python3 -c '
 import json, sys, os
 user_ask = "What is the sum of 17 and 25? Use the tool."
 model_id = os.environ["MID"]
@@ -844,7 +844,7 @@ payload = {
     ],
 }
 print(json.dumps(payload))
-' MID="$model_id" TCID="$tc_id" TCNAME="$tc_name" TCARGS="$tc_args")
+')
     curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" \
         -H "content-type: application/json" -d "$body2" > /tmp/vmlx-roundtrip-2.json
     python3 <<'PY'
@@ -881,7 +881,7 @@ case_cache_stats() {
     python3 <<PY
 import json
 try:
-    d = json.loads('''$resp''')
+    d = json.loads(r'''$resp''')
     # Minimal invariants: response is a dict, has something
     ok = "true" if isinstance(d, dict) and len(d) > 0 else "false"
     keys = list(d.keys())[:4] if isinstance(d, dict) else []
