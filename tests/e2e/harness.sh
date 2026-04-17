@@ -290,6 +290,45 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_temperature_variance() {
+    # Sampling correctness: same prompt at temp=1.0 should produce at
+    # least one output different from temp=0.0 greedy. A regression that
+    # ignores temperature (e.g. a broken samplers branch, or always-
+    # greedy path) yields identical outputs — this catches it.
+    # Fire 3 temp=1 requests; if ALL 3 match the temp=0 output exactly,
+    # temperature is being silently dropped.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    # Prompt-choice matters — some prompts land on a strong greedy
+    # attractor (numbered lists, polite openers) and converge across
+    # temperatures. A short creative one-liner request has enough
+    # entropy to exercise sampling at temp=1.
+    local body_greedy="{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Write one creative sentence about a dragon.\"}],\"max_tokens\":40,\"temperature\":0}"
+    local body_hot="{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Write one creative sentence about a dragon.\"}],\"max_tokens\":40,\"temperature\":1.5}"
+    local f0=/tmp/vmlx-tempg.json f1=/tmp/vmlx-temph1.json f2=/tmp/vmlx-temph2.json f3=/tmp/vmlx-temph3.json
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" -d "$body_greedy" > "$f0"
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" -d "$body_hot" > "$f1"
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" -d "$body_hot" > "$f2"
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" -d "$body_hot" > "$f3"
+    python3 <<'PY'
+import json
+def content(p):
+    try:
+        return json.load(open(p)).get("choices",[{}])[0].get("message",{}).get("content","") or ""
+    except Exception:
+        return ""
+g, h1, h2, h3 = [content(p) for p in
+    ("/tmp/vmlx-tempg.json","/tmp/vmlx-temph1.json",
+     "/tmp/vmlx-temph2.json","/tmp/vmlx-temph3.json")]
+# If temperature is respected, at least one hot sample should differ
+# from the greedy (temp=0) output.
+differs = [h != g for h in (h1, h2, h3)]
+ok = any(differs) and all(h for h in (g, h1, h2, h3))
+diff_count = sum(differs)
+print(json.dumps({"name":"temperature_variance","ok":ok,
+    "notes":f"hot_differs_from_greedy={diff_count}/3 greedy={g[:30]!r}"}))
+PY
+}
+
 case_tool_choice_required() {
     # When `tool_choice: "required"` is set, the engine MUST emit a tool
     # call. If the model produces only text, the engine should surface a
@@ -1742,6 +1781,7 @@ suite_full() {
     case_legacy_completions
     case_tool_choice_none
     case_tool_choice_required
+    case_temperature_variance
 }
 
 suite_vl() {
