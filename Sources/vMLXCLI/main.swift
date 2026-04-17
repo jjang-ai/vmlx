@@ -29,6 +29,8 @@ struct Serve: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Start the OpenAI-compatible server")
 
     @Option(name: .shortAndLong) var model: String
+    @Option(name: .long, help: "Path to an embedding model. When set, `/v1/embeddings` becomes callable. Alongside --model; the chat model still serves /v1/chat/completions etc.")
+    var embeddingModel: String?
     @Option(name: .shortAndLong) var host: String = "127.0.0.1"
     @Option(name: .shortAndLong) var port: Int = 8000
     @Option(name: .long) var apiKey: String?
@@ -327,6 +329,24 @@ struct Serve: AsyncParsableCommand {
         } catch {
             FileHandle.standardError.write(Data("[load] failed: \(error)\n".utf8))
             throw ExitCode.failure
+        }
+
+        // Embedding model side-load. `--embedding-model` lets the server
+        // serve `/v1/embeddings` in addition to `/v1/chat/completions`.
+        // Without this the endpoint throws `no embedding model loaded
+        // (call loadEmbeddingModel first)` — which is correct but not
+        // useful for a one-shot `vmlxctl serve` invocation. Same-port
+        // multiplexing: the gateway dispatches by route prefix.
+        if let emb = embeddingModel, !emb.isEmpty {
+            do {
+                try await engine.loadEmbeddingModel(at: URL(fileURLWithPath: emb))
+                FileHandle.standardError.write(Data(
+                    "[cli] embedding model ready: \((emb as NSString).lastPathComponent)\n".utf8))
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "[cli] embedding model load failed: \(error)\n".utf8))
+                // Not fatal — chat still works. Just log and continue.
+            }
         }
 
         // Load the DFlash drafter AFTER the target model is up so the

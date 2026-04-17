@@ -8,6 +8,11 @@
 #   port           optional, default 8765
 #   suite          "smoke" (default) | "full" | "multiturn" | "vl" | "tools"
 #
+# Environment variables:
+#   CLI            path to vmlxctl (default: .build/arm64-apple-macosx/release/vmlxctl)
+#   EMBEDDING_MODEL  when set, passed to --embedding-model; /v1/embeddings works
+#   EXTRA_FLAGS      additional flags appended to `vmlxctl serve`
+#
 # Emits JSON-lines to stdout, one line per test case. Each line includes
 #   { name, ok, ttft_ms, tokens, tps, notes }
 # so downstream reporters can diff across runs.
@@ -29,8 +34,14 @@ die()  { emit "{\"name\":\"FATAL\",\"ok\":false,\"notes\":\"$1\"}"; exit 1; }
 start_server() {
     # Kill anything on our port first
     lsof -ti tcp:"$PORT" | xargs -r kill -9 2>/dev/null
+    local extra=()
+    [ -n "${EMBEDDING_MODEL:-}" ] && extra+=(--embedding-model "$EMBEDDING_MODEL")
+    [ -n "${EXTRA_FLAGS:-}" ] && extra+=($EXTRA_FLAGS)
+    # `set -u` + empty array expansion trips `unbound variable` on bash 3 —
+    # guard with the `+` form so the expansion disappears when `extra` is
+    # empty instead of erroring.
     "$CLI" serve --model "$MODEL" --host "$HOST" --port "$PORT" \
-        > "$LOG" 2>&1 &
+        ${extra[@]+"${extra[@]}"} > "$LOG" 2>&1 &
     SERVER_PID=$!
     # Poll /v1/models until ready (or timeout after 300s for 60GB models)
     for i in $(seq 1 300); do
@@ -283,6 +294,82 @@ case_ollama_tags() {
 # Suites
 # ---------------------------------------------------------------------------
 
+case_embeddings() {
+    # Requires an embedding-capable model (bert / qwen3-embedding / etc).
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/embeddings" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"input\":[\"hello world\",\"goodbye world\"]}")
+    local dim=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d["data"][0]["embedding"])) if d.get("data") else print(0)' 2>/dev/null || echo 0)
+    local ok=false
+    [ "$dim" -gt 64 ] && ok=true
+    emit "{\"name\":\"embeddings\",\"ok\":$ok,\"notes\":\"dim=$dim\"}"
+}
+
+case_vision_chat() {
+    # Generate a 64×64 solid-red PNG on the fly — Qwen-VL / Gemma-VL
+    # preprocessors require images ≥ 32×32 (patch factor). A 1-pixel
+    # image trips `Height: 1 must be larger than factor: 32`.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local img=$(python3 <<'PY'
+import base64, struct, zlib
+w = h = 64
+def chunk(tag, data):
+    crc = zlib.crc32(tag + data) & 0xffffffff
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+# scanlines: filter byte 0 + 3-byte RGB per pixel, solid red
+raw = b"".join(b"\x00" + b"\xff\x00\x00" * w for _ in range(h))
+idat = zlib.compress(raw)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+print("data:image/png;base64," + base64.b64encode(png).decode())
+PY
+)
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What color is this image? One word.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"$img\"}}]}],\"max_tokens\":16,\"temperature\":0}")
+    local content=$(echo "$resp" | extract_content)
+    local err=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("error",{}).get("message","")[:80])' 2>/dev/null)
+    local ok=false
+    [ -n "$content" ] && [ -z "$err" ] && ok=true
+    local note="$content"
+    [ -n "$err" ] && note="ERR: $err"
+    emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$note")}"
+}
+
+case_audio_transcription() {
+    # Use the whisper model's own test wav if present; else skip.
+    local wav=""
+    for cand in \
+        /Users/eric/.cache/huggingface/hub/models--mlx-community--whisper-tiny-mlx/snapshots/*/test.wav \
+        /Users/eric/vmlx/swift/tests/e2e/fixtures/hello.wav; do
+        eval "expanded=$cand" 2>/dev/null
+        [ -f "$expanded" ] && wav="$expanded" && break
+    done
+    if [ -z "$wav" ]; then
+        # Generate a 1-second silent wav on the fly with python so the
+        # harness doesn't require a checked-in fixture.
+        wav=/tmp/vmlx-test-silent.wav
+        python3 - <<PY
+import struct, wave
+with wave.open("$wav", "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+    w.writeframes(b"\\x00\\x00" * 16000)
+PY
+    fi
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/audio/transcriptions" \
+        -F "file=@$wav" -F "model=whisper-tiny-mlx")
+    local text=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("text",""))' 2>/dev/null)
+    # Even a silent wav should return a valid (possibly empty) text field.
+    local has_text=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("yes" if "text" in d else "no")' 2>/dev/null)
+    local ok=false
+    [ "$has_text" = "yes" ] && ok=true
+    emit "{\"name\":\"audio_transcription\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps((sys.argv[1] or "[silent]")[:60]))' "$text")}"
+}
+
 suite_smoke() {
     case_models_list
     case_basic_chat
@@ -302,6 +389,29 @@ suite_full() {
     case_concurrent
 }
 
+suite_vl() {
+    # VL models: skip max_tokens/stop-sequence chat-template tests that
+    # degenerate on a vision-stamp-heavy template; keep the basic chat +
+    # vision_chat as the marker case.
+    case_models_list
+    case_basic_chat
+    case_sse_stream
+    case_vision_chat
+    case_multiturn_prefix_cache
+    case_concurrent
+}
+
+suite_embedding() {
+    case_models_list
+    case_metrics
+    case_embeddings
+}
+
+suite_audio() {
+    case_models_list
+    case_audio_transcription
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -316,6 +426,9 @@ emit "{\"name\":\"server_start\",\"ok\":true,\"notes\":\"pid=$SERVER_PID\"}"
 case "$SUITE" in
     smoke)      suite_smoke ;;
     full)       suite_full ;;
+    vl)         suite_vl ;;
+    embedding)  suite_embedding ;;
+    audio)      suite_audio ;;
     *)          suite_smoke ;;
 esac
 
