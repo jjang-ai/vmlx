@@ -1,0 +1,20 @@
+{"name": "models_list", "ok": true, "notes": "40 models"}
+{"name": "basic_chat", "ok": true, "ttft_ms": 168, "tokens": 1}
+{"name": "sse_stream", "ok": true, "ttft_ms": 11, "tokens": 202, "tps": 82.3}
+{"name": "metrics_endpoint", "ok": true}
+{"name": "ollama_tags", "ok": true}
+{"name": "max_tokens", "ok": true, "tokens": 4, "notes": "length"}
+{"name": "multiturn_prefix_cache", "ok": true, "notes": "t1=120 t2=147"}
+{"name": "prefix_cache_hit_ratio", "ok": true, "notes": "t1 cached=259/17ms  t2 cached=256/24ms"}
+{"name": "stop_sequences", "ok": true}
+{"name": "json_mode", "ok": true, "notes": "color=blue"}
+{"name": "ollama_chat", "ok": true}
+{"name": "anthropic_messages", "ok": true}
+{"name": "concurrent", "ok": true, "notes": "3/3"}
+{"name": "concurrent_burst", "ok": true, "notes": "5/5 ok"}
+{"name": "cancel_midstream", "ok": true, "notes": "followup_ok"}
+{"name": "tool_call", "ok": true, "notes": "2 tool_calls"}
+{"name": "tool_roundtrip", "ok": false, "notes": "0.6B model refuses tool-result citation"}
+{"name": "stream_usage", "ok": true, "notes": "completion_tokens=7 prefill_ms=11.4"}
+{"name": "reasoning_content", "ok": true, "notes": "no think tag leak, 127 content chunks"}
+{"name": "large_context", "ok": true, "notes": "5409 tok in 541ms \u2192 Line 137=137"}
