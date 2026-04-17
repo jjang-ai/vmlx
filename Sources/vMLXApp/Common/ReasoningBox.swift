@@ -27,6 +27,11 @@ struct ReasoningBox: View {
     @State private var expanded: Bool = true     // default expanded
     @State private var userCollapsed: Bool = false
     @State private var pulse: Double = 0.3
+    /// Respect the system Reduce Motion setting — the header-dot pulse
+    /// is purely decorative "streaming in progress" signaling, and
+    /// VoiceOver users or anyone with vestibular sensitivity shouldn't
+    /// see a looping animation when the OS preference is off.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Brief "Copied!" acknowledgment shown for 1.2s after the copy
     /// button fires so the user gets a visible confirmation. Replaces
     /// the char-count label during the acknowledgment window.
@@ -166,7 +171,13 @@ struct ReasoningBox: View {
 
     /// Drive the header dot pulse via a repeating animation. Stopped
     /// implicitly when `isStreaming` flips off (the dot is removed).
+    /// When Reduce Motion is on, stay at mid-opacity (0.7) so the dot
+    /// is still visible as an active indicator without the loop.
     private func startPulse() {
+        if reduceMotion {
+            pulse = 0.7
+            return
+        }
         pulse = 0.3
         withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
             pulse = 1.0
