@@ -1497,12 +1497,47 @@ def _load_jang_v2_vlm(
                                 except Exception:
                                     continue
 
-        # Gemma 4 PLE: ScaledLinear (per_layer_model_projection) and nn.Embedding
-        # (embed_tokens_per_layer) lack to_quantized(), so nn.quantize() skips them.
-        # But JANG packs their weights as uint32 anyway. Without dequantization,
-        # forward pass does matmul/take on uint32 → garbage → all <pad> output (#52).
+        # Gemma 3n / 4 PLE: ScaledLinear (per_layer_model_projection) and
+        # nn.Embedding (embed_tokens_per_layer) lack to_quantized(), so
+        # nn.quantize() skips them. JANG packs their weights as uint32 anyway.
+        # Without dequantization, forward pass does matmul/take on uint32 →
+        # garbage → all <pad> output (#52 / #87).
+        #
+        # Previously gated on `gemma4_text` only — broadened to cover Gemma 3n
+        # (same PLE architecture) AND the "no-PLE" variant (Gemma 4 2B/4B-only
+        # gate: if `hidden_size_per_layer_input` is 0/null, the model has
+        # `per_layer_model_projection = None` and the safetensors' scales/
+        # biases orphan → strict load fails with "Received 2 parameters not in
+        # model" (vmlx#87 gyula-coder 2026-04-17). When the module is
+        # disabled in the model, drop the orphan keys instead of dequanting.
         _text_mt = config.get("text_config", {}).get("model_type", "")
-        if _text_mt == "gemma4_text":
+        _text_cfg_for_ple = config.get("text_config", config)
+        _has_ple_module = bool(_text_cfg_for_ple.get("hidden_size_per_layer_input"))
+        _ple_eligible_types = {"gemma4_text", "gemma3n", "gemma3n_text", "gemma4"}
+        _gemma_family_by_name = _text_mt in _ple_eligible_types or config.get(
+            "model_type", ""
+        ) in _ple_eligible_types
+        # Case 1 — PLE keys exist AND model has the module: dequant to fp16
+        # Case 2 — PLE keys exist AND model does NOT have the module: drop orphans
+        # Case 3 — non-Gemma models: skip entirely (original behavior)
+        if _gemma_family_by_name and not _has_ple_module:
+            # Drop orphan PLE quant keys so strict weight load succeeds.
+            # Model doesn't instantiate per_layer_model_projection in this config.
+            for _orphan_pfx in (
+                "language_model.model.per_layer_model_projection",
+                "model.language_model.per_layer_model_projection",
+                "language_model.model.embed_tokens_per_layer",
+                "model.language_model.embed_tokens_per_layer",
+            ):
+                for _suffix in (".weight", ".scales", ".biases"):
+                    _k = _orphan_pfx + _suffix
+                    if _k in shard_weights:
+                        del shard_weights[_k]
+                        logger.info(
+                            f"  Dropped orphan Gemma PLE key (model has no PLE "
+                            f"module due to hidden_size_per_layer_input=0): {_k}"
+                        )
+        elif _gemma_family_by_name and _has_ple_module:
             for _ple_name in (
                 "per_layer_model_projection",
                 "embed_tokens_per_layer",
