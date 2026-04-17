@@ -1081,4 +1081,19 @@ case "$SUITE" in
     *)          suite_smoke ;;
 esac
 
+# Post-suite server liveness check. A Metal assertion (e.g. the
+# `tryCoalescingPreviousComputeCommandEncoder` class that iter-25 fixed
+# for VL, or the still-open JANGTQ 5-way burst crash) kills the server
+# mid-suite — subsequent harness cases then fail silently with curl
+# connection refused which looks like a test logic issue rather than a
+# server crash. Surface it explicitly so CI / reviewers see it.
+if [ -n "${SERVER_PID:-}" ] && ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    # Scan the server log for the most common Metal assertion signatures.
+    crash=$(grep -oE "failed assertion.*|Fatal.*|_status <.*Committed|Completed handler provided after commit|tryCoalescingPrevious.*|already encoding to this command buffer" "$LOG" 2>/dev/null | head -1 | tr -d '"' | tr '\n' ' ')
+    [ -z "$crash" ] && crash="server PID $SERVER_PID gone; no Metal signature found in $LOG"
+    emit "{\"name\":\"server_liveness\",\"ok\":false,\"notes\":\"server died mid-suite: ${crash:0:200}\"}"
+else
+    emit "{\"name\":\"server_liveness\",\"ok\":true,\"notes\":\"server alive through suite\"}"
+fi
+
 emit "{\"name\":\"done\",\"ok\":true}"
