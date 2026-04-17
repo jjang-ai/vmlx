@@ -1206,7 +1206,57 @@ extension Engine {
                         }
                     }
                 }
-                if !splitContent.isEmpty {
+                // iter-59 tool-call marker bleed fix: pre-feed the accumulator
+                // BEFORE emitting any visible content. If adding `splitContent`
+                // to the accumulator crosses a tool-call marker, only yield the
+                // prefix that sits *before* the marker as content — everything
+                // from the marker onwards stays buffered until the parser can
+                // parse it (then fires as tool_calls) or the stream ends
+                // (flushed as content below). Without this guard the raw
+                // `<|python_tag|>{"name":...}` bytes leak to the client before
+                // we ever parse them, breaking OpenAI-style tool_calls
+                // consumers. Live-caught against Llama-3.2-1B via harness
+                // tool_call case.
+                let haveToolsOrParser = toolParser != nil
+                    || (mergedTools?.isEmpty == false)
+                var emittableContent = splitContent
+                if haveToolsOrParser && !splitContent.isEmpty {
+                    let wasBuffered = streamingAcc.buffered
+                    _ = streamingAcc.feed(splitContent)
+                    if streamingAcc.buffered {
+                        if wasBuffered {
+                            emittableContent = ""
+                        } else {
+                            // Marker landed inside this delta — find earliest
+                            // marker offset within the combined buffer so we
+                            // yield only what precedes it from this delta.
+                            let combined = streamingAcc.current
+                            var earliest = combined.utf8.count
+                            for marker in toolCallMarkers {
+                                if let r = combined.range(of: marker) {
+                                    let off = combined.utf8.distance(
+                                        from: combined.utf8.startIndex,
+                                        to: r.lowerBound.samePosition(in: combined.utf8) ?? combined.utf8.startIndex
+                                    )
+                                    if off < earliest { earliest = off }
+                                }
+                            }
+                            let preLenBytes = combined.utf8.count - splitContent.utf8.count
+                            let keepBytes = max(0, earliest - preLenBytes)
+                            if keepBytes > 0 {
+                                let utf8 = Array(splitContent.utf8)
+                                emittableContent = String(
+                                    decoding: utf8.prefix(keepBytes),
+                                    as: UTF8.self
+                                )
+                            } else {
+                                emittableContent = ""
+                            }
+                        }
+                    }
+                }
+
+                if !emittableContent.isEmpty {
                     if !stopMatcher.isEmpty {
                         // Aho-Corasick stop scan. Append to the running
                         // visible accumulator and look for a match. If
@@ -1217,7 +1267,7 @@ extension Engine {
                         // generation — reasoning content is excluded
                         // because stop sequences target visible output.
                         let preLen = visibleAccumulator.utf8.count
-                        visibleAccumulator += splitContent
+                        visibleAccumulator += emittableContent
                         if let m = stopMatcher.firstMatch(in: visibleAccumulator) {
                             let pat = stopMatcher.patterns[m.patternIndex]
                             let patBytes = pat.utf8.count
@@ -1226,17 +1276,17 @@ extension Engine {
                             // current delta? Anything before that goes out
                             // unchanged; nothing after it does.
                             let keepBytesInDelta = max(0, matchStartByte - preLen)
-                            let utf8 = Array(splitContent.utf8)
+                            let utf8 = Array(emittableContent.utf8)
                             if keepBytesInDelta > 0 {
                                 let keep = String(decoding: utf8.prefix(keepBytesInDelta), as: UTF8.self)
                                 continuation.yield(StreamChunk(content: keep))
                             }
                             stopHit = true
                         } else {
-                            continuation.yield(StreamChunk(content: splitContent))
+                            continuation.yield(StreamChunk(content: emittableContent))
                         }
                     } else {
-                        continuation.yield(StreamChunk(content: splitContent))
+                        continuation.yield(StreamChunk(content: emittableContent))
                     }
                 }
                 if stopHit { break }
@@ -1255,11 +1305,9 @@ extension Engine {
                 // model stamped a `toolParser` capability nor the user
                 // supplied `request.tools`. 2026-04-16 gemma4 decode
                 // investigation — measured kill factor per-token.
-                let haveToolsOrParser = toolParser != nil
-                    || (mergedTools?.isEmpty == false)
-                if haveToolsOrParser {
-                    _ = streamingAcc.feed(splitContent)
-                }
+                //
+                // (Accumulator was already fed above for the marker-bleed
+                // guard; this block now only runs the parse+emit half.)
                 if haveToolsOrParser, streamingAcc.buffered, let parser = toolParser {
                     let parsed = parser.parse(streamingAcc.current)
                     if !parsed.isEmpty {
@@ -1352,6 +1400,47 @@ extension Engine {
                         continuation.yield(StreamChunk(content: c))
                         _ = streamingAcc.feed(c)
                     }
+                }
+
+                // iter-59 end-of-stream buffered-tool-call flush: if we held
+                // back bytes in the accumulator expecting a tool call (marker
+                // was detected) but the parser never produced a call (e.g.,
+                // model hit max_tokens mid-call, or JSON ended malformed),
+                // release the buffered text as content rather than losing it
+                // silently. This keeps the contract that every decoded
+                // character lands somewhere visible to the caller.
+                if streamingAcc.buffered, let parser = toolParser {
+                    let parsed = parser.parse(streamingAcc.current)
+                    if !parsed.isEmpty {
+                        for p in parsed {
+                            let call = ChatRequest.ToolCall(
+                                id: "call_\(UUID().uuidString.prefix(8))",
+                                type: "function",
+                                function: .init(
+                                    name: p.name,
+                                    arguments: p.argumentsJSON ?? "{}"))
+                            collectedToolCalls.append(call)
+                            continuation.yield(StreamChunk(
+                                toolCalls: [call],
+                                toolStatus: StreamChunk.ToolStatus(
+                                    toolCallId: call.id,
+                                    name: call.function.name,
+                                    phase: .started
+                                )
+                            ))
+                        }
+                        streamingAcc.reset()
+                    } else {
+                        // Give up on parsing — flush the raw buffered text so
+                        // the caller can at least see what the model emitted.
+                        continuation.yield(StreamChunk(content: streamingAcc.current))
+                        streamingAcc.reset()
+                    }
+                } else if streamingAcc.buffered {
+                    // Parser absent but buffered bytes accumulated via
+                    // user-supplied tools — no way to parse, flush as-is.
+                    continuation.yield(StreamChunk(content: streamingAcc.current))
+                    streamingAcc.reset()
                 }
 
                 // Final metrics — populate Usage and emit the finish chunk.
