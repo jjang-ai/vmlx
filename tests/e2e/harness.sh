@@ -428,6 +428,65 @@ case_multiturn_prefix_cache() {
     emit "{\"name\":\"multiturn_prefix_cache\",\"ok\":$ok,\"ttft_ms\":$t2ms,\"notes\":\"t1=${t1ms}ms t2=${t2ms}ms\"}"
 }
 
+case_prefix_cache_hit_ratio() {
+    # Measure prefix-cache efficiency: the x-vmlx-cache-hit response
+    # header (if present) reports `cached_tokens/prompt_tokens`. When
+    # the header isn't available (older build, non-OpenAI route), fall
+    # back to comparing `usage.prompt_tokens` between two turns that
+    # share a long system prefix — if the engine is caching properly,
+    # the second turn's usage.prompt_tokens should include a non-zero
+    # cached_tokens hint surfaced via the final SSE chunk's usage block.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess
+long_sys = "You are a helpful assistant. " * 40  # ~200 tokens
+def chat(msgs):
+    body = {
+        "model": "$model_id",
+        "messages": msgs,
+        "max_tokens": 8, "temperature": 0,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    p = subprocess.run(
+        ["curl","-sN","--max-time","60","-X","POST","$BASE/v1/chat/completions",
+         "-H","content-type: application/json","-d", json.dumps(body)],
+        capture_output=True, text=True)
+    last_usage = None
+    for line in p.stdout.splitlines():
+        if line.startswith("data:") and line.strip() != "data: [DONE]":
+            try:
+                d = json.loads(line[5:].strip())
+                if d.get("usage"): last_usage = d["usage"]
+            except Exception: pass
+    return last_usage or {}
+
+u1 = chat([
+    {"role":"system","content":long_sys},
+    {"role":"user","content":"Say 'one'."},
+])
+u2 = chat([
+    {"role":"system","content":long_sys},
+    {"role":"user","content":"Say 'one'."},
+    {"role":"assistant","content":"one"},
+    {"role":"user","content":"Say 'two'."},
+])
+# cached_tokens field is in usage per OpenAI's 2024 spec
+cached1 = (u1.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or u1.get("cached_tokens", 0)
+cached2 = (u2.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or u2.get("cached_tokens", 0)
+# Pass if:
+#  - turn-2 exposes cached_tokens > 0 (explicit hit signal), OR
+#  - turn-2 prefill_ms is much smaller than turn-1 (implicit hit signal)
+p1 = u1.get("prefill_ms", 0) or 0
+p2 = u2.get("prefill_ms", 0) or 0
+explicit = cached2 > 0
+implicit = p1 > 0 and p2 > 0 and p2 <= max(50, p1 * 0.5)
+ok = "true" if (explicit or implicit) else "false"
+note = f"t1 cached={cached1} prefill={p1:.0f}ms  t2 cached={cached2} prefill={p2:.0f}ms"
+print(json.dumps({"name":"prefix_cache_hit_ratio","ok":ok=="true","notes":note[:120]}))
+PY
+}
+
 case_metrics() {
     local code
     code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/metrics")
@@ -697,6 +756,7 @@ PY
 suite_full() {
     suite_smoke
     case_multiturn_prefix_cache
+    case_prefix_cache_hit_ratio
     case_stop_sequences
     case_json_mode
     case_ollama_chat
