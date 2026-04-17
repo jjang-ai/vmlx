@@ -1252,6 +1252,39 @@ PY
     emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1] + " [" + sys.argv[2] + "]"))' "${note:0:60}" "$color_tag")}"
 }
 
+case_benchmark_endpoint() {
+    # POST /admin/benchmark exercises the decode256 BenchSuite and
+    # returns a BenchReport JSON. Added iter-68 after the surface-sweep
+    # caught that Engine.benchmark was not reachable via HTTP. Gates:
+    #   - HTTP 200 with obj=benchmark.run
+    #   - tokens_per_sec positive
+    #   - ttft_ms positive
+    #   - suite field echoes what we asked for
+    # Allows a generous 90s timeout (decode256 does a 256-token run).
+    local http
+    http=$(curl -s -o /tmp/vmlx-bench.json -w "%{http_code}" \
+        --max-time 90 -X POST "$BASE/admin/benchmark" \
+        -H "content-type: application/json" \
+        -d '{"suite":"decode256"}')
+    local ok=false
+    local notes="http=$http"
+    if [ "$http" = "200" ]; then
+        local result
+        result=$(python3 -c '
+import json,sys
+d=json.load(open("/tmp/vmlx-bench.json"))
+obj=d.get("object","")
+tps=d.get("tokens_per_sec",0)
+ttft=d.get("ttft_ms",0)
+suite=d.get("suite","")
+valid = obj=="benchmark.run" and tps>0 and ttft>=0 and suite=="decode256"
+print(f"valid={valid} tps={tps:.1f} ttft={ttft:.1f}")')
+        notes="$notes $result"
+        echo "$result" | grep -q "valid=True" && ok=true
+    fi
+    emit "{\"name\":\"benchmark_endpoint\",\"ok\":$ok,\"notes\":\"$notes\"}"
+}
+
 case_admin_auth_gate() {
     # AdminAuth middleware sanity check. If the server was started WITHOUT
     # an admin token, `/admin/soft-sleep` must return 200 (open mode,
@@ -2110,6 +2143,7 @@ suite_full() {
     case_unicode_roundtrip
     case_seed_reproducibility
     case_admin_auth_gate
+    case_benchmark_endpoint
 }
 
 suite_vl() {
