@@ -545,11 +545,64 @@ PY
 }
 
 case_ollama_tags() {
-    local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/tags")
-    local ok=false
-    [ "$code" = "200" ] && ok=true
-    emit "{\"name\":\"ollama_tags\",\"ok\":$ok,\"notes\":\"HTTP $code\"}"
+    # GET /api/tags is the Ollama list-models endpoint that Copilot,
+    # Open-WebUI, and other Ollama clients poll. The response shape is
+    # load-bearing:
+    #   { "models": [ { "name", "model", "modified_at", "digest",
+    #                   "size", "details": { "family", "families",
+    #                   "format", "quantization_level", "parameter_size",
+    #                   "parent_model" } } ] }
+    # A drift in any of these fields silently breaks downstream clients
+    # (mlxstudio#72 was exactly this — `/api/version` returned the wrong
+    # value and Copilot refused to connect). Verify the full envelope.
+    local body
+    body=$(curl -s --max-time 5 "$BASE/api/tags")
+    echo "$body" > /tmp/vmlx-ollama-tags.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-ollama-tags.json"))
+    models = d.get("models") or []
+    if not isinstance(models, list) or len(models) == 0:
+        print(json.dumps({"name":"ollama_tags","ok":False,"notes":"empty/missing models[]"}))
+        raise SystemExit
+    required_top = {"name", "model", "modified_at", "digest", "size", "details"}
+    required_det = {"family", "families", "format", "quantization_level",
+                    "parameter_size", "parent_model"}
+    missing_top = set()
+    missing_det = set()
+    for m in models[:5]:
+        missing_top |= required_top - set(m.keys())
+        det = m.get("details") or {}
+        missing_det |= required_det - set(det.keys())
+    ok = not missing_top and not missing_det
+    notes = f"count={len(models)}"
+    if missing_top: notes += f" missingTop={sorted(missing_top)}"
+    if missing_det: notes += f" missingDet={sorted(missing_det)}"
+    print(json.dumps({"name":"ollama_tags","ok":ok,"notes":notes}))
+except Exception as e:
+    print(json.dumps({"name":"ollama_tags","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
+case_ollama_version() {
+    # GET /api/version must report a string matching ^\d+\.\d+\.\d+$ that
+    # is ≥ 0.6.2 (mlxstudio#72 Copilot compat — earlier bundled value
+    # 0.6.2 was too low for newer clients; current is 0.12.6). Locks the
+    # bump in place.
+    local body
+    body=$(curl -s --max-time 5 "$BASE/api/version")
+    python3 <<PY
+import json, re
+try:
+    d = json.loads('''$body''')
+    v = d.get("version", "")
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)$", v)
+    ok = bool(m) and (int(m.group(1)), int(m.group(2)), int(m.group(3))) >= (0, 6, 2)
+    print(json.dumps({"name":"ollama_version","ok":ok,"notes":f"version={v}"}))
+except Exception as e:
+    print(json.dumps({"name":"ollama_version","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -1154,6 +1207,7 @@ suite_full() {
     case_reasoning_content
     case_large_context
     case_cache_flush_roundtrip
+    case_ollama_version
 }
 
 suite_vl() {
