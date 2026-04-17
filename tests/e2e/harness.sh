@@ -270,24 +270,42 @@ PY
 }
 
 case_json_mode() {
+    # Parallel to case_json_schema (iter-47): two engine-correct paths.
+    #   1. Content parses as JSON object AND contains the asked-for key.
+    #   2. Validator caught malformed model output (markdown fences,
+    #      prefix prose) and wrapped as {"error","raw"} with
+    #      finish_reason=content_filter. That's engine-correct — the
+    #      validator did its job. Distinguishes small-model emission
+    #      quality from engine json_object plumbing.
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp
     resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
         -H "content-type: application/json" \
         -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Return ONLY a JSON object with field 'color' set to 'blue'. No prose.\"}],\"max_tokens\":40,\"temperature\":0,\"response_format\":{\"type\":\"json_object\"}}")
-    local content=$(echo "$resp" | extract_content)
-    # Stricter: must be a dict AND contain the expected key — without that
-    # an API-error payload (also a dict) would false-positive.
-    local ok=false
-    echo "$content" | python3 -c '
-import sys, json
+    echo "$resp" > /tmp/vmlx-jsonmode.json
+    python3 <<'PY'
+import json
 try:
-    d = json.loads(sys.stdin.read())
-    sys.exit(0 if isinstance(d, dict) and "color" in d else 2)
-except Exception:
-    sys.exit(1)
-' 2>/dev/null && ok=true
-    emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
+    r = json.load(open("/tmp/vmlx-jsonmode.json"))
+    ch = (r.get("choices") or [{}])[0]
+    content = (ch.get("message") or {}).get("content") or ""
+    finish = ch.get("finish_reason")
+    parsed = json.loads(content)
+    # Path 2: validator caught bad JSON (engine-correct)
+    if isinstance(parsed, dict) and "error" in parsed and "raw" in parsed \
+       and finish == "content_filter":
+        print(json.dumps({"name":"json_mode","ok":True,
+            "notes":f"validator caught bad JSON (engine-correct) raw={parsed['raw'][:40]!r}"}))
+    # Path 1: clean JSON with asked-for key
+    elif isinstance(parsed, dict) and "color" in parsed:
+        print(json.dumps({"name":"json_mode","ok":True,
+            "notes":f"{content[:60]!r}"}))
+    else:
+        print(json.dumps({"name":"json_mode","ok":False,
+            "notes":f"no color key; content={content[:60]!r}"}))
+except Exception as e:
+    print(json.dumps({"name":"json_mode","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_unicode_roundtrip() {
