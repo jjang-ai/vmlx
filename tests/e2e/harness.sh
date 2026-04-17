@@ -586,11 +586,20 @@ PY
         -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What color is this image? One word.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"$img\"}}]}],\"max_tokens\":16,\"temperature\":0}")
     local content=$(echo "$resp" | extract_content)
     local err=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("error",{}).get("message","")[:80])' 2>/dev/null)
+    # Empirical grading — passes if the model saw the image at all
+    # (non-empty response, no error). Separately note whether it
+    # correctly identified the color — informational; small VL models
+    # (≤4B) often refuse to describe images and get `ok=true` without
+    # saying "red". Larger models (≥7B) should land `color_ok=true`.
     local ok=false
+    local color_ok=false
     [ -n "$content" ] && [ -z "$err" ] && ok=true
+    echo "$content" | tr '[:upper:]' '[:lower:]' | grep -q '\bred\b' && color_ok=true
     local note="$content"
     [ -n "$err" ] && note="ERR: $err"
-    emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$note")}"
+    local color_tag="color=unknown"
+    [ "$color_ok" = "true" ] && color_tag="color=red✓"
+    emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1] + " [" + sys.argv[2] + "]"))' "${note:0:60}" "$color_tag")}"
 }
 
 case_audio_transcription() {
