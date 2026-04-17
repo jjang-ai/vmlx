@@ -400,7 +400,13 @@ PY
 }
 
 case_max_tokens() {
-    # max_tokens=4 must produce <=4 tokens and finish_reason=length.
+    # max_tokens=4 must produce <=4 completion tokens. `finish_reason`
+    # can legitimately be either `length` (model was still going) OR
+    # `stop` (model hit EOS within the budget). The contract the caller
+    # cares about is the CAP, not which side closed the response. Earlier
+    # versions of this test required `length` — that flaked on models
+    # that hit EOS at 3 tokens (Qwen3-0.6B with "Write a long story…"
+    # actually terminates at the filler preamble on greedy decode).
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp
     resp=$(curl -s -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
@@ -408,7 +414,8 @@ case_max_tokens() {
     local finish=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["choices"][0].get("finish_reason","?")) if d.get("choices") else print("?")' 2>/dev/null)
     local tok=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("usage",{}).get("completion_tokens",0))' 2>/dev/null || echo 0)
     local ok=false
-    [ "$finish" = "length" ] && [ "$tok" -le 4 ] && [ "$tok" -gt 0 ] && ok=true
+    { [ "$finish" = "length" ] || [ "$finish" = "stop" ]; } \
+        && [ "$tok" -le 4 ] && [ "$tok" -gt 0 ] && ok=true
     emit "{\"name\":\"max_tokens\",\"ok\":$ok,\"tokens\":$tok,\"notes\":\"finish=$finish\"}"
 }
 
@@ -721,6 +728,56 @@ print(json.dumps({"name":"tool_roundtrip","ok":ok=="true","notes":f"has_42={has_
 PY
 }
 
+case_reasoning_content() {
+    # Thinking models (Qwen3, DeepSeek R1, GLM 5, Nemotron-reasoning)
+    # emit their chain-of-thought inside `<think>...</think>` tags.
+    # The Swift engine's reasoning parser is supposed to route those
+    # tokens into `delta.reasoning_content` on SSE chunks, NOT into
+    # `delta.content` — the UI renders them in a separate "thinking"
+    # panel. If the parser is OFF (or misconfigured), `<think>` leaks
+    # into content verbatim and the UI looks broken.
+    #
+    # We verify by:
+    #   1. enabling thinking explicitly via chat_template_kwargs
+    #   2. checking that across the stream, either
+    #       a) at least one chunk has delta.reasoning_content, OR
+    #       b) no chunk contains a literal `<think>` in delta.content
+    # Both are acceptable — (a) for full reasoning support, (b) for
+    # graceful fallback where the server strips the tags without
+    # surfacing a structured field.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"user","content":"What is 17*23? Think step by step."}],
+    "max_tokens": 128,
+    "stream": True, "temperature": 0,
+    "chat_template_kwargs": {"enable_thinking": True},
+}
+p = subprocess.run(
+    ["curl","-sN","--max-time","60","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    capture_output=True, text=True)
+reasoning_chunks = 0
+content_chunks = 0
+think_leak = False
+for line in p.stdout.splitlines():
+    if not line.startswith("data:") or line.strip() == "data: [DONE]": continue
+    try: d = json.loads(line[5:].strip())
+    except Exception: continue
+    for ch in d.get("choices", []):
+        delta = ch.get("delta", {})
+        if delta.get("reasoning_content"): reasoning_chunks += 1
+        c = delta.get("content") or ""
+        if c: content_chunks += 1
+        if "<think>" in c or "</think>" in c: think_leak = True
+ok = "true" if (reasoning_chunks > 0 or not think_leak) else "false"
+note = f"reasoning={reasoning_chunks} content={content_chunks} leak={think_leak}"
+print(json.dumps({"name":"reasoning_content","ok":ok=="true","notes":note[:100]}))
+PY
+}
+
 case_large_context() {
     # A ~4K-token prompt exercises the long-context path, prefill
     # chunking, and eviction boundaries. Build a prompt of 400 lines
@@ -767,6 +824,7 @@ suite_full() {
     case_tool_call
     case_tool_roundtrip
     case_stream_usage
+    case_reasoning_content
     case_large_context
 }
 
