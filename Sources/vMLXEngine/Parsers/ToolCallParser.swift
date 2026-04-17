@@ -277,19 +277,93 @@ public final class LlamaToolCallParser: ToolCallParser {
     public init() {}
 
     public func extractToolCalls(_ modelOutput: String, request: ChatRequest?) -> ExtractedToolCallInformation {
-        let matches = ParserUtils.regexMatches(modelOutput, pattern: #"(?s)<function=([^>]+)>(\{.*?\})</function>"#)
-        if matches.isEmpty {
+        // Variant 1: <function=name>{...}</function>  (Llama 4 style)
+        let fnMatches = ParserUtils.regexMatches(modelOutput, pattern: #"(?s)<function=([^>]+)>(\{.*?\})</function>"#)
+        if !fnMatches.isEmpty {
+            var calls: [ParsedToolCall] = []
+            for m in fnMatches where m.count >= 3 {
+                let name = m[1]
+                let args = ParserUtils.parseJSONObject(m[2]) ?? [:]
+                calls.append(ParsedToolCall(id: generateToolId(), name: name, arguments: ParserUtils.normaliseArgsJSON(args)))
+            }
+            let cleaned = ParserUtils.regexReplace(modelOutput, pattern: #"(?s)<function=([^>]+)>(\{.*?\})</function>"#, with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return ExtractedToolCallInformation(toolsCalled: !calls.isEmpty, toolCalls: calls, content: cleaned.isEmpty ? nil : cleaned)
+        }
+
+        // Variant 2: <|python_tag|>{"name":"...","parameters":{...}}  (Llama 3.1/3.2 style)
+        // The model may emit `parameters` or `parameters_json` (string-escaped nested JSON)
+        // or `arguments`. We normalise all three.
+        let pythonTag = "<|python_tag|>"
+        guard let tagRange = modelOutput.range(of: pythonTag) else {
             return ExtractedToolCallInformation(toolsCalled: false, toolCalls: [], content: modelOutput)
         }
-        var calls: [ParsedToolCall] = []
-        for m in matches where m.count >= 3 {
-            let name = m[1]
-            let args = ParserUtils.parseJSONObject(m[2]) ?? [:]
-            calls.append(ParsedToolCall(id: generateToolId(), name: name, arguments: ParserUtils.normaliseArgsJSON(args)))
-        }
-        let cleaned = ParserUtils.regexReplace(modelOutput, pattern: #"(?s)<function=([^>]+)>(\{.*?\})</function>"#, with: "")
+        let prefix = String(modelOutput[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = String(modelOutput[tagRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let tailNoEot = tail
+            .replacingOccurrences(of: "<|eot_id|>", with: "")
+            .replacingOccurrences(of: "<|eom_id|>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return ExtractedToolCallInformation(toolsCalled: !calls.isEmpty, toolCalls: calls, content: cleaned.isEmpty ? nil : cleaned)
+
+        // Tail can be one JSON object or a semicolon-separated list.
+        let rawCalls: [String]
+        if tailNoEot.hasPrefix("[") {
+            rawCalls = [tailNoEot]
+        } else {
+            rawCalls = tailNoEot.components(separatedBy: ";").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }
+
+        // Only emit when the model has actually finished the JSON object —
+        // streaming dispatch means we're called on partial buffers; repairing
+        // a partial `"get_weather` to `"get_w"` would fire a bogus call while
+        // the model is still typing the tool name.
+        var calls: [ParsedToolCall] = []
+        for rc in rawCalls {
+            if rc.hasPrefix("["), let data = rc.data(using: .utf8),
+               let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                for item in arr {
+                    if let c = buildPythonTagCall(item) { calls.append(c) }
+                }
+                continue
+            }
+            if let obj = ParserUtils.parseJSONObject(rc), let c = buildPythonTagCall(obj) {
+                calls.append(c)
+            }
+        }
+        if calls.isEmpty {
+            return ExtractedToolCallInformation(toolsCalled: false, toolCalls: [], content: modelOutput)
+        }
+        return ExtractedToolCallInformation(
+            toolsCalled: true,
+            toolCalls: calls,
+            content: prefix.isEmpty ? nil : prefix
+        )
+    }
+
+    private func buildPythonTagCall(_ obj: [String: Any]) -> ParsedToolCall? {
+        guard let name = obj["name"] as? String, !name.isEmpty else { return nil }
+        // Resolve arguments — Llama 3 emits any of parameters / parameters_json / arguments.
+        let argsJSON: String
+        if let paramsStr = obj["parameters_json"] as? String {
+            // parameters_json is a string of JSON; trust it as-is if valid, else wrap.
+            if (try? JSONSerialization.jsonObject(with: Data(paramsStr.utf8))) != nil {
+                argsJSON = paramsStr
+            } else {
+                argsJSON = ParserUtils.normaliseArgsJSON(paramsStr)
+            }
+        } else if let params = obj["parameters"] {
+            argsJSON = ParserUtils.normaliseArgsJSON(params)
+        } else if let args = obj["arguments"] {
+            if let s = args as? String,
+               (try? JSONSerialization.jsonObject(with: Data(s.utf8))) != nil {
+                argsJSON = s
+            } else {
+                argsJSON = ParserUtils.normaliseArgsJSON(args)
+            }
+        } else {
+            argsJSON = "{}"
+        }
+        return ParsedToolCall(id: generateToolId(), name: name, arguments: argsJSON)
     }
 }
 

@@ -458,7 +458,11 @@ public enum CapabilityDetector {
             if chatTemplate.contains("<minimax:tool_call>") {
                 return ("minimax", "minimax_m2")
             }
-            if chatTemplate.contains("<|python_tag|>") {
+            if chatTemplate.contains("<|python_tag|>") || chatTemplate.contains("ipython") {
+                // Llama 3.1/3.2/3.3 templates use the `ipython` role for tool
+                // responses and instruct the model to emit `<|python_tag|>`
+                // at generation time — the literal marker often is NOT in
+                // the template itself. Accept either signal.
                 return ("llama", "llama")
             }
             if chatTemplate.contains("<tool_call>") {
