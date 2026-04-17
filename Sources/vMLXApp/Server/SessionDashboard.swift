@@ -379,8 +379,17 @@ enum SessionHeuristics {
         let n = url.lastPathComponent.lowercased()
         return n.contains("jang") || n.contains("mlxq")
     }
+    /// JANGTQ-format bundle. The engine flips the authoritative
+    /// `isMXTQ` at load time via `jang_config.weight_format == "mxtq"`,
+    /// but the card badge is drawn from the folder name BEFORE the
+    /// engine has opened the config. Match both substrings so names
+    /// like `Qwen3.5-35B-A3B-JANGTQ_2L` AND `Qwen3.5-A3B-MXTQ` badge
+    /// consistently — the previous heuristic only found `"mxtq"` and
+    /// silently dropped the badge on folders using the `"jangtq"`
+    /// naming convention (which is what `jang_tools` actually writes).
     static func isMXTQ(_ url: URL) -> Bool {
-        url.lastPathComponent.lowercased().contains("mxtq")
+        let n = url.lastPathComponent.lowercased()
+        return n.contains("mxtq") || n.contains("jangtq")
     }
 }
 

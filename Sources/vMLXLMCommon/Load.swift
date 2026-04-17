@@ -41,8 +41,12 @@ public func loadWeights(
     // shape. See `/Users/eric/jang/jang-tools/jang_tools/load_jangtq.py`
     // for the Python reference loader.
     let jangtqSidecarURL = modelDirectory.appendingPathComponent("jangtq_runtime.safetensors")
+    // Case-insensitive compare — jang-tools writes `"mxtq"` (lowercase)
+    // but bundles coming from third-party converters or hand-edited
+    // `jang_config.json` may use `"MXTQ"` or mixed case. A case-sensitive
+    // exact match silently fell through to the affine expander.
     let isJANGTQNative =
-        (jangConfig?.weightFormat == "mxtq")
+        (jangConfig?.weightFormat?.lowercased() == "mxtq")
         || FileManager.default.fileExists(atPath: jangtqSidecarURL.path)
 
     // .jangspec bundle: per-expert blobs + hot-core safetensors + flat index.
