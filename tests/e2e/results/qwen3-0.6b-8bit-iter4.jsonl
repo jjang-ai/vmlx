@@ -1,0 +1,20 @@
+{"name":"start","ok":true,"notes":"model=11de96878523501bcaa86104e3c186de07ff9068 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=49447"}
+{"name":"models_list","ok":true,"notes":"39 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":342,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 40, "tokens": 202, "tps": 56.7, "notes": "decode_ms=3548"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":619,"notes":"t1=600ms t2=619ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=1. Apple  "}
+{"name":"json_mode","ok":true,"notes":"{\"color\": \"blue\"}"}
+{"name":"ollama_chat","ok":true,"notes":"Hi! Have a great day!"}
+{"name":"anthropic_messages","ok":true,"notes":"Hello! How can I assist you today"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"concurrent_burst","ok":true,"notes":"5/5 ok; alive=200"}
+{"name": "cancel_midstream", "ok": true, "notes": "stream_started=True followup_ok=True"}
+<stdin>:3: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name": "tool_call", "ok": false, "notes": "parse-error: Expecting ',' delimiter: line 1 column 391 (char 390)"}
+{"name":"done","ok":true}

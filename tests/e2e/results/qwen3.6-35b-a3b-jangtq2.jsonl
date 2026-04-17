@@ -1,0 +1,29 @@
+{"name":"start","ok":true,"notes":"model=Qwen3.6-35B-A3B-JANGTQ2 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=54777"}
+{"name":"models_list","ok":true,"notes":"39 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":1060,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 39, "tokens": 202, "tps": 12.2, "notes": "decode_ms=16486"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":1122,"notes":"t1=895ms t2=1122ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=Apple"}
+{"name":"json_mode","ok":false,"notes":"{\"error\": \"response is not valid JSON: The data couldn\u2019t be read because it isn\u2019"}
+{"name":"ollama_chat","ok":true,"notes":"hi"}
+{"name":"anthropic_messages","ok":true,"notes":"Hi! \ud83d\udc4b"}
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+{"name":"concurrent","ok":false,"notes":"2/3 succeeded"}
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+tests/e2e/harness.sh: line 1: 54777 Abort trap: 6           "$CLI" serve --model "$MODEL" --host "$HOST" --port "$PORT" ${extra[@]+"${extra[@]}"} > "$LOG" 2>&1
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+{"name":"concurrent_burst","ok":false,"notes":"0/5 ok; alive=000"}
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+ProcessLookupError: [Errno 3] No such process
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+{"name": "tool_call", "ok": false, "notes": "parse-error: Expecting value: line 1 column 1 (char 0)"}
+{"name":"done","ok":true}
