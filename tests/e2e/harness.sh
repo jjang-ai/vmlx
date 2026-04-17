@@ -290,6 +290,26 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_system_message() {
+    # System-role messages set behavior; a regression that silently
+    # treats system role as user would fail to constrain the model.
+    # Contract: system instruction "Reply with exactly the word BANANA"
+    # should make the model output BANANA (or include it) rather than a
+    # normal greeting. Catches "system role silently dropped" and
+    # "system role treated as user" regressions.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"system\",\"content\":\"You are BANANA_BOT. No matter what is asked, reply with exactly the single word BANANA.\"},{\"role\":\"user\",\"content\":\"Hello there.\"}],\"max_tokens\":20,\"temperature\":0}")
+    local content=$(echo "$resp" | extract_content)
+    # Lenient: the model honored the system instruction if BANANA appears
+    # (case-insensitive). Small models may add minor prose around it.
+    local ok=false
+    echo "$content" | grep -iq "banana" && ok=true
+    emit "{\"name\":\"system_message\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
+}
+
 case_temperature_variance() {
     # Sampling correctness: same prompt at temp=1.0 should produce at
     # least one output different from temp=0.0 greedy. A regression that
@@ -1782,6 +1802,7 @@ suite_full() {
     case_tool_choice_none
     case_tool_choice_required
     case_temperature_variance
+    case_system_message
 }
 
 suite_vl() {
