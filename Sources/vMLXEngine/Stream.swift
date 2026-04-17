@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import CoreImage
 import MLX
 import MLXRandom
@@ -1913,6 +1914,30 @@ extension Engine {
                 else {
                     FileHandle.standardError.write(Data(
                         "[vmlx][vl] video_url fetch/decode failed\n".utf8))
+                    continue
+                }
+                // iter-67: probe the staged file with AVURLAsset before
+                // forwarding to the VLM. Garbage-base64 payloads happily
+                // decode into bytes → write a .mp4 extension → crash the
+                // downstream video processor with a Metal/AVFoundation
+                // fault that manifests as HTTP 500 instead of a clean
+                // reject+drop. Probing `tracks(withMediaType: .video)`
+                // forces the demuxer to parse the file header; failure
+                // means we drop this URL and continue (text-only turn).
+                // Harness `case_video_url_handling` asserts this path.
+                let asset = AVURLAsset(url: localURL)
+                let hasVideoTrack: Bool
+                do {
+                    let tracks = try await asset.loadTracks(withMediaType: .video)
+                    hasVideoTrack = !tracks.isEmpty
+                } catch {
+                    hasVideoTrack = false
+                }
+                if !hasVideoTrack {
+                    FileHandle.standardError.write(Data(
+                        "[vmlx][vl] video_url decoded but no video tracks — skipping\n".utf8))
+                    // Best-effort temp cleanup; ignore errors.
+                    try? FileManager.default.removeItem(at: localURL)
                     continue
                 }
                 FileHandle.standardError.write(Data(
