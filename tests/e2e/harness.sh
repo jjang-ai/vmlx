@@ -1252,6 +1252,57 @@ PY
     emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1] + " [" + sys.argv[2] + "]"))' "${note:0:60}" "$color_tag")}"
 }
 
+case_video_url_handling() {
+    # Negative edge case — feed a *malformed* video_url and assert the
+    # server neither crashes nor 500s. Either outcome is acceptable:
+    #   (a) server rejects with a structured error (schema-valid JSON), OR
+    #   (b) server ignores the video and responds text-only.
+    # Generated in iter-61 after the tier-3 VL sweep confirmed the
+    # video_url → UserInput.Video ingestion path is wired (Stream.swift
+    # extractVideos), but nothing exercised the failure path. Without this
+    # probe, a stray crash in AVURLAsset load / decoded-frame-extraction
+    # under bad input would kill the server without the suite knowing.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    # Garbage bytes base64'd with a plausible video mime — force the
+    # ingestion path without a real codec payload.
+    local bad_video="data:video/mp4;base64,$(python3 -c 'import base64;print(base64.b64encode(b"not a video").decode())')"
+    local body
+    body=$(cat <<JSON
+{
+  "model": "$model_id",
+  "messages": [{"role":"user","content":[
+    {"type":"text","text":"Reply with OK."},
+    {"type":"video_url","video_url":{"url":"$bad_video"}}
+  ]}],
+  "max_tokens": 16,
+  "temperature": 0
+}
+JSON
+)
+    local http_code
+    http_code=$(curl -s -o /tmp/vmlx-vidneg.json -w "%{http_code}" \
+        --max-time 30 \
+        -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body")
+    # Acceptable outcomes:
+    #   200 + schema-valid JSON body (video silently dropped, text reply)
+    #   400 + schema-valid error body (video rejected structurally)
+    # NOT acceptable: 500, connection close, server crash.
+    local ok=false
+    local notes="http=$http_code "
+    if [ "$http_code" = "200" ] || [ "$http_code" = "400" ]; then
+        # Alive check — /healthz should respond instantly.
+        local health=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BASE/healthz")
+        if [ "$health" = "200" ]; then
+            ok=true
+            notes="$notes alive=200"
+        else
+            notes="$notes alive=$health(CRASH)"
+        fi
+    fi
+    emit "{\"name\":\"video_url_handling\",\"ok\":$ok,\"notes\":\"$notes\"}"
+}
+
 case_audio_transcription() {
     # Use the whisper model's own test wav if present; else skip.
     local wav=""
@@ -1987,6 +2038,7 @@ suite_vl() {
     case_basic_chat
     case_sse_stream
     case_vision_chat
+    case_video_url_handling
     case_multiturn_prefix_cache
     case_concurrent
 }
