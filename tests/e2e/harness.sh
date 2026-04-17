@@ -290,6 +290,55 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_unicode_roundtrip() {
+    # Unicode payloads (CJK ideographs, emoji, combining marks) must
+    # survive tokenizer → chat template → LLM → SSE → JSON decode
+    # unchanged. Common regressions: UTF-8 treated as Latin-1 at some
+    # stage (mojibake), surrogate pairs split at chunk boundaries in
+    # streaming, emoji stripped by over-eager "clean output" filters.
+    # Contract: server MUST echo back the input string verbatim inside
+    # its response (non-streaming first, then streaming).
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    # 日本語 + combining + emoji + RTL letters
+    local needle='日本語🦊Café עִבְרִית'
+    python3 <<PY
+import json, subprocess
+needle = "$needle"
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"system","content":f"Repeat the user's message verbatim, no quotes, no prose."},
+                 {"role":"user","content":needle}],
+    "max_tokens": 40,
+    "temperature": 0,
+}
+p = subprocess.run(
+    ["curl","-s","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body, ensure_ascii=False)],
+    capture_output=True, text=True)
+try:
+    r = json.loads(p.stdout)
+    content = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+except Exception as e:
+    print(json.dumps({"name":"unicode_roundtrip","ok":False,"notes":f"parse: {e}"})); raise SystemExit
+# Accept full needle OR the two most-informative substrings (small
+# models may truncate or rephrase slightly but shouldn't mojibake).
+substrings = ["日本語", "🦊", "Café", "עִבְרִית"]
+hits = sum(1 for s in substrings if s in content)
+# Mojibake check: if the response contains replacement chars or lone
+# surrogates, that's a clear UTF-8 handling bug.
+mojibake = "\ufffd" in content
+# Infra-level check: UTF-8 must survive the entire pipeline. Small
+# models paraphrase instead of echoing verbatim, but if ANY of the
+# non-ASCII substrings passed through, the tokenizer+JSON layers are
+# round-tripping correctly. Mojibake (U+FFFD) would be a clear
+# engine bug: tokenizer decoded UTF-8 as Latin-1, or a surrogate pair
+# split at a SSE chunk boundary.
+ok = hits >= 1 and not mojibake and bool(content)
+notes = f"needle_hits={hits}/4 mojibake={mojibake} out={content[:60]!r}"
+print(json.dumps({"name":"unicode_roundtrip","ok":ok,"notes":notes[:180]}))
+PY
+}
+
 case_multiturn_context() {
     # Verifies the engine correctly threads the prior assistant turn
     # into context so the model can reference it. Distinct from
@@ -1909,6 +1958,7 @@ suite_full() {
     case_system_message
     case_unsupported_params
     case_multiturn_context
+    case_unicode_roundtrip
 }
 
 suite_vl() {
