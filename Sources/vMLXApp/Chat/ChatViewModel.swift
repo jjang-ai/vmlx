@@ -342,19 +342,40 @@ final class ChatViewModel {
 
     func send() {
         guard let sessionId = activeSessionId else { return }
-        // No-model guard: if no model is loaded, surface a banner with a
-        // "Open Server tab" action and abort. Without this the request fans
-        // out with an empty model string and the user sees a confusing stub
-        // error. Mirrors Electron's `ChatInterface.tsx` `handleSend` guard.
+        // No-model guard. User complaint: "model loading does not work" —
+        // root cause was that this guard hard-required `selectedModelPath
+        // != nil`, but `selectedModelPath` is ONLY set by the cmd+k quick
+        // picker and the onboarding wizard. Starting a session from the
+        // Chat ▶ button OR from the Server tab's Start Session button
+        // never touched it, so even after a successful load the guard
+        // bounced users back to Server with "Load a model in the Server
+        // tab first" — which looked like loading had failed.
+        //
+        // Post-Gateway-multiplexer (UI-9), the right question is NOT
+        // "is the globally-selected model loaded" but "is ANY session
+        // running we can route to" — the gateway picks the right engine
+        // from the request's `model` field. So pass if:
+        //   - selectedModelPath is set AND its engine is live, OR
+        //   - at least one session is running/in-standby (any model).
+        // Falls through to the actual request if the chat carries a
+        // `modelAlias` that matches a running session.
         if let appRef = app {
-            let hasModel = (appRef.selectedModelPath != nil) &&
-                           appRef.engineState != .stopped &&
-                           !isErrorState(appRef.engineState)
-            if !hasModel {
-                bannerMessage = "Load a model in the Server tab first"
+            let globalHasModel = (appRef.selectedModelPath != nil) &&
+                                 appRef.engineState != .stopped &&
+                                 !isErrorState(appRef.engineState)
+            let anySessionLive = appRef.sessions.contains {
+                switch $0.state {
+                case .running, .loading, .standby: return true
+                case .stopped, .error: return false
+                }
+            }
+            if !globalHasModel && !anySessionLive {
+                bannerMessage = "Load a model first — hit ▶ next to the model picker above, or use the Server tab"
                 appRef.flashBanner(bannerMessage ?? "")
-                // Switch user straight to Server mode so the CTA is one click.
-                appRef.mode = .server
+                // Do NOT auto-switch to Server tab anymore — the Chat
+                // page now has its own start controls (picker ▶ button +
+                // per-row menu). Bouncing back to Server was the old
+                // workaround for not having those controls.
                 return
             }
         }

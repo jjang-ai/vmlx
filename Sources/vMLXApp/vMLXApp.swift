@@ -676,6 +676,12 @@ final class AppState {
         let s = sessions[idx]
         let eng = engine(for: id)
         selectedServerSessionId = id
+        // Also surface the newly-active model path globally. Consumers
+        // that still read `selectedModelPath` (cmd+k quick picker, tray
+        // title, pre-Gateway chat send() guard, older tests) stay in
+        // sync — prevents the "loaded but chat still says not loaded"
+        // class of bug.
+        selectedModelPath = s.modelPath
         rebindEngineObserver()
 
         let remoteSettings = await eng.settings.session(id)
