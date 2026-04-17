@@ -597,6 +597,9 @@ suite_smoke() {
     case_metrics
     case_ollama_tags
     case_max_tokens
+    case_health_endpoint
+    case_cache_stats
+    case_gateway_info
 }
 
 case_stream_usage() {
@@ -726,6 +729,51 @@ finish = ch.get("finish_reason","?")
 ok = "true" if (has_42 or (finish=="stop" and len(content) > 0)) else "false"
 print(json.dumps({"name":"tool_roundtrip","ok":ok=="true","notes":f"has_42={has_42} finish={finish} c={content[:50]}"}))
 PY
+}
+
+case_health_endpoint() {
+    # `/health` is the load-balancer liveness probe. Must be fast, must
+    # be 200, must not require the model to be ready (otherwise a stuck
+    # load would fail upstream health checks and cause a restart loop).
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BASE/health")
+    local ok=false
+    [ "$code" = "200" ] && ok=true
+    emit "{\"name\":\"health_endpoint\",\"ok\":$ok,\"notes\":\"HTTP $code\"}"
+}
+
+case_cache_stats() {
+    # GET /v1/cache/stats reports paged/L1.5/disk cache telemetry. Used
+    # by the CachePanel in the SwiftUI app. Admin-gated if
+    # `--admin-token` was passed to `serve`; without a token the
+    # endpoint is open (which is what our test harness expects).
+    local resp
+    resp=$(curl -s --max-time 5 "$BASE/v1/cache/stats")
+    python3 <<PY
+import json
+try:
+    d = json.loads('''$resp''')
+    # Minimal invariants: response is a dict, has something
+    ok = "true" if isinstance(d, dict) and len(d) > 0 else "false"
+    keys = list(d.keys())[:4] if isinstance(d, dict) else []
+    print(json.dumps({"name":"cache_stats","ok":ok=="true","notes":f"keys={keys}"}))
+except Exception as e:
+    print(json.dumps({"name":"cache_stats","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
+case_gateway_info() {
+    # GET /v1/_gateway/info — the multi-session routing descriptor used
+    # by the multiplexer. Only wired when `serve --gateway-port` (or the
+    # settings toggle) is on — in single-model `vmlxctl serve` mode the
+    # route 404s, which is expected. Accept either 200-with-JSON OR
+    # 404 (not registered). Anything else (500/timeout/TCP reset)
+    # signals a server regression.
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$BASE/v1/_gateway/info")
+    local ok=false
+    [ "$code" = "200" ] || [ "$code" = "404" ] && ok=true
+    emit "{\"name\":\"gateway_info\",\"ok\":$ok,\"notes\":\"HTTP $code (404 expected in single-serve mode)\"}"
 }
 
 case_reasoning_content() {
