@@ -1508,14 +1508,43 @@ PY
 }
 
 case_health_endpoint() {
-    # `/health` is the load-balancer liveness probe. Must be fast, must
-    # be 200, must not require the model to be ready (otherwise a stuck
-    # load would fail upstream health checks and cause a restart loop).
+    # `/health` is the load-balancer liveness probe. Contract:
+    #   * HTTP 200 (fast, no model-ready dependency)
+    #   * JSON body: {"status":"ok","engine":"vmlx-swift"}
+    #   * Response returns within 3s even under load
+    # A regression that drops the status field or returns non-JSON
+    # breaks k8s liveness probes; a regression to text-only breaks
+    # any orchestrator parsing the body.
+    local t0=$(python3 -c 'import time;print(int(time.time()*1000))')
+    local body
+    body=$(curl -s --max-time 3 "$BASE/health")
     local code
     code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BASE/health")
-    local ok=false
-    [ "$code" = "200" ] && ok=true
-    emit "{\"name\":\"health_endpoint\",\"ok\":$ok,\"notes\":\"HTTP $code\"}"
+    local t1=$(python3 -c 'import time;print(int(time.time()*1000))')
+    local latency=$((t1 - t0))
+    echo "$body" > /tmp/vmlx-health.json
+    LATENCY="$latency" CODE="$code" python3 <<'PY'
+import json, os
+try:
+    d = json.load(open("/tmp/vmlx-health.json"))
+    code = os.environ["CODE"]
+    latency = int(os.environ["LATENCY"])
+    probs = []
+    if code != "200":
+        probs.append(f"HTTP {code}")
+    if d.get("status") != "ok":
+        probs.append(f"status={d.get('status')!r}")
+    if not isinstance(d.get("engine"), str):
+        probs.append("engine field missing")
+    if latency > 3000:
+        probs.append(f"slow ({latency}ms > 3s)")
+    ok = not probs
+    notes = f"HTTP {code} latency={latency}ms engine={d.get('engine')!r} status={d.get('status')!r}"
+    if probs: notes += f" GAP:{probs}"
+    print(json.dumps({"name":"health_endpoint","ok":ok,"notes":notes[:180]}))
+except Exception as e:
+    print(json.dumps({"name":"health_endpoint","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_cache_stats() {
