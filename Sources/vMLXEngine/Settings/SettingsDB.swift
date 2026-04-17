@@ -51,6 +51,28 @@ public final class SettingsDB: @unchecked Sendable {
     // MARK: - Migrations
 
     /// Sequential migrations. Index 0 -> v1, index 1 -> v2, etc.
+    ///
+    /// SCHEMA-EVOLUTION CONTRACT:
+    /// JSON blobs stored in `settings_json` are `Codable`-encoded
+    /// `GlobalSettings`/`SessionSettings`/`ChatSettings`. Swift's
+    /// synthesized `Codable.init(from:)` **requires** every non-optional
+    /// key to be present — adding a new non-optional field to any of
+    /// those structs WILL break decoding of existing rows on upgrade.
+    /// `SettingsStore` catches the `try? decode(...)` failure and falls
+    /// back to `GlobalSettings()` defaults, so nothing crashes, but the
+    /// user silently loses every tuned setting. Rules when evolving:
+    ///
+    ///   1. PREFER optional fields (`var newFlag: Bool? = nil`) so
+    ///      missing keys decode as `nil` without a migration bump.
+    ///   2. If a new NON-optional field is unavoidable, add a migration
+    ///      entry here that rewrites every stored blob to carry the
+    ///      field (read JSON dict, inject default, re-encode, UPDATE).
+    ///   3. If the MEANING of an existing field changes (not just its
+    ///      value), add a migration that maps old → new values.
+    ///
+    /// Each migration runs exactly once per user_version bump; check via
+    /// `PRAGMA user_version` at init and apply any missing ones in
+    /// order.
     private lazy var migrations: [(OpaquePointer?) throws -> Void] = [
         { db in
             func execOne(_ sql: String) throws {
