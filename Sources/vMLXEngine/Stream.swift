@@ -837,6 +837,21 @@ extension Engine {
             try await container.perform { (ctx: ModelContext) in
                 let lmInput = try await ctx.processor.prepare(input: userInput)
 
+                // VL-race barrier (iter-25 fix, deferred #4): for image/video
+                // inputs, `processor.prepare` runs the vision encoder which
+                // leaves an OPEN Metal compute encoder under the shared GPU
+                // stream. The subsequent LLM forward pass then commits its
+                // own encoder and Metal trips
+                // `tryCoalescingPreviousComputeCommandEncoder: A command
+                // encoder is already encoding to this command buffer`. The
+                // end-of-gen drain can't catch this because it's WITHIN a
+                // single request, before the LLM forward has even started.
+                // Commit + close any vision-encoder encoder by forcing eval
+                // on the prepared input tokens. Cheap no-op for text-only.
+                if !userInput.images.isEmpty || !userInput.videos.isEmpty {
+                    MLX.eval(lmInput.text.tokens)
+                }
+
                 // Pre-flight OOM protection. MLX Metal allocation
                 // failures come back as `fatalError` — not a Swift
                 // `throw` — so `do/catch` around the forward pass
