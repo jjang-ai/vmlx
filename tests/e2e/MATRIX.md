@@ -139,3 +139,14 @@ Results per model are archived in `tests/e2e/results/*.jsonl`.
   Vision_chat + basic_chat + multiturn all pass; crash only fires
   on the parallel-request case. Likely an MLX-binding race in the VLM
   eval-pipeline completion-handler registration. Investigate next.
+
+### 📊 Iteration 3 — tier-2 JANG first look
+
+| model | size | server tps | concurrent | prefix cache | ok |
+|-------|------|-----------|------------|--------------|-----|
+| Qwen3.5-VL-4B-JANG_4S-CRACK  | 3 GB  | 29.9 | 3/3 ✅ | 1253→1508ms ✅ | 6/6 (post MLX-drain fix) |
+| Nemotron-Cascade-2-30B-A3B-JANG_2L-CRACK | 10 GB | 15.5 | 3/3 ✅ | 987→980ms ⭐ | 10/13 (reasoning-prefixed basic_chat, expected json_mode miss) |
+
+Multi-turn prefix cache on Nemotron: **t2 actually equals t1** despite
+the prompt growing by 2 messages — the hybrid-SSM companion cache is
+pulling the system+user1 tokens out of paged memory as expected.

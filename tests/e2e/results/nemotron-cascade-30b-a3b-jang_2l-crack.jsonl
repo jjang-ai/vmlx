@@ -1,0 +1,27 @@
+{"name":"start","ok":true,"notes":"model=Nemotron-Cascade-2-30B-A3B-JANG_2L-CRACK suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=47050"}
+{"name":"models_list","ok":true,"notes":"39 model(s) in picker"}
+{"name":"basic_chat","ok":false,"ttft_ms":1647,"tokens":8,"notes":"We need to respond with a single word"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 128, "tokens": 202, "tps": 15.5, "notes": "decode_ms=12947"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":980,"notes":"t1=987ms t2=980ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/json/__init__.py", line 352, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/json/decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/json/decoder.py", line 361, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ~~~~~~~~~~~~~~^^^^^^^^
+json.decoder.JSONDecodeError: Expecting ',' delimiter: line 1 column 168 (char 167)
+{"name":"json_mode","ok":false,"notes":"{\"error\": \"response is not valid JSON: The data couldn\u2019t be read because it isn\u2019"}
+{"name":"ollama_chat","ok":true,"notes":"We need to respond: \"Say '"}
+{"name":"anthropic_messages","ok":true,"notes":"The user says: \"Say hi.\""}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"done","ok":true}
