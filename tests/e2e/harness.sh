@@ -290,6 +290,53 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_json_schema() {
+    # response_format:{type:"json_schema",...} is stricter than json_object:
+    # server must return content that parses as JSON AND conforms to the
+    # named schema (required keys present, correct types). OpenAI's
+    # Structured Outputs API; eval frameworks depend on it.
+    #
+    # Two success paths (both engine-correct):
+    #  1. content is clean Person JSON: name:str, age:int
+    #  2. server's validateResponseFormat caught malformed JSON and
+    #     wrapped as {"error","raw"} with finish_reason=content_filter
+    #     (small models occasionally emit markdown-fenced JSON)
+    # Failure = engine let bad JSON through, OR ignored the schema.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Give me a person object: name=Alice age=30\"}],\"max_tokens\":60,\"temperature\":0,\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"Person\",\"schema\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"integer\"}},\"required\":[\"name\",\"age\"]}}}}")
+    echo "$resp" > /tmp/vmlx-json-schema.json
+    python3 <<'PY'
+import json
+try:
+    r = json.load(open("/tmp/vmlx-json-schema.json"))
+    ch = (r.get("choices") or [{}])[0]
+    content = (ch.get("message") or {}).get("content") or ""
+    finish = ch.get("finish_reason")
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"content parsed to {type(parsed).__name__}")
+    # Path 1: validator caught bad JSON (engine-correct)
+    if "error" in parsed and "raw" in parsed and finish == "content_filter":
+        print(json.dumps({"name":"json_schema","ok":True,
+            "notes":f"validator caught bad JSON (engine-correct) raw={parsed['raw'][:40]!r}"}))
+    # Path 2: clean JSON matching schema
+    elif isinstance(parsed.get("name"), str) and isinstance(parsed.get("age"), int):
+        print(json.dumps({"name":"json_schema","ok":True,
+            "notes":f"schema-conformant parsed={parsed}"[:140]}))
+    else:
+        probs = []
+        if not isinstance(parsed.get("name"), str): probs.append("name type")
+        if not isinstance(parsed.get("age"), int): probs.append("age type")
+        print(json.dumps({"name":"json_schema","ok":False,
+            "notes":f"GAP:{probs} parsed={parsed}"[:140]}))
+except Exception as e:
+    print(json.dumps({"name":"json_schema","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
 case_ollama_chat() {
     # Validates the Ollama /api/chat non-streaming response:
     #   model    : str
@@ -1561,6 +1608,7 @@ suite_full() {
     case_stream_usage_opt_out
     case_anthropic_stream
     case_ollama_stream
+    case_json_schema
 }
 
 suite_vl() {
