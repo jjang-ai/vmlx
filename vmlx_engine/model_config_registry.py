@@ -112,15 +112,121 @@ class ModelConfigRegistry:
             # Invalidate cache
             self._match_cache.clear()
 
+    def _try_jang_stamp(self, model_name: str) -> Optional["ModelConfig"]:
+        """Tier-1: read jang_config.json `capabilities` stamp if present.
+
+        All JANG / JANGTQ artifacts produced 2026-04-16+ carry an authoritative
+        capabilities block in jang_config.json of the form:
+
+            "capabilities": {
+              "reasoning_parser": "qwen3 | deepseek_r1 | mistral | gemma4",
+              "tool_parser":      "qwen | minimax | deepseek | nemotron | mistral | gemma4 | glm47",
+              "think_in_template": true | false,
+              "supports_tools":    true,
+              "supports_thinking": true,
+              "family":            "qwen3_5_moe | minimax_m2 | glm5 | nemotron_h | mistral4 | gemma4",
+              "modality":          "text | vision",
+              "cache_type":        "kv | hybrid | mla"
+            }
+
+        When present, this is authoritative — return a ModelConfig built from
+        the stamp without consulting the family registry. That matches what
+        the converter actually produced, including any custom overrides (e.g.
+        Qwen3.6 VLM wrapper stamped "family": "qwen3_5_moe" from the outside
+        even though inner text_config.model_type = "qwen3_5_moe_text").
+
+        Returns None if there's no jang_config.json or no capabilities block.
+        """
+        try:
+            from pathlib import Path
+            import json
+            jcfg_path = Path(model_name) / "jang_config.json"
+            if not jcfg_path.is_file():
+                return None
+            try:
+                jcfg = json.loads(jcfg_path.read_text())
+            except Exception:
+                return None
+            caps = jcfg.get("capabilities")
+            if not isinstance(caps, dict):
+                return None
+            family = caps.get("family") or ""
+            if not family:
+                return None
+
+            # Start from an existing family config if the stamp's family name
+            # matches one we know — preserves specialty fields (eos_tokens,
+            # special_tokens_to_clean, architecture_hints). Fall back to a
+            # fresh ModelConfig otherwise.
+            base = None
+            for c in self._configs:
+                if c.family_name == family:
+                    base = c
+                    break
+            if base is None:
+                # Build from scratch — stamp is authoritative enough that we
+                # trust it even when the family isn't in the registry table.
+                base = ModelConfig(
+                    family_name=family,
+                    model_types=[family],
+                    cache_type=caps.get("cache_type", "kv") or "kv",
+                    priority=0,
+                )
+
+            # Override with stamped values (the stamp wins over registry defaults)
+            from dataclasses import replace
+            updates: Dict[str, Any] = {}
+            rp = caps.get("reasoning_parser")
+            tp = caps.get("tool_parser")
+            tin = caps.get("think_in_template")
+            ct = caps.get("cache_type")
+            mod = caps.get("modality")
+            if rp is not None:
+                updates["reasoning_parser"] = rp if rp != "none" else None
+            if tp is not None:
+                updates["tool_parser"] = tp if tp != "none" else None
+            if isinstance(tin, bool):
+                updates["think_in_template"] = tin
+            if ct:
+                updates["cache_type"] = ct
+            if mod == "vision":
+                updates["is_mllm"] = True
+            elif mod == "text":
+                updates["is_mllm"] = False
+            if updates:
+                base = replace(base, **updates)
+            return base
+        except Exception as e:
+            logger.debug(f"_try_jang_stamp failed for {model_name}: {e}")
+            return None
+
     def lookup(self, model_name: str) -> ModelConfig:
         """
         Look up configuration for a model name by reading its config.json.
+
+        Resolution order:
+          Tier 1 — jang_config.json `capabilities` block (authoritative stamp)
+          Tier 2 — config.json text_config.model_type (VLM wrapper inner type)
+          Tier 3 — config.json model_type + family registry match
+          Default — _DEFAULT_CONFIG
 
         Returns default config if no match found.
         """
         with self._rlock:
             if model_name in self._match_cache:
                 return self._match_cache[model_name]
+
+            # Tier 1 — JANG-stamped capabilities (authoritative, never second-guess)
+            _stamped = self._try_jang_stamp(model_name)
+            if _stamped is not None:
+                logger.info(
+                    f"Model config: detection_source=jang_stamped family={_stamped.family_name} "
+                    f"reasoning_parser={_stamped.reasoning_parser} tool_parser={_stamped.tool_parser} "
+                    f"think_in_template={_stamped.think_in_template} cache_type={_stamped.cache_type} "
+                    f"is_mllm={_stamped.is_mllm}"
+                )
+                self._match_cache[model_name] = _stamped
+                return _stamped
 
             model_type = None
             try:
