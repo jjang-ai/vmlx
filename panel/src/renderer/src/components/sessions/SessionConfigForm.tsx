@@ -62,6 +62,9 @@ export interface SessionConfig {
   chatTemplate?: string
   imageMode?: string
   imageQuantize?: number
+  // VLM video sampling — forwarded as video_fps / video_max_frames on request
+  videoFps?: number
+  videoMaxFrames?: number
   // Distributed compute
   distributedEnabled?: boolean
   distributedMode?: 'pipeline' | 'tensor'
@@ -126,7 +129,11 @@ export const DEFAULT_CONFIG: SessionConfig = {
   corsOrigins: '*',
   maxContextLength: 0,
   imageMode: undefined,
-  imageQuantize: undefined
+  imageQuantize: undefined,
+  // VLM defaults — 2 fps × 8 max frames = reasonable for Qwen 3.6 video (native
+  // temporal embedding capacity). mlx_vlm/models/mllm.py DEFAULT_FPS=2.0.
+  videoFps: 2,
+  videoMaxFrames: 8,
 }
 
 // Expert = current defaults (backwards compatible, full control)
@@ -861,6 +868,33 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {!smeltActive && config.isMultimodal === false && (
           <InfoNote text="VLM mode forced OFF — auto-detection is bypassed. Use this only if the model is incorrectly detected as multimodal." />
+        )}
+        {/* Video sampling — only relevant for VL models that accept video_url.
+            Qwen 3.6 / Qwen3.5-VL both have native video understanding via
+            temporal position embeddings, so 2 fps × 8 frames is typical. */}
+        {config.isMultimodal !== false && (
+          <>
+            <SliderField
+              label="Video Frames/Second"
+              tooltip="For VL models with video support (Qwen 3.6, Qwen3.5-VL). Controls how many frames per second are sampled from an uploaded video clip. Lower = fewer frames = faster prefill but less temporal detail. Qwen 3.6's temporal embeddings tolerate up to ~4 fps; 2 fps is a good default."
+              value={config.videoFps ?? 2}
+              onChange={v => onChange('videoFps', v)}
+              min={1}
+              max={8}
+              step={1}
+              defaultValue={2}
+            />
+            <SliderField
+              label="Max Video Frames"
+              tooltip="Maximum number of frames extracted from a single video, regardless of fps or duration. Caps prefill cost on long clips. Qwen 3.6 supports up to 32+ frames but most prompts work well with 8."
+              value={config.videoMaxFrames ?? 8}
+              onChange={v => onChange('videoMaxFrames', v)}
+              min={2}
+              max={64}
+              step={2}
+              defaultValue={8}
+            />
+          </>
         )}
       </Section>
 

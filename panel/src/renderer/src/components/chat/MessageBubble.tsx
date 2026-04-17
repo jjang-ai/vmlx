@@ -194,6 +194,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     const contentParts = parseContentArray(message.content)
     if (contentParts) {
       const images = contentParts.filter(p => p.type === 'image_url' && p.image_url?.url)
+      const videos = contentParts.filter(p => p.type === 'video_url' && p.video_url?.url)
       const textParts = contentParts.filter(p => p.type === 'text' && p.text)
       return (
         <div>
@@ -206,6 +207,19 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
                   alt={`Attached image ${i + 1}`}
                   className="max-w-[300px] max-h-[200px] rounded-md border border-white/10 cursor-pointer hover:opacity-90 transition-opacity object-contain"
                   onClick={() => setZoomedImage(img.image_url!.url)}
+                />
+              ))}
+            </div>
+          )}
+          {videos.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {videos.map((vid, i) => (
+                <video
+                  key={`v-${i}`}
+                  src={vid.video_url!.url}
+                  controls
+                  preload="metadata"
+                  className="max-w-[360px] max-h-[240px] rounded-md border border-white/10 bg-black"
                 />
               ))}
             </div>
