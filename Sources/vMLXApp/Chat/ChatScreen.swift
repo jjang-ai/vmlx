@@ -25,7 +25,22 @@ struct ChatScreen: View {
                                   loadProgress: app.loadProgress,
                                   isStreaming: vm.isGenerating,
                                   hasContent: !(vm.messages.last?.content.isEmpty ?? true)) {
-                    app.mode = .server
+                    // User complaint: the "Load Model" banner button used to
+                    // bounce to `app.mode = .server` — a pointless detour
+                    // when the chat already knows which model it wants. Try
+                    // to DIRECTLY start the chat's selected model first:
+                    //   1. find ModelEntry matching chat's `modelAlias`, OR
+                    //      fall back to the last-used `selectedModelPath`
+                    //   2. find an existing session for that modelPath, OR
+                    //      auto-create one with default settings
+                    //   3. `startSession` — loads weights + brings up HTTP
+                    //      listener in the same step (observer fires so the
+                    //      banner flips to Loading → Running live).
+                    // Only bounce to Server tab as a LAST resort when the
+                    // chat has zero model selected yet (cold first-run).
+                    Task { @MainActor in
+                        await loadChatModelInline(app: app, vm: vm)
+                    }
                 } onRetry: {
                     // Caller hint — ChatViewModel can re-send when the engine
                     // state flips to .running. For now we just clear the error
@@ -637,4 +652,66 @@ private struct ChatModelPicker: View {
         guard let sid = app.sessionId(forModelPath: entry.canonicalPath) else { return }
         await app.stopSession(sid)
     }
+}
+
+/// File-private helper used by the chat-screen banner's "Load Model"
+/// CTA. Previously the CTA just called `app.mode = .server` — a
+/// pointless tab bounce when the chat already knows which model it
+/// wants. Now it tries to:
+///
+///   1. Resolve the chat's `modelAlias` → matching `ModelLibrary.ModelEntry`.
+///   2. Reuse an existing session for that model path, OR auto-create
+///      a new session with default settings if it's the first time.
+///   3. Call `AppState.startSession(id)` which loads weights + starts
+///      the HTTP listener. The per-session observer flips the banner
+///      through `.loading(…)` → `.running` live, so no manual refresh
+///      is needed.
+///
+/// Only bounces to Server tab in the truly cold case where the user
+/// has neither a chat-level alias nor a last-used `selectedModelPath`
+/// and no entries have been discovered yet.
+@MainActor
+private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
+    // Prefer the chat's currently-configured model. `currentAlias` is
+    // set by the ChatModelPicker when the user picks a model row;
+    // falling back to `selectedModelPath` covers the "just loaded via
+    // cmd+k" + "fresh first-run" cases.
+    var targetAlias: String? = nil
+    if let chatId = vm.activeSessionId,
+       let chat = await app.engine.settings.chat(chatId)
+    {
+        targetAlias = chat.modelAlias
+    }
+    let entries = await app.engine.modelLibrary.entries()
+    var target: ModelLibrary.ModelEntry? = nil
+    if let alias = targetAlias, !alias.isEmpty {
+        target = entries.first { $0.displayName == alias }
+    }
+    if target == nil, let path = app.selectedModelPath {
+        let canonical = path.standardizedFileURL.resolvingSymlinksInPath()
+        target = entries.first {
+            $0.canonicalPath.standardizedFileURL.resolvingSymlinksInPath() == canonical
+        }
+    }
+    guard let entry = target else {
+        // No chat alias, no selectedModelPath — genuinely first-run.
+        // Bounce to Server tab so the user can pick + configure.
+        app.flashBanner("Pick a model from the chat's model menu above, or add one in the Server tab")
+        app.mode = .server
+        return
+    }
+    // Reuse existing session if we already have one for this path; the
+    // session's saved settings (port, host, quant, prefill step, etc.)
+    // carry forward. Auto-create a fresh one (default settings +
+    // CapabilityDetector auto-detection) on first use — user's repeated
+    // ask: "user should be able to load model from the last saved
+    // session of that model's settings, or just start new with auto
+    // detect if new model first time".
+    let sid: UUID
+    if let existing = app.sessionId(forModelPath: entry.canonicalPath) {
+        sid = existing
+    } else {
+        sid = await app.createSession(forModel: entry.canonicalPath)
+    }
+    await app.startSession(sid)
 }
