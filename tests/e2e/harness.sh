@@ -96,15 +96,43 @@ extract_content() {
 # ---------------------------------------------------------------------------
 
 case_models_list() {
+    # GET /v1/models must conform to the OpenAI list-models shape:
+    #   {"object":"list","data":[{"id","object":"model","created","owned_by"}...]}
+    # Each item: `id` string, `object="model"`, `created` int, `owned_by` string.
+    # OpenAI SDK clients (openai-python, openai-node) deserialize into a
+    # typed ModelsPage and raise on missing fields.
     local out
     out=$(curl -s --max-time 5 "$BASE/v1/models")
-    local count
-    count=$(echo "$out" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d.get("data",[])))' 2>/dev/null || echo 0)
-    if [ "$count" -gt 0 ]; then
-        emit "{\"name\":\"models_list\",\"ok\":true,\"notes\":\"$count model(s) in picker\"}"
-    else
-        emit "{\"name\":\"models_list\",\"ok\":false,\"notes\":\"empty\"}"
-    fi
+    echo "$out" > /tmp/vmlx-models.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-models.json"))
+    if d.get("object") != "list":
+        print(json.dumps({"name":"models_list","ok":False,"notes":f"top object={d.get('object')}"}))
+        raise SystemExit
+    data = d.get("data") or []
+    if not isinstance(data, list) or not data:
+        print(json.dumps({"name":"models_list","ok":False,"notes":"empty data[]"}))
+        raise SystemExit
+    bad = []
+    for m in data[:10]:
+        if not isinstance(m.get("id"), str) or not m["id"]:
+            bad.append("id")
+        if m.get("object") != "model":
+            bad.append(f"object={m.get('object')}")
+        if not isinstance(m.get("created"), int):
+            bad.append("created")
+        if not isinstance(m.get("owned_by"), str):
+            bad.append("owned_by")
+        if bad: break
+    ok = not bad
+    notes = f"{len(data)} model(s) in picker"
+    if bad: notes += f" schemaGap={bad}"
+    print(json.dumps({"name":"models_list","ok":ok,"notes":notes}))
+except Exception as e:
+    print(json.dumps({"name":"models_list","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_basic_chat() {
