@@ -776,6 +776,75 @@ case_gateway_info() {
     emit "{\"name\":\"gateway_info\",\"ok\":$ok,\"notes\":\"HTTP $code (404 expected in single-serve mode)\"}"
 }
 
+case_deterministic() {
+    # With temperature=0 + identical prompt + same model state, two
+    # back-to-back requests MUST return bit-identical content. If they
+    # diverge, either the sampler has a nondeterministic source
+    # (time-based seed, uninitialized RNG, wrong greedy path) OR the
+    # KV cache from turn-1 is corrupting turn-2. Both are correctness
+    # bugs users report as "same question, different answer".
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local body="{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Name 3 primary colors in order.\"}],\"max_tokens\":20,\"temperature\":0}"
+    local r1_file=/tmp/vmlx-det-1.json r2_file=/tmp/vmlx-det-2.json
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" -d "$body" > "$r1_file"
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" -d "$body" > "$r2_file"
+    F1="$r1_file" F2="$r2_file" python3 <<'PY'
+import json, os
+def content(p):
+    try:
+        d = json.load(open(p))
+        return d.get("choices",[{}])[0].get("message",{}).get("content","") or ""
+    except Exception:
+        return ""
+r1 = content(os.environ["F1"])
+r2 = content(os.environ["F2"])
+match = r1 == r2 and len(r1) > 0
+tag = "match" if match else "DRIFT"
+print(json.dumps({"name":"deterministic","ok":match,"notes":f"{tag} r1={r1[:50]!r}"[:120]}))
+PY
+}
+
+case_logprobs() {
+    # OpenAI `logprobs: true` + `top_logprobs: 3` should either:
+    #   a) return per-token logprobs (full support), OR
+    #   b) return a clean 400 "not yet supported" error (documented
+    #      unimplemented — the Swift engine currently does this).
+    # What we're catching: the 500/timeout/silent-empty-choices path
+    # (engine would say "no supported" but a regression could just
+    # hang or return an empty but 200 response).
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp_file=/tmp/vmlx-logprobs.json
+    local code
+    code=$(curl -s --max-time 60 -o "$resp_file" -w "%{http_code}" -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}],\"max_tokens\":5,\"temperature\":0,\"logprobs\":true,\"top_logprobs\":3}")
+    F="$resp_file" HTTP="$code" python3 <<'PY'
+import json, os
+code = os.environ["HTTP"]
+try:
+    r = json.load(open(os.environ["F"]))
+except Exception as e:
+    print(json.dumps({"name":"logprobs","ok":False,"notes":f"parse: {e}"}))
+    raise SystemExit
+choices = r.get("choices", [])
+err = r.get("error", {})
+if code == "200" and choices:
+    lp = choices[0].get("logprobs") or {}
+    content = lp.get("content") or []
+    first_lp = content[0].get("logprob") if content else None
+    if content and first_lp is not None:
+        print(json.dumps({"name":"logprobs","ok":True,"notes":f"ok tokens={len(content)} first={first_lp:.2f}"}))
+    else:
+        print(json.dumps({"name":"logprobs","ok":False,"notes":"200 but no content array"}))
+elif code.startswith("4") and "not yet supported" in (err.get("message") or ""):
+    # Documented-unimplemented: engine surfaces a clean 400 with
+    # explicit message. That's an acceptable pass for now.
+    print(json.dumps({"name":"logprobs","ok":True,"notes":f"HTTP {code} not-yet-supported (documented)"}))
+else:
+    print(json.dumps({"name":"logprobs","ok":False,"notes":f"HTTP {code} err={(err.get('message') or '')[:50]}"}))
+PY
+}
+
 case_reasoning_content() {
     # Thinking models (Qwen3, DeepSeek R1, GLM 5, Nemotron-reasoning)
     # emit their chain-of-thought inside `<think>...</think>` tags.
@@ -872,6 +941,8 @@ suite_full() {
     case_tool_call
     case_tool_roundtrip
     case_stream_usage
+    case_deterministic
+    case_logprobs
     case_reasoning_content
     case_large_context
 }
