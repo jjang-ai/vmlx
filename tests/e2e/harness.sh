@@ -942,19 +942,33 @@ case_health_endpoint() {
 
 case_cache_stats() {
     # GET /v1/cache/stats reports paged/L1.5/disk cache telemetry. Used
-    # by the CachePanel in the SwiftUI app. Admin-gated if
-    # `--admin-token` was passed to `serve`; without a token the
-    # endpoint is open (which is what our test harness expects).
+    # by the SwiftUI `CachePanel` (subscribes to `Engine.cacheStats`) so
+    # the response shape is load-bearing. Assert:
+    #   * `isHybrid` is bool (not null/int/string) — CachePanel's
+    #     "hybrid SSM" badge toggles on this exact type.
+    #   * `paged` is present (core KV-cache tier, always populated).
+    #   * `memory` is present (L1.5 byte-budget memory cache).
+    # Missing isHybrid causes the SwiftUI `Bool(any)` cast to fail and
+    # the panel silently shows the wrong badge.
     local resp
     resp=$(curl -s --max-time 5 "$BASE/v1/cache/stats")
     python3 <<PY
 import json
 try:
     d = json.loads(r'''$resp''')
-    # Minimal invariants: response is a dict, has something
-    ok = "true" if isinstance(d, dict) and len(d) > 0 else "false"
-    keys = list(d.keys())[:4] if isinstance(d, dict) else []
-    print(json.dumps({"name":"cache_stats","ok":ok=="true","notes":f"keys={keys}"}))
+    if not isinstance(d, dict) or len(d) == 0:
+        print(json.dumps({"name":"cache_stats","ok":False,"notes":"not a dict / empty"}))
+        raise SystemExit
+    is_hybrid = d.get("isHybrid")
+    has_paged = "paged" in d
+    has_memory = "memory" in d
+    type_ok = isinstance(is_hybrid, bool)
+    ok = type_ok and has_paged and has_memory
+    keys = sorted(d.keys())
+    notes = f"keys={keys} isHybrid={is_hybrid!r}"
+    if not type_ok:
+        notes += f" badHybridType={type(is_hybrid).__name__}"
+    print(json.dumps({"name":"cache_stats","ok":ok,"notes":notes[:140]}))
 except Exception as e:
     print(json.dumps({"name":"cache_stats","ok":False,"notes":f"parse: {e}"}))
 PY
