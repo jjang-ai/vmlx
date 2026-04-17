@@ -304,6 +304,28 @@ Mitigation options to evaluate once tier-3 finishes:
 
 Left as OPEN — don't ship iter-64 binary as production release until this class of race is understood.
 
+### iter-68 final empirical surface sweep (2026-04-17)
+
+Live-verified on the iter-67 binary against Qwen3-0.6B-8bit + ad-hoc model loads.
+
+**OpenAI surfaces:** `/v1/chat/completions` (stream + non-stream, 135 cold → 78-90 warm tok/s) · `/v1/embeddings` (1024-dim, cat/kitten cos=0.86) · `/v1/completions` (legacy `text_completion`) · `/v1/responses` (`status=completed`, `output[].content[].text`).
+
+**Ollama:** `/api/tags` (40 models) · `/api/version` (`0.12.6`) · `/api/chat` (NDJSON earlier).
+
+**Anthropic:** `/v1/messages` (`type=message`, `content[].text`, `stop_reason`).
+
+**Admin:** `GET /v1/cache/stats` (paged/memory/prefix tiers + isHybrid + loaded) · `DELETE /v1/cache` (cleared=true, post-flush blocksInUse=0) · `POST /admin/soft-sleep` / `deep-sleep` / `wake` (all 200) · `POST /admin/wake {model:"..."}` live-verified with Qwen→Llama swap on deep-wake, chat hits swapped model · `GET /metrics` Prometheus gpu/ram gauges.
+
+**Security:** `--api-key` bearer auth (401 missing/wrong, 200 correct) · `--rate-limit N` (first N/min 200, rest 429). Side-note: `--rate-limit N` persists into `settings.sqlite3` affecting later unadorned vmlxctl runs — resolved by `sqlite3 UPDATE global_settings SET settings_json=json_set(...,'$.rateLimit',0)`.
+
+**Streaming + features:** SSE role-delta + content-deltas + finish_reason + usage + `[DONE]` all 5 markers · cancel-mid-stream survives (`/health=200` post-close) · multi-session concurrent (2 models/2 ports parallel) · long context (1,709 prompt tok correct) · `response_format: json_object` parseable · `response_format: json_schema` honors `required` · `tool_calls[] + role=tool` roundtrip · `chat_template_kwargs.enable_thinking` pass-through (Qwen3-0.6B-8bit is non-Thinking variant, reasoning parser correctly falls through to content per §15) · `seed` byte-identical warm (iter-64 fix) · VL image + malformed video (iter-67 HTTP 200).
+
+**Persistence:** 40 models, 4 chats, 20 messages in SQLite WAL.
+
+**Lifecycle race:** sleep/wake cycle GREEN on 5/5 non-JANGTQ full-suite models (iter-66 fix).
+
+Session delivered **16 commits on `dev`** (iter-59 through iter-67) + iter-67 binary installed at `/Applications/vMLX.app`. Zero regressions vs iter-60 239/248 baseline; added 8+ new cases to the 45→47 harness.
+
 ## Known Swift-vendor drift
 
 - Logprobs endpoint returns 400 `"not yet supported by the vMLX Swift engine"` — intentional, tracked as a docstring'd unimplemented feature rather than a bug.
