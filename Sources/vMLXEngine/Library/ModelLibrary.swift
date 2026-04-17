@@ -153,25 +153,40 @@ public actor ModelLibrary {
         let userDirs = database.userDirs()
         var discovered: [ModelEntry] = []
         var seenIds = Set<String>()
+        // Shard-fingerprint → already-emitted entry. HF cache is scanned
+        // first so its entry wins the slot — when the same weights are
+        // ALSO in a user dir (common pattern: user mirrors mlx-community
+        // models into `.mlxstudio/models/MLXModels/mlx-community/...`),
+        // the user-dir copy is dropped and the picker shows one clean
+        // `mlx-community/gemma-4-e2b-it-4bit` instead of two rows with
+        // divergent naming.
+        var seenFingerprints: [String: ModelEntry] = [:]
 
-        // HF cache: ~/.cache/huggingface/hub/models--<org>--<repo>/snapshots/<rev>/
-        for url in walkHFCache() {
-            if let entry = buildEntry(dir: url, source: .hfCache, now: now) {
-                if seenIds.insert(entry.id).inserted {
-                    discovered.append(entry)
-                }
-            }
-        }
-
-        // User-added dirs, depth 3
+        // Build two ordered pass lists and run one inline enqueue loop so
+        // we don't need a closure (avoids Swift-6 actor-capture churn).
+        var passes: [(URL, Source)] = []
+        for url in walkHFCache() { passes.append((url, .hfCache)) }
         for root in userDirs {
             for url in walkUserDir(root, maxDepth: 3) {
-                if let entry = buildEntry(dir: url, source: .userDir(root), now: now) {
-                    if seenIds.insert(entry.id).inserted {
-                        discovered.append(entry)
-                    }
-                }
+                passes.append((url, .userDir(root)))
             }
+        }
+        for (url, source) in passes {
+            guard let entry = buildEntry(dir: url, source: source, now: now) else {
+                continue
+            }
+            guard seenIds.insert(entry.id).inserted else { continue }
+            if let fp = shardFingerprint(in: url) {
+                if seenFingerprints[fp] != nil {
+                    // Same weights already emitted from another source.
+                    // Drop the id so the DB purge step doesn't think this
+                    // is a fresh removal.
+                    seenIds.remove(entry.id)
+                    continue
+                }
+                seenFingerprints[fp] = entry
+            }
+            discovered.append(entry)
         }
 
         // Diff against DB → upsert + purge
@@ -485,7 +500,16 @@ public actor ModelLibrary {
         // / diffusion pipelines are the one exception: they don't carry
         // top-level weight files (the transformer / vae subdirs do), so
         // allow them through.
-        if sizeBytes == 0 && modality != .image {
+        // Stub-snapshot guard: HF cache snapshots frequently carry only
+        // `*.safetensors` symlinks pointing at blobs that were never
+        // actually downloaded (or were downloaded, then the target dir
+        // was moved). Those stubs measure ~279 B (3 symlink paths * 93 B)
+        // and crash the loader when clicked. Anything real is at least
+        // a few MB (tokenizer + tiny bias tensors for the smallest
+        // draft models). 8 MB is comfortably below the smallest legit
+        // model we ship and well above any symlink-path stub.
+        let minimumLegitWeightBytes: Int64 = 8 * 1024 * 1024
+        if sizeBytes < minimumLegitWeightBytes && modality != .image {
             return nil
         }
         let id = sha256(canonical.path)
@@ -541,14 +565,45 @@ public actor ModelLibrary {
         // like `Qwen3.6-35B-A3B`) and makes every variant of the same
         // base show up as a "duplicate" with identical display name.
         // Walk up if the leaf is a hash (unlikely for userDir).
-        if case .userDir = source {
-            let last = dir.lastPathComponent
+        if case .userDir(let root) = source {
+            let last = cleanUserLeaf(dir.lastPathComponent)
+            let safeLeaf: String
             if !looksLikeHash(last) && !last.isEmpty {
-                return last
+                safeLeaf = last
+            } else {
+                let up = cleanUserLeaf(dir.deletingLastPathComponent().lastPathComponent)
+                safeLeaf = (!up.isEmpty && !looksLikeHash(up)) ? up
+                    : (last.isEmpty ? dir.path : last)
             }
-            let up = dir.deletingLastPathComponent().lastPathComponent
-            if !up.isEmpty && !looksLikeHash(up) { return up }
-            return last.isEmpty ? dir.path : last
+            // Nested `<root>/[MLXModels]/<org>/<model>` layout (vMLX's
+            // default for downloaded models): include the org segment
+            // so two sibling orgs shipping the same leaf name
+            // (mlx-community/gemma-4-e2b-it-4bit vs
+            // OsaurusAI/gemma-4-e2b-it-4bit) render as distinct
+            // `org/name` rows instead of collapsing into visible
+            // "duplicates". When the model sits DIRECTLY under root
+            // (`~/models/<model>`), emit just the leaf — prefixing
+            // with `models/` would be noise.
+            let rootPath = root.standardizedFileURL.path
+            let dirPath = dir.standardizedFileURL.path
+            let parentURL = dir.deletingLastPathComponent()
+            let parentName = parentURL.lastPathComponent
+            let parentIsRoot = parentURL.standardizedFileURL.path == rootPath
+            let nestedUnderRoot = dirPath.hasPrefix(rootPath + "/")
+            let genericWrappers: Set<String> = [
+                "models", "MLXModels", "cache", ".cache",
+                "huggingface", "hub",
+            ]
+            let orgIsUseful =
+                !parentIsRoot
+                && nestedUnderRoot
+                && !parentName.isEmpty
+                && !looksLikeHash(parentName)
+                && !genericWrappers.contains(parentName)
+            if orgIsUseful {
+                return "\(parentName)/\(safeLeaf)"
+            }
+            return safeLeaf
         }
 
         // HF cache layout. Split on the FIRST `--` after `models--`
@@ -622,6 +677,57 @@ public actor ModelLibrary {
         return s.allSatisfy { $0.isHexDigit }
     }
 
+    /// Strip bundle-marker extensions (`.jangspec`) from a user-dir leaf so
+    /// the picker shows `MiniMax-M2.7-JANG_2L` rather than
+    /// `MiniMax-M2.7-JANG_2L.jangspec`. The bundle is a loadable unit from
+    /// the engine's perspective — the extension is filesystem metadata.
+    private func cleanUserLeaf(_ name: String) -> String {
+        var s = name
+        for ext in [".jangspec", ".mlxq", ".bundle"] {
+            if s.hasSuffix(ext) {
+                s = String(s.dropLast(ext.count))
+            }
+        }
+        return s
+    }
+
+    /// Shard-size fingerprint used to collapse duplicate installs across
+    /// HF cache + user dirs. Hashing actual bytes would be correct but
+    /// too slow at scan time for 50 GB bundles. Instead we hash the sorted
+    /// list of `(filename_ext, size_bytes)` pairs for weight shards — two
+    /// installs with an identical shard-size tuple are almost certainly
+    /// the same weights (shard boundaries are deterministic per repo), and
+    /// a false collision on distinct repos is vanishingly unlikely because
+    /// every file down to the last byte would have to match.
+    ///
+    /// Returns nil when no weight shards are visible (those dirs are
+    /// rejected upstream by the zero-weight guard in `buildEntry` anyway).
+    private func shardFingerprint(in dir: URL) -> String? {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: []
+        ) else { return nil }
+        var sizes: [Int64] = []
+        for case let url as URL in enumerator {
+            let ext = url.pathExtension.lowercased()
+            guard ext == "safetensors" || ext == "bin" || ext == "gguf" else { continue }
+            let resolved = url.resolvingSymlinksInPath()
+            guard fm.fileExists(atPath: resolved.path) else { continue }
+            if let attrs = try? fm.attributesOfItem(atPath: resolved.path),
+               let size = attrs[.size] as? NSNumber
+            {
+                sizes.append(size.int64Value)
+            }
+        }
+        guard !sizes.isEmpty else { return nil }
+        // Sort so shard ordering (model-00001 vs a.safetensors) doesn't
+        // produce a different fingerprint for the same underlying blobs.
+        sizes.sort()
+        return sha256(sizes.map(String.init).joined(separator: ","))
+    }
+
     private func totalWeightBytes(in dir: URL) -> Int64 {
         let fm = FileManager.default
         // Follow symlinks (HF cache snapshots → blobs/).
@@ -635,10 +741,19 @@ public actor ModelLibrary {
         for case let url as URL in enumerator {
             let ext = url.pathExtension.lowercased()
             guard ext == "safetensors" || ext == "bin" || ext == "gguf" else { continue }
-            // Resolve symlinks so we count the blob, not the link size.
             let resolved = url.resolvingSymlinksInPath()
+            // HF cache snapshots are filled with symlinks to blobs/ or
+            // to user-configured stores (`/Users/eric/mlx-models/...`).
+            // If the target is missing (user moved/deleted the blob),
+            // `attributesOfItem(atPath:)` silently falls back to lstat
+            // and returns the SYMLINK's own size — ~93 bytes per link.
+            // Summing those gives "0 KB" or "0 MB" displays even though
+            // the picker still lists the snapshot. Only attribute size
+            // when the resolved target actually exists on disk.
+            guard fm.fileExists(atPath: resolved.path) else { continue }
             if let attrs = try? fm.attributesOfItem(atPath: resolved.path),
-               let size = attrs[.size] as? NSNumber {
+               let size = attrs[.size] as? NSNumber
+            {
                 total += size.int64Value
             }
         }
