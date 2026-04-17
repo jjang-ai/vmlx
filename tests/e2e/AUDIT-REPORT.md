@@ -213,7 +213,7 @@ Added `case_video_url_handling` to the `vl` suite — feeds a malformed `data:vi
 ### Remaining issues (iter-60+ backlog)
 - **Nemotron analytical prefix** (not an engine bug) — harness's `basic_chat` + `system_message` runs with `max_tokens=8` and no `enable_thinking`. Engine computes `effectiveThinking=false` and passes `enable_thinking=False` to the Jinja template; Nemotron's template then stamps `<think></think>` (immediate close). The model still writes "We need to respond…" as its first 8 tokens — that is the model's analytical style surfacing in the CONTENT stream, not a reasoning-parser miss. Parser wiring is correct (verified: `reasoning_parser=deepseek_r1` + `think_in_template=true` + `modelStampsThink` = true, `thinkInPrompt` flag flows into the parser). To silence this would require either a Nemotron-specific post-filter or a larger `max_tokens` budget — neither is an engine-layer fix.
 - **Small-model tool-call accuracy** — Llama-1B/Gemma-e2b/Nemotron-2L don't emit compliant tool calls. Not an engine bug; documented in tier-3 notes.
-- **Sampler seed not honored** (real engine bug, iter-62 discovery) — `Stream.swift:721-723` sets `MLXRandom.seed(_:)` for the GLOBAL RandomState, but `TopPSampler` / `CategoricalSampler` in `Sources/vMLXLMCommon/Evaluate.swift` construct private `MLXRandom.RandomState()` instances time-seeded from `DispatchTime.now().uptimeNanoseconds`, ignoring the global. Two requests with same seed → different outputs. Fix sketched as `samplerSeed: UInt64?` parameter that flows through `GenerateParameters.sampler()` into `RandomState(seed:)` — partial attempt in iter-62 reverted because the vMLXCLI build target held a stale symbol reference to the old `GenerateParameters.init` signature. Clean re-implementation needs a full `swift package clean` + rebuild to land. Harness `case_seed_reproducibility` kept in place as a running red flag.
+- ~~**Sampler seed not honored**~~ **FIXED iter-64** (`ab86197`) — added `samplerSeed: UInt64?` as a *stored-only* property on `GenerateParameters` (intentionally NOT in the `init` signature so downstream build targets don't need to relink on stale .swiftmodule cache — lesson from the iter-62 revert). `GenerateParameters.sampler()` threads it into `TopPSampler(seed:)` / `CategoricalSampler(seed:)`, each of which constructs its private `RandomState(seed:)` when non-nil. Live-validated: harness `case_seed_reproducibility` now reports `ok=true · r2==r3=True` on the new binary.
 
 ### iter-63 app-layer wins (2026-04-17)
 
@@ -222,6 +222,20 @@ Added `case_video_url_handling` to the `vl` suite — feeds a malformed `data:vi
 - **Direct start/stop from chat** (`e583433`) — `startSession` / `stopSession` / `createSession` lifted off private `SessionDashboard` methods onto `@MainActor` AppState helpers so the Chat picker and Server dashboard share the exact same load path (no drift between the two surfaces).
 - **ParserRegistry audit** — verified `gemma4` present in gemma case, `mistral`/`mistral3`/`mistral4` all aliased, `minimax_m2`/`minimax_m2_5` correct (no `minimax_m2x` typo anywhere in the codebase). No changes needed.
 - **Regression check** — iter-59+iter-62 binary ran Qwen3-0.6B full 45-case harness post-rebuild: 45/45 + 1 informational seed_reproducibility fail (documented above). No unexpected regressions.
+
+### iter-64 final regression gate (2026-04-17 post-seed-fix)
+
+Qwen3-0.6B-8bit through the full 46-case harness on the post-iter-64 binary:
+
+**46 pass · 0 fail · clean green run.** Includes:
+- ✅ `seed_reproducibility` — `r2==r3=True len_r2=75 sample="Here's a unique and imaginative planet n…"` (r1 still diverges due to Metal cold-path kernel warmup, as designed — gate is warm-stable `r2==r3`).
+- ✅ `tool_call` + `tool_roundtrip` — Qwen3 hermes parser green end-to-end.
+- ✅ `anthropic_stream` + `ollama_stream` + `sse_stream` — all three envelope protocols.
+- ✅ `video_url_handling` (vl suite only — not in text suite) — malformed data URL handled without crash.
+- ✅ `sleep_wake_cycle` — admin lifecycle soft + deep + wake.
+- ✅ `concurrent` (3-way) + `concurrent_burst` (5-way) — server liveness 200 throughout.
+
+No engine regressions from iter-59 tool-call marker-bleed fix, iter-62 sampler-seed wire-through, iter-63 app-layer load guard, or iter-64 actor-isolation fix.
 
 ## Known Swift-vendor drift
 
