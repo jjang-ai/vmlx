@@ -56,6 +56,7 @@ struct TrayItem: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                if app.sessions.count > 1 { sessionPickerRow }
                 Divider()
                 lifecycleSection
                 modelRow
@@ -133,6 +134,50 @@ struct TrayItem: View {
         }
     }
 
+    // MARK: - Session picker (multi-engine)
+
+    /// Compact picker that flips `app.selectedServerSessionId` when the
+    /// user has more than one server session open. Mirrors the Electron
+    /// tray's session switcher — previously the macOS tray showed only
+    /// the selected session with no way to switch without opening the
+    /// main window. Hidden when there's 0 or 1 session (no point in a
+    /// picker with a single choice).
+    private var sessionPickerRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "rectangle.on.rectangle")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+            Picker("Session", selection: Binding(
+                get: { app.selectedServerSessionId ?? app.sessions.first?.id ?? UUID() },
+                set: { newId in
+                    app.selectedServerSessionId = newId
+                    app.rebindEngineObserver()
+                }
+            )) {
+                ForEach(app.sessions) { s in
+                    Text("\(s.displayName) · \(Self.sessionShortState(s))")
+                        .tag(s.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+        }
+        .padding(.top, 4)
+    }
+
+    /// One-word state label for the picker row so the menu stays scannable
+    /// even with long model names.
+    private static func sessionShortState(_ s: Session) -> String {
+        switch s.state {
+        case .stopped:        return "stopped"
+        case .loading:        return "loading"
+        case .running:        return "running"
+        case .standby(.soft): return "soft-sleep"
+        case .standby(.deep): return "deep-sleep"
+        case .error:          return "error"
+        }
+    }
+
     // MARK: - Lifecycle row
 
     private var lifecycleSection: some View {
@@ -188,6 +233,12 @@ struct TrayItem: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        // VoiceOver reads the title (e.g. "Start", "Soft Sleep") + the
+        // engine-state hint so the user knows why a button is disabled.
+        .accessibilityLabel(title)
+        .accessibilityHint(enabled
+            ? "Sends the \(title.lowercased()) command to the server"
+            : "Disabled in the current engine state")
     }
 
     // MARK: - Model row
