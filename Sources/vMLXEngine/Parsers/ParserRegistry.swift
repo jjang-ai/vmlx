@@ -38,19 +38,28 @@ public enum ToolCallParserRegistry {
         switch name.lowercased() {
         case "hermes", "nous":
             return HermesToolCallParser()
-        case "qwen", "qwen3":
+        // Qwen family aliases covering JANG capability-stamp + vLLM
+        // ecosystem names + Qwen 3.6 short/long forms (2026-04-16
+        // parser alias audit).
+        case "qwen", "qwen3", "qwen3_5", "qwen35", "qwen3_6", "qwen36",
+             "qwen3_coder", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text":
             return QwenToolCallParser()
         case "llama", "llama3", "llama4":
             return LlamaToolCallParser()
-        case "mistral":
+        // Mistral family — include `mistral4` variant (JANG stamp uses
+        // it for MLA-backed Mistral 4). Before this, Mistral 4 stamped
+        // models silently lost tool parsing.
+        case "mistral", "mistral3", "mistral4":
             return MistralToolCallParser()
-        case "deepseek", "deepseek_v3", "deepseek_r1":
+        case "deepseek", "deepseek_v3", "deepseek_r1", "deepseek_v32":
             return DeepSeekToolCallParser()
         case "kimi", "kimi_k2", "moonshot":
             return KimiToolCallParser()
-        case "granite", "granite3":
+        case "granite", "granite3", "granitemoehybrid":
             return GraniteToolCallParser()
-        case "nemotron", "nemotron3":
+        // Nemotron family — include `nemotron_h` (JANG-stamp family
+        // name for hybrid SSM Nemotron).
+        case "nemotron", "nemotron3", "nemotron_h":
             return NemotronToolCallParser()
         case "step3p5", "stepfun":
             return Step3p5ToolCallParser()
@@ -58,11 +67,21 @@ public enum ToolCallParserRegistry {
             return XlamToolCallParser()
         case "functionary", "meetkai":
             return FunctionaryToolCallParser()
-        case "glm47", "glm4":
+        // GLM 4 family — `glm5` / `glm_moe_dsa` intentionally NOT here:
+        // the JANG stamp for GLM-5.1 bundles writes `tool_parser: "deepseek"`
+        // (GLM-5.1 uses DeepSeek's `[TOOL_CALLS]` JSON envelope), which
+        // routes through the "deepseek" alias above. Only GLM-4 and its
+        // MoE variant use the native glm47 tool parser.
+        case "glm47", "glm4", "glm4_moe":
             return Glm47ToolCallParser()
-        case "minimax", "minimax_m2":
+        // MiniMax family — include `minimax_m2_5` (JANG-stamp for the
+        // M2.5 variant; was previously only aliased as `minimax_m2`).
+        case "minimax", "minimax_m2", "minimax_m2_5":
             return MiniMaxToolCallParser()
-        case "gemma4":
+        // Gemma family — accept bare `gemma` + `gemma3n` (JANG-stamp
+        // uses short form for some bundles, gemma3n is a Gemma 3n
+        // variant that uses Gemma 4's hermes-style tool format).
+        case "gemma", "gemma4", "gemma3", "gemma3n":
             return Gemma4ToolCallParser()
         case "native", "json":
             return NativeToolCallParser()
@@ -73,9 +92,11 @@ public enum ToolCallParserRegistry {
 
     public static var registered: [String] {
         [
-            "hermes", "qwen", "llama", "mistral", "deepseek", "kimi",
-            "granite", "nemotron", "step3p5", "xlam", "functionary",
-            "glm47", "minimax", "gemma4", "native",
+            "hermes", "qwen", "llama", "mistral", "mistral4", "deepseek",
+            "kimi", "granite", "nemotron", "nemotron_h", "step3p5",
+            "xlam", "functionary", "glm47", "glm4", "glm4_moe", "glm5",
+            "minimax", "minimax_m2", "minimax_m2_5", "gemma", "gemma4",
+            "native",
         ]
     }
 }

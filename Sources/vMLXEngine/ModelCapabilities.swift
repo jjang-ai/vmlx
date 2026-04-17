@@ -24,6 +24,12 @@ public struct ModelCapabilities: Sendable, Codable, Equatable, Hashable {
     public enum Source: String, Sendable, Codable {
         case jangStamped       // gold — jang_config.json.capabilities object
         case modelTypeTable    // silver — curated table matched model_type
+        case templateSniff     // bronze+ — unknown model_type, but chat_template
+                               // carried a family signature (e.g. `[TOOL_CALLS]`,
+                               // `<|channel|>analysis`, `<|tool_call>`). Beats
+                               // plain heuristic guessing — less risky than
+                               // bronze because the evidence came from the
+                               // model's own template string.
         case fallback          // bronze — heuristic guess, warn in logs
     }
 
@@ -137,10 +143,16 @@ public enum ModelTypeTable {
         .init(family: "qwen3_5", modelTypes: ["qwen3_5"],
               toolParser: "qwen", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 4),
-        .init(family: "qwen3_5_moe", modelTypes: ["qwen3_5_moe"],
+        .init(family: "qwen3_5_moe", modelTypes: ["qwen3_5_moe", "qwen3_5_moe_text"],
               toolParser: "qwen", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 4),
-        .init(family: "qwen3_5_text", modelTypes: ["qwen3_5_text"],
+        // `qwen3_5_moe_text` is the inner `text_config.model_type` name
+        // Qwen 3.6 VLM wrappers use. `resolveModelType` prefers
+        // text_config over top-level, so without this alias a Qwen 3.6
+        // VLM's text path would fall through to bronze and lose the
+        // qwen/qwen3 parser assignment. Audit 2026-04-16 per JANG
+        // capability stamp rollout item #5.
+        .init(family: "qwen3_5_text", modelTypes: ["qwen3_5_text", "qwen3_5_text_text"],
               toolParser: "qwen", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 4),
         .init(family: "qwen3", modelTypes: ["qwen3"],
