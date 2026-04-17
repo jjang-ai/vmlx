@@ -271,16 +271,60 @@ case_ollama_chat() {
 }
 
 case_anthropic_messages() {
+    # Validates the full Anthropic Messages API response schema:
+    #   id          : str, starts with "msg_"
+    #   type        : "message"
+    #   role        : "assistant"
+    #   model       : str
+    #   content     : [{type:"text",text:<str>}] (single text block minimum)
+    #   stop_reason : one of end_turn / max_tokens / stop_sequence / tool_use
+    #   usage       : { input_tokens:int, output_tokens:int }
+    # anthropic-sdk-python deserializes into typed Message and raises on
+    # missing fields — OpenAI-compat wrapper was historically fragile.
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp
     resp=$(curl -s -X POST "$BASE/v1/messages" \
         -H "content-type: application/json" \
         -H "anthropic-version: 2023-06-01" \
         -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi.\"}],\"max_tokens\":8}")
-    local content=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("content",[{}])[0].get("text","")[:40])' 2>/dev/null)
-    local ok=false
-    [ -n "$content" ] && ok=true
-    emit "{\"name\":\"anthropic_messages\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
+    echo "$resp" > /tmp/vmlx-anthropic.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-anthropic.json"))
+    probs = []
+    if not isinstance(d.get("id"), str) or not d["id"].startswith("msg_"):
+        probs.append(f"id={d.get('id')!r}")
+    if d.get("type") != "message":
+        probs.append(f"type={d.get('type')}")
+    if d.get("role") != "assistant":
+        probs.append(f"role={d.get('role')}")
+    if not isinstance(d.get("model"), str):
+        probs.append("model")
+    content = d.get("content") or []
+    text = ""
+    if not isinstance(content, list) or not content:
+        probs.append("empty content[]")
+    else:
+        c0 = content[0]
+        if c0.get("type") != "text":
+            probs.append(f"content[0].type={c0.get('type')}")
+        text = c0.get("text") or ""
+        if not text:
+            probs.append("content[0].text empty")
+    if d.get("stop_reason") not in {"end_turn","max_tokens","stop_sequence","tool_use"}:
+        probs.append(f"stop_reason={d.get('stop_reason')}")
+    usage = d.get("usage") or {}
+    for k in ("input_tokens","output_tokens"):
+        if not isinstance(usage.get(k), int):
+            probs.append(f"usage.{k}")
+    ok = not probs and bool(text)
+    notes = "schema=ok" if not probs else f"GAP:{probs}"
+    notes += f" text={text[:40]!r}"
+    print(json.dumps({"name":"anthropic_messages","ok":ok,"notes":notes[:140]}))
+except Exception as e:
+    print(json.dumps({"name":"anthropic_messages","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_concurrent() {
