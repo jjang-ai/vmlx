@@ -199,6 +199,16 @@ case_sse_stream() {
     # IMPORTANT: don't spawn python in a per-chunk hot loop — that alone
     # burned 50ms × N chunks and capped "measured" tps at 6. Do all the
     # timing inline in one python process that reads curl's stdout.
+    #
+    # Additional SSE-framing assertions (iter-44, bumped from tps-only):
+    #   * first chunk contains `delta.role == "assistant"` (OpenAI contract)
+    #   * every data line between first and [DONE] parses as JSON
+    #   * trailing `data: [DONE]` sentinel present
+    #   * terminal chunk has finish_reason (not null on the last content chunk)
+    #   * chat.completion.chunk object type
+    # A regression that drops [DONE] breaks openai-python's stream
+    # iterator (it blocks waiting for the sentinel); missing role delta
+    # breaks type-strict clients that expect the first chunk.
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     python3 <<PY
 import json, subprocess, time, sys
@@ -217,22 +227,44 @@ proc = subprocess.Popen(
 first_ms = None
 last_ms = None
 tok = 0
+saw_role = False
+saw_done_sentinel = False
+parse_failures = 0
+finish_reason = None
+obj_type_ok = False
 for raw in proc.stdout:
     if not raw.startswith("data:"): continue
-    if raw.strip() == "data: [DONE]": break
+    if raw.strip() == "data: [DONE]":
+        saw_done_sentinel = True
+        break
     now_ms = int((time.time() - t0) * 1000)
     if first_ms is None: first_ms = now_ms
     last_ms = now_ms
     tok += 1
+    try:
+        d = json.loads(raw[5:].strip())
+        if d.get("object") == "chat.completion.chunk":
+            obj_type_ok = True
+        ch = (d.get("choices") or [{}])[0]
+        delta = ch.get("delta") or {}
+        if delta.get("role") == "assistant":
+            saw_role = True
+        fr = ch.get("finish_reason")
+        if fr is not None:
+            finish_reason = fr
+    except Exception:
+        parse_failures += 1
 proc.wait(timeout=2)
 decode_ms = (last_ms or 0) - (first_ms or 0)
 tps = 0.0
 if decode_ms > 0 and tok > 1:
     tps = round((tok - 1) * 1000.0 / decode_ms, 1)
-ok = "true" if (tok >= 20 and first_ms is not None) else "false"
+schema_ok = saw_role and saw_done_sentinel and obj_type_ok and parse_failures == 0 and finish_reason in {"stop","length","tool_calls","content_filter","cancelled"}
+ok = tok >= 20 and first_ms is not None and schema_ok
+notes = f"decode_ms={decode_ms} role={saw_role} done={saw_done_sentinel} finish={finish_reason} parseFails={parse_failures}"
 print(json.dumps({
-    "name":"sse_stream","ok":ok == "true","ttft_ms":first_ms or 0,
-    "tokens":tok,"tps":tps,"notes":f"decode_ms={decode_ms}"
+    "name":"sse_stream","ok":ok,"ttft_ms":first_ms or 0,
+    "tokens":tok,"tps":tps,"notes":notes[:160]
 }))
 PY
 }
