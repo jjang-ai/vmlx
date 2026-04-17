@@ -101,24 +101,45 @@ case_basic_chat() {
 }
 
 case_sse_stream() {
-    # Use a prompt that forces many tokens — "count 1 to 5" hits EOS at 5.
-    # Write a 200-word paragraph gives us a real throughput measurement.
-    local t0=$(python3 -c 'import time;print(int(time.time()*1000))')
-    local first_ms=0 last_ms=0 tok=0
-    while IFS= read -r line; do
-        [[ "$line" != data:* ]] && continue
-        [[ "$line" == "data: [DONE]" ]] && break
-        local now=$(python3 -c 'import time;print(int(time.time()*1000))')
-        [ "$first_ms" = 0 ] && first_ms=$((now-t0))
-        last_ms=$((now-t0))
-        tok=$((tok+1))
-    done < <(curl_chat "Write a detailed 200 word paragraph about the history of computing. Cover Turing, ENIAC, transistors, and the invention of the transistor. Be thorough and precise." 200 true)
-    local tps=0
-    local decode_ms=$((last_ms-first_ms))
-    [ "$decode_ms" -gt 0 ] && [ "$tok" -gt 1 ] && tps=$(python3 -c "print(f'{($tok-1)*1000/$decode_ms:.1f}')")
-    local ok=false
-    [ "$tok" -ge 20 ] && [ "$first_ms" -gt 0 ] && ok=true
-    emit "{\"name\":\"sse_stream\",\"ok\":$ok,\"ttft_ms\":$first_ms,\"tokens\":$tok,\"tps\":$tps,\"notes\":\"decode_ms=$decode_ms\"}"
+    # IMPORTANT: don't spawn python in a per-chunk hot loop — that alone
+    # burned 50ms × N chunks and capped "measured" tps at 6. Do all the
+    # timing inline in one python process that reads curl's stdout.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess, time, sys
+body = {
+    "model": "$model_id",
+    "messages": [{"role":"user","content":"Write a detailed 200 word paragraph about the history of computing. Cover Turing, ENIAC, transistors, and the invention of the transistor. Be thorough and precise."}],
+    "max_tokens": 200,
+    "stream": True,
+    "temperature": 0,
+}
+t0 = time.time()
+proc = subprocess.Popen(
+    ["curl","-sN","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    stdout=subprocess.PIPE, text=True)
+first_ms = None
+last_ms = None
+tok = 0
+for raw in proc.stdout:
+    if not raw.startswith("data:"): continue
+    if raw.strip() == "data: [DONE]": break
+    now_ms = int((time.time() - t0) * 1000)
+    if first_ms is None: first_ms = now_ms
+    last_ms = now_ms
+    tok += 1
+proc.wait(timeout=2)
+decode_ms = (last_ms or 0) - (first_ms or 0)
+tps = 0.0
+if decode_ms > 0 and tok > 1:
+    tps = round((tok - 1) * 1000.0 / decode_ms, 1)
+ok = "true" if (tok >= 20 and first_ms is not None) else "false"
+print(json.dumps({
+    "name":"sse_stream","ok":ok == "true","ttft_ms":first_ms or 0,
+    "tokens":tok,"tps":tps,"notes":f"decode_ms={decode_ms}"
+}))
+PY
 }
 
 case_json_mode() {

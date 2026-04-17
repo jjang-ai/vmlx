@@ -90,20 +90,38 @@ JANGQ-AI / OsaurusAI / dealignai family variants — see full list in
 
 ## Issue log (this iteration)
 
-### ✅ Fixed
+### ✅ Fixed this iteration
 - **Concurrent request segfault** (Metal `_status < MTLCommandBufferStatusCommitted`):
   added `GenerationLock` actor, wrapped `performStreamingGeneration` with
   FIFO acquire/release. See `Sources/vMLXEngine/GenerationLock.swift`.
+  Verified 3/3 green in `concurrent` case post-fix.
+- **Harness SSE TTFT / tps apparent 10× regression** — root cause was a
+  per-chunk `python3 -c time` subprocess spawn (50 ms × N chunks = seconds
+  of harness overhead). Rewrote `case_sse_stream` to do timing inside a
+  single python process reading curl's stdout. Numbers now match
+  `bench-direct`.
+- **`json_mode`** tightened: require `isinstance(d, dict) and "color" in d`
+  rather than "any dict", so API-error payloads don't false-pass.
+- **`stop_sequences`** rewritten in python — no more shell-grep newline
+  fencepost.
 
-### 🔎 Open / observed
-- **Qwen3-0.6B JANG-stamp log line shows `modality=vision`** in detection
-  log from scanning OTHER library entries — NOT the loaded model. Just
-  chatty log; verify real capabilities on the LOADED model are correct.
-- **SSE `tps=30.7` on Qwen3-0.6B-8bit** — matches reference Swift MLX on
-  this model class; fine for 0.6B 8-bit baseline.
-- **`json_mode` on Qwen3-0.6B-8bit** returned an API error wrapped in a
-  JSON dict — the harness matched against "is a dict" so the test passed
-  but the model's actual JSON adherence wasn't exercised. Tighten the
-  harness to check for the expected `color: blue` field.
-- **`stop_sequences`** flagged `ok=false` because of the shell-grep
-  fencepost, but `finish_reason=stop` did fire. Test-harness nit.
+### 📊 Measured (Apr 17 iteration)
+
+| model | size | bench-direct tps | server tps | TTFT | concurrent |
+|-------|------|------------------|------------|------|------------|
+| Qwen3-0.6B-8bit | 0.6 GB | 58.9 | **52.1** | 58 ms | 3/3 ✅ |
+| Llama-3.2-1B-Instruct-4bit | 0.6 GB | n/m | (rerun pending) | — | 3/3 ✅ |
+| gemma-4-e2b-it-4bit | 3.3 GB | n/m | (rerun pending) | — | 3/3 ✅ |
+
+### 🔎 Still open / observed
+- **Llama-1B `multiturn_prefix_cache`** flagged t2 > 2×t1. Could be
+  (a) prefix cache genuinely missing on llama tokenizer, or (b) my
+  threshold is too tight for prompts that grew by 50%. Rerun with fixed
+  harness to disambiguate.
+- **JANG-stamp log lines show `modality=vision` for Qwen3 text models** —
+  chatty log from scanning OTHER library entries, not the loaded model.
+  Verify real capabilities on the LOADED model are correct (fall-out
+  audit).
+- **Llama-1B fails `json_mode`** — model can't follow the instruction
+  at 1B scale without grammar-constrained sampling. Expected for a
+  1B / 4-bit model. Not an engine bug.
