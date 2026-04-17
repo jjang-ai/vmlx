@@ -345,10 +345,17 @@ struct APIScreen: View {
         // apart by their tail. Raw copy goes through copyToPasteboard
         // regardless of reveal state — that was a sharp edge in the
         // prior revision where a hidden key had no way to copy.
+        //
+        // Resolve the actual key material via the Keychain-preferred
+        // accessor so once the SQLite `value` column is dropped (see
+        // `APIKeyManager.resolveValue(id:)` docstring) this UI keeps
+        // working. Falls back to `k.value` for rows that still hold
+        // a plaintext value during the grace period.
+        let keyValue = APIKeyManager.shared.resolveValue(id: k.id) ?? k.value
         let displayValue: String = {
-            if revealed { return k.value }
-            let tail = k.value.suffix(6)
-            return String(repeating: "•", count: max(8, k.value.count - 6)) + tail
+            if revealed { return keyValue }
+            let tail = keyValue.suffix(6)
+            return String(repeating: "•", count: max(8, keyValue.count - 6)) + tail
         }()
         return HStack(spacing: Theme.Spacing.sm) {
             Text(k.label)
@@ -369,7 +376,7 @@ struct APIScreen: View {
             }
             .buttonStyle(.plain)
             .help(revealed ? "Hide key" : "Reveal key")
-            Button("Copy") { copyToPasteboard(k.value) }
+            Button("Copy") { copyToPasteboard(keyValue) }
                 .buttonStyle(.plain)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.accent)
