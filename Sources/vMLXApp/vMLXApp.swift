@@ -190,7 +190,44 @@ final class AppState {
                 } else {
                     self.sessions[idx].loadProgress = nil
                 }
+                // App Nap prevention: hold a userInitiated activity token
+                // while ANY session is actively loading or running, release
+                // when all sessions are idle. macOS can otherwise suspend
+                // the process during long generations (> several minutes)
+                // which manifests as decode cratering or hangs after a
+                // background window switch. See audit 2026-04-16.
+                self.refreshAppNapActivity()
             }
+        }
+    }
+
+    // MARK: - App Nap prevention
+
+    /// `NSProcessInfo.beginActivity` token held while any engine is
+    /// non-idle. Nil when every session is `.stopped` / `.error`. macOS
+    /// releases the token on process exit, but we explicitly `endActivity`
+    /// when we can so the system is free to nap between sessions.
+    private var appNapActivityToken: NSObjectProtocol?
+
+    /// Reconcile the activity token against current session states.
+    /// Called from the per-session state observer and also after session
+    /// removal to make sure we release the token when the last active
+    /// engine goes idle.
+    private func refreshAppNapActivity() {
+        let anyActive = sessions.contains { s in
+            switch s.state {
+            case .running, .loading, .standby: return true
+            case .stopped, .error:              return false
+            }
+        }
+        if anyActive, appNapActivityToken == nil {
+            appNapActivityToken = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "vMLX model is loading or generating"
+            )
+        } else if !anyActive, let token = appNapActivityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            appNapActivityToken = nil
         }
     }
 
@@ -218,11 +255,21 @@ final class AppState {
                 }
                 upsert(job)
             case .progress(let job): upsert(job)
-            case .completed(let job): upsert(job)
+            case .completed(let job):
+                upsert(job)
+                // Per-engine fan-in covers HTTP-initiated pulls (Ollama
+                // /api/pull, image endpoints, etc). Match the AppState path:
+                // fire a system notification on completion so backgrounded
+                // clients surface the success.
+                DownloadNotifier.notifyCompleted(job)
             case .paused(let id), .resumed(let id), .cancelled(let id):
                 if let job = await dm.job(id) { upsert(job) }
-            case .failed(let id, _):
-                if let job = await dm.job(id) { upsert(job) }
+            case .failed(let id, let message):
+                if let job = await dm.job(id) {
+                    upsert(job)
+                    // Same symmetry for failures — no silent background drop.
+                    DownloadNotifier.notifyFailed(job, message: message)
+                }
             }
         }
     }
@@ -272,6 +319,11 @@ final class AppState {
         if let srv = httpServers.removeValue(forKey: id) {
             Task { await srv.stop() }
         }
+        // Reconcile app-nap activity in case the engine we just removed
+        // was the last non-idle one. Without this, a session-delete while
+        // that session was mid-generation would leak the activity token
+        // forever (well, until app quit).
+        refreshAppNapActivity()
     }
 
     // MARK: - Per-session HTTP servers
@@ -443,8 +495,16 @@ final class AppState {
                 }
             case .paused(let id), .resumed(let id), .cancelled(let id):
                 if let job = await downloadManager.job(id) { upsert(job) }
-            case .failed(let id, _):
-                if let job = await downloadManager.job(id) { upsert(job) }
+            case .failed(let id, let message):
+                if let job = await downloadManager.job(id) {
+                    upsert(job)
+                    // Surface the failure via the same system-notification
+                    // path `.completed` uses — otherwise a background failure
+                    // is silent, contradicting `feedback_download_window.md`
+                    // "no silent downloads, ever" (the rule applies equally
+                    // to failed outcomes).
+                    DownloadNotifier.notifyFailed(job, message: message)
+                }
             }
         }
     }
@@ -769,6 +829,10 @@ struct EngineStatusFooter: View {
 struct LoadingBar: View {
     let fraction: Double?
     @State private var sweepX: CGFloat = -0.4
+    // Honor the system-wide Reduce Motion accessibility setting. When the
+    // user has it on, the indeterminate barber-pole sweep is replaced with
+    // a centered static bar — still clearly "loading" but no motion.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -779,7 +843,14 @@ struct LoadingBar: View {
                     Capsule()
                         .fill(Theme.Colors.accent)
                         .frame(width: max(2, geo.size.width * CGFloat(f.clamped01)))
-                        .animation(.easeOut(duration: 0.25), value: f)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: f)
+                } else if reduceMotion {
+                    // Static "busy" indicator — 60% wide, centered — so the
+                    // bar is visibly non-zero without any sweep animation.
+                    Capsule()
+                        .fill(Theme.Colors.accent)
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: geo.size.width * 0.2)
                 } else {
                     Capsule()
                         .fill(Theme.Colors.accent)
