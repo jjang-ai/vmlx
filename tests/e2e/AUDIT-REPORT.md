@@ -156,6 +156,25 @@ All tier-1 models at `verify.sh` pass (green) vs baseline.
 ### New open issues surfaced
 6. **VL-9B `Completed handler provided after commit call`** (iter-29) — **partially mitigated iter-30**: iter-30 added `MLX.Stream.defaultStream(.gpu).synchronize()` after the VL-race eval barrier. Repro test (2 consecutive full VL suites) shows: first run clean (10/10, concurrent 3/3, server alive); second run concurrent 1/3 with silent server death (no Metal signature in log — process died without a visible assertion). Different failure mode than the original assertion — likely Metal memory-system / OOM under repeated concurrent vision-encoder dispatch rather than the encoder-coalescing class. Further investigation needed. Killswitch `VMLX_DISABLE_VL_RACE_BARRIER=1` disables iter-25+iter-30 barrier.
 
+## Tier-2 matrix snapshot (iter-58, 45-case harness)
+
+45-case harness — 15 new cases landed between iter-24 and iter-57: `case_anthropic_stream`, `case_cache_flush_roundtrip`, `case_json_schema`, `case_legacy_completions`, `case_multiturn_context`, `case_ollama_stream`, `case_ollama_version`, `case_server_liveness`, `case_stream_usage_opt_out`, `case_system_message`, `case_temperature_variance`, `case_tool_choice_none`, `case_tool_choice_required`, `case_unicode_roundtrip`, `case_unsupported_params`.
+
+| model | pass | fail | tps | notable |
+|-------|------|------|-----|---------|
+| qwen3-0.6b-8bit             | **45** | 0 | 183.7 | ✅ every case green incl. tool_choice matrix + deterministic warm-stable |
+| llama-3.2-1b-4bit           | 42 | 3 | 210.9 | small-model ceiling: tool_call · tool_roundtrip · multiturn_context |
+| gemma-4-e2b-it-4bit         | 42 | 3 | 55.0  | same small-model ceiling (tool_call/tool_roundtrip/multiturn_context) |
+| qwen3-embedding-0.6b        | **7** | 0 | — | ✅ L2-norm + cosine-distinctness embed contract |
+
+**Live-verified engine fixes via 45-case harness** (did not regress anything):
+- iter-49: `tool_choice="none"` now actually suppresses tool_calls (was emitting them). Root cause: `case .none = request.toolChoice` was matching Swift `Optional<.none>` instead of `ChatRequest.ToolChoice.none`. Explicit `if let tc = request.toolChoice, case .none = tc` disambiguates. Case coverage: all three tool_choice cases (`none`/`auto`/`required`) green on every tier-1 model.
+- iter-56: `case_unicode_roundtrip` proves SSE frame boundaries don't mojibake the utf-8 mid-token stream.
+- iter-57: `case_json_mode` dual-path — model-produced malformed JSON + validator-caught is treated as engine-correct (we can't fix model capability; we can prove the pipeline doesn't corrupt it).
+- iter-55: `case_health_endpoint` validates JSON shape + latency budget.
+- iter-54: `case_multiturn_context` proves prior assistant turn threads back into the next prompt (model-capability limited — small models don't always recall "BANANA"=73 but infra wiring is green).
+- iter-53: `case_unsupported_params` gates the reject/accept policy across 7 known-unsupported request shapes.
+
 ## Known Swift-vendor drift
 
 - Logprobs endpoint returns 400 `"not yet supported by the vMLX Swift engine"` — intentional, tracked as a docstring'd unimplemented feature rather than a bug.
