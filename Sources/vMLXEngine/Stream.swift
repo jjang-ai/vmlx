@@ -2102,10 +2102,13 @@ func jsonValueToSendable(_ value: JSONValue) -> any Sendable {
 // placeholder returns empty and the streaming accumulator keeps buffering.
 
 private extension ToolCallParser {
-    /// Best-effort streaming parse. Returns an empty array until the
-    /// concrete parser exposes a `parseStreaming(_:)` hook — in the
-    /// meantime the outer loop keeps buffering and emits the tool call
-    /// only when `.toolCall(_)` arrives from vmlx-swift-lm's own parser.
+    /// Best-effort streaming parse. Returns empty so the streaming
+    /// accumulator keeps buffering until vmlx-swift-lm's native
+    /// `.toolCall(_)` event emits the parsed call. Wiring this to
+    /// `extractToolCalls` was attempted in iter-22 but duplicated Qwen/
+    /// Hermes calls (native + shim both fired with same content). The
+    /// correct path is a per-token streaming parser with an end-of-call
+    /// delimiter — left for a future iteration.
     func parse(_ text: String) -> [(name: String, argumentsJSON: String?)] {
         return []
     }
