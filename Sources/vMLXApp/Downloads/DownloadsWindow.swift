@@ -305,7 +305,11 @@ private struct DownloadRow: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(Theme.Colors.textMid)
+        // `help` drives the AppKit tooltip; `accessibilityLabel` drives
+        // VoiceOver. Both share the same human-readable label so the
+        // two assistive layers never diverge.
         .help(label)
+        .accessibilityLabel(label)
     }
 
     private var iconName: String {

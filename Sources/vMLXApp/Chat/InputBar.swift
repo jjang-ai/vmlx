@@ -164,6 +164,7 @@ struct InputBar: View {
                         .foregroundStyle(Theme.Colors.textMid)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Remove image \(index + 1)")
                 .offset(x: 4, y: -4)
             }
     }
@@ -181,6 +182,8 @@ struct InputBar: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Attach images")
+        .accessibilityHint("Opens a file picker to attach images to the next message")
         .help("Attach images (drag, paste, or pick from disk)")
     }
 
@@ -200,6 +203,10 @@ struct InputBar: View {
         }
         .buttonStyle(.plain)
         .disabled(!buttonEnabled)
+        .accessibilityLabel(vm.isGenerating ? "Stop generation" : "Send message")
+        .accessibilityHint(vm.isGenerating
+            ? "Cancels the in-flight response"
+            : "Sends the current prompt to the loaded model")
         .help(helpText)
     }
 
