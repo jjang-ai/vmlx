@@ -334,13 +334,46 @@ public final class VLMModelFactory: ModelFactory {
 
         // Load config.json once and decode for both base config and model-specific config
         let configurationURL = modelDirectory.appending(component: "config.json")
-        let configData: Data
+        var configData: Data
         do {
             configData = try Data(contentsOf: configurationURL)
         } catch {
             throw ModelFactoryError.configurationFileError(
                 configurationURL.lastPathComponent, configuration.name, error)
         }
+
+        // JANGTQ: merge `weight_format`, `mxtq_bits`, `mxtq_seed` from
+        // jang_config.json into config.json so the VLM factory sniff
+        // (FormatSniff.isMXTQ) sees the declaration even on bundles
+        // that keep the JANGTQ flag OUT of config.json. Mirrors the
+        // identical merge in LLMModelFactory._load — kept symmetric so
+        // a VLM bundle with `weight_format` ONLY in jang_config.json
+        // (e.g. MiniMax-M2.7-JANGTQ-CRACK-style layouts when a VLM
+        // variant ships) routes to Qwen35MoEJANGTQ instead of silently
+        // falling through to the affine Qwen35MoE class.
+        let jangConfigURL = modelDirectory.appending(component: "jang_config.json")
+        if let jangData = try? Data(contentsOf: jangConfigURL),
+            var configDict = try JSONSerialization.jsonObject(with: configData) as? [String: Any],
+            let jangDict = try? JSONSerialization.jsonObject(with: jangData) as? [String: Any]
+        {
+            for key in ["weight_format", "mxtq_seed"] {
+                if configDict[key] == nil, let v = jangDict[key] {
+                    configDict[key] = v
+                }
+            }
+            // mxtq_bits is a dict {attention, routed_expert, ...} — pull the
+            // routed_expert bit width out as the scalar the Swift config wants.
+            if configDict["mxtq_bits"] == nil,
+                let bitsMap = jangDict["mxtq_bits"] as? [String: Any],
+                let routed = bitsMap["routed_expert"] as? Int
+            {
+                configDict["mxtq_bits"] = routed
+            }
+            if let merged = try? JSONSerialization.data(withJSONObject: configDict) {
+                configData = merged
+            }
+        }
+
         let baseConfig: BaseConfiguration
         do {
             baseConfig = try JSONDecoder.json5().decode(BaseConfiguration.self, from: configData)
