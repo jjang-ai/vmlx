@@ -255,6 +255,13 @@ public actor Engine {
     /// `Engine.imageGenStream(jobId:)` which fans out from the per-job bridge.
     internal var fluxJobs: [UUID: FluxJobBridge] = [:]
 
+    /// Serializes MLX generation across concurrent HTTP requests so the
+    /// shared Metal command queue isn't mutated from two Tasks at once
+    /// (triggers `_status < MTLCommandBufferStatusCommitted` in
+    /// `IOGPUMetalCommandBuffer setCurrentCommandEncoder:` → process
+    /// abort). See `GenerationLock.swift` for the why.
+    public let generationLock = GenerationLock()
+
     /// Unified cache coordinator for prefix reuse across generations.
     /// Initialized on first `load()` based on the resolved settings
     /// (paged block size, max blocks, disk cache toggle). Passed into

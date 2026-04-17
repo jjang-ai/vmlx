@@ -82,6 +82,20 @@ extension Engine {
                 // Register the driving task on the actor so `Engine.stop()`
                 // and any future admin endpoints can reach it.
                 await self.setCurrentStreamTask(Task { })  // placeholder; replaced below
+                // Serialize with any in-flight generation — MLX's shared
+                // Metal command queue is NOT concurrency-safe, and a
+                // second generate() started while a first one is still
+                // encoding trips the `IOGPUMetalCommandBuffer
+                // setCurrentCommandEncoder:` assertion and aborts the
+                // process. See `GenerationLock.swift`. FIFO — requests
+                // queue and drain in arrival order, so users see latency
+                // under load but never a server crash.
+                await self.generationLock.acquire()
+                defer {
+                    Task { [weak self] in
+                        await self?.generationLock.release()
+                    }
+                }
                 do {
                     try await self.performStreamingGeneration(
                         request: request,
