@@ -657,6 +657,24 @@ extension Engine {
                 "Gemma + tools: auto-disabling thinking to prevent chat-template double-stamp (parity with Python v1.3.54 mlxstudio#71)")
         }
 
+        // tool_choice: "none" enforcement (iter-49). OpenAI spec says the
+        // model MUST NOT call any tool when tool_choice="none". Even with
+        // the stream-side parser catching calls, the tools still reach the
+        // chat template and the model happily decides to call them —
+        // resulting in a response that violates the contract. The fix is
+        // to drop tools from the template render when tool_choice=.none
+        // so the model never sees them. MCP merge was already gated on
+        // this flag above; this extends the same behavior to user-supplied
+        // tools so the contract is honored end-to-end. Live-reproduced on
+        // Qwen3-0.6B + `required=["a","b"]` tools.
+        // Unwrap Optional<ToolChoice> first — Swift's `case .none =
+        // request.toolChoice` matches Optional.none (nil), NOT
+        // ChatRequest.ToolChoice.none. Same guard pattern as
+        // `mcpMergeBlocked` above.
+        if let tc = request.toolChoice, case .none = tc {
+            mergedTools = nil
+        }
+
         let toolSpecs: [ToolSpec]? = mergedTools.map { buildToolSpecs(from: $0) }
 
         // Wire `enable_thinking` + `reasoning_effort` into the chat template
