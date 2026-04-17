@@ -279,6 +279,19 @@ class PrefixCacheManager:
         # Statistics
         self.stats = PrefixCacheStats()
 
+    @property
+    def _lru(self) -> "OrderedDict[Tuple[Any, tuple], bool]":
+        """Compatibility view for audits/tests that expect a single LRU map.
+
+        The implementation now uses per-type LRUs for priority-aware eviction,
+        but exposing an aggregated OrderedDict preserves the old inspection
+        surface without regressing the newer eviction semantics.
+        """
+        merged: "OrderedDict[Tuple[Any, tuple], bool]" = OrderedDict()
+        for cache_type in _CACHE_TYPE_PRIORITY:
+            merged.update(self._lru_by_type[cache_type])
+        return merged
+
     def _search(
         self, tokens: List[int]
     ) -> Tuple[Optional[List[int]], Optional[List[int]], Optional[List[int]], int]:

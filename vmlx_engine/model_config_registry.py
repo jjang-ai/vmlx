@@ -286,6 +286,45 @@ class ModelConfigRegistry:
                         self._match_cache[model_name] = config
                         return config
 
+            # Name-based fallback for emerging model IDs that may not expose a
+            # stable model_type yet (or when config.json couldn't be loaded).
+            lower_name = model_name.lower()
+            if "voxtral" in lower_name:
+                for config in self._configs:
+                    if config.family_name == "voxtral":
+                        self._match_cache[model_name] = config
+                        return config
+                fallback = ModelConfig(
+                    family_name="voxtral",
+                    model_types=["voxtral", "voxtral_realtime"],
+                    cache_type="kv",
+                    is_mllm=True,
+                    tool_parser="mistral",
+                    supports_native_tools=True,
+                    preserve_native_tool_format=True,
+                    priority=8,
+                )
+                self._match_cache[model_name] = fallback
+                return fallback
+            if "qwen3" in lower_name and "omni" in lower_name:
+                for config in self._configs:
+                    if config.family_name == "qwen3_omni":
+                        self._match_cache[model_name] = config
+                        return config
+                fallback = ModelConfig(
+                    family_name="qwen3_omni",
+                    model_types=["qwen3_omni", "qwen3_omni_moe", "qwen3omni"],
+                    cache_type="kv",
+                    eos_tokens=["<|im_end|>"],
+                    tool_parser="qwen",
+                    reasoning_parser="gemma4",
+                    think_in_template=True,
+                    is_mllm=True,
+                    priority=4,
+                )
+                self._match_cache[model_name] = fallback
+                return fallback
+
             self._match_cache[model_name] = _DEFAULT_CONFIG
             return _DEFAULT_CONFIG
 

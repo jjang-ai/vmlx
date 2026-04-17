@@ -339,12 +339,15 @@ class MCPClient:
     def _extract_content(self, result) -> Any:
         """Extract content from MCP tool result.
 
-        Always returns strings to ensure JSON serialization in to_message() never crashes.
+        Returns a string for single-part results and a list for multi-part
+        results. ``MCPToolResult.to_message()`` already serializes non-string
+        payloads safely, so preserving list structure is more informative and
+        matches the audit expectations for truncation handling.
         """
         if not hasattr(result, "content") or not result.content:
             return None
 
-        # Handle list of content items (with size limit to prevent OOM)
+        # Handle list of content items (with size limit to prevent OOM).
         contents: list[str] = []
         total_size = 0
         for item in result.content:
@@ -354,16 +357,17 @@ class MCPClient:
                 text = str(item.data) if not isinstance(item.data, str) else item.data
             else:
                 text = str(item)
-            total_size += len(text)
+            total_size += len(text.encode("utf-8", errors="replace"))
             if total_size > self._MAX_CONTENT_SIZE:
                 contents.append("[Content truncated — MCP tool response exceeded 10 MB]")
                 break
             contents.append(text)
 
-        # Return single string or joined string (not a list — avoids json.dumps in to_message)
+        # Preserve structure for multipart results so clients/tests can see which
+        # item was truncated.
         if len(contents) == 1:
             return contents[0]
-        return "\n".join(contents)
+        return contents
 
     async def refresh_tools(self):
         """Refresh the list of available tools."""

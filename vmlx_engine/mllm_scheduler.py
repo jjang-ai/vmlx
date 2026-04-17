@@ -191,7 +191,7 @@ class MLLMSchedulerConfig:
     # Enable vision embedding cache
     enable_vision_cache: bool = True
     # Maximum cache entries
-    vision_cache_size: int = 16
+    vision_cache_size: int = 100
     # Default max tokens
     default_max_tokens: int = 256
     # Default video FPS for frame extraction
@@ -1439,6 +1439,8 @@ class MLLMScheduler:
             # in-flight. Calling remove() immediately would touch cache
             # tensors mid-computation. Instead, mark for deferred cleanup
             # which runs after the current Metal computation completes.
+            # The actual batch_generator.remove() call happens later under
+            # self._batch_lock inside step(), so abort/decode cannot race.
             if request_id in self.request_id_to_uid:
                 if not hasattr(self, '_pending_aborts'):
                     self._pending_aborts = set()

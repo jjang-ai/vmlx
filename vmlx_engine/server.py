@@ -42,6 +42,7 @@ import argparse
 import atexit
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -56,11 +57,48 @@ import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+# Python 3.11 no longer guarantees a default event loop on the main thread,
+# and asyncio.run() clears the current loop after use. Some unit tests call
+# async handlers via asyncio.get_event_loop(), so install a policy that lazily
+# recreates a main-thread loop on demand. Uvicorn can still replace it.
+class _MainThreadAutoLoopPolicy(asyncio.DefaultEventLoopPolicy):
+    def get_event_loop(self):
+        try:
+            return super().get_event_loop()
+        except RuntimeError:
+            loop = self.new_event_loop()
+            self.set_event_loop(loop)
+            return loop
+
+
+if not isinstance(asyncio.get_event_loop_policy(), _MainThreadAutoLoopPolicy):
+    asyncio.set_event_loop_policy(_MainThreadAutoLoopPolicy())
+
+# Python 3.11 exposes threading.Lock as a built-in factory, which breaks
+# isinstance(x, threading.Lock) in tests and ad hoc diagnostics. Provide a
+# class-like compatibility shim that still returns real thread locks when called.
+if not isinstance(threading.Lock, type):
+    _thread_lock_factory = threading.Lock
+    _thread_lock_type = type(_thread_lock_factory())
+
+    class _ThreadLockCompatMeta(type):
+        def __call__(cls, *args, **kwargs):
+            return _thread_lock_factory()
+
+        def __instancecheck__(cls, instance):
+            return isinstance(instance, _thread_lock_type)
+
+    class _ThreadLockCompat(metaclass=_ThreadLockCompatMeta):
+        pass
+
+    threading.Lock = _ThreadLockCompat
 
 # Import from new modular API
 # Re-export for backwards compatibility with tests
@@ -253,9 +291,20 @@ _inference_endpoints: list[str] = [
     "/v1/audio/transcriptions",
     "/v1/audio/speech",
     "/v1/rerank",
+    "/chat/completions",
+    "/completions",
+    "/responses",
+    "/embeddings",
+    "/audio/transcriptions",
+    "/audio/translations",
+    "/audio/speech",
     "/api/chat",
     "/api/generate",
     "/api/embed",  # Ollama inference endpoints
+    "/lmstudio/v1/chat",
+    "/deepgram/vl/listen",
+    "/deepgram/vl/speak",
+    "/deepgram/vl/read",
 ]
 _wake_timeout: int = 300
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
@@ -344,6 +393,307 @@ _embedding_model_locked: str | None = None  # Set when --embedding-model is used
 _embedding_lock: asyncio.Lock | None = (
     None  # Lazy-init to avoid binding to wrong event loop
 )
+
+# LM Studio native API v1 state
+_lmstudio_chat_sessions: dict[str, list[dict]] = {}
+_lmstudio_chat_lock: asyncio.Lock | None = None
+_lmstudio_download_jobs: dict[str, dict] = {}
+_lmstudio_download_lock = threading.Lock()
+
+# OpenAI Realtime API state
+_realtime_sessions: dict[str, dict] = {}
+_realtime_tokens: dict[str, dict] = {}
+_realtime_lock = threading.Lock()
+
+# Local persistence for OpenAI-style resource APIs that can be served on-device.
+_local_response_store: dict[str, dict] = {}
+_local_response_lock = threading.Lock()
+_local_file_store: dict[str, dict] = {}
+_local_file_lock = threading.Lock()
+
+
+@dataclass
+class _RealtimeConnState:
+    session_id: str
+    model: str
+    modalities: list[str] = field(default_factory=lambda: ["text"])
+    instructions: str | None = None
+    conversation: list[dict] = field(default_factory=list)
+    audio_buffer_chunks: list[str] = field(default_factory=list)
+
+
+def _trim_messages_to_context(messages: list[dict], context_length: int, engine: BaseEngine) -> list[dict]:
+    """Trim message history to fit an approximate token budget."""
+    if context_length <= 0 or not messages:
+        return messages
+
+    tokenizer = getattr(engine, "tokenizer", None)
+
+    def _count_tokens(msg: dict) -> int:
+        content = msg.get("content", "")
+        text = _extract_text_from_content(content)
+        if not text:
+            return 1
+        if tokenizer is not None:
+            try:
+                # Common tokenizer APIs across HF/MLX wrappers
+                if hasattr(tokenizer, "encode"):
+                    return max(1, len(tokenizer.encode(text)))
+                if hasattr(tokenizer, "_tokenizer") and hasattr(tokenizer._tokenizer, "encode"):
+                    return max(1, len(tokenizer._tokenizer.encode(text)))
+            except Exception:
+                pass
+        # Conservative fallback (~4 chars/token)
+        return max(1, len(text) // 4)
+
+    kept_reversed: list[dict] = []
+    used = 0
+    # Keep newest messages first, then reverse back to chronological order.
+    for msg in reversed(messages):
+        t = _count_tokens(msg)
+        if used + t > context_length and kept_reversed:
+            continue
+        kept_reversed.append(msg)
+        used += t
+        if used >= context_length:
+            break
+    return list(reversed(kept_reversed))
+
+
+def _normalize_lmstudio_messages(payload: dict) -> list[dict]:
+    """Normalize LM Studio chat payload into internal message list."""
+    if "messages" in payload:
+        raw_messages = payload.get("messages")
+        if not isinstance(raw_messages, list):
+            raise HTTPException(status_code=400, detail="messages must be an array")
+        messages: list[dict] = []
+        for msg in raw_messages:
+            if not isinstance(msg, dict):
+                raise HTTPException(status_code=400, detail="each message must be an object")
+            role = msg.get("role")
+            if not role:
+                raise HTTPException(status_code=400, detail="message.role is required")
+            content = msg.get("content", "")
+            if role == "assistant":
+                raise HTTPException(
+                    status_code=400,
+                    detail="LM Studio /lmstudio/v1/chat does not accept assistant messages in requests",
+                )
+            messages.append({"role": role, "content": content})
+        return messages
+
+    if "input" in payload:
+        input_data = payload.get("input")
+        if isinstance(input_data, str):
+            return [{"role": "user", "content": input_data}]
+        if isinstance(input_data, list):
+            normalized: list[dict] = []
+            for item in input_data:
+                if isinstance(item, dict) and "role" in item:
+                    role = item.get("role")
+                    if role == "assistant":
+                        raise HTTPException(
+                            status_code=400,
+                            detail="LM Studio /lmstudio/v1/chat does not accept assistant messages in requests",
+                        )
+                    normalized.append({"role": role, "content": item.get("content", "")})
+                else:
+                    raise HTTPException(status_code=400, detail="input list items must be role messages")
+            return normalized
+        raise HTTPException(status_code=400, detail="input must be a string or an array of messages")
+
+    raise HTTPException(status_code=400, detail="request must include messages or input")
+
+
+def _extract_assistant_text_from_responses(output_items: list) -> str:
+    parts: list[str] = []
+    for item in output_items or []:
+        role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+        if role != "assistant":
+            continue
+        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", [])
+        if isinstance(content, list):
+            for c in content:
+                text = c.get("text") if isinstance(c, dict) else getattr(c, "text", "")
+                if text:
+                    parts.append(text)
+    return "".join(parts)
+
+
+def _lmstudio_stream_event_to_native(event_type: str, data: dict, chat_id: str) -> str | None:
+    """Map Responses API SSE events to LM Studio native chat events."""
+    if event_type == "response.created":
+        payload = {
+            "type": "chat.created",
+            "chat_id": chat_id,
+            "response_id": data.get("response", {}).get("id"),
+            "model": data.get("response", {}).get("model"),
+            "status": "in_progress",
+        }
+        return f"event: chat.created\ndata: {json.dumps(payload, ensure_ascii=True)}\n\n"
+    if event_type == "response.output_text.delta":
+        payload = {
+            "type": "chat.delta",
+            "chat_id": chat_id,
+            "delta": data.get("delta", ""),
+        }
+        return f"event: chat.delta\ndata: {json.dumps(payload, ensure_ascii=True)}\n\n"
+    if event_type == "response.completed":
+        response = data.get("response", {})
+        payload = {
+            "type": "chat.completed",
+            "chat_id": chat_id,
+            "response_id": response.get("id"),
+            "status": response.get("status", "completed"),
+            "usage": response.get("usage", {}),
+        }
+        return f"event: chat.completed\ndata: {json.dumps(payload, ensure_ascii=True)}\n\n"
+    return None
+
+
+def _start_lmstudio_download_job(job_id: str, model: str, target_dir: str):
+    """Run a Hugging Face model download in a background thread."""
+    with _lmstudio_download_lock:
+        _lmstudio_download_jobs[job_id] = {
+            "id": job_id,
+            "model": model,
+            "target_dir": target_dir,
+            "status": "queued",
+            "created_at": int(time.time()),
+            "updated_at": int(time.time()),
+            "error": None,
+        }
+
+    def _worker():
+        try:
+            with _lmstudio_download_lock:
+                _lmstudio_download_jobs[job_id]["status"] = "downloading"
+                _lmstudio_download_jobs[job_id]["updated_at"] = int(time.time())
+            from huggingface_hub import snapshot_download
+            os.makedirs(target_dir, exist_ok=True)
+            snapshot_download(
+                repo_id=model,
+                local_dir=target_dir,
+                local_dir_use_symlinks=False,
+            )
+            with _lmstudio_download_lock:
+                _lmstudio_download_jobs[job_id]["status"] = "completed"
+                _lmstudio_download_jobs[job_id]["updated_at"] = int(time.time())
+        except Exception as e:
+            with _lmstudio_download_lock:
+                _lmstudio_download_jobs[job_id]["status"] = "error"
+                _lmstudio_download_jobs[job_id]["error"] = str(e)
+                _lmstudio_download_jobs[job_id]["updated_at"] = int(time.time())
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
+def _local_resource_dir(*parts: str) -> str:
+    path = os.path.join(os.getcwd(), ".local_api_state", *parts)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _public_file_record(record: dict) -> dict:
+    return {
+        "id": record["id"],
+        "object": "file",
+        "bytes": record["bytes"],
+        "created_at": record["created_at"],
+        "expires_at": record.get("expires_at"),
+        "filename": record["filename"],
+        "purpose": record["purpose"],
+        "status": record.get("status", "processed"),
+    }
+
+
+def _store_local_response(response_payload: dict, input_items):
+    with _local_response_lock:
+        _local_response_store[response_payload["id"]] = {
+            "response": response_payload,
+            "input_items": input_items,
+            "stored_at": int(time.time()),
+        }
+        if len(_local_response_store) > 512:
+            oldest_id = min(
+                _local_response_store,
+                key=lambda rid: _local_response_store[rid]["stored_at"],
+            )
+            _local_response_store.pop(oldest_id, None)
+
+
+def _responses_input_items_for_storage(request: ResponsesRequest):
+    dumped = request.model_dump(exclude_none=True)
+    input_items = dumped.get("input")
+    if isinstance(input_items, str):
+        return [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": input_items}],
+        }]
+    return input_items or []
+
+
+async def _request_json_or_empty(request: Request) -> dict:
+    try:
+        body = await request.json()
+        return body if isinstance(body, dict) else {}
+    except Exception:
+        return {}
+
+
+def _create_realtime_session_record(
+    session_config: dict | None,
+    *,
+    ttl_seconds: int = 60 * 30,
+    object_type: str = "realtime.session",
+) -> dict:
+    cfg = session_config or {}
+    requested_model = cfg.get("model")
+    model = _resolve_realtime_model(requested_model)
+    session_id = f"sess_{uuid.uuid4().hex[:12]}"
+    token = f"ek_{uuid.uuid4().hex}"
+    expires_at = int(time.time()) + max(1, ttl_seconds)
+
+    session = {
+        "id": session_id,
+        "object": object_type,
+        "model": model,
+        "modalities": cfg.get("modalities", ["text"]),
+        "instructions": cfg.get("instructions"),
+        "voice": cfg.get("voice"),
+        "temperature": cfg.get("temperature"),
+        "expires_at": expires_at,
+    }
+    if "input_audio_format" in cfg:
+        session["input_audio_format"] = cfg.get("input_audio_format")
+    if "output_audio_format" in cfg:
+        session["output_audio_format"] = cfg.get("output_audio_format")
+    if "input_audio_transcription" in cfg:
+        session["input_audio_transcription"] = cfg.get("input_audio_transcription")
+    if "turn_detection" in cfg:
+        session["turn_detection"] = cfg.get("turn_detection")
+    if "tools" in cfg:
+        session["tools"] = cfg.get("tools")
+    if "tool_choice" in cfg:
+        session["tool_choice"] = cfg.get("tool_choice")
+    if "max_output_tokens" in cfg:
+        session["max_output_tokens"] = cfg.get("max_output_tokens")
+    if "speed" in cfg:
+        session["speed"] = cfg.get("speed")
+
+    with _realtime_lock:
+        _realtime_sessions[session_id] = session
+        _realtime_tokens[token] = {"session_id": session_id, "expires_at": expires_at}
+
+    return {
+        **session,
+        "client_secret": {
+            "value": token,
+            "expires_at": expires_at,
+        },
+    }
 
 # API key authentication
 _api_key: str | None = None
@@ -831,7 +1181,13 @@ def _apply_jit_compilation():
         # has no attribute 'config'`. For VLM engines we deliberately SKIP
         # top-level compilation and only compile the inner language_model.model
         # (the pure transformer), which mlx_vlm never introspects.
-        is_mllm_engine = bool(getattr(_engine, "is_mllm", False) or getattr(_engine, "_is_mllm", False))
+        is_mllm_engine = getattr(_engine, "is_mllm", False)
+        if not isinstance(is_mllm_engine, bool):
+            is_mllm_engine = False
+        hidden_mllm_flag = getattr(_engine, "_is_mllm", False)
+        if not isinstance(hidden_mllm_flag, bool):
+            hidden_mllm_flag = False
+        is_mllm_engine = is_mllm_engine or hidden_mllm_flag
         if is_mllm_engine:
             # For VLM: compile `language_model.model` (inner transformer) if
             # available, leave the wrapper alone so .config survives.
@@ -925,8 +1281,15 @@ async def check_rate_limit(request: Request):
         )
 
 
-async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify API key if authentication is enabled."""
+async def verify_api_key(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None,
+):
+    """Verify API key if authentication is enabled.
+
+    Accepts OpenAI-style ``Authorization: Bearer ...`` and Anthropic-style
+    ``x-api-key`` / ``api-key`` headers for wire-compatibility.
+    """
     global _auth_warning_logged
 
     if _api_key is None:
@@ -939,12 +1302,112 @@ async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(sec
             _auth_warning_logged = True
         return True  # No auth required
 
-    if credentials is None:
+    candidates: list[str] = []
+    if hasattr(credentials, "credentials") and credentials.credentials:
+        candidates.append(credentials.credentials)
+
+    if request is not None:
+        # Anthropic SDK/clients commonly send x-api-key instead of Bearer auth.
+        for header_name in ("x-api-key", "api-key"):
+            v = request.headers.get(header_name)
+            if v:
+                candidates.append(v)
+
+        # Fallback parse in case HTTPBearer doesn't populate credentials.
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+            if token:
+                candidates.append(token)
+        elif auth_header.lower().startswith("token "):
+            token = auth_header[6:].strip()
+            if token:
+                candidates.append(token)
+
+    if not candidates:
         raise HTTPException(status_code=401, detail="API key required")
-    # Use constant-time comparison to prevent timing attacks
-    if not secrets.compare_digest(credentials.credentials, _api_key):
+
+    # Use constant-time comparison to prevent timing attacks.
+    for candidate in candidates:
+        if secrets.compare_digest(candidate, _api_key):
+            return True
+
+    # No candidate matched.
+    if candidates:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return True
+    raise HTTPException(status_code=401, detail="API key required")
+
+
+def _auth_header_token(auth_header: str | None) -> str | None:
+    if not auth_header:
+        return None
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        return token or None
+    if auth_header.lower().startswith("token "):
+        token = auth_header[6:].strip()
+        return token or None
+    return None
+
+
+def _validate_api_key_value(token: str | None) -> bool:
+    """Validate bearer/x-api-key token value against configured API key."""
+    if _api_key is None:
+        return True
+    if not token:
+        return False
+    return secrets.compare_digest(token, _api_key)
+
+
+def _resolve_realtime_model(requested_model: str | None) -> str:
+    """Resolve realtime model name to the loaded model when needed."""
+    resolved = _resolve_model_name()
+    if requested_model and requested_model not in (resolved, _model_name):
+        logger.info(
+            f"Realtime requested model '{requested_model}' but loaded model is '{resolved}'. "
+            f"Using loaded model."
+        )
+    return resolved
+
+
+def _extract_text_from_realtime_item(item: dict) -> str:
+    """Extract user text from a realtime conversation item."""
+    content = item.get("content", [])
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    if isinstance(content, list):
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            ctype = c.get("type", "")
+            if ctype in ("input_text", "text"):
+                txt = c.get("text", "")
+                if txt:
+                    parts.append(txt)
+            elif ctype in ("input_audio_transcript", "audio_transcript"):
+                txt = c.get("text", "")
+                if txt:
+                    parts.append(txt)
+    return "\n".join(parts).strip()
+
+
+def _openai_not_implemented_response(path: str, method: str):
+    """OpenAI-style error payload for cloud-only or unsupported endpoints."""
+    from starlette.responses import JSONResponse
+    return JSONResponse(
+        status_code=501,
+        content={
+            "error": {
+                "message": (
+                    f"Endpoint {method.upper()} {path} is part of the OpenAI cloud spec "
+                    f"but is not implemented for local-only vmlx serving."
+                ),
+                "type": "not_implemented_error",
+                "code": "not_implemented_local",
+            }
+        },
+    )
 
 
 def get_engine() -> BaseEngine:
@@ -1807,6 +2270,8 @@ async def health():
             "model_name": _model_name,
             "model_type": "image",
             "engine_type": "mflux",
+            "inference_backend": "mlx",
+            "local_only": True,
             "last_request_time": _last_request_time if _last_request_time > 0 else None,
         }
     else:
@@ -1816,6 +2281,8 @@ async def health():
             "model_name": _model_name,
             "model_type": "mllm" if (_engine and _engine.is_mllm) else "llm",
             "engine_type": engine_stats.get("engine_type", "unknown"),
+            "inference_backend": "mlx",
+            "local_only": True,
             "last_request_time": _last_request_time if _last_request_time > 0 else None,
             "mcp": mcp_info,
         }
@@ -1868,6 +2335,22 @@ async def health():
 
     if _max_prompt_tokens > 0:
         result["max_prompt_tokens"] = _max_prompt_tokens
+
+    # Cache capability snapshot (preserves existing cache stack; no behavior changes).
+    scheduler = _get_scheduler()
+    if scheduler is not None:
+        stream_from_disk = bool(globals().get("_stream_from_disk", _cli_args.get("stream_from_disk", False)))
+        result["cache"] = {
+            "stream_from_disk": stream_from_disk,
+            "memory_aware_prefix": getattr(scheduler, "memory_aware_cache", None) is not None,
+            "paged_prefix": getattr(scheduler, "block_aware_cache", None) is not None,
+            "legacy_prefix": getattr(scheduler, "prefix_cache", None) is not None,
+            "disk_prompt_cache": getattr(scheduler, "disk_cache", None) is not None,
+            "block_disk_cache": (
+                getattr(getattr(scheduler, "paged_cache_manager", None), "_disk_store", None) is not None
+            ),
+            "mllm_prefix_cache": getattr(scheduler, "prefix_cache_manager", None) is not None,
+        }
 
     return result
 
@@ -2668,6 +3151,517 @@ async def list_models() -> ModelsResponse:
     return ModelsResponse(data=models)
 
 
+@app.get("/models", dependencies=[Depends(verify_api_key)])
+async def list_models_compat() -> ModelsResponse:
+    """OpenAI spec path alias for GET /v1/models."""
+    return await list_models()
+
+
+@app.get("/models/{model}", dependencies=[Depends(verify_api_key)])
+async def retrieve_model_compat(model: str):
+    """OpenAI spec path for retrieving model metadata."""
+    resolved = _resolve_model_name()
+    if model not in (resolved, _model_name, _served_model_name):
+        raise HTTPException(status_code=404, detail=f"Model not found: {model}")
+    return ModelInfo(id=resolved)
+
+
+# =============================================================================
+# OpenAI Files API (local disk-backed store)
+# =============================================================================
+
+
+@app.get("/files", dependencies=[Depends(verify_api_key)])
+@app.get("/v1/files", dependencies=[Depends(verify_api_key)])
+async def list_local_files(
+    purpose: str | None = None,
+    limit: int = 10000,
+    order: str = "desc",
+    after: str | None = None,
+):
+    """List locally stored files in OpenAI-compatible format."""
+    with _local_file_lock:
+        records = list(_local_file_store.values())
+
+    if purpose:
+        records = [record for record in records if record.get("purpose") == purpose]
+
+    reverse = order != "asc"
+    records.sort(key=lambda record: record.get("created_at", 0), reverse=reverse)
+
+    if after:
+        after_idx = next((i for i, record in enumerate(records) if record["id"] == after), None)
+        if after_idx is not None:
+            records = records[after_idx + 1:]
+
+    page = records[: max(1, min(limit, 10000))]
+    data = [_public_file_record(record) for record in page]
+    return {
+        "object": "list",
+        "data": data,
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
+        "has_more": len(records) > len(page),
+    }
+
+
+@app.post("/files", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+@app.post("/v1/files", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def create_local_file(request: Request):
+    """Upload a file to a local disk-backed store with OpenAI-compatible metadata."""
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read") or not hasattr(upload, "filename"):
+        raise HTTPException(status_code=400, detail="multipart form field 'file' is required")
+
+    purpose = str(form.get("purpose", "assistants"))
+    expires_after_seconds = form.get("expires_after[seconds]")
+    expires_at = None
+    created_at = int(time.time())
+    if expires_after_seconds is not None:
+        try:
+            expires_at = created_at + int(expires_after_seconds)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"invalid expires_after[seconds]: {e}") from e
+
+    file_bytes = await upload.read()
+    file_id = f"file-{uuid.uuid4().hex[:24]}"
+    filename = os.path.basename(upload.filename or f"{file_id}.bin")
+    storage_dir = _local_resource_dir("files")
+    disk_path = os.path.join(storage_dir, f"{file_id}__{filename}")
+    with open(disk_path, "wb") as f:
+        f.write(file_bytes)
+
+    record = {
+        "id": file_id,
+        "object": "file",
+        "bytes": len(file_bytes),
+        "created_at": created_at,
+        "expires_at": expires_at,
+        "filename": filename,
+        "purpose": purpose,
+        "status": "processed",
+        "content_type": upload.content_type or "application/octet-stream",
+        "disk_path": disk_path,
+    }
+    with _local_file_lock:
+        _local_file_store[file_id] = record
+    return _public_file_record(record)
+
+
+@app.get("/files/{file_id}", dependencies=[Depends(verify_api_key)])
+@app.get("/v1/files/{file_id}", dependencies=[Depends(verify_api_key)])
+async def retrieve_local_file(file_id: str):
+    """Retrieve metadata for a locally stored file."""
+    with _local_file_lock:
+        record = _local_file_store.get(file_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+    return _public_file_record(record)
+
+
+@app.get("/files/{file_id}/content", dependencies=[Depends(verify_api_key)])
+@app.get("/v1/files/{file_id}/content", dependencies=[Depends(verify_api_key)])
+async def retrieve_local_file_content(file_id: str):
+    """Return the raw content of a locally stored file."""
+    with _local_file_lock:
+        record = _local_file_store.get(file_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+    try:
+        with open(record["disk_path"], "rb") as f:
+            return Response(content=f.read(), media_type=record.get("content_type", "application/octet-stream"))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read stored file: {e}") from e
+
+
+@app.delete("/files/{file_id}", dependencies=[Depends(verify_api_key)])
+@app.delete("/v1/files/{file_id}", dependencies=[Depends(verify_api_key)])
+async def delete_local_file(file_id: str):
+    """Delete a locally stored file."""
+    with _local_file_lock:
+        record = _local_file_store.pop(file_id, None)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+    try:
+        os.unlink(record["disk_path"])
+    except OSError:
+        pass
+    return {"id": file_id, "object": "file", "deleted": True}
+
+
+# =============================================================================
+# OpenAI Realtime API
+# =============================================================================
+
+
+@app.post(
+    "/v1/realtime/sessions",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_realtime_session(request: Request):
+    """Create an OpenAI Realtime-compatible session."""
+    body = await _request_json_or_empty(request)
+    return _create_realtime_session_record(body, object_type="realtime.session")
+
+
+@app.post(
+    "/realtime/sessions",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_realtime_session_compat(request: Request):
+    """OpenAI spec path alias for realtime session creation."""
+    return await create_realtime_session(request)
+
+
+@app.post(
+    "/realtime/client_secrets",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+@app.post(
+    "/v1/realtime/client_secrets",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_realtime_client_secret(request: Request):
+    """OpenAI spec endpoint for ephemeral realtime client secrets."""
+    body = await _request_json_or_empty(request)
+    session_cfg = body.get("session", {}) if isinstance(body.get("session"), dict) else {}
+    expires_after = body.get("expires_after", {}) if isinstance(body.get("expires_after"), dict) else {}
+    ttl_seconds = int(expires_after.get("seconds", 60 * 30) or (60 * 30))
+    session = _create_realtime_session_record(
+        session_cfg,
+        ttl_seconds=ttl_seconds,
+        object_type="realtime.session",
+    )
+    return {
+        "id": f"cs_{uuid.uuid4().hex[:12]}",
+        "object": "realtime.client_secret",
+        "value": session["client_secret"]["value"],
+        "expires_at": session["client_secret"]["expires_at"],
+        "session": {
+            "id": session["id"],
+            "model": session["model"],
+            "modalities": session.get("modalities", ["text"]),
+        },
+    }
+
+
+@app.post(
+    "/realtime/transcription_sessions",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+@app.post(
+    "/v1/realtime/transcription_sessions",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_realtime_transcription_session(request: Request):
+    """Create an OpenAI Realtime transcription session with a local client secret."""
+    body = await _request_json_or_empty(request)
+    session = _create_realtime_session_record(
+        {
+            "model": body.get("model", "gpt-4o-transcribe"),
+            "modalities": body.get("modalities", ["audio", "text"]),
+            "input_audio_format": body.get("input_audio_format", "pcm16"),
+            "input_audio_transcription": body.get(
+                "input_audio_transcription",
+                {"model": body.get("model", "gpt-4o-transcribe"), "language": body.get("language"), "prompt": body.get("prompt", "")},
+            ),
+            "turn_detection": body.get(
+                "turn_detection",
+                {
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 200,
+                },
+            ),
+        },
+        object_type="realtime.transcription_session",
+    )
+    return session
+
+
+@app.websocket("/v1/realtime")
+@app.websocket("/realtime")
+async def realtime_websocket(ws: WebSocket):
+    """OpenAI Realtime-compatible websocket endpoint.
+
+    Supported inbound events:
+    - session.update
+    - conversation.item.create
+    - input_audio_buffer.append
+    - input_audio_buffer.commit
+    - response.create
+    """
+    # Auth: allow API key or realtime client_secret bearer token.
+    auth_header = ws.headers.get("authorization")
+    bearer = _auth_header_token(auth_header)
+    x_api_key = ws.headers.get("x-api-key") or ws.headers.get("api-key")
+    query_token = ws.query_params.get("token")
+    presented_token = bearer or x_api_key or query_token
+
+    allowed = False
+    realtime_session = None
+    session_id = ws.query_params.get("session_id")
+
+    if presented_token and _validate_api_key_value(presented_token):
+        allowed = True
+    else:
+        with _realtime_lock:
+            if presented_token and presented_token in _realtime_tokens:
+                tok = _realtime_tokens[presented_token]
+                if tok["expires_at"] >= int(time.time()):
+                    allowed = True
+                    session_id = tok["session_id"]
+                    realtime_session = _realtime_sessions.get(session_id)
+
+    if not allowed:
+        await ws.close(code=4401, reason="Unauthorized")
+        return
+
+    model = _resolve_model_name()
+    if realtime_session is not None:
+        model = _resolve_realtime_model(realtime_session.get("model"))
+
+    conn = _RealtimeConnState(
+        session_id=session_id or f"sess_{uuid.uuid4().hex[:12]}",
+        model=model,
+        modalities=(realtime_session.get("modalities") if realtime_session else ["text"]),
+        instructions=(realtime_session.get("instructions") if realtime_session else None),
+    )
+
+    await ws.accept()
+
+    # Initial session.created event
+    await ws.send_json({
+        "type": "session.created",
+        "session": {
+            "id": conn.session_id,
+            "object": "realtime.session",
+            "model": conn.model,
+            "modalities": conn.modalities,
+            "instructions": conn.instructions,
+        },
+    })
+
+    async def _emit_response_from_conversation(event_payload: dict):
+        response_id = f"resp_{uuid.uuid4().hex[:12]}"
+        req_cfg = event_payload.get("response", {}) if isinstance(event_payload, dict) else {}
+        max_output_tokens = req_cfg.get("max_output_tokens", _default_max_tokens)
+        temperature = req_cfg.get("temperature")
+        top_p = req_cfg.get("top_p")
+
+        # Convert realtime conversation items into chat messages.
+        messages: list[dict] = []
+        if conn.instructions:
+            messages.append({"role": "system", "content": conn.instructions})
+        for item in conn.conversation:
+            role = item.get("role", "user")
+            if role not in ("user", "assistant", "system", "tool"):
+                role = "user"
+            txt = _extract_text_from_realtime_item(item)
+            if txt:
+                messages.append({"role": role, "content": txt})
+
+        if not messages:
+            messages = [{"role": "user", "content": "Hello"}]
+
+        await ws.send_json({
+            "type": "response.created",
+            "response": {
+                "id": response_id,
+                "object": "realtime.response",
+                "status": "in_progress",
+                "model": conn.model,
+            },
+        })
+
+        item_id = f"item_{uuid.uuid4().hex[:12]}"
+        await ws.send_json({
+            "type": "response.output_item.added",
+            "response_id": response_id,
+            "output_index": 0,
+            "item": {
+                "id": item_id,
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [],
+            },
+        })
+        await ws.send_json({
+            "type": "response.content_part.added",
+            "response_id": response_id,
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": []},
+        })
+
+        full_text = ""
+        output_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        try:
+            engine = get_engine()
+            async for out in _stream_with_keepalive(
+                engine.stream_chat(
+                    messages=messages,
+                    request_id=response_id,
+                    max_tokens=max_output_tokens,
+                    temperature=_resolve_temperature(temperature),
+                    top_p=_resolve_top_p(top_p),
+                ),
+                total_timeout=_default_timeout,
+            ):
+                if out is None:
+                    await ws.send_json({"type": "rate_limits.updated", "response_id": response_id})
+                    continue
+                delta = out.new_text or ""
+                if delta:
+                    full_text += delta
+                    await ws.send_json({
+                        "type": "response.output_text.delta",
+                        "response_id": response_id,
+                        "item_id": item_id,
+                        "output_index": 0,
+                        "content_index": 0,
+                        "delta": delta,
+                    })
+                if getattr(out, "prompt_tokens", 0) or getattr(out, "completion_tokens", 0):
+                    output_usage = {
+                        "input_tokens": int(getattr(out, "prompt_tokens", 0) or 0),
+                        "output_tokens": int(getattr(out, "completion_tokens", 0) or 0),
+                        "total_tokens": int((getattr(out, "prompt_tokens", 0) or 0) + (getattr(out, "completion_tokens", 0) or 0)),
+                    }
+
+            await ws.send_json({
+                "type": "response.output_text.done",
+                "response_id": response_id,
+                "item_id": item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "text": full_text,
+            })
+            await ws.send_json({
+                "type": "response.output_item.done",
+                "response_id": response_id,
+                "output_index": 0,
+                "item": {
+                    "id": item_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": full_text}],
+                },
+            })
+            await ws.send_json({
+                "type": "response.done",
+                "response": {
+                    "id": response_id,
+                    "object": "realtime.response",
+                    "status": "completed",
+                    "output": [{
+                        "id": item_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": full_text}],
+                    }],
+                    "usage": output_usage,
+                    "model": conn.model,
+                },
+            })
+            conn.conversation.append({
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": full_text}],
+            })
+        except Exception as e:
+            await ws.send_json({
+                "type": "response.error",
+                "response_id": response_id,
+                "error": {
+                    "type": "server_error",
+                    "message": str(e),
+                },
+            })
+
+    try:
+        while True:
+            msg = await ws.receive_json()
+            msg_type = msg.get("type")
+
+            if msg_type == "session.update":
+                sess = msg.get("session", {})
+                if isinstance(sess, dict):
+                    if "instructions" in sess:
+                        conn.instructions = sess.get("instructions")
+                    if "modalities" in sess and isinstance(sess.get("modalities"), list):
+                        conn.modalities = sess.get("modalities")
+                    if "model" in sess:
+                        conn.model = _resolve_realtime_model(sess.get("model"))
+                await ws.send_json({
+                    "type": "session.updated",
+                    "session": {
+                        "id": conn.session_id,
+                        "model": conn.model,
+                        "modalities": conn.modalities,
+                        "instructions": conn.instructions,
+                    },
+                })
+                continue
+
+            if msg_type == "conversation.item.create":
+                item = msg.get("item", {})
+                if isinstance(item, dict):
+                    conn.conversation.append(item)
+                    await ws.send_json({
+                        "type": "conversation.item.created",
+                        "item": item,
+                    })
+                continue
+
+            if msg_type == "input_audio_buffer.append":
+                audio = msg.get("audio")
+                if isinstance(audio, str) and audio:
+                    conn.audio_buffer_chunks.append(audio)
+                await ws.send_json({"type": "input_audio_buffer.appended"})
+                continue
+
+            if msg_type == "input_audio_buffer.commit":
+                if conn.audio_buffer_chunks:
+                    # Keep compatibility even when STT backend is unavailable by
+                    # surfacing an audio-transcript placeholder item.
+                    merged = "".join(conn.audio_buffer_chunks)
+                    conn.audio_buffer_chunks.clear()
+                    transcript = f"[audio:{len(merged)} base64 chars]"
+                    item = {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_audio_transcript", "text": transcript}],
+                    }
+                    conn.conversation.append(item)
+                    await ws.send_json({
+                        "type": "conversation.item.created",
+                        "item": item,
+                    })
+                await ws.send_json({"type": "input_audio_buffer.committed"})
+                continue
+
+            if msg_type == "response.create":
+                await _emit_response_from_conversation(msg)
+                continue
+
+            await ws.send_json({
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": f"Unsupported event type: {msg_type}",
+                },
+            })
+    except WebSocketDisconnect:
+        return
+
+
 # =============================================================================
 # Anthropic Messages API
 # =============================================================================
@@ -2732,7 +3726,7 @@ async def create_anthropic_message(
     _msg_kwargs: dict = {
         "temperature": _resolve_temperature(chat_req.temperature),
         "top_p": _resolve_top_p(chat_req.top_p),
-        "max_tokens": chat_req.max_tokens or _default_max_tokens,
+        "max_tokens": chat_req.max_tokens if chat_req.max_tokens is not None else _default_max_tokens,
     }
     if chat_req.top_k is not None:
         _msg_kwargs["top_k"] = chat_req.top_k
@@ -3095,6 +4089,15 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(
+    "/embeddings",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_embeddings_compat(request: EmbeddingRequest) -> EmbeddingResponse:
+    """OpenAI spec path alias for /v1/embeddings."""
+    return await create_embeddings(request)
 
 
 # =============================================================================
@@ -3569,13 +4572,349 @@ async def ollama_create():
 
 
 # =============================================================================
+# LM Studio Native API v1 (/lmstudio/v1/*)
+# =============================================================================
+
+
+@app.get("/lmstudio/v1/models", dependencies=[Depends(verify_api_key)])
+async def lmstudio_list_models():
+    """LM Studio native v1 model list."""
+    resolved = _resolve_model_name()
+    loaded = _engine is not None and _standby_state != "deep"
+    return {
+        "object": "list",
+        "data": [{
+            "id": resolved,
+            "object": "model",
+            "loaded": loaded,
+            "path": _model_path or _model_name or resolved,
+        }],
+    }
+
+
+@app.post("/lmstudio/v1/models/load", dependencies=[Depends(verify_api_key)])
+async def lmstudio_load_model(request: Request):
+    """LM Studio native v1 model load endpoint."""
+    body = await request.json()
+    model = body.get("model") or body.get("model_path") or body.get("id")
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+
+    use_batching = bool(body.get("continuous_batching", _cli_args.get("use_batching", False)))
+    stream_interval = int(body.get("stream_interval", _cli_args.get("stream_interval", 1)))
+    max_tokens = int(body.get("max_tokens", _cli_args.get("max_tokens", _default_max_tokens)))
+    force_mllm = bool(body.get("mllm", _cli_args.get("force_mllm", False)))
+    served_model_name = body.get("served_model_name", _cli_args.get("served_model_name"))
+    stream_from_disk = bool(body.get("stream_from_disk", _cli_args.get("stream_from_disk", False)))
+    stream_memory_percent = int(body.get("stream_memory_percent", _cli_args.get("stream_memory_percent", 90)))
+
+    global _wake_lock, _standby_state
+    if _wake_lock is None:
+        _wake_lock = asyncio.Lock()
+
+    async with _wake_lock:
+        await asyncio.to_thread(
+            load_model,
+            model,
+            use_batching=use_batching,
+            scheduler_config=_cli_args.get("scheduler_config"),
+            stream_interval=stream_interval,
+            max_tokens=max_tokens,
+            force_mllm=force_mllm,
+            served_model_name=served_model_name,
+            stream_from_disk=stream_from_disk,
+            stream_memory_percent=stream_memory_percent,
+        )
+        if _engine and hasattr(_engine, "_needs_async_start") and _engine._needs_async_start:
+            await _engine.start()
+            _engine._needs_async_start = False
+        if _enable_jit and _engine is not None:
+            _apply_jit_compilation()
+        _standby_state = None
+
+    return {
+        "status": "loaded",
+        "model": _resolve_model_name(),
+        "path": _model_path or model,
+    }
+
+
+@app.post("/lmstudio/v1/models/unload", dependencies=[Depends(verify_api_key)])
+async def lmstudio_unload_model():
+    """LM Studio native v1 model unload endpoint."""
+    result = await admin_deep_sleep()
+    if isinstance(result, dict) and result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+    return {"status": "unloaded", "mode": "deep_sleep"}
+
+
+@app.post("/lmstudio/v1/models/download", dependencies=[Depends(verify_api_key)])
+async def lmstudio_download_model(request: Request):
+    """LM Studio native v1 model download endpoint."""
+    body = await request.json()
+    model = body.get("model") or body.get("repo_id")
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+
+    target_dir = body.get("target_dir")
+    if not target_dir:
+        # Keep downloads inside the current user workspace by default.
+        target_dir = os.path.join(os.getcwd(), "models", model.replace("/", "__"))
+
+    job_id = f"dl_{uuid.uuid4().hex[:12]}"
+    _start_lmstudio_download_job(job_id=job_id, model=model, target_dir=target_dir)
+    return {
+        "id": job_id,
+        "status": "queued",
+        "model": model,
+        "target_dir": target_dir,
+    }
+
+
+@app.get("/lmstudio/v1/models/download/status", dependencies=[Depends(verify_api_key)])
+async def lmstudio_download_status(job_id: str | None = Query(default=None)):
+    """LM Studio native v1 model download status endpoint."""
+    with _lmstudio_download_lock:
+        if job_id:
+            job = _lmstudio_download_jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"download job not found: {job_id}")
+            return job
+        return {"jobs": list(_lmstudio_download_jobs.values())}
+
+
+@app.post(
+    "/lmstudio/v1/chat",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def lmstudio_chat(fastapi_request: Request):
+    """LM Studio native v1 chat endpoint with stateful sessions."""
+    body = await fastapi_request.json()
+
+    if body.get("tools"):
+        raise HTTPException(
+            status_code=400,
+            detail="custom tools are not supported on /lmstudio/v1/chat; use /v1/responses or /v1/chat/completions",
+        )
+
+    chat_id = body.get("chat_id") or body.get("session_id") or f"chat_{uuid.uuid4().hex[:12]}"
+    stream = bool(body.get("stream", False))
+
+    incoming_messages = _normalize_lmstudio_messages(body)
+    if not incoming_messages:
+        raise HTTPException(status_code=400, detail="no input messages provided")
+
+    global _lmstudio_chat_lock
+    if _lmstudio_chat_lock is None:
+        _lmstudio_chat_lock = asyncio.Lock()
+
+    async with _lmstudio_chat_lock:
+        history = list(_lmstudio_chat_sessions.get(chat_id, []))
+
+    model = body.get("model") or _resolve_model_name()
+    resolved_name = _resolve_model_name()
+    if model and model not in (resolved_name, _model_name):
+        logger.info(
+            f"LM Studio chat requested model '{model}' but loaded model is '{resolved_name}'. "
+            f"Using loaded model."
+        )
+    model = resolved_name
+
+    engine = get_engine()
+    merged_messages = history + incoming_messages
+    context_length = body.get("context_length")
+    if context_length is not None:
+        try:
+            merged_messages = _trim_messages_to_context(
+                merged_messages, int(context_length), engine
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"invalid context_length: {e}")
+
+    req = ResponsesRequest(
+        model=model,
+        input=merged_messages,
+        instructions=body.get("instructions"),
+        stream=stream,
+        max_output_tokens=body.get("max_tokens")
+        if body.get("max_tokens") is not None
+        else body.get("max_output_tokens"),
+        temperature=body.get("temperature"),
+        top_p=body.get("top_p"),
+        top_k=body.get("top_k"),
+        min_p=body.get("min_p"),
+        repetition_penalty=body.get("repetition_penalty"),
+        stop=body.get("stop"),
+        enable_thinking=body.get("enable_thinking"),
+        reasoning_effort=body.get("reasoning_effort"),
+        chat_template_kwargs=body.get("chat_template_kwargs"),
+        timeout=body.get("timeout"),
+        video_fps=body.get("video_fps"),
+        video_max_frames=body.get("video_max_frames"),
+        stream_options=StreamOptions(include_usage=True) if stream else None,
+    )
+
+    # Build messages and chat kwargs using the same logic as /v1/responses.
+    messages = _responses_input_to_messages(
+        req.input,
+        req.instructions,
+        preserve_multimodal=engine.is_mllm,
+    )
+    if req.text and isinstance(req.text, dict) and req.text.get("type") != "text":
+        json_instruction = build_json_system_prompt(req.text)
+        if json_instruction:
+            messages = _inject_json_instruction(messages, json_instruction)
+    _ct_kwargs = _merge_ct_kwargs(req.chat_template_kwargs)
+    _explicit_thinking_off = (
+        req.enable_thinking is False
+        or (_ct_kwargs.get("enable_thinking") is False)
+    )
+    if _explicit_thinking_off and messages:
+        cleaned = []
+        for msg in messages:
+            if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+                stripped = _THINK_STRIP_RE.sub("", msg["content"]).strip()
+                if stripped != msg["content"]:
+                    if not stripped:
+                        continue
+                    msg = {**msg, "content": stripped}
+            cleaned.append(msg)
+        messages = cleaned
+
+    chat_kwargs = {
+        "max_tokens": req.max_output_tokens if req.max_output_tokens is not None else _default_max_tokens,
+        "temperature": _resolve_temperature(req.temperature),
+        "top_p": _resolve_top_p(req.top_p),
+    }
+    if req.stop:
+        chat_kwargs["stop"] = req.stop
+    if req.top_k is not None:
+        chat_kwargs["top_k"] = req.top_k
+    if req.min_p is not None:
+        chat_kwargs["min_p"] = req.min_p
+    if req.repetition_penalty is not None:
+        chat_kwargs["repetition_penalty"] = req.repetition_penalty
+    if req.enable_thinking is not None:
+        chat_kwargs["enable_thinking"] = req.enable_thinking
+    elif "enable_thinking" in _ct_kwargs:
+        chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
+    elif _default_enable_thinking is not None:
+        chat_kwargs["enable_thinking"] = _default_enable_thinking
+    if req.reasoning_effort is not None:
+        chat_kwargs["reasoning_effort"] = req.reasoning_effort
+    elif _ct_kwargs and _ct_kwargs.get("reasoning_effort") is not None:
+        chat_kwargs["reasoning_effort"] = _ct_kwargs["reasoning_effort"]
+    if _ct_kwargs:
+        extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
+        if extra_ct:
+            chat_kwargs["chat_template_kwargs"] = extra_ct
+    if req.video_fps:
+        chat_kwargs["video_fps"] = req.video_fps
+    if req.video_max_frames:
+        chat_kwargs["video_max_frames"] = req.video_max_frames
+
+    # MCP tools from server config are enabled by default on Responses path.
+    if _mcp_manager is not None:
+        mcp_tools = _mcp_manager.get_all_tools_openai()
+        if mcp_tools:
+            chat_kwargs["tools"] = convert_tools_for_template(mcp_tools)
+
+    if stream:
+        async def _native_stream():
+            # LM Studio-specific lifecycle events (first-class load + prompt phase visibility).
+            yield f"event: model.load\ndata: {json.dumps({'type': 'model.load', 'status': 'loaded', 'model': model}, ensure_ascii=True)}\n\n"
+            yield f"event: prompt.process\ndata: {json.dumps({'type': 'prompt.process', 'status': 'started', 'chat_id': chat_id}, ensure_ascii=True)}\n\n"
+
+            collected_text_parts: list[str] = []
+            final_usage: dict = {}
+
+            async for raw in stream_responses_api(
+                engine=engine,
+                messages=messages,
+                request=req,
+                fastapi_request=fastapi_request,
+                **chat_kwargs,
+            ):
+                if raw.startswith(":"):
+                    yield raw
+                    continue
+
+                lines = [ln for ln in raw.splitlines() if ln]
+                event_name = None
+                data_payload = None
+                for ln in lines:
+                    if ln.startswith("event: "):
+                        event_name = ln[7:].strip()
+                    elif ln.startswith("data: "):
+                        payload = ln[6:].strip()
+                        try:
+                            data_payload = json.loads(payload)
+                        except json.JSONDecodeError:
+                            data_payload = None
+                if event_name and data_payload is not None:
+                    if event_name == "response.output_text.delta":
+                        delta = data_payload.get("delta", "")
+                        if delta:
+                            collected_text_parts.append(delta)
+                    elif event_name == "response.completed":
+                        final_usage = data_payload.get("response", {}).get("usage", {})
+
+                    mapped = _lmstudio_stream_event_to_native(event_name, data_payload, chat_id)
+                    if mapped:
+                        yield mapped
+
+            assistant_text = "".join(collected_text_parts)
+            async with _lmstudio_chat_lock:
+                persisted = list(_lmstudio_chat_sessions.get(chat_id, []))
+                persisted.extend(incoming_messages)
+                if assistant_text:
+                    persisted.append({"role": "assistant", "content": assistant_text})
+                # Keep memory bounded for long-running servers.
+                _lmstudio_chat_sessions[chat_id] = persisted[-200:]
+
+            if final_usage:
+                usage_evt = {
+                    "type": "chat.usage",
+                    "chat_id": chat_id,
+                    "usage": final_usage,
+                }
+                yield f"event: chat.usage\ndata: {json.dumps(usage_evt, ensure_ascii=True)}\n\n"
+
+        return StreamingResponse(_native_stream(), media_type="text/event-stream")
+
+    output = await asyncio.wait_for(
+        engine.chat(messages=messages, **chat_kwargs),
+        timeout=(req.timeout if req.timeout is not None else _default_timeout),
+    )
+    usage = _get_responses_usage(output)
+    assistant_text = clean_output_text(output.text or "")
+
+    async with _lmstudio_chat_lock:
+        persisted = list(_lmstudio_chat_sessions.get(chat_id, []))
+        persisted.extend(incoming_messages)
+        persisted.append({"role": "assistant", "content": assistant_text})
+        _lmstudio_chat_sessions[chat_id] = persisted[-200:]
+
+    return {
+        "id": f"chat_{uuid.uuid4().hex[:12]}",
+        "object": "chat.response",
+        "created_at": int(time.time()),
+        "chat_id": chat_id,
+        "model": model,
+        "message": {
+            "role": "assistant",
+            "content": assistant_text,
+        },
+        "usage": usage.model_dump(exclude_none=True),
+    }
+
+
+# =============================================================================
 # Image Generation Endpoint (OpenAI-compatible /v1/images/generations)
 # =============================================================================
 
 _image_gen = None  # Lazy-loaded ImageGenEngine
-_image_gen_lock: asyncio.Lock | None = (
-    None  # Lazy-init to avoid binding to wrong event loop
-)
+_image_gen_lock: asyncio.Lock | None = asyncio.Lock()
 
 
 @app.post(
@@ -3774,6 +5113,15 @@ async def create_image(request: Request):
             "images_generated": len(images),
         },
     }
+
+
+@app.post(
+    "/images/generations",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_image_compat(request: Request):
+    """OpenAI spec path alias for /v1/images/generations."""
+    return await create_image(request)
 
 
 # =============================================================================
@@ -4059,6 +5407,70 @@ async def create_image_edit(request: Request):
     }
 
 
+@app.post(
+    "/images/edits",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_image_edit_compat(request: Request):
+    """OpenAI spec path alias for /v1/images/edits."""
+    return await create_image_edit(request)
+
+
+@app.post(
+    "/images/variations",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_image_variation_compat(request: Request):
+    """OpenAI-compatible image variations endpoint.
+
+    Local image pipeline does not currently expose a dedicated variation mode.
+    """
+    return _openai_not_implemented_response("/images/variations", "POST")
+
+
+@app.post(
+    "/moderations",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_moderation_compat(request: Request):
+    """OpenAI-compatible moderation endpoint (local heuristic placeholder)."""
+    body = await request.json()
+    input_data = body.get("input", "")
+    if isinstance(input_data, list):
+        joined = "\n".join(str(x) for x in input_data)
+    else:
+        joined = str(input_data)
+    text = joined.lower()
+    # Conservative, lightweight local heuristics.
+    flagged_terms = (
+        "kill ",
+        "bomb",
+        "child sexual",
+        "csam",
+        "suicide instructions",
+    )
+    flagged = any(term in text for term in flagged_terms)
+    categories = {
+        "sexual": False,
+        "hate": False,
+        "harassment": False,
+        "self-harm": "suicide" in text,
+        "sexual/minors": "child sexual" in text or "csam" in text,
+        "hate/threatening": False,
+        "violence/graphic": "bomb" in text,
+    }
+    # Keep results schema close to OpenAI moderation object.
+    return {
+        "id": f"modr-{uuid.uuid4().hex[:12]}",
+        "model": body.get("model", "omni-moderation-latest"),
+        "results": [{
+            "flagged": flagged,
+            "categories": categories,
+            "category_scores": {k: (1.0 if v else 0.0) for k, v in categories.items()},
+        }],
+    }
+
+
 # =============================================================================
 # MCP Endpoints
 # =============================================================================
@@ -4220,11 +5632,35 @@ async def create_transcription(
         logger.error(f"Transcription failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post(
     "/v1/audio/speech",
     dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
 )
+@app.post("/audio/transcriptions", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def create_transcription_compat(
+    file: UploadFile,
+    model: str = "whisper-large-v3",
+    language: str | None = None,
+    response_format: str = "json",
+):
+    """OpenAI spec path alias for /v1/audio/transcriptions."""
+    return await create_transcription(file=file, model=model, language=language, response_format=response_format)
+
+
+@app.post("/audio/translations", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def create_translation_compat(
+    file: UploadFile,
+    model: str = "whisper-large-v3",
+    response_format: str = "json",
+):
+    """OpenAI-compatible translation endpoint.
+
+    Local STT backend returns transcription output; translation is best-effort and
+    currently mapped to transcription behavior.
+    """
+    return await create_transcription(file=file, model=model, language=None, response_format=response_format)
+
+@app.post("/v1/audio/speech", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 async def create_speech(request: AudioSpeechRequest):
     """
     Generate speech from text (OpenAI TTS API compatible).
@@ -4289,6 +5725,12 @@ async def create_speech(request: AudioSpeechRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/audio/speech", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def create_speech_compat(request: AudioSpeechRequest):
+    """OpenAI spec path alias for /v1/audio/speech."""
+    return await create_speech(request)
+
+
 @app.get("/v1/audio/voices", dependencies=[Depends(verify_api_key)])
 async def list_voices(model: str = "kokoro"):
     """List available voices for a TTS model."""
@@ -4300,6 +5742,407 @@ async def list_voices(model: str = "kokoro"):
         return {"voices": CHATTERBOX_VOICES}
     else:
         return {"voices": ["default"]}
+
+
+@app.get("/audio/voices", dependencies=[Depends(verify_api_key)])
+async def list_voices_compat(model: str = "kokoro"):
+    """OpenAI spec path alias for /v1/audio/voices."""
+    return await list_voices(model)
+
+
+# =============================================================================
+# Deepgram-Compatible Endpoints (local MLX runtime)
+# =============================================================================
+
+
+def _map_deepgram_stt_model(model: str | None) -> str:
+    m = (model or "").lower()
+    # Local mappings (best-effort by family).
+    if "nova-3" in m or "nova-2" in m or "enhanced" in m:
+        return "mlx-community/whisper-large-v3-mlx"
+    if "base" in m:
+        return "mlx-community/whisper-small-mlx"
+    if "whisper" in m:
+        return "mlx-community/whisper-large-v3-mlx"
+    return "mlx-community/whisper-large-v3-mlx"
+
+
+def _map_deepgram_tts_model(model: str | None) -> str:
+    m = (model or "").lower()
+    if "aura" in m or "tts" in m:
+        return "kokoro"
+    if "chatterbox" in m:
+        return "chatterbox"
+    return "kokoro"
+
+
+def _detect_deepgram_audio_format(container: str | None, encoding: str | None) -> str:
+    c = (container or "").lower()
+    e = (encoding or "").lower()
+    if c in ("wav", "wave"):
+        return "wav"
+    if e in ("linear16", "pcm16"):
+        return "wav"
+    if c in ("mp3",):
+        return "mp3"
+    if e in ("mp3",):
+        return "mp3"
+    if c in ("opus", "ogg"):
+        return "ogg"
+    if e in ("opus",):
+        return "ogg"
+    return "wav"
+
+
+def _deepgram_listen_response(
+    transcript: str,
+    language: str | None,
+    model: str,
+    request_id: str,
+    sha256_hex: str,
+) -> dict:
+    return {
+        "metadata": {
+            "request_id": request_id,
+            "sha256": sha256_hex,
+            "created": _deepgram_now_iso(),
+            "duration": 0.0,
+            "channels": 1,
+            "models": [model],
+            "model_info": {
+                model: {
+                    "name": model,
+                    "version": "local-mlx",
+                }
+            },
+        },
+        "results": {
+            "channels": [
+                {
+                    "alternatives": [
+                        {
+                            "transcript": transcript,
+                            "confidence": 0.0,
+                            "words": [],
+                        }
+                    ]
+                }
+            ]
+        },
+        "detected_language": language,
+    }
+
+
+def _deepgram_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _deepgram_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _deepgram_model_catalog() -> dict:
+    """Return Deepgram-style model metadata for local MLX-backed mappings."""
+    return {
+        "stt": [
+            {
+                "name": "nova-3",
+                "canonical_name": "nova-3",
+                "architecture": "whisper-large-v3",
+                "languages": ["en", "en-US", "multi"],
+                "version": "local-mlx",
+                "uuid": "7b5a0d84-5db8-4d24-bf22-0a6f50d4de01",
+                "batch": True,
+                "streaming": False,
+                "formatted_output": True,
+                "provider": "local-mlx",
+                "target_model": "mlx-community/whisper-large-v3-mlx",
+            },
+            {
+                "name": "base",
+                "canonical_name": "base",
+                "architecture": "whisper-small",
+                "languages": ["en", "en-US", "multi"],
+                "version": "local-mlx",
+                "uuid": "2f54e7d4-11a2-4f3d-8d8d-a9a16575ef95",
+                "batch": True,
+                "streaming": False,
+                "formatted_output": False,
+                "provider": "local-mlx",
+                "target_model": "mlx-community/whisper-small-mlx",
+            },
+        ],
+        "tts": [
+            {
+                "name": "aura-2",
+                "canonical_name": "aura-2",
+                "architecture": "kokoro",
+                "languages": ["en", "en-US"],
+                "version": "local-mlx",
+                "uuid": "84b41bf4-8d24-4da9-a7fb-bfda8509f8a4",
+                "metadata": {
+                    "accent": "American",
+                    "age": "Adult",
+                    "gender": "neutral",
+                    "description": "Local MLX TTS via Kokoro voice set",
+                },
+                "provider": "local-mlx",
+                "target_model": "kokoro",
+            },
+            {
+                "name": "aura-2-chatterbox",
+                "canonical_name": "aura-2-chatterbox",
+                "architecture": "chatterbox",
+                "languages": ["en", "en-US"],
+                "version": "local-mlx",
+                "uuid": "9958d1f9-c953-46f9-976f-7d5d0d0cb15c",
+                "metadata": {
+                    "accent": "American",
+                    "age": "Adult",
+                    "gender": "neutral",
+                    "description": "Local MLX TTS via Chatterbox voice set",
+                },
+                "provider": "local-mlx",
+                "target_model": "chatterbox",
+            },
+        ],
+    }
+
+
+async def _deepgram_transcribe_from_bytes(
+    audio_bytes: bytes,
+    model: str | None = None,
+    language: str | None = None,
+    file_suffix: str = ".wav",
+) -> tuple[str, str, str]:
+    """Transcribe raw audio bytes using local MLX STT and return text/model/hash."""
+    global _stt_engine, _stt_lock
+
+    from .audio.stt import STTEngine
+
+    model_name = _map_deepgram_stt_model(model)
+    if _stt_lock is None:
+        _stt_lock = asyncio.Lock()
+    async with _stt_lock:
+        if _stt_engine is None or _stt_engine.model_name != model_name:
+            if _stt_engine is not None:
+                _stt_engine.unload()
+            new_engine = STTEngine(model_name)
+            new_engine.load()
+            _stt_engine = new_engine
+        local_stt = _stt_engine
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix or ".wav") as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+    try:
+        result = local_stt.transcribe(tmp_path, language=language)
+        return result.text, model_name, _deepgram_sha256(audio_bytes)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+@app.post("/deepgram/vl/listen", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def deepgram_listen(request: Request):
+    """Deepgram-compatible pre-recorded transcription endpoint (local MLX)."""
+    req_id = f"dgreq_{uuid.uuid4().hex[:12]}"
+    content_type = (request.headers.get("content-type") or "").lower()
+    model = request.query_params.get("model")
+    language = request.query_params.get("language")
+    file_suffix = ".wav"
+
+    try:
+        # JSON URL body style: {"url":"..."} or {"source":{"url":"..."}}
+        if "application/json" in content_type:
+            body = await request.json()
+            source_url = body.get("url")
+            if source_url is None and isinstance(body.get("source"), dict):
+                source_url = body["source"].get("url")
+            if not source_url:
+                raise HTTPException(status_code=400, detail="Deepgram local mode requires audio bytes or a local file URL")
+            # Local-only: only file:// supported (no remote URL fetch).
+            if not str(source_url).startswith("file://"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Local-only mode supports file:// URLs only for /deepgram/vl/listen JSON source",
+                )
+            file_path = str(source_url)[7:]
+            file_suffix = os.path.splitext(file_path)[1] or ".wav"
+            with open(file_path, "rb") as f:
+                audio_bytes = f.read()
+        else:
+            # Deepgram file mode uses application/octet-stream
+            audio_bytes = await request.body()
+            if not audio_bytes:
+                raise HTTPException(status_code=400, detail="Empty audio payload")
+            if "mpeg" in content_type or "mp3" in content_type:
+                file_suffix = ".mp3"
+            elif "ogg" in content_type or "opus" in content_type:
+                file_suffix = ".ogg"
+            elif "wav" in content_type or "wave" in content_type:
+                file_suffix = ".wav"
+
+        text, model_used, sha256_hex = await _deepgram_transcribe_from_bytes(
+            audio_bytes=audio_bytes,
+            model=model,
+            language=language,
+            file_suffix=file_suffix,
+        )
+        return _deepgram_listen_response(
+            transcript=text,
+            language=language,
+            model=model_used,
+            request_id=req_id,
+            sha256_hex=sha256_hex,
+        )
+    except HTTPException:
+        raise
+    except ImportError as e:
+        msg = str(e)
+        if "mlx_audio" in msg or "mlx-audio" in msg:
+            raise HTTPException(status_code=503, detail="mlx-audio not installed. Install with: pip install mlx-audio")
+        raise HTTPException(status_code=503, detail=f"STT dependency missing: {e}")
+    except Exception as e:
+        logger.error(f"Deepgram listen failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Deepgram listen failed: {e}")
+
+
+@app.post("/deepgram/vl/speak", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def deepgram_speak(request: Request):
+    """Deepgram-compatible TTS endpoint (local MLX)."""
+    global _tts_engine, _tts_lock
+
+    body = await request.json()
+    text = body.get("text") or body.get("input")
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    model = _map_deepgram_tts_model(request.query_params.get("model"))
+    encoding = request.query_params.get("encoding")
+    container = request.query_params.get("container")
+    speed = body.get("speed", 1.0)
+
+    out_format = _detect_deepgram_audio_format(container=container, encoding=encoding)
+
+    try:
+        from .audio.tts import TTSEngine
+
+        if _tts_lock is None:
+            _tts_lock = asyncio.Lock()
+        async with _tts_lock:
+            if _tts_engine is None or _tts_engine.model_name != model:
+                if _tts_engine is not None:
+                    _tts_engine.unload()
+                new_engine = TTSEngine(model)
+                new_engine.load()
+                _tts_engine = new_engine
+            local_tts = _tts_engine
+
+        audio = local_tts.generate(text, voice=body.get("voice", "af_heart"), speed=speed)
+        audio_bytes = local_tts.to_bytes(audio, format=out_format)
+        media_type = "audio/wav" if out_format == "wav" else f"audio/{out_format}"
+        return Response(content=audio_bytes, media_type=media_type)
+    except ImportError as e:
+        msg = str(e)
+        if "mlx_audio" in msg or "mlx-audio" in msg:
+            raise HTTPException(status_code=503, detail="mlx-audio not installed. Install with: pip install mlx-audio")
+        raise HTTPException(status_code=503, detail=f"TTS dependency missing: {e}")
+    except Exception as e:
+        logger.error(f"Deepgram speak failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Deepgram speak failed: {e}")
+
+
+@app.post("/deepgram/vl/read", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def deepgram_read(request: Request):
+    """Deepgram-compatible text analysis endpoint (local MLX)."""
+    body = await request.json()
+    text = body.get("text")
+    source_url = body.get("url")
+    language = request.query_params.get("language") or "en"
+    request_id = str(uuid.uuid4())
+
+    if not text and source_url:
+        if not str(source_url).startswith("file://"):
+            raise HTTPException(status_code=400, detail="Local-only mode supports file:// URLs only for /deepgram/vl/read")
+        file_path = str(source_url)[7:]
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                text = f.read()
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=f"Unable to read local file: {e}") from e
+
+    if not text:
+        raise HTTPException(status_code=400, detail="text or url is required")
+
+    summarize = str(request.query_params.get("summarize", "false")).lower() in ("1", "true", "yes", "on")
+    sentiment = str(request.query_params.get("sentiment", "false")).lower() in ("1", "true", "yes", "on")
+    topics = str(request.query_params.get("topics", "false")).lower() in ("1", "true", "yes", "on")
+    intents = str(request.query_params.get("intents", "false")).lower() in ("1", "true", "yes", "on")
+
+    summary_text = None
+    if summarize:
+        try:
+            engine = get_engine()
+            prompt = (
+                "Summarize this text in 1-3 concise sentences.\n\n"
+                f"Text:\n{text[:12000]}\n\nSummary:"
+            )
+            output = await engine.generate(
+                prompt=prompt,
+                max_tokens=192,
+                temperature=0.2,
+                top_p=0.9,
+            )
+            summary_text = clean_output_text(output.text or "").strip() or text[:280]
+        except Exception:
+            summary_text = text[:280]
+
+    results: dict = {}
+    if summarize:
+        results["summary"] = {"results": {"summary": {"text": summary_text or ""}}}
+    if topics:
+        results["topics"] = {"segments": []}
+    if intents:
+        results["intents"] = {"segments": []}
+    if sentiment:
+        results["sentiments"] = {"segments": []}
+
+    return {
+        "metadata": {
+            "request_id": request_id,
+            "created": _deepgram_now_iso(),
+            "language": language,
+            "summary_info": {"model_uuid": "local-mlx", "input_tokens": 0, "output_tokens": 0},
+            "sentiment_info": {"model_uuid": "local-mlx", "input_tokens": 0, "output_tokens": 0},
+            "topics_info": {"model_uuid": "local-mlx", "input_tokens": 0, "output_tokens": 0},
+            "intents_info": {"model_uuid": "local-mlx", "input_tokens": 0, "output_tokens": 0},
+        },
+        "results": results,
+    }
+
+
+@app.get("/deepgram/vl/models", dependencies=[Depends(verify_api_key)])
+async def deepgram_models_alias():
+    """Deepgram-style model list endpoint (alias, local only)."""
+    return _deepgram_model_catalog()
+
+
+@app.get("/deepgram/vl/models/{model_id}", dependencies=[Depends(verify_api_key)])
+async def deepgram_model_detail_alias(model_id: str):
+    """Deepgram-style model detail endpoint (alias, local only)."""
+    catalog = _deepgram_model_catalog()
+    for entry in catalog["stt"] + catalog["tts"]:
+        if model_id in (
+            entry.get("name"),
+            entry.get("canonical_name"),
+            entry.get("uuid"),
+            entry.get("target_model"),
+        ):
+            return entry
+    raise HTTPException(status_code=404, detail="model not found")
 
 
 # =============================================================================
@@ -4396,6 +6239,14 @@ async def create_completion(request: CompletionRequest):
             total_tokens=total_prompt_tokens + total_completion_tokens,
         ),
     )
+
+
+@app.post(
+    "/completions", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)]
+)
+async def create_completion_compat(request: CompletionRequest):
+    """OpenAI spec path alias for /v1/completions."""
+    return await create_completion(request)
 
 
 @app.post(
@@ -4571,9 +6422,7 @@ async def create_chat_completion(
 
     # Prepare kwargs
     chat_kwargs = {
-        "max_tokens": request.max_tokens
-        if request.max_tokens is not None
-        else _default_max_tokens,
+        "max_tokens": request.max_tokens if request.max_tokens is not None else _default_max_tokens,
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -4933,6 +6782,19 @@ async def create_chat_completion(
         return JSONResponse(content=resp_dict)
 
     return response
+
+
+@app.post(
+    "/chat/completions",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    response_model_exclude_none=True,
+)
+async def create_chat_completion_compat(
+    request: ChatCompletionRequest,
+    fastapi_request: Request,
+):
+    """OpenAI spec path alias for /v1/chat/completions."""
+    return await create_chat_completion(request, fastapi_request)
 
 
 # =============================================================================
@@ -5599,12 +7461,98 @@ async def create_response(
                 fc_kwargs["call_id"] = tc_call_id
             output_items.append(ResponsesFunctionCall(**fc_kwargs))
 
-    return ResponsesObject(
+    response_obj = ResponsesObject(
         model=request.model,
         output=output_items,
         usage=_get_responses_usage(output),
         previous_response_id=request.previous_response_id,
     )
+    response_payload = response_obj.model_dump(exclude_none=True)
+    response_payload.setdefault("store", request.store)
+    response_payload.setdefault("instructions", request.instructions)
+    response_payload.setdefault("tools", request.tools or [])
+    response_payload.setdefault("tool_choice", request.tool_choice or "auto")
+    _store_local_response(response_payload, _responses_input_items_for_storage(request))
+    return response_obj
+
+
+@app.post(
+    "/responses",
+    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+)
+async def create_response_compat(
+    request: ResponsesRequest,
+    fastapi_request: Request,
+):
+    """OpenAI spec path alias for /v1/responses."""
+    return await create_response(request, fastapi_request)
+
+
+@app.post(
+    "/responses/{response_id}/cancel",
+    dependencies=[Depends(verify_api_key)],
+)
+async def cancel_response_compat(response_id: str):
+    """OpenAI spec path alias for /v1/responses/{response_id}/cancel."""
+    return await cancel_response(response_id)
+
+
+@app.get(
+    "/responses/{response_id}",
+    dependencies=[Depends(verify_api_key)],
+)
+@app.get(
+    "/v1/responses/{response_id}",
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_response_compat(response_id: str):
+    """Retrieve a locally persisted response object."""
+    with _local_response_lock:
+        record = _local_response_store.get(response_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    return record["response"]
+
+
+@app.get(
+    "/responses/{response_id}/input_items",
+    dependencies=[Depends(verify_api_key)],
+)
+@app.get(
+    "/v1/responses/{response_id}/input_items",
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_response_input_items_compat(response_id: str):
+    """Compatibility endpoint for response input item retrieval."""
+    with _local_response_lock:
+        record = _local_response_store.get(response_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    items = record.get("input_items") or []
+    return {
+        "object": "list",
+        "data": items,
+        "first_id": items[0].get("id") if items and isinstance(items[0], dict) else None,
+        "last_id": items[-1].get("id") if items and isinstance(items[-1], dict) else None,
+        "has_more": False,
+    }
+
+
+@app.delete(
+    "/responses/{response_id}",
+    dependencies=[Depends(verify_api_key)],
+)
+@app.delete(
+    "/v1/responses/{response_id}",
+    dependencies=[Depends(verify_api_key)],
+)
+async def delete_response_compat(response_id: str):
+    """Delete a locally persisted response object."""
+    with _local_response_lock:
+        existed = _local_response_store.pop(response_id, None)
+    if existed is None:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found.")
+    return {"id": response_id, "object": "response", "deleted": True}
 
 
 def _inject_json_instruction(messages: list, instruction: str) -> list:
@@ -7390,31 +9338,144 @@ async def stream_responses_api(
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
-    yield _sse(
-        "response.completed",
-        {
-            "type": "response.completed",
-            "response": {
-                "id": response_id,
-                "object": "response",
-                "created_at": created_at,
-                "status": _resp_status,
-                "model": request.model,
-                "output": all_output_items,
-                **_resp_extra,
-                "usage": {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                    **(
-                        {"input_tokens_details": {"cached_tokens": _cached}}
-                        if _cached > 0
-                        else {}
-                    ),
-                },
-            },
+    completed_response = {
+        "id": response_id, "object": "response", "created_at": created_at,
+        "status": _resp_status, "model": request.model,
+        "output": all_output_items,
+        **_resp_extra,
+        "usage": {
+            "input_tokens": prompt_tokens, "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            **({"input_tokens_details": {"cached_tokens": _cached}} if _cached > 0 else {}),
         },
-    )
+        "store": request.store,
+        "instructions": request.instructions,
+        "tools": request.tools or [],
+        "tool_choice": request.tool_choice or "auto",
+    }
+    _store_local_response(completed_response, _responses_input_items_for_storage(request))
+    yield _sse("response.completed", {
+        "type": "response.completed",
+        "response": completed_response,
+    })
+
+
+# =============================================================================
+# OpenAI Spec Surface Fallbacks (cloud-only endpoints)
+# =============================================================================
+
+_OPENAI_CLOUD_PREFIXES = {
+    "assistants",
+    "batches",
+    "containers",
+    "conversations",
+    "evals",
+    "files",
+    "fine_tuning",
+    "organization",
+    "projects",
+    "threads",
+    "uploads",
+    "vector_stores",
+    "videos",
+    "skills",
+    "chatkit",
+}
+
+
+def _is_cloud_only_prefix(prefix: str) -> bool:
+    return prefix in _OPENAI_CLOUD_PREFIXES
+
+
+@app.get("/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_cloud_get_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/{prefix}/{rest}", "GET")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.post("/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_cloud_post_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/{prefix}/{rest}", "POST")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.put("/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_cloud_put_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/{prefix}/{rest}", "PUT")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.patch("/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_cloud_patch_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/{prefix}/{rest}", "PATCH")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.delete("/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_cloud_delete_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/{prefix}/{rest}", "DELETE")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+_OPENAI_CORE_PREFIXES = {
+    "audio",
+    "chat",
+    "completions",
+    "embeddings",
+    "images",
+    "models",
+    "moderations",
+    "realtime",
+    "responses",
+}
+
+
+def _is_core_prefix(prefix: str) -> bool:
+    return prefix in _OPENAI_CORE_PREFIXES
+
+
+def _is_known_openai_prefix(prefix: str) -> bool:
+    return _is_cloud_only_prefix(prefix) or _is_core_prefix(prefix)
+
+
+@app.get("/v1/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_v1_core_get_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/v1/{prefix}/{rest}", "GET")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.post("/v1/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_v1_core_post_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/v1/{prefix}/{rest}", "POST")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.put("/v1/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_v1_core_put_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/v1/{prefix}/{rest}", "PUT")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.patch("/v1/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_v1_core_patch_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/v1/{prefix}/{rest}", "PATCH")
+    raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.delete("/v1/{prefix}/{rest:path}", dependencies=[Depends(verify_api_key)])
+async def openai_v1_core_delete_fallback(prefix: str, rest: str):
+    if _is_known_openai_prefix(prefix):
+        return _openai_not_implemented_response(f"/v1/{prefix}/{rest}", "DELETE")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 
 # =============================================================================

@@ -565,6 +565,22 @@ class TestRequestTimeoutField:
 class TestAPIKeyVerification:
     """Test API key verification with timing attack prevention."""
 
+    @staticmethod
+    def _make_request_with_headers(headers: dict[str, str]):
+        from starlette.requests import Request
+
+        raw_headers = [
+            (k.lower().encode("latin-1"), v.encode("latin-1"))
+            for k, v in headers.items()
+        ]
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/messages",
+            "headers": raw_headers,
+        }
+        return Request(scope)
+
     def test_secrets_compare_digest_usage(self):
         """Test that secrets.compare_digest is used (timing attack prevention)."""
         import secrets
@@ -634,6 +650,43 @@ class TestAPIKeyVerification:
             result = asyncio.run(server.verify_api_key(credentials))
             # verify_api_key returns True on success (no exception raised)
             assert result is True or result is None
+        finally:
+            server._api_key = original_key
+
+    def test_verify_api_key_accepts_valid_x_api_key_header(self):
+        """Anthropic-style x-api-key header should be accepted."""
+        import asyncio
+
+        import vmlx_engine.server as server
+
+        original_key = server._api_key
+        try:
+            server._api_key = "valid-secret-key"
+            request = self._make_request_with_headers(
+                {"x-api-key": "valid-secret-key"}
+            )
+            result = asyncio.run(server.verify_api_key(request=request))
+            assert result is True or result is None
+        finally:
+            server._api_key = original_key
+
+    def test_verify_api_key_rejects_invalid_x_api_key_header(self):
+        """Invalid x-api-key header should be rejected with 401."""
+        import asyncio
+        from fastapi import HTTPException
+
+        import vmlx_engine.server as server
+
+        original_key = server._api_key
+        try:
+            server._api_key = "valid-secret-key"
+            request = self._make_request_with_headers({"x-api-key": "invalid"})
+
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(server.verify_api_key(request=request))
+
+            assert exc_info.value.status_code == 401
+            assert "Invalid API key" in str(exc_info.value.detail)
         finally:
             server._api_key = original_key
 

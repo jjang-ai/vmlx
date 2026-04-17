@@ -1476,7 +1476,7 @@ export function registerModelHandlers(): void {
     const modelId = m.modelId || m.id || "";
     return {
       id: modelId,
-      author: m.author || modelId.split("/")[0] || "Unknown",
+      author: m.author || modelId.split('/')[0] || "Unknown",
       downloads: m.downloads ?? 0,
       likes: m.likes ?? 0,
       lastModified: m.lastModified || m.createdAt,

@@ -2,6 +2,7 @@
 """Pytest configuration and shared fixtures."""
 
 import pytest
+from urllib.parse import urlparse
 
 
 def pytest_addoption(parser):
@@ -44,9 +45,23 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "integration" in item.keywords:
             item.add_marker(skip_integration)
+            continue
+        if item.nodeid.startswith("tests/test_e2e_live.py") or item.nodeid.startswith("tests/test_tq_e2e_live.py"):
+            item.add_marker(skip_integration)
 
 
 @pytest.fixture(scope="session")
 def server_url(request):
     """Get server URL from command line."""
     return request.config.getoption("--server-url")
+
+
+@pytest.fixture(scope="session")
+def port(server_url):
+    """Extract the TCP port from --server-url for legacy live tests."""
+    parsed = urlparse(server_url)
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme == "https":
+        return 443
+    return 80

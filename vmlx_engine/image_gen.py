@@ -131,8 +131,10 @@ def _fix_quantized_layers(model) -> int:
     mx.dequantize/quantized_matmul fails on these.
     This replaces them with standard Embedding/Linear layers.
     """
-    import mlx.nn as nn
-    import mlx.core as mx
+    import importlib
+
+    nn = importlib.import_module("mlx.nn")
+    mx = importlib.import_module("mlx.core")
 
     fixed = 0
     replacements = []
