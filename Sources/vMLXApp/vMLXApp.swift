@@ -560,7 +560,17 @@ final class AppState {
             _ = engine(for: id)
             let session = Session(
                 id: id,
-                displayName: s.displayName ?? modelPath.lastPathComponent,
+                // HuggingFace cache paths end in a commit SHA
+                // (`snapshots/<40-hex-sha>/`), which showed up as the
+                // displayName fallback. `SessionHeuristics.displayName`
+                // walks up to the first human-readable segment so the
+                // session card shows e.g. `Qwen3-35B` instead of a
+                // truncated hash. User-supplied `s.displayName` still
+                // wins when set — but `sanitizedStoredName` rejects
+                // bad names saved before the fix landed (SQLite rows
+                // still carrying the SHA from old `createSession`).
+                displayName: SessionHeuristics.sanitizedStoredName(s.displayName)
+                    ?? SessionHeuristics.displayName(modelPath),
                 modelPath: modelPath,
                 family: SessionHeuristics.family(modelPath),
                 isJANG: SessionHeuristics.isJANG(modelPath),
