@@ -326,6 +326,33 @@ Live-verified on the iter-67 binary against Qwen3-0.6B-8bit + ad-hoc model loads
 
 Session delivered **16 commits on `dev`** (iter-59 through iter-67) + iter-67 binary installed at `/Applications/vMLX.app`. Zero regressions vs iter-60 239/248 baseline; added 8+ new cases to the 45→47 harness.
 
+### iter-69 clean regression gate (2026-04-17 post-audit)
+
+Qwen3-0.6B-8bit full suite against the iter-69 binary:
+
+**45/45 test cases PASS · 0 fails · 100% GREEN.**
+
+Includes the three new iter-68/69 surfaces added in this sweep:
+- `admin_auth_gate` — probes AdminAuth middleware, open mode returns 200, gated mode returns structured 401
+- `benchmark_endpoint` — `POST /admin/benchmark {"suite":"decode256"}` returns `object=benchmark.run`, `tokens_per_sec=129.6`, `ttft_ms=28.6`
+- `responses_api` — `POST /v1/responses` envelope shape (`object=response`, `status=completed`, `output[0].content[].text`)
+
+All previously-failing gates continue to pass:
+- `seed_reproducibility` r2==r3=True (iter-64 fix holds)
+- `sleep_wake_cycle` full lifecycle (iter-66 fix holds)
+
+Session delivered **20 commits on `dev`** (iter-59 through iter-69):
+iter-59 tool-call marker bleed · iter-60 tier-3 baseline · iter-61
+video_url edge case · chat picker start/stop + RAM indicator · send()
+guard fix · iter-63 audit · iter-64 sampler seed + multicast + inline
+load · regression gate + snapshot · iter-65 regression documented ·
+harness admin_auth · iter-66 sleep_wake fix + tier-3 close · iter-67
+video_url AVURLAsset probe · iter-68 sweep + `/admin/benchmark` +
+harness case · iter-69 images/generations 400-not-500 + harness
+responses_api.
+
+**Installed binary at `/Applications/vMLX.app` is iter-69** — Developer ID signed, quarantine cleared.
+
 ## Known Swift-vendor drift
 
 - Logprobs endpoint returns 400 `"not yet supported by the vMLX Swift engine"` — intentional, tracked as a docstring'd unimplemented feature rather than a bug.
