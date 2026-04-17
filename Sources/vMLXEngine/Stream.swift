@@ -1,5 +1,6 @@
 import Foundation
 import CoreImage
+import MLX
 import MLXRandom
 import vMLXLMCommon
 
@@ -91,11 +92,6 @@ extension Engine {
                 // queue and drain in arrival order, so users see latency
                 // under load but never a server crash.
                 await self.generationLock.acquire()
-                defer {
-                    Task { [weak self] in
-                        await self?.generationLock.release()
-                    }
-                }
                 do {
                     try await self.performStreamingGeneration(
                         request: request,
@@ -108,6 +104,20 @@ extension Engine {
                     await self.log(.error, "engine", "stream failed: \(error)")
                     continuation.finish(throwing: error)
                 }
+                // Drain any async Metal work still pending from the just-
+                // finished generation BEFORE releasing the lock. Without
+                // this, MLX's async eval pipeline can leave a buffer with
+                // a pending completion-handler registration that then
+                // races the next waiter's commit — observed as
+                // `_MTLCommandBuffer addCompletedHandler: Completed
+                // handler provided after commit call` on VL+concurrent
+                // workloads (iteration 2). `synchronize()` on the default
+                // GPU stream blocks until all queued work drains.
+                MLX.Stream.defaultStream(.gpu).synchronize()
+                // Release synchronously (not via a detached Task) so the
+                // next FIFO waiter picks up the baton only AFTER MLX has
+                // quiesced and the actor state is clean.
+                await self.generationLock.release()
                 await self.clearCurrentStreamTask()
             }
             // Store a reference so the engine actor can cancel this
