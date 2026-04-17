@@ -248,6 +248,31 @@ Qwen3-0.6B-8bit through the full 46-case harness on the post-iter-64 binary:
 
 No engine regressions from iter-59 tool-call marker-bleed fix, iter-62 sampler-seed wire-through, iter-63 app-layer load guard, or iter-64 actor-isolation fix.
 
+### iter-65 regression — sleep_wake_cycle server death under matrix load
+
+Tier-3 matrix on the iter-64 binary (matrix-20260417-085652) caught a **real regression** that the standalone 46/46 gate missed:
+
+| model | full-suite pass rate | sleep_wake_cycle |
+|-------|----------------------|------------------|
+| llama-3.2-1b-4bit | 43/46 | ✅ soft=200 deep=200 wake=200 |
+| qwen3-0.6b-8bit | 28/46 | ❌ soft=200 deep=200 **wake=000** (server died) |
+| gemma-4-e2b-it-4bit | 18/44 | ❌ soft=000 (server was already dead) |
+| gemma-4-e4b-it-4bit | 14/43 | ❌ server already dead |
+| nemotron-30b-jang2l | tbd | ❌ server already dead |
+
+Only llama survives; it's the smallest model. Every other full-suite model has its server die at or before `sleep_wake_cycle`. VL suite (no sleep_wake) doesn't exhibit the issue.
+
+**Primary suspect:** iter-64's `Engine.subscribeState` change — moved the `state` read INTO the Task to satisfy strict-concurrency actor-isolation on clean rebuild. Under sequential matrix load, the `await self.state` + `registerStateSubscriber` + `cont.yield(current)` sequence appears to race with concurrent state transitions (soft-sleep → running → deep-sleep) triggered by admin routes. Hummingbird logs `[vmlx] graceful shutdown: flushing settings + stopping engine…` BEFORE the wake POST — i.e. `server.run()` returned cleanly, meaning the ServiceGroup got a shutdown signal it shouldn't have.
+
+**Not seen in the standalone iter-64 validate** because the standalone harness had the machine quiet. Matrix runs have back-to-back model loads that keep Metal + Swift runtime busy.
+
+Mitigation options to evaluate once tier-3 finishes:
+1. Revert `subscribeState` to the old nonisolated-read pattern + add `@preconcurrency` or `nonisolated(unsafe)` annotation to silence strict-concurrency.
+2. Make `state` a nonisolated stored-with-lock so the closure can read synchronously.
+3. Skip `sleep_wake_cycle` in matrix runs until root-cause is pinned.
+
+Left as OPEN — don't ship iter-64 binary as production release until this class of race is understood.
+
 ## Known Swift-vendor drift
 
 - Logprobs endpoint returns 400 `"not yet supported by the vMLX Swift engine"` — intentional, tracked as a docstring'd unimplemented feature rather than a bug.
