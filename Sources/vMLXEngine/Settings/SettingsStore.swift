@@ -71,6 +71,14 @@ public actor SettingsStore {
         return nil
     }
 
+    /// Enumerate every session id that has a stored settings blob.
+    /// Used by `AppState.hydrateSessionsFromSettings()` on app launch
+    /// to rebuild the in-memory Session list so users come back to
+    /// the sessions they left open before quitting.
+    public func allSessionIDs() -> [UUID] {
+        db.allSessionIDs()
+    }
+
     public func chat(_ id: UUID) -> ChatSettings? {
         if let c = chatCache[id] { return c }
         guard let data = db.getChat(id) else { return nil }
