@@ -136,16 +136,63 @@ PY
 }
 
 case_basic_chat() {
+    # Validates the full OpenAI chat.completion response schema:
+    #   id          : str, starts with "chatcmpl-"
+    #   object      : "chat.completion"
+    #   created     : int
+    #   model       : str (non-empty)
+    #   choices[0]  : { finish_reason, index=0, message={role,content} }
+    #   usage       : { prompt_tokens, completion_tokens, total_tokens }
+    # Missing/wrong field type → openai-python raises on the typed
+    # ChatCompletion deserialization. Gate catches that class of drift.
     local t0=$(python3 -c 'import time;print(int(time.time()*1000))')
     local resp
     resp=$(curl_chat "Reply with the single word OK." 8 false)
     local t1=$(python3 -c 'import time;print(int(time.time()*1000))')
-    local content=$(echo "$resp" | extract_content)
-    local usage_tok
-    usage_tok=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("usage",{}).get("completion_tokens",0))' 2>/dev/null || echo 0)
-    local ok=false
-    echo "$content" | grep -iq "ok\|hi\|hello\|yes\|sure" && ok=true
-    emit "{\"name\":\"basic_chat\",\"ok\":$ok,\"ttft_ms\":$((t1-t0)),\"tokens\":$usage_tok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
+    echo "$resp" > /tmp/vmlx-basic.json
+    RAW_T1="$((t1-t0))" python3 <<'PY'
+import json, os, sys
+try:
+    d = json.load(open("/tmp/vmlx-basic.json"))
+    probs = []
+    if not isinstance(d.get("id"), str) or not d["id"].startswith("chatcmpl-"):
+        probs.append(f"id={d.get('id')!r}")
+    if d.get("object") != "chat.completion":
+        probs.append(f"object={d.get('object')}")
+    if not isinstance(d.get("created"), int):
+        probs.append("created")
+    if not isinstance(d.get("model"), str) or not d["model"]:
+        probs.append("model")
+    choices = d.get("choices") or []
+    if not choices:
+        probs.append("no choices")
+    else:
+        c0 = choices[0]
+        if c0.get("index") != 0:
+            probs.append(f"choices[0].index={c0.get('index')}")
+        if c0.get("finish_reason") not in {"stop","length","tool_calls","content_filter","cancelled"}:
+            probs.append(f"finish_reason={c0.get('finish_reason')}")
+        msg = c0.get("message") or {}
+        if msg.get("role") != "assistant":
+            probs.append(f"role={msg.get('role')}")
+        content = msg.get("content") or ""
+    usage = d.get("usage") or {}
+    for k in ("prompt_tokens","completion_tokens","total_tokens"):
+        if not isinstance(usage.get(k), int):
+            probs.append(f"usage.{k}")
+    # Content positivity: response should include one of a few plausible affirmations
+    import re
+    affirm = bool(re.search(r"\b(ok|hi|hello|yes|sure)\b", content, re.I))
+    schema_ok = not probs
+    ok = schema_ok and affirm
+    ttft = os.environ.get("RAW_T1","0")
+    notes = f"schema={'ok' if schema_ok else 'GAP:'+str(probs)} affirm={affirm} c={content[:40]!r}"
+    out = {"name":"basic_chat","ok":ok,"ttft_ms":int(ttft),
+           "tokens":usage.get("completion_tokens",0),"notes":notes[:140]}
+    print(json.dumps(out))
+except Exception as e:
+    print(json.dumps({"name":"basic_chat","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_sse_stream() {
