@@ -1252,6 +1252,45 @@ PY
     emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1] + " [" + sys.argv[2] + "]"))' "${note:0:60}" "$color_tag")}"
 }
 
+case_responses_api() {
+    # OpenAI Responses API — newer /v1/responses surface. Envelope:
+    #   { "object":"response", "status":"completed",
+    #     "output":[{"role":"assistant","content":[{"type":"output_text",
+    #     "text":"..."}]}] }
+    # Regression gate ensures the route didn't silently regress when we
+    # added tools/reasoning/structured input (deep-audit #138).
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s --max-time 20 -X POST "$BASE/v1/responses" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"input\":\"Say OK\",\"max_output_tokens\":8}")
+    echo "$resp" > /tmp/vmlx-resp.json
+    python3 <<'PY'
+import json
+d = json.load(open("/tmp/vmlx-resp.json"))
+probs = []
+if d.get("object") != "response":
+    probs.append(f"object={d.get('object')}")
+if d.get("status") not in ("completed","incomplete","failed"):
+    probs.append(f"status={d.get('status')}")
+output = d.get("output", [])
+if not isinstance(output, list) or not output:
+    probs.append("no-output")
+else:
+    first = output[0]
+    if first.get("role") != "assistant":
+        probs.append(f"role={first.get('role')}")
+    content = first.get("content") or []
+    if not isinstance(content, list) or not content:
+        probs.append("no-content")
+    elif not any((c.get("type") in ("output_text","text")) and c.get("text") for c in content):
+        probs.append("no-text-part")
+ok = not probs
+note = f"status={d.get('status')} " + (",".join(probs) if probs else "schema=ok")
+print(json.dumps({"name":"responses_api","ok":ok,"notes":note[:100]}))
+PY
+}
+
 case_benchmark_endpoint() {
     # POST /admin/benchmark exercises the decode256 BenchSuite and
     # returns a BenchReport JSON. Added iter-68 after the surface-sweep
@@ -2144,6 +2183,7 @@ suite_full() {
     case_seed_reproducibility
     case_admin_auth_gate
     case_benchmark_endpoint
+    case_responses_api
 }
 
 suite_vl() {
