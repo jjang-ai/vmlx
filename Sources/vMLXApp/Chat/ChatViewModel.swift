@@ -29,6 +29,47 @@ final class ChatViewModel {
     /// removes from the sidebar — it doesn't touch the DB).
     private(set) var recentlyClosed: [ChatSession] = []
 
+    /// Tiny in-memory undo stack for destructive actions (delete-session,
+    /// delete-message, clear-all). Each entry pairs a human-readable
+    /// label with a closure that restores the prior state. Cmd-Z pops
+    /// the top action and invokes its closure.
+    ///
+    /// Bounded to the last 20 actions — an undo-all-the-way-back use
+    /// case for a chat app is unnecessary, and holding snapshots of
+    /// every deleted chat forever is a memory leak waiting to happen.
+    struct UndoAction {
+        let label: String
+        let restore: () -> Void
+    }
+    private(set) var undoStack: [UndoAction] = []
+    private let undoStackCap = 20
+
+    /// Register an undoable action. Keeps the stack bounded; oldest
+    /// entries fall off the bottom once cap is reached.
+    private func pushUndo(_ label: String, restore: @escaping () -> Void) {
+        undoStack.append(UndoAction(label: label, restore: restore))
+        if undoStack.count > undoStackCap {
+            undoStack.removeFirst(undoStack.count - undoStackCap)
+        }
+    }
+
+    /// Pop and run the most recent undoable action. Returns the label
+    /// that was undone so the caller (menu command, banner) can
+    /// surface "Undid: delete chat …" feedback. Returns nil when the
+    /// stack is empty.
+    @discardableResult
+    func undo() -> String? {
+        guard let action = undoStack.popLast() else { return nil }
+        action.restore()
+        return action.label
+    }
+
+    /// Non-consuming peek used by the Edit menu command to render
+    /// "Undo Delete chat …" (live-tracked via the menu item label).
+    /// Returns nil when the stack is empty so SwiftUI can disable the
+    /// menu item.
+    var topUndoLabel: String? { undoStack.last?.label }
+
     private weak var app: AppState?
     private var streamTask: Task<Void, Never>? = nil
 
@@ -186,11 +227,28 @@ final class ChatViewModel {
     }
 
     func deleteSession(_ id: UUID) {
+        // Snapshot BEFORE the delete so we can restore on undo. Messages
+        // are fetched fresh from SQLite rather than relying on `messages`
+        // (which only holds the currently-active session) — otherwise
+        // undo-deleting a background chat would resurrect it empty.
+        guard let snapshot = sessions.first(where: { $0.id == id }) else { return }
+        let snapshotMessages = Database.shared.messages(for: id)
+        let priorActive = activeSessionId
         Database.shared.deleteSession(id)
         sessions.removeAll { $0.id == id }
         if activeSessionId == id {
             activeSessionId = sessions.first?.id
             messages = activeSessionId.map { Database.shared.messages(for: $0) } ?? []
+        }
+        pushUndo("Delete chat \"\(snapshot.title)\"") { [weak self] in
+            guard let self else { return }
+            Database.shared.upsertSession(snapshot)
+            for m in snapshotMessages { Database.shared.upsertMessage(m) }
+            self.sessions = Database.shared.allSessions()
+            if priorActive == id {
+                self.activeSessionId = id
+                self.messages = snapshotMessages
+            }
         }
     }
 
@@ -215,6 +273,15 @@ final class ChatViewModel {
     /// is created so the user lands in a usable state instead of a
     /// dead-end empty list.
     func clearAllSessions() {
+        // Snapshot every session + its full message history so undo can
+        // resurrect the whole set. Wipe runs first so the fresh session
+        // `newSession()` creates at the end doesn't appear in the
+        // snapshot (otherwise undo would also recreate + then delete it).
+        let snapshotSessions = sessions
+        var snapshotMessages: [UUID: [ChatMessage]] = [:]
+        for s in sessions {
+            snapshotMessages[s.id] = Database.shared.messages(for: s.id)
+        }
         for s in sessions {
             Database.shared.deleteSession(s.id)
         }
@@ -224,11 +291,37 @@ final class ChatViewModel {
         messages = []
         // Land in a fresh empty session so the chat screen isn't blank.
         newSession()
+        pushUndo("Clear all chats (\(snapshotSessions.count))") { [weak self] in
+            guard let self else { return }
+            for s in snapshotSessions {
+                Database.shared.upsertSession(s)
+                for m in snapshotMessages[s.id] ?? [] {
+                    Database.shared.upsertMessage(m)
+                }
+            }
+            self.sessions = Database.shared.allSessions()
+            if let first = self.sessions.first {
+                self.activeSessionId = first.id
+                self.messages = Database.shared.messages(for: first.id)
+            }
+        }
     }
 
     func deleteMessage(_ id: UUID) {
+        // Snapshot + index BEFORE the delete so undo re-inserts at the
+        // original position. `upsertMessage` with the same id puts the
+        // row back in SQLite; we re-insert in-memory at the captured
+        // index to preserve ordering.
+        guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+        let snapshot = messages[idx]
         Database.shared.deleteMessage(id)
-        messages.removeAll { $0.id == id }
+        messages.remove(at: idx)
+        pushUndo("Delete message") { [weak self] in
+            guard let self else { return }
+            Database.shared.upsertMessage(snapshot)
+            let clamped = min(idx, self.messages.count)
+            self.messages.insert(snapshot, at: clamped)
+        }
     }
 
     func editMessage(_ id: UUID, newContent: String) {
