@@ -353,6 +353,14 @@ final class AppState {
     /// auto-open the window on first `.started`. Nil before main app runs.
     private var appOpenWindow: ((String) -> Void)? = nil
 
+    /// Public hook for the `vmlx://downloads` URL handler + anyone else
+    /// that wants to surface the Downloads window without SwiftUI's
+    /// `@Environment(\.openWindow)` in scope. Safely no-ops when
+    /// RootView hasn't mounted yet (opener not captured).
+    func openDownloadsWindowIfReady() {
+        appOpenWindow?("downloads")
+    }
+
     /// Ensure the gateway listener is running per current GlobalSettings.
     /// Safe to call from any session-start path — if the user has the
     /// toggle off, this is a no-op. If on, binds to (gatewayHost,
@@ -690,6 +698,20 @@ struct RootView: View {
             }
         }
         .background(Theme.Colors.background)
+        // `vmlx://` deep-link handler. Called by macOS when the user
+        // (or Shortcuts, or another app) opens a `vmlx://...` URL.
+        // Paths are best-effort — unknown paths fall back to the
+        // chat tab so the URL at least opens vMLX.
+        .onOpenURL { url in
+            handleIncomingURL(url, state: state)
+        }
+        // Drag-drop model files onto the main window. Drops are matched
+        // by extension via `CFBundleDocumentTypes` in project.yml; the
+        // handler walks up to find the containing model dir and adds
+        // it to the library.
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            handleModelDrop(providers, state: state)
+        }
         .task { await state.observeEngine() }
         .task {
             await state.observeDownloads { id in
@@ -798,6 +820,87 @@ struct RootView: View {
             .frame(width: 0, height: 0)
         )
     }
+}
+
+// MARK: - vmlx:// URL scheme + model drag-drop handlers
+
+/// Handle a `vmlx://...` deep-link. Registered via
+/// `CFBundleURLTypes` in project.yml; called by macOS when the URL is
+/// dispatched through `NSWorkspace.shared.open(_:)` or Shortcuts.
+///
+/// Paths:
+///   - `vmlx://chat/new`         — Chat tab + new session
+///   - `vmlx://chat/<UUID>`      — Chat tab + jump to that session
+///   - `vmlx://server/<UUID>`    — Server tab + select that session
+///   - `vmlx://downloads`        — no-op (Downloads window comes up
+///                                  automatically via `.onOpenURL`
+///                                  routing to the named WindowGroup)
+///   - anything else             — fall back to Chat tab so vMLX
+///                                  at least opens
+@MainActor
+fileprivate func handleIncomingURL(_ url: URL, state: AppState) {
+    guard url.scheme == "vmlx" else { return }
+    let host = url.host ?? ""
+    let path = url.pathComponents.filter { $0 != "/" }
+    switch host {
+    case "chat":
+        state.mode = .chat
+        if let first = path.first, first == "new" {
+            state.chatViewModelRef?.newSession()
+        } else if let first = path.first, let uuid = UUID(uuidString: first) {
+            state.chatViewModelRef?.selectSession(uuid)
+        }
+    case "server":
+        state.mode = .server
+        if let first = path.first, let uuid = UUID(uuidString: first) {
+            state.selectedServerSessionId = uuid
+            state.rebindEngineObserver()
+        }
+    case "downloads":
+        // Tell AppState to route the window open via its public
+        // opener hook. If we got here before RootView mounted, the
+        // opener is nil — the `.onOpenURL` hop will then open the
+        // main window and the user can hit Cmd-Shift-D.
+        state.openDownloadsWindowIfReady()
+    default:
+        state.mode = .chat
+    }
+}
+
+/// Drop handler for model files (`.safetensors` / `.gguf` / `.mlxq`)
+/// dragged onto the main window. Walks up to the containing directory
+/// (a single-file drop of `model-00001-of-00004.safetensors` points at
+/// the model bundle, not the file itself), adds it as a user model
+/// directory so the scanner picks it up, and flashes a banner.
+///
+/// Returns `true` iff at least one valid provider was accepted.
+@MainActor
+fileprivate func handleModelDrop(_ providers: [NSItemProvider], state: AppState) -> Bool {
+    var accepted = false
+    for p in providers {
+        guard p.canLoadObject(ofClass: URL.self) else { continue }
+        accepted = true
+        _ = p.loadObject(ofClass: URL.self) { url, _ in
+            guard let url else { return }
+            // Single-file drop: walk up to the containing directory.
+            // Drag of an already-expanded model directory: use the
+            // directory itself.
+            var targetDir = url
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+               !isDir.boolValue
+            {
+                targetDir = url.deletingLastPathComponent()
+            }
+            Task { @MainActor in
+                let lib = await state.engine.modelLibrary
+                await lib.addUserDir(targetDir)
+                _ = await lib.scan(force: true)
+                state.flashBanner("Added \(targetDir.lastPathComponent) — rescanning model library")
+            }
+        }
+    }
+    return accepted
 }
 
 private struct Sidebar: View {

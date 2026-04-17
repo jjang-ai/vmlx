@@ -64,6 +64,34 @@ targets:
         NSBonjourServices:
           - _vmlx._tcp
           - _http._tcp
+        # URL scheme registration. `vmlx://` deep-links let Shortcuts,
+        # scripts, and other apps surface vMLX actions without the user
+        # manually switching windows. Currently supported paths:
+        #   vmlx://chat/new                — open Chat tab + new session
+        #   vmlx://chat/<session-id>       — open a specific chat session
+        #   vmlx://server/<session-id>     — open the Server tab focused on
+        #                                    the named session
+        #   vmlx://downloads               — surface the Downloads window
+        # Handler lives in `RootView.onOpenURL` (AppKit + SwiftUI).
+        CFBundleURLTypes:
+          - CFBundleURLName: ai.jangq.vmlx
+            CFBundleURLSchemes:
+              - vmlx
+            CFBundleTypeRole: Editor
+        # File-type associations — users can drag-drop `.safetensors` /
+        # `.gguf` / `.mlxq` onto the app icon (or the main window) to
+        # import a model directory. The handler walks up from the file
+        # to find the containing model dir before registering it.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: "Model file"
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.data
+            CFBundleTypeExtensions:
+              - safetensors
+              - gguf
+              - mlxq
     dependencies:
       - package: vmlx
         product: vMLXEngine
