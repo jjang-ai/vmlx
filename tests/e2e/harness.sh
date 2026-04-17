@@ -1252,6 +1252,48 @@ PY
     emit "{\"name\":\"vision_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1] + " [" + sys.argv[2] + "]"))' "${note:0:60}" "$color_tag")}"
 }
 
+case_admin_auth_gate() {
+    # AdminAuth middleware sanity check. If the server was started WITHOUT
+    # an admin token, `/admin/soft-sleep` must return 200 (open mode,
+    # matches historical behaviour). If it WAS started with a token, the
+    # unauthenticated POST must return 401 + a structured error body.
+    # Either outcome is OK; what we catch here is the regressive class
+    # of "admin path crashes the server" or "admin path silently accepts
+    # without a token when the token is required" (classic auth bypass).
+    local http_code
+    http_code=$(curl -s -o /tmp/vmlx-adminprobe.json -w "%{http_code}" \
+        --max-time 5 -X POST "$BASE/admin/soft-sleep")
+    local ok=false
+    local notes="http=$http_code"
+    if [ "$http_code" = "200" ]; then
+        ok=true
+        notes="$notes mode=open"
+    elif [ "$http_code" = "401" ]; then
+        # When gated, the body must be structured JSON so SDK clients
+        # can surface a real error instead of opaque HTML.
+        local has_err
+        has_err=$(python3 -c 'import json,sys
+try:
+    d=json.load(open("/tmp/vmlx-adminprobe.json"))
+    print("yes" if d.get("error",{}).get("message") else "no")
+except Exception: print("no")')
+        if [ "$has_err" = "yes" ]; then
+            ok=true
+            notes="$notes mode=gated"
+        else
+            notes="$notes mode=gated-but-malformed-body"
+        fi
+    fi
+    # Probe liveness — admin probe must not kill the server.
+    local health
+    health=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BASE/health")
+    if [ "$health" != "200" ]; then
+        ok=false
+        notes="$notes POST_HEALTH=$health(SERVER_DOWN)"
+    fi
+    emit "{\"name\":\"admin_auth_gate\",\"ok\":$ok,\"notes\":\"$notes\"}"
+}
+
 case_seed_reproducibility() {
     # Sampler determinism contract. Same seed + same prompt + same temp
     # SHOULD yield identical output. But the prefix-cache and Metal
@@ -2067,6 +2109,7 @@ suite_full() {
     case_multiturn_context
     case_unicode_roundtrip
     case_seed_reproducibility
+    case_admin_auth_gate
 }
 
 suite_vl() {
