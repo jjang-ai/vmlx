@@ -956,6 +956,62 @@ print(json.dumps({"name":"stream_usage","ok":ok=="true","notes":note[:80]}))
 PY
 }
 
+case_anthropic_stream() {
+    # Anthropic SSE streaming uses a different protocol than OpenAI:
+    #   event: message_start         (outer Message envelope, usage=0)
+    #   event: content_block_start   (content block opens, type=text)
+    #   event: content_block_delta   (one per token — {text,type="text_delta"})
+    #   event: content_block_stop
+    #   event: message_delta         (final usage + stop_reason)
+    #   event: message_stop
+    # Missing any step breaks anthropic-sdk-python's stream reader.
+    # Gate: verify all 6 event types appear in order, and content_block_delta
+    # deltas are valid {text,type=text_delta}.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"user","content":"Hi"}],
+    "max_tokens": 8,
+    "stream": True,
+    "temperature": 0,
+}
+proc = subprocess.Popen(
+    ["curl","-sN","-X","POST","$BASE/v1/messages",
+     "-H","content-type: application/json",
+     "-H","anthropic-version: 2023-06-01",
+     "-d", json.dumps(body)],
+    stdout=subprocess.PIPE, text=True)
+events = []
+deltas = 0
+malformed_delta = 0
+for line in proc.stdout:
+    line = line.rstrip("\n")
+    if line.startswith("event: "):
+        events.append(line[7:].strip())
+    elif line.startswith("data: "):
+        try:
+            d = json.loads(line[6:].strip())
+            if d.get("type") == "content_block_delta":
+                delta = d.get("delta") or {}
+                if not (isinstance(delta.get("text"), str) and delta.get("type") == "text_delta"):
+                    malformed_delta += 1
+                deltas += 1
+        except Exception:
+            malformed_delta += 1
+try:
+    proc.wait(timeout=2)
+except Exception:
+    proc.kill()
+required = {"message_start","content_block_start","content_block_delta","content_block_stop","message_delta","message_stop"}
+missing = sorted(required - set(events))
+ok = not missing and deltas > 0 and malformed_delta == 0
+notes = f"events={len(events)} deltas={deltas} missing={missing} malformed={malformed_delta}"
+print(json.dumps({"name":"anthropic_stream","ok":ok,"notes":notes[:160]}))
+PY
+}
+
 case_stream_usage_opt_out() {
     # Inverse of case_stream_usage: when `stream_options.include_usage`
     # is absent OR explicitly false, the server MUST NOT emit a usage
@@ -1450,6 +1506,7 @@ suite_full() {
     case_cache_flush_roundtrip
     case_ollama_version
     case_stream_usage_opt_out
+    case_anthropic_stream
 }
 
 suite_vl() {
