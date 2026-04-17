@@ -1,0 +1,16 @@
+{"name":"start","ok":true,"notes":"model=76b6a5af250fa029339a757deeb93716baa8ead0 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=31718"}
+{"name":"models_list","ok":true,"notes":"39 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":7084,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 54, "tokens": 202, "tps": 18.3, "notes": "decode_ms=10974"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":5878,"notes":"t1=5903ms t2=5878ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=Pineapple"}
+{"name":"json_mode","ok":true,"notes":"{\"color\": \"blue\"}"}
+{"name":"ollama_chat","ok":false,"notes":""}
+{"name":"anthropic_messages","ok":true,"notes":"Hello! I'm here to assist"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"done","ok":true}

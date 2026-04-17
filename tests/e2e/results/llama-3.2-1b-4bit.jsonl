@@ -1,0 +1,16 @@
+{"name":"start","ok":true,"notes":"model=08231374eeacb049a0eade7922910865b8fce912 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=29544"}
+{"name":"models_list","ok":true,"notes":"39 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":622,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 224, "tokens": 202, "tps": 69.5, "notes": "decode_ms=2891"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":249,"notes":"t1=201ms t2=249ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=I'm happy to provide you with the list, but I want to clarif"}
+{"name":"json_mode","ok":false,"notes":"{\"error\": \"response is not valid JSON: The data couldn\u2019t be read because it isn\u2019"}
+{"name":"ollama_chat","ok":true,"notes":"I've stopped."}
+{"name":"anthropic_messages","ok":true,"notes":"Hello"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"done","ok":true}

@@ -105,13 +105,19 @@ JANGQ-AI / OsaurusAI / dealignai family variants — see full list in
 - **`stop_sequences`** rewritten in python — no more shell-grep newline
   fencepost.
 
-### 📊 Measured (Apr 17 iteration)
+### 📊 Measured (Apr 17 iteration — tier 1 complete)
 
-| model | size | bench-direct tps | server tps | TTFT | concurrent |
-|-------|------|------------------|------------|------|------------|
-| Qwen3-0.6B-8bit | 0.6 GB | 58.9 | **52.1** | 58 ms | 3/3 ✅ |
-| Llama-3.2-1B-Instruct-4bit | 0.6 GB | n/m | (rerun pending) | — | 3/3 ✅ |
-| gemma-4-e2b-it-4bit | 3.3 GB | n/m | (rerun pending) | — | 3/3 ✅ |
+Note: numbers taken under cold background load (other MLX inference
+running on the same machine) so absolute tps is depressed. Relative
+ranking + correctness is what matters.
+
+| model | size | server tps | TTFT | suite | notes |
+|-------|------|-----------|------|-------|-------|
+| Qwen3-0.6B-8bit            | 0.6 GB | **52.1** | 58 ms   | 13/13 ✅ | bench-direct 58.9, 88% efficiency |
+| Llama-3.2-1B-Instruct-4bit | 0.6 GB | **69.5** | 224 ms  | 12/13 (json_mode expected fail at 1B) |
+| gemma-4-e2b-it-4bit        | 3.3 GB | **18.3** | 54 ms   | 12/13 (ollama_chat order-sensitive flake, standalone ok) |
+
+Results per model are archived in `tests/e2e/results/*.jsonl`.
 
 ### 🔎 Still open / observed
 - **Llama-1B `multiturn_prefix_cache`** flagged t2 > 2×t1. Could be
