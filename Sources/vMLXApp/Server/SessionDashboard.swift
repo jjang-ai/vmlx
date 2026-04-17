@@ -208,7 +208,11 @@ struct SessionDashboard: View {
     private func createSession(for url: URL) async {
         let id = UUID()
         var settings = SessionSettings(modelPath: url)
-        settings.displayName = url.lastPathComponent
+        // Friendly display name walks up the path past HF cache-internal
+        // segments (`snapshots`, commit SHAs) and `models--org--name`
+        // wrappers. Prevents brand-new sessions from pointing at a HF
+        // snapshot dir and showing a 40-char hex hash as the card title.
+        settings.displayName = SessionHeuristics.displayName(url)
         // Instantiate a dedicated Engine for this session and select it so
         // `app.engine` resolves to the new one for subsequent calls.
         let sessionEngine = app.engine(for: id)
@@ -217,7 +221,7 @@ struct SessionDashboard: View {
         settings = await sessionEngine.applySessionSettings(id, settings)
         let session = Session(
             id: id,
-            displayName: settings.displayName ?? url.lastPathComponent,
+            displayName: settings.displayName ?? SessionHeuristics.displayName(url),
             modelPath: url,
             family: detectFamily(url),
             isJANG: detectJANG(url),
@@ -368,16 +372,112 @@ struct SessionDashboard: View {
 /// capability detector (`CapabilityDetector`) is the source of truth
 /// for loading; these are just card decorations.
 enum SessionHeuristics {
+    /// Collect all path segments, starting from the leaf, that look
+    /// like human-readable model identifiers (i.e. NOT a commit SHA or
+    /// cache-internal dir like `snapshots`/`blobs`). Used by both
+    /// `family(...)` and `displayName(...)` so HuggingFace cache paths
+    /// like `~/.cache/huggingface/hub/models--qwen--Qwen3-35B/snapshots/6068dbe.../`
+    /// resolve to `Qwen3-35B` instead of the bare SHA.
+    static func readableSegments(_ url: URL) -> [String] {
+        // Walk leaf → root, skipping segments that are:
+        //   - hex-SHA-like (40 chars all hex) — HF commit snapshots
+        //   - known HF cache-internal names ("snapshots", "blobs", "refs")
+        //   - the `hub` / `huggingface` sentinels
+        //   - empty or "/"
+        var out: [String] = []
+        var cur = url.resolvingSymlinksInPath()
+        let skipNames: Set<String> = [
+            "snapshots", "blobs", "refs", "hub",
+            "huggingface", "cache", ".cache", "MLXModels",
+        ]
+        while cur.path != "/" && !cur.pathComponents.isEmpty {
+            let name = cur.lastPathComponent
+            if name.isEmpty || name == "/" { break }
+            let isHexSha = name.count >= 40
+                && name.count <= 64
+                && name.allSatisfy { $0.isHexDigit }
+            let isCacheInternal = skipNames.contains(name)
+            if !isHexSha && !isCacheInternal {
+                // HuggingFace cache convention: `models--ORG--NAME`
+                // with a DOUBLE-hyphen separator between the three
+                // fields. The actual model name itself almost always
+                // contains single hyphens (e.g. `Gemma-4-26B-A4B-it-
+                // JANG_2L`), so the earlier `split(separator:"-")`
+                // implementation happily shattered the whole string
+                // and picked the last single-hyphen token — leaving
+                // every HF-cached JANG session titled "JANG_2L" /
+                // "JANG_4M" / "JANG_4S" instead of the full model
+                // name. Split on the literal `--` separator so the
+                // third field survives intact.
+                if name.hasPrefix("models--") {
+                    let parts = name.components(separatedBy: "--")
+                    if let tail = parts.last, !tail.isEmpty {
+                        out.append(tail)
+                    } else {
+                        out.append(name)
+                    }
+                } else {
+                    out.append(name)
+                }
+            }
+            cur = cur.deletingLastPathComponent()
+        }
+        return out
+    }
+
+    /// Preferred display name for a session. Falls back in this order:
+    ///   1. leaf if it looks human-readable
+    ///   2. nearest ancestor that looks human-readable
+    ///   3. the original leaf (so the user at least sees *something*
+    ///      even for pathological paths — better than an empty string)
+    static func displayName(_ url: URL) -> String {
+        let segs = readableSegments(url)
+        if let first = segs.first, !first.isEmpty { return first }
+        return url.lastPathComponent
+    }
+
+    /// Returns the stored name if it's readable, nil otherwise.
+    /// Rejects 40+ hex-char SHAs that slipped through earlier because
+    /// `createSession` used `url.lastPathComponent` which on HF cache
+    /// paths is a commit SHA. Session rows saved before the 2026-04-16
+    /// fix persist those bad names in SQLite — this sanitizer drops
+    /// them so the session shows a fresh human-readable name instead.
+    static func sanitizedStoredName(_ name: String?) -> String? {
+        guard let n = name, !n.isEmpty else { return nil }
+        // 40-64 hex chars = SHA-like, skip.
+        if n.count >= 40 && n.count <= 64 && n.allSatisfy({ $0.isHexDigit }) {
+            return nil
+        }
+        // Bare quant-suffix names (e.g. "JANG_2L", "JANG_4M", "JANGTQ2")
+        // leaked into SQLite before the `--` splitter bug was fixed
+        // (readableSegments was splitting `models--ORG--Name-...-JANG_2L`
+        // on single hyphens and picking the trailing quant token). Reject
+        // them so the hydrator re-derives the full model name.
+        let upper = n.uppercased()
+        if upper.hasPrefix("JANG_") || upper.hasPrefix("JANGTQ") {
+            return nil
+        }
+        return n
+    }
+
     static func family(_ url: URL) -> String {
-        let n = url.lastPathComponent.lowercased()
-        for f in ["qwen", "mistral", "gemma", "llama", "glm", "nemotron", "minimax", "deepseek"] {
-            if n.contains(f) { return f }
+        // Scan readable segments, not just the leaf. Otherwise a path like
+        // `.../Qwen3-35B/snapshots/6068dbe…` would miss the `qwen` match
+        // and return the generic `"model"` fallback.
+        let candidates = readableSegments(url).map { $0.lowercased() }
+        for n in candidates {
+            for f in ["qwen", "mistral", "gemma", "llama", "glm",
+                      "nemotron", "minimax", "deepseek", "phi",
+                      "kimi", "granite", "jamba", "olmo", "lfm",
+                      "baichuan", "mimo", "bailing"] {
+                if n.contains(f) { return f }
+            }
         }
         return "model"
     }
     static func isJANG(_ url: URL) -> Bool {
-        let n = url.lastPathComponent.lowercased()
-        return n.contains("jang") || n.contains("mlxq")
+        let candidates = readableSegments(url).map { $0.lowercased() }
+        return candidates.contains { $0.contains("jang") || $0.contains("mlxq") }
     }
     /// JANGTQ-format bundle. The engine flips the authoritative
     /// `isMXTQ` at load time via `jang_config.weight_format == "mxtq"`,
@@ -388,8 +488,8 @@ enum SessionHeuristics {
     /// silently dropped the badge on folders using the `"jangtq"`
     /// naming convention (which is what `jang_tools` actually writes).
     static func isMXTQ(_ url: URL) -> Bool {
-        let n = url.lastPathComponent.lowercased()
-        return n.contains("mxtq") || n.contains("jangtq")
+        let candidates = readableSegments(url).map { $0.lowercased() }
+        return candidates.contains { $0.contains("mxtq") || $0.contains("jangtq") }
     }
 }
 
