@@ -223,6 +223,152 @@ case_concurrent() {
     emit "{\"name\":\"concurrent\",\"ok\":$ok,\"notes\":\"$success/3 succeeded\"}"
 }
 
+case_concurrent_burst() {
+    # 5-request stress burst. The 3-way `concurrent` case is too shallow —
+    # at that width the FIFO lock never contends enough to expose subtle
+    # drain/release races. Widen to 5 simultaneous streams to stress
+    # GenerationLock + MLX-drain + continuation lifecycle harder.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local pids=()
+    local outs=()
+    for i in 1 2 3 4 5; do
+        local tmp="/tmp/vmlx-burst-$i.json"
+        curl -s -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
+            -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Count to $i.\"}],\"max_tokens\":12,\"temperature\":0}" \
+            > "$tmp" &
+        pids+=($!)
+        outs+=("$tmp")
+    done
+    for pid in "${pids[@]}"; do wait "$pid"; done
+    local success=0
+    for out in "${outs[@]}"; do
+        local c=$(cat "$out" | extract_content)
+        [ -n "$c" ] && success=$((success+1))
+    done
+    # Server alive check — if it aborted mid-burst, /v1/models 404s.
+    local alive_http=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$BASE/v1/models")
+    local ok=false
+    [ "$success" = "5" ] && [ "$alive_http" = "200" ] && ok=true
+    emit "{\"name\":\"concurrent_burst\",\"ok\":$ok,\"notes\":\"$success/5 ok; alive=$alive_http\"}"
+}
+
+case_cancel_midstream() {
+    # Open a long-running stream, kill the curl connection mid-way, then
+    # fire a follow-up chat request and verify the server is still
+    # responsive (didn't deadlock on a held GenerationLock, didn't hang
+    # on a pending continuation). Python because bash backgrounded
+    # `curl` fights the timeout flag.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess, time, sys, os, signal
+body = {
+    "model": "$model_id",
+    "messages": [{"role":"user","content":"Write a very long story with many details."}],
+    "max_tokens": 500,
+    "stream": True,
+    "temperature": 0,
+}
+# Start streaming
+p = subprocess.Popen(
+    ["curl","-sN","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    stdout=subprocess.PIPE, text=True, preexec_fn=os.setsid)
+# Read at least a few chunks to confirm the stream is actually live
+tok = 0
+for line in p.stdout:
+    if line.startswith("data:") and line.strip() != "data: [DONE]":
+        tok += 1
+        if tok >= 3: break
+started = tok >= 3
+# Abort hard — simulates the UI clicking stop / client disconnect
+os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+try: p.wait(timeout=3)
+except Exception: os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+
+# Give the server a beat to release the lock + clean up
+time.sleep(0.5)
+
+# Follow-up request to prove the server didn't deadlock on the
+# abandoned stream. If the GenerationLock wasn't released, this
+# request will hang — set an explicit 20s timeout.
+followup = subprocess.run(
+    ["curl","-s","--max-time","20","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json",
+     "-d", json.dumps({
+         "model":"$model_id",
+         "messages":[{"role":"user","content":"Ping."}],
+         "max_tokens":4,"temperature":0,
+     })],
+    capture_output=True, text=True)
+resp_ok = False
+try:
+    d = json.loads(followup.stdout)
+    resp_ok = bool(d.get("choices",[{}])[0].get("message",{}).get("content"))
+except Exception:
+    pass
+
+ok = "true" if (started and resp_ok) else "false"
+note = f"stream_started={started} followup_ok={resp_ok}"
+print(json.dumps({"name":"cancel_midstream","ok": ok == "true","notes": note}))
+PY
+}
+
+case_tool_call() {
+    # Models that ship a tool parser (Qwen3/qwen family) should emit a
+    # `tool_calls[]` array when the user asks something the provided
+    # function can answer. Not all models comply (Llama-1B in particular
+    # often ignores the tool schema), so this is opt-in — run only when
+    # the first model in `/v1/models` is a plausible tool-capable family.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local body
+    body=$(cat <<JSON
+{
+  "model": "$model_id",
+  "messages": [{"role":"user","content":"What's the weather in Paris? Use the tool."}],
+  "max_tokens": 80,
+  "temperature": 0,
+  "tools": [{
+    "type": "function",
+    "function": {
+      "name": "get_weather",
+      "description": "Get current weather for a city",
+      "parameters": {
+        "type": "object",
+        "properties": {"city": {"type":"string"}},
+        "required": ["city"]
+      }
+    }
+  }],
+  "tool_choice": "auto"
+}
+JSON
+)
+    local resp_file="/tmp/vmlx-tool-call.json"
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body" > "$resp_file"
+    # Pass the response via a file path (not string interpolation) so
+    # quotes/newlines/backslashes inside the JSON body don't break the
+    # heredoc.
+    RESP_FILE="$resp_file" python3 <<'PY'
+import json, os, sys
+try:
+    with open(os.environ["RESP_FILE"]) as f:
+        r = json.load(f)
+    ch = r.get("choices",[{}])[0]
+    msg = ch.get("message",{})
+    tc = msg.get("tool_calls") or []
+    text = msg.get("content") or ""
+    finish = ch.get("finish_reason","?")
+    ok = "true" if (len(tc) >= 1 and tc[0].get("function",{}).get("name")=="get_weather") else "false"
+    print(json.dumps({
+        "name":"tool_call","ok":ok=="true",
+        "notes":f"finish={finish} tc={len(tc)} content={text[:60]}"
+    }))
+except Exception as e:
+    print(json.dumps({"name":"tool_call","ok":False,"notes":f"parse-error: {e}"}))
+PY
+}
+
 case_stop_sequences() {
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp
@@ -387,6 +533,9 @@ suite_full() {
     case_ollama_chat
     case_anthropic_messages
     case_concurrent
+    case_concurrent_burst
+    case_cancel_midstream
+    case_tool_call
 }
 
 suite_vl() {
