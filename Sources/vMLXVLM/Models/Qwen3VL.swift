@@ -1766,18 +1766,23 @@ extension Qwen3VL {
 public struct Qwen3VLMessageGenerator: MessageGenerator {
     public init() {}
 
+    // Emit content as a plain STRING rather than a list of
+    // `{type:"image"|"video"|"text"}` parts. The upstream swift-jinja
+    // renderer has a bug in the list-of-parts branch of the Qwen chat
+    // template: on multi-turn inputs, the `{type:"image"}` dict
+    // renders to the literal substring `[image]` instead of the
+    // expected `<|vision_start|><|image_pad|><|vision_end|>` triple,
+    // leaving `QwenVL.replacePaddingTokens` with zero placeholder
+    // matches and throwing 500 on every request after T1. Callers
+    // (`Engine.normalizeMessagesForVLM` / `buildChatMessages`) already
+    // prepend the family-appropriate vision triple to the text
+    // content when images are present, so the string path renders
+    // correctly and deterministically for every turn. Live-confirmed
+    // 2026-04-16 on Qwen3.6-35B-A3B-JANGTQ2 (3-turn image+text+text).
     public func generate(message: Chat.Message) -> vMLXLMCommon.Message {
-        let imageContent = message.images.map { _ in
-            ["type": "image"]
-        }
-        let textContent = [["type": "text", "text": message.content]]
-        let videoContent = message.videos.map { _ in
-            ["type": "video"]
-        }
-
-        return [
+        [
             "role": message.role.rawValue,
-            "content": imageContent + videoContent + textContent,
+            "content": message.content,
         ]
     }
 }

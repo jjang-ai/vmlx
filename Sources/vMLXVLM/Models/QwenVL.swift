@@ -171,8 +171,16 @@ public struct QwenVL {
             text: "<|vision_start|>\(paddingToken)<|vision_end|>")
         let placeholderRanges = promptTokens.ranges(of: placeholderTokens)
         guard placeholderRanges.count == frames.count else {
+            // Actionable diagnostic: the bare "count mismatch" error was a
+            // dead-end for multi-turn VL debugging. Surface both counts
+            // plus the first 40 tokens of decoded prompt so future repros
+            // can tell which side over-/under-counted at a glance.
+            let decoded = tokenizer.decode(tokenIds: Array(promptTokens.prefix(120)))
             throw VLMError.processing(
-                "Number of placeholder tokens does not match number of frames")
+                "Number of placeholder tokens (\(placeholderRanges.count)) "
+              + "does not match number of frames (\(frames.count)). "
+              + "Prompt head: \(decoded.prefix(400))"
+            )
         }
         let mergeLength = mergeSize * mergeSize
         let replacementSequences = frames.map { frame in
