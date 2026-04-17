@@ -132,6 +132,30 @@ tps drop > 30% blocks the run.
 
 All tier-1 models at `verify.sh` pass (green) vs baseline.
 
+## Tier-3 matrix snapshot (iter-29, post-fix)
+
+8 models · 148 pass / 17 fail · **89.7% pass rate**
+
+| model | pass | fail | tps | notable |
+|-------|------|------|-----|---------|
+| qwen3-0.6b-8bit              | 29 | 1 | 343.6 | tool_roundtrip (small-model) |
+| llama-3.2-1b-4bit            | 27 | 3 | 234.3 | json_mode + tool_call (small-model) |
+| gemma-4-e2b-it-4bit          | 28 | 2 | 40.0  | tool_call + tool_roundtrip |
+| qwen3-embedding-0.6b         | **6** | **0** | — | ✅ **iter-23 fix confirmed** (was 5/1 dim=0) |
+| gemma-4-e4b-it-4bit          | 28 | 2 | 30.3  | tool_call + tool_roundtrip |
+| **qwen3.5-vl-4b-jang-4s**    | **10** | **0** | 42.0  | ✅ **iter-25 fix confirmed** (was 8/1 concurrent) |
+| qwen3.5-vl-9b-jang-4s        | 8  | 2 | 26.3  | concurrent 1/3 + server died (`Completed handler provided after commit`) — **different** Metal class, see Open #6 |
+| nemotron-30b-a3b-jang2l      | 23 | 7 | 39.6  | concurrent 3/3 ✅, burst 5/5 ✅, hybrid SSM+MoE stable. Fails are quant-aggressive reasoning leaks ("We need to respond" as content) — JANG_2L behavior, not engine. `cache_stats` keys include `ssmCompanion` (hybrid companion cache populated). |
+
+### Live-verified closures
+- ✅ Deferred #4 (VL concurrent Metal crash on Qwen3.5-VL-4B): iter-25 fix holds, 0 crashes.
+- ✅ Embedding server via `--embedding-model` alone: iter-23 fix holds, 6/6.
+- ✅ Llama-3.2 silver-tier tool parser detection: iter-22 `ipython` marker works.
+- ✅ Deterministic warm-stable: iter-20 r2==r3 contract passes on all qwen/llama/gemma text models.
+
+### New open issues surfaced
+6. **VL-9B `Completed handler provided after commit call`** (iter-29) — **partially mitigated iter-30**: iter-30 added `MLX.Stream.defaultStream(.gpu).synchronize()` after the VL-race eval barrier. Repro test (2 consecutive full VL suites) shows: first run clean (10/10, concurrent 3/3, server alive); second run concurrent 1/3 with silent server death (no Metal signature in log — process died without a visible assertion). Different failure mode than the original assertion — likely Metal memory-system / OOM under repeated concurrent vision-encoder dispatch rather than the encoder-coalescing class. Further investigation needed. Killswitch `VMLX_DISABLE_VL_RACE_BARRIER=1` disables iter-25+iter-30 barrier.
+
 ## Known Swift-vendor drift
 
 - Logprobs endpoint returns 400 `"not yet supported by the vMLX Swift engine"` — intentional, tracked as a docstring'd unimplemented feature rather than a bug.
