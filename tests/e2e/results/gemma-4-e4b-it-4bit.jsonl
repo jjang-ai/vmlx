@@ -1,0 +1,18 @@
+{"name": "models_list", "ok": true, "notes": "39 model(s) in picker"}
+{"name": "basic_chat", "ok": true, "ttft_ms": 8399, "tokens": 1}
+{"name": "sse_stream", "ok": true, "ttft_ms": 103, "tokens": 192, "tps": 8.6}
+{"name": "metrics_endpoint", "ok": true}
+{"name": "ollama_tags", "ok": true}
+{"name": "max_tokens", "ok": true, "tokens": 4}
+{"name": "multiturn_prefix_cache", "ok": true, "notes": "t1=7278ms t2=7821ms"}
+{"name": "stop_sequences", "ok": true}
+{"name": "json_mode", "ok": true}
+{"name": "ollama_chat", "ok": true}
+{"name": "anthropic_messages", "ok": true}
+{"name": "concurrent", "ok": true, "notes": "3/3"}
+{"name": "concurrent_burst", "ok": true, "notes": "5/5 ok; alive=200"}
+{"name": "cancel_midstream", "ok": true}
+{"name": "tool_call", "ok": false, "notes": "Gemma-e4b model limit"}
+{"name": "tool_roundtrip", "ok": false, "notes": "no tool_calls emitted"}
+{"name": "stream_usage", "ok": true, "notes": "completion_tokens=7 prefill_ms=220"}
+{"name": "large_context", "ok": true, "notes": "5819 tokens; Line 137 is 137"}
