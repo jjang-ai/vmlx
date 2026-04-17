@@ -92,6 +92,7 @@ extension Engine {
                 // queue and drain in arrival order, so users see latency
                 // under load but never a server crash.
                 await self.generationLock.acquire()
+                var wasCancelled = false
                 do {
                     try await self.performStreamingGeneration(
                         request: request,
@@ -99,6 +100,7 @@ extension Engine {
                     )
                     continuation.finish()
                 } catch is CancellationError {
+                    wasCancelled = true
                     continuation.finish()
                 } catch {
                     await self.log(.error, "engine", "stream failed: \(error)")
@@ -137,7 +139,19 @@ extension Engine {
                 // `tryCoalescingPreviousComputeCommandEncoder: A
                 // command encoder is already encoding to this command
                 // buffer`.
-                MLX.eval(MLX.MLXArray(Int32(0)))
+                //
+                // SKIP the eval barrier on CancellationError paths —
+                // the just-interrupted gen left a pending completion
+                // handler on an in-flight buffer that our fresh eval
+                // then collides with, tripping
+                // `addCompletedHandler: Completed handler provided
+                // after commit call`. Reproduced intermittently (~1/2
+                // runs) on `case_cancel_midstream`. Under cancel we
+                // rely on synchronize() alone — which waits for the
+                // pending commit to drain without scheduling new work.
+                if !wasCancelled {
+                    MLX.eval(MLX.MLXArray(Int32(0)))
+                }
                 MLX.Stream.defaultStream(.gpu).synchronize()
                 MLX.Stream.defaultStream(.cpu).synchronize()
                 // Release synchronously (not via a detached Task) so the
