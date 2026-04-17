@@ -1,0 +1,38 @@
+{"name":"start","ok":true,"notes":"model=11de96878523501bcaa86104e3c186de07ff9068 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=20413"}
+{"name":"models_list","ok":true,"notes":"40 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":150,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 13, "tokens": 202, "tps": 118.7, "notes": "decode_ms=1694"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"health_endpoint","ok":true,"notes":"HTTP 200"}
+<stdin>:3: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name": "cache_stats", "ok": true, "notes": "keys=['memory', 'isHybrid', 'paged', 'prefixCache']"}
+{"name":"gateway_info","ok":true,"notes":"HTTP 404 (404 expected in single-serve mode)"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":146,"notes":"t1=112ms t2=146ms"}
+{"name": "prefix_cache_hit_ratio", "ok": true, "notes": "t1 cached=0 prefill=66ms  t2 cached=256 prefill=18ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=1. Apple  "}
+{"name":"json_mode","ok":true,"notes":"{\"color\": \"blue\"}"}
+{"name":"ollama_chat","ok":true,"notes":"Hi! Have a great day!"}
+{"name":"anthropic_messages","ok":true,"notes":"Hello! How can I assist you today"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"concurrent_burst","ok":true,"notes":"5/5 ok; alive=200"}
+{"name": "cancel_midstream", "ok": true, "notes": "stream_started=True followup_ok=True"}
+{"name": "tool_call", "ok": true, "notes": "finish=tool_calls tc=2 content="}
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    model_id = os.environ["MID"]
+               ~~~~~~~~~~^^^^^^^
+  File "<frozen os>", line 709, in __getitem__
+KeyError: 'MID'
+{"name": "tool_roundtrip", "ok": false, "notes": "has_42=False finish=? c="}
+{"name": "stream_usage", "ok": true, "notes": "usage={'completion_tokens': 7, 'prefill_ms': 17.15695858001709, 'prompt_tokens':"}
+{"name": "deterministic", "ok": false, "notes": "DRIFT r1='The three primary colors in order are **red, blue,'"}
+{"name": "logprobs", "ok": true, "notes": "HTTP 400 not-yet-supported (documented)"}
+{"name":"input_validation","ok":true,"notes":"6/6: invJSON=400 noMessages=400 emptyMessages=400 negMax=400 wildTemp=400 badRole=400"}
+{"name":"sleep_wake_cycle","ok":true,"notes":"soft=200 chat1='Hello! How can' deep=200 wake=200 chat2='Bye. Have'"}
+{"name": "reasoning_content", "ok": true, "notes": "reasoning=0 content=127 leak=False"}
+{"name": "large_context", "ok": true, "notes": "prompt_tok=5409 elapsed=6632ms c=Based on the pattern provided, each line"}
+{"name":"done","ok":true}
