@@ -8,6 +8,8 @@ Package.resolved
 # Xcode build artifacts
 build/
 DerivedData/
+# scripts/build-release.sh writes archives, DMGs, and notarization zips here
+release/
 
 # xcodegen output (committed only when regenerated)
 vMLX.xcodeproj/
