@@ -61,7 +61,11 @@ cat > "$EXPORT_PLIST" <<EOF
 </plist>
 EOF
 
-echo "==> [3/6] Archiving (xcodebuild archive)"
+echo "==> [3/6] Archiving (xcodebuild archive) — arm64 only"
+# MLX Swift is Apple-Silicon-only (Metal + arm64 kernels). Forcing
+# `ARCHS=arm64` avoids the x86_64 compile failure that otherwise kills
+# `ONLY_ACTIVE_ARCH=NO` archives on Mac Silicon. All production vMLX
+# users run arm64 hardware.
 xcodebuild archive \
     -project vMLX.xcodeproj \
     -scheme vMLX \
@@ -69,7 +73,9 @@ xcodebuild archive \
     -destination "generic/platform=macOS" \
     -archivePath "$ARCHIVE_PATH" \
     MARKETING_VERSION="$VERSION" \
+    ARCHS=arm64 \
     ONLY_ACTIVE_ARCH=NO \
+    EXCLUDED_ARCHS=x86_64 \
     | xcbeautify 2>/dev/null || true
 
 echo "==> [4/6] Exporting signed .app"

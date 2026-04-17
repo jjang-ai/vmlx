@@ -239,17 +239,26 @@ struct SessionConfigForm: View {
         // per-session; users with external SSDs couldn't redirect the
         // cache off the boot volume.
         if s.enableDiskCache ?? globalDefaults.enableDiskCache {
-            TextField("Disk cache directory (empty = default)", text: Binding(
-                get: { s.diskCacheDir ?? globalDefaults.diskCacheDir },
-                set: { s.diskCacheDir = $0; commit() }
-            ))
-            .textFieldStyle(.roundedBorder)
+            // NOTE: disk cache dir + max-GB are GLOBAL-only knobs because
+            // `setupCacheCoordinator` runs at load-time and reads
+            // `settings.global()`. Per-session overrides for these cannot
+            // take effect without a coordinator re-init, so the UI shows
+            // the global defaults as read-only info. Edit them via Tray →
+            // Server section. Audit 2026-04-16 cleanup.
+            HStack {
+                Text("Disk cache dir: \(globalDefaults.diskCacheDir.isEmpty ? "default" : globalDefaults.diskCacheDir)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             .padding(.leading, 20)
-            ValidatedField(title: "Disk cache max (GB)",
-                           value: doubleBinding(\.diskCacheMaxGB,
-                                                default: globalDefaults.diskCacheMaxGB),
-                           range: 1...1000, step: 1, format: "%.0f GB")
-                .padding(.leading, 20)
+            HStack {
+                Text("Disk cache max: \(Int(globalDefaults.diskCacheMaxGB)) GB")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 20)
         }
         // JANG repack is NOT a user setting — JangLoader auto-detects
         // jang_config.json at load time and activates itself. Showing a

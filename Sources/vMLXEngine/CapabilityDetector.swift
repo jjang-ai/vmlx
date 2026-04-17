@@ -76,6 +76,18 @@ public enum CapabilityDetector {
             isMXTQ: isMXTQ,
             quantBits: quantBits
         ) {
+            // Observability: surface the Tier-1 hit so ops can confirm
+            // jang_config.capabilities actually won. Prior to the 94-bundle
+            // stamp rollout the silver table was the primary source; this
+            // log line makes it easy to spot a stamped model falling
+            // through to silver (would indicate a parse bug).
+            FileHandle.standardError.write(Data((
+                "[vmlx][caps] detection_source=jang_stamped "
+                + "model_type=\(rawModelType) family=\(cap.family) "
+                + "reasoning=\(cap.reasoningParser ?? "nil") "
+                + "tool=\(cap.toolParser ?? "nil") "
+                + "modality=\(cap.modality.rawValue) cache=\(cap.cacheType)\n"
+            ).utf8))
             return cap
         }
 
@@ -114,6 +126,49 @@ public enum CapabilityDetector {
                 chatTemplate: silverChatTemplate(directory: directory),
                 detectionSource: .modelTypeTable
             )
+        }
+
+        // ── Tier 2.5: chat-template sniff ──
+        //
+        // When the model_type is unknown to the silver table (Qwen 3.6
+        // MXFP4 from HF, boutique fine-tunes with custom model_type
+        // strings, community MLX quants of tomorrow's models), we can
+        // still nail the parser family by scanning the chat_template
+        // for tokens unique to each tool-calling convention:
+        //
+        //   `[TOOL_CALLS]`                  → mistral family
+        //   `<|tool_calls_section_begin|>`  → deepseek family
+        //   `<|channel|>analysis`           → gpt_oss (Harmony)
+        //   `<|tool_call>`                  → gemma4
+        //   `<minimax:tool_call>`           → minimax_m2
+        //   `<|python_tag|>`                → llama3/4 Hermes-style
+        //   `<tool_call>`                   → qwen/hermes (fallback)
+        //
+        // Plus the existing unconditional-`<think>` probe for reasoning.
+        // Beats bronze because the evidence is the model's own template
+        // output, not name matching. Saves users from manually passing
+        // `--reasoning-parser`/`--tool-call-parser` on fresh HF pulls.
+        let tokCfgEarly = loadJSON(directory.appendingPathComponent("tokenizer_config.json"))
+            ?? [:]
+        let templateEarly = (tokCfgEarly["chat_template"] as? String) ?? ""
+        if let sniff = detectFromTemplateSniff(
+            chatTemplate: templateEarly,
+            modelType: rawModelType,
+            modality: modality,
+            forceHybrid: forceHybrid,
+            quantBits: quantBits,
+            isJANG: isJANG,
+            isMXTQ: isMXTQ,
+            config: config
+        ) {
+            FileHandle.standardError.write(Data((
+                "[vmlx][caps] detection_source=template_sniff "
+                + "model_type=\(rawModelType) family=\(sniff.family) "
+                + "reasoning=\(sniff.reasoningParser ?? "nil") "
+                + "tool=\(sniff.toolParser ?? "nil") "
+                + "modality=\(sniff.modality.rawValue) cache=\(sniff.cacheType)\n"
+            ).utf8))
+            return sniff
         }
 
         // ── Tier 3: bronze heuristic ──
@@ -336,6 +391,122 @@ public enum CapabilityDetector {
             isMXTQ: isMXTQ,
             chatTemplate: chatTemplate,
             detectionSource: .jangStamped
+        )
+    }
+
+    // MARK: - Tier 2.5: chat-template sniff
+
+    /// Family → `(reasoning, tool, thinkInTemplate, cache)` resolved from
+    /// a chat_template scan alone. Returns nil when we can't find a
+    /// high-confidence family signature — caller falls through to the
+    /// bronze heuristic.
+    ///
+    /// Why this beats bronze: bronze guesses from the `model_type` STRING,
+    /// which is what's in config.json. Brand-new architectures often
+    /// have unrecognized model_type strings but ship well-known chat
+    /// templates (Qwen 3.6 MXFP4 = HF Qwen chat template; third-party
+    /// fine-tune of Mistral 4 = Mistral chat template). Template sniff
+    /// catches those cleanly.
+    ///
+    /// Ordering: the check list is priority-ordered so the MORE SPECIFIC
+    /// token always wins. `[TOOL_CALLS]` is tested before `<tool_call>`
+    /// because Mistral's `[TOOL_CALLS]` is a unique marker, while
+    /// `<tool_call>` is the most generic fallback.
+    private static func detectFromTemplateSniff(
+        chatTemplate: String,
+        modelType: String,
+        modality: ModelCapabilities.Modality,
+        forceHybrid: Bool,
+        quantBits: Int?,
+        isJANG: Bool,
+        isMXTQ: Bool,
+        config: [String: Any]
+    ) -> ModelCapabilities? {
+        guard !chatTemplate.isEmpty else { return nil }
+
+        // Tool parser dispatch — first hit wins.
+        let (toolParser, toolFamily): (String?, String) = {
+            if chatTemplate.contains("[TOOL_CALLS]") {
+                return ("mistral", "mistral")
+            }
+            if chatTemplate.contains("<|tool_calls_section_begin|>")
+                || chatTemplate.contains("<\u{FF5C}tool\u{2581}calls\u{2581}begin\u{FF5C}>")
+            {
+                return ("deepseek", "deepseek")
+            }
+            if chatTemplate.contains("<|channel|>analysis")
+                || chatTemplate.contains("<|channel|>final")
+            {
+                return ("glm47", "gpt_oss")
+            }
+            if chatTemplate.contains("<|tool_call>") {
+                return ("gemma4", "gemma")
+            }
+            if chatTemplate.contains("<minimax:tool_call>") {
+                return ("minimax", "minimax_m2")
+            }
+            if chatTemplate.contains("<|python_tag|>") {
+                return ("llama", "llama")
+            }
+            if chatTemplate.contains("<tool_call>") {
+                // Generic hermes-style. Qwen-family templates also use
+                // this form; we pick "qwen" because it's the larger
+                // HF ecosystem and the parser is equivalent.
+                return ("qwen", "qwen")
+            }
+            return (nil, "")
+        }()
+
+        // Reasoning parser — use unconditional-`<think>` probe.
+        let thinkUnconditional = hasUnconditionalThinkMarker(chatTemplate)
+        let reasoningParser: String? = {
+            if chatTemplate.contains("<|channel|>analysis") { return "openai_gptoss" }
+            if chatTemplate.contains("<\u{FF5C}begin\u{2581}of\u{2581}reasoning\u{FF5C}>") {
+                return "deepseek_r1"
+            }
+            if thinkUnconditional {
+                // Template ALREADY stamps `<think>` — almost certainly
+                // qwen3 or deepseek_r1. When the tool parser is
+                // mistral/minimax the reasoning is still `<think>`-based
+                // (qwen3 is the safest shared parser). When gpt_oss
+                // handled it above we've already returned.
+                if toolFamily == "qwen" || toolFamily == "minimax_m2" {
+                    return "qwen3"
+                }
+                return "deepseek_r1"
+            }
+            return nil
+        }()
+
+        // Need at least one positive signal to claim this tier. If we
+        // can't pick a parser AND there's no think marker, bail out and
+        // let bronze handle it.
+        guard toolParser != nil || reasoningParser != nil else { return nil }
+
+        // Family name: if neither tool nor reasoning contributed, use
+        // the model_type as the best label.
+        let family = toolFamily.isEmpty ? modelType : toolFamily
+
+        let finalCache = resolveCacheType(
+            silverDefault: "kv",
+            forceHybrid: forceHybrid,
+            config: config)
+
+        return ModelCapabilities(
+            family: family,
+            modality: modality,
+            modelType: modelType,
+            reasoningParser: reasoningParser,
+            toolParser: toolParser,
+            thinkInTemplate: thinkUnconditional,
+            cacheType: finalCache,
+            supportsTools: toolParser != nil,
+            supportsThinking: reasoningParser != nil,
+            quantBits: quantBits,
+            isJANG: isJANG,
+            isMXTQ: isMXTQ,
+            chatTemplate: chatTemplate,
+            detectionSource: .templateSniff
         )
     }
 
