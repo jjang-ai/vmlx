@@ -469,9 +469,30 @@ public actor ModelLibrary {
         source: Source,
         config: [String: Any]
     ) -> String {
-        // (1) HF cache layout. We only split on the FIRST `--` after
-        // `models--` so repos with hyphens (`Qwen3.5-VL-307B-A17B`)
-        // don't get mangled into multi-slash paths.
+        // User-owned dirs: the FOLDER NAME is authoritative. The user
+        // chose to name the dir `Qwen3.6-35B-A3B-JANGTQ2` or
+        // `MiniMax-M2.7-JANGTQ-CRACK` — those quant/crack suffixes are
+        // how they tell variants apart in the model list. Reaching
+        // into `config.json._name_or_path` or `jang_config.json`
+        // strips those suffixes (both point at the upstream base name
+        // like `Qwen3.6-35B-A3B`) and makes every variant of the same
+        // base show up as a "duplicate" with identical display name.
+        // Walk up if the leaf is a hash (unlikely for userDir).
+        if case .userDir = source {
+            let last = dir.lastPathComponent
+            if !looksLikeHash(last) && !last.isEmpty {
+                return last
+            }
+            let up = dir.deletingLastPathComponent().lastPathComponent
+            if !up.isEmpty && !looksLikeHash(up) { return up }
+            return last.isEmpty ? dir.path : last
+        }
+
+        // HF cache layout. Split on the FIRST `--` after `models--`
+        // so repos with hyphens (`Qwen3.5-VL-307B-A17B`) don't get
+        // mangled. For HF paths we keep the original 3-field
+        // resolution because `snapshots/<SHA>/` is NOT a usable
+        // display name.
         let parent = dir.deletingLastPathComponent()        // snapshots/
         let modelDir = parent.deletingLastPathComponent()   // models--org--repo
         let name = modelDir.lastPathComponent
@@ -486,24 +507,20 @@ public actor ModelLibrary {
             }
         }
 
-        // (2) config.json _name_or_path
+        // HF non-standard layout fallbacks (snapshot-hash leaf or
+        // user-added HF-like dirs). Prefer structured metadata over
+        // the path because path info here is a hash.
         if let np = config["_name_or_path"] as? String,
            !np.isEmpty, !np.hasPrefix("/"), !looksLikeHash(np)
         {
             return np
         }
-        // (3) jang_config.json model_name
         if let jc = config["jang_config"] as? [String: Any],
            let mn = jc["model_name"] as? String,
            !mn.isEmpty, !looksLikeHash(mn)
         {
             return mn
         }
-        // (3b) sibling jang_config.json with nested source_model.name.
-        // Modern JANG packs keep jang_config.json as a separate file
-        // next to config.json; the repack metadata lives in
-        // `source_model.name` (e.g. "mlx-community/Qwen3.5-VL-307B-A17B").
-        // Audit #246 A4 (2026-04-15).
         let jangURL = dir.appendingPathComponent("jang_config.json")
         if let jdata = try? Data(contentsOf: jangURL),
            let jobj = try? JSONSerialization.jsonObject(with: jdata) as? [String: Any]
@@ -521,7 +538,6 @@ public actor ModelLibrary {
             }
         }
 
-        // (4) bare snapshot-hash dir — walk up one.
         let last = dir.lastPathComponent
         if looksLikeHash(last) {
             let up = parent.lastPathComponent
@@ -534,7 +550,6 @@ public actor ModelLibrary {
             }
         }
 
-        _ = source
         return last
     }
 
