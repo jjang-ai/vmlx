@@ -98,6 +98,7 @@ HELPER FUNCTIONS
 """
 
 import logging
+import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -1040,6 +1041,28 @@ class MLLMBatchGenerator:
             and len(self._hybrid_kv_positions) < self._hybrid_num_layers
         )
 
+        # Opt-in: enable chunked prefill for hybrid SSM models on text-only
+        # requests. Default OFF preserves the conservative single-shot path.
+        # When enabled, long text-only prompts (>~34K tokens) avoid the Metal
+        # single-buffer OOM from full-sequence attention scores:
+        #   (1, num_heads, seq_len, seq_len) * 2 bytes exceeds 72 GB at
+        #   seq_len >~ 34K on M3 Max 128 GB (72 GB = Metal's per-buffer cap).
+        # Verified safe for Qwen3.5 (GatedDeltaNet + attention): its
+        # create_attention_mask / create_ssm_mask in mlx_lm are cache-aware
+        # and produce correct masks for any chunk size, and both KVCache and
+        # ArraysCache carry state across chunks via mx.eval() at each step.
+        # Other hybrid architectures are not verified — hence opt-in.
+        self._allow_hybrid_chunked_prefill: bool = os.environ.get(
+            "VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", "0"
+        ).lower() in ("1", "true", "yes", "on")
+        if self._is_hybrid and self._allow_hybrid_chunked_prefill:
+            logger.info(
+                "MLLMBatchGenerator: VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 — "
+                "chunked prefill enabled for this hybrid SSM model on "
+                "text-only requests. Verified safe for Qwen3.5; other hybrid "
+                "architectures are unverified."
+            )
+
         # Vision embedding cache for repeated images
         self.vision_cache = VisionEmbeddingCache(
             max_pixel_entries=vision_cache_size,
@@ -1424,8 +1447,13 @@ class MLLMBatchGenerator:
         # The VLM wrapper adds overhead from vision encoder path and some VLM
         # wrappers (e.g. Gemma 4 loaded via smelt) may not accept pixel_values.
         # Using language_model directly avoids this entirely.
-        # Hybrid SSM models must go through the full model for correct mask computation.
-        if not has_images and not self._is_hybrid:
+        # Hybrid SSM models default to the full model for correct mask computation.
+        # Users with known-safe hybrid models (e.g. Qwen3.5) can opt in via
+        # VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 — see __init__ for details.
+        _skip_hybrid_chunked = (
+            self._is_hybrid and not self._allow_hybrid_chunked_prefill
+        )
+        if not has_images and not _skip_hybrid_chunked:
             lm = getattr(self.model, 'language_model', None)
             if lm is not None and cache is not None:
                 if seq_len <= self.prefill_step_size * 2:
@@ -1438,10 +1466,12 @@ class MLLMBatchGenerator:
 
         # Chunked prefill for text-only VLM requests with long prompts.
         # Image requests must run in one shot (vision encoder needs full sequence).
-        # Hybrid SSM models (GatedDeltaNet/Mamba + attention) must run in one shot
+        # Hybrid SSM models (GatedDeltaNet/Mamba + attention) default to single-shot
         # because the language_model's forward pass computes masks from specific
-        # cache positions (fa_idx/ssm_idx) that assume full-sequence processing.
-        if not has_images and seq_len > self.prefill_step_size * 2 and not self._is_hybrid:
+        # cache positions (fa_idx/ssm_idx) — verified safe to chunk for Qwen3.5
+        # (cache-aware mask creation) but not universally verified.
+        # Opt in via VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 — see __init__ for details.
+        if not has_images and seq_len > self.prefill_step_size * 2 and not _skip_hybrid_chunked:
             # Use language_model directly for chunked text prefill
             lm = getattr(self.model, 'language_model', None)
             if lm is not None and cache is not None:
