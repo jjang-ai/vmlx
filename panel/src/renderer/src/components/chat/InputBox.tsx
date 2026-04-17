@@ -1,16 +1,24 @@
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
-import { Paperclip, Send, Square, ImagePlus, X } from 'lucide-react'
+import { Paperclip, Send, Square, ImagePlus, X, Film } from 'lucide-react'
 import { VoiceChat } from './VoiceChat'
 
-export interface ImageAttachment {
+export type AttachmentKind = 'image' | 'video'
+
+export interface MediaAttachment {
   id: string
+  kind: AttachmentKind
   dataUrl: string
   name: string
   type: string
+  size: number
 }
 
+// Back-compat alias — older callers imported ImageAttachment when it was
+// image-only. Keep the name exported so existing imports don't break.
+export type ImageAttachment = MediaAttachment
+
 interface InputBoxProps {
-  onSend: (message: string, attachments?: ImageAttachment[]) => void
+  onSend: (message: string, attachments?: MediaAttachment[]) => void
   onAbort?: () => void
   disabled?: boolean
   loading?: boolean
@@ -18,9 +26,27 @@ interface InputBoxProps {
   sessionId?: string
 }
 
+// Caps: images up to 10 MB, videos up to 100 MB (engine extracts frames
+// smartly via OpenCV, so no reason to block reasonable clips locally).
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024
+const VIDEO_MAX_BYTES = 100 * 1024 * 1024
+
+const ACCEPTED_IMAGE_TYPES = 'image/png,image/jpeg,image/gif,image/webp'
+const ACCEPTED_VIDEO_TYPES = 'video/mp4,video/webm,video/quicktime,video/x-m4v'
+
+function kindForFile(f: File): AttachmentKind | null {
+  if (f.type.startsWith('image/')) return 'image'
+  if (f.type.startsWith('video/')) return 'video'
+  return null
+}
+
+function sizeLimitForKind(kind: AttachmentKind): number {
+  return kind === 'video' ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES
+}
+
 export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, sessionId }: InputBoxProps) {
   const [message, setMessage] = useState('')
-  const [attachments, setAttachments] = useState<ImageAttachment[]>([])
+  const [attachments, setAttachments] = useState<MediaAttachment[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -63,17 +89,22 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
   }
 
   const addFiles = useCallback((files: FileList | File[]) => {
-    const imageFiles = Array.from(files).filter(f =>
-      f.type.startsWith('image/') && f.size <= 10 * 1024 * 1024
-    )
-    for (const file of imageFiles) {
+    for (const file of Array.from(files)) {
+      const kind = kindForFile(file)
+      if (kind === null) continue
+      if (file.size > sizeLimitForKind(kind)) {
+        console.warn(`[InputBox] Skipping ${file.name}: ${file.size} bytes exceeds ${kind} limit`)
+        continue
+      }
       const reader = new FileReader()
       reader.onload = () => {
         setAttachments(prev => [...prev, {
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          kind,
           dataUrl: reader.result as string,
           name: file.name,
-          type: file.type
+          type: file.type,
+          size: file.size,
         }])
       }
       reader.onerror = () => {
@@ -86,10 +117,14 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
   const handlePaste = useCallback((e: ClipboardEvent) => {
     const items = e.clipboardData?.items
     if (!items) return
-    const imageItems = Array.from(items).filter(i => i.type.startsWith('image/'))
-    if (imageItems.length === 0) return
+    // Clipboard paste accepts images and videos. Most OSes only paste image
+    // data from clipboard; videos typically come via drop or picker.
+    const mediaItems = Array.from(items).filter(i =>
+      i.type.startsWith('image/') || i.type.startsWith('video/')
+    )
+    if (mediaItems.length === 0) return
     e.preventDefault()
-    const files = imageItems.map(item => item.getAsFile()).filter(Boolean) as File[]
+    const files = mediaItems.map(item => item.getAsFile()).filter(Boolean) as File[]
     addFiles(files)
   }, [addFiles])
 
@@ -133,7 +168,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 border-2 border-dashed border-primary/40 rounded-lg m-1 pointer-events-none">
           <div className="flex flex-col items-center gap-1 text-primary">
             <ImagePlus className="h-6 w-6" />
-            <span className="text-xs font-medium">Drop image to attach</span>
+            <span className="text-xs font-medium">Drop image or video to attach</span>
           </div>
         </div>
       )}
@@ -142,11 +177,25 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <div className="flex gap-2 mb-3 flex-wrap">
           {attachments.map(att => (
             <div key={att.id} className="relative group">
-              <img
-                src={att.dataUrl}
-                alt={att.name}
-                className="h-20 w-20 object-cover rounded-lg border border-border"
-              />
+              {att.kind === 'video' ? (
+                <div className="h-20 w-20 rounded-lg border border-border bg-black flex items-center justify-center overflow-hidden">
+                  <video
+                    src={att.dataUrl}
+                    className="h-full w-full object-cover"
+                    muted
+                    preload="metadata"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <Film className="h-6 w-6 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
+                  </div>
+                </div>
+              ) : (
+                <img
+                  src={att.dataUrl}
+                  alt={att.name}
+                  className="h-20 w-20 object-cover rounded-lg border border-border"
+                />
+              )}
               <button
                 onClick={() => removeAttachment(att.id)}
                 className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
@@ -165,7 +214,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
+          accept={`${ACCEPTED_IMAGE_TYPES},${ACCEPTED_VIDEO_TYPES}`}
           multiple
           className="hidden"
           onChange={(e) => { if (e.target.files) addFiles(e.target.files) }}
@@ -175,7 +224,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled && !loading}
             className="p-2 rounded-lg hover:bg-accent disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
-            title="Attach image"
+            title="Attach image or video"
           >
             <Paperclip className="h-4 w-4" />
           </button>

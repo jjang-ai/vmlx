@@ -57,7 +57,12 @@ export function calcTextareaHeight(
  *  Returns null if not a valid content array. */
 export function parseContentArray(
   content: string,
-): Array<{ type: string; text?: string; image_url?: { url: string } }> | null {
+): Array<{
+  type: string;
+  text?: string;
+  image_url?: { url: string };
+  video_url?: { url: string };
+}> | null {
   if (!content.startsWith("[")) return null;
   try {
     const parsed = JSON.parse(content);

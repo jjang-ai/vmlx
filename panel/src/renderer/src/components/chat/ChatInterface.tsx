@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Sparkles, Loader2 } from 'lucide-react'
 import { MessageList } from './MessageList'
-import { InputBox, ImageAttachment } from './InputBox'
+import { InputBox, MediaAttachment } from './InputBox'
 import { useToast } from '../Toast'
 
 interface MessageMetrics {
@@ -304,7 +304,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     setAskUserQuestion(null)
   }
 
-  const handleSend = async (content: string, attachments?: ImageAttachment[]) => {
+  const handleSend = async (content: string, attachments?: MediaAttachment[]) => {
     if (!chatId || (!content.trim() && (!attachments || attachments.length === 0))) return
 
     // Guard: don't send if model isn't running (prevents fallback to wrong endpoint)
@@ -317,11 +317,17 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     setStreamingMessageId(null)
     setCurrentMetrics(null)
 
-    // Build display content for user message: if images attached, store as JSON content array
+    // Build display content for user message: if attachments present, store as JSON content array.
+    // Images use image_url; videos use video_url — the engine's extract_multimodal_content()
+    // parses both and routes each to the appropriate processor (vision tower for images,
+    // OpenCV frame-sampler then vision tower for videos).
     const displayContent = attachments && attachments.length > 0
       ? JSON.stringify([
         ...(content.trim() ? [{ type: 'text', text: content }] : []),
-        ...attachments.map(a => ({ type: 'image_url', image_url: { url: a.dataUrl } })),
+        ...attachments.map(a => a.kind === 'video'
+          ? { type: 'video_url', video_url: { url: a.dataUrl } }
+          : { type: 'image_url', image_url: { url: a.dataUrl } }
+        ),
       ])
       : content
 
@@ -407,26 +413,32 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       try { await window.api.chat.deleteMessage(lastAssistant.id) } catch {}
     }
     setMessages(prev => prev.filter(m => m.id !== lastAssistant?.id))
-    // Handle multimodal content (JSON array with text + images)
+    // Handle multimodal content (JSON array with text + images + videos)
     let content = lastUser.content
-    let attachments: ImageAttachment[] | undefined
+    let attachments: MediaAttachment[] | undefined
     try {
       const parsed = JSON.parse(content)
       if (Array.isArray(parsed)) {
         content = parsed.find((p: any) => p.type === 'text')?.text ?? ''
         attachments = parsed
-          .filter((p: any) => p.type === 'image_url' && p.image_url?.url)
-          .map((p: any, i: number): ImageAttachment => {
-            // Reconstruct full ImageAttachment shape — id/type are synthetic
+          .filter((p: any) =>
+            (p.type === 'image_url' && p.image_url?.url) ||
+            (p.type === 'video_url' && p.video_url?.url)
+          )
+          .map((p: any, i: number): MediaAttachment => {
+            // Reconstruct MediaAttachment shape — id/type/size are synthetic
             // on regenerate (original values are lost when persisted to DB).
-            const url: string = p.image_url.url
+            const isVideo = p.type === 'video_url'
+            const url: string = isVideo ? p.video_url.url : p.image_url.url
             const mimeMatch =
               typeof url === 'string' ? url.match(/^data:([^;]+);/) : null
             return {
               id: `regen-${Date.now()}-${i}`,
+              kind: isVideo ? 'video' : 'image',
               dataUrl: url,
-              name: 'image',
-              type: mimeMatch ? mimeMatch[1] : 'image/png',
+              name: isVideo ? 'video' : 'image',
+              type: mimeMatch ? mimeMatch[1] : (isVideo ? 'video/mp4' : 'image/png'),
+              size: 0,
             }
           })
         if (attachments && attachments.length === 0) attachments = undefined

@@ -624,7 +624,10 @@ export function registerChatHandlers(
 
   // Send message and get streaming response
   // Optional 4th arg: endpoint override { host, port } for multi-server support
-  // Optional 5th arg: image attachments for vision/multimodal models
+  // Optional 5th arg: media attachments for vision/multimodal models.
+  // `kind` distinguishes image vs video so we emit the right OpenAI content
+  // part (image_url vs video_url). Back-compat: undefined `kind` falls back
+  // to image detection via the data URL mime prefix below.
   ipcMain.handle(
     "chat:sendMessage",
     async (
@@ -632,7 +635,7 @@ export function registerChatHandlers(
       chatId: string,
       content: string,
       endpoint?: { host: string; port: number },
-      attachments?: Array<{ dataUrl: string; name: string }>,
+      attachments?: Array<{ dataUrl: string; name: string; kind?: "image" | "video" }>,
     ) => {
       // B6: Concurrency guard — reject if a request is already active for this chat
       // B6: Concurrency guard with stale lock recovery
@@ -674,6 +677,11 @@ export function registerChatHandlers(
       let sessionHasReasoningParser = false;
       let isHarmonyModel = false;
       let chatIsMultimodal = false;
+      // VLM video sampling (Qwen 3.6, Qwen3.5-VL, etc.) — forwarded as
+      // video_fps / video_max_frames on the request body when present.
+      // Default undefined = engine default (2.0 fps, 8 max frames).
+      let sessionVideoFps: number | undefined;
+      let sessionVideoMaxFrames: number | undefined;
       let chatSession: import("../database").Session | undefined;
       if (chat.modelPath) {
         chatSession = sessionManager.getSessionByModelPath(
@@ -737,6 +745,11 @@ export function registerChatHandlers(
               sessionHasReasoningParser = !!detected.reasoningParser;
               isHarmonyModel = detected.reasoningParser === "openai_gptoss";
             }
+            // VLM video sampling knobs (undefined → engine default)
+            if (typeof sessionConfig.videoFps === "number" && sessionConfig.videoFps > 0)
+              sessionVideoFps = sessionConfig.videoFps;
+            if (typeof sessionConfig.videoMaxFrames === "number" && sessionConfig.videoMaxFrames > 0)
+              sessionVideoMaxFrames = sessionConfig.videoMaxFrames;
           } catch (_) {}
         }
       }
@@ -891,18 +904,26 @@ export function registerChatHandlers(
       // server will reject the request properly if the model truly cannot
       // handle images, which is far better than silently dropping them.
       if (hasAttachments && !chatIsMultimodal) {
+        const imgs = attachments!.filter((a) => (a.kind ?? 'image') === 'image').length;
+        const vids = attachments!.filter((a) => a.kind === 'video').length;
         console.log(
-          `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${attachments!.length} image(s)`,
+          `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s)`,
         );
         chatIsMultimodal = true;
       }
+      // Back-compat: infer kind from the data URL mime prefix when the
+      // client (older renderer build) didn't send a `kind` field.
+      const inferKind = (a: { dataUrl: string; kind?: "image" | "video" }): "image" | "video" => {
+        if (a.kind) return a.kind;
+        return a.dataUrl.startsWith("data:video/") ? "video" : "image";
+      };
       const userContentForDb = hasAttachments
         ? JSON.stringify([
             ...(content.trim() ? [{ type: "text", text: content }] : []),
-            ...attachments.map((a) => ({
-              type: "image_url",
-              image_url: { url: a.dataUrl },
-            })),
+            ...attachments.map((a) => inferKind(a) === "video"
+              ? { type: "video_url", video_url: { url: a.dataUrl } }
+              : { type: "image_url", image_url: { url: a.dataUrl } }
+            ),
           ])
         : content;
       const userMessage: Message = {
@@ -1229,6 +1250,13 @@ export function registerChatHandlers(
               };
             if (overrides?.reasoningEffort)
               obj.reasoning_effort = overrides.reasoningEffort;
+            // VLM video sampling — forward to engine only when session
+            // config has non-default values. Remote OpenAI-compatible
+            // providers don't support these fields, so skip there.
+            if (!isRemote && sessionVideoFps !== undefined)
+              obj.video_fps = sessionVideoFps;
+            if (!isRemote && sessionVideoMaxFrames !== undefined)
+              obj.video_max_frames = sessionVideoMaxFrames;
             // Send timeout to server so streaming timeout matches client-side timeout
             if (!isRemote && timeoutSeconds !== 300)
               obj.timeout = timeoutSeconds;
@@ -1292,6 +1320,12 @@ export function registerChatHandlers(
               };
             if (overrides?.reasoningEffort && !isStrictApi)
               obj.reasoning_effort = overrides.reasoningEffort;
+            // VLM video sampling — local engine only (strict 3rd-party APIs
+            // reject unknown fields, remote OpenAI-compat doesn't support it).
+            if (!isRemote && sessionVideoFps !== undefined)
+              obj.video_fps = sessionVideoFps;
+            if (!isRemote && sessionVideoMaxFrames !== undefined)
+              obj.video_max_frames = sessionVideoMaxFrames;
             // Send timeout to server so streaming timeout matches client-side timeout
             if (!isRemote && timeoutSeconds !== 300)
               obj.timeout = timeoutSeconds;

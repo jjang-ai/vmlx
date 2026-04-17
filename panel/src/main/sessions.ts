@@ -896,6 +896,10 @@ export class SessionManager extends EventEmitter {
     'logLevel', 'corsOrigins',
     'enableJit',
     'imageMode', 'imageQuantize',
+    // VLM video sampling (Qwen 3.6 / Qwen3.5-VL) — no CLI-restart needed.
+    // chat.ts reads sessionConfig.videoFps / videoMaxFrames and forwards as
+    // video_fps / video_max_frames on each request body.
+    'videoFps', 'videoMaxFrames',
   ])
 
   async updateSessionConfig(sessionId: string, config: Partial<ServerConfig>): Promise<{ restartRequired: boolean; changedKeys: string[] }> {
