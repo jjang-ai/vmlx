@@ -845,6 +845,44 @@ else:
 PY
 }
 
+case_sleep_wake_cycle() {
+    # Exercise the admin lifecycle: POST /admin/soft-sleep → verify the
+    # next chat request transparently wakes → POST /admin/deep-sleep →
+    # POST /admin/wake explicitly → verify chat works again. This is
+    # the Electron-parity "server idle timer" path — the server enters
+    # `.standby(.soft)` / `.standby(.deep)` states automatically after
+    # the configured idle window, and chat requests auto-wake on the
+    # way in. Users see a "Waking up…" banner briefly. A regression
+    # here means models silently fail to respond after inactivity.
+    #
+    # Test shape:
+    #   1. soft-sleep → chat works (auto-wake from soft)
+    #   2. deep-sleep → explicit wake → chat works
+    # Green = both post-sleep chats return non-empty content.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    # Step 1: soft sleep
+    local soft_code
+    soft_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$BASE/admin/soft-sleep")
+    local chat1
+    chat1=$(curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi.\"}],\"max_tokens\":4,\"temperature\":0}" \
+        | extract_content)
+    # Step 2: deep sleep → explicit wake → chat
+    local deep_code
+    deep_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$BASE/admin/deep-sleep")
+    # Give deep sleep a moment to release
+    sleep 1
+    local wake_code
+    wake_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 120 -X POST "$BASE/admin/wake")
+    local chat2
+    chat2=$(curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Bye.\"}],\"max_tokens\":4,\"temperature\":0}" \
+        | extract_content)
+    local ok=false
+    [ -n "$chat1" ] && [ -n "$chat2" ] && ok=true
+    emit "{\"name\":\"sleep_wake_cycle\",\"ok\":$ok,\"notes\":\"soft=$soft_code chat1='${chat1:0:20}' deep=$deep_code wake=$wake_code chat2='${chat2:0:20}'\"}"
+}
+
 case_reasoning_content() {
     # Thinking models (Qwen3, DeepSeek R1, GLM 5, Nemotron-reasoning)
     # emit their chain-of-thought inside `<think>...</think>` tags.
@@ -943,6 +981,7 @@ suite_full() {
     case_stream_usage
     case_deterministic
     case_logprobs
+    case_sleep_wake_cycle
     case_reasoning_content
     case_large_context
 }
