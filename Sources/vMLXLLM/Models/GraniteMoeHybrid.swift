@@ -289,6 +289,11 @@ class GraniteMoeHybridTopKGating: Module {
 class GraniteMoeHybridMoE: Module, UnaryLayer {
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     let router: GraniteMoeHybridTopKGating
+    /// Flash MoE drop-in for the routed-expert path. The sibling
+    /// `sharedMLP` stays native (host layer sums its output separately
+    /// per line 427: `blockSparseMoE!(normed) + sharedMLP!(normed)`).
+    /// F-G9.
+    fileprivate var flashMoeShim: FlashMoEBlock?
 
     init(_ args: GraniteMoeHybridConfiguration) {
         guard let numExperts = args.numLocalExperts,
@@ -312,6 +317,9 @@ class GraniteMoeHybridMoE: Module, UnaryLayer {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
+        if let shim = flashMoeShim {
+            return shim(x)
+        }
         let (indices, gates) = router(x)
         let expertOutputs = switchMLP(x, indices)
         return (expertOutputs * gates[.ellipsis, .newAxis]).sum(axis: -2)
@@ -700,5 +708,37 @@ public struct GraniteMoeHybridConfiguration: Codable, Sendable {
         self.tieWordEmbeddings =
             try container.decodeIfPresent(Bool.self, forKey: .tieWordEmbeddings) ?? true
         self._timeStepLimit = try container.decodeIfPresent([Float].self, forKey: ._timeStepLimit)
+    }
+}
+
+// MARK: - Flash MoE conformance (F-G9)
+//
+// GraniteMoeHybrid has a twist vs other textPathSwitchGLU models: the
+// host layer sums `blockSparseMoE(x)` + `sharedMLP(x)` in parallel
+// (line 427). Flash MoE only replaces the routed-expert path; the
+// `sharedMLP` stays native. This is done via the `flashMoeShim`
+// field on GraniteMoeHybridMoE — when set, its callAsFunction
+// delegates to the shim and returns the experts-only output. The
+// host layer still runs `+ sharedMLP(x)` on top.
+
+extension GraniteMoeHybridModel: FlashMoEReplaceable {
+    public var flashMoELayers: [FlashMoELayer] {
+        model.layers
+    }
+}
+
+extension GraniteMoeHybridLayer: FlashMoELayer {
+    public var flashMoELayout: FlashMoELayout {
+        (useMoE && blockSparseMoE != nil) ? .textPathSwitchGLU : .none
+    }
+
+    public func replaceMoEBlock(with block: FlashMoEBlock) throws {
+        guard let moe = blockSparseMoE else { return }
+        let router = moe.router
+        block.topK = router.topK
+        block.router = { x in
+            return router(x)
+        }
+        moe.flashMoeShim = block
     }
 }
