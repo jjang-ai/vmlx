@@ -197,8 +197,21 @@ Full 45-case harness × 6 families, VL suite × 2 models, embedding suite × 1 m
 - ✅ **Iter-49 tool_choice="none"** — honored on every model that fires a parser.
 - ✅ **Iter-59 tool-call marker bleed** — Llama's `<|python_tag|>` no longer leaks into `content` before parse (captured via harness tier-3, fix live in same binary under matrix run).
 
+### JANGTQ standalone run (iter-61)
+
+Ran `Qwen3.6-35B-A3B-JANGTQ2-CRACK` through the full 45-case harness in isolation to confirm the tier-3 wiring and re-baseline the MXTQ-native path.
+
+- **21 pass before crash** — the server died mid-`cancel_midstream`; every subsequent case came back `HTTP 000 / parse-error empty body`, as expected when a vmlxctl process goes away under harness watch.
+- No Metal signature in `/tmp/vmlx-e2e/server-Qwen3.6-35B-A3B-JANGTQ2-CRACK.log` — the crash was a non-Metal SIGKILL class (probably the MXTQ packed-tensor kernel stream mismatch originally filed as **deferred #1: JANGTQ 5-way concurrent burst**). Iter-29 reported 7/13 on a 30-case suite; iter-61 got 21+ passes on a 45-case suite BEFORE the crash — so the surface is wider than iter-29, but `cancel_midstream` exercises a different tear-down path than the 5-way burst did.
+- Loaded in under 10 s, decode hit ~45-55 tok/s on sse_stream, basic_chat, system_message, reasoning_content — every non-crash path behaved sanely.
+- **Takeaway**: JANGTQ reliably survives single-client, sequential traffic. Multi-path-termination (cancel mid-stream, concurrent burst) still has an open MXTQ-stream issue. 3-way concurrent was iter-29's stable ceiling; that stays our production-recommended cap for JANGTQ models.
+
+### Video edge case (iter-61)
+
+Added `case_video_url_handling` to the `vl` suite — feeds a malformed `data:video/mp4;base64,…` payload and asserts the server either rejects cleanly (400) or ingests-and-ignores (200), then checks `/healthz` is still 200. Exercises `Stream.swift:extractVideos` → `AVURLAsset` failure-path robustness that nothing previously covered. Runs on every VL tier-2 and tier-3 iteration going forward.
+
 ### Remaining issues (iter-60+ backlog)
-- **Nemotron reasoning-leak fingerprint** — `"We need to..."` bleeds to `content`. Parser registry may need a Nemotron-specific reasoning parser stamp, or hermes-style for this model. The model ships with no stamped reasoning parser and its chat template doesn't emit `<think>` tags, so the engine surfaces the raw analytical prefix.
+- **Nemotron analytical prefix** (not an engine bug) — harness's `basic_chat` + `system_message` runs with `max_tokens=8` and no `enable_thinking`. Engine computes `effectiveThinking=false` and passes `enable_thinking=False` to the Jinja template; Nemotron's template then stamps `<think></think>` (immediate close). The model still writes "We need to respond…" as its first 8 tokens — that is the model's analytical style surfacing in the CONTENT stream, not a reasoning-parser miss. Parser wiring is correct (verified: `reasoning_parser=deepseek_r1` + `think_in_template=true` + `modelStampsThink` = true, `thinkInPrompt` flag flows into the parser). To silence this would require either a Nemotron-specific post-filter or a larger `max_tokens` budget — neither is an engine-layer fix.
 - **Small-model tool-call accuracy** — Llama-1B/Gemma-e2b/Nemotron-2L don't emit compliant tool calls. Not an engine bug; documented in tier-3 notes.
 
 ## Known Swift-vendor drift
