@@ -201,6 +201,66 @@ public enum AdminRoutes {
             }
         }
 
+        // POST /admin/benchmark — run a BenchSuite against the loaded chat
+        // model and return the final BenchReport as JSON. Body shape:
+        //     { "suite": "decode256" | "prefill1024" | "cacheTurn5" }
+        // Default suite is `decode256`. Runs synchronously (drains
+        // Engine.benchmark's AsyncThrowingStream to the `.done(report:)`
+        // or `.failed(msg)` terminator), then serializes headline +
+        // extended fields. iter-68 gap (Engine.benchmark existed since
+        // iter-62 but was only callable via the in-app BenchmarkPanel).
+        router.post("/admin/benchmark") { req, _ -> Response in
+            var req = req
+            let body = try? await req.collectBody(upTo: 4 * 1024)
+            var suiteName = "decode256"
+            if let body,
+               let obj = try? JSONSerialization.jsonObject(with: Data(buffer: body))
+                   as? [String: Any],
+               let s = obj["suite"] as? String, !s.isEmpty
+            {
+                suiteName = s
+            }
+            guard let suite = Engine.BenchSuite(rawValue: suiteName) else {
+                let valid = Engine.BenchSuite.allCases.map { $0.rawValue }
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "unknown suite '\(suiteName)'. Valid: \(valid.joined(separator: ", "))"
+                )
+            }
+            do {
+                for try await event in await engine.benchmark(suite: suite) {
+                    switch event {
+                    case .progress:
+                        continue
+                    case .failed(let msg):
+                        return OpenAIRoutes.errorJSON(.internalServerError, msg)
+                    case .done(let r):
+                        var payload: [String: Any] = [
+                            "object": "benchmark.run",
+                            "suite": r.suite.rawValue,
+                            "model_id": r.modelId,
+                            "tokens_per_sec": r.tokensPerSec,
+                            "ttft_ms": r.ttftMs,
+                            "total_ms": r.totalMs,
+                            "cache_hit_rate": r.cacheHitRate,
+                            "notes": r.notes,
+                        ]
+                        if let v = r.tpotMs { payload["tpot_ms"] = v }
+                        if let v = r.generationTps { payload["generation_tps"] = v }
+                        if let v = r.processingTps { payload["processing_tps"] = v }
+                        if let v = r.peakMemoryGB { payload["peak_memory_gb"] = v }
+                        if let v = r.promptTokens { payload["prompt_tokens"] = v }
+                        if let v = r.completionTokens { payload["completion_tokens"] = v }
+                        return OpenAIRoutes.json(payload)
+                    }
+                }
+                return OpenAIRoutes.errorJSON(.internalServerError,
+                    "benchmark stream ended without a terminal event")
+            } catch {
+                return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
         // Fixes vmlx #57: user-facing model delete.
         // DELETE /admin/models/{id} removes the model's on-disk files and
         // drops it from the ModelLibrary cache. Returns 404 if the id is
