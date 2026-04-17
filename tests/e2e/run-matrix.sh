@@ -73,6 +73,11 @@ fi
 if [ "$TIER" -ge 3 ]; then
     add_if_exists "qwen3.5-vl-9b-jang-4s"  "$USER_MODELS/dealignai/Qwen3.5-VL-9B-JANG_4S-CRACK"      vl
     add_if_exists "nemotron-30b-a3b-jang2l" "$USER_MODELS/dealignai/Nemotron-Cascade-2-30B-A3B-JANG_2L-CRACK" full
+    # Tier-3 adds JANGTQ native-kernel path — exercises MXTQ decode,
+    # QuantizedLinear repack, and packed-safetensors loader in one go.
+    # Skip MiniMax-M2.7-JANGTQ-CRACK (~460 GB source) — not routinely
+    # runnable on audit hardware; iter-58 verified it separately.
+    add_if_exists "qwen3.6-35b-a3b-jangtq2" "$USER_MODELS/dealignai/Qwen3.6-35B-A3B-JANGTQ2-CRACK"   full
 fi
 
 if [ ${#ENTRIES[@]} -eq 0 ]; then
