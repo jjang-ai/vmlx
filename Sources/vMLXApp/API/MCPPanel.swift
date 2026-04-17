@@ -106,38 +106,61 @@ struct MCPPanel: View {
     }
 
     private func serverRow(_ status: MCPServerStatus) -> some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Circle()
-                .fill(stateColor(status.state))
-                .frame(width: 8, height: 8)
-            Text(status.name)
-                .font(Theme.Typography.mono)
-                .foregroundStyle(Theme.Colors.textHigh)
-            Text("(\(status.transport.rawValue))")
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textLow)
-            Spacer()
-            Text("\(status.toolsCount) tools")
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textMid)
-            Text(status.state.rawValue)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(stateColor(status.state))
-                .padding(.horizontal, Theme.Spacing.sm)
-                .padding(.vertical, 2)
-                .background(
-                    Capsule()
-                        .fill(stateColor(status.state).opacity(0.12))
-                )
-            Button {
-                Task { await toggleServer(status) }
-            } label: {
-                Image(systemName: status.state == .connected
-                      ? "stop.circle" : "play.circle")
-                    .foregroundStyle(Theme.Colors.accent)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Circle()
+                    .fill(stateColor(status.state))
+                    .frame(width: 8, height: 8)
+                Text(status.name)
+                    .font(Theme.Typography.mono)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                Text("(\(status.transport.rawValue))")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                Spacer()
+                Text("\(status.toolsCount) tools")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textMid)
+                // Per-server tool-call timeout — makes the "how long until
+                // a hung tool aborts" answer legible without opening the
+                // underlying `mcp.json`. Default 30s matches Python.
+                Text("timeout \(Int(status.timeoutSeconds))s")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                Text(status.state.rawValue)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(stateColor(status.state))
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(stateColor(status.state).opacity(0.12))
+                    )
+                Button {
+                    Task { await toggleServer(status) }
+                } label: {
+                    Image(systemName: status.state == .connected
+                          ? "stop.circle" : "play.circle")
+                        .foregroundStyle(Theme.Colors.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(status.state == .connected
+                    ? "Stop MCP server \(status.name)"
+                    : "Start MCP server \(status.name)")
+                .help(status.state == .connected ? "Stop server" : "Start server")
             }
-            .buttonStyle(.plain)
-            .help(status.state == .connected ? "Stop server" : "Start server")
+            // Error row — only shown on `.error` state. Previously the
+            // panel only showed the state-pill color-coded red with no
+            // actual error text; the connection error was buried in the
+            // engine logs.
+            if let err = status.error, status.state == .error {
+                Text(err)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.danger)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .padding(.leading, 18)  // align under server name
+            }
         }
         .padding(.vertical, 4)
     }
