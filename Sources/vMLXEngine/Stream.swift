@@ -469,7 +469,28 @@ extension Engine {
             if fam.contains("mistral") || mt.contains("mistral") || mt.contains("pixtral") {
                 return "[IMG]"
             }
-            // Qwen / Llava / Idefics / SmolVLM / FastVLM / LFM2 / GlmOcr etc.
+            // Qwen family (qwen2_vl / qwen2_5_vl / qwen3_vl / qwen3_5_moe
+            // with has_vision=true): emit the fully-expanded triple
+            // `<|vision_start|><|image_pad|><|vision_end|>` inline in
+            // the text. The Qwen3VL message generator is overridden
+            // (see `Qwen3VLMessageGenerator.generate`) to pass
+            // `content` as a plain string so the template's
+            // `{%- if content is string %} {{- content }}` branch
+            // renders the triple verbatim. This sidesteps a
+            // swift-jinja bug in the list-of-parts code path where
+            // `{%- elif content is iterable %}` with multiple
+            // top-level messages dropped the `{type:"image"}`
+            // dict to the literal substring `[image]` on T2+ (the
+            // T1 render worked because the single-message fast path
+            // took a different internal branch). Single-turn VL still
+            // works; multi-turn VL now stamps N vision blocks for N
+            // frames. Live-confirmed 2026-04-16 on
+            // Qwen3.6-35B-A3B-JANGTQ2 with 3-turn image+text+text.
+            if fam.contains("qwen") || mt.contains("qwen") {
+                return "<|vision_start|><|image_pad|><|vision_end|>"
+            }
+            // Llava / Idefics / SmolVLM / FastVLM / LFM2 / GlmOcr etc.
+            // — their templates DO accept the short `<image>` marker.
             return "<image>"
         }()
         let chatMessages = await Engine.buildChatMessages(
