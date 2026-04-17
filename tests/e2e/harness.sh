@@ -805,6 +805,41 @@ except Exception as e:
 PY
 }
 
+case_cache_flush_roundtrip() {
+    # DELETE /v1/cache → engine clears all tiers and reports post-flush
+    # stats. Critical for multi-user scenarios: a stale prefix cache hit
+    # across user-sessions would leak content. Verify the round-trip:
+    #   1. Fire a chat request so there's SOMETHING in the cache.
+    #   2. DELETE /v1/cache — expect 200 + cleared=true + fresh stats.
+    #   3. /v1/cache/stats — expect non-error.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    # Step 1: prime the cache
+    curl -s -o /dev/null -X POST "$BASE/v1/chat/completions" -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Prime the cache.\"}],\"max_tokens\":4,\"temperature\":0}" 2>/dev/null || true
+    # Step 2: flush
+    local flush
+    flush=$(curl -s -X DELETE "$BASE/v1/cache")
+    # Step 3: read post-flush stats (must still be a dict)
+    local stats
+    stats=$(curl -s "$BASE/v1/cache/stats")
+    echo "$flush" > /tmp/vmlx-flush.json
+    echo "$stats" > /tmp/vmlx-stats-post.json
+    python3 <<'PY'
+import json
+try:
+    f = json.load(open("/tmp/vmlx-flush.json"))
+    s = json.load(open("/tmp/vmlx-stats-post.json"))
+    cleared = f.get("cleared") is True
+    has_stats = "stats" in f and isinstance(f["stats"], dict)
+    stats_ok = isinstance(s, dict) and len(s) > 0
+    ok = cleared and has_stats and stats_ok
+    print(json.dumps({"name":"cache_flush_roundtrip","ok":ok,
+        "notes":f"cleared={cleared} hasStats={has_stats} postStatsOk={stats_ok}"}))
+except Exception as e:
+    print(json.dumps({"name":"cache_flush_roundtrip","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
 case_gateway_info() {
     # GET /v1/_gateway/info — the multi-session routing descriptor used
     # by the multiplexer. Only wired when `serve --gateway-port` (or the
@@ -1085,6 +1120,7 @@ suite_full() {
     case_sleep_wake_cycle
     case_reasoning_content
     case_large_context
+    case_cache_flush_roundtrip
 }
 
 suite_vl() {
