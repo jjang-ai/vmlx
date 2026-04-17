@@ -504,11 +504,44 @@ PY
 }
 
 case_metrics() {
-    local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/metrics")
-    local ok=false
-    [ "$code" = "200" ] && ok=true
-    emit "{\"name\":\"metrics_endpoint\",\"ok\":$ok,\"notes\":\"HTTP $code\"}"
+    # GET /metrics must return valid Prometheus text format: lines alternating
+    # `# HELP`, `# TYPE`, and metric values. Each non-comment non-empty line
+    # must be `<metric_name>[{<labels>}] <value>`. Also verify the engine's
+    # key telemetry families are present (GPU mem, decode tps, queue depth,
+    # request latency histogram) so a regression that drops a family is
+    # surfaced here instead of silently breaking Grafana dashboards.
+    local body
+    body=$(curl -s --max-time 5 "$BASE/metrics")
+    echo "$body" > /tmp/vmlx-metrics.txt
+    python3 <<'PY'
+import json
+try:
+    lines = open("/tmp/vmlx-metrics.txt").read().splitlines()
+    help_lines = sum(1 for l in lines if l.startswith("# HELP "))
+    type_lines = sum(1 for l in lines if l.startswith("# TYPE "))
+    # value lines: "metric[{labels}] floatval"
+    value_lines = [l for l in lines if l and not l.startswith("#")]
+    has_gpu = any(l.startswith("vmlx_gpu_memory_bytes") for l in value_lines)
+    has_decode = any(l.startswith("vmlx_decode_tokens_per_second") for l in value_lines)
+    has_queue = any(l.startswith("vmlx_queue_depth") for l in value_lines)
+    has_latency = any(l.startswith("vmlx_request_duration_seconds_bucket") for l in value_lines)
+    # Every value line must be parseable: final whitespace-separated token is a float
+    bad = []
+    for l in value_lines[:200]:
+        try:
+            float(l.rsplit(None, 1)[-1])
+        except Exception:
+            bad.append(l[:60])
+    ok = (help_lines >= 5 and type_lines >= 5 and has_gpu and has_decode
+          and has_queue and has_latency and not bad)
+    notes = (f"help={help_lines} type={type_lines} values={len(value_lines)} "
+             f"gpu={has_gpu} decode={has_decode} queue={has_queue} latency={has_latency}")
+    if bad:
+        notes += f" malformed={bad[:2]}"
+    print(json.dumps({"name":"metrics_endpoint","ok":ok,"notes":notes}))
+except Exception as e:
+    print(json.dumps({"name":"metrics_endpoint","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_ollama_tags() {
