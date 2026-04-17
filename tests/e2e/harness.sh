@@ -259,15 +259,50 @@ except Exception:
 }
 
 case_ollama_chat() {
+    # Validates the Ollama /api/chat non-streaming response:
+    #   model    : str
+    #   created_at : RFC3339 timestamp str
+    #   message  : {role="assistant", content:<str>}
+    #   done     : true
+    #   done_reason : str (one of stop / length / load / tool_calls)
+    #   total_duration, prompt_eval_count, eval_count : int (ns and tokens)
+    # Missing/wrong fields break ollama-python and continue.dev clients.
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp
     resp=$(curl -s -X POST "$BASE/api/chat" \
         -H "content-type: application/json" \
         -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Say 'hi' and stop.\"}],\"stream\":false,\"options\":{\"temperature\":0,\"num_predict\":8}}")
-    local content=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("message",{}).get("content","")[:40])' 2>/dev/null)
-    local ok=false
-    [ -n "$content" ] && ok=true
-    emit "{\"name\":\"ollama_chat\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
+    echo "$resp" > /tmp/vmlx-ollama-chat.json
+    python3 <<'PY'
+import json, re
+try:
+    d = json.load(open("/tmp/vmlx-ollama-chat.json"))
+    probs = []
+    if not isinstance(d.get("model"), str):
+        probs.append("model")
+    ts = d.get("created_at")
+    if not isinstance(ts, str) or not re.match(r"^\d{4}-\d{2}-\d{2}T", ts):
+        probs.append(f"created_at={ts!r}")
+    msg = d.get("message") or {}
+    if msg.get("role") != "assistant":
+        probs.append(f"msg.role={msg.get('role')}")
+    content = msg.get("content") or ""
+    if not content:
+        probs.append("msg.content empty")
+    if d.get("done") is not True:
+        probs.append(f"done={d.get('done')!r}")
+    if not isinstance(d.get("done_reason"), str):
+        probs.append("done_reason")
+    # Token counts are optional for Ollama but we emit them; assert they're ints if present
+    for k in ("total_duration","prompt_eval_count","eval_count"):
+        if k in d and not isinstance(d[k], int):
+            probs.append(f"{k}_type={type(d[k]).__name__}")
+    ok = not probs and bool(content)
+    notes = ("schema=ok" if not probs else f"GAP:{probs}") + f" c={content[:40]!r}"
+    print(json.dumps({"name":"ollama_chat","ok":ok,"notes":notes[:140]}))
+except Exception as e:
+    print(json.dumps({"name":"ollama_chat","ok":False,"notes":f"parse: {e}"}))
+PY
 }
 
 case_anthropic_messages() {
