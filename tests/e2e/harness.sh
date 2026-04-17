@@ -290,6 +290,28 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_multiturn_context() {
+    # Verifies the engine correctly threads the prior assistant turn
+    # into context so the model can reference it. Distinct from
+    # multiturn_prefix_cache (timing-based) and prefix_cache_hit_ratio
+    # (cache-hit-based) — this one is a CORRECTNESS test.
+    #
+    # Contract: turn 1 plants a numeric fact ("my number is 73"),
+    # assistant ack, turn 2 asks "what was my number?". Response must
+    # contain "73" (case-insensitive match). A regression that drops
+    # earlier messages / collapses to just the last user message would
+    # fail this — and does in pathological "last-message-only" bugs.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Remember my number: 73. Just say OK.\"},{\"role\":\"assistant\",\"content\":\"OK, I'll remember 73.\"},{\"role\":\"user\",\"content\":\"What was my number?\"}],\"max_tokens\":30,\"temperature\":0}")
+    local content=$(echo "$resp" | extract_content)
+    local ok=false
+    echo "$content" | grep -q "73" && ok=true
+    emit "{\"name\":\"multiturn_context\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
+}
+
 case_unsupported_params() {
     # ChatRequest.validate() has a nuanced policy per the doc:
     #  * n != 1 → HARD 400 (vMLX cannot produce multiple completions;
@@ -1857,6 +1879,7 @@ suite_full() {
     case_temperature_variance
     case_system_message
     case_unsupported_params
+    case_multiturn_context
 }
 
 suite_vl() {
