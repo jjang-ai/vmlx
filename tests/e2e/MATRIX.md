@@ -131,3 +131,11 @@ Results per model are archived in `tests/e2e/results/*.jsonl`.
 - **Llama-1B fails `json_mode`** — model can't follow the instruction
   at 1B scale without grammar-constrained sampling. Expected for a
   1B / 4-bit model. Not an engine bug.
+- **VL concurrent crash** (iteration 2): `-[_MTLCommandBuffer
+  addCompletedHandler:]:1011: failed assertion 'Completed handler
+  provided after commit call'` on 3-way concurrent burst against
+  Qwen3.5-VL-4B. Distinct from the prior text-model
+  `setCurrentCommandEncoder` race (GenerationLock prevented that one).
+  Vision_chat + basic_chat + multiturn all pass; crash only fires
+  on the parallel-request case. Likely an MLX-binding race in the VLM
+  eval-pipeline completion-handler registration. Investigate next.
