@@ -525,6 +525,167 @@ suite_smoke() {
     case_max_tokens
 }
 
+case_stream_usage() {
+    # stream_options.include_usage must emit a final chunk with a
+    # non-empty `usage` block before [DONE]. OpenAI-compat contract —
+    # many client libs (LangChain, Vercel AI SDK) rely on this to
+    # accumulate cost metrics.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess, sys
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"user","content":"Count 1 to 3."}],
+    "max_tokens": 20,
+    "stream": True,
+    "temperature": 0,
+    "stream_options": {"include_usage": True},
+}
+p = subprocess.Popen(
+    ["curl","-sN","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    stdout=subprocess.PIPE, text=True)
+saw_usage = False
+usage = None
+for line in p.stdout:
+    if not line.startswith("data:"): continue
+    if line.strip() == "data: [DONE]": break
+    try:
+        d = json.loads(line[5:].strip())
+    except Exception:
+        continue
+    if d.get("usage"):
+        saw_usage = True
+        usage = d["usage"]
+p.wait(timeout=2)
+ok = "true" if saw_usage and (usage or {}).get("completion_tokens", 0) > 0 else "false"
+note = f"usage={usage}" if usage else "no usage chunk"
+print(json.dumps({"name":"stream_usage","ok":ok=="true","notes":note[:80]}))
+PY
+}
+
+case_tool_roundtrip() {
+    # Tool-call feedback loop — two-hop exchange:
+    #   1. Client sends messages + tool defs → server emits tool_calls
+    #   2. Client appends a `tool` role message with the result → server
+    #      returns a final assistant reply that ideally cites the result.
+    # This exercises the full OpenAI tool-feedback dance; bash-tool
+    # terminal mode is the Swift engine's marquee feature and this is
+    # the only case that verifies the plumbing end-to-end without Xcode.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local body1=$(cat <<JSON
+{
+  "model": "$model_id",
+  "messages": [{"role":"user","content":"What is the sum of 17 and 25? Use the tool."}],
+  "max_tokens": 80,
+  "temperature": 0,
+  "tools": [{
+    "type": "function",
+    "function": {
+      "name": "add",
+      "description": "Add two integers",
+      "parameters": {
+        "type": "object",
+        "properties": {"a":{"type":"integer"},"b":{"type":"integer"}},
+        "required": ["a","b"]
+      }
+    }
+  }],
+  "tool_choice": "auto"
+}
+JSON
+)
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body1" > /tmp/vmlx-roundtrip-1.json
+    # Parse tool_calls from step 1
+    local tc_id tc_name tc_args
+    local parsed=$(python3 <<'PY'
+import json
+r = json.load(open("/tmp/vmlx-roundtrip-1.json"))
+tc = r.get("choices",[{}])[0].get("message",{}).get("tool_calls") or []
+if not tc:
+    print("MISS||")
+else:
+    c = tc[0]
+    print(f"{c.get('id','call_1')}|{c.get('function',{}).get('name','?')}|{c.get('function',{}).get('arguments','{}')}")
+PY
+)
+    if [[ "$parsed" == MISS* ]]; then
+        emit "{\"name\":\"tool_roundtrip\",\"ok\":false,\"notes\":\"step 1: no tool_calls emitted\"}"
+        return
+    fi
+    tc_id=$(echo "$parsed" | cut -d'|' -f1)
+    tc_name=$(echo "$parsed" | cut -d'|' -f2)
+    tc_args=$(echo "$parsed" | cut -d'|' -f3)
+    # Step 2: send tool result back, expect prose answer mentioning 42
+    local body2
+    body2=$(python3 -c '
+import json, sys, os
+user_ask = "What is the sum of 17 and 25? Use the tool."
+model_id = os.environ["MID"]
+tc_id = os.environ["TCID"]
+tc_name = os.environ["TCNAME"]
+tc_args = os.environ["TCARGS"]
+payload = {
+    "model": model_id, "temperature": 0, "max_tokens": 60,
+    "messages": [
+        {"role":"user","content":user_ask},
+        {"role":"assistant","content":None,"tool_calls":[{
+            "id": tc_id, "type":"function",
+            "function": {"name": tc_name, "arguments": tc_args}
+        }]},
+        {"role":"tool","tool_call_id":tc_id,"name":tc_name,"content":"42"},
+    ],
+}
+print(json.dumps(payload))
+' MID="$model_id" TCID="$tc_id" TCNAME="$tc_name" TCARGS="$tc_args")
+    curl -s --max-time 60 -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" -d "$body2" > /tmp/vmlx-roundtrip-2.json
+    python3 <<'PY'
+import json
+r = json.load(open("/tmp/vmlx-roundtrip-2.json"))
+ch = r.get("choices",[{}])[0]
+content = ch.get("message",{}).get("content") or ""
+has_42 = "42" in content
+# Accept either: final prose cites 42 OR finish_reason stop with non-empty content.
+finish = ch.get("finish_reason","?")
+ok = "true" if (has_42 or (finish=="stop" and len(content) > 0)) else "false"
+print(json.dumps({"name":"tool_roundtrip","ok":ok=="true","notes":f"has_42={has_42} finish={finish} c={content[:50]}"}))
+PY
+}
+
+case_large_context() {
+    # A ~4K-token prompt exercises the long-context path, prefill
+    # chunking, and eviction boundaries. Build a prompt of 400 lines
+    # of "The number is N" so the tokenizer can't just repeat-compress.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess, sys, time
+big = "\n".join(f"Line {i}: the number is {i}." for i in range(400))
+question = f"\n\nBased on the lines above, what is the number on Line 137?"
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"user","content": big + question}],
+    "max_tokens": 20, "temperature": 0,
+}
+t0 = time.time()
+out = subprocess.run(
+    ["curl","-s","--max-time","120","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    capture_output=True, text=True)
+elapsed = int((time.time()-t0)*1000)
+try:
+    r = json.loads(out.stdout)
+    content = r.get("choices",[{}])[0].get("message",{}).get("content") or ""
+    prompt_tok = r.get("usage",{}).get("prompt_tokens", 0)
+    ok = "true" if prompt_tok > 2000 and content else "false"
+    note = f"prompt_tok={prompt_tok} elapsed={elapsed}ms c={content[:40]}"
+except Exception as e:
+    ok = "false"; note = f"parse: {e}"
+print(json.dumps({"name":"large_context","ok":ok=="true","notes":note[:120]}))
+PY
+}
+
 suite_full() {
     suite_smoke
     case_multiturn_prefix_cache
@@ -536,6 +697,9 @@ suite_full() {
     case_concurrent_burst
     case_cancel_midstream
     case_tool_call
+    case_tool_roundtrip
+    case_stream_usage
+    case_large_context
 }
 
 suite_vl() {
