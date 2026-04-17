@@ -848,7 +848,11 @@ extension Engine {
                 // single request, before the LLM forward has even started.
                 // Commit + close any vision-encoder encoder by forcing eval
                 // on the prepared input tokens. Cheap no-op for text-only.
-                if !userInput.images.isEmpty || !userInput.videos.isEmpty {
+                // Killswitch: `VMLX_DISABLE_VL_RACE_BARRIER=1` restores the
+                // old behavior for A/B debugging.
+                if !userInput.images.isEmpty || !userInput.videos.isEmpty,
+                   ProcessInfo.processInfo.environment["VMLX_DISABLE_VL_RACE_BARRIER"] != "1"
+                {
                     MLX.eval(lmInput.text.tokens)
                 }
 
