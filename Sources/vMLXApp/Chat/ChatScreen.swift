@@ -375,71 +375,206 @@ private struct ChatModelPicker: View {
         }
     }
 
-    var body: some View {
-        Menu {
-            if entries.isEmpty {
-                Text("No models discovered")
-                    .foregroundStyle(Theme.Colors.textLow)
-            } else {
-                // Search/filter field at the top of the menu. A
-                // SwiftUI Menu accepts arbitrary View content, so we
-                // just drop a TextField in. `Menu` on macOS keeps the
-                // field focused while typing so shortcut filtering
-                // feels native.
-                TextField("Filter models…", text: $filterQuery)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Typography.caption)
-                Divider()
+    /// Repeated user ask: "there needs to be a way to directly easily
+    /// start / stop models from the chat page and list without needing
+    /// to go to the server page". Each menu row now carries a load-state
+    /// dot + an inline ▶ / ■ button that calls `app.startSession` /
+    /// `app.stopSession`. The picker label also shows the state of the
+    /// CURRENT chat's model so you can tell at a glance whether the
+    /// next send will hit a warm model or block on load.
+    private enum LoadState { case running, loading, standby, stopped, absent }
 
-                let shown = filteredEntries
-                if shown.isEmpty {
-                    Text("No models match `\(filterQuery)`")
+    private func loadState(for entry: ModelLibrary.ModelEntry) -> LoadState {
+        let canonical = entry.canonicalPath.standardizedFileURL.resolvingSymlinksInPath()
+        guard let session = app.sessions.first(where: {
+            $0.modelPath.standardizedFileURL.resolvingSymlinksInPath() == canonical
+        }) else {
+            return .absent
+        }
+        switch session.state {
+        case .running: return .running
+        case .loading: return .loading
+        case .standby: return .standby
+        case .stopped, .error: return .stopped
+        }
+    }
+
+    private func stateColor(_ s: LoadState) -> Color {
+        switch s {
+        case .running: return .green
+        case .loading: return .yellow
+        case .standby: return .orange
+        case .stopped: return Theme.Colors.textLow
+        case .absent:  return Theme.Colors.textLow
+        }
+    }
+
+    private func stateLabel(_ s: LoadState) -> String {
+        switch s {
+        case .running: return "In RAM"
+        case .loading: return "Loading…"
+        case .standby: return "Standby"
+        case .stopped: return "Not loaded"
+        case .absent:  return "No session"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            // Primary picker menu — filter + select + per-row ▶/■
+            Menu {
+                if entries.isEmpty {
+                    Text("No models discovered")
                         .foregroundStyle(Theme.Colors.textLow)
                 } else {
-                    ForEach(shown, id: \.id) { e in
-                        Button {
-                            Task { await select(e.displayName) }
-                        } label: {
-                            HStack {
-                                Text(e.displayName)
-                                if e.displayName == currentAlias {
+                    TextField("Filter models…", text: $filterQuery)
+                        .textFieldStyle(.plain)
+                        .font(Theme.Typography.caption)
+                    Divider()
+
+                    let shown = filteredEntries
+                    if shown.isEmpty {
+                        Text("No models match `\(filterQuery)`")
+                            .foregroundStyle(Theme.Colors.textLow)
+                    } else {
+                        ForEach(shown, id: \.id) { e in
+                            Menu {
+                                Button("Select for this chat") {
+                                    Task { await select(e.displayName) }
+                                }
+                                let s = loadState(for: e)
+                                switch s {
+                                case .running, .loading, .standby:
+                                    Button("Stop / unload from RAM") {
+                                        Task { await stopModel(for: e) }
+                                    }
+                                case .stopped, .absent:
+                                    Button("Start / load into RAM") {
+                                        Task { await startModel(for: e) }
+                                    }
+                                }
+                                Divider()
+                                Button("Show in Server tab") {
+                                    if let sid = app.sessionId(forModelPath: e.canonicalPath) {
+                                        app.selectedServerSessionId = sid
+                                    }
+                                    app.mode = .server
+                                }
+                            } label: {
+                                HStack(spacing: Theme.Spacing.sm) {
+                                    Circle()
+                                        .fill(stateColor(loadState(for: e)))
+                                        .frame(width: 8, height: 8)
+                                    Text(e.displayName)
                                     Spacer()
-                                    Image(systemName: "checkmark")
+                                    if e.displayName == currentAlias {
+                                        Image(systemName: "checkmark")
+                                    }
+                                    Text(stateLabel(loadState(for: e)))
+                                        .font(Theme.Typography.caption)
+                                        .foregroundStyle(Theme.Colors.textLow)
                                 }
                             }
                         }
                     }
+                    Divider()
+                    Button("Manage in Server tab") {
+                        app.mode = .server
+                    }
                 }
-                Divider()
-                Button("Manage in Server tab") {
-                    app.mode = .server
+            } label: {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(stateColor(currentEntryState()))
+                        .frame(width: 8, height: 8)
+                    Text(currentAlias.isEmpty ? "Select model" : currentAlias)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: 180, alignment: .leading)
                 }
+                .foregroundStyle(Theme.Colors.textMid)
+                .font(Theme.Typography.caption)
+                .padding(.horizontal, Theme.Spacing.sm)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Theme.Colors.surface)
+                )
             }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "cube.box")
-                    .font(.system(size: 11))
-                Text(currentAlias.isEmpty ? "Select model" : currentAlias)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: 180, alignment: .leading)
+            .menuStyle(.borderlessButton)
+            .help("Pick a model · colored dot = load state. Right side ▶ / ■ toggles the model in/out of RAM without leaving the Chat tab.")
+
+            // Inline ▶ / ■ for the CURRENT chat's selected model. One
+            // click = start if stopped, stop if running. Matches the
+            // repeated user ask.
+            if let current = currentEntry() {
+                let s = loadState(for: current)
+                Button {
+                    Task {
+                        switch s {
+                        case .running, .loading, .standby:
+                            await stopModel(for: current)
+                        case .stopped, .absent:
+                            await startModel(for: current)
+                        }
+                    }
+                } label: {
+                    Image(systemName: iconName(for: s))
+                        .font(.system(size: 11))
+                        .foregroundStyle(iconColor(for: s))
+                        .padding(4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Theme.Colors.surface)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(buttonTooltip(for: s))
             }
-            .foregroundStyle(Theme.Colors.textMid)
-            .font(Theme.Typography.caption)
-            .padding(.horizontal, Theme.Spacing.sm)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Theme.Colors.surface)
-            )
         }
-        .menuStyle(.borderlessButton)
         .task {
             await refresh()
         }
         .task(id: vm.activeSessionId) {
             await loadCurrentAlias()
         }
+    }
+
+    private func iconName(for s: LoadState) -> String {
+        switch s {
+        case .running: return "stop.fill"
+        case .loading: return "hourglass"
+        case .standby: return "play.fill"
+        case .stopped, .absent: return "play.fill"
+        }
+    }
+
+    private func iconColor(for s: LoadState) -> Color {
+        switch s {
+        case .running: return .red
+        case .loading: return .yellow
+        case .standby: return .orange
+        case .stopped, .absent: return .green
+        }
+    }
+
+    private func buttonTooltip(for s: LoadState) -> String {
+        switch s {
+        case .running: return "Unload this model from RAM"
+        case .loading: return "Loading in progress — click to cancel and unload"
+        case .standby: return "Wake / reload from standby"
+        case .stopped: return "Load this model into RAM"
+        case .absent:  return "Create a session and load this model"
+        }
+    }
+
+    private func currentEntry() -> ModelLibrary.ModelEntry? {
+        guard !currentAlias.isEmpty else { return nil }
+        return entries.first(where: { $0.displayName == currentAlias })
+    }
+
+    private func currentEntryState() -> LoadState {
+        currentEntry().map(loadState(for:)) ?? .absent
     }
 
     @MainActor
@@ -478,5 +613,28 @@ private struct ChatModelPicker: View {
         var chat = await app.engine.settings.chat(chatId) ?? .init()
         chat.modelAlias = alias
         await app.engine.settings.setChat(chatId, chat)
+    }
+
+    /// Start / load the model associated with `entry`. Creates a
+    /// session row on the fly if the user picked a model that hasn't
+    /// been added to the Server tab yet. No-op if the session is
+    /// already running (AppState.startSession is idempotent).
+    @MainActor
+    private func startModel(for entry: ModelLibrary.ModelEntry) async {
+        let sid: UUID
+        if let existing = app.sessionId(forModelPath: entry.canonicalPath) {
+            sid = existing
+        } else {
+            sid = await app.createSession(forModel: entry.canonicalPath)
+        }
+        await app.startSession(sid)
+    }
+
+    /// Stop / unload the model associated with `entry`. No-op if no
+    /// session exists for the model.
+    @MainActor
+    private func stopModel(for entry: ModelLibrary.ModelEntry) async {
+        guard let sid = app.sessionId(forModelPath: entry.canonicalPath) else { return }
+        await app.stopSession(sid)
     }
 }
