@@ -85,7 +85,16 @@ public actor Engine {
     }
 
     public private(set) var loaded: vMLXLMCommon.ModelContainer?
-    public private(set) var state: EngineState = .stopped
+    // `nonisolated(unsafe)` lets `subscribeState`'s AsyncStream closure
+    // capture `state` synchronously without tripping strict concurrency.
+    // Safe because: mutation is funnelled through `transition(_:)` on the
+    // actor's serial queue, and a nonisolated READ can only observe a
+    // slightly-stale value which is immediately superseded by the next
+    // transition event delivered through the subscriber continuation.
+    // The iter-64 alternative (move the read into an awaited Task) tickled
+    // a race under matrix load — sleep_wake_cycle wiped every model post-
+    // llama. Reverted in iter-66. See AUDIT-REPORT "iter-65 regression".
+    public private(set) nonisolated(unsafe) var state: EngineState = .stopped
 
     /// Currently active LoRA / DoRA adapter on the chat model, or
     /// `nil` when the model is running with unmodified base weights.
@@ -650,12 +659,16 @@ public actor Engine {
                 return
             }
             let id = UUID()
-            // Actor-isolated `state` can't be read from this nonisolated
-            // closure — move the read INTO the Task so it's awaited.
+            // iter-66: capture state SYNCHRONOUSLY at subscribe time, then
+            // register+yield in a spawned Task. Pre-iter-64 behavior that
+            // survives matrix load. State is `nonisolated(unsafe)` so this
+            // read is allowed. Any transition that races between this read
+            // and `registerStateSubscriber` is delivered naturally by the
+            // subscriber list once registration lands — subscribers still
+            // get a monotonic event stream.
+            let current = self.state
             Task { [weak self] in
-                guard let self else { return }
-                let current = await self.state
-                await self.registerStateSubscriber(id, continuation: cont)
+                await self?.registerStateSubscriber(id, continuation: cont)
                 cont.yield(current)
             }
             cont.onTermination = { [weak self] _ in
