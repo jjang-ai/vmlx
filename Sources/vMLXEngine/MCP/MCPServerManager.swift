@@ -33,7 +33,8 @@ public actor MCPServerManager {
             self.statuses[name] = MCPServerStatus(
                 name: name,
                 state: .disconnected,
-                transport: server.transport
+                transport: server.transport,
+                timeoutSeconds: server.timeout
             )
         }
     }
@@ -65,7 +66,8 @@ public actor MCPServerManager {
                 statuses[name] = MCPServerStatus(
                     name: name,
                     state: .disconnected,
-                    transport: server.transport
+                    transport: server.transport,
+                    timeoutSeconds: server.timeout
                 )
             }
         }
@@ -90,7 +92,8 @@ public actor MCPServerManager {
         statuses[name] = MCPServerStatus(
             name: name,
             state: .connecting,
-            transport: server.transport
+            transport: server.transport,
+            timeoutSeconds: server.timeout
         )
         let client = MCPStdioClient(server: server)
         do {
@@ -105,7 +108,8 @@ public actor MCPServerManager {
                 transport: server.transport,
                 toolsCount: discovered.count,
                 error: nil,
-                lastConnected: Date()
+                lastConnected: Date(),
+                timeoutSeconds: server.timeout
             )
         } catch {
             await client.stop()
@@ -115,7 +119,8 @@ public actor MCPServerManager {
                 transport: server.transport,
                 toolsCount: 0,
                 error: String(describing: error),
-                lastConnected: statuses[name]?.lastConnected
+                lastConnected: statuses[name]?.lastConnected,
+                timeoutSeconds: server.timeout
             )
             throw error
         }
@@ -154,7 +159,8 @@ public actor MCPServerManager {
                 transport: s.transport,
                 toolsCount: 0,
                 error: nil,
-                lastConnected: s.lastConnected
+                lastConnected: s.lastConnected,
+                timeoutSeconds: s.timeoutSeconds
             )
         }
     }
@@ -170,7 +176,8 @@ public actor MCPServerManager {
                     transport: s.transport,
                     toolsCount: 0,
                     error: nil,
-                    lastConnected: s.lastConnected
+                    lastConnected: s.lastConnected,
+                    timeoutSeconds: s.timeoutSeconds
                 )
             }
         }

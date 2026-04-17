@@ -322,6 +322,13 @@ public struct MCPServerStatus: Sendable, Equatable {
     public let toolsCount: Int
     public let error: String?
     public let lastConnected: Date?
+    /// Per-server tool-call timeout in seconds. Echoed from the
+    /// `MCPServerConfig.timeout` field so the UI can surface a
+    /// "Timeout: Ns" indicator next to each server row — previously
+    /// the only place this lived was the raw `mcp.json` file, so
+    /// users couldn't tell at a glance how long a hung tool had
+    /// before the engine gave up on it.
+    public let timeoutSeconds: Double
 
     public init(
         name: String,
@@ -329,7 +336,8 @@ public struct MCPServerStatus: Sendable, Equatable {
         transport: MCPTransport,
         toolsCount: Int = 0,
         error: String? = nil,
-        lastConnected: Date? = nil
+        lastConnected: Date? = nil,
+        timeoutSeconds: Double = 30.0
     ) {
         self.name = name
         self.state = state
@@ -337,6 +345,7 @@ public struct MCPServerStatus: Sendable, Equatable {
         self.toolsCount = toolsCount
         self.error = error
         self.lastConnected = lastConnected
+        self.timeoutSeconds = timeoutSeconds
     }
 
     public func toDictionary() -> [String: Any] {
@@ -345,6 +354,7 @@ public struct MCPServerStatus: Sendable, Equatable {
             "state": state.rawValue,
             "transport": transport.rawValue,
             "tools_count": toolsCount,
+            "timeout_seconds": timeoutSeconds,
         ]
         if let error = error { out["error"] = error }
         if let lastConnected = lastConnected {
