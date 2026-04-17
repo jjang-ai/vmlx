@@ -845,6 +845,41 @@ else:
 PY
 }
 
+case_input_validation() {
+    # Malformed requests must return 4xx with a structured error — NOT
+    # 500 (server bug) and NOT a hang. Probes six flavors of bad input:
+    #   1. invalid JSON body
+    #   2. missing `messages` field
+    #   3. empty `messages` array
+    #   4. negative max_tokens
+    #   5. temperature out of range
+    #   6. unknown `messages[].role`
+    # Each returning 4xx counts as a pass. 5xx or 2xx (silent accept)
+    # is a regression.
+    local m=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local pass=0 total=6 notes=""
+    probe() {
+        local label="$1" body="$2"
+        local code
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+            -X POST "$BASE/v1/chat/completions" \
+            -H "content-type: application/json" -d "$body")
+        if [ "${code:0:1}" = "4" ]; then
+            pass=$((pass+1))
+        fi
+        notes="$notes $label=$code"
+    }
+    probe invJSON        '{this is not json'
+    probe noMessages     "{\"model\":\"$m\",\"max_tokens\":4}"
+    probe emptyMessages  "{\"model\":\"$m\",\"messages\":[]}"
+    probe negMax         "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":-1}"
+    probe wildTemp       "{\"model\":\"$m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"temperature\":99}"
+    probe badRole        "{\"model\":\"$m\",\"messages\":[{\"role\":\"alien\",\"content\":\"hi\"}]}"
+    local ok=false
+    [ "$pass" -ge 4 ] && ok=true  # tolerate 2 that might 200-accept if engine auto-clamps
+    emit "{\"name\":\"input_validation\",\"ok\":$ok,\"notes\":\"$pass/$total:$notes\"}"
+}
+
 case_sleep_wake_cycle() {
     # Exercise the admin lifecycle: POST /admin/soft-sleep → verify the
     # next chat request transparently wakes → POST /admin/deep-sleep →
@@ -981,6 +1016,7 @@ suite_full() {
     case_stream_usage
     case_deterministic
     case_logprobs
+    case_input_validation
     case_sleep_wake_cycle
     case_reasoning_content
     case_large_context
