@@ -80,6 +80,81 @@ struct vMLXApp: App {
                 .environment(appState)
         }
         .menuBarExtraStyle(.window)
+
+        // Scene-level `.commands { ... }` block registers File/View/Window
+        // menu-bar entries so users can hit standard macOS shortcuts.
+        // Without this the menu bar only shows the default SwiftUI menus
+        // and keyboard shortcuts are reachable only from inside the app's
+        // focused tab, not from the menu bar.
+        .commands {
+            // Replace the default "New" command (Cmd-N) with "New Chat"
+            // wired to ChatViewModel.newSession so Cmd-N from any tab
+            // lands on a fresh chat.
+            CommandGroup(replacing: .newItem) {
+                Button("New Chat") {
+                    appState.mode = .chat
+                    appState.chatViewModelRef?.newSession()
+                }
+                .keyboardShortcut("n", modifiers: [.command])
+
+                Button("Reopen Last Closed Chat") {
+                    appState.mode = .chat
+                    appState.chatViewModelRef?.reopenLastClosed()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            }
+
+            // View menu — tab switching. Cmd-1..Cmd-5 route to the five
+            // top-level modes so keyboard users can navigate without
+            // touching the sidebar.
+            CommandMenu("View") {
+                Button("Chat")     { appState.mode = .chat }
+                    .keyboardShortcut("1", modifiers: [.command])
+                Button("Server")   { appState.mode = .server }
+                    .keyboardShortcut("2", modifiers: [.command])
+                Button("Image")    { appState.mode = .image }
+                    .keyboardShortcut("3", modifiers: [.command])
+                Button("Terminal") { appState.mode = .terminal }
+                    .keyboardShortcut("4", modifiers: [.command])
+                Button("API")      { appState.mode = .api }
+                    .keyboardShortcut("5", modifiers: [.command])
+                Divider()
+                Button("Command Palette…") {
+                    appState.showCommandBar.toggle()
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+            }
+
+            // Window → Downloads. Uses the named WindowGroup defined
+            // above so macOS-level "bring window forward" logic works.
+            CommandGroup(after: .windowArrangement) {
+                Divider()
+                Button("Downloads") { openDownloadsWindow() }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
+        }
+    }
+
+    /// AppKit fallback to focus or open the Downloads window from the
+    /// menu-bar command. SwiftUI's `@Environment(\.openWindow)` can't be
+    /// captured at Scene scope, so we reach into NSApp — the named
+    /// WindowGroup id "downloads" matches the scene declaration above.
+    private func openDownloadsWindow() {
+        #if canImport(AppKit)
+        // If a Downloads window is already open, bring it forward.
+        for win in NSApp.windows {
+            if win.identifier?.rawValue.contains("downloads") == true {
+                win.makeKeyAndOrderFront(nil)
+                return
+            }
+        }
+        // Otherwise, post the `openWindow` URL scheme SwiftUI synthesises
+        // for named WindowGroups (see Apple's SwiftUI Scene documentation
+        // — the URL form is honoured by NSApp.openURL).
+        if let url = URL(string: "vmlx://downloads") {
+            NSWorkspace.shared.open(url)
+        }
+        #endif
     }
 }
 
@@ -435,6 +510,56 @@ final class AppState {
 
     func observeEngine() async {
         rebindEngineObserver()
+        // Phase-4 follow-up: AppState.sessions used to live entirely in
+        // memory, so quitting the app dropped every open server session.
+        // SessionSettings persist per-id in SettingsDB; hydrate from there
+        // on launch so users come back to the same session list they left.
+        await hydrateSessionsFromSettings()
+    }
+
+    /// Rebuild `sessions` from persisted `SessionSettings` on launch so
+    /// server sessions survive app restart. Each row gets a dedicated
+    /// Engine actor + per-session state observer (same plumbing as
+    /// `SessionDashboard.createSession`). Engines start in `.stopped` —
+    /// the user clicks Start to reload the model.
+    func hydrateSessionsFromSettings() async {
+        guard sessions.isEmpty else { return }  // idempotent
+        let store = await engine.settings
+        let ids = await store.allSessionIDs()
+        var restored: [Session] = []
+        for id in ids {
+            guard let s = await store.session(id) else { continue }
+            let modelPath = s.modelPath
+            // engine(for:) spawns the Engine actor + per-session state
+            // observer; we never need to hold the returned actor here,
+            // the dict lookup in subsequent dispatch paths picks it up.
+            _ = engine(for: id)
+            let session = Session(
+                id: id,
+                displayName: s.displayName ?? modelPath.lastPathComponent,
+                modelPath: modelPath,
+                family: SessionHeuristics.family(modelPath),
+                isJANG: SessionHeuristics.isJANG(modelPath),
+                isMXTQ: SessionHeuristics.isMXTQ(modelPath),
+                quantBits: nil,
+                host: s.host ?? "127.0.0.1",
+                port: s.port ?? 8000,
+                pid: nil,
+                latencyMs: nil,
+                state: .stopped,
+                loadProgress: nil
+            )
+            restored.append(session)
+        }
+        if !restored.isEmpty {
+            sessions = restored
+            // Pick the first hydrated session so the Server tab opens on
+            // a meaningful row instead of the empty-state screen.
+            if selectedServerSessionId == nil {
+                selectedServerSessionId = restored.first?.id
+                rebindEngineObserver()
+            }
+        }
     }
 
     func rebindEngineObserver() {

@@ -355,18 +355,31 @@ struct SessionDashboard: View {
 
     // MARK: - Tiny display-only heuristics (JANG/MXTQ badges on the card)
 
-    private func detectFamily(_ url: URL) -> String {
+    private func detectFamily(_ url: URL) -> String { SessionHeuristics.family(url) }
+    private func detectJANG(_ url: URL) -> Bool { SessionHeuristics.isJANG(url) }
+    private func detectMXTQ(_ url: URL) -> Bool { SessionHeuristics.isMXTQ(url) }
+}
+
+/// Display-only name-based heuristics for the Session card's badges and
+/// family label. Extracted so `AppState.hydrateSessionsFromSettings()`
+/// and `SessionDashboard.createSession(for:)` share the same rules —
+/// otherwise a persisted session would show different badges than a
+/// freshly-created one. Kept non-authoritative: the engine's real
+/// capability detector (`CapabilityDetector`) is the source of truth
+/// for loading; these are just card decorations.
+enum SessionHeuristics {
+    static func family(_ url: URL) -> String {
         let n = url.lastPathComponent.lowercased()
         for f in ["qwen", "mistral", "gemma", "llama", "glm", "nemotron", "minimax", "deepseek"] {
             if n.contains(f) { return f }
         }
         return "model"
     }
-    private func detectJANG(_ url: URL) -> Bool {
+    static func isJANG(_ url: URL) -> Bool {
         let n = url.lastPathComponent.lowercased()
         return n.contains("jang") || n.contains("mlxq")
     }
-    private func detectMXTQ(_ url: URL) -> Bool {
+    static func isMXTQ(_ url: URL) -> Bool {
         url.lastPathComponent.lowercased().contains("mxtq")
     }
 }
