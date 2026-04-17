@@ -28,7 +28,8 @@ struct VMLX: AsyncParsableCommand {
 struct Serve: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Start the OpenAI-compatible server")
 
-    @Option(name: .shortAndLong) var model: String
+    @Option(name: .shortAndLong, help: "Path to the chat model. Optional when --embedding-model is set (embedding-only server).")
+    var model: String?
     @Option(name: .long, help: "Path to an embedding model. When set, `/v1/embeddings` becomes callable. Alongside --model; the chat model still serves /v1/chat/completions etc.")
     var embeddingModel: String?
     @Option(name: .shortAndLong) var host: String = "127.0.0.1"
@@ -301,34 +302,44 @@ struct Serve: AsyncParsableCommand {
         // `CacheCoordinatorConfig`. Default `LoadOptions(modelPath:)`
         // ignores GlobalSettings entirely, which is why the cache flag
         // was silently dropped before this change.
-        let resolved = await engine.settings.resolved(sessionId: nil, chatId: nil)
-        let loadOpts = Engine.LoadOptions(
-            modelPath: URL(fileURLWithPath: model),
-            from: resolved
-        )
-        let loadStream = await engine.load(loadOpts)
-        do {
-            for try await event in loadStream {
-                switch event {
-                case .progress(let p):
-                    if jsonProgress {
-                        let line = #"{"phase":"\#(p.phase.rawValue)","message":"\#(p.label)","fraction":\#(p.fraction)}"#
-                        FileHandle.standardError.write(Data((line + "\n").utf8))
-                    } else {
-                        FileHandle.standardError.write(
-                            Data("[load] \(p.phase.rawValue): \(p.label)\n".utf8)
-                        )
-                    }
-                case .done:
-                    break
-                case .failed(let reason):
-                    throw EngineError.modelNotFound(URL(fileURLWithPath: model))
-                        .context("\(reason)")
-                }
-            }
-        } catch {
-            FileHandle.standardError.write(Data("[load] failed: \(error)\n".utf8))
+        // Either --model or --embedding-model must be provided. Chat-only,
+        // embedding-only, and chat+embedding are all valid server topologies.
+        if model == nil && (embeddingModel == nil || embeddingModel!.isEmpty) {
+            FileHandle.standardError.write(Data(
+                "[cli] error: provide --model and/or --embedding-model\n".utf8))
             throw ExitCode.failure
+        }
+
+        if let modelPath = model, !modelPath.isEmpty {
+            let resolved = await engine.settings.resolved(sessionId: nil, chatId: nil)
+            let loadOpts = Engine.LoadOptions(
+                modelPath: URL(fileURLWithPath: modelPath),
+                from: resolved
+            )
+            let loadStream = await engine.load(loadOpts)
+            do {
+                for try await event in loadStream {
+                    switch event {
+                    case .progress(let p):
+                        if jsonProgress {
+                            let line = #"{"phase":"\#(p.phase.rawValue)","message":"\#(p.label)","fraction":\#(p.fraction)}"#
+                            FileHandle.standardError.write(Data((line + "\n").utf8))
+                        } else {
+                            FileHandle.standardError.write(
+                                Data("[load] \(p.phase.rawValue): \(p.label)\n".utf8)
+                            )
+                        }
+                    case .done:
+                        break
+                    case .failed(let reason):
+                        throw EngineError.modelNotFound(URL(fileURLWithPath: modelPath))
+                            .context("\(reason)")
+                    }
+                }
+            } catch {
+                FileHandle.standardError.write(Data("[load] failed: \(error)\n".utf8))
+                throw ExitCode.failure
+            }
         }
 
         // Embedding model side-load. `--embedding-model` lets the server
@@ -399,9 +410,10 @@ struct Serve: AsyncParsableCommand {
         // buffered stdout when redirected to a file, which used to hide
         // this line entirely when the process exited quickly for any
         // reason.
+        let banner = model ?? embeddingModel ?? "(no model)"
         FileHandle.standardError.write(Data(
-            "vmlx serving \(model) at \(scheme)://\(host):\(port)\n".utf8))
-        print("vmlx serving \(model) at \(scheme)://\(host):\(port)")
+            "vmlx serving \(banner) at \(scheme)://\(host):\(port)\n".utf8))
+        print("vmlx serving \(banner) at \(scheme)://\(host):\(port)")
         do {
             try await server.run()
             FileHandle.standardError.write(Data(

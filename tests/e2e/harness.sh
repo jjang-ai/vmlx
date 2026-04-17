@@ -37,11 +37,20 @@ start_server() {
     local extra=()
     [ -n "${EMBEDDING_MODEL:-}" ] && extra+=(--embedding-model "$EMBEDDING_MODEL")
     [ -n "${EXTRA_FLAGS:-}" ] && extra+=($EXTRA_FLAGS)
-    # `set -u` + empty array expansion trips `unbound variable` on bash 3 —
-    # guard with the `+` form so the expansion disappears when `extra` is
-    # empty instead of erroring.
-    "$CLI" serve --model "$MODEL" --host "$HOST" --port "$PORT" \
-        ${extra[@]+"${extra[@]}"} > "$LOG" 2>&1 &
+    # For the embedding suite the MODEL path IS the embedding model — load
+    # it via `--embedding-model` rather than `--model` so `/v1/embeddings`
+    # has a live loader and the text-gen path stays off (MODEL==
+    # Qwen3-Embedding-0.6B isn't a causal LM). Dummy text model ensures
+    # /v1/models surfaces *something* so the harness readiness probe
+    # succeeds; the embedding endpoint resolves via the embedding-model
+    # slot.
+    if [ "$SUITE" = "embedding" ]; then
+        "$CLI" serve --embedding-model "$MODEL" --host "$HOST" --port "$PORT" \
+            ${extra[@]+"${extra[@]}"} > "$LOG" 2>&1 &
+    else
+        "$CLI" serve --model "$MODEL" --host "$HOST" --port "$PORT" \
+            ${extra[@]+"${extra[@]}"} > "$LOG" 2>&1 &
+    fi
     SERVER_PID=$!
     # Poll /v1/models until ready (or timeout after 300s for 60GB models)
     for i in $(seq 1 300); do
