@@ -55,3 +55,4 @@ TEST-MATRIX-*.md
 .sisyphus/
 .playwright-mcp/
 .env.signing.example
+.env.signing

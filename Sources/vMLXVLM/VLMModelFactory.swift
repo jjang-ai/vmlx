@@ -111,7 +111,8 @@ public enum VLMTypeRegistry {
                 }
             }
             if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
-                check.weightFormat == "mxtq" || check.textConfig?.weightFormat == "mxtq"
+                check.weightFormat?.lowercased() == "mxtq"
+                 || check.textConfig?.weightFormat?.lowercased() == "mxtq"
             {
                 let config = try JSONDecoder.json5().decode(
                     Qwen35MoEJANGTQConfiguration.self, from: data)

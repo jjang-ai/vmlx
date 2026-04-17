@@ -40,28 +40,16 @@ public enum LLMTypeRegistry {
             "qwen3_next": create(Qwen3NextConfiguration.self, Qwen3NextModel.init),
             "qwen3_5": create(Qwen35Configuration.self, Qwen35Model.init),
             "qwen3_5_moe": { data in
-                // Sniff weight_format at the top level. JANGTQ-quantized
-                // checkpoints declare `weight_format: "mxtq"` — route to
-                // the JANGTQ model so the routed-expert MoE projections
-                // run through TurboQuantSwitchGLU. Affine MoE checkpoints
-                // (no weight_format key) fall through to Qwen35MoEModel.
-                struct FormatCheck: Codable {
-                    let weightFormat: String?
-                    let textConfig: TextConfigCheck?
-                    enum CodingKeys: String, CodingKey {
-                        case weightFormat = "weight_format"
-                        case textConfig = "text_config"
-                    }
-                    struct TextConfigCheck: Codable {
-                        let weightFormat: String?
-                        enum CodingKeys: String, CodingKey {
-                            case weightFormat = "weight_format"
-                        }
-                    }
-                }
-                if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
-                    check.weightFormat == "mxtq" || check.textConfig?.weightFormat == "mxtq"
-                {
+                // Sniff weight_format at the top level OR nested under
+                // text_config. JANGTQ-quantized checkpoints declare
+                // `weight_format: "mxtq"` — route to the JANGTQ model so
+                // the routed-expert MoE projections run through
+                // TurboQuantSwitchGLU. Affine MoE checkpoints (no
+                // weight_format key) fall through to Qwen35MoEModel.
+                //
+                // Comparison is case-insensitive — `jang_tools` writes
+                // lowercase but third-party converters may emit "MXTQ".
+                if FormatSniff.isMXTQ(from: data) {
                     let config = try JSONDecoder.json5().decode(
                         Qwen35JANGTQConfiguration.self, from: data)
                     return Qwen35JANGTQModel(config)
@@ -100,14 +88,12 @@ public enum LLMTypeRegistry {
             "mimo_v2_flash": create(MiMoV2FlashConfiguration.self, MiMoV2FlashModel.init),
             "minimax": create(MiniMaxConfiguration.self, MiniMaxModel.init),
             "minimax_m2": { data in
-                // Peek at weight_format — "mxtq" routes to the JANGTQ variant.
-                struct FormatCheck: Codable {
-                    let weightFormat: String?
-                    enum CodingKeys: String, CodingKey { case weightFormat = "weight_format" }
-                }
-                if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
-                    check.weightFormat == "mxtq"
-                {
+                // Peek at weight_format (top-level OR nested text_config,
+                // case-insensitive) — "mxtq" routes to the JANGTQ variant.
+                // Previously only checked top-level exact-case; VLM
+                // wrappers that nest minimax_m2 under `text_config` +
+                // uppercase `"MXTQ"` fell through to affine.
+                if FormatSniff.isMXTQ(from: data) {
                     let config = try JSONDecoder.json5().decode(
                         MiniMaxJANGTQConfiguration.self, from: data)
                     return MiniMaxJANGTQModel(config)
@@ -117,17 +103,12 @@ public enum LLMTypeRegistry {
             },
             "glm4": create(GLM4Configuration.self, GLM4Model.init),
             "glm4_moe": { data in
-                // Sniff weight_format. JANGTQ-quantized GLM 5.1 declares
+                // Sniff weight_format (top-level OR nested text_config,
+                // case-insensitive). JANGTQ-quantized GLM 5.1 declares
                 // `weight_format: "mxtq"` and routes to the JANGTQ model
                 // so routed-expert MoE projections run through
                 // TurboQuantSwitchGLU. Affine GLM 4 / 5.1 fall through.
-                struct FormatCheck: Codable {
-                    let weightFormat: String?
-                    enum CodingKeys: String, CodingKey { case weightFormat = "weight_format" }
-                }
-                if let check = try? JSONDecoder.json5().decode(FormatCheck.self, from: data),
-                    check.weightFormat == "mxtq"
-                {
+                if FormatSniff.isMXTQ(from: data) {
                     let config = try JSONDecoder.json5().decode(
                         GLM4MoEJANGTQConfiguration.self, from: data)
                     return GLM4MoEJANGTQModel(config)
