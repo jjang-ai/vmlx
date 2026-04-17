@@ -1,0 +1,24 @@
+{"name":"start","ok":true,"notes":"model=11de96878523501bcaa86104e3c186de07ff9068 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=98757"}
+{"name":"models_list","ok":true,"notes":"40 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":117,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 9, "tokens": 202, "tps": 97.8, "notes": "decode_ms=2056"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":3,"notes":"finish=stop"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":92,"notes":"t1=100ms t2=92ms"}
+{"name": "prefix_cache_hit_ratio", "ok": true, "notes": "t1 cached=259 prefill=9ms  t2 cached=256 prefill=14ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=1. Apple  "}
+{"name":"json_mode","ok":true,"notes":"{\"color\": \"blue\"}"}
+{"name":"ollama_chat","ok":true,"notes":"Hi! Have a great day!"}
+{"name":"anthropic_messages","ok":true,"notes":"Hello! How can I assist you today"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"concurrent_burst","ok":true,"notes":"5/5 ok; alive=200"}
+{"name": "cancel_midstream", "ok": true, "notes": "stream_started=True followup_ok=True"}
+{"name": "tool_call", "ok": false, "notes": "finish=stop tc=0 content=The weather in Paris is sunny with a temperature of 15\u00b0C."}
+{"name":"tool_roundtrip","ok":false,"notes":"step 1: no tool_calls emitted"}
+{"name": "stream_usage", "ok": true, "notes": "usage={'completion_tokens': 7, 'prefill_ms': 7.367968559265137, 'prompt_tokens':"}
+{"name": "reasoning_content", "ok": true, "notes": "reasoning=0 content=127 leak=False"}
+{"name": "large_context", "ok": true, "notes": "prompt_tok=5409 elapsed=311ms c=**Answer:** 137."}
+{"name":"done","ok":true}

@@ -1,0 +1,24 @@
+{"name":"start","ok":true,"notes":"model=76b6a5af250fa029339a757deeb93716baa8ead0 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=99721"}
+{"name":"models_list","ok":true,"notes":"40 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":2353,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": false, "ttft_ms": 9, "tokens": 2, "tps": 0.4, "notes": "decode_ms=2305"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":2781,"notes":"t1=2499ms t2=2781ms"}
+{"name": "prefix_cache_hit_ratio", "ok": true, "notes": "t1 cached=0 prefill=805ms  t2 cached=256 prefill=845ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=Kiwi"}
+{"name":"json_mode","ok":true,"notes":"{\"color\": \"blue\"}"}
+{"name":"ollama_chat","ok":false,"notes":""}
+{"name":"anthropic_messages","ok":false,"notes":""}
+{"name":"concurrent","ok":false,"notes":"0/3 succeeded"}
+{"name":"concurrent_burst","ok":true,"notes":"5/5 ok; alive=200"}
+{"name": "cancel_midstream", "ok": true, "notes": "stream_started=True followup_ok=True"}
+{"name": "tool_call", "ok": false, "notes": "finish=stop tc=0 content=Please provide the tool you are referring to so I can check "}
+{"name":"tool_roundtrip","ok":false,"notes":"step 1: no tool_calls emitted"}
+{"name": "stream_usage", "ok": true, "notes": "usage={'completion_tokens': 7, 'prefill_ms': 317.9590702056885, 'prompt_tokens':"}
+{"name": "reasoning_content", "ok": true, "notes": "reasoning=0 content=128 leak=False"}
+{"name": "large_context", "ok": true, "notes": "prompt_tok=5819 elapsed=21976ms c=Line 137: the number is 137."}
+{"name":"done","ok":true}

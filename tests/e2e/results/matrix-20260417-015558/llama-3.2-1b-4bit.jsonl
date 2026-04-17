@@ -1,0 +1,24 @@
+{"name":"start","ok":true,"notes":"model=08231374eeacb049a0eade7922910865b8fce912 suite=full"}
+{"name":"server_start","ok":true,"notes":"pid=99206"}
+{"name":"models_list","ok":true,"notes":"40 model(s) in picker"}
+{"name":"basic_chat","ok":true,"ttft_ms":147,"tokens":1,"notes":"OK"}
+{"name": "sse_stream", "ok": true, "ttft_ms": 13, "tokens": 202, "tps": 140.8, "notes": "decode_ms=1428"}
+{"name":"metrics_endpoint","ok":true,"notes":"HTTP 200"}
+{"name":"ollama_tags","ok":true,"notes":"HTTP 200"}
+{"name":"max_tokens","ok":true,"tokens":4,"notes":"finish=length"}
+{"name":"multiturn_prefix_cache","ok":true,"ttft_ms":112,"notes":"t1=82ms t2=112ms"}
+{"name": "prefix_cache_hit_ratio", "ok": true, "notes": "t1 cached=0 prefill=105ms  t2 cached=256 prefill=28ms"}
+<stdin>:2: SyntaxWarning: "\/" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\/"? A raw string is also an option.
+{"name":"stop_sequences","ok":true,"notes":"finish=stop nl=False c=I can generate the list for you. Here it is:Cherries"}
+{"name":"json_mode","ok":false,"notes":"{\"error\": \"response is not valid JSON: The data couldn\u2019t be read because it isn\u2019"}
+{"name":"ollama_chat","ok":true,"notes":"I've stopped."}
+{"name":"anthropic_messages","ok":true,"notes":"It seems like you're trying to say"}
+{"name":"concurrent","ok":true,"notes":"3/3 succeeded"}
+{"name":"concurrent_burst","ok":true,"notes":"5/5 ok; alive=200"}
+{"name": "cancel_midstream", "ok": true, "notes": "stream_started=True followup_ok=True"}
+{"name": "tool_call", "ok": false, "notes": "finish=stop tc=0 content=<|python_tag|>{\"name\": \"get_weather\", \"parameters_json\": \"{\\"}
+{"name":"tool_roundtrip","ok":false,"notes":"step 1: no tool_calls emitted"}
+{"name": "stream_usage", "ok": true, "notes": "usage={'completion_tokens': 5, 'prefill_ms': 27.221083641052246, 'prompt_tokens'"}
+{"name": "reasoning_content", "ok": true, "notes": "reasoning=0 content=115 leak=False"}
+{"name": "large_context", "ok": true, "notes": "prompt_tok=4061 elapsed=3929ms c=To find the number on Line 137, we need "}
+{"name":"done","ok":true}
