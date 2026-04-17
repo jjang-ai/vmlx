@@ -58,6 +58,20 @@ struct BenchmarkPanel: View {
 
     // MARK: - Presets
 
+    /// Engine-state gate for the preset buttons. Bench runs dispatch real
+    /// generation requests via `Engine.benchmark`, which requires a loaded
+    /// model. Previously the buttons were only disabled while another bench
+    /// was in flight, so a user could click during `.loading` / `.error` /
+    /// `.stopped` and hit `.failed("No model loaded")` with no UI hint.
+    /// Gate by running-or-standby so JIT wake still works.
+    private var canStartBench: Bool {
+        guard running == nil else { return false }
+        switch app.engineState {
+        case .running, .standby: return true
+        case .stopped, .loading, .error: return false
+        }
+    }
+
     private var presetRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
             ForEach(Engine.BenchSuite.allCases, id: \.self) { suite in
@@ -75,7 +89,10 @@ struct BenchmarkPanel: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(running != nil)
+                .disabled(!canStartBench)
+                .help(canStartBench
+                    ? "Run \(suite.displayName) benchmark"
+                    : "Benchmark requires a loaded model — start the session first")
             }
             Spacer()
         }

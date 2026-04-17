@@ -45,7 +45,13 @@ struct SessionCard: View {
         .buttonStyle(.plain)
         .contextMenu {
             if case .standby = session.state { Button("Wake", action: onWake) }
-            if session.isRunning { Button("Stop", action: onStop) }
+            // Stop is valid in `.running`, either standby depth, AND `.error`
+            // (cleanly unload the dangling engine before reconnect). The
+            // action-row button already allowed all three; the context menu
+            // was silently gated to `.running` only, creating an
+            // inconsistency where right-click-menu-Stop was hidden while
+            // the card's inline Stop was live.
+            if canStop(session.state) { Button("Stop", action: onStop) }
             if case .error = session.state { Button("Reconnect", action: onReconnect) }
             Button("Open logs", action: onSelect)
             Divider()
@@ -124,6 +130,17 @@ struct SessionCard: View {
         case .standby(.soft): return "Light Sleep"
         case .standby(.deep): return "Deep Sleep"
         case .error:          return "Error"
+        }
+    }
+
+    /// Stop is valid in any non-stopped/non-loading state. Keeps the card's
+    /// inline Stop button and the right-click Stop menu item in lock-step —
+    /// previously the action row allowed Stop for `.running` + `.standby` +
+    /// `.error` while the context menu hid it for the latter two.
+    private func canStop(_ state: EngineState) -> Bool {
+        switch state {
+        case .running, .standby, .error: return true
+        case .stopped, .loading:         return false
         }
     }
 
