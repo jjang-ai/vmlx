@@ -770,6 +770,47 @@ print(json.dumps({"name":"stream_usage","ok":ok=="true","notes":note[:80]}))
 PY
 }
 
+case_stream_usage_opt_out() {
+    # Inverse of case_stream_usage: when `stream_options.include_usage`
+    # is absent OR explicitly false, the server MUST NOT emit a usage
+    # block in any streamed chunk. Some OpenAI SDK clients error when
+    # they see a chunk with `{"choices":[],"usage":{...}}` and weren't
+    # told to expect one (missing field in schema). This gates against
+    # a "usage always included" regression.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    python3 <<PY
+import json, subprocess
+body = {
+    "model": "$model_id",
+    "messages":[{"role":"user","content":"Hi."}],
+    "max_tokens": 5,
+    "stream": True,
+    "temperature": 0,
+}
+p = subprocess.Popen(
+    ["curl","-sN","-X","POST","$BASE/v1/chat/completions",
+     "-H","content-type: application/json","-d", json.dumps(body)],
+    stdout=subprocess.PIPE, text=True)
+usage_leaked = False
+n_chunks = 0
+for line in p.stdout:
+    if not line.startswith("data:"): continue
+    if line.strip() == "data: [DONE]": break
+    try:
+        d = json.loads(line[5:].strip())
+    except Exception:
+        continue
+    n_chunks += 1
+    if d.get("usage"):
+        usage_leaked = True
+        break
+p.wait(timeout=2)
+ok = not usage_leaked and n_chunks > 0
+note = f"chunks={n_chunks} leaked={usage_leaked}"
+print(json.dumps({"name":"stream_usage_opt_out","ok":ok,"notes":note}))
+PY
+}
+
 case_tool_roundtrip() {
     # Tool-call feedback loop — two-hop exchange:
     #   1. Client sends messages + tool defs → server emits tool_calls
@@ -1208,6 +1249,7 @@ suite_full() {
     case_large_context
     case_cache_flush_roundtrip
     case_ollama_version
+    case_stream_usage_opt_out
 }
 
 suite_vl() {
