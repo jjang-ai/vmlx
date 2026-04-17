@@ -109,6 +109,31 @@ public func loadWeights(
         }
     }
 
+    // Empty-weight guard. A bundle with zero safetensors shards (typical
+    // symptom: HuggingFace snapshot dir where only `config.json` +
+    // tokenizer were fetched and the .safetensors blobs never downloaded)
+    // used to silently fall through `model.update(verify: [.noUnusedKeys])`
+    // because `noUnusedKeys` only checks that the incoming dict has no
+    // extras — it does NOT check that every module parameter got a value.
+    // The model then ran the MLX graph evaluator on its freshly-initialized
+    // random parameters, which hangs Metal on anything MoE-sized (e.g.
+    // Gemma 4 26B-A4B: the load bar pins at "100% Ready" while the backend
+    // silently stalls on a 26B random-weight graph evaluation).
+    //
+    // Throw a clear, user-actionable message instead. Also runs for the
+    // JangSpec / JANG-v1 branches above because they populate the same
+    // `weights` dict — an empty JangSpec bundle fails here too.
+    if weights.isEmpty {
+        throw JangLoaderError.loadFailed(
+            "No safetensors weights found in \(modelDirectory.lastPathComponent). "
+          + "The bundle contains config/tokenizer files but no weight shards "
+          + "— likely a partial HuggingFace download. Re-fetch the model "
+          + "(DownloadStatusBar → pull again, or `vmlx pull <repo>`) and "
+          + "retry. Expected: `model-0000X-of-0000Y.safetensors` or a "
+          + "`.jangspec` bundle directory."
+        )
+    }
+
     // JANGTQ native-path validation. When `jang_config.weight_format ==
     // "mxtq"` (or the sidecar is present) we're committed to the
     // TurboQuant-native code path — we skipped the affine expander and

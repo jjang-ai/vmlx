@@ -303,17 +303,69 @@ public actor ModelLibrary {
         guard let topLevel = try? fm.contentsOfDirectory(
             at: hub, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
 
+        // ONE snapshot per models--<org>--<repo> directory. HF cache routinely
+        // accumulates multiple revs per repo (a fully-downloaded commit plus
+        // partials from subsequent metadata-only fetches). Before 2026-04-16
+        // we emitted every rev with a config.json — which surfaced empty
+        // stub snapshots in the picker, and clicking one hung the loader at
+        // "100% Ready" on a random-weight graph (see Load.swift empty-weight
+        // guard for the downstream symptom). Now we pick exactly one rev
+        // per repo using this order:
+        //   1. If `refs/main` exists and the referenced snapshot has ≥1
+        //      weight file (.safetensors / .bin / .gguf), use it.
+        //   2. Otherwise, pick the snapshot with the largest aggregate
+        //      weight size. Ties broken by newest mtime.
+        //   3. If no snapshot has any weights, emit NONE (the repo is a
+        //      metadata-only stub — don't clutter the picker).
         for modelDir in topLevel where modelDir.lastPathComponent.hasPrefix("models--") {
             let snapshots = modelDir.appendingPathComponent("snapshots", isDirectory: true)
             guard let revs = try? fm.contentsOfDirectory(
                 at: snapshots, includingPropertiesForKeys: nil) else { continue }
-            for rev in revs {
-                // Each snapshot rev dir contains config.json (symlinks into blobs/).
-                let cfg = rev.appendingPathComponent("config.json")
-                if fm.fileExists(atPath: cfg.path) {
-                    out.append(rev)
+
+            // Try refs/main first — the "canonical" rev for this repo.
+            var refMainURL: URL? = nil
+            let refsMain = modelDir
+                .appendingPathComponent("refs", isDirectory: true)
+                .appendingPathComponent("main")
+            if let sha = try? String(contentsOf: refsMain, encoding: .utf8) {
+                let trimmed = sha.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let candidate = snapshots.appendingPathComponent(trimmed, isDirectory: true)
+                    let cfg = candidate.appendingPathComponent("config.json")
+                    if fm.fileExists(atPath: cfg.path),
+                       totalWeightBytes(in: candidate) > 0
+                    {
+                        refMainURL = candidate
+                    }
                 }
             }
+            if let picked = refMainURL {
+                out.append(picked)
+                continue
+            }
+
+            // Fall back to largest-weight snapshot.
+            var best: (url: URL, size: Int64, mtime: Date)? = nil
+            for rev in revs {
+                let cfg = rev.appendingPathComponent("config.json")
+                guard fm.fileExists(atPath: cfg.path) else { continue }
+                let size = totalWeightBytes(in: rev)
+                guard size > 0 else { continue }
+                let mtime = (try? fm.attributesOfItem(atPath: rev.path))?[.modificationDate]
+                    as? Date ?? Date.distantPast
+                if let cur = best {
+                    if size > cur.size || (size == cur.size && mtime > cur.mtime) {
+                        best = (rev, size, mtime)
+                    }
+                } else {
+                    best = (rev, size, mtime)
+                }
+            }
+            if let picked = best?.url {
+                out.append(picked)
+            }
+            // else: repo is metadata-only — skip silently so the picker
+            // doesn't show a dead entry.
         }
         return out
     }
@@ -425,6 +477,17 @@ public actor ModelLibrary {
 
         let displayName = deriveDisplayName(dir: dir, source: source, config: json)
         let sizeBytes = totalWeightBytes(in: dir)
+        // Zero-weight guard: any dir that has config.json but no
+        // .safetensors/.bin/.gguf shards is a stub — either a partial HF
+        // download, a standalone tokenizer repo, or a config-only metadata
+        // release. Emitting it into the picker means a user can click it
+        // and hang the loader evaluating uninitialized parameters. Image
+        // / diffusion pipelines are the one exception: they don't carry
+        // top-level weight files (the transformer / vae subdirs do), so
+        // allow them through.
+        if sizeBytes == 0 && modality != .image {
+            return nil
+        }
         let id = sha256(canonical.path)
 
         return ModelEntry(
