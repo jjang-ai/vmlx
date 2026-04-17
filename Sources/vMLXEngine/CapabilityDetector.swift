@@ -81,13 +81,24 @@ public enum CapabilityDetector {
             // stamp rollout the silver table was the primary source; this
             // log line makes it easy to spot a stamped model falling
             // through to silver (would indicate a parse bug).
-            FileHandle.standardError.write(Data((
-                "[vmlx][caps] detection_source=jang_stamped "
-                + "model_type=\(rawModelType) family=\(cap.family) "
-                + "reasoning=\(cap.reasoningParser ?? "nil") "
-                + "tool=\(cap.toolParser ?? "nil") "
-                + "modality=\(cap.modality.rawValue) cache=\(cap.cacheType)\n"
-            ).utf8))
+            //
+            // Gated on `VMLX_CAPS_LOG=1` so the library-scan path (which
+            // re-runs detect() for every entry on every freshness-window
+            // refresh) doesn't flood stderr with N copies of every
+            // model's cap line. Engine.load still records the loaded
+            // model's capabilities via `logs.append(.info, "engine", ...)`
+            // (Engine.swift:707) — the user-facing log is identical.
+            // Ops debugging a stamp miss can turn the raw stderr stream
+            // on with `VMLX_CAPS_LOG=1 vmlxctl serve ...`.
+            if ProcessInfo.processInfo.environment["VMLX_CAPS_LOG"] == "1" {
+                FileHandle.standardError.write(Data((
+                    "[vmlx][caps] detection_source=jang_stamped "
+                    + "model_type=\(rawModelType) family=\(cap.family) "
+                    + "reasoning=\(cap.reasoningParser ?? "nil") "
+                    + "tool=\(cap.toolParser ?? "nil") "
+                    + "modality=\(cap.modality.rawValue) cache=\(cap.cacheType)\n"
+                ).utf8))
+            }
             return cap
         }
 
@@ -161,13 +172,15 @@ public enum CapabilityDetector {
             isMXTQ: isMXTQ,
             config: config
         ) {
-            FileHandle.standardError.write(Data((
-                "[vmlx][caps] detection_source=template_sniff "
-                + "model_type=\(rawModelType) family=\(sniff.family) "
-                + "reasoning=\(sniff.reasoningParser ?? "nil") "
-                + "tool=\(sniff.toolParser ?? "nil") "
-                + "modality=\(sniff.modality.rawValue) cache=\(sniff.cacheType)\n"
-            ).utf8))
+            if ProcessInfo.processInfo.environment["VMLX_CAPS_LOG"] == "1" {
+                FileHandle.standardError.write(Data((
+                    "[vmlx][caps] detection_source=template_sniff "
+                    + "model_type=\(rawModelType) family=\(sniff.family) "
+                    + "reasoning=\(sniff.reasoningParser ?? "nil") "
+                    + "tool=\(sniff.toolParser ?? "nil") "
+                    + "modality=\(sniff.modality.rawValue) cache=\(sniff.cacheType)\n"
+                ).utf8))
+            }
             return sniff
         }
 
