@@ -400,6 +400,37 @@ public actor Engine {
     ///
     /// `nil` resets to the default search-path discovery
     /// (`./mcp.json` → `~/.config/vmlx/mcp.json` → legacy paths).
+    /// Upsert a single MCP server entry: merge `server` into the
+    /// current in-memory config (keyed by `server.name`), persist the
+    /// merged config to `path` (or the previously discovered file if
+    /// nil), and apply the result to the live `MCPServerManager`.
+    ///
+    /// The running subprocess for the affected name is torn down so the
+    /// next tool dispatch starts fresh against the new spec. Called by
+    /// the in-app MCP panel's add/edit sheet.
+    public func upsertMCPServer(_ server: MCPServerConfig, configPath: URL? = nil) async throws {
+        var cfg = await mcp.currentConfig()
+        cfg.servers[server.name] = server
+        let saved = try MCPConfigLoader.save(config: cfg, to: configPath)
+        await logs.append(.info, category: "mcp",
+            "Upserted MCP server '\(server.name)' → \(saved.path)")
+        await mcp.stopAll()
+        await mcp.setConfig(cfg)
+    }
+
+    /// Remove an MCP server by name: drop from the live config,
+    /// persist, and stop any running client. No-op if the name isn't
+    /// configured.
+    public func removeMCPServer(_ name: String, configPath: URL? = nil) async throws {
+        var cfg = await mcp.currentConfig()
+        guard cfg.servers.removeValue(forKey: name) != nil else { return }
+        let saved = try MCPConfigLoader.save(config: cfg, to: configPath)
+        await logs.append(.info, category: "mcp",
+            "Removed MCP server '\(name)' → \(saved.path)")
+        await mcp.stopAll()
+        await mcp.setConfig(cfg)
+    }
+
     public func reloadMCPConfig(path: URL?) async throws {
         let cfg: MCPConfig
         if let path {

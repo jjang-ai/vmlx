@@ -89,4 +89,32 @@ public enum MCPConfigLoader {
         }
         return cfg
     }
+
+    /// Persist an `MCPConfig` back to disk as pretty-printed JSON. Used
+    /// by the in-app CRUD UI so edits round-trip to the file the user
+    /// chose (or to the first default search path when none was set).
+    ///
+    /// Returns the URL that was written. Creates parent directories as
+    /// needed. Atomic write (temp-file + rename) so a crash mid-write
+    /// can't truncate the user's config.
+    @discardableResult
+    public static func save(config: MCPConfig, to explicit: URL? = nil) throws -> URL {
+        let fm = FileManager.default
+        let target: URL = {
+            if let explicit = explicit { return explicit }
+            if let found = findConfigFile() { return found }
+            // No existing file — land the new one at the primary
+            // default search path and create the parent dir.
+            return defaultSearchPaths[1]  // ~/.config/vmlx/mcp.json
+        }()
+        let parent = target.deletingLastPathComponent()
+        if !fm.fileExists(atPath: parent.path) {
+            try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(config)
+        try data.write(to: target, options: .atomic)
+        return target
+    }
 }
