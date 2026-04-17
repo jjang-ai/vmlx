@@ -525,15 +525,40 @@ case_ollama_tags() {
 
 case_embeddings() {
     # Requires an embedding-capable model (bert / qwen3-embedding / etc).
+    # Asserts empirical correctness beyond shape:
+    #   * dim > 64 (reasonable embedding width)
+    #   * 2 input strings → 2 output vectors
+    #   * L2 norms > 0 (rules out all-zero / NaN / collapsed output)
+    #   * distinct strings → distinct vectors (cosine sim < 0.999)
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp
     resp=$(curl -s -X POST "$BASE/v1/embeddings" \
         -H "content-type: application/json" \
-        -d "{\"model\":\"$model_id\",\"input\":[\"hello world\",\"goodbye world\"]}")
-    local dim=$(echo "$resp" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d["data"][0]["embedding"])) if d.get("data") else print(0)' 2>/dev/null || echo 0)
-    local ok=false
-    [ "$dim" -gt 64 ] && ok=true
-    emit "{\"name\":\"embeddings\",\"ok\":$ok,\"notes\":\"dim=$dim\"}"
+        -d "{\"model\":\"$model_id\",\"input\":[\"hello world\",\"the quick brown fox jumps over the lazy dog\"]}")
+    echo "$resp" > /tmp/vmlx-embed.json
+    python3 <<'PY'
+import json, math
+r = json.load(open("/tmp/vmlx-embed.json"))
+data = r.get("data") or []
+if len(data) < 2:
+    print(json.dumps({"name":"embeddings","ok":False,"notes":f"expected 2 vectors, got {len(data)}"}))
+    raise SystemExit
+v1 = data[0].get("embedding") or []
+v2 = data[1].get("embedding") or []
+dim = len(v1)
+def l2(v):
+    return math.sqrt(sum(x*x for x in v))
+def cos(a, b):
+    na, nb = l2(a), l2(b)
+    if na == 0 or nb == 0: return 0.0
+    return sum(x*y for x, y in zip(a, b)) / (na * nb)
+n1, n2 = l2(v1), l2(v2)
+c = cos(v1, v2)
+# Distinct strings must NOT collapse to the same vector.
+ok = dim > 64 and len(v2) == dim and n1 > 0.01 and n2 > 0.01 and c < 0.999
+notes = f"dim={dim} norm1={n1:.3f} norm2={n2:.3f} cos={c:.4f}"
+print(json.dumps({"name":"embeddings","ok":ok,"notes":notes}))
+PY
 }
 
 case_vision_chat() {
