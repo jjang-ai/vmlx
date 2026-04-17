@@ -290,6 +290,41 @@ except Exception:
     emit "{\"name\":\"json_mode\",\"ok\":$ok,\"notes\":$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1][:80]))' "$content")}"
 }
 
+case_tool_choice_none() {
+    # When `tool_choice: "none"` is set, the engine MUST NOT emit any
+    # tool_calls even if tools are provided. This matters for agent
+    # loops where the caller wants the model to stop calling tools and
+    # respond in prose (the "summarize tool outputs" step). A regression
+    # that always routes to tools would infinite-loop the agent.
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp
+    resp=$(curl -s -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 17+25?\"}],\"max_tokens\":40,\"temperature\":0,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"add\",\"description\":\"Add two numbers\",\"parameters\":{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}}}],\"tool_choice\":\"none\"}")
+    echo "$resp" > /tmp/vmlx-toolnone.json
+    python3 <<'PY'
+import json
+try:
+    r = json.load(open("/tmp/vmlx-toolnone.json"))
+    ch = (r.get("choices") or [{}])[0]
+    msg = ch.get("message") or {}
+    tc = msg.get("tool_calls") or []
+    content = msg.get("content") or ""
+    finish = ch.get("finish_reason")
+    # Contract: tool_choice=none => NO tool_calls, finish != tool_calls,
+    # content must be non-empty (the model responded in prose).
+    tc_suppressed = len(tc) == 0
+    finish_ok = finish != "tool_calls"
+    content_ok = bool(content)
+    ok = tc_suppressed and finish_ok and content_ok
+    notes = (f"tc_count={len(tc)} finish={finish} "
+             f"content={content[:40]!r}")
+    print(json.dumps({"name":"tool_choice_none","ok":ok,"notes":notes[:140]}))
+except Exception as e:
+    print(json.dumps({"name":"tool_choice_none","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
 case_legacy_completions() {
     # /v1/completions is the PRE-chat OpenAI endpoint. Still widely
     # used by text-only systems (autocomplete widgets, instruct-only
@@ -1668,6 +1703,7 @@ suite_full() {
     case_ollama_stream
     case_json_schema
     case_legacy_completions
+    case_tool_choice_none
 }
 
 suite_vl() {
