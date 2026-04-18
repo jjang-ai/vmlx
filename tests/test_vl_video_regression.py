@@ -1269,3 +1269,93 @@ class TestToolsReasoningInteraction:
                "_THINK_STRIP_RE.sub" in src, (
             "Think-strip mutation pattern must still exist"
         )
+
+
+class TestVmlx91SSMLongestPrefix:
+    """vmlx#91: SSM companion cache must allow resume-from-checkpoint when
+    the exact token count doesn't match but a valid earlier checkpoint exists.
+
+    Before: fetch() was exact-key only → new request at 58K tokens missed
+    because stored checkpoints at 52K/55K/61K/66K had no exact hit.
+    After: fetch_longest_prefix() finds the longest stored checkpoint
+    ≤ query_len whose key tokens are a strict prefix of the query.
+    Caller resumes from that checkpoint and prefills only the delta.
+    """
+
+    def test_exact_match_still_works_via_fetch_longest_prefix(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F: cache = None; lengths = None
+        c = SSMCompanionCache(max_entries=20)
+        tokens = list(range(100))
+        c.store(tokens, 50, [_F()])
+        r = c.fetch_longest_prefix(tokens, 50)
+        assert r is not None and r[0] == 50, (
+            "exact match must work via fetch_longest_prefix"
+        )
+
+    def test_longest_shorter_checkpoint_when_no_exact(self):
+        """Multiple checkpoints; query_len falls between — return longest <=."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F: cache = None; lengths = None
+        c = SSMCompanionCache(max_entries=20)
+        tokens = list(range(200))
+        c.store(tokens, 50, [_F()])
+        c.store(tokens, 120, [_F()])
+        c.store(tokens, 180, [_F()])
+        # Query at 150 → longest <= 150 is 120
+        r = c.fetch_longest_prefix(tokens, 150)
+        assert r is not None and r[0] == 120, (
+            f"expected longest <=150 = 120, got {r}"
+        )
+
+    def test_divergent_prefix_falls_back_to_shared_portion(self):
+        """Divergent token → must match the shared-prefix checkpoint only."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F: cache = None; lengths = None
+        c = SSMCompanionCache(max_entries=20)
+        tokens = list(range(100))
+        c.store(tokens, 30, [_F()])
+        c.store(tokens, 70, [_F()])
+        # Divergent at index 50 — 30 is fully shared, 70 is not
+        divergent = list(range(50)) + [999] + list(range(51, 100))
+        r = c.fetch_longest_prefix(divergent, 100)
+        assert r is not None and r[0] == 30, (
+            f"divergent at index 50 must select n=30 not n=70, got {r}"
+        )
+
+    def test_no_shared_prefix_returns_none(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F: cache = None; lengths = None
+        c = SSMCompanionCache(max_entries=20)
+        c.store(list(range(100)), 50, [_F()])
+        r = c.fetch_longest_prefix(list(range(1000, 1100)), 100)
+        assert r is None, "unrelated tokens must not match"
+
+    def test_max_len_caps_search(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F: cache = None; lengths = None
+        c = SSMCompanionCache(max_entries=20)
+        tokens = list(range(200))
+        c.store(tokens, 50, [_F()])
+        c.store(tokens, 150, [_F()])
+        # Cap search at 100 — only 50 is eligible
+        r = c.fetch_longest_prefix(tokens, 100)
+        assert r is not None and r[0] == 50
+
+    def test_eviction_purges_length_index(self):
+        """LRU evictions must clean up _length_index too."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F: cache = None; lengths = None
+        c = SSMCompanionCache(max_entries=2)
+        # Store 3 distinct entries at 3 lengths (same token family), evicting oldest
+        tokens = list(range(100))
+        c.store(tokens, 10, [_F()])
+        c.store(tokens, 20, [_F()])
+        c.store(tokens, 30, [_F()])  # should evict the n=10 entry
+        r = c.fetch_longest_prefix(tokens, 15)
+        # With n=10 evicted, the longest <=15 should be None (n=20 > 15)
+        assert r is None, (
+            f"n=10 should be evicted (LRU); query at 15 should miss, got {r}"
+        )
+        r2 = c.fetch_longest_prefix(tokens, 25)
+        assert r2 is not None and r2[0] == 20

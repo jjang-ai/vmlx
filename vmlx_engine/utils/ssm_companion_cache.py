@@ -83,7 +83,7 @@ import json
 import logging
 from collections import OrderedDict
 from copy import deepcopy
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import mlx.core as mx
 
@@ -143,6 +143,14 @@ class SSMCompanionCache:
         # Model identity prefix mixed into every key. Empty string is the
         # legacy "single-model" behavior — safe default.
         self._model_key = str(model_key or "")
+
+        # Auxiliary index: maps checkpoint length -> (key, prefix_hash)
+        # so fetch_longest_prefix can find the best resume point for
+        # a given token sequence without scanning the entire store.
+        # prefix_hash = sha256(model_key || token_ids[:n]) identifies the
+        # shared prefix family; different families with the same length
+        # live under different prefix_hashes.  vmlx#91.
+        self._length_index: Dict[int, Dict[str, str]] = {}
 
     @property
     def size(self) -> int:
@@ -204,13 +212,38 @@ class SSMCompanionCache:
         if num_tokens <= 0 or not ssm_states:
             return
         key = self._key(token_ids, num_tokens)
+        prefix_hash = self._prefix_hash(token_ids, num_tokens)
         # Remove existing entry to update its LRU position
         if key in self._store:
             del self._store[key]
+            self._length_index.get(num_tokens, {}).pop(prefix_hash, None)
         self._store[key] = (ssm_states, is_complete)
+        # Record in length index so fetch_longest_prefix can locate it.
+        self._length_index.setdefault(num_tokens, {})[prefix_hash] = key
         # Evict oldest if over limit
         while len(self._store) > self._max_entries:
-            self._store.popitem(last=False)
+            evict_key, _ = self._store.popitem(last=False)
+            self._index_remove(evict_key)
+
+    def _prefix_hash(self, token_ids: List[int], num_tokens: int) -> str:
+        """Stable family identifier: same sha256 for any (longer) token list
+        whose first ``num_tokens`` match. Used to confirm a shorter stored
+        checkpoint is a true prefix of the new query before resuming."""
+        data = (
+            self._model_key.encode()
+            + b"\x00"
+            + json.dumps(token_ids[:num_tokens], separators=(",", ":")).encode()
+        )
+        return hashlib.sha256(data).hexdigest()
+
+    def _index_remove(self, key: str) -> None:
+        """Purge a specific key from the length index (called on eviction)."""
+        for length, mapping in list(self._length_index.items()):
+            for ph, k in list(mapping.items()):
+                if k == key:
+                    del mapping[ph]
+            if not mapping:
+                del self._length_index[length]
 
     def fetch(self, token_ids: List[int], num_tokens: int) -> SSMCompanionEntry:
         """Fetch SSM states for a matching prompt prefix.
@@ -280,9 +313,58 @@ class SSMCompanionCache:
                 return None
         return (copied, is_complete)
 
+    def fetch_longest_prefix(
+        self, token_ids: List[int], max_len: int
+    ) -> Optional[Tuple[int, List[Any], bool]]:
+        """vmlx#91: find the longest stored checkpoint whose key tokens are
+        a prefix of ``token_ids[:max_len]``, allowing the caller to resume
+        from that checkpoint and prefill only the remaining tokens.
+
+        Returns:
+            On hit: ``(checkpoint_len, deep_copied_states, is_complete)``.
+            On miss: ``None``.
+
+        Strict prefix discipline: SSM state is cumulative, so reusing a
+        checkpoint that branches off the new query's prefix would corrupt
+        output. We use prefix_hash equality to confirm the stored entry's
+        first ``checkpoint_len`` tokens match the query's first
+        ``checkpoint_len`` tokens before accepting it.
+
+        Safety: this method delegates to ``fetch`` for the actual state
+        retrieval, so the same deep-copy + materialization discipline
+        applies — callers get independent buffers, never shared refs.
+        """
+        if max_len <= 0:
+            return None
+        # Scan lengths in descending order so we find the longest match
+        # first.  Typical cache sizes are small (<=20 entries), so the
+        # walk is O(entries) per request — negligible vs a 50K prefill.
+        candidate_lengths = sorted(
+            (n for n in self._length_index.keys() if n <= max_len),
+            reverse=True,
+        )
+        if not candidate_lengths:
+            return None
+        # Compute the prefix_hash for each candidate length against the
+        # query's own tokens and compare. First match wins.
+        for n in candidate_lengths:
+            query_ph = self._prefix_hash(token_ids, n)
+            stored_key = self._length_index.get(n, {}).get(query_ph)
+            if stored_key is None:
+                continue
+            # Delegate to fetch() so deep-copy discipline is uniform.
+            result = self.fetch(token_ids, n)
+            if result is None:
+                # deepcopy failed — treat as miss per existing contract
+                continue
+            states, is_complete = result
+            return (n, states, is_complete)
+        return None
+
     def clear(self) -> None:
         """Drop all entries."""
         self._store.clear()
+        self._length_index.clear()
 
 
 # ----------------------------------------------------------------------
