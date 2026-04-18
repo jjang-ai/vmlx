@@ -2317,11 +2317,26 @@ class Scheduler:
                                 f"{len(remaining)} remaining to process"
                             )
                 else:
-                    # Reconstruction failed, treat as cache miss
+                    # Reconstruction failed, treat as cache miss.
+                    # mlxstudio#73: fetch_cache incremented block refs; if we
+                    # don't release them here, a long-running session leaks
+                    # refs on every reconstruction failure (e.g. MLX API
+                    # drift, quantization mismatch, TQ dequant error). Over
+                    # thousands of turns this exhausts the block pool and
+                    # makes the scheduler appear frozen (requests wait for
+                    # allocations that will never free). Release now.
+                    try:
+                        self.block_aware_cache.release_cache(request.request_id)
+                    except Exception as _rel_err:
+                        logger.debug(
+                            f"release_cache after reconstruct failure "
+                            f"threw ({type(_rel_err).__name__}): {_rel_err}"
+                        )
                     request.remaining_tokens = request.prompt_token_ids
                     request.cached_tokens = 0
                     logger.info(
-                        f"Request {request.request_id}: paged cache reconstruction failed"
+                        f"Request {request.request_id}: paged cache reconstruction "
+                        f"failed — block refs released, full prefill"
                     )
             else:
                 request.remaining_tokens = request.prompt_token_ids
