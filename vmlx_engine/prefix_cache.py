@@ -1830,6 +1830,68 @@ class BlockAwarePrefixCache:
             self.paged_cache.delete_block_table(request_id)
             logger.debug(f"Released cache for {request_id}")
 
+    def trim_block_table(
+        self, request_id: str, target_tokens: int
+    ) -> Optional["BlockTable"]:
+        """Shrink a live block_table down to ``target_tokens`` by releasing
+        trailing blocks, keeping only the block-aligned prefix.
+
+        Used by the vmlx#91 SSM resume path: when the exact SSM companion
+        cache misses but a shorter checkpoint is a valid prefix, we trim
+        the KV cache to match the checkpoint so KV + SSM stay aligned, and
+        the scheduler prefills only the tail delta.
+
+        Args:
+            request_id: Request whose block_table to trim (must be held in
+                the paged cache — look up via get_block_table).
+            target_tokens: Desired cached-token count. The actual result is
+                block-aligned (floor to nearest multiple of block_size), so
+                it may be slightly less than requested.
+
+        Returns:
+            Trimmed BlockTable if trim succeeded and >0 blocks retained,
+            None if target_tokens == 0 (caller should release entirely) or
+            if the request has no active block_table.
+
+        Safety:
+            * Trailing blocks have their ref_count decremented via
+              ``paged_cache.decrement_ref`` so they rejoin the free pool
+              for future reuse. No ref-count leak.
+            * Block IDs retained are exactly the prefix, preserving
+              content-hash chain integrity for future sibling requests.
+        """
+        block_table = self.paged_cache.get_block_table(request_id)
+        if block_table is None or not block_table.block_ids:
+            return None
+        if target_tokens <= 0:
+            return None
+
+        # Block-align (floor): never exceed target_tokens.
+        block_size = self.block_size
+        kept_blocks_count = target_tokens // block_size
+        if kept_blocks_count <= 0:
+            return None
+        kept_blocks_count = min(kept_blocks_count, len(block_table.block_ids))
+        if kept_blocks_count == len(block_table.block_ids):
+            # Nothing to trim — already at or below target.
+            return block_table
+
+        # Release the trailing block refs so they return to the free pool.
+        to_release = block_table.block_ids[kept_blocks_count:]
+        for block_id in to_release:
+            self.paged_cache.decrement_ref(block_id)
+
+        # Truncate the block_table in-place.
+        block_table.block_ids = block_table.block_ids[:kept_blocks_count]
+        block_table.num_tokens = kept_blocks_count * block_size
+
+        logger.debug(
+            f"vmlx#91: trimmed block_table for {request_id} to "
+            f"{kept_blocks_count} blocks ({block_table.num_tokens} tokens); "
+            f"released {len(to_release)} trailing blocks"
+        )
+        return block_table
+
     def release_low_priority(self, n_entries: int = 1) -> int:
         """
         Release up to n_entries from the lowest-priority non-empty bucket

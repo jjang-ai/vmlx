@@ -1626,13 +1626,16 @@ class MLLMBatchGenerator:
                                     else:
                                         ssm_states, _is_complete = _entry
                                     if ssm_states is None:
-                                        # vmlx#91: no exact SSM state — look for a shorter
-                                        # stored checkpoint whose tokens are a strict prefix
-                                        # of the current query. Log when one exists so we can
-                                        # quantify how often multi-client workloads with
-                                        # near-identical prefixes would benefit from resume.
-                                        # (Block-table truncation to align KV with the shorter
-                                        # checkpoint is a separate PR — this metric gates it.)
+                                        # vmlx#91: exact SSM state miss — try resuming from
+                                        # the longest stored checkpoint whose tokens are a
+                                        # strict prefix of the current query. Opt-in via
+                                        # VMLX_ENABLE_SSM_PREFIX_RESUME=1 until this has
+                                        # seen production mileage; default OFF preserves
+                                        # current full-prefill behavior exactly.
+                                        import os as _os
+                                        _enable_resume = _os.environ.get(
+                                            "VMLX_ENABLE_SSM_PREFIX_RESUME"
+                                        ) in ("1", "true", "True", "yes", "on")
                                         _missed_ck = None
                                         _fn = getattr(
                                             self._ssm_state_cache,
@@ -1644,26 +1647,58 @@ class MLLMBatchGenerator:
                                                 _missed_ck = _fn(token_list, _fetch_num)
                                             except Exception:
                                                 _missed_ck = None
-                                        if _missed_ck is not None:
-                                            _ck_len, _, _ = _missed_ck
-                                            logger.info(
-                                                f"VLM prefix cache MISS for {req.request_id}: "
-                                                f"{block_table.num_tokens} KV blocks found but "
-                                                f"no exact SSM companion; stored checkpoint at "
-                                                f"{_ck_len} tokens is a valid prefix "
-                                                f"(would save {_ck_len} tokens prefill — "
-                                                f"vmlx#91 tracking). Full prefill required."
+
+                                        if _enable_resume and _missed_ck is not None:
+                                            _ck_len, _ck_states, _ = _missed_ck
+                                            # Trim the block_table down to block-aligned
+                                            # <= _ck_len so KV + SSM stay aligned.
+                                            trimmed = self.block_aware_cache.trim_block_table(
+                                                req.request_id, _ck_len
                                             )
+                                            if trimmed is not None and trimmed.num_tokens > 0:
+                                                block_table = trimmed
+                                                ssm_states = _ck_states
+                                                logger.info(
+                                                    f"vmlx#91 RESUME for {req.request_id}: "
+                                                    f"trimmed KV to {trimmed.num_tokens} tokens "
+                                                    f"(block-aligned from checkpoint at {_ck_len}), "
+                                                    f"SSM state reused from checkpoint. "
+                                                    f"Prefill tail: {_fetch_num - trimmed.num_tokens} tokens"
+                                                )
+                                                # Fall through to reconstruct with the trimmed
+                                                # block_table + ssm_states.
+                                            else:
+                                                # Trim returned None (e.g. checkpoint below
+                                                # one block) — fall back to full prefill.
+                                                logger.info(
+                                                    f"vmlx#91 RESUME skipped for {req.request_id}: "
+                                                    f"checkpoint at {_ck_len} below one block — "
+                                                    f"full prefill required"
+                                                )
+                                                self.block_aware_cache.release_cache(req.request_id)
+                                                continue
                                         else:
-                                            logger.info(
-                                                f"VLM prefix cache MISS for {req.request_id}: "
-                                                f"{block_table.num_tokens} KV blocks found but "
-                                                f"no SSM companion state — full prefill required"
-                                            )
-                                        # Release the block refs that fetch_cache incremented
-                                        # to prevent ref_count leak → OOM on subsequent requests.
-                                        self.block_aware_cache.release_cache(req.request_id)
-                                        continue  # Skip reconstruction
+                                            if _missed_ck is not None:
+                                                _ck_len, _, _ = _missed_ck
+                                                logger.info(
+                                                    f"VLM prefix cache MISS for {req.request_id}: "
+                                                    f"{block_table.num_tokens} KV blocks found but "
+                                                    f"no exact SSM companion; stored checkpoint at "
+                                                    f"{_ck_len} tokens is a valid prefix "
+                                                    f"(would save {_ck_len} tokens prefill — "
+                                                    f"set VMLX_ENABLE_SSM_PREFIX_RESUME=1 to "
+                                                    f"enable). Full prefill required."
+                                                )
+                                            else:
+                                                logger.info(
+                                                    f"VLM prefix cache MISS for {req.request_id}: "
+                                                    f"{block_table.num_tokens} KV blocks found but "
+                                                    f"no SSM companion state — full prefill required"
+                                                )
+                                            # Release the block refs that fetch_cache incremented
+                                            # to prevent ref_count leak → OOM on subsequent requests.
+                                            self.block_aware_cache.release_cache(req.request_id)
+                                            continue  # Skip reconstruction
 
                                 # Either non-hybrid OR hybrid with SSM state — reconstruct
                                 reconstructed = self.block_aware_cache.reconstruct_cache(block_table)

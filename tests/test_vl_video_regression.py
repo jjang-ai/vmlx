@@ -1380,3 +1380,119 @@ class TestVmlx91InstrumentationWired:
         assert "vmlx#91" in src, (
             "log anchor `vmlx#91` must be present for grep-based ops visibility"
         )
+
+
+class TestVmlx91ResumeOptInEndToEnd:
+    """vmlx#91: end-to-end SSM prefix resume via
+    VMLX_ENABLE_SSM_PREFIX_RESUME=1 opt-in.
+
+    The fetch_longest_prefix data structure (iter 17) and instrumentation
+    (iter 18) are now backed by trim_block_table + scheduler wiring (iter 19).
+    Default OFF preserves current behavior exactly.
+    """
+
+    def test_trim_block_table_method_exists(self):
+        """BlockAwarePrefixCache.trim_block_table is the surgical tool."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        assert hasattr(BlockAwarePrefixCache, "trim_block_table"), (
+            "trim_block_table must exist for vmlx#91 resume to wire in"
+        )
+
+    def test_mllm_batch_generator_wires_resume_opt_in(self):
+        """Hot path must gate on VMLX_ENABLE_SSM_PREFIX_RESUME."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+        ).read_text()
+        assert "VMLX_ENABLE_SSM_PREFIX_RESUME" in src, (
+            "Opt-in env var must gate the resume behavior"
+        )
+        assert "trim_block_table" in src, (
+            "hot path must call trim_block_table on resume"
+        )
+        assert "vmlx#91 RESUME" in src, (
+            "log anchor `vmlx#91 RESUME` must be present"
+        )
+
+    def test_resume_defaults_off(self):
+        """Without the env var set, the old full-prefill path runs (safe)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+        ).read_text()
+        # The full-prefill log still fires in the else branch
+        assert "Full prefill required" in src, (
+            "Fallback full-prefill must remain when resume disabled"
+        )
+
+    def test_trim_block_table_block_aligns_target(self):
+        """Unit test: trim_block_table floors target_tokens to block boundary."""
+        # Direct unit — build a minimal BlockTable + paged_cache mock
+        from vmlx_engine.paged_cache import BlockTable
+        from unittest.mock import MagicMock
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        # Build a minimal prefix_cache instance without full wiring:
+        # bypass constructor; synthesize just enough to exercise trim logic.
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        bt = BlockTable(request_id="R1", block_ids=[10, 20, 30, 40, 50],
+                        num_tokens=5 * 64)
+        cache.paged_cache.get_block_table = MagicMock(return_value=bt)
+        cache.paged_cache.decrement_ref = MagicMock(return_value=True)
+
+        # Trim to 150 tokens (not multiple of 64) → expect 2 blocks kept (128 tokens)
+        result = cache.trim_block_table("R1", 150)
+        assert result is not None
+        assert result.num_tokens == 128, f"expected 128 (block-aligned from 150), got {result.num_tokens}"
+        assert len(result.block_ids) == 2
+        # 3 trailing blocks must be released
+        assert cache.paged_cache.decrement_ref.call_count == 3
+
+    def test_trim_block_table_zero_target_returns_none(self):
+        """target_tokens=0 must return None so caller releases entirely."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from unittest.mock import MagicMock
+        from vmlx_engine.paged_cache import BlockTable
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        bt = BlockTable(request_id="R1", block_ids=[1, 2], num_tokens=128)
+        cache.paged_cache.get_block_table = MagicMock(return_value=bt)
+        assert cache.trim_block_table("R1", 0) is None
+
+    def test_trim_block_table_below_one_block_returns_none(self):
+        """target_tokens < block_size means kept_blocks == 0 → None."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from unittest.mock import MagicMock
+        from vmlx_engine.paged_cache import BlockTable
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        bt = BlockTable(request_id="R1", block_ids=[1, 2, 3], num_tokens=192)
+        cache.paged_cache.get_block_table = MagicMock(return_value=bt)
+        assert cache.trim_block_table("R1", 50) is None  # 50 / 64 = 0
+
+    def test_trim_block_table_no_trim_when_target_exceeds_current(self):
+        """target >= current → return table as-is, no decrements."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from unittest.mock import MagicMock
+        from vmlx_engine.paged_cache import BlockTable
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        bt = BlockTable(request_id="R1", block_ids=[1, 2], num_tokens=128)
+        cache.paged_cache.get_block_table = MagicMock(return_value=bt)
+        cache.paged_cache.decrement_ref = MagicMock()
+        result = cache.trim_block_table("R1", 200)  # exceeds 128
+        assert result is bt
+        cache.paged_cache.decrement_ref.assert_not_called()
+
+    def test_trim_block_table_missing_request_returns_none(self):
+        """Unknown request_id → None, no crash."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from unittest.mock import MagicMock
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        cache.paged_cache.get_block_table = MagicMock(return_value=None)
+        assert cache.trim_block_table("missing", 100) is None
