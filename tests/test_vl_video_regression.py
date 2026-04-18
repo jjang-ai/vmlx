@@ -1530,3 +1530,58 @@ class TestMlxstudio73ReconstructFailReleasesBlocks:
         )
         # Anchor the issue so refactors notice
         assert "mlxstudio#73" in window
+
+
+class TestVmlx65GemmaE2BConversion:
+    """vmlx#65: `TypeError: '>' not supported between NoneType and int` on
+    gemma-4-E2B JANG conversion.
+
+    Root cause: HF configs can spell "this attribute is absent" as
+    `"num_local_experts": null` instead of omitting the key. Python
+    dict.get() with a default does NOT substitute explicit None, so the
+    downstream `num_experts > 1` comparison crashed.
+    """
+
+    def test_detect_architecture_handles_null_experts(self, tmp_path):
+        """Minimal config with num_local_experts=null must not crash."""
+        import json
+        cfg = {
+            "model_type": "gemma4",
+            "architectures": ["Gemma4ForCausalLM"],
+            "num_attention_heads": 8,
+            "num_key_value_heads": 4,
+            "num_hidden_layers": 30,
+            "hidden_size": 2048,
+            "vocab_size": 256000,
+            "num_local_experts": None,  # the crash trigger in vmlx#65
+            "num_experts": None,
+            "n_routed_experts": None,
+        }
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        from jang_tools.architectures import detect_architecture
+        # Must not raise TypeError
+        result = detect_architecture(str(tmp_path))
+        # None should coerce to the default (0), routing to TRANSFORMER
+        assert result.num_experts == 0
+        assert result.has_moe_layers is False
+
+    def test_detect_architecture_handles_present_int_experts(self, tmp_path):
+        """Regression guard: when num_local_experts IS an int, don't break it."""
+        import json
+        cfg = {
+            "model_type": "gemma4",
+            "architectures": ["Gemma4ForCausalLM"],
+            "num_attention_heads": 8,
+            "num_key_value_heads": 4,
+            "num_hidden_layers": 30,
+            "hidden_size": 2048,
+            "vocab_size": 256000,
+            "num_local_experts": 32,
+            "num_experts_per_tok": 4,
+        }
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+        from jang_tools.architectures import detect_architecture
+        result = detect_architecture(str(tmp_path))
+        assert result.num_experts == 32
+        assert result.has_moe_layers is True
