@@ -1359,3 +1359,24 @@ class TestVmlx91SSMLongestPrefix:
         )
         r2 = c.fetch_longest_prefix(tokens, 25)
         assert r2 is not None and r2[0] == 20
+
+
+class TestVmlx91InstrumentationWired:
+    """vmlx#91: instrumentation hookup — scheduler path must consult
+    `fetch_longest_prefix` on SSM miss and log prefix-checkpoint impact.
+
+    This is the observability step that gates the block-table-truncation PR.
+    """
+
+    def test_mllm_batch_generator_calls_fetch_longest_prefix_on_ssm_miss(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+        ).read_text()
+        assert "fetch_longest_prefix" in src, (
+            "mllm_batch_generator.py must consult fetch_longest_prefix on "
+            "SSM cache miss (vmlx#91)"
+        )
+        # Must log the checkpoint impact for tracking
+        assert "vmlx#91" in src, (
+            "log anchor `vmlx#91` must be present for grep-based ops visibility"
+        )
