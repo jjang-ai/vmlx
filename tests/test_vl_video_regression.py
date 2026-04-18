@@ -1496,3 +1496,37 @@ class TestVmlx91ResumeOptInEndToEnd:
         cache.paged_cache = MagicMock()
         cache.paged_cache.get_block_table = MagicMock(return_value=None)
         assert cache.trim_block_table("missing", 100) is None
+
+
+class TestMlxstudio73ReconstructFailReleasesBlocks:
+    """mlxstudio#73: Session freezes after 'Failed to reconstruct cache'.
+
+    Root cause: fetch_cache incremented block refs, but when
+    reconstruct_cache returned None (MLX API drift, quantization mismatch,
+    TQ dequant error), the non-hybrid scheduler path treated it as a cache
+    miss without releasing the block refs. Over a long session this leaked
+    one set of refs per reconstruction failure → block pool exhausted →
+    all new requests stall waiting for allocations that never free →
+    client sees frozen session.
+
+    Fix: scheduler.py now calls release_cache(request_id) in the
+    reconstruction-failure branch, symmetric with the hybrid-cache-fix
+    branch that already did.
+    """
+
+    def test_reconstruct_failure_releases_block_refs(self):
+        """Source contains release_cache call on the reconstruct-fail path."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        # Find the 'Reconstruction failed, treat as cache miss' branch
+        idx = src.find("Reconstruction failed, treat as cache miss")
+        assert idx > 0, "the bugfix anchor must survive refactors"
+        # Immediately below must call release_cache(request_id)
+        window = src[idx:idx + 1200]
+        assert "self.block_aware_cache.release_cache(request.request_id)" in window, (
+            "mlxstudio#73 fix missing: reconstruct-fail branch must release "
+            "block refs or a long session leaks until the pool exhausts"
+        )
+        # Anchor the issue so refactors notice
+        assert "mlxstudio#73" in window
