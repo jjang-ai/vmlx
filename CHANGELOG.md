@@ -2,6 +2,27 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.3.62] - 2026-04-18
+
+### Fixed
+- **MLLM prefix cache was effectively disabled**: `MLLMPrefixCacheManager.__len__` was defined but `__bool__` was not, so `if self._cache_manager` fell through to `__len__ > 0`. Empty cache evaluated False, so the very first store was skipped, and no subsequent request could ever hit. Fix: use `is not None`. Verified on Qwen3.6-35B-A3B-JANGTQ2 — exact `(image, prompt)` repeat now hits with real prefix-token reuse (22 tokens saved in test).
+- **Non-stream reasoning parser missed `think_in_prompt`**: OpenAI Chat Completions and Responses API non-stream paths called `request_parser.reset_state(harmony_active=...)` without `think_in_prompt`, while the stream paths passed it correctly. For always-thinking templates (MiniMax M2.x, Qwen3, DeepSeek R1), the parser fell through to "no tags → all content" and reasoning prose leaked into the assistant message body. Fix: compute `think_in_prompt` at both non-stream sites the same way the stream path does. Verified on MiniMax-M2.7-JANGTQ-CRACK 4-cell matrix (stream × non-stream × thinking on/off).
+- **Token IDs stored as dummy zeros**: The legacy `store_cache` path wrote `token_ids=[0] * num_tokens`, making downstream prefix matching always return 0 even on exact repeats. Fix: `MLXMultimodalLM.generate` now routes through `store()` with real token_ids when they're already computed for the fetch branch.
+
+### Added
+- **`VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` opt-in** (vmlx#89): hybrid SSM models (Qwen3.5 GatedDeltaNet + attention) on text-only prompts >~34K tokens allocate `attention_scores` of `(1, heads, 48K, 48K) × 2 B = 147 GB` in a single Metal command buffer, blowing the ~72 GB single-buffer cap. With this env var set, hybrid models route through the chunked prefill path for text-only requests. Default OFF = zero behavior change. Reporter's safety analysis for Qwen3.5 verified: `cache.make_mask(N)` + `ArraysCache.state` carry across chunks.
+- **Torchvision-free video processor fallback**: `jang_tools.load_jangtq_vlm` installs a class-level patch on `Qwen3VLProcessor.__call__` that routes video inputs through the image_processor when `video_processor is None` (no torchvision in bundled Python). Temporal merging preserved via `video_grid_thw` rewriting. Both JANG v1 and v2 VLM load paths wire it in.
+- **65 regression guards** in `tests/test_vl_video_regression.py` covering: video fallback idempotence + temporal rollup; VLM loader wiring; `apply_chat_template` num_images gotcha; mlxstudio#69 multimodal auto-promotion; hybrid cache shape (10 TQ-KV + 30 ArraysCache); reasoning parser split; content-part extraction (image_url / video_url / mixed); cv2 import error surface; sustained load-bloat; prior-turn `<think>` strip preserving `tool_calls`; §15 reasoning-off UX contracts; all four API paths `think_in_prompt` wiring; vmlx#89 opt-in env var; `enable_thinking` priority chain; Gemma 4 + tools auto-off; Mistral 4 `reasoning_effort` auto-map; MLLM cache populates + hits.
+- **Stale test cleanup (21 pre-existing failures, test-side only)**: Gemma 3 tool_parser (hermes → gemma3), reasoning_parser (deepseek_r1 → None); PrefixCacheManager `_lru` → `_lru_by_type`; VLM-aware JIT targets `language_model.model`; SimpleEngine test mocks `.generate` not `.chat`; default `vision_cache_size` 100 → 16; default `max_entries` 50 → 20; MCP `_extract_content` returns string; JANGTQ weight_format error message.
+
+### Real-model verification (M4 Max 128 GB)
+- **Qwen3.6-35B-A3B-JANGTQ2**: 7 scenarios — multi-turn, hybrid TQ KV cache, VL single/multi-image, L2 disk cache bit-exact round-trip, video fallback, sustained RAM (+0.00 GB growth over 20 mixed requests).
+- **MiniMax-M2.7-JANGTQ-CRACK**: full 4-cell reasoning matrix ship-clean.
+
+### Test suite
+- Python: 2163 passed, 0 failed.
+- Panel TS (vitest): 1545 passed, 0 failed.
+
 ## [1.3.11] - 2026-03-24
 
 ### Added
