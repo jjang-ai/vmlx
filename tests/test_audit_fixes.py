@@ -383,17 +383,18 @@ class TestMCPContentLimit:
         assert client._extract_content(result) == "hello world"
 
     def test_extract_content_oversized(self):
-        """Content exceeding 10MB should be truncated."""
+        """Content exceeding 10 MB should append a truncation marker.
+        _extract_content returns a joined string; the trailing
+        '[Content truncated …]' segment indicates the size guard fired."""
         client = self._make_client()
         result = MagicMock()
-        big_text = "x" * (6 * 1024 * 1024)  # 6MB each
+        big_text = "x" * (6 * 1024 * 1024)  # 6 MB each
         item1 = MagicMock(spec=[]); item1.text = big_text
         item2 = MagicMock(spec=[]); item2.text = big_text
         result.content = [item1, item2]
         extracted = client._extract_content(result)
-        assert isinstance(extracted, list)
-        assert len(extracted) == 2
-        assert "truncated" in extracted[1].lower()
+        assert isinstance(extracted, str)
+        assert "truncated" in extracted.lower()
 
     def test_extract_content_none(self):
         """No content should return None."""
@@ -403,15 +404,16 @@ class TestMCPContentLimit:
         assert client._extract_content(result) is None
 
     def test_extract_content_bytes_counted(self):
-        """Bytes objects should count toward size limit."""
+        """Bytes objects should count toward size limit. _extract_content
+        returns a joined string with a trailing '[Content truncated …]'."""
         client = self._make_client()
         result = MagicMock()
         item1 = MagicMock(spec=[]); item1.data = b"x" * (6 * 1024 * 1024)
         item2 = MagicMock(spec=[]); item2.data = b"x" * (6 * 1024 * 1024)
         result.content = [item1, item2]
         extracted = client._extract_content(result)
-        assert isinstance(extracted, list)
-        assert "truncated" in extracted[-1].lower()
+        assert isinstance(extracted, str)
+        assert "truncated" in extracted.lower()
 
 
 # =============================================================================
@@ -458,11 +460,13 @@ class TestJANGLoader:
         assert is_jang_model("/nonexistent/path") is False
 
     def test_missing_format_field_error(self, tmp_path):
-        """Config without format field should give clear error."""
+        """Config without format/weight_format should give clear error.
+        Error message was broadened to `missing 'format' / 'weight_format'`
+        when v1.3.58 added JANGTQ support (weight_format=mxtq)."""
         (tmp_path / "jang_config.json").write_text('{"quantization": {}}')
         (tmp_path / "config.json").write_text('{"model_type": "llama", "hidden_size": 128, "num_attention_heads": 2, "vocab_size": 100}')
         from vmlx_engine.utils.jang_loader import load_jang_model
-        with pytest.raises(ValueError, match="missing 'format' field"):
+        with pytest.raises(ValueError, match=r"missing 'format'.*weight_format"):
             load_jang_model(str(tmp_path))
 
     def test_wrong_format_value_error(self, tmp_path):

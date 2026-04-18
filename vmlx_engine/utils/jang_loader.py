@@ -1778,6 +1778,17 @@ def _load_jang_v2_vlm(
     if image_processor is not None:
         processor.image_processor = image_processor
 
+    # transformers' AutoVideoProcessor requires torchvision, which is not
+    # in the bundled Python. Without this install, Qwen3VLProcessor's
+    # video_processor stays None and the fallback path raises TypeError
+    # the first time a caller passes `videos=`. This class-level patch
+    # routes videos through image_processor when video_processor is None.
+    try:
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+        _install_video_fallback(processor)
+    except Exception as _vfe:
+        logger.debug(f"video fallback not installed: {_vfe}")
+
     return model, processor
 
 
@@ -2153,6 +2164,13 @@ def _load_jang_v1_vlm(
         processor = _build_vlm_processor(path, eos_token_id)
     if image_processor is not None:
         processor.image_processor = image_processor
+
+    # See v2 VLM path for rationale — install torchvision-free video fallback.
+    try:
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+        _install_video_fallback(processor)
+    except Exception as _vfe:
+        logger.debug(f"video fallback not installed: {_vfe}")
 
     return model, processor
 

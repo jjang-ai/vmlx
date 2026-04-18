@@ -1213,6 +1213,7 @@ class MLXMultimodalLM:
         # Check cache for existing KV state
         prompt_cache = None
         cache_hit = False
+        _cache_token_ids: list[int] | None = None  # reused by store path below
 
         if use_cache and self._cache_manager is not None and all_sources:
             try:
@@ -1222,6 +1223,7 @@ class MLXMultimodalLM:
                     else self.processor
                 )
                 token_ids = tokenizer.encode(formatted_prompt)
+                _cache_token_ids = token_ids
                 cache_entry, prefix_match_len = self._cache_manager.fetch(
                     all_sources, formatted_prompt, token_ids
                 )
@@ -1256,14 +1258,34 @@ class MLXMultimodalLM:
             **kwargs,
         )
 
-        # Store cache for future reuse (only on miss)
-        if use_cache and self._cache_manager and all_sources and not cache_hit:
+        # Store cache for future reuse (only on miss).
+        # Use `is not None` — MLLMPrefixCacheManager.__len__ exists but
+        # __bool__ does not, so plain `if self._cache_manager` evaluates
+        # False when the cache is empty (via len fallback). That made
+        # store skip the very first attempt, so the cache could never
+        # populate and no request ever hit. (2026-04-18 Ralph iter 11)
+        if use_cache and self._cache_manager is not None and all_sources and not cache_hit:
             if prompt_cache is not None:
                 try:
                     num_tokens = getattr(result, "prompt_tokens", 0)
-                    self._cache_manager.store_cache(
-                        all_sources, formatted_prompt, prompt_cache, num_tokens
-                    )
+                    # Prefer the real token_ids (computed above during fetch)
+                    # so partial-hit prefix matching works. store_cache's
+                    # num_tokens-only path writes dummy `[0] * N` which makes
+                    # downstream get_prefix_match_length always return 0.
+                    if _cache_token_ids:
+                        self._cache_manager.store(
+                            images=all_sources,
+                            prompt=formatted_prompt,
+                            vision_embeddings=None,
+                            kv_cache=prompt_cache,
+                            token_ids=_cache_token_ids,
+                            num_image_tokens=0,
+                            model_name=self.model_name,
+                        )
+                    else:
+                        self._cache_manager.store_cache(
+                            all_sources, formatted_prompt, prompt_cache, num_tokens
+                        )
                     logger.info(f"MLLM cache stored for {len(all_sources)} source(s)")
                 except Exception as e:
                     logger.debug(f"Failed to store MLLM cache: {e}")

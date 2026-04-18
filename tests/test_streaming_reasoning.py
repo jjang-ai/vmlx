@@ -915,10 +915,11 @@ class TestOtherModelConfigs:
         assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is True
 
-    def test_gemma3_uses_deepseek_r1(self):
-        """Gemma3 uses deepseek_r1 reasoning parser."""
-        config = _find_config_by_model_type(self._registry,"gemma3")
-        assert config.reasoning_parser == "deepseek_r1"
+    def test_gemma3_reasoning_parser_is_none(self):
+        """Gemma 3 is not a thinking model — commit 3294a2da removed the
+        deepseek_r1 reasoning parser (Gemma 3 emits no <think> stream)."""
+        config = _find_config_by_model_type(self._registry, "gemma3")
+        assert config.reasoning_parser is None
         assert config.is_mllm is True
 
     def test_phi4_reasoning_uses_deepseek_r1(self):
@@ -1512,11 +1513,15 @@ class TestMLLMSystemPrompt:
         assert "messages," in source
 
     def test_mllm_path_condition(self):
-        """MLLM path activates for single-turn VLM without tools."""
+        """MLLM path activates when actual images are present (num_images > 0),
+        not based on turn count. The earlier turn-count gate
+        (`non_system_msgs <= 2`) was removed because text-only multi-turn
+        VLM conversations were being misrouted through mlx_vlm, producing
+        cache divergence. See num_images guard in BatchedEngine."""
         source = inspect.getsource(
             __import__("vmlx_engine.engine.batched", fromlist=["BatchedEngine"]).BatchedEngine._apply_chat_template
         )
-        assert "non_system_msgs <= 2" in source
+        assert "num_images > 0" in source
         assert "not tools" in source
 
 

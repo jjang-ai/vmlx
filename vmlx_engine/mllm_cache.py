@@ -307,7 +307,57 @@ class MLLMPrefixCacheManager:
 
                 return entry, match_length
 
-            # Check for image-only match (can reuse vision embeddings)
+            # Image-only match — two variants:
+            #
+            # 1. vision_embeddings is cached (legacy, currently unused because
+            #    mlx_vlm doesn't expose pre-computed embeddings to us). Returns
+            #    match_length=0 since prompt differs, but vision encoder can be
+            #    skipped by the caller.
+            #
+            # 2. token-prefix-safe KV cache reuse (new 2026-04-18):
+            #    When a prior entry's token_ids is a STRICT PREFIX of the
+            #    current query's token_ids (i.e. match_length ==
+            #    entry.total_tokens), the entry's kv_cache is a valid starting
+            #    state — no stale state past the prefix. Return it so the
+            #    caller prefills only the remaining suffix.
+            #
+            #    Strict prefix requirement is important: if match_length <
+            #    entry.total_tokens, the cached KV has state past the shared
+            #    prefix that would poison the new query. We don't trim here
+            #    because mlx_vlm's generate() treats prompt_cache as continuous
+            #    state with entry.total_tokens of prefix, and a mid-stream trim
+            #    would require cache-type-specific slicing we don't want to
+            #    reimplement across KVCache, TurboQuantKVCache, ArraysCache,
+            #    and CacheList variants.
+            if images and token_ids:
+                image_key = self._make_image_only_key(images)
+                best_entry = None
+                best_match = 0
+                best_key = None
+                for key, entry in self._cache.items():
+                    if entry.image_hash != image_key:
+                        continue
+                    if entry.kv_cache is None or not entry.token_ids:
+                        continue
+                    ml = entry.get_prefix_match_length(token_ids)
+                    # Require strict prefix for safe reuse
+                    if ml == entry.total_tokens and ml > best_match:
+                        best_entry = entry
+                        best_match = ml
+                        best_key = key
+                if best_entry is not None:
+                    self.stats.partial_hits += 1
+                    self.stats.tokens_saved += best_match
+                    self._cache.move_to_end(best_key)
+                    logger.debug(
+                        f"MLLM cache PARTIAL HIT (prefix {best_match} tokens): "
+                        f"image={image_key[:16]}"
+                    )
+                    return best_entry, best_match
+
+            # Legacy vision-only skip (kept for future when vision_embeddings
+            # gets wired through mlx_vlm — today this branch never fires
+            # because store paths pass vision_embeddings=None).
             if images:
                 image_key = self._make_image_only_key(images)
                 for key, entry in self._cache.items():
@@ -315,17 +365,12 @@ class MLLMPrefixCacheManager:
                         entry.image_hash == image_key
                         and entry.vision_embeddings is not None
                     ):
-                        # Image match - can reuse vision embeddings!
                         self.stats.partial_hits += 1
                         self.stats.vision_encoder_skips += 1
-                        # Update LRU position for image-only hit
                         self._cache.move_to_end(key)
                         logger.debug(
                             f"MLLM cache PARTIAL HIT (vision only): image={image_key[:16]}"
                         )
-
-                        # Return entry for vision embeddings, but 0 prefix match
-                        # (prompt is different, so KV cache can't be reused)
                         return entry, 0
 
             self.stats.misses += 1

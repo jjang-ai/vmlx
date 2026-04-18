@@ -31,17 +31,21 @@ class TestJitToggle:
             server._apply_jit_compilation()
 
     def test_jit_applies_mx_compile(self):
-        """When engine has a model, mx.compile should be called on it."""
+        """When engine has a (text-only) model, mx.compile should be called
+        on `model.model`. Explicitly mark the mock engine as LLM — MLLM
+        engines use a separate path that targets `language_model.model`."""
         from vmlx_engine import server
 
         inner_model = MagicMock()
         inner_model.__call__ = MagicMock()  # make it callable
 
-        model_wrapper = MagicMock()
+        model_wrapper = MagicMock(spec=["model"])
         model_wrapper.model = inner_model
 
         mock_engine = MagicMock()
         mock_engine._model = model_wrapper
+        mock_engine.is_mllm = False   # force LLM path
+        mock_engine._is_mllm = False
 
         compiled_fn = MagicMock()
 
@@ -71,7 +75,8 @@ class TestJitToggle:
             server._apply_jit_compilation()
 
     def test_jit_verifies_replacement(self):
-        """After compile, the compiled object should be set on model.model."""
+        """After compile (LLM path), the compiled object replaces model.model.
+        MLLM path replaces language_model.model instead — tested separately."""
         from vmlx_engine import server
 
         inner_model = MagicMock()
@@ -86,6 +91,8 @@ class TestJitToggle:
 
         mock_engine = MagicMock()
         mock_engine._model = model_wrapper
+        mock_engine.is_mllm = False   # force LLM path
+        mock_engine._is_mllm = False
 
         compiled_fn = MagicMock()
 

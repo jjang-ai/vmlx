@@ -346,7 +346,9 @@ class TestModelConfigs:
     def test_gemma3_config(self, registry):
         config = self._lookup(registry, "mlx-community/gemma-3-2b-it-4bit", "gemma3")
         assert config.is_mllm is True
-        assert config.tool_parser == "hermes"
+        # commit 3294a2da: Gemma 3 uses Google's tool_code format (Python code
+        # blocks), not hermes JSON. tool_parser flipped hermes → gemma3.
+        assert config.tool_parser == "gemma3"
 
     def test_gemma3_text_config(self, registry):
         config = self._lookup(registry, "google/gemma-3-text-1b", "gemma3_text")
@@ -598,13 +600,17 @@ class TestModelConfigs:
     # ── Gemma family coverage ──
 
     def test_gemma3_reasoning_parser(self, registry):
+        """Gemma 3 is not a thinking model — reasoning_parser is None.
+        commit 3294a2da removed deepseek_r1 (wrong parser for Gemma 3's
+        non-existent reasoning stream)."""
         config = self._lookup(registry, "google/gemma-3-2b-it", "gemma3")
-        assert config.reasoning_parser == "deepseek_r1"
+        assert config.reasoning_parser is None
 
     def test_gemma3_text_not_mllm(self, registry):
         config = self._lookup(registry, "google/gemma-3-text-1b", "gemma3_text")
         assert config.is_mllm is False
-        assert config.reasoning_parser == "deepseek_r1"
+        # Gemma 3 text — same as gemma3 multimodal: no reasoning stream.
+        assert config.reasoning_parser is None
 
     def test_paligemma_config(self, registry):
         config = self._lookup(registry, "google/paligemma-3b", "paligemma")
@@ -714,7 +720,11 @@ class TestModelConfigComprehensiveChecks:
     VALID_REASONING_PARSERS = {None, "qwen3", "deepseek_r1", "openai_gptoss", "mistral", "gemma4"}
     VALID_TOOL_PARSERS = {
         None, "qwen", "llama", "mistral", "deepseek", "hermes",
-        "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi", "gemma4",
+        "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",
+        # Gemma family: commit 3294a2da added `gemma3` for Google's
+        # documented ``` ```tool_code\\nname(k=v)\\n``` ``` format, and
+        # `gemma3n` for Gemma 3n (same parser, separate registry entry).
+        "gemma3", "gemma3n", "gemma4",
     }
     VALID_CACHE_TYPES = {"kv", "mamba", "hybrid"}
 

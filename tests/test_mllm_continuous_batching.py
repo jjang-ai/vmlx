@@ -240,7 +240,8 @@ class TestMLLMSchedulerConfig:
         assert config.prefill_batch_size == 16
         assert config.completion_batch_size == 16
         assert config.enable_vision_cache is True
-        assert config.vision_cache_size == 100
+        # Default lowered 100 → 16 to match max_num_seqs sizing.
+        assert config.vision_cache_size == 16
 
     def test_custom_config(self):
         """Test custom configuration."""

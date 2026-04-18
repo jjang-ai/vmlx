@@ -881,14 +881,22 @@ class TestC2AbortDecodeRace:
             "step() must hold _batch_lock during batch_generator.next()"
         )
 
-    def test_batch_lock_used_in_abort(self):
+    def test_deferred_abort_prevents_metal_race(self):
+        """Aborting a request while Metal buffers are in-flight touching the
+        cache tensors would assert. Current design defers removal via
+        `_pending_aborts` instead of holding `_batch_lock`, which is safer
+        — the deferred set is drained after the current Metal compute
+        completes."""
         import inspect
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.abort_request)
-        assert "_batch_lock" in source, (
-            "abort_request() must hold _batch_lock during batch_generator.remove()"
+        assert "_pending_aborts" in source, (
+            "abort_request() must defer batch removal via _pending_aborts "
+            "to avoid touching cache tensors mid-Metal-compute"
         )
+        # And must still hold the queue lock for request table mutation
+        assert "_queue_lock" in source
 
 
 class TestC3DiskCacheQuantScoping:
@@ -917,13 +925,24 @@ class TestC4MaxTokensZero:
     """C4: max_tokens=0 must not be silently overridden to the default."""
 
     def test_server_uses_is_not_none_check(self):
+        """max_tokens=0 must not be silently overridden (0 is falsy so the
+        old `max_tokens or default` pattern would replace 0 with default).
+        Accept either single- or multi-line form of the conditional, and
+        normalize whitespace so newlines between clauses don't fool the
+        check."""
         import inspect
+        import re
         from vmlx_engine.server import create_chat_completion
 
         source = inspect.getsource(create_chat_completion)
-        # Must use "is not None" instead of "or" for max_tokens
-        assert "max_tokens if request.max_tokens is not None" in source or \
-               "is not None else _default_max_tokens" in source, (
+        # Collapse all whitespace to single spaces so the multi-line
+        # `if request.max_tokens is not None\n  else _default_max_tokens`
+        # matches too.
+        normalized = re.sub(r"\s+", " ", source)
+        assert (
+            "request.max_tokens if request.max_tokens is not None" in normalized
+            or "if request.max_tokens is not None else _default_max_tokens" in normalized
+        ), (
             "max_tokens must use 'is not None' check, not 'or' (0 is falsy)"
         )
 
@@ -1574,16 +1593,33 @@ class TestV4CacheListTruncation:
 
 
 class TestV4PrefixCacheLRU:
-    """PrefixCacheManager LRU must use OrderedDict for O(1) and dedup."""
+    """PrefixCacheManager LRU must use OrderedDict for O(1) and dedup.
+
+    LRU storage is now partitioned by cache_type (assistant / user / system)
+    via ``_lru_by_type`` so eviction can prefer lower-priority buckets
+    first. The original ``_lru`` attribute was replaced; these tests walk
+    all buckets to produce the combined view.
+    """
+
+    @staticmethod
+    def _all_lru_keys(mgr):
+        keys = []
+        for od in mgr._lru_by_type.values():
+            keys.extend(od.keys())
+        return keys
 
     def test_lru_is_ordered_dict(self):
         from vmlx_engine.prefix_cache import PrefixCacheManager
         mock_model = MagicMock()
         mgr = PrefixCacheManager(mock_model, max_entries=10)
         from collections import OrderedDict
-        assert isinstance(mgr._lru, OrderedDict), (
-            "PrefixCacheManager._lru must be OrderedDict, not deque"
+        assert hasattr(mgr, "_lru_by_type"), (
+            "PrefixCacheManager must expose per-type LRU dict"
         )
+        for t, od in mgr._lru_by_type.items():
+            assert isinstance(od, OrderedDict), (
+                f"bucket {t!r} must be OrderedDict for O(1) reordering"
+            )
 
     def test_no_duplicate_lru_entries(self):
         """Storing same tokens twice must not create duplicate LRU entries."""
@@ -1594,8 +1630,9 @@ class TestV4PrefixCacheLRU:
         cache = [MagicMock()]
         mgr.store_cache(tokens, cache)
         mgr.store_cache(tokens, cache)
-        assert len(mgr._lru) == 1, (
-            f"Expected 1 LRU entry after duplicate store, got {len(mgr._lru)}"
+        total = len(self._all_lru_keys(mgr))
+        assert total == 1, (
+            f"Expected 1 LRU entry after duplicate store, got {total}"
         )
 
     def test_touch_lru_moves_to_end(self):
@@ -1605,9 +1642,9 @@ class TestV4PrefixCacheLRU:
         mgr = PrefixCacheManager(mock_model, max_entries=10)
         mgr.store_cache([1, 2], [MagicMock()])
         mgr.store_cache([3, 4], [MagicMock()])
-        # Touch first entry — it should move to end
+        # Touch first entry — it should move to end of its bucket
         mgr._touch_lru(tuple([1, 2]))
-        keys = list(mgr._lru.keys())
+        keys = self._all_lru_keys(mgr)
         assert keys[-1] == (mgr.model_key, (1, 2)), (
             "Touch must move entry to MRU end"
         )
@@ -1621,8 +1658,8 @@ class TestV4PrefixCacheLRU:
         mgr.store_cache([2], [MagicMock()])
         # This should evict [1]
         mgr.store_cache([3], [MagicMock()])
-        assert len(mgr._lru) == 2
-        keys = list(mgr._lru.keys())
+        keys = self._all_lru_keys(mgr)
+        assert len(keys) == 2
         assert (mgr.model_key, (1,)) not in keys, "LRU entry [1] should have been evicted"
 
 
@@ -2146,8 +2183,11 @@ class TestV6MapHFModel:
             source = f.read()
         func_start = source.find("function mapHFModel")
         func_body = source[func_start:func_start + 400]
-        # Must extract author from modelId (split('/')[0]) as fallback
-        assert "split('/')[0]" in func_body, (
+        # Must extract author from modelId (split('/')[0]) as fallback.
+        # Accept both single- and double-quote forms — the TS source uses
+        # double quotes: `modelId.split("/")[0]`.
+        assert ("split('/')[0]" in func_body
+                or 'split("/")[0]' in func_body), (
             "mapHFModel must extract author from modelId.split('/')[0] as fallback"
         )
 

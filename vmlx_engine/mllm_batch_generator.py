@@ -98,6 +98,7 @@ HELPER FUNCTIONS
 """
 
 import logging
+import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -1420,12 +1421,30 @@ class MLLMBatchGenerator:
         has_images = request.pixel_values is not None
         seq_len = input_ids.shape[1]
 
+        # vmlx#89: opt-in chunked prefill for hybrid SSM models on text-only
+        # requests. Hybrid models default to one-shot prefill because their
+        # mask computation uses cache-position indexing (fa_idx/ssm_idx) that
+        # was only tested for full-sequence processing. However, long prompts
+        # (>~34K tokens) trigger Metal single-buffer OOM (~72 GB cap per
+        # allocation) because `attention_scores` blows up to
+        # (1, heads, seq_len, seq_len) * 2 bytes — 147 GB at seq_len=48K.
+        #
+        # Qwen3.5 hybrid (GatedDeltaNet + attention) was verified safe with
+        # chunked prefill: both `KVCache.make_mask(N)` and `ArraysCache.state`
+        # carry across chunks correctly. Reporter opt-in so other hybrid
+        # architectures keep default behavior until verified.
+        _allow_hybrid_chunked = os.environ.get(
+            "VMLX_ALLOW_HYBRID_CHUNKED_PREFILL"
+        ) in ("1", "true", "True", "yes", "on")
+        _hybrid_blocks_chunk = self._is_hybrid and not _allow_hybrid_chunked
+
         # TEXT-ONLY FAST PATH: use language_model directly, skip VLM wrapper.
         # The VLM wrapper adds overhead from vision encoder path and some VLM
         # wrappers (e.g. Gemma 4 loaded via smelt) may not accept pixel_values.
         # Using language_model directly avoids this entirely.
-        # Hybrid SSM models must go through the full model for correct mask computation.
-        if not has_images and not self._is_hybrid:
+        # Hybrid SSM models must go through the full model for correct mask
+        # computation UNLESS the opt-in env var is set (vmlx#89).
+        if not has_images and not _hybrid_blocks_chunk:
             lm = getattr(self.model, 'language_model', None)
             if lm is not None and cache is not None:
                 if seq_len <= self.prefill_step_size * 2:
@@ -1438,10 +1457,10 @@ class MLLMBatchGenerator:
 
         # Chunked prefill for text-only VLM requests with long prompts.
         # Image requests must run in one shot (vision encoder needs full sequence).
-        # Hybrid SSM models (GatedDeltaNet/Mamba + attention) must run in one shot
-        # because the language_model's forward pass computes masks from specific
-        # cache positions (fa_idx/ssm_idx) that assume full-sequence processing.
-        if not has_images and seq_len > self.prefill_step_size * 2 and not self._is_hybrid:
+        # Hybrid SSM default: one-shot (safe). Opt-in via
+        # VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 for hybrid architectures that
+        # have been verified cache-aware (Qwen3.5 GatedDeltaNet + attention).
+        if not has_images and seq_len > self.prefill_step_size * 2 and not _hybrid_blocks_chunk:
             # Use language_model directly for chunked text prefill
             lm = getattr(self.model, 'language_model', None)
             if lm is not None and cache is not None:

@@ -4821,7 +4821,42 @@ async def create_chat_completion(
         _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get(
             "prompt_suffix", ""
         ).startswith("<|start|>assistant<|channel|>analysis")
-        request_parser.reset_state(harmony_active=_harmony_prefix_active)
+
+        # Compute think_in_prompt the same way the streaming path does at
+        # ~line 5840. MiniMax and other "always-thinks" templates inject
+        # <think>\n in the generation prompt, so model output starts in
+        # reasoning mode. Without think_in_prompt=True, `extract_reasoning`
+        # falls through to "no tags → pure content" and the reasoning prose
+        # shows up raw in content (§15 regression).
+        try:
+            from .model_config_registry import get_model_config_registry as _mcr
+            _mc_nonstream = _mcr().lookup(_model_path or _model_name or request.model)
+            _think_in_prompt_ns = _mc_nonstream.think_in_template
+            if not _think_in_prompt_ns and _reasoning_parser:
+                try:
+                    if getattr(engine.tokenizer, "has_thinking", False):
+                        _think_in_prompt_ns = True
+                except Exception:
+                    pass
+            if _think_in_prompt_ns and _template_completes_thinking(
+                engine.tokenizer, _model_name or request.model
+            ):
+                _think_in_prompt_ns = False
+            # User asked thinking off + template actually respects it → no think prefix
+            _eff_thinking_ns = chat_kwargs.get("enable_thinking")
+            if _eff_thinking_ns is False and _think_in_prompt_ns:
+                if not _template_always_thinks(
+                    engine.tokenizer, _model_name or request.model
+                ):
+                    _think_in_prompt_ns = False
+        except Exception as _tpe:
+            logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
+            _think_in_prompt_ns = False
+
+        request_parser.reset_state(
+            think_in_prompt=_think_in_prompt_ns,
+            harmony_active=_harmony_prefix_active,
+        )
         reasoning_text, remaining_text = request_parser.extract_reasoning(output.text)
         if remaining_text is not None:
             content_for_parsing = remaining_text
@@ -5471,7 +5506,42 @@ async def create_response(
         _harmony_prefix_active = "prompt_suffix" in chat_kwargs and chat_kwargs.get(
             "prompt_suffix", ""
         ).startswith("<|start|>assistant<|channel|>analysis")
-        request_parser.reset_state(harmony_active=_harmony_prefix_active)
+
+        # Compute think_in_prompt the same way the streaming path does at
+        # ~line 5840. MiniMax and other "always-thinks" templates inject
+        # <think>\n in the generation prompt, so model output starts in
+        # reasoning mode. Without think_in_prompt=True, `extract_reasoning`
+        # falls through to "no tags → pure content" and the reasoning prose
+        # shows up raw in content (§15 regression).
+        try:
+            from .model_config_registry import get_model_config_registry as _mcr
+            _mc_nonstream = _mcr().lookup(_model_path or _model_name or request.model)
+            _think_in_prompt_ns = _mc_nonstream.think_in_template
+            if not _think_in_prompt_ns and _reasoning_parser:
+                try:
+                    if getattr(engine.tokenizer, "has_thinking", False):
+                        _think_in_prompt_ns = True
+                except Exception:
+                    pass
+            if _think_in_prompt_ns and _template_completes_thinking(
+                engine.tokenizer, _model_name or request.model
+            ):
+                _think_in_prompt_ns = False
+            # User asked thinking off + template actually respects it → no think prefix
+            _eff_thinking_ns = chat_kwargs.get("enable_thinking")
+            if _eff_thinking_ns is False and _think_in_prompt_ns:
+                if not _template_always_thinks(
+                    engine.tokenizer, _model_name or request.model
+                ):
+                    _think_in_prompt_ns = False
+        except Exception as _tpe:
+            logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
+            _think_in_prompt_ns = False
+
+        request_parser.reset_state(
+            think_in_prompt=_think_in_prompt_ns,
+            harmony_active=_harmony_prefix_active,
+        )
         reasoning_text, remaining_text = request_parser.extract_reasoning(output.text)
         if remaining_text is not None:
             content_for_parsing = remaining_text

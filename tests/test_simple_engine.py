@@ -40,7 +40,14 @@ class TestSimpleEngineConcurrency:
 
     @pytest.fixture
     def mock_llm_model(self):
-        """Create a mock LLM model."""
+        """Create a mock LLM model.
+
+        SimpleEngine.chat() internally routes through `_model.generate()` for
+        text-only (LLM) models (is_mllm_model returns False). So this fixture
+        mocks `.generate` with a real string `.text` attribute — a bare
+        MagicMock returns MagicMock for unset attributes, and that slips into
+        `clean_output_text()` which calls re.sub and crashes on non-strings.
+        """
         model = MagicMock()
         model.tokenizer = MagicMock()
         model.tokenizer.encode = MagicMock(return_value=[1, 2, 3])
@@ -49,20 +56,26 @@ class TestSimpleEngineConcurrency:
         model._concurrent_count = 0
         model._max_concurrent = 0
 
-        def chat_side_effect(**kwargs):
+        def generate_side_effect(**kwargs):
             model._concurrent_count += 1
             model._max_concurrent = max(model._max_concurrent, model._concurrent_count)
             import time
-
             time.sleep(0.05)
             model._concurrent_count -= 1
-            result = MagicMock()
+            # Use spec so attribute reads raise AttributeError for anything
+            # we didn't explicitly wire — prevents silent MagicMock bleed-in.
+            result = MagicMock(spec=["text", "tokens", "finish_reason",
+                                     "prompt_tokens", "completion_tokens"])
             result.text = "test response"
             result.tokens = [1, 2, 3]
             result.finish_reason = "stop"
+            result.prompt_tokens = 3
+            result.completion_tokens = 3
             return result
 
-        model.chat = MagicMock(side_effect=chat_side_effect)
+        model.generate = MagicMock(side_effect=generate_side_effect)
+        # Some code paths may probe .chat too — mirror to .generate
+        model.chat = model.generate
         return model
 
     @pytest.mark.asyncio

@@ -50,7 +50,8 @@ class _FakeSSMLayer:
 def test_construction_default():
     cache = SSMCompanionCache()
     assert cache.size == 0
-    assert cache.max_entries == 50  # default
+    # Default lowered 50 → 20 to keep worst-case ~4 GB instead of ~10 GB.
+    assert cache.max_entries == 20
 
 
 def test_construction_custom_max_entries():
