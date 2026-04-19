@@ -3726,7 +3726,11 @@ async def ollama_generate(fastapi_request: Request):
     if not is_streaming:
         openai_req["stream"] = False
         comp_req = CompletionRequest(**openai_req)
-        result = await create_completion(comp_req, fastapi_request)
+        # create_completion takes only the CompletionRequest — no
+        # fastapi_request arg (unlike create_chat_completion which uses
+        # it for disconnect detection). Pre-session regression from
+        # v1.3.12 where the call passed 2 args causing TypeError.
+        result = await create_completion(comp_req)
         if hasattr(result, "model_dump"):
             result_dict = result.model_dump(exclude_none=True)
         else:
