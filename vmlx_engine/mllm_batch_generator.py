@@ -1066,17 +1066,56 @@ class MLLMBatchGenerator:
                 self._old_wired_limit = mx.set_wired_limit(
                     _device_info()["max_recommended_working_set_size"]
                 )
-                # Set Metal allocator cache limit to 25% of max working set
-                # (floor 512MB). Bounds the Metal allocator's free-list,
-                # preventing it from hoarding memory that prefix cache / OS needs.
+                # Set Metal allocator cache limit.
+                # mlxstudio#78: previously was a hard `max_ws * 0.25`, which
+                # on a 64GB M4 Max loading Gemma-4-31B (~41GB active) would
+                # reserve 12GB for cache on top of 41GB model → 53GB required
+                # vs 48GB max working set → Metal command buffer OOM on the
+                # FIRST request before a single token is generated.
+                #
+                # New policy: cap at min(25% of max_ws, 50% of FREE memory
+                # after model load). Floor at 512MB. This keeps the original
+                # behavior on machines with plenty of headroom (bounds the
+                # free-list so the OS can reclaim memory when pressured)
+                # while adapting on tight-memory systems where the model
+                # already consumed most of the budget.
                 try:
                     max_ws = _device_info()["max_recommended_working_set_size"]
-                    cache_limit = max(512 * 1024 * 1024, int(max_ws * 0.25))
+                    _get_active = (
+                        getattr(mx, "get_active_memory", None)
+                        or mx.metal.get_active_memory
+                    )
+                    active = _get_active()
+                    free = max(0, max_ws - active)
+                    # Base policy: 25% of max_ws (unchanged semantics on
+                    # big-headroom systems).
+                    base_limit = int(max_ws * 0.25)
+                    # Safety cap: don't reserve more than 50% of FREE
+                    # memory, so activations + KV + attention_scores have
+                    # the other half to live in without forcing the
+                    # allocator to release pooled blocks back to Metal.
+                    safety_limit = int(free * 0.5)
+                    cache_limit = max(
+                        512 * 1024 * 1024, min(base_limit, safety_limit)
+                    )
                     self._old_cache_limit = _set_cache(cache_limit)
                     logger.info(
                         f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
-                        f"(25% of {max_ws / (1024**3):.1f}GB max working set)"
+                        f"(max_ws={max_ws / (1024**3):.1f}GB, "
+                        f"active={active / (1024**3):.1f}GB, "
+                        f"free={free / (1024**3):.1f}GB; "
+                        f"base={base_limit / (1024**3):.2f}GB "
+                        f"safety={safety_limit / (1024**3):.2f}GB; "
+                        f"mlxstudio#78)"
                     )
+                    if safety_limit < base_limit:
+                        logger.warning(
+                            "Tight-memory configuration detected: model is "
+                            "using a large fraction of max working set. "
+                            "Cache limit adjusted downward. If requests OOM, "
+                            "try a more aggressively quantized model or "
+                            "reduce prompt length. (mlxstudio#78)"
+                        )
                 except Exception as e:
                     logger.debug(f"Metal cache limit not available: {e}")
             else:

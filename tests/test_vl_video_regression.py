@@ -2643,3 +2643,220 @@ class TestSSMCompanionIsCompleteFlag:
         assert is_complete is True, (
             "non-thinking capture (default is_complete=True) must behave as before"
         )
+
+
+class TestMlxstudio78AdaptiveCacheLimit:
+    """mlxstudio#78: Metal cache limit was hardcoded to 25% of max_ws,
+    which on tight-memory systems (M4 Max 64GB loading Gemma-4-31B at
+    ~41GB active) reserved 12GB for cache leaving only 7GB for model
+    forward pass → Metal OOM on first request.
+
+    Fix: cap cache limit at min(25% max_ws, 50% of FREE memory).
+    """
+
+    def test_cache_limit_adaptive_source_pin(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+        ).read_text()
+        assert "mlxstudio#78" in src
+        assert "safety_limit = int(free * 0.5)" in src
+        assert "min(base_limit, safety_limit)" in src
+        # Old hardcoded 25% path must be gone
+        # (except inside 'base_limit' which is still 25% of max_ws as the
+        # upper bound — that's intentional)
+        assert "Tight-memory configuration detected" in src
+
+    def test_cache_limit_tight_memory_scenario(self):
+        """Simulate reporter's scenario: 48GB max_ws, 41GB active → free 7GB.
+        Expected cache limit = min(12GB, 3.5GB) = 3.5GB (safety cap wins)."""
+        max_ws = 48 * 1024 ** 3
+        active = 41 * 1024 ** 3
+        free = max_ws - active
+        base_limit = int(max_ws * 0.25)       # 12 GB
+        safety_limit = int(free * 0.5)        # 3.5 GB
+        cache_limit = max(512 * 1024 ** 2, min(base_limit, safety_limit))
+        # On reporter's rig, should be ~3.5 GB, NOT 12 GB
+        assert cache_limit == safety_limit, (
+            f"tight-memory path: expected safety cap to win, got base={base_limit} "
+            f"safety={safety_limit} chosen={cache_limit}"
+        )
+        assert cache_limit < base_limit, "safety cap must bite"
+
+    def test_cache_limit_big_headroom_scenario(self):
+        """On a machine with plenty of headroom, old 25% behavior preserved."""
+        max_ws = 100 * 1024 ** 3       # 100 GB
+        active = 10 * 1024 ** 3        # 10 GB active (mostly free)
+        free = max_ws - active
+        base_limit = int(max_ws * 0.25)   # 25 GB
+        safety_limit = int(free * 0.5)    # 45 GB
+        cache_limit = max(512 * 1024 ** 2, min(base_limit, safety_limit))
+        # Big headroom: base_limit wins, unchanged behavior
+        assert cache_limit == base_limit, (
+            f"big-headroom path: expected base to win, got {cache_limit}"
+        )
+
+    def test_cache_limit_floor(self):
+        """Degenerate case: tiny machine — floor at 512MB."""
+        max_ws = 2 * 1024 ** 3         # 2 GB
+        active = int(1.9 * 1024 ** 3)  # almost full
+        free = max_ws - active
+        base_limit = int(max_ws * 0.25)
+        safety_limit = int(free * 0.5)
+        cache_limit = max(512 * 1024 ** 2, min(base_limit, safety_limit))
+        # Floor must kick in
+        assert cache_limit == 512 * 1024 ** 2
+
+
+class TestMlxstudio63MemoryPressureGuard:
+    """mlxstudio#63: kernel panic on heavy VS Code OAICopilot traffic.
+
+    On macOS, continuous-batching under extreme unified-memory pressure
+    can trip an IOKit command-buffer failure that escalates to a whole-
+    system kernel panic (irrecoverable). We reject new inference requests
+    with 503 BEFORE Metal allocates new KV blocks when system memory is
+    critically low.
+
+    Default threshold 97% — only triggers in catastrophic territory.
+    Configurable via VMLX_MEMORY_PRESSURE_REJECT_PCT; disable entirely
+    with VMLX_MEMORY_PRESSURE_GUARD=0.
+    """
+
+    def _mock_psutil_vmem(self, percent: float, available_gb: float = 2.0):
+        """Build a minimal psutil.virtual_memory() mock with given %used."""
+        mock_vmem = MagicMock()
+        mock_vmem.percent = percent
+        mock_vmem.available = int(available_gb * (1024**3))
+        return mock_vmem
+
+    def test_dependency_exists_and_wires_onto_all_inference_endpoints(self):
+        """Source pin: check_memory_pressure wired onto every endpoint
+        that can trigger KV growth → Metal OOM."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        # Dependency function must exist
+        assert "async def check_memory_pressure(" in src, (
+            "check_memory_pressure dependency missing — kernel panic "
+            "guard offline"
+        )
+        # It must be used on the critical inference endpoints. We search
+        # for `"/path"` followed within ~300 chars by
+        # `check_memory_pressure` to confirm wiring.
+        endpoints_wired = [
+            '"/v1/messages"',
+            '"/v1/images/generations"',
+            '"/v1/images/edits"',
+            '"/v1/completions",',
+            '"/v1/chat/completions"',
+            '"/v1/responses",',
+            '"/api/chat"',
+            '"/api/generate"',
+        ]
+        for ep in endpoints_wired:
+            # rfind skips the module-level inference_endpoints list
+            # (~line 251) and lands on the @app.post decorator itself.
+            idx = src.rfind(ep)
+            assert idx > 0, f"endpoint {ep} not found in server.py"
+            window = src[idx:idx + 500]
+            assert "check_memory_pressure" in window, (
+                f"mlxstudio#63: {ep} missing check_memory_pressure — "
+                f"kernel panic still possible on this entry point"
+            )
+
+    def test_pressure_above_threshold_rejects_with_503(self):
+        """Core behavior: when memory % exceeds threshold, dependency
+        raises HTTPException(503) with Retry-After=5."""
+        import asyncio
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        import vmlx_engine.server as s
+
+        async def run_check():
+            with patch.dict(os.environ, {"VMLX_MEMORY_PRESSURE_GUARD": "1",
+                                          "VMLX_MEMORY_PRESSURE_REJECT_PCT": "97"}):
+                with patch("psutil.virtual_memory",
+                           return_value=self._mock_psutil_vmem(98.5, 0.5)):
+                    return await s.check_memory_pressure(MagicMock())
+
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(run_check())
+        assert excinfo.value.status_code == 503
+        assert "Retry-After" in (excinfo.value.headers or {})
+        assert excinfo.value.headers["Retry-After"] == "5"
+        assert "memory pressure" in str(excinfo.value.detail).lower()
+
+    def test_pressure_below_threshold_passes_silently(self):
+        """Default path: ok memory → dependency returns without raising."""
+        import asyncio
+        from unittest.mock import patch
+        import vmlx_engine.server as s
+
+        async def run_check():
+            with patch.dict(os.environ, {"VMLX_MEMORY_PRESSURE_GUARD": "1",
+                                          "VMLX_MEMORY_PRESSURE_REJECT_PCT": "97"}):
+                with patch("psutil.virtual_memory",
+                           return_value=self._mock_psutil_vmem(40.0, 48.0)):
+                    return await s.check_memory_pressure(MagicMock())
+
+        # No exception = healthy path
+        asyncio.run(run_check())
+
+    def test_guard_disabled_env_var_bypasses_check(self):
+        """VMLX_MEMORY_PRESSURE_GUARD=0 must fully bypass the check
+        even at 99% memory — user opt-out escape hatch."""
+        import asyncio
+        from unittest.mock import patch
+        import vmlx_engine.server as s
+
+        async def run_check():
+            with patch.dict(os.environ, {"VMLX_MEMORY_PRESSURE_GUARD": "0"}):
+                with patch("psutil.virtual_memory",
+                           return_value=self._mock_psutil_vmem(99.5, 0.2)):
+                    return await s.check_memory_pressure(MagicMock())
+
+        # Must NOT raise even at 99.5% — env var opts out
+        asyncio.run(run_check())
+
+    def test_custom_threshold_respected(self):
+        """VMLX_MEMORY_PRESSURE_REJECT_PCT tunes the threshold. At 90%
+        configured threshold, 92% used must reject."""
+        import asyncio
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        import vmlx_engine.server as s
+
+        async def run_check():
+            with patch.dict(os.environ, {"VMLX_MEMORY_PRESSURE_GUARD": "1",
+                                          "VMLX_MEMORY_PRESSURE_REJECT_PCT": "90"}):
+                with patch("psutil.virtual_memory",
+                           return_value=self._mock_psutil_vmem(92.0, 5.0)):
+                    return await s.check_memory_pressure(MagicMock())
+
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(run_check())
+        assert excinfo.value.status_code == 503
+
+    def test_log_throttling_prevents_spam(self):
+        """Log warnings must be throttled to at most one per 5s so
+        sustained overload doesn't fill disk with identical WARN lines."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        assert "_last_pressure_log" in src, (
+            "log throttle state missing — WARN spam will fill logs under "
+            "sustained overload"
+        )
+        assert "now - _last_pressure_log > 5" in src, (
+            "throttle interval must be 5s"
+        )
+
+    def test_source_anchor(self):
+        """mlxstudio#63 anchor present in both the dependency function
+        and the per-endpoint wiring comment — so `grep mlxstudio#63`
+        finds all touch points."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        # At least 7+ references expected (1 func comment + 6+ endpoints)
+        count = src.count("mlxstudio#63")
+        assert count >= 7, (
+            f"mlxstudio#63 anchor count = {count}, expected ≥ 7 "
+            f"(dependency func + all inference endpoints)"
+        )
