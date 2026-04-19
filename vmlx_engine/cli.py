@@ -1883,7 +1883,37 @@ Examples:
         help="Skip inference smoke test",
     )
 
-    args = parser.parse_args()
+    # mlxstudio#76: parse_args() exits with code 2 on unrecognized args,
+    # which is opaque to end users running via the panel's process spawner.
+    # When a user's vmlx-engine binary is shadowed by an older install on
+    # PATH, flags like --smelt or --default-repetition-penalty (added in
+    # newer releases) get rejected. The panel logs "unrecognized arguments"
+    # but the user has no obvious path to diagnose. Catch SystemExit(2)
+    # from argparse and emit a one-line hint telling them to check for
+    # a stale binary; then re-raise so argparse's own message still shows.
+    try:
+        args = parser.parse_args()
+    except SystemExit as _argp_exit:
+        if _argp_exit.code == 2:
+            # Argparse already wrote "error: unrecognized arguments: ..." to
+            # stderr. Append a diagnostic tail so users can act on it.
+            try:
+                import sys as _sys
+                from . import __version__ as _vmlx_ver
+            except Exception:
+                _vmlx_ver = "unknown"
+            _sys.stderr.write(
+                f"\n"
+                f"hint: vmlx_engine version is {_vmlx_ver}. "
+                f"If this flag was recently added and you expect it to "
+                f"work, verify no older `vmlx-engine` is shadowing the "
+                f"bundled one on your PATH:\n"
+                f"    which -a vmlx-engine\n"
+                f"    python -c 'import vmlx_engine; print(vmlx_engine.__file__)'\n"
+                f"    pip show vmlx\n"
+                f"See mlxstudio#76.\n"
+            )
+        raise
 
     if args.command == "serve":
         serve_command(args)
