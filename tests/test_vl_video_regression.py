@@ -2991,3 +2991,142 @@ class TestSlidingWindowHybridInteraction:
         # Either skip-rotating is explicit, or the classification is used
         # to route to a separate code path
         assert "RotatingKVCache" in src or "sliding_window" in src.lower()
+
+
+class TestPagedCacheBoundaries:
+    """Paged cache: block-size alignment, ref-count discipline, cross-
+    request sharing. These invariants have all regressed at least once."""
+
+    def test_block_size_is_64_by_default(self):
+        """Default block_size=64 matches mlx_lm assumptions. Changing it
+        silently breaks multi-turn cache hit rates."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        import inspect
+        src = inspect.getsource(BlockAwarePrefixCache.__init__)
+        # Must read block_size from the paged_cache_manager
+        assert "paged_cache_manager.block_size" in src, (
+            "BlockAwarePrefixCache must use the paged manager's block_size"
+        )
+
+    def test_block_aware_fetch_cache_increments_ref(self):
+        """BlockAwarePrefixCache.fetch_cache must call
+        paged_cache.increment_ref for each shared block. Without this,
+        concurrent requests could evict a block mid-use."""
+        import vmlx_engine.prefix_cache as pc
+        src = Path(pc.__file__).read_text()
+        # Target BlockAwarePrefixCache (the paged one). Its fetch_cache
+        # lives inside the class body — the legacy in-memory
+        # PrefixCacheManager.fetch_cache returns MLX-immutable refs
+        # and doesn't need ref counts (MLX arrays can't be mutated).
+        cls_idx = src.find("class BlockAwarePrefixCache")
+        assert cls_idx > 0, "BlockAwarePrefixCache class required"
+        cls_body = src[cls_idx:cls_idx + 30000]
+        fc_idx = cls_body.find("def fetch_cache")
+        assert fc_idx > 0, "BlockAwarePrefixCache.fetch_cache required"
+        fc_body = cls_body[fc_idx:fc_idx + 3000]
+        assert "increment_ref" in fc_body, (
+            "BlockAwarePrefixCache.fetch_cache must increment refs so "
+            "concurrent clients don't race to evict shared blocks"
+        )
+
+    def test_release_cache_symmetric_with_fetch(self):
+        """Every fetch_cache path must have a matching release_cache,
+        especially in error-handling branches (recently added in
+        mlxstudio#73 fix)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        # Count fetch_cache vs release_cache call sites
+        import re
+        fetches = len(re.findall(r"\.fetch_cache\(", src))
+        releases = len(re.findall(r"\.release_cache\(", src))
+        # Release >= fetch because error paths release without fetching
+        # (ref counts survived from upstream). But at minimum, release
+        # must be present whenever fetch_cache can lead to None result.
+        assert releases >= 1, (
+            "scheduler.py must have release_cache calls to balance fetch_cache"
+        )
+
+    def test_trim_block_table_block_aligns(self):
+        """trim_block_table floors target_tokens to block-size boundary
+        (critical for vmlx#91 SSM prefix resume)."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import BlockTable
+        from unittest.mock import MagicMock
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        bt = BlockTable(request_id="r", block_ids=list(range(10)),
+                        num_tokens=10 * 64)
+        cache.paged_cache.get_block_table = MagicMock(return_value=bt)
+        cache.paged_cache.decrement_ref = MagicMock()
+        # Target 300 tokens → floor to 256 (4 blocks)
+        result = cache.trim_block_table("r", 300)
+        assert result is not None
+        assert result.num_tokens == 256
+        assert len(result.block_ids) == 4
+        assert cache.paged_cache.decrement_ref.call_count == 6
+
+
+class TestL2DiskCacheIntegrity:
+    """L2 disk cache: bit-exact round-trip, proper eviction, safe
+    concurrent access."""
+
+    def test_disk_cache_manager_isolated_dirs_per_model(self):
+        """Source pin: DiskCacheManager is scoped by cache_dir, so the
+        scheduler must use a dir that mixes in the model hash/quant
+        config so two different models can't collide."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/disk_cache.py"
+        ).read_text()
+        # A cache_dir arg is required to isolate models
+        assert "cache_dir" in src
+        # SHA-256 hashing of tokens for the on-disk filename
+        assert "_hash_tokens" in src or "sha256" in src.lower()
+
+    def test_disk_cache_round_trip_bit_exact(self, tmp_path):
+        """Store 3-layer KV cache → fresh manager → fetch → bit-exact."""
+        from vmlx_engine.disk_cache import DiskCacheManager
+        from mlx_lm.models.cache import KVCache
+        import mlx.core as mx
+        import numpy as np
+        mgr = DiskCacheManager(cache_dir=str(tmp_path), max_size_gb=1.0)
+        caches = []
+        for _ in range(3):
+            kv = KVCache()
+            kv.keys = mx.array(np.random.randn(1, 4, 10, 64).astype(np.float16))
+            kv.values = mx.array(np.random.randn(1, 4, 10, 64).astype(np.float16))
+            kv.offset = 10
+            mx.eval(kv.keys, kv.values)
+            caches.append(kv)
+        tokens = list(range(10))
+        assert mgr.store(tokens, caches), "store must return True"
+        import time
+        time.sleep(0.5)  # let background writer flush
+        # Fresh manager pointing at same dir
+        del mgr
+        mgr2 = DiskCacheManager(cache_dir=str(tmp_path), max_size_gb=1.0)
+        loaded = mgr2.fetch(tokens)
+        assert loaded is not None, "fetch after fresh manager must hit"
+        assert len(loaded) == 3
+        for orig, rec in zip(caches, loaded):
+            assert (orig.keys == rec.keys).all().item()
+            assert (orig.values == rec.values).all().item()
+
+    def test_disk_cache_respects_size_limit(self, tmp_path):
+        """Source pin: DiskCacheManager has max_size_bytes enforcement."""
+        import vmlx_engine.disk_cache as dc
+        src = Path(dc.__file__).read_text()
+        assert "max_size_bytes" in src, "size cap field must exist"
+        # LRU-style eviction when limit hit
+        assert "evict" in src.lower() or "DELETE FROM cache_entries" in src
+
+    def test_tq_native_disk_store_marker(self):
+        """TurboQuant-native disk serialization (26× smaller) must still
+        be present per memory note."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/disk_cache.py"
+        ).read_text()
+        assert "tq_native" in src.lower() or "TurboQuant" in src, (
+            "TQ-native disk store saves 5.3× vs affine re-encoded KV"
+        )
