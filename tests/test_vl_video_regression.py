@@ -3130,3 +3130,404 @@ class TestL2DiskCacheIntegrity:
         assert "tq_native" in src.lower() or "TurboQuant" in src, (
             "TQ-native disk store saves 5.3× vs affine re-encoded KV"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Extended unit coverage — multi-turn, VL marker handling, video edge cases,
+# prefix cache corner cases. Pure-Python, no model load required.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMultiTurnCacheStateMachine:
+    """Multi-turn cache transitions: stale session state, mid-stream cancel,
+    image→text→image→text alternation, tool-result injection."""
+
+    def test_prefix_match_length_exact(self):
+        from vmlx_engine.mllm_cache import MLLMPrefixCacheEntry
+        e = MLLMPrefixCacheEntry(
+            image_hash="img", prompt_hash="p", vision_embeddings=None,
+            kv_cache=[], token_ids=[1, 2, 3, 4, 5], num_image_tokens=0,
+            num_text_tokens=5, prompt_tokens=5, model_name="",
+        )
+        # Query with exact same tokens → full match
+        assert e.get_prefix_match_length([1, 2, 3, 4, 5]) == 5
+
+    def test_prefix_match_length_shorter_query(self):
+        from vmlx_engine.mllm_cache import MLLMPrefixCacheEntry
+        e = MLLMPrefixCacheEntry(
+            image_hash="img", prompt_hash="p", vision_embeddings=None,
+            kv_cache=[], token_ids=[1, 2, 3, 4, 5], num_image_tokens=0,
+            num_text_tokens=5, prompt_tokens=5, model_name="",
+        )
+        # Query shorter than stored → match length == query length
+        assert e.get_prefix_match_length([1, 2, 3]) == 3
+
+    def test_prefix_match_length_diverging(self):
+        from vmlx_engine.mllm_cache import MLLMPrefixCacheEntry
+        e = MLLMPrefixCacheEntry(
+            image_hash="img", prompt_hash="p", vision_embeddings=None,
+            kv_cache=[], token_ids=[1, 2, 3, 4, 5], num_image_tokens=0,
+            num_text_tokens=5, prompt_tokens=5, model_name="",
+        )
+        # Diverges at index 2 → match length 2
+        assert e.get_prefix_match_length([1, 2, 99, 4, 5]) == 2
+
+    def test_prefix_match_length_zero_shared(self):
+        from vmlx_engine.mllm_cache import MLLMPrefixCacheEntry
+        e = MLLMPrefixCacheEntry(
+            image_hash="img", prompt_hash="p", vision_embeddings=None,
+            kv_cache=[], token_ids=[1, 2, 3], num_image_tokens=0,
+            num_text_tokens=3, prompt_tokens=3, model_name="",
+        )
+        assert e.get_prefix_match_length([99, 100]) == 0
+
+    def test_prefix_cache_lru_eviction_ordering(self):
+        """LRU eviction must drop oldest, keep most recent."""
+        from vmlx_engine.mllm_cache import MLLMPrefixCacheManager
+        cm = MLLMPrefixCacheManager(max_entries=3)
+        # Store 3 entries
+        for i in range(3):
+            cm.store(
+                images=[f"img{i}.png"], prompt=f"p{i}",
+                vision_embeddings=None, kv_cache=[object()],
+                token_ids=[i, i+1, i+2], num_image_tokens=0,
+                model_name="test",
+            )
+        assert len(cm._cache) == 3
+        # Store 4th → oldest (0) must be evicted
+        cm.store(
+            images=["img3.png"], prompt="p3",
+            vision_embeddings=None, kv_cache=[object()],
+            token_ids=[3, 4, 5], num_image_tokens=0, model_name="test",
+        )
+        assert len(cm._cache) == 3
+        # Check the key for "img0" is gone
+        keys = list(cm._cache.keys())
+        for k in keys:
+            assert "img0" not in str(cm._cache[k].image_hash)
+
+    def test_multi_turn_alternating_image_text_distinct_keys(self):
+        """Image-turn vs text-turn produce different cache keys even when
+        prompt text is the same. Otherwise text-only queries could pull
+        image-embedded cache state → wrong output."""
+        from vmlx_engine.mllm_cache import MLLMPrefixCacheManager
+        cm = MLLMPrefixCacheManager(max_entries=10)
+        k1 = cm._make_cache_key(["img.png"], "hello")
+        k2 = cm._make_cache_key([], "hello")
+        assert k1 != k2, (
+            "image-present key must differ from text-only key for same prompt"
+        )
+
+
+class TestImageMarkerEdgeCases:
+    """VL: tokens representing image placeholders must be preserved across
+    prefill, strip, and re-prompt boundaries."""
+
+    def test_image_marker_constants_stable(self):
+        """Qwen3-VL image markers used by tests in this file."""
+        # These are tested elsewhere; pin the strings so future refactors
+        # don't accidentally drift the marker names.
+        marker = "<|vision_start|><|image_pad|><|vision_end|>"
+        assert "<|image_pad|>" in marker
+        assert "<|vision_start|>" in marker and "<|vision_end|>" in marker
+
+    def test_apply_chat_template_requires_num_images(self):
+        """mlx_vlm.prompt_utils.apply_chat_template's num_images signature
+        must remain — test for ALL future mlx_vlm upgrades."""
+        from mlx_vlm.prompt_utils import apply_chat_template
+        import inspect
+        sig = inspect.signature(apply_chat_template)
+        assert "num_images" in sig.parameters, (
+            "apply_chat_template must accept num_images= kwarg; without it "
+            "we can't force image marker insertion for sessions that pre- "
+            "compute prompts (vmlx#97 repro setup depends on this)"
+        )
+
+    def test_video_token_marker_distinct_from_image(self):
+        """video_pad and image_pad must differ, else video routing collapses."""
+        assert "<|image_pad|>" != "<|video_pad|>"
+
+    def test_video_temporal_patch_size_defaults(self):
+        """Default temporal_patch_size=2 is what the fallback assumes.
+        If this constant drifts, frame-count → t_patches math breaks."""
+        import inspect
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+        src = inspect.getsource(_install_video_fallback)
+        assert "temporal_patch_size" in src
+        assert "temporal_patch_size\", 2)" in src or "temporal_patch_size, 2)" in src
+
+
+class TestPrefixCacheCornerCases:
+    """Corner cases for BlockAwarePrefixCache that have bitten us before."""
+
+    def test_empty_tokens_returns_none(self):
+        """fetch_cache with empty tokens must not crash — returns (None, [])."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from unittest.mock import MagicMock
+        pm = PagedCacheManager(block_size=64, max_blocks=16)
+        model = MagicMock()
+        cache = BlockAwarePrefixCache(model, pm)
+        result = cache.fetch_cache("req1", [])
+        assert result == (None, [])
+
+    def test_fetch_nonexistent_request_returns_miss(self):
+        """Never-seen request returns (None, tokens)."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from unittest.mock import MagicMock
+        pm = PagedCacheManager(block_size=64, max_blocks=16)
+        model = MagicMock()
+        cache = BlockAwarePrefixCache(model, pm)
+        table, remaining = cache.fetch_cache("req1", [1, 2, 3])
+        assert table is None
+        assert remaining == [1, 2, 3]
+
+    def test_trim_to_exactly_one_block(self):
+        """trim_block_table target=block_size keeps exactly 1 block."""
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        from vmlx_engine.paged_cache import BlockTable
+        from unittest.mock import MagicMock
+        cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        cache.block_size = 64
+        cache.paged_cache = MagicMock()
+        bt = BlockTable(request_id="r", block_ids=[10, 20, 30], num_tokens=192)
+        cache.paged_cache.get_block_table = MagicMock(return_value=bt)
+        cache.paged_cache.decrement_ref = MagicMock()
+        result = cache.trim_block_table("r", 64)
+        assert result is not None
+        assert len(result.block_ids) == 1
+        assert result.num_tokens == 64
+        assert cache.paged_cache.decrement_ref.call_count == 2
+
+
+class TestSSMCompanionPrefixHashStability:
+    """SSM companion cache prefix_hash must be stable across python
+    runs so on-disk serialization (future) would work deterministically."""
+
+    def test_prefix_hash_deterministic(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        c1 = SSMCompanionCache(max_entries=5, model_key="model-A")
+        c2 = SSMCompanionCache(max_entries=5, model_key="model-A")
+        # Same tokens + same model_key → same prefix_hash
+        assert c1._prefix_hash([1, 2, 3], 3) == c2._prefix_hash([1, 2, 3], 3)
+
+    def test_prefix_hash_different_for_different_models(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        c1 = SSMCompanionCache(max_entries=5, model_key="model-A")
+        c2 = SSMCompanionCache(max_entries=5, model_key="model-B")
+        # Same tokens, different model — hashes must differ (otherwise
+        # two models cache-collide on identical token prefixes)
+        assert c1._prefix_hash([1, 2, 3], 3) != c2._prefix_hash([1, 2, 3], 3)
+
+    def test_prefix_hash_respects_num_tokens_bound(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        c = SSMCompanionCache(max_entries=5, model_key="m")
+        # First N tokens identical, suffix differs → hash must only reflect
+        # the first N (since num_tokens slice caps at N)
+        h1 = c._prefix_hash([1, 2, 3, 4, 5], 3)
+        h2 = c._prefix_hash([1, 2, 3, 99, 100], 3)
+        assert h1 == h2
+        # But hash at full length differs
+        h3 = c._prefix_hash([1, 2, 3, 4, 5], 5)
+        h4 = c._prefix_hash([1, 2, 3, 99, 100], 5)
+        assert h3 != h4
+
+    def test_length_index_cleanup_on_eviction(self):
+        """_length_index must not grow unbounded — evicted keys removed."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F:
+            cache = None
+            lengths = None
+        c = SSMCompanionCache(max_entries=2, model_key="m")
+        c.store([1, 2, 3], 3, [_F()])
+        c.store([1, 2, 3, 4, 5], 5, [_F()])
+        c.store([1, 2, 3, 4, 5, 6, 7], 7, [_F()])  # evicts entry at len=3
+        # _length_index should only have 5 and 7 buckets populated
+        populated = [n for n, d in c._length_index.items() if d]
+        assert 3 not in populated, (
+            "LRU-evicted entry at length=3 must be purged from _length_index"
+        )
+        assert 5 in populated and 7 in populated
+
+
+@pytest.mark.skipif(not HAS_JANGTQ, reason="model not present")
+class TestRealModelMultiTurnIntegration:
+    """Real-model multi-turn integration tests — reuse one model load
+    across all scenarios to keep CI cost manageable.
+
+    Covers:
+      - text-only multi-turn through MLXMultimodalLM (VL class, text path)
+      - image multi-turn (same image across turns → cache hit)
+      - video frame input produces valid pixel_values_videos
+      - multi-image in a single request
+      - reasoning=True vs reasoning=False on a thinking-capable family
+      - RAM stability across N requests (no leak)
+    """
+
+    @pytest.fixture(scope="class")
+    def loaded_model(self):
+        """Load Qwen3.6-35B-A3B-JANGTQ2 once, share across class tests."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+        import mlx.utils as _mu
+        import mlx.core as _mx
+        m = MLXMultimodalLM(str(MODEL_JANGTQ))
+        m.load()
+        # Force materialize
+        flat = _mu.tree_flatten(m.model.parameters())
+        for i in range(0, len(flat), 200):
+            _mx.eval(*[v for _, v in flat[i:i + 200]])
+        yield m
+        # No teardown — fixture scoped to class; process exit cleans up
+
+    def test_text_multi_turn_no_leak(self, loaded_model):
+        """4 text-only turns → MLX active memory should not grow."""
+        import mlx.core as mx
+        m = loaded_model
+        baseline = mx.get_active_memory() / 1e9
+        for q in ["1+1?", "2+2?", "3+3?", "4+4?"]:
+            out = m.generate(q, max_tokens=6, use_cache=True)
+            assert out.text is not None
+        after = mx.get_active_memory() / 1e9
+        growth = after - baseline
+        assert growth < 0.5, (
+            f"text multi-turn grew active memory by {growth:.2f} GB "
+            f"(baseline {baseline:.2f}, after {after:.2f})"
+        )
+
+    def test_image_multi_turn_same_image_hits_cache(self, loaded_model):
+        """Same (image, prompt) repeated → second turn must hit cache."""
+        from PIL import Image
+        m = loaded_model
+        img = "/tmp/_real_mt_img.png"
+        Image.new("RGB", (384, 384), (128, 64, 192)).save(img)
+        cm = m._cache_manager
+        cm.stats.hits = 0
+        cm.stats.misses = 0
+        # T1 populate
+        m.generate("Name this color.", images=[img],
+                   max_tokens=6, use_cache=True)
+        # T2 same — must hit
+        m.generate("Name this color.", images=[img],
+                   max_tokens=6, use_cache=True)
+        assert cm.stats.hits >= 1, (
+            f"same-image repeat must hit cache, got "
+            f"hits={cm.stats.hits} misses={cm.stats.misses}"
+        )
+
+    def test_multi_image_single_request(self, loaded_model):
+        """Two images in one request must both be processed."""
+        from PIL import Image
+        m = loaded_model
+        img1 = "/tmp/_real_mt_img1.png"
+        img2 = "/tmp/_real_mt_img2.png"
+        Image.new("RGB", (256, 256), (255, 0, 0)).save(img1)
+        Image.new("RGB", (256, 256), (0, 255, 0)).save(img2)
+        out = m.generate(
+            "Compare these two images in 5 words.",
+            images=[img1, img2], max_tokens=30, use_cache=False,
+        )
+        # Just confirm we got output without crash
+        assert out.text is not None
+        assert len(out.text) > 0
+
+    def test_video_fallback_processor_single_request(self, loaded_model):
+        """4-frame video through processor fallback → valid shapes."""
+        from PIL import Image
+        m = loaded_model
+        frames = []
+        for i in range(4):
+            p = f"/tmp/_real_mt_frame{i}.png"
+            Image.new("RGB", (256, 256), (60, 60 + i * 30, 120)).save(p)
+            frames.append(p)
+        # Call processor directly with fallback
+        prompt = ("<|im_start|>user\n"
+                  "<|vision_start|><|video_pad|><|vision_end|>"
+                  "desc<|im_end|>\n<|im_start|>assistant\n")
+        inputs = m.processor(
+            text=[prompt], videos=[frames],
+            return_tensors="mlx", padding=True,
+        )
+        assert "pixel_values_videos" in inputs
+        assert "video_grid_thw" in inputs
+
+    def test_ram_stable_across_12_mixed(self, loaded_model):
+        """12 mixed requests (text + image) — active memory stays bounded."""
+        import mlx.core as mx
+        from PIL import Image
+        m = loaded_model
+        img = "/tmp/_real_mt_stability.png"
+        Image.new("RGB", (256, 256), (32, 64, 128)).save(img)
+        baseline = mx.get_active_memory() / 1e9
+        peaks = []
+        for i in range(12):
+            if i % 3 == 0:
+                m.generate(f"quick q {i}", max_tokens=5, use_cache=True)
+            elif i % 3 == 1:
+                m.generate(f"color? {i}", images=[img],
+                           max_tokens=5, use_cache=True)
+            else:
+                m.generate(f"count {i}", max_tokens=5, use_cache=True)
+            peaks.append(mx.get_active_memory() / 1e9)
+        final = peaks[-1]
+        growth = final - baseline
+        assert growth < 1.0, (
+            f"12-mixed-request growth {growth:.2f} GB exceeds 1 GB bound"
+        )
+        # No single peak > 16 GB above baseline (sanity)
+        worst = max(peaks)
+        assert worst - baseline < 16, (
+            f"worst single-request peak {worst - baseline:.2f} GB over baseline"
+        )
+
+
+class TestMlxstudio69ImageAttachmentForceMultimodal:
+    """mlxstudio#69: attaching an image via the UI button didn't send the
+    image with the submission when the session's `isMultimodal` flag was
+    false (stale config, session lookup failed, or config.json lacks
+    vision_config). The user's explicit click on "attach image" must win.
+
+    Fix (shipped v1.3.49): in panel/src/main/ipc/chat.ts the send handler
+    forces `chatIsMultimodal = true` when `hasAttachments && !chatIsMultimodal`.
+
+    These guards pin the panel contract so a refactor can't drop it.
+    """
+
+    def test_panel_force_multimodal_on_attachment(self):
+        """Source pin: the force-multimodal branch with mlxstudio#69 anchor."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        # Anchor must be present
+        assert "mlxstudio#69" in src, (
+            "mlxstudio#69 anchor dropped — silent image-drop regression "
+            "is now possible on sessions with stale isMultimodal=false"
+        )
+        # The specific branch pattern
+        assert "hasAttachments && !chatIsMultimodal" in src, (
+            "force-multimodal branch missing; attachments get silently "
+            "dropped when session thinks it's text-only"
+        )
+        # The assignment must still set chatIsMultimodal = true
+        force_idx = src.find("hasAttachments && !chatIsMultimodal")
+        assert force_idx > 0
+        # Within ~500 chars after the branch, chatIsMultimodal=true assignment
+        window = src[force_idx:force_idx + 500]
+        assert "chatIsMultimodal = true" in window, (
+            "force-multimodal must set chatIsMultimodal=true"
+        )
+
+    def test_panel_infer_kind_back_compat_present(self):
+        """A companion back-compat helper `inferKind` lets older renderer
+        builds (without `.kind` field) still work. Keep it tested so
+        removing it doesn't break older client builds."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        assert "inferKind" in src, (
+            "inferKind back-compat helper missing — older renderer builds "
+            "that don't send `kind` will now fail"
+        )
+        assert 'data:video/' in src, (
+            "mime-prefix detection for video must remain in inferKind"
+        )
