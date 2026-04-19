@@ -73,6 +73,15 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [showHfToken, setShowHfToken] = useState(false)
   const [hfTokenSaving, setHfTokenSaving] = useState(false)
 
+  // ms#75: HuggingFace mirror endpoint — users in mainland China (or
+  // behind a restrictive network) can point this at hf-mirror.com or
+  // any HF-protocol-compatible proxy to fix slow/failed downloads.
+  // Empty = default to https://huggingface.co. Applies to downloads
+  // (via HF_ENDPOINT env var) AND all HF API calls (search, collection
+  // fetch, README fetch) via getHfBaseUrl() in the main process.
+  const [hfEndpoint, setHfEndpoint] = useState('')
+  const [hfEndpointSaving, setHfEndpointSaving] = useState(false)
+
   // Track locally available models for "already downloaded" detection
   const [localModelIds, setLocalModelIds] = useState<Set<string>>(new Set())
 
@@ -90,6 +99,10 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     window.api.models.getDownloadDir().then(setDownloadDir)
     window.api.settings.get('hf_api_key').then((val: string | null) => {
       if (val) setHfToken(val)
+    })
+    // ms#75: load saved mirror endpoint
+    window.api.settings.get('hf_endpoint').then((val: string | null) => {
+      if (val) setHfEndpoint(val)
     })
     window.api.models.scan().then((models: any[]) => {
       // Build a set of local model identifiers for matching against HF repo IDs
@@ -280,6 +293,34 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }
   }
 
+  // ms#75: save the HF mirror endpoint. Validates that the URL starts
+  // with https:// so a typo like "hf-mirror.com" (no scheme) doesn't
+  // silently break all downloads when HF_ENDPOINT is mis-configured.
+  const handleSaveHfEndpoint = async (endpoint: string) => {
+    const trimmed = endpoint.trim().replace(/\/+$/, '')
+    if (trimmed && !/^https?:\/\//.test(trimmed)) {
+      showToast('error', 'Invalid mirror URL',
+        'Endpoint must start with https:// or http://')
+      return
+    }
+    setHfEndpointSaving(true)
+    try {
+      if (trimmed) {
+        await window.api.settings.set('hf_endpoint', trimmed)
+      } else {
+        await window.api.settings.delete('hf_endpoint')
+      }
+      setHfEndpoint(trimmed)
+      showToast('success', trimmed
+        ? `HuggingFace mirror set: ${trimmed}`
+        : 'HuggingFace mirror cleared (using huggingface.co)')
+    } catch (err) {
+      showToast('error', 'Failed to save mirror endpoint', (err as Error).message)
+    } finally {
+      setHfEndpointSaving(false)
+    }
+  }
+
   const handleCollectionTabChange = useCallback(async (tab: CollectionTab) => {
     setCollectionTab(tab)
     // ms#68: refetch on tab click when we have no cached result AND no
@@ -402,6 +443,47 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           >
             Get your token
           </a>
+        </p>
+      </div>
+
+      {/* ms#75: HuggingFace mirror endpoint — unblocks downloads for
+          users in mainland China (hf-mirror.com) or behind restrictive
+          networks. hf-mirror.com is HF-protocol-compatible so we route
+          downloads, search, collection, and README fetches all through
+          the same base URL. */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground whitespace-nowrap">HF Mirror:</span>
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={hfEndpoint}
+              onChange={(e) => setHfEndpoint(e.target.value)}
+              placeholder="https://huggingface.co (default) — e.g. https://hf-mirror.com"
+              className="w-full px-2 py-1 bg-background border border-input rounded text-xs font-mono"
+            />
+          </div>
+          <button
+            onClick={() => handleSaveHfEndpoint(hfEndpoint)}
+            disabled={hfEndpointSaving}
+            className="px-2 py-1 text-xs border border-border rounded hover:bg-accent whitespace-nowrap disabled:opacity-40"
+          >
+            {hfEndpointSaving ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={() => handleSaveHfEndpoint('https://hf-mirror.com')}
+            disabled={hfEndpointSaving}
+            className="px-2 py-1 text-xs border border-border rounded hover:bg-accent whitespace-nowrap disabled:opacity-40"
+            title="One-click preset for users in mainland China"
+          >
+            Use hf-mirror
+          </button>
+        </div>
+        <p className="text-[10px] text-muted-foreground ml-16">
+          Routes all HuggingFace traffic (downloads + API) through an
+          alternate endpoint. Useful when huggingface.co is slow or blocked.
+          Leave empty to use huggingface.co directly. Restart any
+          in-progress downloads after changing.
         </p>
       </div>
 

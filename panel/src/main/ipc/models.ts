@@ -22,6 +22,31 @@ import {
   resolveImageModelRepo as _resolveImageModelRepo,
 } from "../../shared/imageModels";
 
+/**
+ * ms#75: resolve the HuggingFace-compatible base URL for API calls
+ * (model search, collection fetch, README fetch). Users in mainland
+ * China (or behind any restrictive network) can set hf_endpoint in
+ * settings to e.g. `https://hf-mirror.com` to route every HF API call
+ * through a mirror. The mirror must expose the same `/api/...` paths
+ * as huggingface.co — which hf-mirror.com does (it's a transparent
+ * proxy, not a different service).
+ *
+ * Returns a URL string WITHOUT trailing slash. Falls back to the
+ * canonical `https://huggingface.co` when the setting is empty.
+ */
+export function getHfBaseUrl(): string {
+  try {
+    const v = db.getSetting("hf_endpoint");
+    if (v && v.trim()) {
+      // Strip trailing slash so concatenation with `/api/...` stays clean
+      return v.trim().replace(/\/+$/, "");
+    }
+  } catch {
+    // db access failures are non-fatal — fall through to default
+  }
+  return "https://huggingface.co";
+}
+
 /** Generation defaults read from a model's generation_config.json */
 export interface GenerationDefaults {
   temperature?: number;
@@ -1060,6 +1085,16 @@ export function registerModelHandlers(): void {
     if (hfToken) {
       downloadEnv.HF_TOKEN = hfToken;
     }
+    // ms#75: allow users in mainland China (or anyone behind a
+    // restrictive network) to route downloads through an HF-protocol-
+    // compatible mirror. huggingface_hub reads HF_ENDPOINT and rewrites
+    // all repo URLs — so a one-line passthrough here reroutes the
+    // entire download pipeline. Default mirror = hf-mirror.com (the
+    // standard China-based mirror; no new client library required).
+    const hfEndpoint = db.getSetting("hf_endpoint");
+    if (hfEndpoint && hfEndpoint.trim()) {
+      downloadEnv.HF_ENDPOINT = hfEndpoint.trim();
+    }
 
     const proc = spawn(
       pythonPath,
@@ -1571,12 +1606,14 @@ export function registerModelHandlers(): void {
         console.log(
           `[MODELS] Searching HuggingFace image models: ${query} (sort=${sortBy || "downloads"} dir=${sortDir || "desc"})`,
         );
+        // ms#75: mirror-aware base URL
+        const hfBase = getHfBaseUrl();
         const [r1, r2] = await Promise.all([
-          fetch(`https://huggingface.co/api/models?${p1}`, {
+          fetch(`${hfBase}/api/models?${p1}`, {
             headers: searchHeaders,
             signal: AbortSignal.timeout(15000),
           }),
-          fetch(`https://huggingface.co/api/models?${p2}`, {
+          fetch(`${hfBase}/api/models?${p2}`, {
             headers: searchHeaders,
             signal: AbortSignal.timeout(15000),
           }),
@@ -1595,7 +1632,8 @@ export function registerModelHandlers(): void {
         }
       } else {
         params.set("filter", "mlx");
-        const url = `https://huggingface.co/api/models?${params}`;
+        // ms#75: mirror-aware base URL
+        const url = `${getHfBaseUrl()}/api/models?${params}`;
         console.log(
           `[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || "downloads"} dir=${sortDir || "desc"})`,
         );
@@ -1639,8 +1677,10 @@ export function registerModelHandlers(): void {
       const readmeHeaders: Record<string, string> = {};
       const readmeToken = db.getSetting("hf_api_key");
       if (readmeToken) readmeHeaders["Authorization"] = `Bearer ${readmeToken}`;
+      // ms#75: mirror-aware base URL for the README fetch + relative-URL rewrites
+      const hfBase = getHfBaseUrl();
       const res = await fetch(
-        `https://huggingface.co/${repoId}/raw/main/README.md`,
+        `${hfBase}/${repoId}/raw/main/README.md`,
         {
           headers: readmeHeaders,
           signal: AbortSignal.timeout(10000),
@@ -1654,13 +1694,13 @@ export function registerModelHandlers(): void {
       content = content.replace(
         /!\[([^\]]*)\]\((?!https?:\/\/)([^)]+)\)/g,
         (_, alt, path) =>
-          `![${alt}](https://huggingface.co/${repoId}/resolve/main/${path})`,
+          `![${alt}](${hfBase}/${repoId}/resolve/main/${path})`,
       );
       // Also fix HTML img tags with relative src
       content = content.replace(
         /src="(?!https?:\/\/)([^"]+)"/g,
         (_, path) =>
-          `src="https://huggingface.co/${repoId}/resolve/main/${path}"`,
+          `src="${hfBase}/${repoId}/resolve/main/${path}"`,
       );
       // Collapse excessive blank lines
       content = content.replace(/\n{3,}/g, "\n\n").trim();
@@ -1676,8 +1716,9 @@ export function registerModelHandlers(): void {
   // Get recommended models from JANGQ-AI
   ipcMain.handle("models:getRecommendedModels", async () => {
     console.log("[MODELS] Fetching JANGQ-AI recommended models");
+    // ms#75: mirror-aware
     const urls = [
-      `https://huggingface.co/api/models?author=JANGQ-AI&sort=downloads&direction=-1&expand[]=safetensors`,
+      `${getHfBaseUrl()}/api/models?author=JANGQ-AI&sort=downloads&direction=-1&expand[]=safetensors`,
     ];
     const allModels: any[] = [];
     for (const url of urls) {
@@ -1720,7 +1761,8 @@ export function registerModelHandlers(): void {
       const collectionHeaders: Record<string, string> = {};
       if (collectionToken)
         collectionHeaders["Authorization"] = `Bearer ${collectionToken}`;
-      const url = `https://huggingface.co/api/collections/${collectionSlug}`;
+      // ms#75: mirror-aware base URL
+      const url = `${getHfBaseUrl()}/api/collections/${collectionSlug}`;
       let response = await fetch(url, {
         headers: collectionHeaders,
         signal: AbortSignal.timeout(15000),
