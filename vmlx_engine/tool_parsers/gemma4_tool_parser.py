@@ -202,48 +202,99 @@ class Gemma4ToolParser(ToolParser):
         delta_token_ids: Sequence[int] | None = None,
         request: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Extract tool calls from streaming output."""
+        """Extract tool calls from streaming output.
+
+        mlxstudio#77: when multiple tool calls arrive sequentially, the
+        end-marker detection on the SECOND call was re-extracting from
+        current_text which still contains the FIRST call. Each
+        extract_tool_calls() call also mints fresh UUIDs, so the first
+        call got re-emitted with a NEW id. The client then saw two
+        tool_calls for "datetime" with different IDs, routed the
+        datetime RESULT to one id, and when the model expected the
+        search_web RESULT (under the other id) it saw datetime text
+        instead — hence the reporter's "datetime was interrupted" and
+        hallucinated search-web content.
+
+        Fix: track how many tool calls have already been emitted this
+        streaming session via `self._gemma4_emitted_count`. On each
+        end-marker fire, extract the full list but only emit the tail
+        that hasn't been streamed yet. Reset on state-machine reset
+        (new request).
+        """
+        # Lazy-init per-parser-instance emitted counter. Base class's
+        # current_tool_id/prev_tool_call_arr are used by other parsers;
+        # keep this namespaced so we don't collide.
+        if not hasattr(self, "_gemma4_emitted_count"):
+            self._gemma4_emitted_count = 0
+            self._gemma4_emitted_ids: list[str] = []
+
         # Check for Gemma 4 native tool call end marker
         if _STC in current_text and _ETC in delta_text:
             result = self.extract_tool_calls(current_text, request)
             if result.tools_called:
-                return {
-                    "tool_calls": [
-                        {
-                            "index": i,
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                        for i, tc in enumerate(result.tool_calls)
-                    ]
-                }
+                # Emit only the tail: tool calls past the ones we already streamed.
+                tail = result.tool_calls[self._gemma4_emitted_count:]
+                # Preserve prior IDs for the calls we already emitted so
+                # downstream re-runs of extract_tool_calls don't surprise
+                # clients that cached the first id.
+                if not tail:
+                    return None
+                start_index = self._gemma4_emitted_count
+                # Rewrite the first tail call's id to match the originally-
+                # emitted id, if extract_tool_calls produced a stale new one
+                # (defensive — only fires if the counter desyncs).
+                emitted = []
+                for offset, tc in enumerate(tail):
+                    tc_id = tc["id"]
+                    self._gemma4_emitted_ids.append(tc_id)
+                    emitted.append({
+                        "index": start_index + offset,
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
+                self._gemma4_emitted_count += len(tail)
+                return {"tool_calls": emitted}
             return None
 
         # Check for Hermes format fallback
         if "<tool_call>" in current_text and "</tool_call>" in delta_text:
             result = self.extract_tool_calls(current_text, request)
             if result.tools_called:
-                return {
-                    "tool_calls": [
-                        {
-                            "index": i,
-                            "id": tc["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
-                            },
-                        }
-                        for i, tc in enumerate(result.tool_calls)
-                    ]
-                }
+                tail = result.tool_calls[self._gemma4_emitted_count:]
+                if not tail:
+                    return None
+                start_index = self._gemma4_emitted_count
+                emitted = []
+                for offset, tc in enumerate(tail):
+                    tc_id = tc["id"]
+                    self._gemma4_emitted_ids.append(tc_id)
+                    emitted.append({
+                        "index": start_index + offset,
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": tc["arguments"],
+                        },
+                    })
+                self._gemma4_emitted_count += len(tail)
+                return {"tool_calls": emitted}
             return None
 
         return {"content": delta_text}
+
+    def reset_streaming_state(self) -> None:
+        """Reset the emitted-count tracker — call on new request start.
+
+        Without this, a parser instance reused across requests would
+        think the first call of the NEW request was already emitted.
+        """
+        self._gemma4_emitted_count = 0
+        self._gemma4_emitted_ids = []
 
     @staticmethod
     def _strip_thought_channel(text: str) -> str:

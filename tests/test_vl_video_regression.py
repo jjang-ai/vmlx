@@ -2271,3 +2271,84 @@ class TestVmlx75DefaultRepetitionPenaltyArg:
         # definition in cli.py.
         # (We allow this test to be soft — the hard pins are above.)
         assert "default-repetition-penalty" in src
+
+
+class TestMlxstudio77Gemma4DupToolCalls:
+    """mlxstudio#77: Gemma 4 + multiple tool calls — duplicate emission.
+
+    Before: second tool-call end-marker re-scanned the full current_text
+    (which still included the first call) and re-emitted it with a NEW
+    UUID. Client received `datetime` twice with different IDs, routed
+    the result to one ID, and the model's next turn saw mismatched
+    tool_result → hallucinated content (reporter's symptom).
+
+    Fix: track emitted_count per parser instance, emit only the tail
+    past what's been streamed already. reset_streaming_state() clears
+    the counter for instance reuse across requests.
+    """
+
+    def _make_stream(self):
+        """Reporter's scenario: two back-to-back Gemma 4 tool calls."""
+        return [
+            "", "Let me search. ",
+            "<|tool_call>", "call:datetime{}", "<tool_call|>",
+            " Now search: ",
+            "<|tool_call>", "call:search_web{\"query\":\"Iran\"}", "<tool_call|>",
+            "",
+        ]
+
+    def test_no_duplicate_tool_calls_on_second_emission(self):
+        from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
+        p = Gemma4ToolParser(tokenizer=None)
+        current = ""
+        previous = ""
+        emitted = []
+        for delta in self._make_stream():
+            current = previous + delta
+            r = p.extract_tool_calls_streaming(previous, current, delta)
+            if r and r.get("tool_calls"):
+                for tc in r["tool_calls"]:
+                    emitted.append(tc)
+            previous = current
+        names = [tc["function"]["name"] for tc in emitted]
+        assert names.count("datetime") == 1, (
+            f"datetime emitted {names.count('datetime')} times, expected 1. "
+            f"Second emission bug regressed: {names}"
+        )
+        assert names.count("search_web") == 1
+        # Indices must be sequential starting at 0
+        idx = [tc["index"] for tc in emitted]
+        assert idx == [0, 1], f"indices must be sequential, got {idx}"
+
+    def test_reset_streaming_state_allows_instance_reuse(self):
+        """Calling reset_streaming_state between requests lets the same
+        parser instance re-emit tool calls from a fresh state."""
+        from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
+        p = Gemma4ToolParser(tokenizer=None)
+
+        def run_once():
+            current = ""
+            previous = ""
+            emitted = []
+            for delta in self._make_stream():
+                current = previous + delta
+                r = p.extract_tool_calls_streaming(previous, current, delta)
+                if r and r.get("tool_calls"):
+                    emitted.extend(r["tool_calls"])
+                previous = current
+            return emitted
+
+        first = run_once()
+        p.reset_streaming_state()
+        second = run_once()
+        for label, batch in [("first", first), ("second", second)]:
+            names = [tc["function"]["name"] for tc in batch]
+            assert names.count("datetime") == 1, f"{label}: datetime dup"
+            assert names.count("search_web") == 1, f"{label}: search_web dup"
+
+    def test_source_pin(self):
+        import vmlx_engine.tool_parsers.gemma4_tool_parser as m
+        src = Path(m.__file__).read_text()
+        assert "mlxstudio#77" in src, "anchor must persist"
+        assert "_gemma4_emitted_count" in src
+        assert "reset_streaming_state" in src
