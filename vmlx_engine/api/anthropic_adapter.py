@@ -246,9 +246,16 @@ def _convert_assistant_message(msg: dict) -> Message:
                     },
                 })
 
+        # When the assistant message ONLY has tool_calls (no text), some chat
+        # templates (Qwen3, others that do `{{ message.content }}` directly)
+        # fail with UndefinedError because exclude_none drops the content key
+        # entirely. Emit empty string instead of None so the template sees a
+        # defined content attribute. Zero downstream cost — tool-call-only
+        # assistant messages still get their tool_calls rendered correctly.
+        _content = "\n".join(text_parts) if text_parts else ("" if tool_calls else None)
         return Message(
             role="assistant",
-            content="\n".join(text_parts) if text_parts else None,
+            content=_content,
             tool_calls=tool_calls if tool_calls else None,
         )
 

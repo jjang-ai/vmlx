@@ -5362,3 +5362,70 @@ class TestMistral4VlmTextFallback:
             "fallback guard must be narrow — any model with model_type != "
             "mistral3 or text_config.model_type != mistral4 stays on VLM path"
         )
+
+
+class TestAnthropicAssistantToolCallsEmptyContent:
+    """Anthropic tool roundtrip failed mid-trip because an assistant message
+    with tool_calls but no text returned content=None, which exclude_none
+    dropped entirely — then Qwen3's chat template did `{{ message.content }}`
+    and raised UndefinedError('dict object has no attribute content').
+
+    Live-repro: POST /v1/messages with [user, assistant{tool_use}, user{tool_result}]
+    returned content=''. Direct POST /v1/chat/completions with the equivalent
+    OpenAI-format messages worked — so the bug was in the adapter's
+    tool-call-only assistant conversion.
+
+    Fix: tool-call-only assistant messages emit content='' instead of None
+    so exclude_none still exports the key and templates see a defined
+    attribute.
+    """
+
+    def test_assistant_with_only_tool_calls_emits_empty_content(self):
+        from vmlx_engine.api.anthropic_adapter import _convert_assistant_message
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "toolu_x", "name": "f", "input": {"a": 1}}
+            ]
+        }
+        out = _convert_assistant_message(msg)
+        dump = out.model_dump(exclude_none=True)
+        assert "content" in dump, (
+            "tool-call-only assistant must emit content key (empty string) — "
+            "without it, chat templates that do `{{ message.content }}` raise "
+            "UndefinedError on render"
+        )
+        assert dump["content"] == ""
+        assert dump["tool_calls"], "tool_calls must still be present"
+
+    def test_assistant_with_only_text_keeps_text(self):
+        """Regression: plain assistant text messages unchanged."""
+        from vmlx_engine.api.anthropic_adapter import _convert_assistant_message
+        msg = {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}
+        out = _convert_assistant_message(msg)
+        assert out.content == "hello"
+        assert out.tool_calls is None
+
+    def test_assistant_with_text_and_tool_keeps_both(self):
+        """Mixed text + tool_use — text goes to content, tool to tool_calls."""
+        from vmlx_engine.api.anthropic_adapter import _convert_assistant_message
+        msg = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "I'll check."},
+                {"type": "tool_use", "id": "toolu_y", "name": "g", "input": {}}
+            ]
+        }
+        out = _convert_assistant_message(msg)
+        assert "check" in out.content
+        assert out.tool_calls and out.tool_calls[0]["function"]["name"] == "g"
+
+    def test_assistant_with_empty_content_list_still_none(self):
+        """Edge case: empty content list, no text + no tool_calls → None is ok
+        because exclude_none drops it AND we don't have tool_calls to trip the
+        template either."""
+        from vmlx_engine.api.anthropic_adapter import _convert_assistant_message
+        msg = {"role": "assistant", "content": []}
+        out = _convert_assistant_message(msg)
+        assert out.content is None
+        assert out.tool_calls is None
