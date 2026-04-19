@@ -3531,3 +3531,188 @@ class TestMlxstudio69ImageAttachmentForceMultimodal:
         assert 'data:video/' in src, (
             "mime-prefix detection for video must remain in inferKind"
         )
+
+
+class TestVideoProcessingEdgeCases:
+    """Video fallback edge cases — frame count variations, different
+    resolutions, single vs multi-video batches."""
+
+    def _install_on_fresh_proc(self):
+        """Build a fake Qwen3VL-like processor with the patch installed."""
+        from unittest.mock import MagicMock
+        import numpy as np
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+
+        class _Proc:
+            image_processor = None
+            video_processor = None
+            tokenizer = None
+            image_token = "<|image_pad|>"
+            video_token = "<|video_pad|>"
+
+            def __call__(self, *, images=None, text=None, videos=None,
+                         **kw):
+                if videos is not None:
+                    # simulate the real bug path that patch must bypass
+                    raise TypeError("videos kwarg unsupported")
+                if text and images:
+                    ip_out = self.image_processor(images=images)
+                    tok = self.tokenizer(text)
+                    return {**tok, **ip_out}
+                return {}
+
+        # Image processor mock
+        ip = MagicMock()
+        ip.merge_size = 2
+        ip.temporal_patch_size = 2
+        ip.patch_size = 16
+
+        def _ipc(*, images, **kw):
+            n = len(images)
+            return {
+                "pixel_values": np.zeros((576 * n, 1536), dtype=np.float32),
+                "image_grid_thw": np.tile([[1, 12, 12]], (n, 1)),
+            }
+        ip.side_effect = _ipc
+
+        tk = MagicMock()
+
+        def _tkc(texts, **kw):
+            return {"input_ids": [list(range(max(1, len(s) // 3)))
+                                  for s in texts],
+                    "attention_mask": [[1] * max(1, len(s) // 3)
+                                       for s in texts]}
+        tk.side_effect = _tkc
+
+        p = _Proc()
+        p.image_processor = ip
+        p.tokenizer = tk
+        _install_video_fallback(p)
+        return p
+
+    def test_single_frame_video(self):
+        p = self._install_on_fresh_proc()
+        out = p(text=["<|vision_start|><|video_pad|><|vision_end|>one"],
+                videos=[["f"]])
+        import numpy as np
+        vg = np.asarray(out["video_grid_thw"])
+        # 1 frame @ temporal_patch_size=2 → ceil(1/2) = 1
+        assert int(vg[0, 0]) == 1
+
+    def test_even_frame_count(self):
+        """Even frame count with temporal_patch_size=2 → exact division."""
+        p = self._install_on_fresh_proc()
+        out = p(text=["<|vision_start|><|video_pad|><|vision_end|>even"],
+                videos=[["f"] * 8])
+        import numpy as np
+        vg = np.asarray(out["video_grid_thw"])
+        assert int(vg[0, 0]) == 4
+
+    def test_large_frame_count(self):
+        p = self._install_on_fresh_proc()
+        out = p(text=["<|vision_start|><|video_pad|><|vision_end|>long"],
+                videos=[["f"] * 64])
+        import numpy as np
+        vg = np.asarray(out["video_grid_thw"])
+        assert int(vg[0, 0]) == 32  # 64 / 2
+
+    def test_three_videos_in_one_request(self):
+        p = self._install_on_fresh_proc()
+        marker = "<|vision_start|><|video_pad|><|vision_end|>"
+        out = p(
+            text=[marker * 3 + "describe all"],
+            videos=[["f1"], ["f2a", "f2b"], ["f3a", "f3b", "f3c"]],
+        )
+        import numpy as np
+        vg = np.asarray(out["video_grid_thw"])
+        assert vg.shape == (3, 3)
+        # Expected t: 1, 1, 2
+        t_values = [int(vg[i, 0]) for i in range(3)]
+        assert t_values == [1, 1, 2], f"expected [1,1,2], got {t_values}"
+
+
+class TestEngineConfigPaths:
+    """Tests covering engine config and startup paths that have broken
+    in the past."""
+
+    def test_enable_thinking_tri_state_none_bool(self):
+        """enable_thinking resolution must distinguish None (no preference)
+        vs True vs False. None falls through to auto-detect/defaults."""
+        # Test ChatCompletionRequest accepts the tri-state
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        r_none = ChatCompletionRequest(
+            model="x", messages=[Message(role="user", content="hi")],
+        )
+        assert r_none.enable_thinking is None, (
+            "default enable_thinking must be None (tri-state unset)"
+        )
+        r_true = ChatCompletionRequest(
+            model="x", messages=[Message(role="user", content="hi")],
+            enable_thinking=True,
+        )
+        assert r_true.enable_thinking is True
+        r_false = ChatCompletionRequest(
+            model="x", messages=[Message(role="user", content="hi")],
+            enable_thinking=False,
+        )
+        assert r_false.enable_thinking is False
+
+    def test_chat_template_kwargs_passthrough(self):
+        """ChatCompletionRequest's chat_template_kwargs field preserves
+        arbitrary dict payload (e.g., think parameter)."""
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        r = ChatCompletionRequest(
+            model="x", messages=[Message(role="user", content="hi")],
+            chat_template_kwargs={"enable_thinking": True, "tool_choice": "auto"},
+        )
+        assert r.chat_template_kwargs == {
+            "enable_thinking": True, "tool_choice": "auto",
+        }
+
+
+class TestMLLMModelConfigMapping:
+    """ModelConfigRegistry family mapping covers the main vision + text
+    variants we support. If a family drops out of the registry, sessions
+    silently fall back to defaults which lose tool/reasoning parsers."""
+
+    def test_qwen3_5_moe_family_has_parsers(self):
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        reg = ModelConfigRegistry()
+        register_all(reg)
+        by_name = {c.family_name: c for c in reg._configs}
+        c = by_name.get("qwen3_5_moe")
+        assert c is not None
+        assert c.reasoning_parser == "qwen3"
+        assert c.tool_parser == "qwen"
+
+    def test_gemma4_family_has_parsers(self):
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        reg = ModelConfigRegistry()
+        register_all(reg)
+        by_name = {c.family_name: c for c in reg._configs}
+        c = by_name.get("gemma4")
+        assert c is not None
+        assert c.tool_parser == "gemma4"
+        assert c.reasoning_parser == "gemma4"
+
+    def test_minimax_family_has_parsers(self):
+        """Family is registered under 'minimax' (not 'minimax_m2') with
+        model_types covering minimax / minimax_m2 / minimax_m2_5. The
+        MiniMax-M2.x models use tool_parser=minimax + reasoning=qwen3
+        (per JANG capabilities stamp)."""
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        reg = ModelConfigRegistry()
+        register_all(reg)
+        by_name = {c.family_name: c for c in reg._configs}
+        c = by_name.get("minimax")
+        assert c is not None, (
+            "minimax family must be registered (not minimax_m2)"
+        )
+        assert "minimax_m2" in c.model_types, (
+            "minimax_m2 inner model_type must map to minimax family"
+        )
+        assert c.tool_parser == "minimax"
+        assert c.reasoning_parser == "qwen3"
