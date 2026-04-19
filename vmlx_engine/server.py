@@ -842,6 +842,12 @@ def _apply_jit_compilation():
                 logger.info("JIT: MLLM model has no inner language_model.model to compile — skipping JIT safely")
                 return
             logger.info("JIT: Applying mx.compile to language_model.model (VLM wrapper preserved for .config access)")
+            # vmlx#83: mx.compile() is LAZY — it returns a wrapper that only
+            # triggers tracing on the first forward pass. If that forward
+            # pass raises (e.g. dynamic shape, TurboQuantKVCache despite the
+            # upstream guard, unsupported op), we must RESTORE the original
+            # uncompiled model so subsequent requests still work.
+            _pre_compile_backup_vlm = inner_transformer  # for rollback
             try:
                 compiled = mx.compile(inner_transformer)
                 language_model.model = compiled
@@ -857,7 +863,19 @@ def _apply_jit_compilation():
                 return
 
             logger.info("JIT: Applying mx.compile to model forward pass...")
-            compiled = mx.compile(inner)
+            # vmlx#83: stash the pre-compile references so the warmup-failure
+            # branch below can restore them. Without rollback, a lazy-compile
+            # error during warmup leaves the model in a broken state where
+            # every subsequent request fails silently (reporter's symptom).
+            _pre_compile_inner = inner
+            _pre_compile_backup_vlm = None
+            try:
+                compiled = mx.compile(inner)
+            except Exception as _llm_jit_err:
+                logger.warning(
+                    f"JIT: mx.compile(inner) raised, running without JIT: {_llm_jit_err}"
+                )
+                return
 
             # Replace in-place on the wrapper and verify
             replaced = False
@@ -877,6 +895,7 @@ def _apply_jit_compilation():
             # Metal shaders. Without this, the first real request simultaneously
             # pages ~30GB+ of mmap weights AND allocates cache/activations,
             # causing Metal OOM on memory-constrained machines (e.g. 122B on 48GB).
+            # This is ALSO where a lazy-compile error first surfaces (vmlx#83).
             try:
                 warmup_cache = (
                     model_obj.make_cache() if hasattr(model_obj, "make_cache") else None
@@ -895,9 +914,35 @@ def _apply_jit_compilation():
                     "JIT: Warmup complete — model weights paged in, Metal shaders compiled"
                 )
             except Exception as warmup_err:
-                logger.info(
-                    f"JIT: Warmup skipped ({warmup_err}) — first request will be slower"
+                # vmlx#83 fix: before this, a warmup failure silently left
+                # the model set to the broken compiled fn — every real
+                # request then failed with no fallback. Now we roll back
+                # the mutation so the model reverts to its pre-compile
+                # uncompiled form, same state as "JIT disabled".
+                logger.warning(
+                    f"JIT: warmup raised ({warmup_err}) — rolling back "
+                    f"mx.compile (vmlx#83 fallback)"
                 )
+                try:
+                    if is_mllm_engine:
+                        language_model.model = _pre_compile_backup_vlm
+                    else:
+                        if hasattr(model_obj, "model"):
+                            model_obj.model = _pre_compile_inner
+                        elif hasattr(_engine, "_model"):
+                            _engine._model = _pre_compile_inner
+                        elif hasattr(_engine, "model"):
+                            _engine.model = _pre_compile_inner
+                    logger.info(
+                        "JIT: rollback complete — running without JIT "
+                        "(first request will NOT be slower because JIT is off)"
+                    )
+                except Exception as rollback_err:
+                    logger.error(
+                        f"JIT: rollback itself failed ({rollback_err}) — "
+                        f"model may be in inconsistent state. Restart server "
+                        f"if generation stops responding."
+                    )
         else:
             logger.warning(
                 "JIT: mx.compile created but could not verify replacement — model structure may have changed"
