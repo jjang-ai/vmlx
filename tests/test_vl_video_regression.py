@@ -4319,9 +4319,13 @@ class TestVmlx94MxMetalDeprecation:
         guard. If a bare call lacks both, the test fails — which is the
         exact regression pattern the issue reporter caught."""
         import re
+        # Require the match to be followed by `(` — i.e. a real call,
+        # not a docstring mention (`mx.metal.foo()` inside `` `` marks).
+        # Also anchor to the left so it isn't inside a backtick.
         bare_pattern = re.compile(
-            r"\bmx\.metal\.(get_active_memory|get_peak_memory|get_cache_memory|"
-            r"clear_cache|set_cache_limit|reset_peak_memory|device_info)\b"
+            r"(?<![`.'\"])\bmx\.metal\.(get_active_memory|get_peak_memory|"
+            r"get_cache_memory|clear_cache|set_cache_limit|reset_peak_memory|"
+            r"device_info)\("
         )
         unguarded = []
         for relpath in (
