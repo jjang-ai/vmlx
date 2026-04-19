@@ -3716,3 +3716,274 @@ class TestMLLMModelConfigMapping:
         )
         assert c.tool_parser == "minimax"
         assert c.reasoning_parser == "qwen3"
+
+
+class TestMlxstudio78MetalWorkingSetGuard:
+    """mlxstudio#78: Gemma-4-31B-JANG_4M on M4 Max 64GB → Metal command
+    buffer OOM on first request. System RAM is only 64% used (mlxstudio#63
+    guard won't fire at 97% threshold), but Metal's max recommended
+    working set (~48GB on M4 Max 64GB) is already occupied by model
+    weights. First prefill's attention tensors + KV blocks exceed
+    headroom and Metal crashes with IOGPUCommandBufferCallback error 8.
+
+    Fix: `check_metal_working_set_pressure` FastAPI dependency rejects
+    with 503 + Retry-After=5 when
+      active_memory / max_recommended_working_set_size > threshold
+    (default 85% — leaves ~7GB headroom on M4 Max).
+
+    This is ORTHOGONAL to mlxstudio#63: the RAM guard catches system-
+    level pressure (swap thrashing), the Metal guard catches GPU-level
+    pressure (command-buffer exhaustion). Both are needed — either can
+    trigger process death on macOS.
+    """
+
+    def test_dependency_exists(self):
+        """Source pin: check_metal_working_set_pressure function."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        assert "async def check_metal_working_set_pressure(" in src, (
+            "check_metal_working_set_pressure missing — Metal OOM guard "
+            "offline; big-model+small-mac configs will crash on first req"
+        )
+
+    def test_dependency_wired_onto_all_inference_endpoints(self):
+        """Same 8 inference endpoints that get mlxstudio#63 must also
+        get mlxstudio#78 — they can both trigger process death."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        endpoints = [
+            '"/v1/messages"',
+            '"/v1/images/generations"',
+            '"/v1/images/edits"',
+            '"/v1/completions",',
+            '"/v1/chat/completions"',
+            '"/v1/responses",',
+            '"/api/chat"',
+            '"/api/generate"',
+        ]
+        for ep in endpoints:
+            idx = src.rfind(ep)
+            assert idx > 0, f"endpoint {ep} not found"
+            window = src[idx:idx + 700]
+            assert "check_metal_working_set_pressure" in window, (
+                f"mlxstudio#78: {ep} missing Metal working-set guard"
+            )
+
+    def test_pressure_above_threshold_rejects(self):
+        """Active 90% of working set + 85% threshold → 503.
+        Patches on the live `mx` module because the dependency calls
+        `import mlx.core as mx` inside its body (module-cached by then)."""
+        import asyncio
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        import vmlx_engine.server as s
+        import mlx.core as mx
+
+        max_ws = 48 * (1024**3)  # 48GB working set
+        active = int(max_ws * 0.90)  # 90% active
+
+        async def run():
+            with patch.dict(os.environ, {
+                "VMLX_METAL_WS_GUARD": "1",
+                "VMLX_METAL_WS_REJECT_PCT": "85"
+            }):
+                with patch.object(mx, "device_info", lambda: {
+                    "max_recommended_working_set_size": max_ws
+                }, create=True), patch.object(
+                    mx, "get_active_memory", lambda: active, create=True
+                ):
+                    return await s.check_metal_working_set_pressure(MagicMock())
+
+        with pytest.raises(HTTPException) as excinfo:
+            asyncio.run(run())
+        assert excinfo.value.status_code == 503
+        assert "Retry-After" in (excinfo.value.headers or {})
+        assert "working set" in str(excinfo.value.detail).lower()
+
+    def test_pressure_below_threshold_passes(self):
+        """50% active + 85% threshold → no raise."""
+        import asyncio
+        from unittest.mock import patch
+        import vmlx_engine.server as s
+        import mlx.core as mx
+
+        max_ws = 48 * (1024**3)
+        active = int(max_ws * 0.50)
+
+        async def run():
+            with patch.dict(os.environ, {
+                "VMLX_METAL_WS_GUARD": "1",
+                "VMLX_METAL_WS_REJECT_PCT": "85"
+            }):
+                with patch.object(mx, "device_info", lambda: {
+                    "max_recommended_working_set_size": max_ws
+                }, create=True), patch.object(
+                    mx, "get_active_memory", lambda: active, create=True
+                ):
+                    return await s.check_metal_working_set_pressure(MagicMock())
+
+        # Must not raise
+        asyncio.run(run())
+
+    def test_guard_disabled_bypasses(self):
+        """VMLX_METAL_WS_GUARD=0 → no check even at 99% active."""
+        import asyncio
+        from unittest.mock import patch
+        import vmlx_engine.server as s
+
+        # With guard disabled, mlx.core doesn't even need to load
+        async def run():
+            with patch.dict(os.environ, {"VMLX_METAL_WS_GUARD": "0"}):
+                return await s.check_metal_working_set_pressure(MagicMock())
+
+        # Must not raise regardless of mlx state
+        asyncio.run(run())
+
+    def test_missing_max_ws_skipped_silently(self):
+        """If device doesn't expose max_recommended_working_set_size
+        (some non-Apple-Silicon), skip — don't raise."""
+        import asyncio
+        from unittest.mock import patch
+        import vmlx_engine.server as s
+        import mlx.core as mx
+
+        async def run():
+            with patch.dict(os.environ, {"VMLX_METAL_WS_GUARD": "1"}):
+                with patch.object(mx, "device_info", lambda: {},
+                                   create=True), patch.object(
+                    mx, "get_active_memory", lambda: 10**9, create=True
+                ):
+                    return await s.check_metal_working_set_pressure(MagicMock())
+
+        asyncio.run(run())  # no raise
+
+    def test_log_throttled(self):
+        """Log warning must be throttled to 1 per 5s."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        assert "_last_metal_ws_log" in src
+        assert "now - _last_metal_ws_log > 5" in src
+
+    def test_orthogonal_to_mlxstudio63(self):
+        """The two guards catch different pressure dimensions:
+        #63 = system RAM, #78 = Metal working set. Both must be wired
+        on the same endpoints."""
+        import vmlx_engine.server as s
+        src = Path(s.__file__).read_text()
+        assert "mlxstudio#63" in src and "mlxstudio#78" in src
+        # Both dependencies exist
+        assert "async def check_memory_pressure(" in src
+        assert "async def check_metal_working_set_pressure(" in src
+        # They must appear together on inference endpoints — use first
+        # chat/completions as canonical example
+        idx = src.rfind('"/v1/chat/completions"')
+        assert idx > 0
+        window = src[idx:idx + 1000]
+        assert "check_memory_pressure" in window
+        assert "check_metal_working_set_pressure" in window
+
+
+class TestMlxstudio78MetalWorkingSetGuard:
+    """mlxstudio#78 — second layer of defense for Metal OOM on tight
+    memory configs. The adaptive cache limit (a8c19429) sizes the
+    Metal allocator to leave headroom. This request-time guard rejects
+    incoming requests when the working set is already saturated.
+
+    Guard triggers when active_memory / max_recommended_working_set
+    exceeds VMLX_METAL_WS_REJECT_PCT (default 85).
+    """
+
+    def test_guard_rejects_high_pressure(self):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        from vmlx_engine.server import check_metal_working_set_pressure
+        from fastapi import HTTPException
+
+        def _di():
+            return {"max_recommended_working_set_size": 48 * 1024 ** 3}
+        def _active():
+            return 41 * 1024 ** 3  # 85.4% → above 85% default
+
+        with patch.object(mx, "device_info", _di, create=True), \
+             patch.object(mx, "get_active_memory", _active, create=True):
+            with pytest.raises(HTTPException) as e:
+                asyncio.run(check_metal_working_set_pressure(MagicMock()))
+            assert e.value.status_code == 503
+            assert e.value.headers.get("Retry-After") == "5"
+
+    def test_guard_allows_low_pressure(self):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        from vmlx_engine.server import check_metal_working_set_pressure
+
+        def _di():
+            return {"max_recommended_working_set_size": 128 * 1024 ** 3}
+        def _active():
+            return 20 * 1024 ** 3  # 15.6%
+
+        with patch.object(mx, "device_info", _di, create=True), \
+             patch.object(mx, "get_active_memory", _active, create=True):
+            # Must NOT raise
+            asyncio.run(check_metal_working_set_pressure(MagicMock()))
+
+    def test_guard_can_be_disabled(self):
+        import asyncio, os
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        from vmlx_engine.server import check_metal_working_set_pressure
+
+        def _di():
+            return {"max_recommended_working_set_size": 48 * 1024 ** 3}
+        def _active():
+            return 47 * 1024 ** 3  # 97.9% → would reject
+
+        os.environ["VMLX_METAL_WS_GUARD"] = "0"
+        try:
+            with patch.object(mx, "device_info", _di, create=True), \
+                 patch.object(mx, "get_active_memory", _active, create=True):
+                asyncio.run(check_metal_working_set_pressure(MagicMock()))
+        finally:
+            os.environ.pop("VMLX_METAL_WS_GUARD", None)
+
+    def test_guard_threshold_tunable_via_env(self):
+        import asyncio, os
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        from vmlx_engine.server import check_metal_working_set_pressure
+        from fastapi import HTTPException
+
+        def _di():
+            return {"max_recommended_working_set_size": 100 * 1024 ** 3}
+        def _active():
+            return 40 * 1024 ** 3  # 40% → allowed at 85% default, rejected at 30%
+
+        # At default 85% — passes
+        with patch.object(mx, "device_info", _di, create=True), \
+             patch.object(mx, "get_active_memory", _active, create=True):
+            asyncio.run(check_metal_working_set_pressure(MagicMock()))
+
+        # At custom 30% — rejects
+        os.environ["VMLX_METAL_WS_REJECT_PCT"] = "30"
+        try:
+            with patch.object(mx, "device_info", _di, create=True), \
+                 patch.object(mx, "get_active_memory", _active, create=True):
+                with pytest.raises(HTTPException):
+                    asyncio.run(check_metal_working_set_pressure(MagicMock()))
+        finally:
+            os.environ.pop("VMLX_METAL_WS_REJECT_PCT", None)
+
+    def test_all_endpoints_wire_guard(self):
+        """Every @app.post chat endpoint must include
+        check_metal_working_set_pressure (vs just check_memory_pressure
+        from ms#63 which only watches system RAM)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        count = src.count("Depends(check_metal_working_set_pressure)")
+        # Chat completions + responses + anthropic + ollama chat/generate +
+        # image gen + image edit = 7 endpoints minimum
+        assert count >= 5, (
+            f"expected ≥5 endpoints to wire the guard, found {count}"
+        )

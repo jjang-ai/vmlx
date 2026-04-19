@@ -1038,6 +1038,87 @@ async def check_memory_pressure(request: Request):
     )
 
 
+# mlxstudio#78: Metal command-buffer OOM on big-model + small-Mac configs.
+# E.g. Gemma-4-31B-JANG_4M on M4 Max 64GB: weights load to ~41GB (64% of
+# 64GB), Metal working-set cap is ~48GB (75% of RAM on Apple Silicon).
+# First request's prefill attention tensors + KV allocations exceed the
+# remaining ~7GB working-set headroom and the Metal command buffer dies
+# with `Insufficient Memory` (IOGPUCommandBufferCallback error 8). The
+# mlxstudio#63 system-RAM guard doesn't catch this because total RAM is
+# only 64% used — the bottleneck is GPU working set, not system RAM.
+#
+# This guard reads `mx.get_active_memory()` (with mx.metal fallback per
+# vmlx#94) and rejects when `active / max_working_set` exceeds threshold
+# (default 85%). 85% leaves ~7GB headroom on M4 Max — enough for a
+# moderate prefill but tight enough to catch the failure case early.
+#
+# Knobs:
+# - VMLX_METAL_WS_GUARD=0       → disable entirely
+# - VMLX_METAL_WS_REJECT_PCT=N  → tune threshold (default 85)
+_last_metal_ws_log: float = 0.0
+
+
+async def check_metal_working_set_pressure(request: Request):
+    """Reject when Metal active_memory / max_recommended_working_set_size
+    exceeds threshold — catches the big-model-on-small-Mac OOM that the
+    system-RAM guard (mlxstudio#63) misses because RAM isn't exhausted
+    but Metal's command-buffer cap is.
+    """
+    if os.environ.get("VMLX_METAL_WS_GUARD", "1") == "0":
+        return
+    try:
+        threshold_pct = float(
+            os.environ.get("VMLX_METAL_WS_REJECT_PCT", "85")
+        )
+    except (TypeError, ValueError):
+        threshold_pct = 85.0
+    try:
+        import mlx.core as mx
+    except ImportError:
+        return
+    try:
+        _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
+        _get_active = (
+            getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+        )
+        max_ws = _device_info().get("max_recommended_working_set_size", 0)
+        if max_ws <= 0:
+            return  # no limit exposed — skip
+        active = _get_active()
+    except Exception:
+        return
+
+    pct = (active / max_ws) * 100.0
+    if pct < threshold_pct:
+        return
+
+    # Log throttle (shared state with mlxstudio#63 is overkill — use own).
+    global _last_metal_ws_log
+    now = time.monotonic()
+    if now - _last_metal_ws_log > 5.0:
+        _last_metal_ws_log = now
+        logger.warning(
+            f"mlxstudio#78 Metal working-set pressure reject: "
+            f"{pct:.1f}% of {max_ws / (1024**3):.1f}GB "
+            f"(threshold {threshold_pct:.1f}%); rejecting to avoid "
+            f"command-buffer OOM. active={active / (1024**3):.1f}GB"
+        )
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Metal GPU working set too full "
+            f"({pct:.0f}% of {max_ws / (1024**3):.1f}GB cap) — "
+            f"rejecting to prevent command-buffer OOM. This model may "
+            f"be too large for this Mac's unified memory budget. "
+            f"Retry after the GPU catches up, reduce concurrent load, "
+            f"or try a smaller model / smaller quant. Tune via "
+            f"VMLX_METAL_WS_REJECT_PCT (default 85), "
+            f"disable via VMLX_METAL_WS_GUARD=0."
+        ),
+        headers={"Retry-After": "5"},
+    )
+
+
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify API key if authentication is enabled."""
     global _auth_warning_logged
@@ -2819,6 +2900,7 @@ async def list_models() -> ModelsResponse:
         Depends(verify_api_key),
         Depends(check_rate_limit),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def create_anthropic_message(
@@ -3429,6 +3511,7 @@ async def ollama_show(fastapi_request: Request):
     dependencies=[
         Depends(verify_api_key),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def ollama_chat(fastapi_request: Request):
@@ -3625,6 +3708,7 @@ async def ollama_chat(fastapi_request: Request):
     dependencies=[
         Depends(verify_api_key),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def ollama_generate(fastapi_request: Request):
@@ -3740,6 +3824,7 @@ _image_gen_lock: asyncio.Lock | None = (
         Depends(verify_api_key),
         Depends(check_rate_limit),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def create_image(request: Request):
@@ -3947,6 +4032,7 @@ async def create_image(request: Request):
         Depends(verify_api_key),
         Depends(check_rate_limit),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def create_image_edit(request: Request):
@@ -4528,6 +4614,7 @@ async def list_voices(model: str = "kokoro"):
         Depends(verify_api_key),
         Depends(check_rate_limit),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def create_completion(request: CompletionRequest):
@@ -4624,6 +4711,7 @@ async def create_completion(request: CompletionRequest):
         Depends(verify_api_key),
         Depends(check_rate_limit),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
     response_model_exclude_none=True,
 )
@@ -5378,6 +5466,7 @@ def _responses_input_to_messages(
         Depends(verify_api_key),
         Depends(check_rate_limit),
         Depends(check_memory_pressure),  # mlxstudio#63
+        Depends(check_metal_working_set_pressure),  # mlxstudio#78
     ],
 )
 async def create_response(
