@@ -583,6 +583,25 @@ export function registerChatHandlers(
     return { success: true };
   });
 
+  // vmlx#70: bulk-delete. Reporter wanted "mass delete or wipe chat
+  // history" instead of one-by-one. This single handler covers:
+  //   - wipe everything:               {}
+  //   - wipe unfiled:                  { folderId: "unfiled" }
+  //   - wipe one folder:               { folderId: "<id>" }
+  //   - wipe all chats for a model:    { modelPath: "<path>" }
+  // Returns the count so the UI can confirm "N chats deleted".
+  ipcMain.handle(
+    "chat:deleteAll",
+    async (_, scope?: { folderId?: string; modelPath?: string }) => {
+      try {
+        const deleted = db.deleteAllChats(scope);
+        return { success: true, deleted };
+      } catch (error) {
+        return { success: false, error: (error as Error).message };
+      }
+    },
+  );
+
   ipcMain.handle("chat:deleteMessage", async (_, messageId: string) => {
     db.deleteMessage(messageId);
     return { success: true };

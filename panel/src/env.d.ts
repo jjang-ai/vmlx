@@ -149,6 +149,9 @@ declare global {
         delete: (id: string) => Promise<{ success: boolean }>;
         deleteMessage: (messageId: string) => Promise<{ success: boolean }>;
         deleteMessagesFrom: (chatId: string, fromTimestamp: number) => Promise<{ success: boolean }>;
+        /** vmlx#70: bulk-delete chat history. Omit scope to wipe everything. */
+        deleteAll: (scope?: { folderId?: string; modelPath?: string }) =>
+          Promise<{ success: boolean; deleted?: number; error?: string }>;
         search: (query: string) => Promise<any[]>;
         getMessages: (chatId: string) => Promise<any[]>;
         addMessage: (

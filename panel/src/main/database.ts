@@ -976,6 +976,37 @@ class DatabaseManager {
     stmt.run(id);
   }
 
+  // vmlx#70: bulk-delete all chats, or just those in a specific folder
+  // / bound to a specific model path. Messages cascade-delete via the
+  // schema's ON DELETE CASCADE FK on messages.chat_id. Returns the
+  // number of chats actually deleted so the UI can show "N chats deleted".
+  //
+  // Scope modes (exactly one may be non-undefined; all undefined = wipe all):
+  //   folderId: "unfiled"    → chats without a folder
+  //   folderId: "<id>"       → chats in that specific folder
+  //   modelPath: "<path>"    → chats bound to that model
+  deleteAllChats(scope?: { folderId?: string; modelPath?: string }): number {
+    this.ensureOpen();
+    let sql: string;
+    let params: (string | null)[];
+    if (scope?.folderId === "unfiled") {
+      sql = "DELETE FROM chats WHERE folder_id IS NULL";
+      params = [];
+    } else if (scope?.folderId) {
+      sql = "DELETE FROM chats WHERE folder_id = ?";
+      params = [scope.folderId];
+    } else if (scope?.modelPath) {
+      sql = "DELETE FROM chats WHERE model_path = ?";
+      params = [scope.modelPath];
+    } else {
+      sql = "DELETE FROM chats";
+      params = [];
+    }
+    const stmt = this.db.prepare(sql);
+    const result = stmt.run(...params);
+    return Number(result.changes ?? 0);
+  }
+
   // Messages
   addMessage(message: Message): void {
     this.ensureOpen();

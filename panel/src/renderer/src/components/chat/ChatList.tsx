@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { Pencil, Trash2, Folder, X, MessageSquare, Search, Upload } from 'lucide-react'
+import { Pencil, Trash2, Folder, X, MessageSquare, Search, Upload, Eraser } from 'lucide-react'
 
 interface Chat {
   id: string
@@ -142,6 +142,34 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
       await window.api.chat.export(chatId, format)
     } catch (err) {
       console.error('Export failed:', err)
+    }
+  }
+
+  // vmlx#70: mass-delete chats. Scope = current modelPath filter when
+  // one is active (Chat tab bound to a model), otherwise wipes ALL
+  // chats across all models. A confirm() dialog shows the exact count
+  // so the user can bail if the scope is surprising.
+  const handleClearAll = async () => {
+    const targetCount = chats.length
+    if (targetCount === 0) return
+    const scopeLabel = modelPath
+      ? `all ${targetCount} chat${targetCount === 1 ? '' : 's'} for this model`
+      : `ALL ${targetCount} chat${targetCount === 1 ? '' : 's'} across every model`
+    if (!confirm(
+      `Delete ${scopeLabel}?\n\n` +
+      `This wipes the chat rows and their messages. Cannot be undone.`
+    )) return
+    try {
+      const res = await window.api.chat.deleteAll(modelPath ? { modelPath } : undefined)
+      if (!res?.success) {
+        console.error('[ChatList] clearAll failed:', res?.error)
+        return
+      }
+      setChats([])
+      if (currentChatId) onChatSelect('')
+      await loadChats()
+    } catch (err) {
+      console.error('[ChatList] clearAll error:', err)
     }
   }
 
@@ -293,6 +321,21 @@ export function ChatList({ currentChatId, onChatSelect, onNewChat, modelPath }: 
             <Upload className="h-3.5 w-3.5" />
             <span>Import</span>
           </button>
+          {/* vmlx#70: bulk clear. Hidden when there's nothing to clear so
+              users don't mis-click an empty list. */}
+          {chats.length > 0 && (
+            <button
+              onClick={handleClearAll}
+              className="flex-shrink-0 px-2.5 py-2 border border-border rounded hover:bg-red-500/10 hover:border-red-500/30 hover:text-red-400 text-sm flex items-center gap-1.5 whitespace-nowrap text-muted-foreground"
+              title={modelPath
+                ? `Delete all ${chats.length} chats for this model`
+                : `Delete ALL ${chats.length} chats across every model`}
+              aria-label="Clear all chats"
+            >
+              <Eraser className="h-3.5 w-3.5" />
+              <span>Clear</span>
+            </button>
+          )}
         </div>
 
         {/* Search */}
