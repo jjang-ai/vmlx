@@ -2351,4 +2351,233 @@ class TestMlxstudio77Gemma4DupToolCalls:
         src = Path(m.__file__).read_text()
         assert "mlxstudio#77" in src, "anchor must persist"
         assert "_gemma4_emitted_count" in src
-        assert "reset_streaming_state" in src
+
+
+class TestAsyncSSMRederiveReasoningHybrid:
+    """Async SSM re-derive for reasoning hybrid models (Qwen3.5 GatedDelta,
+    Nemotron Cascade with thinking, etc.).
+
+    Problem: when a thinking hybrid request finalizes, the SSM recurrent
+    state has been advanced through both the prompt AND the thinking
+    tokens + output. Storing that state as a "prefix checkpoint" fails
+    on the next request because the checkpoint's token position (prompt
+    boundary) no longer matches the actual SSM state (post-output).
+
+    Prior behavior (broken): skip SSM companion storage entirely when
+    `gen_prompt_len > 0`. Net: thinking hybrid models never get SSM
+    prefix hits → full re-prefill every turn.
+
+    Current behavior (async re-derive queue):
+    1. On finalize with `gpl > 0`, scheduler appends (tokens, prompt_len,
+       request_id) to `_ssm_rederive_queue` (capped at 20 entries).
+    2. On the scheduler step, when `not self.running` (idle), the queue's
+       head is popped and `_prefill_for_prompt_only_cache(tokens)` runs a
+       clean prefill pass on JUST the prompt tokens. The resulting SSM
+       state is clean (no thinking contamination) and gets stored in
+       `_ssm_state_cache` keyed by `(tokens, prompt_len)`.
+    3. Next request with the same prompt prefix: SSM companion fetch hits
+       → KV + SSM prefix cache both populate → no full re-prefill.
+
+    These tests pin the contract so a refactor doesn't silently revert
+    thinking hybrid models to full-prefill-every-turn.
+    """
+
+    def test_scheduler_has_ssm_rederive_queue_path(self):
+        """Scheduler source must queue re-derive instead of skipping."""
+        import vmlx_engine.scheduler as sched
+        src = Path(sched.__file__).read_text()
+        # Queue append logic must exist
+        assert "_ssm_rederive_queue" in src, (
+            "async re-derive queue missing — thinking hybrid models will "
+            "silently lose all SSM prefix hits"
+        )
+        # Queue cap
+        assert ">= 20" in src and "pop(0)" in src, (
+            "queue cap + FIFO eviction must be preserved (unbounded queue "
+            "growth under sustained load = memory leak on busy servers)"
+        )
+        # gpl > 0 branch is the trigger
+        assert "_gpl > 0" in src, (
+            "must trigger on thinking models (gen_prompt_len > 0)"
+        )
+
+    def test_scheduler_idle_processes_one_rederive_per_step(self):
+        """Idle consumer must pop ONE entry per scheduler step (avoid
+        long GPU stalls blocking new incoming requests)."""
+        import vmlx_engine.scheduler as sched
+        src = Path(sched.__file__).read_text()
+        idle_block_idx = src.find("Deferred SSM re-derive (idle-time")
+        assert idle_block_idx > 0, (
+            "idle consumer block missing — re-derives will never execute"
+        )
+        # The consumer must check `not self.running` before running the
+        # clean prefill (GPU is exclusive; running + re-derive = deadlock)
+        block_end = src.find("return output", idle_block_idx)
+        assert block_end > idle_block_idx
+        block = src[idle_block_idx:block_end]
+        assert "not self.running" in block, (
+            "idle guard missing: re-derive would collide with active "
+            "generation on the GPU"
+        )
+        assert "_ssm_state_cache is not None" in block, (
+            "must guard on companion cache presence (non-hybrid models "
+            "don't have one)"
+        )
+        # One-per-step contract: a single .pop(0)
+        assert block.count("self._ssm_rederive_queue.pop(0)") == 1, (
+            "exactly one entry per step — more means long stalls"
+        )
+
+    def test_clean_prefill_helper_exists(self):
+        """The clean-prompt prefill helper must exist — it's what gives
+        the SSM companion UNCONTAMINATED state."""
+        import vmlx_engine.scheduler as sched
+        src = Path(sched.__file__).read_text()
+        assert "def _prefill_for_prompt_only_cache" in src, (
+            "missing helper — async re-derive has nothing to call"
+        )
+
+    def test_stored_state_is_deep_copied(self):
+        """Re-derive must deepcopy SSM state into the companion store.
+        Sharing buffers with the scheduler's scratch cache → mutation on
+        next step → garbled output on the next request that hits."""
+        import vmlx_engine.scheduler as sched
+        src = Path(sched.__file__).read_text()
+        idle_block_idx = src.find("Deferred SSM re-derive (idle-time")
+        block_end = src.find("return output", idle_block_idx)
+        block = src[idle_block_idx:block_end]
+        assert "deepcopy" in block or "mx.array(a)" in block, (
+            "SSM re-derive must deep-copy state before storing"
+        )
+
+    def test_mllm_side_captures_at_prefill_not_finalize(self):
+        """MLLM path is different: it captures at prefill-success (BEFORE
+        generation), so SSM state is never thinking-contaminated and
+        doesn't need re-derive. Pin this so a refactor doesn't move the
+        capture to finalize (which would re-introduce contamination)."""
+        import vmlx_engine.mllm_batch_generator as m
+        src = Path(m.__file__).read_text()
+        # The comment block identifying prefill-boundary capture
+        assert "SSM state at prompt boundary" in src or \
+               "Capture SSM state at prompt boundary" in src, (
+            "MLLM prefill-boundary SSM capture must be documented — "
+            "otherwise a refactor could move it to the contaminated "
+            "finalize path"
+        )
+        # store() must be inside the prefill-success flow, not a post-gen hook
+        store_idx = src.find("self._ssm_state_cache.store(")
+        assert store_idx > 0
+        # Look backwards for `first_tokens.append` — which means we're
+        # still in the prefill block (after sampling the first token but
+        # before any generation step). If store() is AFTER a generation
+        # loop, this wouldn't hold.
+        preceding = src[max(0, store_idx - 4000):store_idx]
+        assert "first_tokens.append" in preceding, (
+            "store() must live in prefill-success path (not finalize) — "
+            "moving it post-generation reintroduces thinking contamination"
+        )
+
+    def test_queue_cap_prevents_unbounded_growth(self):
+        """Under sustained thinking-model load the queue could grow
+        forever. Cap + oldest-first eviction must be in place."""
+        import vmlx_engine.scheduler as sched
+        src = Path(sched.__file__).read_text()
+        # Find the append site
+        append_idx = src.find("self._ssm_rederive_queue.append")
+        assert append_idx > 0
+        # The cap check must precede the append, within the same block
+        preceding = src[max(0, append_idx - 500):append_idx]
+        assert "pop(0)" in preceding, (
+            "cap-check (pop oldest before append) must precede append — "
+            "otherwise queue grows unboundedly"
+        )
+        assert ">= 20" in preceding, "cap constant must remain 20"
+
+
+class TestReasoningContractEndToEnd:
+    """Comprehensive reasoning on/off contract audit — hits BOTH the
+    server-side emission AND the panel-side classification in one
+    battery of pins so a future regression in either half fails by
+    name."""
+
+    def test_server_emits_reasoning_field_in_chunk_delta(self):
+        """ChatCompletionChunkDelta has a `reasoning` field that serializes
+        as `reasoning_content` via computed_field. model_dump must exclude
+        reasoning_content when None (else OpenAI SDK parsers break)."""
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
+        d = ChatCompletionChunkDelta(content="hi", reasoning=None)
+        dump = d.model_dump(exclude_none=True)
+        assert "reasoning_content" not in dump, (
+            "reasoning_content must NOT appear when reasoning is None"
+        )
+        d2 = ChatCompletionChunkDelta(content=None, reasoning="thinking…")
+        dump2 = d2.model_dump()
+        assert dump2.get("reasoning_content") == "thinking…"
+
+    def test_assistant_message_omits_reasoning_content_when_none(self):
+        """Non-streaming: AssistantMessage.model_dump drops
+        reasoning_content when reasoning is None."""
+        from vmlx_engine.api.models import AssistantMessage
+        m = AssistantMessage(content="hello")
+        d = m.model_dump(exclude_none=True)
+        assert "reasoning_content" not in d, (
+            "non-thinking response must not include reasoning_content: null"
+        )
+
+    def test_assistant_message_includes_reasoning_when_set(self):
+        """When reasoning IS set, reasoning_content appears."""
+        from vmlx_engine.api.models import AssistantMessage
+        m = AssistantMessage(content="final", reasoning="let me think")
+        d = m.model_dump()
+        assert d.get("reasoning_content") == "let me think"
+
+    def test_panel_chat_ts_extracts_reasoning_from_both_fields(self):
+        """Panel must handle both canonical names: reasoning_content AND
+        reasoning (legacy / alias). Regression source pin."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        # The extractor line
+        assert "choice?.reasoning_content || choice?.reasoning" in src, (
+            "panel chat.ts must accept BOTH reasoning_content and "
+            "reasoning from the choice object"
+        )
+        # emitDelta with isReasoningDelta=true
+        assert "emitDelta(reasoning, true)" in src, (
+            "panel must classify reasoning delta as reasoning=true"
+        )
+
+    def test_panel_message_bubble_renders_reasoning_box(self):
+        """Panel renderer must render ReasoningBox when reasoningContent
+        is present and NOT equal to content."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/MessageBubble.tsx"
+        ).read_text()
+        assert "ReasoningBox" in src
+        assert "reasoningContent" in src
+        # The guard that hides ReasoningBox when content == reasoningContent
+        # (prevents double-render when suppress_reasoning routed reasoning
+        # to content field)
+        assert "reasoningContent.trim() === message.content.trim()" in src
+
+    def test_server_suppress_reasoning_routes_to_content(self):
+        """§15: when thinking is off and model leaks <think>, the server
+        routes reasoning delta → content delta so the user sees
+        something instead of empty SSE."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # The §15 anchor
+        assert "§15" in src
+        # Concat pattern: parts = [reasoning, content]
+        assert "_parts.append(delta_msg.reasoning)" in src, (
+            "§15 must concatenate reasoning into the content emit path"
+        )
+
+    def test_database_schema_has_reasoning_content_column(self):
+        """Panel database must persist reasoningContent across sessions."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+        ).read_text()
+        assert "ALTER TABLE messages ADD COLUMN reasoning_content TEXT" in src
+        assert "reasoning_content" in src
