@@ -55,6 +55,11 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   const [collectionTab, setCollectionTab] = useState<CollectionTab>('jang')
   const [collectionModels, setCollectionModels] = useState<Record<string, HFModel[]>>({})
   const [loadingCollectionTabs, setLoadingCollectionTabs] = useState<Record<string, boolean>>({})
+  // ms#68: distinguish a genuinely empty HF collection from a fetch
+  // failure (no internet, HF down, HF rate-limited, slug outdated).
+  // Both previously showed the same "No models in this collection"
+  // text — the user had no way to tell whether to retry.
+  const [collectionErrors, setCollectionErrors] = useState<Record<string, string>>({})
 
   // Download state: track which repos are downloading/queued
   const [downloadingRepos, setDownloadingRepos] = useState<Set<string>>(new Set())
@@ -102,9 +107,18 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
     }).catch((err) => console.error('Failed to scan models:', err))
     // Fetch default collection (JANG)
     setLoadingCollectionTabs(prev => ({ ...prev, jang: true }))
+    setCollectionErrors(prev => { const next = { ...prev }; delete next.jang; return next })
     window.api.models.getCollectionModels(COLLECTION_SLUGS.jang)
       .then(models => setCollectionModels(prev => ({ ...prev, jang: models })))
-      .catch(err => console.error('Failed to load JANG collection:', err))
+      .catch(err => {
+        // ms#68: record the error so the UI can show "Failed to load —
+        // click to retry" instead of the ambiguous empty-state text.
+        console.error('Failed to load JANG collection:', err)
+        setCollectionErrors(prev => ({
+          ...prev,
+          jang: (err instanceof Error ? err.message : String(err)) || 'Fetch failed',
+        }))
+      })
       .finally(() => setLoadingCollectionTabs(prev => ({ ...prev, jang: false })))
 
     // Check for any in-progress downloads (activeAll covers concurrent downloads)
@@ -268,18 +282,45 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   const handleCollectionTabChange = useCallback(async (tab: CollectionTab) => {
     setCollectionTab(tab)
-    if (!collectionModels[tab]) {
+    // ms#68: refetch on tab click when we have no cached result AND no
+    // prior error. If there's an error, let the user click the retry
+    // button (below) to opt-in to another network roundtrip.
+    if (!collectionModels[tab] && !collectionErrors[tab]) {
       setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
+      setCollectionErrors(prev => { const next = { ...prev }; delete next[tab]; return next })
       try {
         const models = await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
         setCollectionModels(prev => ({ ...prev, [tab]: models }))
       } catch (err) {
         console.error(`Failed to load ${tab} collection:`, err)
+        setCollectionErrors(prev => ({
+          ...prev,
+          [tab]: (err instanceof Error ? err.message : String(err)) || 'Fetch failed',
+        }))
       } finally {
         setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
       }
     }
-  }, [collectionModels])
+  }, [collectionModels, collectionErrors])
+
+  // ms#68: explicit retry — clears the error and refetches. Wired to the
+  // "click to retry" button shown when a collection fetch has failed.
+  const retryCollectionFetch = useCallback(async (tab: CollectionTab) => {
+    setLoadingCollectionTabs(prev => ({ ...prev, [tab]: true }))
+    setCollectionErrors(prev => { const next = { ...prev }; delete next[tab]; return next })
+    try {
+      const models = await window.api.models.getCollectionModels(COLLECTION_SLUGS[tab])
+      setCollectionModels(prev => ({ ...prev, [tab]: models }))
+    } catch (err) {
+      console.error(`Retry failed for ${tab} collection:`, err)
+      setCollectionErrors(prev => ({
+        ...prev,
+        [tab]: (err instanceof Error ? err.message : String(err)) || 'Fetch failed',
+      }))
+    } finally {
+      setLoadingCollectionTabs(prev => ({ ...prev, [tab]: false }))
+    }
+  }, [])
 
   const handleBrowseDownloadDir = async () => {
     const result = await window.api.models.browseDownloadDir()
@@ -453,6 +494,24 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           <div className="flex-1 overflow-y-auto space-y-1 pr-1">
             {isCollectionLoading ? (
               <p className="text-sm text-muted-foreground py-4 text-center">Loading models...</p>
+            ) : !searchQuery.trim() && collectionErrors[collectionTab] ? (
+              // ms#68: fetch failure — distinct from empty collection. Show
+              // the actual error + a retry button so the user isn't stuck
+              // staring at "No models" wondering if the network died.
+              <div className="text-sm py-4 text-center space-y-2">
+                <p className="text-muted-foreground">
+                  Failed to load {collectionTab === 'jang' ? 'JANG' : 'Uncensored'} collection from HuggingFace.
+                </p>
+                <p className="text-xs text-muted-foreground/70 max-w-md mx-auto break-words">
+                  {collectionErrors[collectionTab]}
+                </p>
+                <button
+                  onClick={() => retryCollectionFetch(collectionTab)}
+                  className="px-3 py-1 text-xs rounded border border-border hover:bg-accent"
+                >
+                  Retry
+                </button>
+              </div>
             ) : displayModels.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">
                 {searchQuery.trim() ? (modelType === 'image' ? 'No image models found' : 'No MLX models found') : 'No models in this collection'}

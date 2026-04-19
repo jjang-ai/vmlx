@@ -4225,3 +4225,161 @@ class TestMs79AnthropicUsageTokens:
             "ms#79 anchor missing — fix is at risk of silent revert"
         )
         assert "include_usage=True" in src
+
+
+class TestMs68CollectionErrorVsEmpty:
+    """ms#68 "[Bug] — No models in this collection".
+
+    The issue body was just the literal UI text "No models in this
+    collection". Before this fix that text was shown for BOTH:
+    (a) HF fetch failure (no internet, HF down, rate-limited, slug
+        outdated, HF API schema changed)
+    (b) genuinely empty collection
+
+    The user couldn't tell which. Fix: per-tab `collectionErrors` state
+    + distinct "Failed to load — Retry" UI when the promise rejects,
+    plus explicit retry handler.
+    """
+
+    def test_collection_errors_state_present(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+        ).read_text()
+        assert "ms#68" in src, "anchor missing"
+        assert "const [collectionErrors," in src, (
+            "per-tab error state must exist; otherwise fetch failure = "
+            "empty collection in the UI"
+        )
+
+    def test_retry_handler_present(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+        ).read_text()
+        assert "retryCollectionFetch" in src, (
+            "explicit retry entry point missing"
+        )
+        # The retry button text in the fallback UI
+        assert ">Retry<" in src or "Retry\n" in src, (
+            "retry button must exist in the error fallback UI"
+        )
+
+    def test_error_ui_distinct_from_empty(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+        ).read_text()
+        assert "Failed to load" in src, (
+            "error fallback must say 'Failed to load' — otherwise the UX "
+            "is identical to the empty-collection case"
+        )
+        # Error must show the actual exception message (so users can
+        # diagnose rate-limit, 404 slug, etc.)
+        assert "collectionErrors[collectionTab]" in src
+
+    def test_failure_path_records_error(self):
+        """The catch branch of the fetch must populate collectionErrors,
+        not just log to console."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+        ).read_text()
+        # Both catch sites (mount effect + handleCollectionTabChange)
+        # must set the error state, not just log.
+        setError = src.count("setCollectionErrors(prev => ({")
+        assert setError >= 2, (
+            f"setCollectionErrors must be called on fetch failure in at "
+            f"least 2 sites (mount effect + tab switch); found {setError}"
+        )
+
+
+class TestVmlx94MxMetalDeprecation:
+    """vmlx#94: MLX 0.31+ deprecates mx.metal.*. All call sites must prefer
+    mx.* and only fall back to mx.metal.* when the top-level isn't present."""
+
+    def test_scheduler_uses_getattr_fallback(self):
+        """scheduler.py memory-pressure guard must use getattr fallback."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        # The two functions vmlx#94 flagged:
+        assert (
+            "getattr(mx, \"get_active_memory\", None) or mx.metal.get_active_memory"
+            in src
+        ), "scheduler get_active_memory must use getattr fallback"
+        assert (
+            "getattr(mx, \"device_info\", None) or mx.metal.device_info"
+            in src
+        ), "scheduler device_info must use getattr fallback"
+
+    def test_no_bare_mx_metal_outside_hasattr_guards(self):
+        """Every bare `mx.metal.<fn>(` call must be inside a hasattr(mx, ...)
+        guard that already tried mx.* first — otherwise MLX 0.32+ would
+        raise DeprecationWarning during a normal server startup.
+
+        This test walks each mx.metal.* occurrence and checks the
+        preceding ~3 lines for an `if hasattr(mx, "X")` or `getattr(mx,`
+        guard. If a bare call lacks both, the test fails — which is the
+        exact regression pattern the issue reporter caught."""
+        import re
+        bare_pattern = re.compile(
+            r"\bmx\.metal\.(get_active_memory|get_peak_memory|get_cache_memory|"
+            r"clear_cache|set_cache_limit|reset_peak_memory|device_info)\b"
+        )
+        unguarded = []
+        for relpath in (
+            "vmlx_engine/scheduler.py",
+            "vmlx_engine/server.py",
+            "vmlx_engine/benchmark.py",
+            "vmlx_engine/mllm_batch_generator.py",
+        ):
+            fpath = Path("/private/tmp/vmlx-1.3.55-build") / relpath
+            if not fpath.exists():
+                continue
+            lines = fpath.read_text().splitlines()
+            for i, line in enumerate(lines):
+                if not bare_pattern.search(line):
+                    continue
+                # Look backward up to 8 lines for the guard
+                preceding = "\n".join(lines[max(0, i - 8):i])
+                has_getattr = "getattr(mx," in preceding or "getattr(mx," in line
+                has_hasattr = "hasattr(mx," in preceding
+                if not (has_getattr or has_hasattr):
+                    unguarded.append(f"{relpath}:{i+1}: {line.strip()}")
+        assert not unguarded, (
+            "Bare mx.metal.* without getattr/hasattr guard (will emit "
+            "DeprecationWarning on MLX 0.31+):\n  " + "\n  ".join(unguarded)
+        )
+
+    def test_import_free_of_mx_metal_deprecation(self):
+        """Importing and exercising the memory probes must NOT raise a
+        mx.metal-specific DeprecationWarning. This reproduces the
+        reporter's command:
+
+            python -W error::DeprecationWarning -c \"import mlx.core as mx;
+            mx.metal.get_active_memory()\"
+
+        ...except we target only mx.metal deprecations (pydantic and
+        other libs have unrelated deprecations that would false-positive)."""
+        import warnings
+        import mlx.core as mx
+        caught = []
+
+        def capture(msg, cat, *a, **kw):
+            if issubclass(cat, DeprecationWarning) and "mx.metal" in str(msg):
+                caught.append(str(msg))
+
+        prev = warnings.showwarning
+        warnings.showwarning = capture
+        try:
+            _get_active = (
+                getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+            )
+            _device_info = (
+                getattr(mx, "device_info", None) or mx.metal.device_info
+            )
+            _get_active()
+            _device_info()
+        finally:
+            warnings.showwarning = prev
+
+        assert not caught, (
+            f"mx.metal deprecation warnings escaped: {caught}"
+        )
