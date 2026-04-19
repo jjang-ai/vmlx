@@ -2097,13 +2097,26 @@ class MLLMBatchGenerator:
                             # SSM companion key must match.
                             prompt_len = len(all_tokens) - 1 if len(all_tokens) > 1 else len(all_tokens)
                             if prompt_len > 0:
+                                # When gen_prompt_len > 0 (thinking models with
+                                # a `<think>\n` template suffix), the captured
+                                # SSM state covers the FULL prompt including
+                                # those template tokens. Subsequent turns with
+                                # the same exact template are fine, but mark
+                                # is_complete=False so the fetch path can
+                                # decide whether to trust the entry for
+                                # differently-templated prefixes.
+                                _gpl_for_flag = getattr(req, '_gen_prompt_len', 0)
+                                _is_complete_flag = (_gpl_for_flag == 0)
                                 self._ssm_state_cache.store(
-                                    all_tokens, prompt_len, ssm_layers
+                                    all_tokens, prompt_len, ssm_layers,
+                                    is_complete=_is_complete_flag,
                                 )
                                 logger.info(
                                     f"Captured SSM state for "
                                     f"{req.request_id}: {len(ssm_layers)} layers, "
-                                    f"{prompt_len}-token key"
+                                    f"{prompt_len}-token key, "
+                                    f"is_complete={_is_complete_flag} "
+                                    f"(gen_prompt_len={_gpl_for_flag})"
                                 )
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")

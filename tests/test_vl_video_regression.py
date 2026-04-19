@@ -2581,3 +2581,65 @@ class TestReasoningContractEndToEnd:
         ).read_text()
         assert "ALTER TABLE messages ADD COLUMN reasoning_content TEXT" in src
         assert "reasoning_content" in src
+
+
+class TestSSMCompanionIsCompleteFlag:
+    """SSM companion cache: when gen_prompt_len > 0 (thinking models with
+    a `<think>\\n` template suffix), the captured state covers the FULL
+    prompt including template tokens. Mark those entries is_complete=False
+    so the fetch path can reason about whether the state is at a pure-
+    prompt boundary or includes template residue.
+
+    Memory note: "SSM companion cache SKIPPED for gpl>0. Post-gen SSM
+    state contaminated by gen_prompt+output → position mismatch →
+    garbled output." This guard ensures we at LEAST tag those entries
+    correctly, even if we keep them in the cache for now. Future work:
+    fetch path consulting is_complete to skip or reuse accordingly.
+    """
+
+    def test_store_respects_is_complete_flag(self):
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F:
+            cache = None
+            lengths = None
+        c = SSMCompanionCache(max_entries=5)
+        c.store([1, 2, 3], 3, [_F()], is_complete=False)
+        entry = c.fetch([1, 2, 3], 3)
+        assert entry is not None
+        _, is_complete = entry
+        assert is_complete is False, (
+            "SSMCompanionCache must preserve is_complete flag through store/fetch"
+        )
+
+    def test_mllm_batch_generator_passes_gpl_to_is_complete(self):
+        """Source pin: mllm_batch_generator's SSM capture path gates
+        is_complete on gen_prompt_len."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+        ).read_text()
+        assert "_gpl_for_flag = getattr(req, '_gen_prompt_len', 0)" in src, (
+            "SSM capture must read gen_prompt_len from the request"
+        )
+        assert "_is_complete_flag = (_gpl_for_flag == 0)" in src, (
+            "is_complete must be True only when gen_prompt_len is 0"
+        )
+        assert "is_complete=_is_complete_flag" in src, (
+            "store() must receive the computed is_complete flag"
+        )
+
+    def test_default_is_complete_true_for_non_gpl_store(self):
+        """Regression guard: non-thinking model (gpl=0) still stores as
+        is_complete=True, same as before this change."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        class _F:
+            cache = None
+            lengths = None
+        c = SSMCompanionCache(max_entries=5)
+        # Default behavior — no is_complete arg → True
+        c.store([1, 2, 3], 3, [_F()])
+        entry = c.fetch([1, 2, 3], 3)
+        assert entry is not None
+        _, is_complete = entry
+        assert is_complete is True, (
+            "non-thinking capture (default is_complete=True) must behave as before"
+        )
