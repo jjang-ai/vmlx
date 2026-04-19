@@ -2125,3 +2125,51 @@ class TestVmlx96RelocatedMfluxModels:
         assert "vmlx#96" in src
         # Class-resolution second-chance strip must exist
         assert "second-chance" in src.lower() or "decoration-strip" in src
+
+
+class TestMlxstudio76UnrecognizedArgHint:
+    """mlxstudio#76: users hit `unrecognized arguments: --smelt ...`
+    intermittently because an older vmlx-engine is shadowing the newer
+    bundled-python binary on PATH. Argparse's default message gave no
+    hint — users restarted 3-4 times hoping it would work.
+
+    Fix: wrap parser.parse_args() with a SystemExit(2) catch that appends
+    a hint about PATH shadowing + tells the user to run `which -a` to
+    diagnose. Argparse's error message still prints normally; our hint
+    follows it.
+    """
+
+    def test_cli_source_has_mlxstudio76_hint(self):
+        import vmlx_engine.cli as cli
+        src = Path(cli.__file__).read_text()
+        assert "mlxstudio#76" in src, "anchor required so future edits notice"
+        # Critical diagnostics in the hint must be preserved
+        assert "which -a vmlx-engine" in src, (
+            "hint must tell user to check PATH shadowing"
+        )
+        assert "SystemExit" in src and "parse_args" in src
+
+    def test_unknown_flag_triggers_hint(self, capsys):
+        """Running cli with a garbage flag triggers the hint."""
+        import subprocess
+        bpy = (
+            "/private/tmp/vmlx-1.3.55-build/panel/bundled-python/"
+            "python/bin/python3.12"
+        )
+        r = subprocess.run(
+            [bpy, "-m", "vmlx_engine.cli", "serve",
+             "/nonexistent", "--nonexistent-flag-xyz-1-2-3"],
+            capture_output=True, text=True, timeout=30,
+        )
+        # argparse exits 2 on unrecognized args
+        assert r.returncode == 2
+        combined = (r.stdout or "") + (r.stderr or "")
+        assert "unrecognized arguments" in combined, (
+            "argparse error must still fire"
+        )
+        assert "mlxstudio#76" in combined, (
+            "hint must include issue anchor"
+        )
+        assert "which -a vmlx-engine" in combined, (
+            "hint must include PATH-shadowing diagnostic"
+        )
