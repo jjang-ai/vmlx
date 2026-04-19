@@ -3925,6 +3925,22 @@ class Scheduler:
         if temp > self._pld_spec_max_temp:
             return []
 
+        # Non-MLLM BatchGenerator guard (vmlx#92).
+        # PLD-spec requires MLLMBatchGenerator's API surface: `.active_batch`
+        # for the forward_logprobs peek, and `remove(..., return_prompt_caches=
+        # True)` returning cache objects that expose `.is_trimmable()`. mlx-lm's
+        # text-only BatchGenerator has neither — attempting speculation on that
+        # path crashes at `c.is_trimmable()` on a plain list, and the
+        # finally-block emergency re-insert then corrupts the batch so the NEXT
+        # step() crashes with `<class 'list'> does not yet support batching
+        # with history` from _patched_merge_caches. Gate BEFORE remove() so
+        # batch state stays clean. The retrospective prompt-lookup analyzer in
+        # prompt_lookup.py still runs on every decode step, so PLD hit-rate
+        # telemetry is unaffected — only the batched verify-and-reinsert cycle
+        # is gated off on non-MLLM generators.
+        if not hasattr(self.batch_generator, "active_batch"):
+            return []
+
         full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
         ngram_idx = self._pld_ngram_indices.get(request_id)
         if ngram_idx is None:
