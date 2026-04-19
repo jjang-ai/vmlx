@@ -4387,3 +4387,78 @@ class TestVmlx94MxMetalDeprecation:
         assert not caught, (
             f"mx.metal deprecation warnings escaped: {caught}"
         )
+
+
+class TestVmlx92PldGuardOnNonMllm:
+    """vmlx#92: PLD speculative decode must NOT touch batch state when the
+    generator is plain BatchGenerator (no .active_batch / no trimmable
+    caches). Reporter observed that pre-guard, the first PLD call on a
+    text-only server raised AttributeError, the finally path reinserted
+    a malformed cache, step() crashed with `<class 'list'> does not yet
+    support batching with history`, and recovery cleared the entire
+    paged cache for every queued request."""
+
+    def test_guard_is_present_before_active_batch_access(self):
+        """The hasattr check must come BEFORE any .active_batch touch."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        # Locate the guard line
+        guard_line = 'if not hasattr(self.batch_generator, "active_batch"):'
+        assert guard_line in src, (
+            "vmlx#92 guard must be present in _try_speculative_decode"
+        )
+        # The guard index must be BEFORE every other '.active_batch' read
+        # inside _try_speculative_decode. We scope to the function body.
+        import re
+        body_start = src.index("def _try_speculative_decode")
+        body_end = src.index("\n    def ", body_start + 1)
+        body = src[body_start:body_end]
+        guard_idx = body.index(guard_line)
+        # Every ab = self.batch_generator.active_batch must be after
+        active_reads = [m.start() for m in re.finditer(
+            r"self\.batch_generator\.active_batch", body
+        )]
+        for idx in active_reads:
+            # skip the guard line itself
+            if idx == body.index("self.batch_generator.active_batch") and \
+               body[max(0, idx-4):idx] == "attr":
+                # this is the hasattr( — skip
+                continue
+            assert idx > guard_idx or body[idx-10:idx] == 'hasattr(', (
+                f"active_batch access at offset {idx} comes BEFORE the "
+                "hasattr guard — vmlx#92 regression"
+            )
+
+    def test_guard_returns_empty_list(self):
+        """When the guard fires we must return [], so the caller treats
+        it as 'no drafts available' and continues normal decode."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        # The two-line block must be: `if not hasattr(...)` then `return []`
+        body_start = src.index("def _try_speculative_decode")
+        body_end = src.index("\n    def ", body_start + 1)
+        body = src[body_start:body_end]
+        guard_idx = body.index(
+            'if not hasattr(self.batch_generator, "active_batch"):'
+        )
+        # The next non-whitespace line must be return []
+        remainder = body[guard_idx:guard_idx + 200]
+        assert "return []" in remainder[:120], (
+            "guard must short-circuit with `return []` — otherwise falls "
+            "through and the old AttributeError reappears"
+        )
+
+    def test_mllm_batch_generator_still_has_active_batch(self):
+        """Pin the capability the guard is selecting on — if MLLM
+        BatchGenerator loses .active_batch, the guard falsely fires
+        and PLD silently stops working for VLMs too."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        # Either declared as attribute or produced in __init__
+        import inspect
+        src = inspect.getsource(MLLMBatchGenerator)
+        assert "active_batch" in src, (
+            "MLLMBatchGenerator must still expose active_batch — "
+            "otherwise the vmlx#92 guard misclassifies it as non-MLLM"
+        )
