@@ -4546,3 +4546,96 @@ class TestMs61ImageGalleryDeleteAndCopyPrompt:
         assert "window.api.image.deleteGeneration(gen.id)" in src
         # On success: drop from local state rather than refetch
         assert "setGenerations(prev => prev.filter(g => g.id !== gen.id))" in src
+
+
+class TestVmlx70BulkDeleteChats:
+    """vmlx#70 Feature Request: mass delete / wipe chat history.
+
+    > there is no way to mass delete or wipe chat history — you can
+    > only do it one-by-one, which is inconvenient.
+
+    Implementation: DB `deleteAllChats(scope?)` with scope modes
+    (all / folder / model), IPC `chat:deleteAll`, preload exposure,
+    env.d.ts type, "Clear" button in ChatList header with a confirm()
+    dialog that spells out the exact count + scope before nuking.
+    """
+
+    def test_db_has_delete_all_chats(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+        ).read_text()
+        assert "deleteAllChats(scope?:" in src or \
+               "deleteAllChats(scope" in src, (
+            "DB must expose deleteAllChats — one-row-at-a-time DELETE in "
+            "a JS loop would be far slower on large histories"
+        )
+        # The scope modes must all be supported
+        assert 'folderId === "unfiled"' in src
+        assert "scope?.folderId" in src
+        assert "scope?.modelPath" in src
+        # Messages cascade via FK — no need for explicit DELETE FROM messages
+        assert "ON DELETE CASCADE" in src, (
+            "messages.chat_id FK must cascade, otherwise deleteAllChats "
+            "leaves orphaned messages"
+        )
+        # Return value must be the number actually deleted
+        assert "return Number(result.changes" in src, (
+            "deleteAllChats must return a count — the UI shows it to "
+            "the user after confirmation"
+        )
+
+    def test_ipc_handler_wired(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        assert '"chat:deleteAll"' in src
+        assert "vmlx#70" in src, "anchor required"
+        assert "db.deleteAllChats(scope)" in src
+
+    def test_preload_exposes_delete_all(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/preload/index.ts"
+        ).read_text()
+        assert "deleteAll: (scope?:" in src
+        assert "chat:deleteAll" in src
+
+    def test_env_types_declare_delete_all(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/env.d.ts"
+        ).read_text()
+        assert "deleteAll: (scope?:" in src
+        assert "deleted?: number" in src
+
+    def test_ui_has_clear_button_with_confirm(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/ChatList.tsx"
+        ).read_text()
+        # Anchor + handler + button + confirm + scope branching
+        assert "vmlx#70" in src
+        assert "handleClearAll" in src
+        assert "Eraser" in src, "Eraser icon used for the button"
+        # confirm() is required — delete is irreversible
+        assert "confirm(" in src, (
+            "bulk-delete MUST have a confirm dialog — one misclick "
+            "erases the user's entire chat history"
+        )
+        # The confirm text must tell the user the COUNT and SCOPE so a
+        # surprise (e.g. modelPath filter active) doesn't lead to a
+        # mis-click-confirmed wipe.
+        assert "targetCount" in src or "chats.length" in src
+        # Button hidden when nothing to clear (defensive)
+        assert "chats.length > 0" in src and "Clear" in src
+
+    def test_scope_aware_clear(self):
+        """When the Chat tab is bound to a specific model, Clear should
+        pass modelPath so only that model's chats get nuked — not the
+        user's entire cross-model history."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/ChatList.tsx"
+        ).read_text()
+        # handleClearAll must conditionally pass {modelPath} vs undefined
+        assert "modelPath ? { modelPath } : undefined" in src, (
+            "Clear handler must respect the model filter — passing "
+            "undefined when no filter wipes cross-model, passing "
+            "{modelPath} when filter is active wipes just that model"
+        )

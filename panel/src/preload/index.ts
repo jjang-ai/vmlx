@@ -85,6 +85,9 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke('chat:delete', id),
     deleteMessage: (messageId: string) => ipcRenderer.invoke('chat:deleteMessage', messageId),
     deleteMessagesFrom: (chatId: string, fromTimestamp: number) => ipcRenderer.invoke('chat:deleteMessagesFrom', chatId, fromTimestamp),
+    // vmlx#70: bulk-delete. Omit scope to wipe everything.
+    deleteAll: (scope?: { folderId?: string; modelPath?: string }) =>
+      ipcRenderer.invoke('chat:deleteAll', scope) as Promise<{ success: boolean; deleted?: number; error?: string }>,
     search: (query: string) => ipcRenderer.invoke('chat:search', query),
 
     // Messages
