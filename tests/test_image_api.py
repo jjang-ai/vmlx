@@ -511,16 +511,35 @@ class TestImageGenLock:
         import vmlx_engine.server as srv
         assert hasattr(srv, "_image_gen_lock")
 
-    def test_lock_is_asyncio_lock(self):
-        """_image_gen_lock must be an asyncio.Lock instance."""
+    def test_lock_is_asyncio_lock_or_none(self):
+        """_image_gen_lock must be either asyncio.Lock or None.
+
+        Current design: lazily initialized to None at module load to avoid
+        binding to the wrong event loop. First call to create_image /
+        create_image_edit creates the lock inside the running loop.
+        """
         import vmlx_engine.server as srv
-        assert isinstance(srv._image_gen_lock, asyncio.Lock)
+        assert srv._image_gen_lock is None or isinstance(
+            srv._image_gen_lock, asyncio.Lock
+        ), (
+            f"_image_gen_lock must be asyncio.Lock or None (lazy init), "
+            f"got {type(srv._image_gen_lock).__name__}"
+        )
 
     def test_lock_not_a_threading_lock(self):
-        """Must NOT be a threading.Lock (would block the event loop)."""
-        import threading
+        """Must NOT be a threading.Lock (would block the event loop).
+
+        Note: on Python 3.12+, threading.Lock is a factory function, not a
+        class. Use the underlying LockType from _thread for isinstance().
+        If the lock is None (lazy init), it vacuously passes.
+        """
+        import _thread
         import vmlx_engine.server as srv
-        assert not isinstance(srv._image_gen_lock, threading.Lock)
+        if srv._image_gen_lock is None:
+            return
+        assert not isinstance(srv._image_gen_lock, _thread.LockType), (
+            "_image_gen_lock must be asyncio.Lock, not a _thread lock"
+        )
 
     def test_lock_used_in_generation_endpoint(self):
         """Verify the lock is acquired in create_image."""
