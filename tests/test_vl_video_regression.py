@@ -1742,3 +1742,76 @@ class TestVmlx81SmeltAndFlashMoeOnJangtq:
             )
         except Exception:
             pass  # expected: downstream failure loading actual weights
+
+
+class TestVmlx81JangtqSmeltFlashMoeIncompat:
+    """vmlx#81: --smelt or --flash-moe on JANGTQ (weight_format=mxtq)
+    models used to fail with cryptic errors deep in the loader:
+
+      --smelt:     "JANG config jang_config.json is missing 'format' field"
+                   (because JANGTQ uses `weight_format` not `format`)
+      --flash-moe: ExpertIndex silently found 0 MoE layers (JANGTQ's
+                   tq_packed/tq_norms keys don't match .weight/.scales)
+                   → silent skip + later crash on dequant fallback
+
+    Fix: detect JANGTQ up-front in both entry points and surface a
+    clean error with actionable workarounds (use JANG_* variant, or
+    drop the flag since JANGTQ is already sub-2-bit effective).
+    """
+
+    def test_smelt_load_rejects_jangtq_cleanly(self, tmp_path):
+        import json
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2, "weight_format": "mxtq",
+        }))
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax_m2", "num_local_experts": 256,
+        }))
+        from vmlx_engine.utils.smelt_loader import smelt_load
+        import pytest as _pt
+        with _pt.raises(ValueError, match=r"vmlx#81.*--smelt.*JANGTQ"):
+            smelt_load(str(tmp_path), expert_percent=50)
+
+    def test_flash_moe_skips_jangtq_cleanly(self, tmp_path):
+        import json, logging
+        from unittest.mock import MagicMock, patch
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+        }))
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax_m2",
+        }))
+        import vmlx_engine.server as srv
+        logs = []
+
+        class _LH(logging.Handler):
+            def emit(self, r): logs.append(r.getMessage())
+
+        srv.logger.addHandler(_LH())
+        srv.logger.setLevel(logging.WARNING)
+        srv._flash_moe_enabled = True
+        srv._flash_moe_loader = None
+        srv._model_path = str(tmp_path)
+        srv._model_name = str(tmp_path)
+        srv._cli_args = {}
+        srv._engine = MagicMock()
+        srv._distributed_enabled = False
+        srv._distributed_coordinator = None
+        with patch.object(srv, "_get_raw_model_from_engine", return_value=MagicMock()):
+            srv._apply_flash_moe_patching()
+        hits = [l for l in logs if "vmlx#81" in l]
+        assert hits, f"expected vmlx#81 clean skip log, got: {logs}"
+        assert srv._flash_moe_loader is None, (
+            "flash_moe_loader must be None after clean skip"
+        )
+
+    def test_vmlx81_anchors_in_source(self):
+        """vmlx#81 anchor in both smelt_loader and server flash-moe init."""
+        smelt_src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/smelt_loader.py"
+        ).read_text()
+        srv_src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        assert "vmlx#81" in smelt_src
+        assert "vmlx#81" in srv_src
