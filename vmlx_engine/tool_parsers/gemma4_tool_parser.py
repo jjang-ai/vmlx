@@ -298,7 +298,15 @@ class Gemma4ToolParser(ToolParser):
 
     @staticmethod
     def _strip_thought_channel(text: str) -> str:
-        """Strip Gemma 4 thought channel markers from text."""
+        """Strip Gemma 4 thought channel markers from text.
+
+        Handles both forms:
+        1. Full marker: `<|channel>thought\\n...<channel|>`
+        2. Degraded form (detokenizer stripped `<|channel>` special token
+           but left `thought\\n` as plain text): `thought\\n...<channel|>`.
+           Falls back to stripping just `thought\\n` + everything up to
+           the first `<channel|>` OR (if no endmarker) a blank line.
+        """
         # Remove <|channel>thought\n...<channel|> blocks
         result = re.sub(
             r'<\|channel>thought\n.*?<channel\|>',
@@ -306,6 +314,17 @@ class Gemma4ToolParser(ToolParser):
             text,
             flags=re.DOTALL,
         )
+        # Degraded form: leading `thought\n...<channel|>` without SOC
+        result = re.sub(
+            r'^\s*thought\n.*?<channel\|>',
+            '',
+            result,
+            flags=re.DOTALL,
+        )
+        # Degraded form with no endmarker (truncated or single-channel):
+        # strip leading `thought\n` if it's still at the start.
+        if result.lstrip().startswith("thought\n"):
+            result = result.lstrip()[len("thought\n"):]
         # Also strip bare markers
         result = result.replace('<|channel>', '').replace('<channel|>', '')
         return result.strip()

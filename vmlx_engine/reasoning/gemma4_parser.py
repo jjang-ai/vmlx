@@ -65,19 +65,50 @@ class Gemma4ReasoningParser(ReasoningParser):
         self,
         model_output: str,
     ) -> tuple[str | None, str | None]:
-        """Extract reasoning from complete Gemma 4 output."""
+        """Extract reasoning from complete Gemma 4 output.
+
+        Handles both forms:
+        1. With `<|channel>` special token preserved (raw wire form):
+             `<|channel>thought\\n...<channel|>...<turn|>`
+        2. With `<|channel>` stripped by the detokenizer (common case
+           with JANG / MLX tokenizers that treat it as a special token
+           and don't emit it in the decoded string):
+             `thought\\n...<channel|>...`
+        """
         text = model_output
 
         # Strip trailing <turn|> tokens (EOS)
         while text.endswith(_EOT):
             text = text[:-len(_EOT)]
 
-        # Check for thought channel
-        if _SOC + _THOUGHT in text:
-            # Find the thought channel start
-            idx = text.find(_SOC + _THOUGHT)
-            pre_text = text[:idx].strip()
+        # Detect thought channel. Accept both the full marker AND the
+        # degraded form where the SOC token was eaten by the detokenizer
+        # (the `thought\n` prefix + an `<channel|>` endmarker downstream).
+        soc_thought_idx = text.find(_SOC + _THOUGHT)
+        if soc_thought_idx < 0 and text.lstrip().startswith(_THOUGHT + "\n") and _EOC in text:
+            # Degraded form: `thought\n...<channel|>...`
+            stripped = text.lstrip()
+            lead = len(text) - len(stripped)
+            after_soc = stripped[len(_THOUGHT) + 1:]  # skip "thought\n"
+            eoc_idx = after_soc.find(_EOC)
+            if eoc_idx >= 0:
+                reasoning = after_soc[:eoc_idx].strip()
+                content = after_soc[eoc_idx + len(_EOC):].strip()
+                while content.endswith(_EOT):
+                    content = content[:-len(_EOT)].strip()
+                return reasoning or None, content or None
 
+        # Also handle the degraded form when there's NO <channel|> yet
+        # (truncated mid-thought). Pull everything after `thought\n`
+        # into reasoning so it doesn't spill into content.
+        if soc_thought_idx < 0 and text.lstrip().startswith(_THOUGHT + "\n") and _EOC not in text:
+            stripped = text.lstrip()
+            after_soc = stripped[len(_THOUGHT) + 1:]
+            return after_soc.strip() or None, None
+
+        # Check for thought channel (full marker form)
+        if soc_thought_idx >= 0:
+            idx = soc_thought_idx
             # Extract after the channel marker + "thought" + optional newline
             after_soc = text[idx + len(_SOC + _THOUGHT):]
             if after_soc.startswith("\n"):
@@ -117,8 +148,13 @@ class Gemma4ReasoningParser(ReasoningParser):
         # Parse the full accumulated text to determine state
         reasoning_text, content_text = self._parse_accumulated(current_text)
 
-        # Check if we just entered or left thought channel
-        thought_in_current = _SOC + _THOUGHT in current_text
+        # Check if we just entered or left thought channel.
+        # Accept both the full SOC marker AND the degraded form where
+        # the detokenizer stripped `<|channel>` but left `thought\n`.
+        thought_in_current = (
+            _SOC + _THOUGHT in current_text
+            or current_text.lstrip().startswith(_THOUGHT + "\n")
+        )
         eoc_in_current = _EOC in current_text
 
         if thought_in_current and not self._saw_thought:
@@ -175,18 +211,28 @@ class Gemma4ReasoningParser(ReasoningParser):
         return None
 
     def _parse_accumulated(self, text: str) -> tuple[str | None, str | None]:
-        """Parse accumulated text into reasoning and content portions."""
+        """Parse accumulated text into reasoning and content portions.
+
+        Handles both the full `<|channel>thought\\n...` marker AND the
+        degraded form where the detokenizer ate the SOC token (leaving
+        `thought\\n...<channel|>...`).
+        """
         # Strip trailing <turn|>
         while text.endswith(_EOT):
             text = text[:-len(_EOT)]
 
-        if _SOC + _THOUGHT not in text:
+        # Full marker form
+        if _SOC + _THOUGHT in text:
+            idx = text.find(_SOC + _THOUGHT)
+            after_soc = text[idx + len(_SOC + _THOUGHT):]
+            if after_soc.startswith("\n"):
+                after_soc = after_soc[1:]
+        # Degraded form — only `thought\n` prefix (detokenizer ate <|channel>)
+        elif text.lstrip().startswith(_THOUGHT + "\n"):
+            stripped = text.lstrip()
+            after_soc = stripped[len(_THOUGHT) + 1:]
+        else:
             return None, text.strip() if text.strip() else None
-
-        idx = text.find(_SOC + _THOUGHT)
-        after_soc = text[idx + len(_SOC + _THOUGHT):]
-        if after_soc.startswith("\n"):
-            after_soc = after_soc[1:]
 
         eoc_idx = after_soc.find(_EOC)
         if eoc_idx >= 0:

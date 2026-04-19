@@ -22,9 +22,44 @@ from typing import Any
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
+
+    # Ollama convention for VL models: each message may have an
+    # `images: [<base64>, ...]` field alongside `content: <string>`.
+    # The OpenAI multimodal schema instead embeds images as inline
+    # content parts. Translate so VL models (Qwen VL, Gemma 4 VL, etc.)
+    # see the image through the normal /v1/chat/completions path.
+    #
+    # Without this translation `prompt_eval_count` shows only the text
+    # tokens, the model reports "I cannot see the image", and the
+    # reporter has no indication of why. Surfaced during live VL test
+    # against Qwen3.5-VL-4B-JANG_4S-CRACK.
+    src_messages = body.get("messages", [])
+    translated_messages = []
+    for msg in src_messages:
+        images = msg.get("images") if isinstance(msg, dict) else None
+        if not images:
+            translated_messages.append(msg)
+            continue
+        text = msg.get("content", "") or ""
+        parts: list[dict] = []
+        if text:
+            parts.append({"type": "text", "text": text})
+        for img in images:
+            if not isinstance(img, str):
+                continue
+            # Ollama accepts either raw base64 or a data URL — normalize
+            # to data URL so the OpenAI content_part handler (which
+            # inspects the dataUrl mime prefix) can decode.
+            url = img if img.startswith("data:") else f"data:image/png;base64,{img}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        new_msg = {k: v for k, v in msg.items() if k != "images" and k != "content"}
+        new_msg["role"] = msg.get("role", "user")
+        new_msg["content"] = parts
+        translated_messages.append(new_msg)
+
     req: dict[str, Any] = {
         "model": body.get("model", "default"),
-        "messages": body.get("messages", []),
+        "messages": translated_messages,
         "stream": body.get("stream", True),
         # Always request usage so Ollama clients get eval_count/prompt_eval_count
         "stream_options": {"include_usage": True},

@@ -43,6 +43,18 @@ def clean_output_text(text: str) -> str:
     """
     if not text:
         return text
+
+    # Gemma 4 degraded-form handling: when the tokenizer strips the
+    # `<|channel>` special token but leaves the `thought` word, we see
+    # a literal `thought\n...<channel|>...` (or `thought\n...` if the
+    # endmarker was stripped too). Must run BEFORE SPECIAL_TOKENS_PATTERN
+    # so we can still see the `<channel|>` endmarker — if we strip
+    # channel markers first, the degraded block has no delimiter and
+    # we'd collapse reasoning into content.
+    text = re.sub(r"^\s*thought\n.*?<channel\|>", "", text, flags=re.DOTALL).lstrip()
+    if text.startswith("thought\n"):
+        text = text[len("thought\n"):]
+
     text = SPECIAL_TOKENS_PATTERN.sub("", text)
     text = text.strip()
 

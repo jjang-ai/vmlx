@@ -4848,3 +4848,101 @@ class TestVmlx57DeleteLocalModel:
         )
         # Confirm dialog quotes the path so user knows what they're nuking
         assert "Path: ${model.path}" in src or "model.path" in src
+
+
+class TestGemma4DegradedChannelStripping:
+    """Gemma 4 degraded `thought\\n` channel handling (live bug found
+    against Gemma-4-31B-it-JANG_4M).
+
+    When the tokenizer strips the `<|channel>` special token but leaves
+    the plain word `thought` followed by a newline, the stream text is
+      `thought\\nReasoning<channel|>Final<turn|>`
+    instead of the canonical
+      `<|channel>thought\\nReasoning<channel|>Final<turn|>`.
+
+    All three sanitization layers (reasoning parser, tool parser,
+    clean_output_text) must recognize this degraded form or `thought\\n`
+    leaks into the final assistant message.content — visible to every
+    OpenAI / Anthropic / Ollama client.
+    """
+
+    def test_reasoning_parser_degraded_form(self):
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+        p = Gemma4ReasoningParser()
+        p.reset_state()
+        r, c = p.extract_reasoning("thought\nReasoning text<channel|>Final content")
+        assert r == "Reasoning text", f"reasoning extraction broken: {r!r}"
+        assert c == "Final content", f"content extraction broken: {c!r}"
+
+    def test_reasoning_parser_full_form_still_works(self):
+        """Regression guard: the original `<|channel>thought\\n` form
+        must still parse correctly — the fix is ADDITIVE not a replace."""
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+        p = Gemma4ReasoningParser()
+        p.reset_state()
+        r, c = p.extract_reasoning(
+            "<|channel>thought\nDeep analysis<channel|>Result"
+        )
+        assert r == "Deep analysis", f"full form broken: {r!r}"
+        assert c == "Result", f"full form broken: {c!r}"
+
+    def test_reasoning_parser_degraded_no_endmarker(self):
+        """Truncated reasoning (max_tokens hit before `<channel|>`):
+        everything after `thought\\n` should be reasoning, content=None."""
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+        p = Gemma4ReasoningParser()
+        p.reset_state()
+        r, c = p.extract_reasoning("thought\nStill thinking when truncated")
+        assert r == "Still thinking when truncated", (
+            f"truncated-reasoning branch broken: r={r!r}, c={c!r}"
+        )
+        assert c is None, f"no content expected when truncated: {c!r}"
+
+    def test_tool_parser_strips_degraded_full_block(self):
+        from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
+        out = Gemma4ToolParser._strip_thought_channel(
+            "thought\nAnalysis<channel|>Final content"
+        )
+        assert out == "Final content", f"degraded strip broken: {out!r}"
+
+    def test_tool_parser_strips_bare_leading_thought(self):
+        """No endmarker → still strip the leading `thought\\n`."""
+        from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
+        out = Gemma4ToolParser._strip_thought_channel(
+            "thought\nThe current weather is sunny."
+        )
+        assert out == "The current weather is sunny.", (
+            f"bare-leading strip broken: {out!r}"
+        )
+
+    def test_clean_output_text_safety_net(self):
+        """clean_output_text is the LAST layer — runs on every final
+        message.content. A degraded-form leak that escapes both parsers
+        must still get cleaned here."""
+        from vmlx_engine.api.utils import clean_output_text
+        assert clean_output_text(
+            "thought\n some weather info for Tokyo."
+        ).strip() == "some weather info for Tokyo."
+        assert clean_output_text(
+            "thought\nAnalysis<channel|>Answer."
+        ).strip() == "Answer."
+
+    def test_clean_output_text_leaves_non_gemma_untouched(self):
+        """Other models must not be affected by the Gemma degraded-form strip."""
+        from vmlx_engine.api.utils import clean_output_text
+        # Qwen/DeepSeek reasoning stays intact via <think> handling
+        assert "Hello there" in clean_output_text("Hello there, I thought about it.")
+        # Whitespace handling preserved
+        assert clean_output_text("  TEST_OK  ") == "TEST_OK"
+
+    def test_strip_layers_idempotent(self):
+        """Running the same strip twice must be a no-op on the second call."""
+        from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
+        from vmlx_engine.api.utils import clean_output_text
+        once = Gemma4ToolParser._strip_thought_channel("thought\nContent")
+        twice = Gemma4ToolParser._strip_thought_channel(once)
+        assert once == twice == "Content"
+        # clean_output_text
+        once = clean_output_text("thought\nReal content")
+        twice = clean_output_text(once)
+        assert once == twice
