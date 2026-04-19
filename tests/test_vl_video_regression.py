@@ -1815,3 +1815,64 @@ class TestVmlx81JangtqSmeltFlashMoeIncompat:
         ).read_text()
         assert "vmlx#81" in smelt_src
         assert "vmlx#81" in srv_src
+
+
+class TestVmlx92PldNonMllmGuard:
+    """vmlx#92: `_try_speculative_decode` assumed BatchGenerator exposes
+    `.active_batch` (MLLM API). On text-only / non-MLLM paths mlx-lm's
+    plain BatchGenerator has neither `.active_batch` nor
+    `remove(return_prompt_caches=True)`, so PLD crashed, re-inserted a
+    malformed cache, and the NEXT step() raised
+    `<class 'list'> does not yet support batching with history`.
+    Recovery then `clear()`s the paged cache — torching every prefix
+    for every in-flight request. Every PLD-enabled text server
+    corrupted itself within a few tokens.
+
+    Fix: capability check right after the temperature gate —
+    `if not hasattr(self.batch_generator, 'active_batch'): return []`
+    """
+
+    def test_speculative_decode_returns_empty_on_non_mllm_generator(self):
+        from unittest.mock import MagicMock
+        from vmlx_engine.scheduler import Scheduler
+
+        s = Scheduler.__new__(Scheduler)
+        s._pld_spec_max_temp = 1.0
+
+        class PlainBatchGen:
+            def __init__(self):
+                self.requests = {}
+        s.batch_generator = PlainBatchGen()
+
+        req = MagicMock()
+        req.sampling_params = MagicMock()
+        req.sampling_params.temperature = 0.3
+        req.prompt_token_ids = [1, 2, 3]
+        req.output_token_ids = [10, 11]
+
+        # Must return [] cleanly — NOT raise AttributeError and NOT
+        # touch the generator state.
+        result = s._try_speculative_decode("rid", req, 11)
+        assert result == [], f"expected [] (non-MLLM short-circuit), got {result}"
+
+    def test_temperature_gate_still_fires_first(self):
+        """Regression: high-temp short-circuit must still run before the
+        active_batch hasattr check (defense in depth)."""
+        from unittest.mock import MagicMock
+        from vmlx_engine.scheduler import Scheduler
+        s = Scheduler.__new__(Scheduler)
+        s._pld_spec_max_temp = 1.0
+        s.batch_generator = MagicMock()  # HAS active_batch
+        req = MagicMock()
+        req.sampling_params = MagicMock()
+        req.sampling_params.temperature = 2.5
+        req.prompt_token_ids = [1]
+        req.output_token_ids = []
+        assert s._try_speculative_decode("rid", req, 0) == []
+
+    def test_vmlx92_anchor_in_source(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        assert "vmlx#92" in src
+        assert 'hasattr(self.batch_generator, "active_batch")' in src

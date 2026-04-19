@@ -3925,6 +3925,26 @@ class Scheduler:
         if temp > self._pld_spec_max_temp:
             return []
 
+        # vmlx#92: PLD verify-and-reinsert only works on MLLMBatchGenerator
+        # which exposes `.active_batch` (for forward-logprobs peek) and
+        # `remove(..., return_prompt_caches=True)` returning trimmable
+        # caches. On pure text / non-MLLM paths the generator is mlx-lm's
+        # plain BatchGenerator, which has neither.
+        #
+        # Before this guard the attribute access at `active_batch` raised
+        # AttributeError; the try/except + finally path re-inserted a
+        # malformed cache; and the next step() crashed with `<class 'list'>
+        # does not yet support batching with history`, forcing the scheduler
+        # to clear the entire paged cache. Every PLD-enabled server hitting
+        # a text model corrupted itself within the first few tokens.
+        #
+        # Short-circuit cleanly here — the retrospective n-gram analyzer in
+        # prompt_lookup.py still runs inline on every decode step, so
+        # PLD telemetry / theoretical-speedup stats stay accurate; only
+        # the batched verify-and-reinsert cycle is gated off.
+        if not hasattr(self.batch_generator, "active_batch"):
+            return []
+
         full_tokens = list(request.prompt_token_ids) + list(request.output_token_ids)
         ngram_idx = self._pld_ngram_indices.get(request_id)
         if ngram_idx is None:
