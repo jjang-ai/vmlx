@@ -4946,3 +4946,90 @@ class TestGemma4DegradedChannelStripping:
         once = clean_output_text("thought\nReal content")
         twice = clean_output_text(once)
         assert once == twice
+
+
+class TestOllamaImagesFieldForwarding:
+    """Ollama /api/chat `images: [base64]` field must forward to VL models
+    as inline OpenAI image content parts. Before this fix, the Ollama
+    adapter passed the message through unchanged and VL models reported
+    'I cannot see the image' because the image tokens never expanded.
+
+    Found during live test with Qwen3.5-VL-4B-JANG against /api/chat —
+    prompt_eval_count stayed at text-only size (~20) instead of the
+    expected image-expanded size (~86).
+    """
+
+    def test_images_field_translates_to_inline_content_parts(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        body = {
+            "model": "vl",
+            "messages": [{
+                "role": "user",
+                "content": "What is in this image?",
+                "images": ["aGVsbG8gd29ybGQ="]  # b64("hello world")
+            }]
+        }
+        req = ollama_chat_to_openai(body)
+        msgs = req["messages"]
+        assert len(msgs) == 1
+        assert msgs[0]["role"] == "user"
+        content = msgs[0]["content"]
+        assert isinstance(content, list), (
+            "content must be a content-parts array after translation"
+        )
+        # Text part first, image part second
+        assert content[0] == {"type": "text", "text": "What is in this image?"}
+        assert content[1]["type"] == "image_url"
+        # Raw base64 must be wrapped in a data URL
+        assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+    def test_images_field_accepts_data_urls_directly(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        body = {
+            "model": "vl",
+            "messages": [{
+                "role": "user",
+                "content": "desc",
+                "images": ["data:image/jpeg;base64,xyz"]
+            }]
+        }
+        req = ollama_chat_to_openai(body)
+        # Pre-formatted data URLs pass through unchanged
+        assert req["messages"][0]["content"][1]["image_url"]["url"] == \
+            "data:image/jpeg;base64,xyz"
+
+    def test_empty_images_field_leaves_message_untouched(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        body = {
+            "model": "text",
+            "messages": [{"role": "user", "content": "hello"}]
+        }
+        req = ollama_chat_to_openai(body)
+        assert req["messages"][0]["content"] == "hello"
+
+    def test_multiple_images_in_single_message(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        body = {
+            "model": "vl",
+            "messages": [{
+                "role": "user", "content": "compare",
+                "images": ["aaa", "bbb", "ccc"]
+            }]
+        }
+        parts = ollama_chat_to_openai(body)["messages"][0]["content"]
+        assert len(parts) == 4  # 1 text + 3 images
+        assert parts[0]["type"] == "text"
+        for i in range(1, 4):
+            assert parts[i]["type"] == "image_url"
+
+    def test_empty_content_with_images(self):
+        """Ollama lets you send just images with no text — must not crash."""
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        body = {
+            "model": "vl",
+            "messages": [{"role": "user", "content": "", "images": ["xyz"]}]
+        }
+        parts = ollama_chat_to_openai(body)["messages"][0]["content"]
+        # No text part when content was empty; only the image
+        assert len(parts) == 1
+        assert parts[0]["type"] == "image_url"
