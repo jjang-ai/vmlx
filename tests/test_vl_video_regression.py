@@ -5286,3 +5286,79 @@ class TestPanelUIContractFull:
         assert "reasoning_content" not in dump, (
             "reasoning_content: null must not appear on every chunk"
         )
+
+
+class TestMistral4VlmTextFallback:
+    """Mistral 4 has no mlx_vlm VLM class. When jang_config.has_vision=true,
+    the naive VLM path loads mistral3 (standard attention) with mistral4
+    MLA weights → garbage tokens. Must fall through to text-only load.
+
+    Live-reproduced against Mistral-Small-4-119B-JANG_2L 2026-04-19.
+    """
+
+    def test_is_mllm_forces_false_on_mistral3_mistral4_combo(self, tmp_path):
+        """is_mllm_model must override jang_config.has_vision=true when
+        the config.json is the mistral3-wrapper-with-mistral4-inner combo."""
+        import json as _json
+        # Fake model dir with the buggy config
+        d = tmp_path / "FakeMistral4"
+        d.mkdir()
+        (d / "jang_config.json").write_text(_json.dumps({
+            "version": 2,
+            "weight_format": "jang_v2",
+            "architecture": {"has_vision": True},
+            "quantization": {"bit_widths_used": [4], "block_size": 64},
+        }))
+        (d / "config.json").write_text(_json.dumps({
+            "model_type": "mistral3",
+            "text_config": {"model_type": "mistral4"},
+            "vision_config": {"model_type": "clip_vision_model"},
+        }))
+        # Make it look like a JANG v2 model
+        (d / "model.safetensors").write_bytes(b"\x00" * 16)
+        (d / "tokenizer_config.json").write_text("{}")
+
+        from vmlx_engine.api.utils import is_mllm_model, _IS_MLLM_CACHE
+        _IS_MLLM_CACHE.clear()  # avoid stale cache from earlier tests
+        result = is_mllm_model(str(d))
+        assert result is False, (
+            "mistral3+mistral4 config must force is_mllm=False to avoid "
+            "VLM-path garbage output from Mistral 4 weights in mistral3 class"
+        )
+
+    def test_vlm_loader_has_mistral4_fallback(self):
+        """Defense in depth: even if is_mllm is forced True via --is-mllm,
+        _load_jang_v2_vlm must detect mistral3+mistral4 and delegate to
+        the text-only loader."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+        ).read_text()
+        # In the VLM loader, check for the fallback block
+        vlm_idx = src.find("def _load_jang_v2_vlm")
+        assert vlm_idx > 0
+        next_fn = src.find("\ndef _", vlm_idx + 10)
+        vlm_body = src[vlm_idx:next_fn if next_fn > 0 else len(src)]
+        assert 'mistral3' in vlm_body and 'mistral4' in vlm_body, (
+            "VLM loader must check for mistral3+mistral4 combo"
+        )
+        assert 'return _load_jang_v2(' in vlm_body, (
+            "VLM loader must delegate to text-only _load_jang_v2 on "
+            "Mistral 4 fallback"
+        )
+
+    def test_non_mistral4_vlm_still_loads_via_vlm_path(self):
+        """Regression guard — Qwen VL, Gemma 4 VL etc. must NOT be
+        rerouted to the text-only path."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+        ).read_text()
+        vlm_idx = src.find("def _load_jang_v2_vlm")
+        next_fn = src.find("\ndef _", vlm_idx + 10)
+        vlm_body = src[vlm_idx:next_fn if next_fn > 0 else len(src)]
+        # The fallback check must be strict (both == "mistral3" AND
+        # text_config model_type == "mistral4")
+        assert ('config.get("model_type") == "mistral3"' in vlm_body
+                and '"model_type") == "mistral4"' in vlm_body), (
+            "fallback guard must be narrow — any model with model_type != "
+            "mistral3 or text_config.model_type != mistral4 stays on VLM path"
+        )

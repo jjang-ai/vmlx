@@ -219,6 +219,30 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
                     if "has_vision" in arch:
                         has_vision = arch.get("has_vision")
                         if has_vision is True:
+                            # Mistral 4 has_vision=true exception: mlx_vlm has
+                            # mistral3 (standard attention) and mistral4 (text
+                            # only; no VLM class). A Mistral 4 VLM config
+                            # routed through the VLM engine stuffs MLA weights
+                            # into mistral3's standard-attention skeleton →
+                            # garbage tokens. Force text-only until mlx_vlm
+                            # ships a mistral4 VLM class; paired with the
+                            # loader's text-only fallback as defense in depth.
+                            try:
+                                hf_cfg_path = os.path.join(local_path, "config.json")
+                                if os.path.isfile(hf_cfg_path):
+                                    hf_cfg = json.loads(open(hf_cfg_path).read())
+                                    tc = hf_cfg.get("text_config") or {}
+                                    if (hf_cfg.get("model_type") == "mistral3"
+                                            and tc.get("model_type") == "mistral4"):
+                                        _logger.warning(
+                                            "is_mllm_model(%s): Mistral 4 VLM "
+                                            "wrapper unsupported by mlx_vlm — "
+                                            "forcing text-only to avoid garbage output",
+                                            model_name,
+                                        )
+                                        return False
+                            except Exception:
+                                pass
                             _logger.info(
                                 "is_mllm_model(%s): tier=jang_config_explicit_true result=True",
                                 model_name,

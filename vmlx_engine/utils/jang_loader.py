@@ -1130,6 +1130,30 @@ def _load_jang_v2_vlm(
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     config = vlm_load_config(path)
+
+    # Mistral 4 VLM fallback: the outer config has model_type=mistral3 (the VLM
+    # wrapper class name in HuggingFace) but text_config.model_type=mistral4
+    # (the inner MLA language model). `get_model_and_args` picks mlx_vlm's
+    # mistral3 class which uses standard attention (q_proj/k_proj/v_proj); our
+    # weights are Mistral 4 MLA (q_a_proj/q_b_proj/kv_a_proj/kv_b_proj/embed_q/
+    # unembed_out) so weights have nowhere to land and the model outputs
+    # repetitive token soup ('.;.;.;' / 'SuppAddAdd' / 'cevcev-top-top') —
+    # live-observed against Mistral-Small-4-119B-JANG_2L on 2026-04-19.
+    #
+    # mlx_vlm does not (yet) ship a mistral4 VLM class, only a mistral4
+    # language-model. Fall through to the text-only `_load_jang_v2` path which
+    # already has the mistral3→mistral4 promotion at line ~460 and produces
+    # coherent output. Cost: no image input for Mistral 4 until mlx_vlm adds
+    # a VLM class. (Image input was already broken pre-rerouting — the class
+    # mismatch meant weights were corrupt; no regression.)
+    _tc = config.get("text_config") or {}
+    if config.get("model_type") == "mistral3" and _tc.get("model_type") == "mistral4":
+        logger.warning(
+            "  Mistral 4 VLM not supported by mlx_vlm (no mistral4 VLM class); "
+            "falling back to text-only load. Vision input will be ignored."
+        )
+        return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
+
     model_class, _ = get_model_and_args(config=config)
 
     config.setdefault("text_config", {})
