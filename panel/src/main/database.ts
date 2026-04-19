@@ -1766,6 +1766,33 @@ class DatabaseManager {
       }));
   }
 
+  // ms#61: single-row lookup so the image:deleteGeneration IPC handler
+  // can read the file paths before deleting the DB row.
+  getImageGeneration(id: string): ImageGeneration | null {
+    this.ensureOpen();
+    const r: any = this.db
+      .prepare("SELECT * FROM image_generations WHERE id = ?")
+      .get(id);
+    if (!r) return null;
+    return {
+      id: r.id,
+      sessionId: r.session_id,
+      prompt: r.prompt,
+      negativePrompt: r.negative_prompt,
+      modelName: r.model_name,
+      width: r.width,
+      height: r.height,
+      steps: r.steps,
+      guidance: r.guidance,
+      seed: r.seed,
+      strength: r.strength,
+      elapsedSeconds: r.elapsed_seconds,
+      imagePath: r.image_path,
+      sourceImagePath: r.source_image_path,
+      createdAt: r.created_at,
+    };
+  }
+
   deleteImageGeneration(id: string): void {
     this.ensureOpen();
     this.db.prepare("DELETE FROM image_generations WHERE id = ?").run(id);

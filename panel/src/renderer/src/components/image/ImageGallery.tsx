@@ -6,6 +6,8 @@ import {
   ImageIcon,
   Pencil,
   RefreshCw,
+  Trash2,
+  FileText,
 } from "lucide-react";
 import type { ImageGenerationInfo } from "./ImageTab";
 
@@ -14,6 +16,9 @@ interface ImageGalleryProps {
   generating: boolean;
   mode?: "generate" | "edit";
   onRegenerate?: (gen: ImageGenerationInfo) => void;
+  // ms#61: per-image delete so users can prune the gallery without
+  // wiping the whole session.
+  onDelete?: (gen: ImageGenerationInfo) => void;
 }
 
 // MLX Studio Image Gallery — mlx.studio — Jinho Jang
@@ -22,6 +27,7 @@ export function ImageGallery({
   generating,
   mode,
   onRegenerate,
+  onDelete,
 }: ImageGalleryProps) {
   if (generations.length === 0 && !generating) {
     return (
@@ -67,6 +73,7 @@ export function ImageGallery({
             key={gen.id}
             generation={gen}
             onRegenerate={onRegenerate}
+            onDelete={onDelete}
             sessionMode={mode}
           />
         ))}
@@ -81,16 +88,20 @@ export function ImageGallery({
 function ImageCard({
   generation,
   onRegenerate,
+  onDelete,
   sessionMode,
 }: {
   generation: ImageGenerationInfo;
   onRegenerate?: (gen: ImageGenerationInfo) => void;
+  onDelete?: (gen: ImageGenerationInfo) => void;
   sessionMode?: "generate" | "edit";
 }) {
   const [imageData, setImageData] = useState<string | null>(null);
   const [sourceData, setSourceData] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [hovered, setHovered] = useState(false);
+  // ms#61: transient "Copied!" indicator for the copy-prompt button.
+  const [promptCopied, setPromptCopied] = useState(false);
 
   const hasSource = !!generation.sourceImagePath;
   // Gen model + source = variation, edit model + source = edit
@@ -141,6 +152,24 @@ function ImageCard({
       navigator.clipboard.writeText(generation.seed.toString()).catch(() => {});
     }
   }, [generation.seed]);
+
+  // ms#61: copy the prompt that generated this image.
+  const handleCopyPrompt = useCallback(() => {
+    if (!generation.prompt) return;
+    navigator.clipboard.writeText(generation.prompt)
+      .then(() => {
+        setPromptCopied(true);
+        setTimeout(() => setPromptCopied(false), 1500);
+      })
+      .catch(() => {});
+  }, [generation.prompt]);
+
+  // ms#61: delete this image from the gallery (DB + files).
+  const handleDelete = useCallback(() => {
+    // Lightweight confirmation — a missed click shouldn't nuke the image.
+    if (!confirm("Delete this image? The file will be removed permanently.")) return;
+    onDelete?.(generation);
+  }, [onDelete, generation]);
 
   return (
     <div
@@ -285,6 +314,27 @@ function ImageCard({
               <Download className="h-3.5 w-3.5" />
               Save
             </button>
+            {/* ms#61: copy prompt */}
+            <button
+              onClick={handleCopyPrompt}
+              className="py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+              title="Copy the prompt used to generate this image"
+              aria-label="Copy prompt"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {promptCopied ? "Copied!" : "Prompt"}
+            </button>
+            {/* ms#61: delete this image (DB row + file) */}
+            {onDelete && (
+              <button
+                onClick={handleDelete}
+                className="py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 bg-muted text-muted-foreground hover:bg-red-500/15 hover:text-red-400 transition-colors"
+                title="Delete this image from the gallery"
+                aria-label="Delete image"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         )}
       </div>

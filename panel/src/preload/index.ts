@@ -300,6 +300,8 @@ const api = {
     getSession: (id: string) => ipcRenderer.invoke('image:getSession', id),
     deleteSession: (id: string) => ipcRenderer.invoke('image:deleteSession', id),
     getGenerations: (sessionId: string) => ipcRenderer.invoke('image:getGenerations', sessionId),
+    // ms#61: per-image delete so the gallery doesn't grow unbounded.
+    deleteGeneration: (generationId: string) => ipcRenderer.invoke('image:deleteGeneration', generationId),
     generate: (params: any) => ipcRenderer.invoke('image:generate', params),
     edit: (params: any) => ipcRenderer.invoke('image:edit', params),
     startServer: (modelName: string, quantize?: number, imageMode?: 'generate' | 'edit', serverSettings?: any) => ipcRenderer.invoke('image:startServer', modelName, quantize, imageMode, serverSettings),

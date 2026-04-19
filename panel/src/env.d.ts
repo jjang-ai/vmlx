@@ -389,6 +389,10 @@ declare global {
           id: string,
         ) => Promise<{ success: boolean; error?: string }>;
         getGenerations: (sessionId: string) => Promise<any[]>;
+        /** ms#61: delete a single image from the gallery. */
+        deleteGeneration: (
+          generationId: string,
+        ) => Promise<{ success: boolean; error?: string }>;
         generate: (params: {
           sessionId: string;
           prompt: string;

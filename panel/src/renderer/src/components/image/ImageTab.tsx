@@ -553,6 +553,23 @@ export function ImageTab() {
                 setError('Failed to load image for iteration')
               }
             }}
+            onDelete={async (gen) => {
+              // ms#61: delete this image from the gallery. Unlinks the
+              // file on disk (only if inside ~/.mlxstudio) and removes
+              // the DB row.
+              try {
+                const r = await window.api.image.deleteGeneration(gen.id)
+                if (!r.success) {
+                  setError(`Failed to delete image: ${r.error || 'unknown'}`)
+                  return
+                }
+                // Drop from local state — no need to refetch the whole list.
+                setGenerations(prev => prev.filter(g => g.id !== gen.id))
+              } catch (err) {
+                console.error('Failed to delete image:', err)
+                setError('Failed to delete image')
+              }
+            }}
           />
         </div>
 

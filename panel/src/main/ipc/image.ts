@@ -112,6 +112,39 @@ export function registerImageHandlers(): void {
     }
   })
 
+  // ms#61: delete a single image generation from the gallery.
+  // The gallery can grow to unmanageable size without pruning (reporter's
+  // words); we expose per-row delete so users don't need to purge the
+  // whole session to clean up.
+  // Unlinks the image file (output) and, if present, the source image —
+  // BUT only if the source path is under ~/.mlxstudio (don't rm user's
+  // home-folder pictures that were only referenced, never copied).
+  ipcMain.handle('image:deleteGeneration', async (_, generationId: string) => {
+    try {
+      const gen = db.getImageGeneration(generationId)
+      if (!gen) return { success: false, error: 'generation not found' }
+      const mlxstudioRoot = resolve(join(homedir(), '.mlxstudio'))
+      const tryUnlink = (p?: string | null): void => {
+        if (!p) return
+        // Only unlink paths inside ~/.mlxstudio (defensive — never rm a
+        // file the user originally chose from their Pictures / Desktop).
+        try {
+          const abs = resolve(p)
+          if (!abs.startsWith(mlxstudioRoot + '/') && abs !== mlxstudioRoot) return
+          if (existsSync(abs)) unlinkSync(abs)
+        } catch (e) {
+          console.error('[IMAGE] Failed to unlink', p, e)
+        }
+      }
+      tryUnlink(gen.imagePath)
+      tryUnlink(gen.sourceImagePath)
+      db.deleteImageGeneration(generationId)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: (error as Error).message }
+    }
+  })
+
   // ─── Image Generation ────────────────────────────────────────────────
 
   ipcMain.handle('image:generate', async (_, params: {

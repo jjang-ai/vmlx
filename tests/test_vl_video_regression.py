@@ -4462,3 +4462,87 @@ class TestVmlx92PldGuardOnNonMllm:
             "MLLMBatchGenerator must still expose active_batch — "
             "otherwise the vmlx#92 guard misclassifies it as non-MLLM"
         )
+
+
+class TestMs61ImageGalleryDeleteAndCopyPrompt:
+    """ms#61 Feature Request: per-image delete + copy-prompt buttons in
+    the Image gallery.
+
+    > Please consider adding a delete button to image in Image gallery
+    > to delete the image. The Image gallery can grow to unmanageable
+    > size without pruning.
+    > Also please consider adding a button to each image in Image
+    > gallery to allow copy of the prompt that generated the image.
+
+    Implementation surface: DB layer (new getImageGeneration +
+    existing deleteImageGeneration), IPC handler (image:deleteGeneration
+    with safe unlink path check), preload exposure, env.d.ts types,
+    ImageGallery UI (Trash2 + FileText buttons), ImageTab wiring.
+    """
+
+    def test_ipc_handler_present_and_anchored(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/image.ts"
+        ).read_text()
+        assert "image:deleteGeneration" in src, (
+            "IPC handler missing — preload call will fail"
+        )
+        assert "ms#61" in src, "anchor required"
+        # Safety: must gate unlink on ~/.mlxstudio path so random picks
+        # from user's filesystem don't get rm'd
+        assert ".mlxstudio" in src and "startsWith" in src, (
+            "unlink must be gated to ~/.mlxstudio paths only — never "
+            "touch user's Pictures / Desktop files that were only "
+            "referenced as source images"
+        )
+
+    def test_database_has_single_row_lookup(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+        ).read_text()
+        assert "getImageGeneration(id: string)" in src, (
+            "single-row lookup needed so IPC can read the paths before "
+            "deleting the DB row"
+        )
+
+    def test_preload_exposes_delete_generation(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/preload/index.ts"
+        ).read_text()
+        assert "deleteGeneration:" in src
+        assert "image:deleteGeneration" in src
+
+    def test_env_types_declare_delete_generation(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/env.d.ts"
+        ).read_text()
+        assert "deleteGeneration:" in src
+
+    def test_gallery_ui_has_copy_and_delete_buttons(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/image/ImageGallery.tsx"
+        ).read_text()
+        # Copy prompt button
+        assert "handleCopyPrompt" in src
+        assert "generation.prompt" in src
+        assert "promptCopied" in src
+        # Delete button
+        assert "handleDelete" in src
+        assert "Trash2" in src
+        # Guard — confirm dialog so a stray click doesn't nuke
+        assert "confirm(" in src, (
+            "delete must have a confirmation prompt — otherwise a stray "
+            "click deletes permanently with no undo"
+        )
+
+    def test_image_tab_wires_delete_handler(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/image/ImageTab.tsx"
+        ).read_text()
+        assert "onDelete={async (gen) =>" in src, (
+            "ImageTab must provide the onDelete callback; otherwise the "
+            "button is shown but does nothing"
+        )
+        assert "window.api.image.deleteGeneration(gen.id)" in src
+        # On success: drop from local state rather than refetch
+        assert "setGenerations(prev => prev.filter(g => g.id !== gen.id))" in src
