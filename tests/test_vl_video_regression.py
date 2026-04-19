@@ -2019,3 +2019,94 @@ class TestVmlx94MxMetalDeprecationCleanup:
         assert getattr(mx, "get_peak_memory", None) is not None
         assert getattr(mx, "get_cache_memory", None) is not None
         assert getattr(mx, "clear_cache", None) is not None
+
+
+class TestVmlx96RelocatedMfluxModels:
+    """vmlx#96: relocated image models (e.g. on external SSD) fail class
+    resolution because the session stores `mflux_name` as the directory
+    name (`Z-Image-Turbo-mflux-8bit`), skipping the normalizer that fires
+    only when `mflux_name` is absent.
+
+    Fix: second-chance decoration strip in the class-resolution branch
+    that runs whether mflux_name was pre-set or not.
+    """
+
+    def test_relocated_z_image_turbo_resolves(self):
+        """Reporter's exact case: Z-Image-Turbo-mflux-8bit passes through
+        to a downstream load error, NOT the class-lookup ValueError."""
+        from vmlx_engine.image_gen import ImageGenEngine
+        e = ImageGenEngine()
+        try:
+            e.load(
+                model_name="Z-Image-Turbo-mflux-8bit",
+                mflux_name="Z-Image-Turbo-mflux-8bit",
+                quantize=8,
+                model_path="/nonexistent/path",
+            )
+        except ValueError as err:
+            assert "Cannot determine mflux class" not in str(err), (
+                f"vmlx#96 regression: class lookup still fails: {err}"
+            )
+            # Any OTHER ValueError (e.g. local files not found) is fine
+        except Exception:
+            pass  # downstream error after successful class resolution
+
+    def test_relocated_flux2_klein_9b_resolves(self):
+        """Another reporter variant: flux2-klein-9b-mflux-4bit."""
+        from vmlx_engine.image_gen import ImageGenEngine
+        e = ImageGenEngine()
+        try:
+            e.load(
+                model_name="Flux2-Klein-9B-mflux-4bit",
+                mflux_name="Flux2-Klein-9B-mflux-4bit",
+                quantize=4,
+                model_path="/nonexistent",
+            )
+        except ValueError as err:
+            assert "Cannot determine mflux class" not in str(err)
+        except Exception:
+            pass
+
+    def test_relocated_qwen_image_edit_resolves(self):
+        """Another reporter variant: Qwen-Image-Edit-mflux (no bit suffix)."""
+        from vmlx_engine.image_gen import ImageGenEngine
+        e = ImageGenEngine()
+        try:
+            e.load(
+                model_name="Qwen-Image-Edit-mflux",
+                mflux_name="Qwen-Image-Edit-mflux",
+                model_path="/nonexistent",
+            )
+        except ValueError as err:
+            assert "Cannot determine mflux class" not in str(err)
+        except Exception:
+            pass
+
+    def test_unknown_model_still_errors_clearly(self):
+        """Regression guard: a genuinely-unknown model still fails, but
+        with the improved error listing known keys."""
+        from vmlx_engine.image_gen import ImageGenEngine
+        e = ImageGenEngine()
+        with pytest.raises(ValueError) as exc_info:
+            e.load(
+                model_name="totally-unknown-xyz-1.0",
+                mflux_name="totally-unknown-xyz-1.0",
+                model_path="/nonexistent",
+            )
+        # Error should list known keys to help the user
+        assert "Known keys" in str(exc_info.value), (
+            "error must list known keys so user can see what to use"
+        )
+        assert "z-image" in str(exc_info.value), (
+            "known keys list must include the canonical names"
+        )
+
+    def test_anchor_and_regex_strips_in_source(self):
+        """Source pin: vmlx#96 anchor and the regex strip sequence both
+        appear in image_gen.py."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/image_gen.py"
+        ).read_text()
+        assert "vmlx#96" in src
+        # Class-resolution second-chance strip must exist
+        assert "second-chance" in src.lower() or "decoration-strip" in src

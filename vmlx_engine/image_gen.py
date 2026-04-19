@@ -266,24 +266,73 @@ class ImageGenEngine:
             _lookup = model_name.lower()
             if "/" in _lookup:
                 _lookup = _lookup.rsplit("/", 1)[-1]
-            # Strip quantization suffixes from directory names (e.g., "-4bit", "-8bit")
+            # vmlx#96: strip common user-directory decorations in addition to
+            # -{N}bit. Directory names from mflux conversions often look like:
+            #   Z-Image-Turbo-mflux-8bit
+            #   flux2-klein-9b-mflux-4bit
+            #   Qwen-Image-Edit-mflux
+            # Relocated models (external drives etc.) are named by the user
+            # and drift from our canonical keys. Peel off the decorations so
+            # the lookup still hits.
             import re
+            _lookup = re.sub(r'-\d+bit$', '', _lookup)
+            _lookup = re.sub(r'-mflux$', '', _lookup)
+            _lookup = re.sub(r'-mflux-\d+bit$', '', _lookup)
+            # Also handle the combination -mflux-{Nbit} (not caught by the
+            # two patterns above if stripped in wrong order).
             _lookup = re.sub(r'-\d+bit$', '', _lookup)
             resolved_name = SUPPORTED_MODELS.get(_lookup)
             if not resolved_name:
                 resolved_name = EDIT_MODELS.get(_lookup)
             if not resolved_name:
-                resolved_name = model_name
+                # Fallback: use the NORMALIZED _lookup (not original model_name)
+                # so the downstream _NAME_TO_CLASS lookup has a chance. If
+                # _lookup is itself a canonical _NAME_TO_CLASS key this works.
+                resolved_name = _lookup
 
         # Resolve mflux class
         resolved_class = mflux_class
         if not resolved_class:
             resolved_class = _NAME_TO_CLASS.get(resolved_name)
+            # vmlx#96: try the lowercased variant as a last resort — stored
+            # configs sometimes carry the directory casing.
+            if not resolved_class and resolved_name != resolved_name.lower():
+                resolved_class = _NAME_TO_CLASS.get(resolved_name.lower())
+
+            # vmlx#96: second-chance decoration strip for relocated models.
+            # When caller passes `mflux_name` explicitly (stored session
+            # config referencing a directory named like
+            # "Z-Image-Turbo-mflux-8bit"), the primary normalization block
+            # above was SKIPPED because `resolved_name` was pre-set. Apply
+            # the same regex strips here so these paths still resolve.
+            if not resolved_class:
+                import re as _re
+                _alt = resolved_name.lower()
+                if "/" in _alt:
+                    _alt = _alt.rsplit("/", 1)[-1]
+                _alt = _re.sub(r"-\d+bit$", "", _alt)
+                _alt = _re.sub(r"-mflux$", "", _alt)
+                _alt = _re.sub(r"-mflux-\d+bit$", "", _alt)
+                _alt = _re.sub(r"-\d+bit$", "", _alt)
+                if _alt and _alt != resolved_name.lower():
+                    _cls = _NAME_TO_CLASS.get(_alt)
+                    if _cls:
+                        resolved_class = _cls
+                        logger.info(
+                            f"vmlx#96: resolved relocated model "
+                            f"'{resolved_name}' via decoration-strip to "
+                            f"'{_alt}' -> {_cls}"
+                        )
+                        # Canonicalize resolved_name so downstream code
+                        # (ModelConfig.from_name, SUPPORTED_MODELS) hits.
+                        resolved_name = _alt
+
             if not resolved_class:
                 raise ValueError(
                     f"Cannot determine mflux class for model '{model_name}' "
                     f"(resolved name: '{resolved_name}'). "
-                    f"Pass mflux_class explicitly or add to _NAME_TO_CLASS."
+                    f"Pass mflux_class explicitly or add to _NAME_TO_CLASS. "
+                    f"Known keys: {sorted(_NAME_TO_CLASS.keys())}"
                 )
 
         logger.info(f"Loading image model: {resolved_name} (class={resolved_class}, quantize={quantize})")
