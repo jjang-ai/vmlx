@@ -799,6 +799,36 @@ def smelt_load(
         _jt_load = lambda p: _internal_load(p)
         logger.info("  Gemma 4 detected: using internal JANG loader (proper weight sanitization)")
 
+    # vmlx#81: detect JANGTQ (weight_format=mxtq) up front. Smelt partial-
+    # expert loading is tied to the standard JANG affine-quant runtime —
+    # JANGTQ uses custom TurboQuantLinear modules with codebook weights
+    # (tq_packed + tq_norms + codebook + signs) that the smelt patches do
+    # not know how to subset. Previously this errored deep in the JANG
+    # loader with "missing 'format' field" because JANGTQ uses
+    # `weight_format: mxtq` instead of `format: jang`, and the user had
+    # no idea what was wrong. Emit a clear, actionable error now.
+    try:
+        _raw_jc_path = Path(model_path) / "jang_config.json"
+        if _raw_jc_path.exists():
+            _raw_jc = _json.loads(_raw_jc_path.read_text())
+            if _raw_jc.get("weight_format") == "mxtq" or _raw_jc.get("format") == "mxtq":
+                raise ValueError(
+                    "vmlx#81: --smelt is not supported on JANGTQ "
+                    "(weight_format=mxtq) models. JANGTQ uses custom "
+                    "TurboQuantLinear modules with codebook weights that "
+                    "smelt partial-expert loading cannot subset.\n"
+                    "\n"
+                    "Workarounds:\n"
+                    "  (1) Use the standard JANG variant of this model "
+                    "(e.g. MiniMax-M2.7-JANG_2L instead of "
+                    "MiniMax-M2.7-JANGTQ). Smelt works there.\n"
+                    "  (2) Drop --smelt. JANGTQ already quantizes below "
+                    "2 bits effective via P3/P15/P17/P18 Metal kernels — "
+                    "smelt's memory savings are largely subsumed.\n"
+                )
+    except FileNotFoundError:
+        pass  # not a JANG model at all — let downstream handle
+
     path = Path(model_path)
     t0 = time.perf_counter()
     logger.info("Smelt loading %s (expert_percent=%d)", path.name, expert_percent)

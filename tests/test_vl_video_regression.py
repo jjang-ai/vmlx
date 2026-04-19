@@ -1650,3 +1650,95 @@ class TestVmlx83JitWarmupFailureRollback:
         assert "_pre_compile_backup_vlm" in src, "VLM rollback capture missing"
         # Rollback must fire in warmup except branch
         assert "rolling back" in src.lower(), "rollback log anchor missing"
+
+
+class TestVmlx81SmeltAndFlashMoeOnJangtq:
+    """vmlx#81: JANGTQ (weight_format=mxtq) with --smelt or --flash-moe
+    previously produced cryptic errors:
+      - smelt: "missing 'format' field. Expected: jang, jjqf, mxq"
+      - flash-moe: silent skip with "no MoE layers" OR downstream
+        "missing block_sparse_moe.experts.N.w1.weight"
+
+    Both are the same class — JANGTQ stores expert weights as codebook-
+    packed .tq_packed/.tq_norms tensors, not the .weight/.scales/.biases
+    layout that smelt and flash-moe scan for.
+
+    Fix: detect weight_format=mxtq in jang_config.json at the top of
+    each entry point, emit a clear error/warning citing the alternative
+    (use JANG_ variant or drop the flag). No silent fall-through.
+    """
+
+    def test_smelt_load_on_jangtq_raises_actionable_error(self, tmp_path):
+        """smelt_load() on an mxtq model must raise ValueError citing vmlx#81."""
+        import json
+        # Minimal JANGTQ-shaped config
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2, "weight_format": "mxtq", "mxtq_seed": 42,
+        }))
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5_moe",
+            "architectures": ["Qwen3_5MoeForCausalLM"],
+        }))
+        from vmlx_engine.utils.smelt_loader import smelt_load
+        with pytest.raises(ValueError, match=r"vmlx#81.*--smelt"):
+            smelt_load(str(tmp_path), expert_percent=50)
+
+    def test_smelt_error_names_workaround(self, tmp_path):
+        """Error text must tell the user what to do next."""
+        import json
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2, "weight_format": "mxtq",
+        }))
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax_m2",
+        }))
+        from vmlx_engine.utils.smelt_loader import smelt_load
+        try:
+            smelt_load(str(tmp_path), expert_percent=50)
+        except ValueError as e:
+            msg = str(e)
+            assert "JANG_" in msg, "must point to JANG_ alternative"
+            assert "TurboQuantLinear" in msg, "must explain why"
+            return
+        pytest.fail("expected ValueError")
+
+    def test_flash_moe_server_path_detects_jangtq(self):
+        """server.py flash-moe setup must detect JANGTQ before calling
+        ExpertIndex.build (which would find 0 MoE layers silently)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Locate _apply_flash_moe_patching vicinity — the server-side
+        # entry point that wires the flash-moe loader onto the engine.
+        idx = src.find("def _apply_flash_moe_patching")
+        assert idx > 0, "flash-moe setup entry point missing"
+        window = src[idx:idx + 4500]
+        # vmlx#81 JANGTQ detection must exist inside the setup function
+        assert "vmlx#81" in window, (
+            "flash-moe setup must carry vmlx#81 JANGTQ detection"
+        )
+        assert 'weight_format") == "mxtq"' in window, (
+            "flash-moe JANGTQ detection must check weight_format=mxtq"
+        )
+
+    def test_non_jangtq_jang_model_not_affected(self, tmp_path):
+        """Regression guard: a normal JANG (not JANGTQ) model must NOT
+        trigger the vmlx#81 early-exit. It should proceed past the
+        detection and fail for a different, downstream reason (missing
+        safetensors here), NOT with vmlx#81 ValueError."""
+        import json
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2, "format": "jang",  # standard JANG, NOT mxtq
+        }))
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5_moe",
+        }))
+        from vmlx_engine.utils.smelt_loader import smelt_load
+        try:
+            smelt_load(str(tmp_path), expert_percent=50)
+        except ValueError as e:
+            assert "vmlx#81" not in str(e), (
+                "standard JANG must not trigger vmlx#81 guard"
+            )
+        except Exception:
+            pass  # expected: downstream failure loading actual weights

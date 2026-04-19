@@ -1268,6 +1268,33 @@ def _apply_flash_moe_patching():
         from .api.utils import resolve_to_local_path
 
         resolved_path = resolve_to_local_path(_model_path or _model_name)
+
+        # vmlx#81: if this is a JANGTQ (weight_format=mxtq) model, the
+        # ExpertIndex scan will find 0 MoE layers because JANGTQ stores
+        # weights as tq_packed / tq_norms / tq_bits, not the standard
+        # .weight / .scales / .biases suffixes the flash-moe loader
+        # relies on. Previously this just silently skipped with "no MoE
+        # layers, skipping", which was misleading. Detect + log clearly.
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _jc = _json.loads((_Path(resolved_path) / "jang_config.json").read_text())
+            if _jc.get("weight_format") == "mxtq" or _jc.get("format") == "mxtq":
+                logger.warning(
+                    "vmlx#81: --flash-moe is not supported on JANGTQ "
+                    "(weight_format=mxtq) models. JANGTQ stores expert weights "
+                    "as codebook-packed tq_packed tensors; flash-moe's "
+                    "on-demand loader expects standard .weight/.scales/.biases "
+                    "safetensor keys. Skipping flash-moe setup. "
+                    "Use the standard JANG_* variant of this model for "
+                    "flash-moe, or drop --flash-moe (JANGTQ is already "
+                    "sub-2-bit effective)."
+                )
+                _flash_moe_loader = None
+                return
+        except (FileNotFoundError, ValueError, KeyError):
+            pass  # not JANG or not resolvable — let downstream handle
+
         ei = ExpertIndex.build(resolved_path)
 
         if ei.num_moe_layers == 0:
