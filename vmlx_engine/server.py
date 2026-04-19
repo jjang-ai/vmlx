@@ -970,6 +970,74 @@ async def check_rate_limit(request: Request):
         )
 
 
+# mlxstudio#63: kernel panic on heavy VS Code OAICopilot traffic.
+# On macOS, continuous-batching under extreme unified-memory pressure can
+# trip an IOKit command-buffer failure that escalates to a whole-system
+# kernel panic. We reject new inference requests with 503 BEFORE Metal
+# allocates new KV blocks when system memory is critically low. This is
+# recoverable (503 + Retry-After) whereas a kernel panic is not.
+#
+# Threshold: default 97% RAM used (very high — only triggers when the
+# machine is already in swap thrash territory). Overridable via
+# VMLX_MEMORY_PRESSURE_REJECT_PCT env var. Disable entirely with
+# VMLX_MEMORY_PRESSURE_GUARD=0.
+_last_pressure_log: float = 0.0
+
+
+async def check_memory_pressure(request: Request):
+    """Reject new inference requests when unified memory is critically low.
+
+    Wired onto all inference entry points (chat/completions, completions,
+    responses, messages, api/chat, api/generate). Returns 503 with
+    Retry-After=5 so well-behaved clients back off and retry.
+
+    Skipped entirely when VMLX_MEMORY_PRESSURE_GUARD=0. The threshold
+    defaults to 97% used — catastrophic territory, not a normal load.
+    """
+    if os.environ.get("VMLX_MEMORY_PRESSURE_GUARD", "1") == "0":
+        return
+    try:
+        import psutil
+    except ImportError:
+        return
+    try:
+        threshold_pct = float(
+            os.environ.get("VMLX_MEMORY_PRESSURE_REJECT_PCT", "97")
+        )
+    except (TypeError, ValueError):
+        threshold_pct = 97.0
+    try:
+        mem = psutil.virtual_memory()
+    except Exception:
+        return
+    if mem.percent < threshold_pct:
+        return
+
+    # Log pressure rejections, but at most once per 5 s so we don't spam
+    # the log under sustained overload.
+    global _last_pressure_log
+    now = time.monotonic()
+    if now - _last_pressure_log > 5.0:
+        _last_pressure_log = now
+        logger.warning(
+            f"mlxstudio#63 memory-pressure reject: {mem.percent:.1f}% used "
+            f"(threshold {threshold_pct:.1f}%); rejecting inference "
+            f"request with 503 to prevent Metal OOM / kernel panic. "
+            f"available={mem.available / (1024**3):.1f}GB"
+        )
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Server memory pressure too high "
+            f"({mem.percent:.0f}%) — rejecting to prevent Metal OOM. "
+            f"Retry in a few seconds, or reduce concurrent load. "
+            f"Set VMLX_MEMORY_PRESSURE_REJECT_PCT to tune (default 97), "
+            f"or VMLX_MEMORY_PRESSURE_GUARD=0 to disable."
+        ),
+        headers={"Retry-After": "5"},
+    )
+
+
 async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verify API key if authentication is enabled."""
     global _auth_warning_logged
@@ -2747,7 +2815,11 @@ async def list_models() -> ModelsResponse:
 
 @app.post(
     "/v1/messages",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
 )
 async def create_anthropic_message(
     fastapi_request: Request,
@@ -3352,7 +3424,13 @@ async def ollama_show(fastapi_request: Request):
     }
 
 
-@app.post("/api/chat", dependencies=[Depends(verify_api_key)])
+@app.post(
+    "/api/chat",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
+)
 async def ollama_chat(fastapi_request: Request):
     """Ollama-compatible chat — translates to /v1/chat/completions internally."""
     from .api.ollama_adapter import (
@@ -3542,7 +3620,13 @@ async def ollama_chat(fastapi_request: Request):
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
 
 
-@app.post("/api/generate", dependencies=[Depends(verify_api_key)])
+@app.post(
+    "/api/generate",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
+)
 async def ollama_generate(fastapi_request: Request):
     """Ollama-compatible generate — translates to /v1/completions internally."""
     body = await fastapi_request.json()
@@ -3652,7 +3736,11 @@ _image_gen_lock: asyncio.Lock | None = (
 
 @app.post(
     "/v1/images/generations",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
 )
 async def create_image(request: Request):
     """
@@ -3855,7 +3943,11 @@ async def create_image(request: Request):
 
 @app.post(
     "/v1/images/edits",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
 )
 async def create_image_edit(request: Request):
     """Edit an image using an instruction and a source image.
@@ -4431,7 +4523,12 @@ async def list_voices(model: str = "kokoro"):
 
 
 @app.post(
-    "/v1/completions", dependencies=[Depends(verify_api_key), Depends(check_rate_limit)]
+    "/v1/completions",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
 )
 async def create_completion(request: CompletionRequest):
     """Create a text completion."""
@@ -4523,7 +4620,11 @@ async def create_completion(request: CompletionRequest):
 
 @app.post(
     "/v1/chat/completions",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
     response_model_exclude_none=True,
 )
 async def create_chat_completion(
@@ -5273,7 +5374,11 @@ def _responses_input_to_messages(
 
 @app.post(
     "/v1/responses",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),  # mlxstudio#63
+    ],
 )
 async def create_response(
     request: ResponsesRequest,

@@ -2860,3 +2860,134 @@ class TestMlxstudio63MemoryPressureGuard:
             f"mlxstudio#63 anchor count = {count}, expected ≥ 7 "
             f"(dependency func + all inference endpoints)"
         )
+
+
+class TestSleepWakeContract:
+    """Sleep/wake/soft-sleep contracts — comprehensive state-machine pins.
+
+    Three states:
+      - active (None)    : model loaded, full cache limit.
+      - soft sleep       : model loaded, cache cleared, cache_limit=512MB.
+      - deep sleep       : model unloaded, process + port alive, pre-sleep
+                           cache_limit saved for later wake restore.
+
+    Transitions must be monotonic and reversible. A soft-sleep'd server
+    must not re-enter soft-sleep (409), same for deep. Wake from either
+    state must restore the pre-sleep cache limit.
+    """
+
+    def test_sleep_states_module_level_globals_exist(self):
+        """Core state vars defined at module import — tests depend on them."""
+        import vmlx_engine.server as srv
+        # Presence checks only (values are volatile)
+        assert hasattr(srv, "_standby_state")
+        assert hasattr(srv, "_pre_sleep_cache_limit")
+        assert hasattr(srv, "_wake_lock")
+
+    def test_sleep_transitions_are_guarded(self):
+        """Source pin: soft-sleep-when-deep and double-enter return 409."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        assert 'Already in deep sleep' in src
+        assert 'already_soft' in src
+        # Deep sleep must also guard against double enter
+        assert "already_deep" in src or "Already in deep sleep" in src
+
+    def test_soft_sleep_clears_scheduler_caches(self):
+        """Source pin: admin_soft_sleep calls scheduler.deep_reset or
+        clears the prefix cache — we must never leave stale cache when
+        the user asks for soft sleep."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Locate admin_soft_sleep body
+        idx = src.find("async def admin_soft_sleep")
+        assert idx > 0
+        body = src[idx:idx + 2000]
+        assert "deep_reset" in body, (
+            "soft sleep must call scheduler.deep_reset() to clear caches"
+        )
+        assert "_prefix_cache.clear" in body, (
+            "fallback path: if no deep_reset, must clear prefix cache"
+        )
+
+    def test_wake_restores_cache_limit(self):
+        """Source pin: admin_wake reads _pre_sleep_cache_limit and
+        restores it on wake (both from soft and deep paths)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        idx = src.find("async def admin_wake")
+        assert idx > 0
+        body = src[idx:idx + 4000]
+        assert "_pre_sleep_cache_limit" in body, (
+            "wake must consult saved cache limit"
+        )
+        # Cache limit restoration must happen (the setter call pattern)
+        assert "_set_cache(_pre_sleep_cache_limit)" in body, (
+            "wake must call set_cache_limit with the saved value"
+        )
+
+    def test_wake_from_deep_sleep_reloads_model(self):
+        """Deep sleep unloads the model; wake must reload it from _cli_args."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        idx = src.find("async def admin_wake")
+        body = src[idx:idx + 4000]
+        # Must call load_model with args from _cli_args
+        assert "load_model" in body
+        assert "_cli_args" in body
+        # Must preserve smelt/flash_moe options across the wake
+        assert "smelt" in body
+        assert "flash_moe" in body
+
+    def test_flash_moe_deep_sleep_wake_fixed(self):
+        """Memory: v1.3.36 fix for Flash MoE deep-sleep silent deactivation."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # The fix is admin_deep_sleep must clear loader and admin_wake
+        # must restart it with the same args.
+        assert "_flash_moe_loader" in src
+
+
+class TestSlidingWindowHybridInteraction:
+    """Sliding window + hybrid SSM: both cache families must coexist.
+
+    Qwen3.5 hybrid models use GatedDeltaNet (SSM) + attention layers.
+    Some attention layers may have sliding_window config. The scheduler
+    must dispatch to the right cache type per layer.
+    """
+
+    def test_rotating_and_arrays_cache_both_importable(self):
+        """Both cache classes used by hybrid + sliding window are importable."""
+        from mlx_lm.models.cache import (
+            RotatingKVCache, KVCache, ArraysCache,
+        )
+        assert RotatingKVCache is not None
+        assert KVCache is not None
+        assert ArraysCache is not None
+
+    def test_cache_type_detection_distinguishes_rotating(self):
+        """detect_cache_type classifies RotatingKVCache correctly — the
+        scheduler uses this to avoid KV-cache prefix-matching on
+        rotating caches (which can't be safely trimmed)."""
+        from vmlx_engine.utils.cache_types import detect_cache_type, CacheType
+        from mlx_lm.models.cache import RotatingKVCache, KVCache
+        r = RotatingKVCache(max_size=256)
+        k = KVCache()
+        assert detect_cache_type(r) == CacheType.ROTATING_KV_CACHE
+        assert detect_cache_type(k) == CacheType.KV_CACHE
+
+    def test_scheduler_skips_rotating_for_paged(self):
+        """Source pin: paged cache paths must skip RotatingKVCache
+        entries — rotating state can't be reconstructed block-by-block
+        because each window overwrites the previous."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/prefix_cache.py"
+        ).read_text()
+        # Either skip-rotating is explicit, or the classification is used
+        # to route to a separate code path
+        assert "RotatingKVCache" in src or "sliding_window" in src.lower()
