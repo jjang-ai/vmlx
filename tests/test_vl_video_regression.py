@@ -4639,3 +4639,116 @@ class TestVmlx70BulkDeleteChats:
             "undefined when no filter wipes cross-model, passing "
             "{modelPath} when filter is active wipes just that model"
         )
+
+
+class TestMs75HuggingFaceMirrorEndpoint:
+    """ms#75: ModelScope / HuggingFace mirror support for users in
+    mainland China (or behind any restrictive network).
+
+    > For users in mainland China, downloading models from Hugging Face
+    > is often extremely slow or fails due to network limitations.
+
+    Solution: `hf_endpoint` setting routes ALL HF traffic (downloads +
+    API) through an HF-protocol-compatible mirror. hf-mirror.com is
+    the standard China-based mirror (no new client library needed).
+    The `huggingface_hub` Python library respects the `HF_ENDPOINT`
+    env var natively, so the download pipeline reroutes automatically
+    when the env var is set.
+    """
+
+    def test_main_process_exposes_getHfBaseUrl(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        assert "export function getHfBaseUrl()" in src, (
+            "getHfBaseUrl helper missing — callers would need to reimplement "
+            "the setting read + slash-strip"
+        )
+        # Must read the setting and strip trailing slash
+        assert 'db.getSetting("hf_endpoint")' in src
+        assert "replace(/\\/+$/" in src, (
+            "trailing-slash strip required — otherwise concatenation "
+            "with '/api/...' produces '//api/...'"
+        )
+        # Must fall back to the canonical URL when unset
+        assert 'return "https://huggingface.co"' in src
+
+    def test_download_passes_hf_endpoint_env(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        assert 'downloadEnv.HF_ENDPOINT = hfEndpoint.trim()' in src, (
+            "HF_ENDPOINT must be forwarded to the download subprocess — "
+            "that's the env var huggingface_hub reads"
+        )
+        assert 'db.getSetting("hf_endpoint")' in src
+
+    def test_all_fetch_sites_mirror_aware(self):
+        """Every direct `https://huggingface.co` fetch in the main
+        process must route through getHfBaseUrl()."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        # Count hardcoded HF URLs outside of comments/fallback/rewrites
+        # The only remaining literal `https://huggingface.co` should be
+        # in the `return "https://huggingface.co"` default fallback +
+        # comment strings — no LIVE fetches should hit it directly.
+        import re
+        # Find all `fetch(\`https://huggingface.co/...)` literals
+        fetch_literals = re.findall(
+            r'fetch\(\s*`https://huggingface\.co',
+            src,
+        )
+        assert len(fetch_literals) == 0, (
+            f"Still have {len(fetch_literals)} hardcoded HF URLs in fetch calls — "
+            f"they bypass the mirror setting"
+        )
+        # Find `\`https://huggingface.co/api/...` used as URL strings
+        url_literals = re.findall(
+            r'`https://huggingface\.co/api/',
+            src,
+        )
+        assert len(url_literals) == 0, (
+            f"Still have {len(url_literals)} hardcoded HF API URL strings — "
+            f"they bypass the mirror setting"
+        )
+        # getHfBaseUrl() must be USED, not just defined
+        usages = src.count("getHfBaseUrl()")
+        assert usages >= 5, (
+            f"getHfBaseUrl() must be called ≥ 5 times (search × 2 + "
+            f"recommended + collection + README); found {usages}"
+        )
+
+    def test_csp_allows_mirror_hosts(self):
+        """Content Security Policy must whitelist hf-mirror.com and
+        modelscope.cn or README images from those hosts render broken."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/index.ts"
+        ).read_text()
+        # Both mirror domains must appear in img-src AND connect-src
+        img_src_idx = src.find("img-src")
+        connect_src_idx = src.find("connect-src")
+        img_src_line = src[img_src_idx:src.find(";", img_src_idx)]
+        connect_src_line = src[connect_src_idx:src.find(";", connect_src_idx)]
+        for host in ["hf-mirror.com", "modelscope.cn"]:
+            assert host in img_src_line, f"CSP img-src missing {host}"
+            assert host in connect_src_line, f"CSP connect-src missing {host}"
+
+    def test_settings_ui_has_mirror_input_with_validation(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+        ).read_text()
+        # Anchor + state + save handler + UI field + one-click preset
+        assert "ms#75" in src
+        assert "const [hfEndpoint, setHfEndpoint]" in src
+        assert "handleSaveHfEndpoint" in src
+        # Validation — typo "hf-mirror.com" (no scheme) must not silently break
+        assert "https?:\\/\\/" in src, (
+            "save handler must validate scheme — otherwise a typo "
+            "silently corrupts HF_ENDPOINT and kills all downloads"
+        )
+        # One-click preset button for the standard China mirror
+        assert "hf-mirror.com" in src
+        assert "Use hf-mirror" in src
+        # Load saved value on mount
+        assert "window.api.settings.get('hf_endpoint')" in src
