@@ -1503,6 +1503,11 @@ Examples:
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
     )
+    # vmlx#75: reporter's `vmlx-engine serve ... --default-repetition-penalty
+    # 1.10` failed with `unrecognized arguments` on older binaries. The flag
+    # is registered here and validated in serve_command() (0.5..2.0 range
+    # matches user's 1.10 value). Paired with mlxstudio#76 diagnostic hint
+    # for cases where an older vmlx-engine shadows this one on PATH.
     serve_parser.add_argument(
         "--default-repetition-penalty",
         type=float,

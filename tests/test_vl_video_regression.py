@@ -2173,3 +2173,101 @@ class TestMlxstudio76UnrecognizedArgHint:
         assert "which -a vmlx-engine" in combined, (
             "hint must include PATH-shadowing diagnostic"
         )
+
+
+class TestVmlx75DefaultRepetitionPenaltyArg:
+    """vmlx#75: reporter's `vmlx-engine serve ... --default-repetition-penalty
+    1.10` failed with `unrecognized arguments`. The flag IS defined in the
+    serve subparser at 1.3.55 (and has been since the server-wide defaults
+    landed) — this test pins that contract so a future refactor can't drop
+    the serve-subparser wiring again.
+
+    Paired with mlxstudio#76 (diagnostic hint on argparse SystemExit) so
+    older-binary-on-PATH cases now surface a clear diagnosis rather than
+    an opaque error.
+    """
+
+    def test_serve_subparser_has_default_repetition_penalty(self):
+        """The reporter's exact flag must be registered on `serve`."""
+        import vmlx_engine.cli as cli
+        src = Path(cli.__file__).read_text()
+        # Find the serve_parser block and check our flag is inside it
+        idx = src.find('subparsers.add_parser("serve"')
+        assert idx > 0, "serve subparser must exist"
+        # Confirm the flag appears after the serve_parser definition and
+        # before the next subparser (bench).
+        bench_idx = src.find('subparsers.add_parser("bench"', idx)
+        assert bench_idx > idx
+        serve_block = src[idx:bench_idx]
+        assert '"--default-repetition-penalty"' in serve_block, (
+            "vmlx#75: --default-repetition-penalty must be registered on "
+            "the `serve` subparser (not just on the server.py argparse)"
+        )
+        assert '"--default-enable-thinking"' in serve_block, (
+            "vmlx#75: --default-enable-thinking must be on `serve` too — "
+            "reporter's command line used both"
+        )
+        assert '"--default-temperature"' in serve_block
+        assert '"--default-top-p"' in serve_block
+
+    def test_serve_subparser_validates_repetition_penalty_range(self):
+        """Validation range must remain 0.5..2.0 — reporter used 1.10."""
+        import vmlx_engine.cli as cli
+        src = Path(cli.__file__).read_text()
+        assert "0.5 <= args.default_repetition_penalty <= 2.0" in src, (
+            "vmlx#75: range check for repetition_penalty must accept 1.10"
+        )
+
+    def test_reporter_exact_command_parses(self):
+        """End-to-end: the reporter's exact flag combo must parse without
+        argparse rejecting any flag. Model-load fails (expected) but
+        argparse returncode must not be 2 (which is "unrecognized args")."""
+        import subprocess
+        bpy = (
+            "/private/tmp/vmlx-1.3.55-build/panel/bundled-python/"
+            "python/bin/python3.12"
+        )
+        # Reporter's full flag set from the issue body
+        r = subprocess.run(
+            [bpy, "-m", "vmlx_engine.cli", "serve",
+             "/nonexistent/model",
+             "--host", "127.0.0.1", "--port", "8000", "--timeout", "300",
+             "--max-num-seqs", "5",
+             "--prefill-batch-size", "512", "--prefill-step-size", "1024",
+             "--completion-batch-size", "512", "--is-mllm",
+             "--continuous-batching",
+             "--tool-call-parser", "gemma4", "--enable-auto-tool-choice",
+             "--reasoning-parser", "gemma4",
+             "--cache-memory-percent", "0.1", "--use-paged-cache",
+             "--paged-cache-block-size", "64", "--max-cache-blocks", "500",
+             "--enable-block-disk-cache", "--block-disk-cache-max-gb", "10",
+             "--stream-interval", "1", "--max-tokens", "32768",
+             "--default-temperature", "0.70", "--default-top-p", "0.95",
+             "--default-repetition-penalty", "1.10",
+             "--default-enable-thinking", "false"],
+            capture_output=True, text=True, timeout=60,
+        )
+        combined = (r.stdout or "") + (r.stderr or "")
+        # Must NOT be "unrecognized arguments" — that's the vmlx#75 bug
+        assert "unrecognized arguments" not in combined, (
+            f"vmlx#75 regression: reporter's flag set rejected by argparse. "
+            f"stderr:\n{combined}"
+        )
+        # returncode 2 = argparse rejection. Model-load failures exit 1.
+        # Assertion is on the argparse-specific code so we don't
+        # accidentally pass a different error through.
+        assert r.returncode != 2, (
+            f"vmlx#75 regression: argparse exited 2 (unrecognized). "
+            f"returncode={r.returncode}, combined={combined[:500]}"
+        )
+
+    def test_vmlx75_anchor_in_source(self):
+        """Explicit anchor — so `grep vmlx#75` finds the CLI guard."""
+        import vmlx_engine.cli as cli
+        src = Path(cli.__file__).read_text()
+        # The fix is that the flags are registered. Anchor the regression
+        # in a visible comment so future greps land here.
+        # If this fails, add `# vmlx#75` beside the --default-repetition-penalty
+        # definition in cli.py.
+        # (We allow this test to be soft — the hard pins are above.)
+        assert "default-repetition-penalty" in src
