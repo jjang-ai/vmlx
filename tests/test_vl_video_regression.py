@@ -2085,6 +2085,7 @@ class TestVmlx96RelocatedMfluxModels:
     def test_unknown_model_still_errors_clearly(self):
         """Regression guard: a genuinely-unknown model still fails, but
         with the improved error listing known keys."""
+        pytest.importorskip("mflux")
         from vmlx_engine.image_gen import ImageGenEngine
         e = ImageGenEngine()
         with pytest.raises(ValueError) as exc_info:
@@ -2100,6 +2101,20 @@ class TestVmlx96RelocatedMfluxModels:
         assert "z-image" in str(exc_info.value), (
             "known keys list must include the canonical names"
         )
+
+    def test_unknown_model_error_format_source_pin(self):
+        """Source-anchor alternative to the live call above — runs even
+        without mflux installed. Verifies the error message template
+        includes `Known keys` and lists canonical class names."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/image_gen.py"
+        ).read_text()
+        assert "Known keys:" in src, (
+            "vmlx#96 regression: error template must surface known keys"
+        )
+        # The keys list is built from _NAME_TO_CLASS at raise-time; pin
+        # the variable name so the string stays live-sourced.
+        assert "sorted(_NAME_TO_CLASS.keys())" in src
 
     def test_anchor_and_regex_strips_in_source(self):
         """Source pin: vmlx#96 anchor and the regex strip sequence both
