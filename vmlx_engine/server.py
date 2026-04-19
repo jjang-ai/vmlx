@@ -5012,6 +5012,23 @@ async def create_chat_completion(
     _tool_choice = request.tool_choice
     _suppress_tools = _tool_choice == "none"
 
+    # response_format = json_object / json_schema implies the output IS the
+    # structured data — not a tool call. The generic tool-call parser runs
+    # on any JSON-ish output and is happy to interpret `{"name":"alice",
+    # "age":30}` as a tool call `alice()`. Suppress the tool parser when
+    # the client asked for JSON output and didn't pass tools themselves.
+    # If both tools AND response_format are present, tool parsing still
+    # runs (structured tool-call arguments are allowed).
+    if not request.tools and not _suppress_tools:
+        _rf = request.response_format
+        _rf_type = None
+        if isinstance(_rf, dict):
+            _rf_type = _rf.get("type")
+        elif _rf is not None and hasattr(_rf, "type"):
+            _rf_type = getattr(_rf, "type", None)
+        if _rf_type in ("json_object", "json_schema"):
+            _suppress_tools = True
+
     # Merge MCP tools with user-provided tools
     all_tools = []
 
@@ -5702,6 +5719,23 @@ async def create_response(
     # "required" or specific tool dict are handled post-generation.
     _tool_choice = request.tool_choice
     _suppress_tools = _tool_choice == "none"
+
+    # response_format = json_object / json_schema implies the output IS the
+    # structured data — not a tool call. The generic tool-call parser runs
+    # on any JSON-ish output and is happy to interpret `{"name":"alice",
+    # "age":30}` as a tool call `alice()`. Suppress the tool parser when
+    # the client asked for JSON output and didn't pass tools themselves.
+    # If both tools AND response_format are present, tool parsing still
+    # runs (structured tool-call arguments are allowed).
+    if not request.tools and not _suppress_tools:
+        _rf = request.response_format
+        _rf_type = None
+        if isinstance(_rf, dict):
+            _rf_type = _rf.get("type")
+        elif _rf is not None and hasattr(_rf, "type"):
+            _rf_type = getattr(_rf, "type", None)
+        if _rf_type in ("json_object", "json_schema"):
+            _suppress_tools = True
 
     # Merge MCP tools with user-provided tools
     all_tools = []

@@ -5429,3 +5429,95 @@ class TestAnthropicAssistantToolCallsEmptyContent:
         out = _convert_assistant_message(msg)
         assert out.content is None
         assert out.tool_calls is None
+
+
+class TestResponseFormatJsonSuppressesToolParser:
+    """When client sends `response_format: {"type": "json_object"}` or
+    json_schema, the generic tool-call parser must NOT treat the output
+    as a tool call. Previously the output `{"name":"alice","age":30}`
+    got parsed as a tool_call `alice()` and content was returned as null.
+
+    Live-repro 2026-04-19 on Qwen3-0.6B-8bit /v1/chat/completions.
+    """
+
+    def test_source_has_rf_tool_suppression(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Both non-stream + stream paths must suppress tools on json output
+        count = src.count('_rf_type in ("json_object", "json_schema")')
+        assert count >= 2, (
+            f"response_format json suppression must live in BOTH non-stream "
+            f"and stream paths of chat completions; found {count}"
+        )
+        assert "if _rf_type in" in src
+
+    def test_response_format_guards_only_when_no_tools(self):
+        """If caller passes both tools AND response_format, tool parsing
+        should still run (tool_call arguments are JSON too, that's fine)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # The guard must check `not request.tools`
+        count = src.count("if not request.tools and not _suppress_tools:")
+        assert count >= 2, (
+            "must guard on `not request.tools` so tool-using clients can "
+            "still pass response_format for structured tool arguments"
+        )
+
+
+class TestOllamaFormatJsonTranslation:
+    """Ollama's `format: "json"` (or schema dict) must translate to OpenAI
+    `response_format` so the underlying chat completions path emits pure
+    JSON instead of fenced ```json blocks.
+
+    Live-repro against Qwen3 /api/chat: model returned
+      '```json\\n{\\n  "key": "value"\\n}\\n```'
+    instead of the expected
+      '{"key": "value"}'
+    """
+
+    def test_format_json_string_translates(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        req = ollama_chat_to_openai({
+            "model": "q",
+            "messages": [{"role": "user", "content": "hi"}],
+            "format": "json",
+        })
+        rf = req.get("response_format")
+        assert rf == {"type": "json_object"}, (
+            f"format='json' must translate to response_format json_object, "
+            f"got {rf!r}"
+        )
+
+    def test_format_schema_dict_translates(self):
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+        req = ollama_chat_to_openai({
+            "model": "q",
+            "messages": [{"role": "user", "content": "hi"}],
+            "format": schema,
+        })
+        rf = req.get("response_format")
+        assert rf["type"] == "json_schema"
+        assert rf["json_schema"]["schema"] == schema
+
+    def test_no_format_no_response_format(self):
+        """Regression guard: requests WITHOUT format field don't gain a
+        response_format field."""
+        from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+        req = ollama_chat_to_openai({
+            "model": "q",
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        assert "response_format" not in req
+
+    def test_api_generate_also_translates(self):
+        """Parity: /api/generate path must also forward format=json."""
+        from vmlx_engine.api.ollama_adapter import ollama_generate_to_openai
+        req = ollama_generate_to_openai({
+            "model": "q",
+            "prompt": "hi",
+            "format": "json",
+        })
+        assert req.get("response_format") == {"type": "json_object"}

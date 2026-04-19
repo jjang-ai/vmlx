@@ -82,6 +82,24 @@ def ollama_chat_to_openai(body: dict) -> dict:
     # Ollama 0.7+ supports think at top level: {"model": "...", "think": true}
     if body.get("think") is not None:
         req["enable_thinking"] = body["think"]
+    # Ollama's `format` field → OpenAI `response_format`. Two shapes:
+    #   "format": "json"     → {"type": "json_object"}
+    #   "format": <schema>   → {"type": "json_schema", "json_schema": {...}}
+    # Without this translation the model emits ```json ``` fences around
+    # its output and Ollama clients that parse .message.content as JSON
+    # blow up.
+    _fmt = body.get("format")
+    if _fmt == "json":
+        req["response_format"] = {"type": "json_object"}
+    elif isinstance(_fmt, dict):
+        req["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ollama_schema",
+                "strict": False,
+                "schema": _fmt,
+            },
+        }
     return req
 
 
@@ -101,6 +119,15 @@ def ollama_generate_to_openai(body: dict) -> dict:
         req["top_p"] = opts["top_p"]
     if opts.get("stop"):
         req["stop"] = opts["stop"]
+    # /api/generate also forwards format=json → response_format
+    _fmt = body.get("format")
+    if _fmt == "json":
+        req["response_format"] = {"type": "json_object"}
+    elif isinstance(_fmt, dict):
+        req["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "ollama_schema", "strict": False, "schema": _fmt},
+        }
     return req
 
 
