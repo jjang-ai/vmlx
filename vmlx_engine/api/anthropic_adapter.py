@@ -173,7 +173,14 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         top_k=req.top_k,
         stop=req.stop_sequences,
         stream=req.stream,
-        stream_options=StreamOptions(include_usage=True) if req.stream else None,
+        # ms#79: always request usage in chunks. The non-streaming Anthropic
+        # path at server.py internally calls stream_chat_completion() and
+        # accumulates chunks — without include_usage=True here, the inner
+        # chunks never emit usage and the final /v1/messages response
+        # returns `{input_tokens: 0, output_tokens: 0}`. Claude Code uses
+        # these counts for rate-limit accounting and progress display, so
+        # zeroed usage looks like a broken request.
+        stream_options=StreamOptions(include_usage=True),
         tools=tools,
         tool_choice=tool_choice,
         enable_thinking=enable_thinking,

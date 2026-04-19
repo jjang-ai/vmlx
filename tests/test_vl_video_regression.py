@@ -3987,3 +3987,241 @@ class TestMlxstudio78MetalWorkingSetGuard:
         assert count >= 5, (
             f"expected ≥5 endpoints to wire the guard, found {count}"
         )
+
+
+class TestContinuousBatchingConcurrency:
+    """Continuous batching concurrency invariants — request lifecycle,
+    cancellation, batch queue safety under load."""
+
+    def test_scheduler_serializes_batches_via_event_loop(self):
+        """Scheduler runs under a single asyncio event loop. That's the
+        serialization — no explicit lock needed because the loop itself
+        guarantees only one coroutine mutates the batch state at a time.
+        This test pins that invariant: waiting/running queues must be
+        deque-backed (single-loop-safe), not naked list shared across
+        threads. If someone introduces threading without a lock, this
+        test catches the missing deque."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+        src = inspect.getsource(Scheduler)
+        # Waiting queue must be a deque (FCFS, loop-serialized)
+        assert "deque" in src, (
+            "Scheduler waiting/running queues must use deque for "
+            "single-event-loop FCFS ordering"
+        )
+
+    def test_abort_request_exists_and_returns_bool(self):
+        """abort_request API is the cancellation entry point."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+        assert hasattr(Scheduler, "abort_request")
+        src = inspect.getsource(Scheduler.abort_request)
+        # Must document return semantics (True/False)
+        assert "return True" in src or "-> bool" in src
+
+    def test_mllm_scheduler_defers_abort_to_avoid_metal_race(self):
+        """mllm_scheduler.abort_request must defer batch removal via
+        _pending_aborts instead of mid-metal-compute removal (from prior
+        audit — kept here as a corner-case guard)."""
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        import inspect
+        src = inspect.getsource(MLLMScheduler.abort_request)
+        assert "_pending_aborts" in src, (
+            "mllm abort must defer via _pending_aborts to avoid touching "
+            "cache tensors during Metal computation"
+        )
+
+    def test_engine_core_uses_asyncio_event_per_request(self):
+        """Engine core coordinates request completion via per-request
+        asyncio.Event (one Event per request_id in _finished_events).
+        That's the cross-coroutine signal without needing a shared
+        queue. If this goes away, add-another-primitive discipline
+        has been broken."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/engine_core.py"
+        ).read_text()
+        assert "asyncio.Event()" in src, (
+            "engine_core needs asyncio.Event per request for "
+            "cross-coroutine completion signaling"
+        )
+        assert "_finished_events" in src, (
+            "engine_core must track per-request Events in _finished_events"
+        )
+
+
+class TestAPIRequestCancellation:
+    """Stop button / client disconnect must propagate to engine cancellation."""
+
+    def test_stream_outputs_handles_client_disconnect(self):
+        """Server must recognize client disconnect and abort the in-flight
+        request. Critical for "stop generation" UX.
+
+        Uses Starlette's Request.is_disconnected() polled in the stream
+        loop — the preferred pattern over CancelledError, which wouldn't
+        fire reliably from SSE streaming generators.
+        """
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        hits = src.count("is_disconnected()")
+        assert hits >= 3, (
+            f"server must poll Request.is_disconnected() in ≥3 streaming "
+            f"endpoints (OpenAI chat, Responses, image gen/edit at minimum); "
+            f"found {hits}"
+        )
+
+    def test_api_utils_max_tokens_not_falsy_check(self):
+        """Previous regression: max_tokens=0 got silently replaced with
+        default because `X or default` treats 0 as falsy. Must use
+        `is not None` to preserve explicit-zero intent."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Target both call sites
+        import re
+        hits = re.findall(
+            r"max_tokens\s+if\s+\w+\.max_tokens\s+is\s+not\s+None",
+            src,
+        )
+        assert len(hits) >= 2, (
+            f"max_tokens `is not None` check required ≥ 2 call sites, "
+            f"found {len(hits)}"
+        )
+
+
+class TestModelUnloadOnShutdown:
+    """Process exit must release model weights + Metal pool to avoid
+    dangling allocations leaking across process restarts on the same
+    Tailscale node (common in the memory-enforcer auto-evict flow)."""
+
+    def test_engine_close_documented(self):
+        """Engine class must expose close()/shutdown() for graceful teardown."""
+        from vmlx_engine.engine_core import EngineCore
+        assert hasattr(EngineCore, "close"), (
+            "EngineCore must expose close() for graceful shutdown"
+        )
+
+    def test_batch_generator_close_releases_metal_limits(self):
+        """MLLMBatchGenerator.close restores pre-override wired + cache
+        limits — otherwise a second process on the same machine starts
+        from a bad global state."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+        import inspect
+        src = inspect.getsource(MLLMBatchGenerator.close)
+        assert "_old_wired_limit" in src
+        assert "_old_cache_limit" in src
+
+
+class TestPanelEngineIPCContract:
+    """Panel ↔ engine IPC shape contracts — the panel TS side and the
+    Python server must agree on field names / types.
+
+    When this drifts, the panel's console fills with type errors,
+    streaming dies, or features silently vanish."""
+
+    def test_panel_expects_reasoning_content_or_reasoning(self):
+        """Panel reads both reasoning_content (new) and reasoning (legacy/alias)
+        from streaming chunk delta.choices[].delta.{reasoning_content,reasoning}."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        assert "reasoning_content" in src
+        assert "delta" in src
+
+    def test_server_emits_reasoning_content_via_computed_field(self):
+        """ChatCompletionChunkDelta.reasoning_content is a computed
+        @property that delegates to self.reasoning, so both field names
+        on the wire point to the same internal value."""
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
+        d = ChatCompletionChunkDelta(content="x", reasoning="think")
+        dump = d.model_dump()
+        assert dump.get("reasoning_content") == "think"
+
+    def test_image_and_video_url_content_part_schemas(self):
+        """Request schema must accept both image_url and video_url — the
+        panel sends either depending on attachment kind (mlxstudio#69/97)."""
+        from vmlx_engine.api.models import ContentPart, ImageUrl
+        # image_url part
+        ip = ContentPart(type="image_url",
+                         image_url=ImageUrl(url="data:image/png;base64,AA"))
+        assert ip.image_url is not None
+        # video_url is also supported by the engine (may be via dict)
+        try:
+            from vmlx_engine.api.models import VideoUrl
+            vp = ContentPart(type="video_url",
+                             video_url=VideoUrl(url="data:video/mp4;base64,BB"))
+            assert vp.video_url is not None
+        except ImportError:
+            # Older versions shipped video_url as plain dict — still OK
+            pass
+
+
+class TestMs79AnthropicUsageTokens:
+    """ms#79 issue 4: "In Claude Code and OpenCode tools always can't be
+    used correctly, ！回复 appears".
+
+    Root cause found: `to_chat_completion(req)` in anthropic_adapter.py
+    set `stream_options=StreamOptions(include_usage=True) if req.stream
+    else None` — so non-streaming Anthropic requests had stream_options=
+    None. The /v1/messages server path then internally calls
+    stream_chat_completion() and accumulates chunks; without
+    include_usage=True, the inner OpenAI-format stream never emits
+    usage and the final response returns `{input_tokens: 0,
+    output_tokens: 0}`.
+
+    Claude Code uses these counts for rate-limit accounting and progress
+    display. Zeroed usage looks like a broken request and contributes
+    to the "model auto-stop" / "！回复" user-facing failure mode.
+
+    Fix: always request include_usage=True in the internal chat_req,
+    regardless of the outer req.stream flag.
+    """
+
+    def test_non_streaming_always_includes_usage(self):
+        """to_chat_completion must always set include_usage=True so the
+        internal stream emits usage for both streaming and non-streaming
+        Anthropic requests."""
+        from vmlx_engine.api.anthropic_adapter import to_chat_completion
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest
+
+        # Non-stream request — the bug case
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            stream=False,
+        )
+        chat_req = to_chat_completion(req)
+        assert chat_req.stream_options is not None, (
+            "ms#79: non-streaming Anthropic must still set stream_options "
+            "so the internal stream emits usage tokens"
+        )
+        assert chat_req.stream_options.include_usage is True, (
+            "ms#79: include_usage must be True regardless of outer stream flag"
+        )
+
+    def test_streaming_also_includes_usage(self):
+        """Streaming case unchanged — Claude Code's incremental chunks
+        also need usage for live progress display."""
+        from vmlx_engine.api.anthropic_adapter import to_chat_completion
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest
+
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            stream=True,
+        )
+        chat_req = to_chat_completion(req)
+        assert chat_req.stream_options is not None
+        assert chat_req.stream_options.include_usage is True
+
+    def test_source_anchor(self):
+        """ms#79 anchor present so future refactors don't drop the fix."""
+        from pathlib import Path
+        import vmlx_engine.api.anthropic_adapter as m
+        src = Path(m.__file__).read_text()
+        assert "ms#79" in src, (
+            "ms#79 anchor missing — fix is at risk of silent revert"
+        )
+        assert "include_usage=True" in src
