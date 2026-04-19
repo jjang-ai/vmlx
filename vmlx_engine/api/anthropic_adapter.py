@@ -59,6 +59,10 @@ class AnthropicToolInput(BaseModel):
 
 
 class AnthropicRequest(BaseModel):
+    # Non-Anthropic passthrough: some vMLX clients send chat_template_kwargs
+    # even on /v1/messages so they can pick reasoning on/off without the
+    # Anthropic-native `thinking: {type: "enabled"}` schema. Accept it and
+    # fold into the internal ChatCompletionRequest below.
     """Anthropic Messages API request."""
     model: str
     messages: list[dict]
@@ -73,6 +77,12 @@ class AnthropicRequest(BaseModel):
     tool_choice: dict | None = None
     thinking: AnthropicThinking | dict | None = None
     metadata: dict | None = None
+    # Non-Anthropic passthrough for chat_template_kwargs (vMLX extension).
+    # Clients targeting /v1/messages but unaware of Anthropic's
+    # `thinking: {type}` schema can still forward enable_thinking, etc.
+    chat_template_kwargs: dict | None = None
+    # Non-Anthropic passthrough for explicit enable_thinking bool.
+    enable_thinking: bool | None = None
 
 
 # ─── Request Conversion ────────────────────────────────────────────────
@@ -151,18 +161,34 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         elif tc_type == "tool":
             tool_choice = {"type": "function", "function": {"name": req.tool_choice.get("name", "")}}
 
-    # Thinking/reasoning
+    # Thinking/reasoning — three sources, precedence order:
+    #   1. req.enable_thinking (vMLX extension, explicit bool)
+    #   2. req.thinking (Anthropic-native {type: enabled/disabled})
+    #   3. req.chat_template_kwargs.enable_thinking (vMLX extension fallback)
     enable_thinking = None
     chat_template_kwargs = None
+    # Start with the client's chat_template_kwargs passthrough (lowest prio)
+    if req.chat_template_kwargs:
+        chat_template_kwargs = dict(req.chat_template_kwargs)
+        if "enable_thinking" in chat_template_kwargs:
+            v = chat_template_kwargs.get("enable_thinking")
+            if isinstance(v, bool):
+                enable_thinking = v
+    # Anthropic-native thinking field (mid prio)
     if req.thinking:
         thinking = req.thinking if isinstance(req.thinking, dict) else req.thinking.model_dump()
         if thinking.get("type") == "enabled":
             enable_thinking = True
             # Forward budget_tokens as thinking_budget for Qwen3 models
             if thinking.get("budget_tokens"):
-                chat_template_kwargs = {"thinking_budget": thinking["budget_tokens"]}
+                if chat_template_kwargs is None:
+                    chat_template_kwargs = {}
+                chat_template_kwargs["thinking_budget"] = thinking["budget_tokens"]
         elif thinking.get("type") == "disabled":
             enable_thinking = False
+    # Explicit enable_thinking (highest prio)
+    if req.enable_thinking is not None:
+        enable_thinking = req.enable_thinking
 
     return ChatCompletionRequest(
         model=req.model,
