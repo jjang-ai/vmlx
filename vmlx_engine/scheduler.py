@@ -2674,9 +2674,14 @@ class Scheduler:
             try:
                 import mlx.core as mx
 
-                active_mem = mx.metal.get_active_memory()
+                # vmlx#94: prefer mx.* top-level APIs, fall back to mx.metal.*
+                # for pre-0.31 MLX builds. Same pattern used in server.py.
+                _get_active = getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+                _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
+
+                active_mem = _get_active()
                 if active_mem > 0 and len(self.running) > 0:
-                    max_mem = mx.metal.device_info().get(
+                    max_mem = _device_info().get(
                         "max_recommended_working_set_size", 0
                     )
                     if max_mem > 0 and active_mem / max_mem > 0.85:

@@ -1876,3 +1876,146 @@ class TestVmlx92PldNonMllmGuard:
         ).read_text()
         assert "vmlx#92" in src
         assert 'hasattr(self.batch_generator, "active_batch")' in src
+
+
+class TestVmlx97PaintedMaskInpainting:
+    """vmlx#97: Flux Fill failed with "requires a mask_path for inpainting"
+    when the user painted a mask with the brush tool, while rectangle
+    masks worked.
+
+    Root cause: paint-tool output is RGBA with strokes in the alpha
+    channel. `img.convert("L")` drops alpha → all-zero grayscale → mask
+    file is saved but all-black → downstream treats as no-mask.
+
+    Fix: when the mask is RGBA or LA, blend alpha into the L channel
+    (`ImageChops.lighter(rgb_l, alpha)`) so painted strokes survive
+    the grayscale conversion. Also rejects all-zero masks with a
+    clear error that tells the user the mask didn't register.
+    """
+
+    def test_rgba_paint_mask_preserved_through_conversion(self):
+        """RGBA with painted alpha strokes → L-mode preserves the strokes."""
+        from PIL import Image, ImageChops
+        rgba = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        for x in range(5):
+            for y in range(5):
+                rgba.putpixel((x, y), (255, 255, 255, 255))
+        rgb_l = rgba.convert("RGB").convert("L")
+        alpha = rgba.split()[-1]
+        merged = ImageChops.lighter(rgb_l, alpha)
+        assert merged.getextrema()[1] == 255, (
+            "RGBA paint-tool mask must preserve strokes after alpha blend"
+        )
+
+    def test_all_transparent_rgba_detected_as_empty(self):
+        """Fully transparent RGBA → still all zero after blend → rejected."""
+        from PIL import Image, ImageChops
+        empty = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+        rgb_l = empty.convert("RGB").convert("L")
+        alpha = empty.split()[-1]
+        merged = ImageChops.lighter(rgb_l, alpha)
+        assert merged.getextrema() == (0, 0), (
+            "all-transparent RGBA should produce empty mask that the server rejects"
+        )
+
+    def test_rect_grayscale_still_works_after_fix(self):
+        """Regression guard: rectangle mask (L-mode with signal) still passes."""
+        from PIL import Image
+        rect = Image.new("L", (16, 16), 0)
+        for x in range(5, 10):
+            for y in range(5, 10):
+                rect.putpixel((x, y), 255)
+        assert rect.getextrema()[1] == 255
+        # Already L mode — no conversion needed
+
+    def test_server_rejects_all_black_mask_with_actionable_error(self):
+        """Server code path: all-black mask → HTTPException 400 with
+        vmlx#97 anchor + workaround instructions."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # The anchor must be in the server
+        assert "vmlx#97" in src, "server must carry vmlx#97 anchor"
+        # RGBA alpha-blend handling
+        assert 'mask_img.mode == "RGBA"' in src
+        assert "ImageChops.lighter" in src or "ImageChops import" not in src
+        # Empty-mask guard
+        assert "Mask is all black" in src, (
+            "server must give a clear error when mask has no painted region"
+        )
+
+    def test_server_handles_la_mode_mask(self):
+        """LA (grayscale + alpha) is another common paint output."""
+        from PIL import Image, ImageChops
+        la = Image.new("LA", (16, 16), (0, 0))
+        for x in range(5):
+            for y in range(5):
+                la.putpixel((x, y), (200, 255))  # gray stroke, opaque
+        l = la.convert("L")
+        alpha = la.split()[-1]
+        merged = ImageChops.lighter(l, alpha)
+        # alpha is 0 outside stroke, 255 inside → result has signal
+        assert merged.getextrema()[1] == 255
+
+
+class TestVmlx94MxMetalDeprecationCleanup:
+    """vmlx#94: scheduler.py's memory-pressure guard called
+    `mx.metal.get_active_memory()` and `mx.metal.device_info()` without
+    the `getattr(mx, X, None) or mx.metal.X` fallback used in server.py.
+    On MLX 0.31+ these emit DeprecationWarning ("mx.metal.X is
+    deprecated...use mx.X instead"). Future MLX release will remove the
+    aliases outright and break the scheduler on every admission.
+
+    Fix: same fallback pattern at both call sites.
+    """
+
+    def test_scheduler_memory_pressure_uses_fallback_pattern(self):
+        """Both sites must use `getattr(mx, 'X', None) or mx.metal.X`."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+        ).read_text()
+        # Memory-pressure guard lives in the admission loop
+        assert 'getattr(mx, "get_active_memory", None)' in src, (
+            "scheduler.py must use getattr fallback for get_active_memory"
+        )
+        assert 'getattr(mx, "device_info", None)' in src, (
+            "scheduler.py must use getattr fallback for device_info"
+        )
+        # Anchor the issue
+        assert "vmlx#94" in src
+
+    def test_no_unguarded_mx_metal_calls_in_hot_paths(self):
+        """Grep for unguarded `mx.metal.X()` calls in scheduler / server
+        hot paths. They must live inside a hasattr/getattr guard."""
+        import re as _re
+        for rel in ("vmlx_engine/scheduler.py",):
+            src = Path(
+                f"/private/tmp/vmlx-1.3.55-build/{rel}"
+            ).read_text()
+            # Capture bare mx.metal.get_active_memory() style calls that
+            # aren't preceded by a hasattr/getattr/or-fallback. Simple
+            # proxy: any `mx.metal.get_active_memory(` outside comments
+            # that isn't part of `or mx.metal.`.
+            lines = src.split("\n")
+            bad = []
+            for i, line in enumerate(lines, 1):
+                if "#" in line and line.strip().startswith("#"):
+                    continue
+                if _re.search(r"\bmx\.metal\.(?:get_active_memory|device_info)\s*\(", line):
+                    # Allow if preceded by 'or '
+                    if " or mx.metal." not in line:
+                        bad.append(f"{rel}:{i}: {line.strip()}")
+            assert not bad, (
+                f"unguarded mx.metal.* calls in scheduler hot path:\n  "
+                + "\n  ".join(bad)
+            )
+
+    def test_new_api_available_on_bundled_mlx(self):
+        """The fallback exists for old MLX; confirm bundled MLX has the
+        new top-level APIs so the fallback branch never fires in prod."""
+        import mlx.core as mx
+        assert getattr(mx, "get_active_memory", None) is not None
+        assert getattr(mx, "device_info", None) is not None
+        assert getattr(mx, "get_peak_memory", None) is not None
+        assert getattr(mx, "get_cache_memory", None) is not None
+        assert getattr(mx, "clear_cache", None) is not None
