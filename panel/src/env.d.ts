@@ -92,6 +92,14 @@ declare global {
         ) => Promise<{ success: boolean; error?: string }>;
         getDownloadDir: () => Promise<string>;
         setDownloadDir: (dir: string) => Promise<{ success: boolean }>;
+        /** vmlx#57: delete a local model directory (path-gated). */
+        deleteLocal: (modelPath: string) => Promise<{
+          success: boolean;
+          error?: string;
+          deletedPath?: string;
+          freedBytes?: number;
+          alreadyGone?: boolean;
+        }>;
         browseDownloadDir: () => Promise<{ canceled: boolean; path?: string }>;
         onDownloadProgress: (
           callback: (data: { repoId: string; progress: string }) => void,

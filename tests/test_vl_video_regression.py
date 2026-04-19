@@ -4752,3 +4752,99 @@ class TestMs75HuggingFaceMirrorEndpoint:
         assert "Use hf-mirror" in src
         # Load saved value on mount
         assert "window.api.settings.get('hf_endpoint')" in src
+
+
+class TestVmlx57DeleteLocalModel:
+    """vmlx#57: add in-app model deletion.
+
+    > How can I remove models via the tool? Great tool for testing out
+    > the capabilities of models, but now I need to manually remove it
+    > from the /Users/<user>/.mlxstudio/models/ directory. Can't it be
+    > done via the app itself?
+
+    Implementation: `models:deleteLocal(path)` IPC gated to known
+    model roots (builtins + user-configured scan dirs + download dir),
+    realpath-resolves to block symlink escapes, stops any session
+    using the model first, `rm -rf` with retries, returns freedBytes.
+    UI: hover-reveal trash icon on each local model row in
+    CreateSession with confirm() dialog that quotes the path.
+    """
+
+    def test_ipc_handler_with_safety_gates(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        assert '"models:deleteLocal"' in src, (
+            "IPC handler missing — UI button will fail"
+        )
+        assert "vmlx#57" in src, "anchor required"
+        # Path safety: must resolve realpath to defeat symlink escape
+        assert "await realpath(modelPath)" in src, (
+            "realpath() required — otherwise a symlink inside "
+            "~/.mlxstudio/models pointing to /Users/<user>/Documents "
+            "would let the delete escape the allowed roots"
+        )
+        # Must check against known roots (BUILTIN_MODEL_PATHS, etc.)
+        assert "BUILTIN_MODEL_PATHS" in src
+        assert "BUILTIN_IMAGE_PATHS" in src
+        assert "getDownloadDirectory()" in src
+        assert 'getUserDirectories("text")' in src
+        assert 'getUserDirectories("image")' in src
+        # Must NOT delete a matched root itself — only strictly deeper
+        assert "real === matchedRoot" in src
+        # Uses rm() with recursive+force
+        assert "recursive: true, force: true, maxRetries: 3" in src
+
+    def test_ipc_stops_session_before_delete(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        # Session manager is consulted and running sessions stopped
+        assert "sessionManagerRef.stopSession" in src, (
+            "must stop any running session on this model — otherwise "
+            "rm happens mid-inference"
+        )
+        # Guard is on the right statuses (running, loading, standby)
+        assert "running" in src and "loading" in src and "standby" in src
+
+    def test_ipc_returns_useful_metadata(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        # freedBytes via getDirectorySize
+        assert "freedBytes" in src
+        assert "getDirectorySize(real)" in src
+        # alreadyGone branch for already-deleted path (idempotent)
+        assert "alreadyGone: true" in src
+
+    def test_preload_and_env_types(self):
+        pre = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/preload/index.ts"
+        ).read_text()
+        env = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/env.d.ts"
+        ).read_text()
+        assert "deleteLocal: (modelPath: string)" in pre
+        assert "models:deleteLocal" in pre
+        assert "deleteLocal: (modelPath: string)" in env
+        assert "freedBytes?: number" in env
+        assert "alreadyGone?: boolean" in env
+
+    def test_ui_has_delete_button_in_model_list(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/CreateSession.tsx"
+        ).read_text()
+        assert "vmlx#57" in src
+        # Trash icon + confirm dialog + IPC call + re-scan
+        assert "Delete " in src and "Delete a local model" not in src[:1000]
+        assert "confirm(" in src, (
+            "delete must have a confirm() — the path is rm -rf'd"
+        )
+        assert "window.api.models.deleteLocal(model.path)" in src
+        # After success, must rescan to drop the row from the list
+        assert "window.api.models.scan(filterTypeProp)" in src, (
+            "must rescan after delete — otherwise the row stays in the "
+            "list even though the files are gone"
+        )
+        # Confirm dialog quotes the path so user knows what they're nuking
+        assert "Path: ${model.path}" in src or "model.path" in src

@@ -25,6 +25,16 @@ const api = {
     getDownloadStatus: () => ipcRenderer.invoke('models:getDownloadStatus'),
     getDownloadDir: () => ipcRenderer.invoke('models:getDownloadDir'),
     setDownloadDir: (dir: string) => ipcRenderer.invoke('models:setDownloadDir', dir),
+    // vmlx#57: delete a locally-downloaded model directory (gated to
+    // known model roots; rejects arbitrary paths).
+    deleteLocal: (modelPath: string) =>
+      ipcRenderer.invoke('models:deleteLocal', modelPath) as Promise<{
+        success: boolean;
+        error?: string;
+        deletedPath?: string;
+        freedBytes?: number;
+        alreadyGone?: boolean;
+      }>,
     browseDownloadDir: () => ipcRenderer.invoke('models:browseDownloadDir'),
     onDownloadProgress: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)

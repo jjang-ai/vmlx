@@ -2027,6 +2027,105 @@ export function registerModelHandlers(): void {
     return getDownloadDirectory();
   });
 
+  // vmlx#57: delete a locally-downloaded model directory.
+  //
+  // User reported: "now I need to manually remove it from the
+  // /Users/<user>/.mlxstudio/models/ directory. Can't it be done via
+  // the app itself?"
+  //
+  // Safety invariants:
+  // 1. The path MUST be inside one of the known model roots:
+  //    builtin (~/.mlxstudio/models, ~/.cache/huggingface/hub,
+  //    ~/.exo/models), the configured download dir, the user-
+  //    configured scan dirs (text + image), OR the image builtins.
+  //    Arbitrary paths are rejected with 400-equivalent.
+  // 2. Path is resolved via realpath() before the prefix check, so
+  //    symlink tricks can't escape the allowed roots.
+  // 3. Any active session using the model is stopped first so we
+  //    don't rm mid-inference.
+  // 4. rm -rf via `rm({ recursive: true, force: true })` with
+  //    maxRetries for Windows-style transient locks.
+  ipcMain.handle("models:deleteLocal", async (_, modelPath: string) => {
+    try {
+      if (!modelPath || typeof modelPath !== "string") {
+        return { success: false, error: "invalid path" };
+      }
+      // Resolve to real path so symlinks can't escape allowed roots
+      let real: string;
+      try {
+        real = await realpath(modelPath);
+      } catch {
+        // Path doesn't exist — treat as already-deleted success
+        return { success: true, deletedPath: modelPath, alreadyGone: true };
+      }
+
+      const allowed = new Set<string>();
+      for (const p of BUILTIN_MODEL_PATHS) allowed.add(p.replace(/\/+$/, ""));
+      for (const p of BUILTIN_IMAGE_PATHS) allowed.add(p.replace(/\/+$/, ""));
+      const dl = getDownloadDirectory();
+      if (dl) allowed.add(dl.replace(/\/+$/, ""));
+      for (const p of getUserDirectories("text")) allowed.add(p.replace(/\/+$/, ""));
+      for (const p of getUserDirectories("image")) allowed.add(p.replace(/\/+$/, ""));
+
+      const matchedRoot = Array.from(allowed).find(
+        (root) => real === root || real.startsWith(root + "/"),
+      );
+      if (!matchedRoot) {
+        return {
+          success: false,
+          error:
+            `Refusing to delete '${real}' — path is not inside any known ` +
+            `model directory. Known roots: ${Array.from(allowed).join(", ")}`,
+        };
+      }
+      // Defensive: never delete a matched root itself (would nuke the
+      // whole model folder tree). The path must be STRICTLY deeper.
+      if (real === matchedRoot) {
+        return {
+          success: false,
+          error: `Refusing to delete the root directory '${real}' itself`,
+        };
+      }
+
+      // Stop any sessions using this model so we don't rm mid-inference.
+      try {
+        const all = await import("../sessions");
+        const sessionManagerRef = (all as any).sessionManager;
+        if (sessionManagerRef?.listSessions) {
+          const sessions = sessionManagerRef.listSessions();
+          const normalized = real.replace(/\/+$/, "");
+          for (const s of sessions) {
+            const mp = (s.modelPath || "").replace(/\/+$/, "");
+            if (
+              mp === normalized &&
+              (s.status === "running" ||
+                s.status === "loading" ||
+                s.status === "standby")
+            ) {
+              await sessionManagerRef.stopSession(s.id);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[MODELS] session stop on delete (non-fatal):", e);
+      }
+
+      // Compute freed bytes (best-effort — do NOT block if it fails)
+      let freedBytes = 0;
+      try {
+        freedBytes = await getDirectorySize(real);
+      } catch {
+        /* non-fatal */
+      }
+
+      await rm(real, { recursive: true, force: true, maxRetries: 3 });
+
+      return { success: true, deletedPath: real, freedBytes };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
   // Set download directory (also adds to scan list)
   ipcMain.handle("models:setDownloadDir", async (_, dir: string) => {
     db.setSetting(DOWNLOAD_DIR_KEY, dir);
