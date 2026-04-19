@@ -76,16 +76,29 @@ class TestJitToggle:
 
     def test_jit_verifies_replacement(self):
         """After compile (LLM path), the compiled object replaces model.model.
-        MLLM path replaces language_model.model instead — tested separately."""
+        MLLM path replaces language_model.model instead — tested separately.
+
+        vmlx#83 note: _apply_jit_compilation now runs a warmup pass after
+        replacement and rolls back on warmup failure. The test wrapper
+        must be callable so warmup succeeds and the replacement sticks —
+        otherwise the rollback correctly reverts to the pre-compile
+        model (and the test would need a different assertion).
+        """
         from vmlx_engine import server
 
         inner_model = MagicMock()
         inner_model.__call__ = MagicMock()
 
-        # Use a real attribute so assignment is tracked
+        # Use a real attribute so assignment is tracked. Wrapper MUST
+        # be callable or vmlx#83 warmup-rollback kicks in and reverts.
         class ModelWrapper:
             def __init__(self):
                 self.model = inner_model
+
+            def __call__(self, *args, **kwargs):
+                # Delegate to compiled inner; MagicMock is callable so this
+                # returns a MagicMock and warmup's mx.synchronize() no-ops.
+                return self.model(*args, **kwargs)
 
         model_wrapper = ModelWrapper()
 
@@ -100,7 +113,8 @@ class TestJitToggle:
              patch.object(mx, "compile", return_value=compiled_fn):
             server._apply_jit_compilation()
 
-        # The compiled function should now be on model_wrapper.model
+        # The compiled function should now be on model_wrapper.model.
+        # If vmlx#83 rollback had fired, this would instead be inner_model.
         assert model_wrapper.model is compiled_fn
 
     def test_jit_skips_when_model_not_callable(self):

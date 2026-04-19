@@ -103,7 +103,15 @@ class TestRequestConversion:
         assert chat_req.stream_options is not None
         assert chat_req.stream_options.include_usage is True
 
-    def test_stream_options_absent_non_streaming(self):
+    def test_stream_options_always_present_even_non_streaming(self):
+        """ms#79: non-streaming Anthropic requests now ALSO get
+        stream_options.include_usage=True. The /v1/messages server path
+        internally calls stream_chat_completion() and accumulates chunks;
+        without include_usage the inner stream never emits usage and the
+        response returns {input_tokens: 0, output_tokens: 0}. Claude Code
+        uses these counts for rate-limit accounting — zeroed usage looks
+        like a broken request and causes CC to bail with "!回复".
+        """
         req = AnthropicRequest(
             model="test-model",
             messages=[{"role": "user", "content": "Hi"}],
@@ -111,7 +119,10 @@ class TestRequestConversion:
         )
         chat_req = to_chat_completion(req)
         assert chat_req.stream is False
-        assert chat_req.stream_options is None
+        # ms#79 contract: stream_options MUST be present even when
+        # req.stream=False so the internal stream emits usage tokens.
+        assert chat_req.stream_options is not None
+        assert chat_req.stream_options.include_usage is True
 
 
 # ─── Tool Conversion Tests ───────────────────────────────────────────
