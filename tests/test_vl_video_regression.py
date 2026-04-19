@@ -1585,3 +1585,68 @@ class TestVmlx65GemmaE2BConversion:
         result = detect_architecture(str(tmp_path))
         assert result.num_experts == 32
         assert result.has_moe_layers is True
+
+
+class TestVmlx83JitWarmupFailureRollback:
+    """vmlx#83: reporter noticed `mx.compile` errors did not fall back to
+    the uncompiled model. Root cause: `mx.compile()` is lazy — errors
+    surface at the first forward pass (the warmup). Previously the
+    warmup-failure handler logged the error but left `model.model =
+    compiled`, so every subsequent real request hit the broken graph
+    and silently failed.
+
+    Fix: on warmup failure, restore the pre-compile inner model so the
+    engine reverts to the same state as "JIT disabled".
+    """
+
+    def test_rollback_restores_original_model_on_warmup_fail(self):
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        from vmlx_engine import server
+
+        class Inner:
+            def __call__(self, x, cache=None):
+                return x
+
+        class ModelWrapper:
+            def __init__(self, inner):
+                self.model = inner
+
+            def make_cache(self):
+                return None
+
+        original_inner = Inner()
+        wrapper = ModelWrapper(original_inner)
+
+        mock_engine = MagicMock()
+        mock_engine._model = wrapper
+        mock_engine.is_mllm = False
+        mock_engine._is_mllm = False
+
+        class BrokenCompiled:
+            def __call__(self, *a, **kw):
+                raise RuntimeError("Unsupported dynamic shape")
+
+        with patch.object(server, "_engine", mock_engine), \
+             patch.object(server, "_flash_moe_enabled", False), \
+             patch.object(server, "_flash_moe_loader", None), \
+             patch.object(server, "_distributed_enabled", False), \
+             patch.object(mx, "compile", return_value=BrokenCompiled()):
+            server._apply_jit_compilation()
+
+        assert wrapper.model is original_inner, (
+            "vmlx#83: warmup failure must roll back — broken compiled fn "
+            "must not remain installed"
+        )
+
+    def test_rollback_anchor_in_source(self):
+        """Source contains the vmlx#83 rollback anchors."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        assert "vmlx#83" in src, "issue anchor must be present"
+        # Both LLM and VLM branches need backup refs
+        assert "_pre_compile_inner" in src, "LLM rollback capture missing"
+        assert "_pre_compile_backup_vlm" in src, "VLM rollback capture missing"
+        # Rollback must fire in warmup except branch
+        assert "rolling back" in src.lower(), "rollback log anchor missing"
