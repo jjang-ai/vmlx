@@ -382,10 +382,19 @@ async function getDirectorySize(dirPath: string): Promise<number> {
     const files = await readdir(dirPath, { withFileTypes: true });
     for (const file of files) {
       const filePath = join(dirPath, file.name);
-      if (file.isDirectory()) {
+      // Follow symlinks via `stat` (readdir's dirent.isDirectory returns
+      // false for symlinks even when the target is a directory). Without
+      // this, symlinked model directories report size 0 and get pruned
+      // by the 1MB floor in scanRecursive.
+      let stats;
+      try {
+        stats = await stat(filePath);
+      } catch {
+        continue;  // broken symlink etc.
+      }
+      if (stats.isDirectory()) {
         totalSize += await getDirectorySize(filePath);
       } else {
-        const stats = await stat(filePath);
         totalSize += stats.size;
       }
     }
@@ -553,7 +562,22 @@ async function scanModelsInPath(
       if (depth < maxDepth) {
         const entries = await readdir(currentPath, { withFileTypes: true });
         for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
+          // Accept directories AND symlinks-to-directories. readdir's
+          // entry.isDirectory() returns FALSE for symlinks even when
+          // the target IS a directory — without the symlink branch the
+          // scanner silently skips user-managed symlinked model dirs
+          // (e.g. external-drive models linked into ~/.mlxstudio/models).
+          let isDirOrLink = entry.isDirectory();
+          if (!isDirOrLink && entry.isSymbolicLink()) {
+            try {
+              const s = await stat(join(currentPath, entry.name));
+              isDirOrLink = s.isDirectory();
+            } catch {
+              // Broken symlink — skip silently
+              continue;
+            }
+          }
+          if (!isDirOrLink) continue;
           if (SKIP_DIRS.includes(entry.name)) continue;
 
           // Skip directories that belong to the other model type's scan paths

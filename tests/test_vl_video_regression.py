@@ -5033,3 +5033,256 @@ class TestOllamaImagesFieldForwarding:
         # No text part when content was empty; only the image
         assert len(parts) == 1
         assert parts[0]["type"] == "image_url"
+
+
+class TestScannerSymlinkFollowing:
+    """Panel model scanner must follow symlinks when walking scan dirs.
+
+    Before: readdir+entry.isDirectory() returned FALSE for symlinks even
+    when the target was a directory → scanner silently skipped symlinked
+    model directories. Common break: user adds ~/.mlxstudio/models but
+    symlinks individual models there from an external drive.
+
+    Also before: getDirectorySize called dirent.isDirectory() directly,
+    which returns false for symlinks → symlinked model reported size=0
+    → scanRecursive's 1MB floor pruned it.
+
+    Both paths now go through `stat()` so symlinks-to-directories are
+    followed correctly. Python tests pin the source invariants since TS
+    unit tests run via a separate runner.
+    """
+
+    def test_scanner_follows_symbolic_links(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        assert "entry.isSymbolicLink()" in src, (
+            "scanner symlink-branch missing; symlinked model dirs silently skipped"
+        )
+        assert "isDirOrLink = s.isDirectory()" in src
+        # The fix must be in scanRecursive (depth<maxDepth block)
+        scan_idx = src.find("async function scanRecursive")
+        assert scan_idx > 0
+        scan_block_end = src.find("async function ", scan_idx + 10)
+        if scan_block_end < 0:
+            scan_block_end = len(src)
+        scan_block = src[scan_idx:scan_block_end]
+        assert "entry.isSymbolicLink()" in scan_block, (
+            "symlink branch must live inside scanRecursive, not elsewhere"
+        )
+
+    def test_getdirsize_stat_follows_symlinks(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+        ).read_text()
+        # getDirectorySize must stat() each entry (not rely on dirent)
+        gds_idx = src.find("async function getDirectorySize")
+        assert gds_idx > 0
+        next_fn = src.find("async function ", gds_idx + 10)
+        body = src[gds_idx:next_fn if next_fn > 0 else len(src)]
+        assert "stat(filePath)" in body or "await stat(" in body, (
+            "getDirectorySize must stat() entries — dirent.isDirectory() "
+            "returns false for symlinks"
+        )
+        assert "stats.isDirectory()" in body, (
+            "must check stats.isDirectory() (the follow-symlink check) "
+            "not dirent.isDirectory()"
+        )
+
+    def test_symlink_engine_recognition_live(self):
+        """Live check: a symlinked model dir is recognized by
+        is_mllm_model and the registry."""
+        import os
+        from vmlx_engine.api.utils import is_mllm_model
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        link = "/tmp/vmlx_symlink_test/SymlinkedVL4B"
+        target = os.path.expanduser(
+            "~/.mlxstudio/models/MLXModels/dealignai/Qwen3.5-VL-4B-JANG_4S-CRACK"
+        )
+        if not os.path.exists(target):
+            pytest.skip("real VL-4B model not present — live check skipped")
+        # Create the symlink (idempotent)
+        os.makedirs("/tmp/vmlx_symlink_test", exist_ok=True)
+        if os.path.islink(link):
+            os.unlink(link)
+        os.symlink(target, link)
+        try:
+            assert is_mllm_model(link) is True, (
+                "engine must detect VL via symlinked path"
+            )
+            cfg = get_model_config_registry().lookup(link)
+            assert cfg.family_name == "qwen3_5"
+            assert cfg.cache_type == "hybrid"
+            assert cfg.is_mllm is True
+        finally:
+            try:
+                os.unlink(link)
+            except OSError:
+                pass
+
+
+class TestAnthropicPassthroughExtensions:
+    """Anthropic /v1/messages must accept vMLX extension passthroughs
+    for `chat_template_kwargs` and top-level `enable_thinking` so
+    clients that don't know the Anthropic-native `thinking: {type}`
+    schema still get reasoning routed into a `thinking` content block.
+
+    Found during 24-case API feature matrix — anthropic + thinking=true
+    via chat_template_kwargs returned text only (no thinking block)
+    while OpenAI + Ollama paths correctly routed reasoning.
+    """
+
+    def test_schema_accepts_extensions(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest
+        # Both passthroughs must type-check (pydantic v2)
+        r = AnthropicRequest(
+            model="q", max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            chat_template_kwargs={"enable_thinking": True},
+            enable_thinking=True,
+        )
+        assert r.chat_template_kwargs == {"enable_thinking": True}
+        assert r.enable_thinking is True
+
+    def test_chat_template_kwargs_routes_thinking(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        r = AnthropicRequest(
+            model="q", max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            chat_template_kwargs={"enable_thinking": True},
+        )
+        cc = to_chat_completion(r)
+        assert cc.enable_thinking is True, (
+            "chat_template_kwargs.enable_thinking passthrough broken — "
+            "clients without Anthropic-native `thinking` param lose reasoning"
+        )
+
+    def test_top_level_enable_thinking_wins_over_thinking_field(self):
+        """Precedence: explicit top-level enable_thinking > Anthropic
+        native thinking > chat_template_kwargs."""
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        # Contradictory inputs: native thinking says disabled,
+        # explicit enable_thinking says True → explicit wins
+        r = AnthropicRequest(
+            model="q", max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "disabled"},
+            enable_thinking=True,
+        )
+        cc = to_chat_completion(r)
+        assert cc.enable_thinking is True, (
+            "top-level enable_thinking must win over native thinking field"
+        )
+
+    def test_budget_tokens_still_forwards(self):
+        """Anthropic-native thinking.budget_tokens must still forward
+        as chat_template_kwargs.thinking_budget (for Qwen3)."""
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        r = AnthropicRequest(
+            model="q", max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "enabled", "budget_tokens": 5000},
+        )
+        cc = to_chat_completion(r)
+        assert cc.enable_thinking is True
+        assert cc.chat_template_kwargs is not None
+        assert cc.chat_template_kwargs.get("thinking_budget") == 5000
+
+    def test_budget_tokens_merges_with_other_ct_kwargs(self):
+        """Budget merge must not clobber user-passed chat_template_kwargs."""
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        r = AnthropicRequest(
+            model="q", max_tokens=10,
+            messages=[{"role": "user", "content": "hi"}],
+            thinking={"type": "enabled", "budget_tokens": 5000},
+            chat_template_kwargs={"reasoning_effort": "high"},
+        )
+        cc = to_chat_completion(r)
+        assert cc.chat_template_kwargs.get("thinking_budget") == 5000
+        assert cc.chat_template_kwargs.get("reasoning_effort") == "high", (
+            "merge must preserve non-thinking passthrough keys"
+        )
+
+
+class TestPanelUIContractFull:
+    """End-to-end contract that the engine's SSE output → panel IPC →
+    SQLite → renderer render loop doesn't drop reasoning_content or
+    tool_calls anywhere along the way.
+
+    This is the chain that broke repeatedly per MEMORY.md §15. Each
+    test pins one link.
+    """
+
+    def test_engine_emits_reasoning_content_in_delta(self):
+        """The ChatCompletionChunkDelta model must expose a
+        reasoning_content computed-field."""
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
+        d = ChatCompletionChunkDelta(content="", reasoning="abc")
+        dump = d.model_dump(exclude_none=True)
+        assert dump.get("reasoning_content") == "abc", (
+            "engine must emit reasoning_content on wire; panel reads it"
+        )
+
+    def test_panel_chat_ts_reads_both_field_aliases(self):
+        """Panel chat.ts must read reasoning_content (v2) OR reasoning (v1)
+        — supports both old and new model server versions without change."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        assert "reasoning_content" in src
+        assert "reasoningContent +=" in src, (
+            "panel must accumulate reasoning deltas across stream chunks"
+        )
+
+    def test_db_persists_reasoning_column(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+        ).read_text()
+        # Schema migration + write path + read path
+        assert "ALTER TABLE messages ADD COLUMN reasoning_content TEXT" in src
+        assert "reasoning_content = ?" in src  # UPDATE
+        assert "reasoning_content" in src     # column in INSERT
+        assert "row.reasoning_content" in src  # READ back
+
+    def test_interface_restores_reasoning_on_refresh(self):
+        """Reload/navigate-away must restore reasoning_content from
+        DB, not wipe it."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/ChatInterface.tsx"
+        ).read_text()
+        assert "m.reasoningContent" in src
+        assert "reasoningMap" in src
+
+    def test_message_bubble_renders_reasoning_separately(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/MessageBubble.tsx"
+        ).read_text()
+        assert "reasoningContent" in src
+        # Renders in a separate ReasoningBlock / box with its own
+        # isDone state so streaming feels right
+        assert "reasoningDone" in src
+        assert "useTypewriter" in src
+
+    def test_tool_calls_persist_through_the_chain(self):
+        """tool_calls must be JSON-serialized to DB and read back."""
+        dbsrc = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+        ).read_text()
+        chatsrc = Path(
+            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+        ).read_text()
+        assert "tool_calls_json" in dbsrc
+        assert "toolCallsJson" in dbsrc
+        assert "tool_calls" in chatsrc
+
+    def test_streaming_delta_uses_exclude_none(self):
+        """ChatCompletionChunkDelta dumps with exclude_none — strict
+        OpenAI SDK parsers (Claude Code, opencode) reject
+        `reasoning_content: null` on every chunk."""
+        from vmlx_engine.api.models import ChatCompletionChunkDelta
+        d = ChatCompletionChunkDelta(content="hi")
+        dump = d.model_dump(exclude_none=True)
+        assert "reasoning_content" not in dump, (
+            "reasoning_content: null must not appear on every chunk"
+        )
