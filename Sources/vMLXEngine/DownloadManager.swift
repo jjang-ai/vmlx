@@ -291,6 +291,30 @@ public actor DownloadManager {
             // paused or cancelled — event already broadcast.
             return
         } catch {
+            // iter-94 §121: URLSession cancellation surfaces as
+            // `URLError(.cancelled)` (NSURLErrorCancelled = -999), NOT
+            // Swift's `CancellationError`, so the case-is match above
+            // doesn't catch it. Without this second guard, user-
+            // cancelled downloads briefly appeared `.cancelled` (set
+            // by `cancel(_:)` synchronously) and then flipped to
+            // `.failed` with cryptic message "The operation couldn't
+            // be completed" once the URLSession completion handler
+            // resumed with URLError.cancelled. Also catch cases
+            // where the outer Task was cancelled but the error
+            // propagated as something other than CancellationError.
+            if let urlErr = error as? URLError, urlErr.code == .cancelled {
+                return
+            }
+            if Task.isCancelled {
+                return
+            }
+            // Also skip the flip if the job was already flagged
+            // `.cancelled` by the user — defensive in case a future
+            // refactor threads cancellation through a different
+            // error type.
+            if _jobs[id]?.status == .cancelled {
+                return
+            }
             if var j = _jobs[id] {
                 j.status = .failed
                 j.error = "\(error)"

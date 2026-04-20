@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 38
+iteration: 39
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,24 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 356/356 source-scan tests green, 116/116 regression guards + 15 matrix
-  rows (§57–§120)
+- 357/357 source-scan tests green, 117/117 regression guards + 15 matrix
+  rows (§57–§121)
+- iter-94 work:
+  1. DownloadManager cancel status-flip (§121) — **real UX bug**.
+     `cancel(_:)` synchronously set job status to `.cancelled` AND
+     cancelled both the outer workTasks Task + the URLSessionDownloadTask.
+     But when URLSession fired its completion handler with
+     `URLError(.cancelled)` (CFNetwork -999), `run(id:)` caught it
+     via the generic catch (the error is NSError, NOT Swift's
+     `CancellationError`, so `catch is CancellationError` missed
+     it), and flipped status from `.cancelled` to `.failed` with
+     cryptic `"The operation couldn't be completed (Cocoa error
+     -999)"`. User clicked Cancel, saw "cancelled" briefly, then
+     "failed". Fix: in the generic catch, early-return on
+     `URLError(.cancelled)`, on `Task.isCancelled`, or when
+     `_jobs[id].status` is already `.cancelled` — any of those
+     three means the user intentionally stopped the download.
+     §121 regression guard pins all three early-return conditions.
 - iter-93 work:
   1. MCP dead-subprocess teardown (§120) — **real lifecycle bug**.
      `MCPStdioClient.handleEOF` correctly fails all pending
