@@ -425,13 +425,23 @@ public actor Engine {
         // most-recent stream's handle — every earlier stream is invisible
         // to the no-id cancel, so Engine.stop() or an admin-kill was
         // leaking tasks while advertising they'd been cancelled. Walk
-        // the by-id registry too. Drain under lock by snapshotting keys
-        // first so the subsequent removeValue doesn't mutate during
-        // iteration.
-        for (id, task) in streamTasksByID {
+        // the by-id registry too.
+        //
+        // iter-88 §116: the comment on this block used to claim
+        // "snapshot keys first" but the code didn't — it iterated the
+        // dict and called `removeValue(forKey:)` inside the loop,
+        // which is the classic mutation-during-iteration undefined
+        // behavior. Swift debug would trap on `Dictionary was mutated
+        // while being enumerated`; release silently relied on the
+        // COW-on-mutate buffer swap to paper over it. Snapshot
+        // `Array(tasks)` first, cancel the handles, then clear the
+        // dict in one shot. Same defensive pattern fixed in iter-72
+        // (§101) for SettingsStore.
+        let snapshot = Array(streamTasksByID)
+        for (_, task) in snapshot {
             task.cancel()
-            streamTasksByID.removeValue(forKey: id)
         }
+        streamTasksByID.removeAll()
         if let rc = remoteClient {
             Task { await rc.cancelStream() }
         }

@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 32
+iteration: 33
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,24 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 351/351 source-scan tests green, 111/111 regression guards + 15 matrix
-  rows (§57–§115)
+- 352/352 source-scan tests green, 112/112 regression guards + 15 matrix
+  rows (§57–§116)
+- iter-88 work:
+  1. cancelStream snapshot-then-drain (§116) — **real concurrency
+     bug**. `Engine.cancelStream()` used `for (id, task) in
+     streamTasksByID { … streamTasksByID.removeValue(forKey: id) }`
+     — classic mutation-during-iteration. The comment block
+     literally promised "snapshot keys first so the subsequent
+     removeValue doesn't mutate during iteration" but the code
+     skipped the snapshot. Swift debug builds trap on "Dictionary
+     was mutated while being enumerated"; release rode COW-on-
+     mutate buffer swap to avoid visible crash but iterated in
+     undefined state. Same pattern fixed in iter-72 (§101) for
+     SettingsStore.flushPending — the fix here mirrors that one:
+     snapshot Array(dict), cancel each task, then removeAll() in
+     one shot. §116 regression guard pins the snapshot call + the
+     removeAll form + asserts the per-iteration removeValue is
+     absent.
 - iter-87 work:
   1. Auth timing-oracle fix (§115) — **SECURITY FIX**. Both the user
      API-key check (BearerAuthMiddleware) and the admin-token check
