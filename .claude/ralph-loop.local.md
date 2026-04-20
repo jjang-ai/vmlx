@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 56
+iteration: 57
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,26 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 372/372 source-scan tests green, 132/132 regression guards + 15 matrix
-  rows (§57–§136)
+- 373/373 source-scan tests green, 133/133 regression guards + 15 matrix
+  rows (§57–§137)
+- iter-111 work:
+  1. deleteMessage stream-cycle waste (§137) — **small-impact cycle
+     waste + cleanup bug**. Streaming token-append loop at
+     ChatViewModel.send() looks up `messages.firstIndex(where:
+     $0.id == assistantId)` on every chunk. If the user clicks the
+     trash button on the currently-streaming assistant bubble,
+     deleteMessage dropped the row by UUID — next chunk's firstIndex
+     returned nil and the guard returned early. Functionally safe
+     (no crash) but the engine kept generating tokens with nowhere
+     to land until the natural stop condition fired. Wasted Metal
+     cycles + isGenerating stayed true blocking the next send().
+     Fix: when `isGenerating && idx == messages.count - 1` (always
+     the streaming assistant), flip intentionalStop + cancel
+     streamTask before dropping the row. Earlier-message deletes
+     don't touch the stream — engine's prompt was consumed at
+     prefill so stale UI indices don't affect continued generation.
+     §137 pins the marker + the guard + the cancel sequence. Build
+     clean, guard green.
 - iter-110 work:
   1. ChatSettings row leak on delete (§136) — **real data leak**.
      `deleteSession` + `clearAllSessions` dropped SQLite messages /
