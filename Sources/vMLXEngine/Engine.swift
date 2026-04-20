@@ -672,6 +672,26 @@ public actor Engine {
             s.port = (try? Self.firstAvailablePort(startingAt: 8000)) ?? 8000
         }
         await settings.setSession(id, s)
+
+        // iter-134 §160: reconfigure the idleTimer with the newly-
+        // resolved idle values. The timer was seeded from LoadOptions at
+        // load-time and never updated afterward, so session-level
+        // `idleEnabled` / `idleSoftSec` / `idleDeepSec` overrides
+        // silently didn't take effect until the next restart. Users who
+        // opened SessionConfigForm and bumped "Sleep after" saw the
+        // value persist to SQLite but the engine kept sleeping at the
+        // old interval. We reconfigure live using the resolved snapshot
+        // so the change lands on the running engine. Global-level
+        // changes already flow through `applySettings(_ g:)` at line
+        // 640, which reconfigures there — this closes the symmetric
+        // session-level gap.
+        let resolved = await settings.resolved(sessionId: id).settings
+        await idleTimer.setConfig(.init(
+            softAfter: resolved.idleSoftSec,
+            deepAfter: resolved.idleDeepSec,
+            enabled: resolved.idleEnabled
+        ))
+
         return s
     }
 
