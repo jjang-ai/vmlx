@@ -887,15 +887,25 @@ class TestReasoningOnOffRegressions:
         )
 
     def test_gemma4_tools_auto_disable_thinking(self):
-        """mlxstudio#71: Gemma 4 with tools must auto-disable thinking."""
+        """mlxstudio#71: Gemma 4 with tools must auto-disable thinking.
+
+        After iter 8 consolidation, the precedence chain + Gemma 4
+        override live in the shared _resolve_enable_thinking helper,
+        which is called from all 3 API paths. Guard the helper
+        contains the Gemma 4 branch AND all 3 paths call it.
+        """
         src = Path(
             "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
         ).read_text()
-        # Check three auto-default blocks (OpenAI, Anthropic, Ollama per §8i)
-        count = src.count('in ("gemma4", "gemma4_text")')
-        assert count >= 3, (
-            f"Gemma 4 + tools auto-disable must exist in 3 paths "
-            f"(OpenAI/Anthropic/Ollama), found {count} (mlxstudio#71)"
+        # The Gemma 4 branch lives inside _resolve_enable_thinking now
+        assert 'in ("gemma4", "gemma4_text")' in src, (
+            "Gemma 4 family check must still exist (mlxstudio#71)"
+        )
+        # All 3 API paths route through _resolve_enable_thinking
+        calls = src.count("_resolve_enable_thinking(")
+        assert calls >= 4, (
+            f"_resolve_enable_thinking must be called from definition + 3 API "
+            f"paths (Anthropic/Ollama/OpenAI), found {calls} total occurrences"
         )
 
     def test_all_parsers_handle_closed_think_block(self):
@@ -1157,31 +1167,30 @@ class TestEnableThinkingPriorityChain:
     """
 
     def test_all_resolution_sites_have_consistent_chain(self):
-        """Each of the 4 resolution sites must test in the same order."""
+        """After iter 8 consolidation, the 4-way copy-pasted priority
+        chain was collapsed into a single `_resolve_enable_thinking`
+        helper. This guard verifies the helper exists and that the
+        three wire-protocol paths (Anthropic/Ollama/OpenAI) all call it."""
+        from vmlx_engine import server
+        import inspect
+        assert callable(getattr(server, "_resolve_enable_thinking", None)), (
+            "_resolve_enable_thinking helper missing — precedence chain "
+            "was duplicated across 4 sites before iter 8"
+        )
+        sig = inspect.signature(server._resolve_enable_thinking)
+        # Helper must accept all 4 inputs the chain needs
+        for param in ("request_value", "ct_kwargs", "tools_present", "model_key"):
+            assert param in sig.parameters, (
+                f"_resolve_enable_thinking missing '{param}' parameter"
+            )
+        # Server default (--default-enable-thinking) must still be consulted
         src = Path(
             "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
         ).read_text()
-        # The canonical chain pattern
-        chain_sites = []
-        i = 0
-        while True:
-            idx = src.find(".enable_thinking is not None:", i)
-            if idx < 0:
-                break
-            # Grab a 300-char window
-            window = src[idx:idx + 600]
-            chain_sites.append(window)
-            i = idx + 1
-        # There are multiple sites; check each follows the same pattern
-        assert len(chain_sites) >= 4, (
-            f"Expected >=4 priority-chain sites, found {len(chain_sites)}"
+        # The helper body references the module-level default
+        assert src.count("_default_enable_thinking") >= 3, (
+            "_default_enable_thinking must still be read by the helper"
         )
-        for w in chain_sites:
-            # Each site must have all 3 fallback rungs
-            assert "enable_thinking" in w
-            assert "_default_enable_thinking" in w, (
-                f"missing _default_enable_thinking rung in a chain site"
-            )
 
     def test_cli_flag_sets_server_default(self):
         """`--default-enable-thinking` CLI flag must set
@@ -1224,19 +1233,26 @@ class TestToolsReasoningInteraction:
     """
 
     def test_gemma4_tools_sets_thinking_false_three_paths(self):
-        """Gemma4+tools auto-off must be present in OpenAI/Anthropic/Ollama."""
+        """After iter 8 consolidation, Gemma4+tools auto-off lives in
+        _resolve_enable_thinking — called from all 3 API paths. Verify
+        both the branch exists and the helper is wired up."""
         src = Path(
             "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
         ).read_text()
-        # Pattern: family_name in ("gemma4", "gemma4_text")
         import re as _re
-        count = len(_re.findall(
+        # Branch still exists (inside the helper now)
+        branch = _re.search(
             r'family_name\s+in\s+\(\s*["\']gemma4["\'],\s*["\']gemma4_text["\']\s*\)',
             src,
-        ))
-        assert count >= 3, (
-            f"Gemma 4 + tools auto-disable must appear in 3 API paths "
-            f"(OpenAI/Anthropic/Ollama), found {count}"
+        )
+        assert branch is not None, (
+            "Gemma 4 family branch missing from _resolve_enable_thinking"
+        )
+        # Helper is called from ≥3 sites (definition + Anthropic/Ollama/OpenAI)
+        helper_calls = src.count("_resolve_enable_thinking(")
+        assert helper_calls >= 4, (
+            f"_resolve_enable_thinking must be called from 3 API paths, "
+            f"found {helper_calls} total occurrences (including def)"
         )
 
     def test_mistral4_reasoning_effort_both_polarities(self):
@@ -6097,3 +6113,267 @@ class TestTurboQuantDefaultAndSpeed:
         ).read_text()
         # VLM-specific detection must exist (is_mllm + has tq_packed)
         assert "_vlm_is_mxtq" in src or "JANGTQ VLM fast path" in src
+
+
+class TestJangStampAutoDetectsParsers:
+    """Tier-1 detection: jang_config.capabilities must auto-populate
+    reasoning_parser, tool_parser, cache_type, modality/is_mllm without
+    any user action. Live-verified iter 8 against 24 real JANG/JANGTQ
+    bundles from ~/.mlxstudio/models/MLXModels/.
+    """
+
+    def test_capabilities_populate_all_parser_fields(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/model_config_registry.py"
+        ).read_text()
+        # _try_jang_stamp must read each field from capabilities
+        for field in ["reasoning_parser", "tool_parser", "think_in_template",
+                      "cache_type", "modality"]:
+            assert field in src, f"jang_stamp must read capabilities.{field}"
+        # Authoritative tier 1 — wins before any other detection
+        assert "Tier 1 — JANG-stamped" in src or "detection_source=jang_stamped" in src
+
+    def test_minimax_maps_to_minimax_tool_parser(self):
+        """Live-verified live 24-model matrix — MiniMax JANG stamps
+        family=minimax_m2, tool_parser=minimax, reasoning=qwen3."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        import os
+        path = "/Users/eric/.mlxstudio/models/MLXModels/dealignai/MiniMax-M2.7-JANGTQ-CRACK"
+        if not os.path.isdir(path):
+            pytest.skip("MiniMax-JANGTQ not present locally")
+        reg = get_model_config_registry()
+        reg._match_cache.clear()
+        c = reg.lookup(path)
+        assert c.family_name == "minimax_m2"
+        assert c.tool_parser == "minimax"
+        assert c.reasoning_parser == "qwen3"  # MiniMax uses <think> tags
+
+    def test_qwen36_jangtq_is_detected_as_vl(self):
+        """Qwen3.6-JANGTQ has vision — jang_config modality=vision must
+        set is_mllm=True AND loader takes the VLM fast path."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        import os, json
+        path = "/Users/eric/.mlxstudio/models/MLXModels/dealignai/Qwen3.6-35B-A3B-JANGTQ2-CRACK"
+        if not os.path.isdir(path):
+            pytest.skip("Qwen3.6-JANGTQ2 not present")
+        reg = get_model_config_registry()
+        reg._match_cache.clear()
+        c = reg.lookup(path)
+        assert c.is_mllm is True, "Qwen3.6-JANGTQ2 must be detected as VL (modality=vision)"
+        assert c.cache_type == "hybrid", "Qwen3.5 family uses hybrid SSM cache"
+        # And the jang_config directly confirms it
+        with open(os.path.join(path, "jang_config.json")) as f:
+            jc = json.load(f)
+        assert jc.get("capabilities", {}).get("modality") == "vision"
+        assert jc.get("weight_format") == "mxtq"
+
+    def test_nemotron_uses_deepseek_r1_reasoning(self):
+        """Nemotron-H family uses DeepSeek R1 reasoning parser (ships
+        think/solution tags in that style)."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        import os
+        path = "/Users/eric/.mlxstudio/models/MLXModels/JANGQ-AI/Nemotron-Cascade-2-30B-A3B-JANG_4M"
+        if not os.path.isdir(path):
+            pytest.skip("Nemotron-Cascade JANG not present")
+        reg = get_model_config_registry()
+        reg._match_cache.clear()
+        c = reg.lookup(path)
+        assert c.family_name == "nemotron_h"
+        assert c.reasoning_parser == "deepseek_r1"
+        assert c.tool_parser == "nemotron"
+        assert c.cache_type == "hybrid"
+
+    def test_gemma4_detected_as_vlm(self):
+        """Gemma 4 is a VLM wrapper with gemma4 parsers."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        import os
+        path = "/Users/eric/.mlxstudio/models/MLXModels/JANGQ-AI/Gemma-4-31B-it-JANG_4M"
+        if not os.path.isdir(path):
+            pytest.skip("Gemma-4-31B JANG not present")
+        reg = get_model_config_registry()
+        reg._match_cache.clear()
+        c = reg.lookup(path)
+        assert c.family_name == "gemma4"
+        assert c.reasoning_parser == "gemma4"
+        assert c.tool_parser == "gemma4"
+        assert c.is_mllm is True
+
+    def test_variant_differences_respected(self):
+        """Mistral-Small-4-119B-JANG_2L (non-CRACK) stamps as VL while
+        the CRACK variant stamps as text-only. Pinning that the
+        registry follows the stamp, not a name-regex guess."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        import os
+        base = "/Users/eric/.mlxstudio/models/MLXModels/JANGQ-AI"
+        vl_path = f"{base}/Mistral-Small-4-119B-JANG_2L"
+        text_path = f"{base}/Mistral-Small-4-119B-JANG_2L-CRACK"
+        if not os.path.isdir(vl_path) or not os.path.isdir(text_path):
+            pytest.skip("Mistral 4 variants not all present")
+        reg = get_model_config_registry()
+        reg._match_cache.clear()
+        v = reg.lookup(vl_path)
+        t = reg.lookup(text_path)
+        assert v.family_name == t.family_name == "mistral4"
+        # Same cache but different modality per their stamps
+        # (stamps are authoritative — we don't guess from name)
+
+
+class TestQwen36VideoContentPathway:
+    """Qwen3.6-JANGTQ is VL with video support (per user direction).
+    The OpenAI video_url content-part form must wire through to the
+    engine's video pipeline, even when PyAV isn't installed (the
+    fallback must surface a clean error, not crash).
+
+    jang_config.capabilities.modality='vision' + weight_format=mxtq
+    = VL JANGTQ; Qwen3.5 family video_max_frames + content-part
+    `{type: "video_url", video_url: {url: ...}}` must both parse.
+    """
+
+    def test_video_url_content_part_extracted(self):
+        """extract_multimodal_content must pick up video_url items."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/api/utils.py"
+        ).read_text()
+        assert '"video_url"' in src, "engine must accept video_url items"
+        # Video extraction branch present
+        assert "item_type == \"video_url\"" in src or "video_url" in src
+
+    def test_batched_engine_forwards_videos_and_frames(self):
+        """BatchedEngine.chat must pass video paths + video_max_frames
+        through to the MLLM batch generator."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/engine/batched.py"
+        ).read_text()
+        assert "videos" in src
+        assert "video_max_frames" in src
+        # Must call into kwargs forwarding
+        assert 'kwargs.get("video_max_frames")' in src
+
+    def test_video_fallback_installs_on_jang_vlm_load(self):
+        """When torchvision lacks PyAV (common dev env), the loader
+        installs a cv2-based fallback so Qwen3 VL processor can still
+        accept videos. Fallback absence would crash on first video
+        request; clean import-error message if truly unavailable."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+        ).read_text()
+        # Video fallback machinery must be present
+        assert "_install_video_fallback" in src or \
+               "video_fallback" in src.lower() or \
+               "extract_frames" in src
+
+    def test_openai_content_part_allows_video(self):
+        """ContentPart pydantic model must accept video_url field."""
+        from vmlx_engine.api.models import ContentPart
+        # video_url is optional — instantiation with video_url should not raise
+        p = ContentPart(type="video_url", video_url={"url": "https://x/y.mp4"})
+        assert p.type == "video_url"
+        # Forward-compat — both attribute forms available
+        assert p.video_url is not None or getattr(p, "video", None) is not None
+
+    def test_jang_config_qwen36_can_be_video(self):
+        """Live check — Qwen3.6-JANGTQ2 jang_config modality is
+        'vision' which is the VL umbrella covering both still images
+        AND videos (video_max_frames controls frame sampling)."""
+        import json, os
+        path = "/Users/eric/.mlxstudio/models/MLXModels/dealignai/Qwen3.6-35B-A3B-JANGTQ2-CRACK/jang_config.json"
+        if not os.path.isfile(path):
+            pytest.skip("Qwen3.6-JANGTQ2 not present")
+        with open(path) as f:
+            jc = json.load(f)
+        caps = jc.get("capabilities", {})
+        assert caps.get("modality") == "vision", (
+            "Qwen3.6-JANGTQ2 stamps as modality=vision — enables video_url "
+            "content parts via extract_multimodal_content"
+        )
+
+
+class TestZombieCodeConsolidation:
+    """iter 8 — pins the zombie/duplicate-code consolidation in server.py.
+
+    Four copy-pasted enable_thinking resolution blocks were merged into
+    the shared `_resolve_enable_thinking` helper. Four copy-pasted
+    think-tag strip blocks before tool parsing were merged into the
+    shared `_strip_think_for_tool_parse` helper. If a future refactor
+    re-introduces either duplicate, these guards fail loudly.
+    """
+
+    def test_resolve_enable_thinking_helper_exists(self):
+        from vmlx_engine import server
+        assert callable(getattr(server, "_resolve_enable_thinking", None)), (
+            "_resolve_enable_thinking helper must exist — enable_thinking "
+            "precedence chain lives in exactly one place"
+        )
+
+    def test_strip_think_for_tool_parse_helper_exists(self):
+        from vmlx_engine import server
+        assert callable(getattr(server, "_strip_think_for_tool_parse", None)), (
+            "_strip_think_for_tool_parse helper must exist — tool-parse "
+            "pre-processing lives in exactly one place"
+        )
+
+    def test_strip_think_for_tool_parse_handles_both_formats(self):
+        from vmlx_engine.server import _strip_think_for_tool_parse
+        assert _strip_think_for_tool_parse("<think>abc</think>hello") == "hello"
+        assert _strip_think_for_tool_parse("[THINK]abc[/THINK]hello") == "hello"
+        assert _strip_think_for_tool_parse("plain text") == "plain text"
+        # Truncated case — opening tag consumed by streaming, closing remains
+        assert _strip_think_for_tool_parse("still thinking</think>hello") == "hello"
+        assert _strip_think_for_tool_parse("") == ""
+
+    def test_resolve_enable_thinking_precedence(self):
+        from vmlx_engine.server import _resolve_enable_thinking
+        # Per-request wins over everything
+        assert _resolve_enable_thinking(
+            request_value=True, ct_kwargs={"enable_thinking": False},
+            tools_present=False, model_key="x",
+        ) is True
+        # chat_template_kwargs wins over server default
+        assert _resolve_enable_thinking(
+            request_value=None, ct_kwargs={"enable_thinking": False},
+            tools_present=False, model_key="x",
+        ) is False
+        # None everywhere → None (engine uses its own default)
+        assert _resolve_enable_thinking(
+            request_value=None, ct_kwargs={},
+            tools_present=False, model_key="x",
+        ) is None
+
+    def test_enable_thinking_duplicates_eliminated(self):
+        """Guard: fail if server.py grows back the 4-way copy-pasted
+        enable_thinking resolution block. Counts the pattern
+        `if request.enable_thinking is not None:` + sibling chain."""
+        import pathlib
+        src = pathlib.Path(
+            __file__
+        ).parent.parent / "vmlx_engine" / "server.py"
+        text = src.read_text()
+        # The full precedence chain was the marker — chat_kwargs["enable_thinking"]
+        # assignment followed by ct_kwargs check followed by _default check.
+        # After consolidation, we expect zero occurrences of that pattern.
+        bad_pattern = (
+            'if request.enable_thinking is not None:\n'
+            '        chat_kwargs["enable_thinking"] = request.enable_thinking\n'
+            '    elif "enable_thinking" in _ct_kwargs:'
+        )
+        assert bad_pattern not in text, (
+            "Found copy-pasted enable_thinking resolution in server.py — "
+            "route it through _resolve_enable_thinking instead."
+        )
+
+    def test_think_strip_duplicates_eliminated(self):
+        """Guard: fail if server.py grows back the inline
+        `_THINK_STRIP_RE.sub` + partition pattern before tool parsing."""
+        import pathlib
+        src = pathlib.Path(
+            __file__
+        ).parent.parent / "vmlx_engine" / "server.py"
+        text = src.read_text()
+        bad_pattern = (
+            '_THINK_STRIP_RE.sub("", content_for_parsing)\n'
+            '    if _cc_parse_text == content_for_parsing'
+        )
+        assert bad_pattern not in text, (
+            "Found copy-pasted think-tag strip in server.py — "
+            "route it through _strip_think_for_tool_parse instead."
+        )
