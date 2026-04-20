@@ -34,19 +34,16 @@ public enum OpenAIRoutes {
             // the 5-minute freshness window, so subsequent hits are free.
             _ = await engine.modelLibrary.scan(force: false)
             let entries = await engine.modelLibrary.entries()
-            let created = Int(Date().timeIntervalSince1970)
             let dflashReady = await engine.dflashIsReady()
             let dflashPath = await engine.dflashDrafterPath()?.path
             let loadedPath = await engine.loadedModelPath?.path
             let data: [[String: Any]] = entries.map { e in
+                let isLoaded = loadedPath.map { $0 == e.canonicalPath.path } ?? false
                 // Attach speculative-decoding metadata only to the
                 // currently-loaded model entry (a drafter is bound to
                 // one specific target at a time).
                 var speculative: [String: Any] = [:]
-                if dflashReady,
-                   let lp = loadedPath,
-                   e.canonicalPath.path == lp
-                {
+                if dflashReady, isLoaded {
                     speculative["kind"] = "dflash"
                     // iter-117 §143: redact drafter path too.
                     speculative["drafter"] = dflashPath.map(Self.redactHomeDir) as Any
@@ -65,6 +62,12 @@ public enum OpenAIRoutes {
                     "is_mxtq": e.isMXTQ,
                     "quant_bits": e.quantBits as Any,
                     "path": Self.redactHomeDir(e.canonicalPath.path),
+                    // iter-104 §182: honest loaded flag. Was previously
+                    // inferred only via presence/absence of the
+                    // `speculative_decoding` block, which was a
+                    // fingerprint at best (and false-negative when the
+                    // user ran without DFlash). Now explicit.
+                    "loaded": isLoaded,
                 ]
                 if !speculative.isEmpty {
                     vmlx["speculative_decoding"] = speculative
@@ -72,8 +75,22 @@ public enum OpenAIRoutes {
                 return [
                     "id": e.displayName,
                     "object": "model",
-                    "created": created,
-                    "owned_by": e.isJANG ? "dealignai" : "mlx-community",
+                    // iter-104 §182: `created` was `Date().timeIntervalSince1970`
+                    // on EVERY call, which returned the current request time
+                    // for every entry — completely broken semantics (OpenAI's
+                    // spec says it's when the model was created). Use the
+                    // entry's `detectedAt` so /v1/models agrees with Ollama's
+                    // /api/tags `modified_at` (both sourced from the same
+                    // ModelLibrary scan).
+                    "created": Int(e.detectedAt.timeIntervalSince1970),
+                    // iter-104 §182: derive owner from `org/repo`
+                    // displayName when present. Prior heuristic collapsed
+                    // every JANG model into "dealignai" (wrong for
+                    // JANGQ-AI/..., OsaurusAI/..., etc.) and every non-JANG
+                    // model into "mlx-community" (wrong for HuggingFaceTB/...,
+                    // Qwen/..., etc.). Local-disk-only entries without an
+                    // "org/" prefix fall back to "local".
+                    "owned_by": Self.deriveOwnedBy(e.displayName),
                     "vmlx": vmlx,
                 ]
             }
@@ -1190,6 +1207,20 @@ public enum OpenAIRoutes {
             return "~" + path.dropFirst(home.count)
         }
         return path
+    }
+
+    /// iter-104 §182: resolve a model's `owned_by` field from its
+    /// displayName. HF-style IDs are `org/repo`; everything before the
+    /// first `/` is the org. For bare-basename entries (local-only
+    /// models without a matching HF repo) we report `"local"` rather
+    /// than the prior mis-mapping to "dealignai" or "mlx-community".
+    static func deriveOwnedBy(_ displayName: String) -> String {
+        if let slash = displayName.firstIndex(of: "/"),
+           slash != displayName.startIndex
+        {
+            return String(displayName[..<slash])
+        }
+        return "local"
     }
 
     static func json(_ obj: [String: Any], status: HTTPResponse.Status = .ok) -> Response {

@@ -118,7 +118,17 @@ public struct GatewayServer {
         // GET /v1/models — union of every registered engine's library.
         router.get("/v1/models") { _, _ -> Response in
             let engines = await enumerate()
-            let created = Int(Date().timeIntervalSince1970)
+            // iter-104 §182: collect the set of currently-loaded model
+            // paths across every engine so the union response can flag
+            // which ids are live. Prior gateway code had no per-entry
+            // loaded flag at all — identical response whether the model
+            // was resident or not.
+            var loadedPaths: Set<String> = []
+            for engine in engines {
+                if let lp = await engine.loadedModelPath {
+                    loadedPaths.insert(lp.path)
+                }
+            }
             var seen = Set<String>()
             var data: [[String: Any]] = []
             for engine in engines {
@@ -126,11 +136,24 @@ public struct GatewayServer {
                 let entries = await engine.modelLibrary.entries()
                 for e in entries where !seen.contains(e.displayName) {
                     seen.insert(e.displayName)
+                    let isLoaded = loadedPaths.contains(e.canonicalPath.path)
                     data.append([
                         "id": e.displayName,
                         "object": "model",
-                        "created": created,
-                        "owned_by": e.isJANG ? "jjang-ai" : "mlx-community",
+                        // iter-104 §182: entry's detectedAt, not request
+                        // time. See OpenAIRoutes /v1/models §182 comment
+                        // for the full rationale (prior `Int(Date().time...
+                        // IntervalSince1970)` stamped every entry with
+                        // the current request time).
+                        "created": Int(e.detectedAt.timeIntervalSince1970),
+                        // iter-104 §182: shared owned_by heuristic. The
+                        // gateway previously used "jjang-ai" while
+                        // OpenAIRoutes used "dealignai" for the same
+                        // isJANG==true condition — clients hitting both
+                        // endpoints saw inconsistent ownership. Now both
+                        // call the shared helper which parses org from
+                        // `org/repo` displayName.
+                        "owned_by": OpenAIRoutes.deriveOwnedBy(e.displayName),
                         // iter-117 §143: redact per-model canonicalPath.
                         // Same rationale as OpenAIRoutes /v1/models.
                         "vmlx": [
@@ -141,6 +164,8 @@ public struct GatewayServer {
                             "is_mxtq": e.isMXTQ,
                             "quant_bits": e.quantBits as Any,
                             "path": OpenAIRoutes.redactHomeDir(e.canonicalPath.path),
+                            // iter-104 §182: loaded flag (gateway path).
+                            "loaded": isLoaded,
                         ],
                     ])
                 }
