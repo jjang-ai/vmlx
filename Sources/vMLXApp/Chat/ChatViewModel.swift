@@ -13,9 +13,34 @@ final class ChatViewModel {
     var searchQuery: String = ""
     var isGenerating: Bool = false
     var reasoningEnabled: Bool = false
+    /// Chat-level "hide tool status" preference, hydrated from
+    /// ChatSettings.hideToolStatus when the active chat switches.
+    /// MessageList passes this down to each MessageBubble which
+    /// suppresses InlineToolCallCard when true. Pre-iter-39 the popover
+    /// toggle persisted to SQLite but no reader consumed it, so
+    /// flipping it had no observable effect.
+    var hideToolStatus: Bool = false
     var pendingImages: [Data] = []
+    /// Pending video attachments keyed by absolute file:// URL. Unlike
+    /// images we don't inline the bytes: a 30 s 1080p clip is ~30 MB
+    /// and would bloat SQLite. The engine path (ChatRequest →
+    /// video_url ContentPart) consumes the URL directly; InputBar
+    /// shows a thumbnail via AVAssetImageGenerator.
+    var pendingVideos: [URL] = []
     var inputText: String = ""
     var bannerMessage: String? = nil
+
+    /// Per-session draft stash: when the user switches away mid-compose
+    /// (half-typed message, attached images/videos), we snapshot the
+    /// pending state under the outgoing sessionId here. Switching back
+    /// restores it so the user doesn't lose their in-progress turn.
+    /// Cleared when `send()` actually dispatches the draft (iter-22).
+    private struct ChatDraft {
+        var inputText: String
+        var pendingImages: [Data]
+        var pendingVideos: [URL]
+    }
+    private var drafts: [UUID: ChatDraft] = [:]
 
     /// Per-session scrollback of user prompts for the Up-arrow input recall
     /// shortcut. Only user messages go here; `historyCursor` tracks the
@@ -182,8 +207,53 @@ final class ChatViewModel {
             streamTask = nil
             isGenerating = false
         }
+        // 2026-04-18 iter-22: save the outgoing chat's compose state
+        // so it survives a round-trip. Pre-fix, switching away mid-
+        // compose and back discarded the user's half-typed text +
+        // attached images/videos, OR worse: kept them attached and
+        // accidentally sent them to the new chat. Now the draft is
+        // keyed per-session.
+        if let outgoing = activeSessionId {
+            if !inputText.isEmpty || !pendingImages.isEmpty || !pendingVideos.isEmpty {
+                drafts[outgoing] = ChatDraft(
+                    inputText: inputText,
+                    pendingImages: pendingImages,
+                    pendingVideos: pendingVideos)
+            } else {
+                drafts.removeValue(forKey: outgoing)
+            }
+        }
         activeSessionId = id
         messages = Database.shared.messages(for: id)
+        // Hydrate chat-level UI preferences from SettingsStore so the
+        // popover toggles take effect immediately on chat switch.
+        //   • `hideToolStatus` drives InlineToolCallCard rendering in
+        //     MessageList → MessageBubble.
+        //   • `workingDirectory` seeds the engine's `terminalCwd` so
+        //     a subsequent bash tool call defaults to that directory
+        //     instead of the process cwd. Before iter-43 the field
+        //     was persisted but never propagated, so users setting a
+        //     per-chat workdir saw no effect unless the model
+        //     explicitly filled `cwd` in the tool-call arguments.
+        if let engine = app?.engine {
+            Task { @MainActor [weak self] in
+                let chat = await engine.settings.chat(id)
+                self?.hideToolStatus = chat?.hideToolStatus ?? false
+                if let wd = chat?.workingDirectory, !wd.isEmpty {
+                    await engine.setTerminalCwd(URL(fileURLWithPath: wd))
+                }
+            }
+        }
+        // Restore (or zero) the incoming chat's draft.
+        if let draft = drafts[id] {
+            inputText = draft.inputText
+            pendingImages = draft.pendingImages
+            pendingVideos = draft.pendingVideos
+        } else {
+            inputText = ""
+            pendingImages = []
+            pendingVideos = []
+        }
     }
 
     /// Cmd-W: remove a chat from the sidebar without touching the DB.
@@ -234,20 +304,47 @@ final class ChatViewModel {
         guard let snapshot = sessions.first(where: { $0.id == id }) else { return }
         let snapshotMessages = Database.shared.messages(for: id)
         let priorActive = activeSessionId
+        // **iter-70 (§99)**: snapshot the draft BEFORE the dict drop so
+        // an undo can restore the user's in-progress compose state.
+        // Previously `deleteSession` only cleaned SQLite + `sessions`;
+        // the draft entry in `drafts[id]` survived as an orphan
+        // (harmless — keyed by UUID so no cross-chat clobber — but a
+        // slow memory leak if the user deletes lots of chats without
+        // ever re-opening). Clearing the stash here means undo must
+        // also re-seat it, handled below.
+        let snapshotDraft = drafts[id]
         Database.shared.deleteSession(id)
         sessions.removeAll { $0.id == id }
+        drafts.removeValue(forKey: id)
         if activeSessionId == id {
             activeSessionId = sessions.first?.id
             messages = activeSessionId.map { Database.shared.messages(for: $0) } ?? []
         }
         pushUndo("Delete chat \"\(snapshot.title)\"") { [weak self] in
             guard let self else { return }
-            Database.shared.upsertSession(snapshot)
-            for m in snapshotMessages { Database.shared.upsertMessage(m) }
+            // Iter-27: batch under a single transaction — same
+            // rationale as clearAllSessions undo above. A 500-message
+            // delete-chat undo pre-fix was 500 sync fsyncs.
+            Database.shared.withTransaction {
+                Database.shared.upsertSession(snapshot)
+                for m in snapshotMessages { Database.shared.upsertMessage(m) }
+            }
             self.sessions = Database.shared.allSessions()
+            if let d = snapshotDraft {
+                self.drafts[id] = d
+            }
             if priorActive == id {
                 self.activeSessionId = id
                 self.messages = snapshotMessages
+                // Active-chat resurrection must also restore live compose
+                // state — not just the drafts dict — otherwise the user
+                // undoes a delete and lands on a blank composer even
+                // though their draft is back in `drafts[id]`.
+                if let d = snapshotDraft {
+                    self.inputText = d.inputText
+                    self.pendingImages = d.pendingImages
+                    self.pendingVideos = d.pendingVideos
+                }
             }
         }
     }
@@ -282,27 +379,54 @@ final class ChatViewModel {
         for s in sessions {
             snapshotMessages[s.id] = Database.shared.messages(for: s.id)
         }
+        // iter-70 (§99): snapshot every stashed draft so undo can restore
+        // in-progress compose state alongside the sessions/messages.
+        // Same orphan-leak rationale as `deleteSession` — without the
+        // clear, drafts for wiped chats survive in memory (harmless
+        // cross-chat wise because they're UUID-keyed, but a slow leak
+        // if the user does repeated clear cycles).
+        let snapshotDrafts = drafts
         for s in sessions {
             Database.shared.deleteSession(s.id)
         }
         sessions.removeAll()
         recentlyClosed.removeAll()
+        drafts.removeAll(keepingCapacity: false)
         activeSessionId = nil
         messages = []
         // Land in a fresh empty session so the chat screen isn't blank.
         newSession()
         pushUndo("Clear all chats (\(snapshotSessions.count))") { [weak self] in
             guard let self else { return }
-            for s in snapshotSessions {
-                Database.shared.upsertSession(s)
-                for m in snapshotMessages[s.id] ?? [] {
-                    Database.shared.upsertMessage(m)
+            // Iter-27: batch the bulk-restore under a single SQLite
+            // transaction. Pre-fix a 20-chat × 50-msg clear→undo cycle
+            // was ~1000 synchronous fsync calls (each upsertSession /
+            // upsertMessage committed independently in WAL mode) which
+            // stalled the Main Actor for multiple seconds on rotational
+            // storage. With one txn this is sub-100ms on SSD, a couple
+            // hundred ms on rotational.
+            Database.shared.withTransaction {
+                for s in snapshotSessions {
+                    Database.shared.upsertSession(s)
+                    for m in snapshotMessages[s.id] ?? [] {
+                        Database.shared.upsertMessage(m)
+                    }
                 }
             }
             self.sessions = Database.shared.allSessions()
+            // Re-seat every snapshotted draft so undo fully restores
+            // the pre-wipe compose state across all chats.
+            for (id, d) in snapshotDrafts {
+                self.drafts[id] = d
+            }
             if let first = self.sessions.first {
                 self.activeSessionId = first.id
                 self.messages = Database.shared.messages(for: first.id)
+                if let d = snapshotDrafts[first.id] {
+                    self.inputText = d.inputText
+                    self.pendingImages = d.pendingImages
+                    self.pendingVideos = d.pendingVideos
+                }
             }
         }
     }
@@ -338,6 +462,81 @@ final class ChatViewModel {
         Database.shared.deleteMessages(after: anchor.createdAt, in: sessionId)
         messages.removeSubrange(idx...)
         send()
+    }
+
+    /// Branch: fork this chat from `messageId` into a new session. Copies
+    /// every message strictly BEFORE `messageId` into a fresh ChatSession
+    /// (with new UUIDs to avoid primary-key collisions in SQLite) and
+    /// opens that session. The original chat is unchanged — the user can
+    /// return to it any time.
+    ///
+    /// Production use case: "what if I'd answered differently mid-way
+    /// through". Common in Claude/ChatGPT web UIs. 2026-04-18 iter-9.
+    func branchSession(from messageId: UUID) {
+        // VM-level guards — complement the MessageBubble disable state
+        // so non-UI callers (future scripting / keyboard shortcut) can't
+        // branch into an inconsistent state.
+        guard !isGenerating else {
+            app?.flashBanner("Stop the current response before branching")
+            return
+        }
+        guard let sourceId = activeSessionId else { return }
+        guard let source = sessions.first(where: { $0.id == sourceId }) else { return }
+        guard let idx = messages.firstIndex(where: { $0.id == messageId }) else { return }
+
+        // Slice [0, idx) — everything STRICTLY before the anchor.
+        let copied = Array(messages.prefix(idx))
+        guard !copied.isEmpty else {
+            // Can't branch from the first message — that's identical to
+            // a fresh session. Flash-banner the user so they know why
+            // nothing happened.
+            app?.flashBanner("Can't branch from the first message — use New Chat instead")
+            return
+        }
+
+        // Build the fork with a fresh UUID + a title that tells the
+        // user which chat this branched from without being noisy.
+        let forkTitle: String = {
+            let base = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = base.isEmpty ? "chat" : base
+            return "↱ \(trimmed)"
+        }()
+        let now = Date()
+        let fork = ChatSession(
+            id: UUID(), title: forkTitle,
+            modelPath: source.modelPath,
+            createdAt: now, updatedAt: now
+        )
+        // Iter-27: wrap fork creation + message copy in a single
+        // SQLite transaction. Pre-fix a 500-message branch blocked
+        // the Main Actor for ~hundreds of ms on rotational storage.
+        // Re-id each copied message so SQLite primary keys don't
+        // collide and cascading deletes on the original chat don't
+        // take the fork's rows with them. Preserve ordering via
+        // incremental microsecond bumps on createdAt.
+        Database.shared.withTransaction {
+            Database.shared.upsertSession(fork)
+            for (offset, original) in copied.enumerated() {
+                var m = original
+                m.id = UUID()
+                m.sessionId = fork.id
+                m.createdAt = now.addingTimeInterval(TimeInterval(offset) * 1e-6)
+                Database.shared.upsertMessage(m)
+            }
+        }
+
+        // Open the fork so the user lands inside it immediately.
+        sessions.insert(fork, at: 0)
+        selectSession(fork.id)
+        pushUndo("Branch \"\(fork.title)\"") { [weak self] in
+            guard let self else { return }
+            Database.shared.deleteSession(fork.id)
+            self.sessions.removeAll(where: { $0.id == fork.id })
+            if self.activeSessionId == fork.id {
+                self.activeSessionId = sourceId
+                self.messages = Database.shared.messages(for: sourceId)
+            }
+        }
     }
 
     func send() {
@@ -385,7 +584,8 @@ final class ChatViewModel {
                 sessionId: sessionId,
                 role: .user,
                 content: trimmed,
-                imageData: pendingImages
+                imageData: pendingImages,
+                videoPaths: pendingVideos.map { $0.absoluteString }
             )
             messages.append(user)
             Database.shared.upsertMessage(user)
@@ -397,6 +597,11 @@ final class ChatViewModel {
             historyCursor = nil
             inputText = ""
             pendingImages = []
+            pendingVideos = []
+            // iter-22: dispatched the draft — clear its stashed copy
+            // under the active session so a selectSession() round-trip
+            // doesn't silently resurrect the already-sent content.
+            drafts.removeValue(forKey: sessionId)
 
             // Bump session updatedAt so the sidebar reorders this chat
             // to the top (allSessions ORDERs BY updated_at DESC).
@@ -435,7 +640,9 @@ final class ChatViewModel {
         // can forward them to `UserInput.images` for the VLM processor.
         let reqMessages: [ChatRequest.Message] = messages.dropLast().map { m in
             let content: ChatRequest.ContentValue
-            if m.role == .user && !m.imageData.isEmpty {
+            let hasMedia = m.role == .user &&
+                (!m.imageData.isEmpty || !m.videoPaths.isEmpty)
+            if hasMedia {
                 var parts: [ChatRequest.ContentPart] = []
                 if !m.content.isEmpty {
                     parts.append(ChatRequest.ContentPart(
@@ -447,6 +654,15 @@ final class ChatViewModel {
                     parts.append(ChatRequest.ContentPart(
                         type: "image_url",
                         imageUrl: .init(url: dataURL)))
+                }
+                // Video attachments: pass the absolute `file://` URL
+                // through as a `video_url` ContentPart. `Stream.extractVideos`
+                // (iter-0 carry-over) stages the file via AVURLAsset and
+                // hands it to the VLM processor as a UserInput.Video.
+                for path in m.videoPaths {
+                    parts.append(ChatRequest.ContentPart(
+                        type: "video_url",
+                        videoUrl: .init(url: path)))
                 }
                 content = .parts(parts)
             } else {
@@ -469,14 +685,12 @@ final class ChatViewModel {
         // can fork between local Engine and remote endpoint. Reading
         // SessionSettings here (rather than inside the streamTask) keeps
         // the 4-tier resolution cheap and avoids two extra actor hops.
+        // `serverSid` is captured into the streamTask below so the
+        // settings resolution + remote-endpoint dispatch can look up
+        // the per-session SessionSettings blob. MainActor hop would be
+        // wasteful here — we pass the raw UUID and let the Task do the
+        // engine.settings.session(_:) lookup asynchronously.
         let serverSid = serverSessionId
-        let remoteSession: SessionSettings? = {
-            guard let sid = serverSid else { return nil }
-            // The Settings store is per-engine; pull from the engine
-            // bound to this server session.
-            return nil  // placeholder, filled inside the Task below
-        }()
-        _ = remoteSession  // kept for documentation; real resolution below
         streamTask = Task { [weak self] in
             guard let engine = engine else { return }
             // Pull the 4-tier-resolved settings snapshot for this chat. The
@@ -524,9 +738,51 @@ final class ChatViewModel {
                 return .auto
             }()
 
-            let req = ChatRequest(
+            // Chat-level sampling overrides that the 4-tier resolver
+            // doesn't synthesize into `r` (which returns a flat
+            // GlobalSettings). ChatSettingsPopover persists both of
+            // these, but ChatViewModel used to hardcode them to nil on
+            // the outbound ChatRequest — meaning the UI knobs had no
+            // observable effect on the in-app chat path.
+            //   • reasoningEffort: none/low/medium/high clamps the
+            //     engine's reasoning window for Mistral 4 / DeepSeek /
+            //     GLM. Global default is "none" for parity with the
+            //     Python app's v1.3.x behavior.
+            //   • stopSequences: extra strings that halt decode early;
+            //     used by tool-calling clients + user-visible "Stop on
+            //     </end>" workflows.
+            let reasoningEffortOut = chatOverrides?.reasoningEffort
+            let stopSequencesOut = chatOverrides?.stopSequences
+
+            // System prompt injection. The 4-tier resolver already picks
+            // the highest-priority non-nil systemPrompt (chat → session
+            // → global) into `r.defaultSystemPrompt`. Before iter-34 no
+            // consumer read it on the in-app chat path — users setting
+            // a per-chat system prompt via ChatSettingsPopover got
+            // silently ignored. Now we prepend it as a `system` message
+            // IFF the transcript doesn't already start with one. The
+            // dedup is deliberate: an explicit system message in the
+            // visible chat transcript is the user directly authoring
+            // instructions and must win over the settings-tier default.
+            let resolvedSystemPrompt = r.defaultSystemPrompt ?? ""
+            let hasExistingSystemMsg = reqMessages.first?.role.lowercased() == "system"
+            let effectiveMessages: [ChatRequest.Message] = {
+                guard !resolvedSystemPrompt.isEmpty, !hasExistingSystemMsg else {
+                    return reqMessages
+                }
+                let sys = ChatRequest.Message(
+                    role: "system",
+                    content: .string(resolvedSystemPrompt),
+                    name: nil,
+                    toolCalls: nil,
+                    toolCallId: nil
+                )
+                return [sys] + reqMessages
+            }()
+
+            var req = ChatRequest(
                 model: modelField,
-                messages: reqMessages,
+                messages: effectiveMessages,
                 stream: true,
                 maxTokens: r.defaultMaxTokens,
                 temperature: r.defaultTemperature,
@@ -534,13 +790,24 @@ final class ChatViewModel {
                 topK: r.defaultTopK,
                 minP: r.defaultMinP,
                 repetitionPenalty: r.defaultRepetitionPenalty,
-                stop: nil,
+                stop: stopSequencesOut,
                 seed: nil,
                 enableThinking: r.defaultEnableThinking ?? reasoning,
-                reasoningEffort: nil,
+                reasoningEffort: reasoningEffortOut,
                 tools: toolList,
                 toolChoice: toolChoiceValue
             )
+            // Tool-loop ceiling: `ChatRequest.init` doesn't take
+            // maxToolIterations (historical — the init predates the
+            // tool-loop feature). Before iter-37, leaving it nil meant
+            // Stream.swift fell back to its internal default (10) and
+            // the ChatSettingsPopover slider (1–32) was purely
+            // cosmetic. Post-init assignment wires the user's value
+            // through; Stream.swift reads `request.maxToolIterations`
+            // first when deciding the loop budget.
+            if let mti = chatOverrides?.maxToolIterations, mti > 0 {
+                req.maxToolIterations = mti
+            }
 
             // JIT wake: if this engine is in soft/deep standby (idle timer
             // fired, user manually slept it, or wake was skipped), bring

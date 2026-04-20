@@ -42,47 +42,62 @@ public enum SSEEncoder {
             var lastUsage: StreamChunk.Usage? = nil
             var toolCallIndex = 0
 
+            // Merge upstream with a periodic heartbeat (see
+            // `sseMergeWithHeartbeat` docs). Protects thinking models
+            // from idle-timeout disconnects on LAN / proxied deployments.
+            let merged = sseMergeWithHeartbeat(
+                upstream: upstream, interval: sseHeartbeatInterval)
+
             do {
-                for try await chunk in upstream {
-                    if let reasoning = chunk.reasoning, !reasoning.isEmpty, includeReasoning {
-                        let j = Self.chunkJSON(
-                            id: id, model: model, created: created,
-                            delta: ["reasoning_content": reasoning],
-                            finishReason: nil
-                        )
-                        try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
-                    }
-                    if let content = chunk.content, !content.isEmpty {
-                        let j = Self.chunkJSON(
-                            id: id, model: model, created: created,
-                            delta: ["content": content],
-                            finishReason: nil
-                        )
-                        try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
-                    }
-                    if let tcs = chunk.toolCalls, !tcs.isEmpty {
-                        for tc in tcs {
-                            let delta: [String: Any] = [
-                                "tool_calls": [[
-                                    "index": toolCallIndex,
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": [
-                                        "name": tc.function.name,
-                                        "arguments": tc.function.arguments,
-                                    ] as [String: Any],
-                                ] as [String: Any]]
-                            ]
+                for try await event in merged {
+                    switch event {
+                    case .heartbeat:
+                        // SSE comment — ignored by EventSource parsers
+                        // but flushes TCP so the connection stays warm.
+                        try await writer.write(
+                            allocator.buffer(string: ": keep-alive\n\n"))
+                        continue
+                    case .chunk(let chunk):
+                        if let reasoning = chunk.reasoning, !reasoning.isEmpty, includeReasoning {
                             let j = Self.chunkJSON(
                                 id: id, model: model, created: created,
-                                delta: delta, finishReason: nil
+                                delta: ["reasoning_content": reasoning],
+                                finishReason: nil
                             )
                             try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
-                            toolCallIndex += 1
                         }
+                        if let content = chunk.content, !content.isEmpty {
+                            let j = Self.chunkJSON(
+                                id: id, model: model, created: created,
+                                delta: ["content": content],
+                                finishReason: nil
+                            )
+                            try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                        }
+                        if let tcs = chunk.toolCalls, !tcs.isEmpty {
+                            for tc in tcs {
+                                let delta: [String: Any] = [
+                                    "tool_calls": [[
+                                        "index": toolCallIndex,
+                                        "id": tc.id,
+                                        "type": "function",
+                                        "function": [
+                                            "name": tc.function.name,
+                                            "arguments": tc.function.arguments,
+                                        ] as [String: Any],
+                                    ] as [String: Any]]
+                                ]
+                                let j = Self.chunkJSON(
+                                    id: id, model: model, created: created,
+                                    delta: delta, finishReason: nil
+                                )
+                                try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                                toolCallIndex += 1
+                            }
+                        }
+                        if let fr = chunk.finishReason { finishReason = fr }
+                        if let u = chunk.usage { lastUsage = u }
                     }
-                    if let fr = chunk.finishReason { finishReason = fr }
-                    if let u = chunk.usage { lastUsage = u }
                 }
             } catch {
                 let errObj: [String: Any] = [
@@ -146,24 +161,33 @@ public enum SSEEncoder {
         ResponseBody { writer in
             let allocator = ByteBufferAllocator()
             var finishReason: String? = nil
+            let merged = sseMergeWithHeartbeat(
+                upstream: upstream, interval: sseHeartbeatInterval)
             do {
-                for try await chunk in upstream {
-                    if let content = chunk.content, !content.isEmpty {
-                        let obj: [String: Any] = [
-                            "id": id,
-                            "object": "text_completion.chunk",
-                            "created": created,
-                            "model": model,
-                            "choices": [[
-                                "index": 0,
-                                "text": content,
-                                "finish_reason": NSNull(),
-                            ] as [String: Any]],
-                        ]
-                        let j = Self.asciiJSON(obj)
-                        try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                for try await event in merged {
+                    switch event {
+                    case .heartbeat:
+                        try await writer.write(
+                            allocator.buffer(string: ": keep-alive\n\n"))
+                        continue
+                    case .chunk(let chunk):
+                        if let content = chunk.content, !content.isEmpty {
+                            let obj: [String: Any] = [
+                                "id": id,
+                                "object": "text_completion.chunk",
+                                "created": created,
+                                "model": model,
+                                "choices": [[
+                                    "index": 0,
+                                    "text": content,
+                                    "finish_reason": NSNull(),
+                                ] as [String: Any]],
+                            ]
+                            let j = Self.asciiJSON(obj)
+                            try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                        }
+                        if let fr = chunk.finishReason { finishReason = fr }
                     }
-                    if let fr = chunk.finishReason { finishReason = fr }
                 }
             } catch {
                 let errObj: [String: Any] = [
@@ -405,51 +429,60 @@ public enum SSEEncoder {
                 return (itemId, outputIndex)
             }
 
+            let merged = sseMergeWithHeartbeat(
+                upstream: upstream, interval: sseHeartbeatInterval)
             do {
-                for try await chunk in upstream {
-                    if let r = chunk.reasoning, !r.isEmpty {
-                        let (itemId, outputIndex) = try await openReasoning()
-                        accumulatedReasoning += r
-                        try await send("response.reasoning_summary_text.delta", [
-                            "type": "response.reasoning_summary_text.delta",
-                            "item_id": itemId,
-                            "output_index": outputIndex,
-                            "summary_index": 0,
-                            "delta": r,
-                        ])
-                    }
-                    if let c = chunk.content, !c.isEmpty {
-                        let (itemId, outputIndex) = try await openMessage()
-                        accumulatedText += c
-                        try await send("response.output_text.delta", [
-                            "type": "response.output_text.delta",
-                            "item_id": itemId,
-                            "output_index": outputIndex,
-                            "content_index": 0,
-                            "delta": c,
-                        ])
-                    }
-                    if let tcs = chunk.toolCalls, !tcs.isEmpty {
-                        for tc in tcs {
-                            let (itemId, outputIndex) = try await openToolCall(
-                                callId: tc.id, name: tc.function.name)
-                            if !tc.function.arguments.isEmpty {
-                                // Accumulate the partial arg string for
-                                // this call id so `closeCurrent()` can
-                                // emit the full assembled arguments in
-                                // the terminal `output_item.done` payload.
-                                toolArgsByCallId[tc.id, default: ""] += tc.function.arguments
-                                try await send("response.function_call_arguments.delta", [
-                                    "type": "response.function_call_arguments.delta",
-                                    "item_id": itemId,
-                                    "output_index": outputIndex,
-                                    "delta": tc.function.arguments,
-                                ])
+                for try await event in merged {
+                    switch event {
+                    case .heartbeat:
+                        try await writer.write(
+                            allocator.buffer(string: ": keep-alive\n\n"))
+                        continue
+                    case .chunk(let chunk):
+                        if let r = chunk.reasoning, !r.isEmpty {
+                            let (itemId, outputIndex) = try await openReasoning()
+                            accumulatedReasoning += r
+                            try await send("response.reasoning_summary_text.delta", [
+                                "type": "response.reasoning_summary_text.delta",
+                                "item_id": itemId,
+                                "output_index": outputIndex,
+                                "summary_index": 0,
+                                "delta": r,
+                            ])
+                        }
+                        if let c = chunk.content, !c.isEmpty {
+                            let (itemId, outputIndex) = try await openMessage()
+                            accumulatedText += c
+                            try await send("response.output_text.delta", [
+                                "type": "response.output_text.delta",
+                                "item_id": itemId,
+                                "output_index": outputIndex,
+                                "content_index": 0,
+                                "delta": c,
+                            ])
+                        }
+                        if let tcs = chunk.toolCalls, !tcs.isEmpty {
+                            for tc in tcs {
+                                let (itemId, outputIndex) = try await openToolCall(
+                                    callId: tc.id, name: tc.function.name)
+                                if !tc.function.arguments.isEmpty {
+                                    // Accumulate the partial arg string for
+                                    // this call id so `closeCurrent()` can
+                                    // emit the full assembled arguments in
+                                    // the terminal `output_item.done` payload.
+                                    toolArgsByCallId[tc.id, default: ""] += tc.function.arguments
+                                    try await send("response.function_call_arguments.delta", [
+                                        "type": "response.function_call_arguments.delta",
+                                        "item_id": itemId,
+                                        "output_index": outputIndex,
+                                        "delta": tc.function.arguments,
+                                    ])
+                                }
                             }
                         }
+                        if let fr = chunk.finishReason { finishReason = fr }
+                        if let u = chunk.usage { lastUsage = u }
                     }
-                    if let fr = chunk.finishReason { finishReason = fr }
-                    if let u = chunk.usage { lastUsage = u }
                 }
             } catch {
                 let errObj: [String: Any] = [
@@ -476,11 +509,11 @@ public enum SSEEncoder {
             ]
             if let u = lastUsage {
                 var r = completed["response"] as! [String: Any]
-                r["usage"] = [
-                    "input_tokens": u.promptTokens,
-                    "output_tokens": u.completionTokens,
-                    "total_tokens": u.promptTokens + u.completionTokens,
-                ] as [String: Any]
+                // iter-67 (§96) — include tokens_per_second / ttft_ms /
+                // prefill_ms / total_ms in the `response.completed`
+                // usage dict for parity with chat/completions,
+                // Ollama, and Anthropic surfaces.
+                r["usage"] = OpenAIRoutes.responsesUsageEnvelope(u)
                 completed["response"] = r
             }
             try await send("response.completed", completed)
@@ -557,3 +590,97 @@ extension ByteBufferAllocator {
         return b
     }
 }
+
+// MARK: - Heartbeat merging
+//
+// Thinking models (Qwen3.6-JANGTQ2, GLM-5.1, DeepSeek R1) can spend
+// 20-40 seconds in prefill + initial reasoning before emitting their
+// first visible token. If vMLX is LAN-bound behind an idle-timeout
+// proxy (nginx default 60s) OR the client has a short HTTP read
+// timeout (ollama-js default 30s, some custom SDKs ~20s), the TCP
+// connection is torn down before the first token arrives and the
+// user sees a "connection reset" rather than the completion.
+//
+// Fix: merge the upstream chunk stream with a periodic heartbeat
+// signal. When heartbeat fires, we emit a single SSE comment line
+// (`: keep-alive\n\n`) — valid per the SSE spec, ignored by
+// EventSource / ChatGPT / Ollama parsers, but puts bytes on the wire
+// so the TCP connection stays live. Local 127.0.0.1 servers get
+// this essentially for free (negligible cost) and LAN / proxied
+// deployments stop dropping thinking-model streams.
+//
+// The heartbeat is cancelled when the upstream terminates so the
+// final [DONE] isn't followed by a stray keep-alive.
+
+/// Unified event type threaded through the merged heartbeat stream.
+enum SSEMergedEvent: @unchecked Sendable {
+    case chunk(StreamChunk)
+    case heartbeat
+}
+
+/// Merge `upstream` chunks with a periodic heartbeat. The returned
+/// stream yields `.chunk(c)` for every upstream element (in order)
+/// and `.heartbeat` every `interval` seconds in between. Errors and
+/// termination propagate from the upstream. Pass `interval <= 0` to
+/// disable heartbeating entirely.
+func sseMergeWithHeartbeat(
+    upstream: AsyncThrowingStream<StreamChunk, Error>,
+    interval: TimeInterval
+) -> AsyncThrowingStream<SSEMergedEvent, Error> {
+    AsyncThrowingStream { continuation in
+        // 2026-04-18 iter-18 fix: a strongly-held ref to the heartbeat
+        // task so the upstream completion closure can cancel it even
+        // when the consumer drains the stream normally (no-cancel path
+        // — `onTermination` doesn't always fire on clean completion,
+        // and without explicit cancellation the heartbeat loop would
+        // run forever, yielding into a finished continuation).
+        // Wrapped in a class box for cross-Task write access.
+        final class HeartbeatHandle: @unchecked Sendable {
+            var task: Task<Void, Never>?
+        }
+        let hb = HeartbeatHandle()
+
+        let upstreamTask = Task {
+            do {
+                for try await c in upstream {
+                    continuation.yield(.chunk(c))
+                }
+                // Clean upstream end — cancel the heartbeat BEFORE
+                // finishing the continuation so no stray .heartbeat
+                // events arrive between finish() and the consumer's
+                // return-from-loop.
+                hb.task?.cancel()
+                continuation.finish()
+            } catch {
+                hb.task?.cancel()
+                continuation.finish(throwing: error)
+            }
+        }
+        if interval > 0 {
+            hb.task = Task {
+                let nanos = UInt64(interval * 1_000_000_000)
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: nanos)
+                    if Task.isCancelled { return }
+                    continuation.yield(.heartbeat)
+                }
+            }
+        }
+        continuation.onTermination = { _ in
+            upstreamTask.cancel()
+            hb.task?.cancel()
+        }
+    }
+}
+
+/// Heartbeat interval used by every SSE-producing route. Env override
+/// `VMLX_SSE_HEARTBEAT_SEC` lets ops tune for a specific proxy
+/// without rebuilding. 15s is a conservative middle ground that
+/// protects nginx's 60s default while staying cheap on 127.0.0.1.
+let sseHeartbeatInterval: TimeInterval = {
+    if let raw = ProcessInfo.processInfo.environment["VMLX_SSE_HEARTBEAT_SEC"],
+       let v = TimeInterval(raw), v >= 0 {
+        return v
+    }
+    return 15
+}()

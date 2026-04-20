@@ -13,9 +13,19 @@ struct MessageBubble: View {
     /// Regenerate is hidden on older assistant turns, mirroring the React
     /// MessageBubble's `isLastAssistant` prop.
     let isLastAssistant: Bool
+    /// User-level preference — when true, suppress InlineToolCallCard
+    /// rendering entirely. Mirrors ChatSettings.hideToolStatus from the
+    /// chat-settings popover. Pre-iter-39 the toggle persisted to SQLite
+    /// but the view unconditionally rendered tool cards — so flipping
+    /// it had no visible effect.
+    let hideToolStatus: Bool
     let onDelete: () -> Void
     let onEdit: (String) -> Void
     let onRegenerate: () -> Void
+    /// Fork this chat from the current message into a new session, keeping
+    /// everything strictly BEFORE the anchor. `nil` hides the button (for
+    /// the first message, where branching is equivalent to New Chat).
+    var onBranch: (() -> Void)? = nil
 
     @State private var hovered = false
     @State private var editing = false
@@ -60,8 +70,13 @@ struct MessageBubble: View {
                 // message carries tool calls — chat mode users running
                 // MCP/OpenWebUI-style tools need to see invocations just
                 // like Terminal mode does.
+                //
+                // Honors ChatSettings.hideToolStatus: power users who
+                // don't want to see every sub-call (they trust the
+                // model and just want the final answer) can flip the
+                // chat-settings toggle and suppress this block.
                 let toolCalls = message.inlineToolCalls
-                if !toolCalls.isEmpty {
+                if !toolCalls.isEmpty, !hideToolStatus {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                         ForEach(toolCalls) { tc in
                             InlineToolCallCard(toolCall: tc)
@@ -89,6 +104,14 @@ struct MessageBubble: View {
                                 .help("Click to zoom")
                             }
                             #endif
+                        }
+                    }
+                }
+
+                if !message.videoPaths.isEmpty {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        ForEach(Array(message.videoPaths.enumerated()), id: \.offset) { _, path in
+                            videoChip(pathString: path)
                         }
                     }
                 }
@@ -231,6 +254,19 @@ struct MessageBubble: View {
                 .disabled(isGenerating)
                 .help(isGenerating ? "Stop generating to regenerate" : "Regenerate response")
             }
+            if let onBranch {
+                Button(action: onBranch) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10))
+                        .foregroundStyle(isGenerating ? Theme.Colors.textLow.opacity(0.4)
+                                                      : Theme.Colors.textLow)
+                }
+                .buttonStyle(.plain)
+                .disabled(isGenerating)
+                .help(isGenerating
+                      ? "Stop generating to branch"
+                      : "Fork this chat from before this message into a new session")
+            }
             Button {
                 showDeleteConfirm = true
             } label: {
@@ -241,6 +277,45 @@ struct MessageBubble: View {
             .buttonStyle(.plain)
             .help("Delete message")
         }
+    }
+
+    /// Renders a persisted video attachment as a clickable chip. Click
+    /// opens the file in Finder (user wanted a light-weight surface;
+    /// QuickLook would need an NSViewRepresentable). Missing files
+    /// (user deleted the temp staging) render the chip in muted color
+    /// with a "file not found" tooltip rather than crashing.
+    @ViewBuilder
+    private func videoChip(pathString: String) -> some View {
+        let url = URL(string: pathString) ?? URL(fileURLWithPath: pathString)
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        Button {
+            #if canImport(AppKit)
+            if exists {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+            #endif
+        } label: {
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(exists ? Theme.Colors.accent : Theme.Colors.textLow)
+                Text(url.lastPathComponent)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(exists ? Theme.Colors.textMid : Theme.Colors.textLow)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 200)
+            }
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(Theme.Colors.surfaceHi.opacity(exists ? 1.0 : 0.6))
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!exists)
+        .help(exists ? "Reveal in Finder" : "File not found — temp staging may have been cleared")
     }
 
     private var roleLabel: String {

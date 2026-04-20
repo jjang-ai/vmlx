@@ -673,7 +673,7 @@ public struct JangLoader: Sendable {
 
 // MARK: - Errors
 
-public enum JangLoaderError: Error, LocalizedError, Sendable {
+public enum JangLoaderError: Error, LocalizedError, CustomStringConvertible, Sendable {
     case configNotFound(String)
     case invalidConfig(String)
     case unsupportedVersion(String)
@@ -687,4 +687,13 @@ public enum JangLoaderError: Error, LocalizedError, Sendable {
         case .loadFailed(let msg): return "JANG load failed: \(msg)"
         }
     }
+
+    // Engine.swift reports load failures via `await fail("\(error)")`
+    // which produces the enum-case form unless we also conform to
+    // `CustomStringConvertible`. Without this, Load.swift's carefully-
+    // crafted HTML-error-page message, empty-weights message, and
+    // JANGTQ misconfig message all surfaced to the user as
+    // `loadFailed("Shard …")` rather than the actual diagnostic.
+    // **iter-66 (§95)**.
+    public var description: String { errorDescription ?? "\(Self.self)" }
 }

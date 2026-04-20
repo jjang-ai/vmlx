@@ -50,6 +50,24 @@ public final class SSMStateCache: @unchecked Sendable {
     /// Number of cache misses since creation (or last ``clear()``).
     public private(set) var misses: Int = 0
 
+    /// Number of times the hybrid-SSM re-derive watcher fired (iter-40).
+    /// Incremented by `markReDeriveFired()` from `maybeReDeriveSSMState`
+    /// whenever a thinking-template turn triggers a prompt-only pass.
+    /// Distinct from `misses` so the UI can distinguish "I never tried"
+    /// from "I tried but the cache was contaminated so I re-derived".
+    /// Zero for pure-attention models (re-derive always no-ops early).
+    public private(set) var reDerives: Int = 0
+
+    /// Bump the re-derive counter. Lock-protected so it stays
+    /// consistent with the hits/misses counters under concurrent
+    /// access. Called from the detached Task in `Stream.swift` or
+    /// synchronously when `VMLX_DISABLE_SSM_RE_DERIVE_ASYNC=1`.
+    public func markReDeriveFired() {
+        lock.lock()
+        reDerives &+= 1
+        lock.unlock()
+    }
+
     // MARK: - Initialization
 
     /// Creates a new SSM state cache.
@@ -178,7 +196,7 @@ public final class SSMStateCache: @unchecked Sendable {
         return FetchResult(states: copies, isComplete: entry.isComplete)
     }
 
-    /// Remove all entries and reset hit/miss statistics.
+    /// Remove all entries and reset hit/miss/re-derive statistics.
     public func clear() {
         lock.lock()
         defer { lock.unlock() }
@@ -186,6 +204,7 @@ public final class SSMStateCache: @unchecked Sendable {
         entries.removeAll()
         hits = 0
         misses = 0
+        reDerives = 0
     }
 
     // MARK: - Key Generation

@@ -639,7 +639,15 @@ public final class MemoryAwarePrefixCache<Payload>: @unchecked Sendable {
 
     private func checkMemoryPressure() {
         let now = Date()
-        guard now.timeIntervalSince(lastPressureCheckAt) > 60 else { return }
+        // Throttle bumped 60s → 10s on 2026-04-18 to address JANGTQ2 burst OOM:
+        // a 5-way burst of 10 GB JANGTQ chats completes in ~15s, well inside
+        // the old 60s window. Each store() call adds 500 MB-1 GB of
+        // TQ-compressed arrays; with pressure checks throttled the memory
+        // cache grows unboundedly until macOS OOM-kills the process. 10s
+        // gives the burst 2-3 pressure checks to drive eviction between
+        // sequential requests — still cheap for the common case of small
+        // text stores. See SWIFT-AUDIT-2026-04-18.md §3a.
+        guard now.timeIntervalSince(lastPressureCheckAt) > 10 else { return }
         lastPressureCheckAt = now
 
         let available = availableMemory()

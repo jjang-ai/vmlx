@@ -17,9 +17,22 @@ Updated as models change. See also:
 | Tier | Type | What it stores | Gating |
 |---|---|---|---|
 | L1  | `PagedCacheManager` (in-memory, block-indexed) | KV blocks with LRU | `config.usePagedCache` |
-| L1.5 | `MemoryAwarePrefixCache` (byte-budgeted) | Whole-prompt payloads | `config.enableMemoryCache` (default off) |
+| L1.5 | `MemoryAwarePrefixCache` (byte-budgeted) | Whole-prompt payloads | `config.enableMemoryCache` (**default ON** in `GlobalSettings.enableMemoryCache=true`; the `CacheCoordinatorConfig.init` default is `false` but the engine always passes the GlobalSettings value through) |
 | L2  | `DiskCache` + `TQDiskSerializer` v2 | Per-prompt full KV + Mamba state on SSD | `config.enableDiskCache` (**default ON** as of 2026-04-14) |
-| SSM | `SSMStateCache` (LRU) | Companion Mamba state per hash-prefix | Automatic when `coordinator.isHybrid` |
+| SSM | `SSMStateCache` (LRU) | Companion Mamba state per hash-prefix + re-derive counter | Automatic when `coordinator.isHybrid`; re-derive watcher gated by `config.enableSSMReDerive` (**default ON**). iter-45 root-fix runs prepare-tail through the model forward pass so `MambaCache.state` actually populates. iter-40 adds a `reDerives` counter + `markReDeriveFired()` bumper — surfaced in `cacheStats.ssmCompanion.reDerives` and rendered in CachePanel as a "Re-derives" cell. Observability breadcrumbs tagged `[vmlx][cache/ssm-rederive]` cover every gate branch so operators can see why the watcher fired or skipped. |
+
+## Paged cache block-alignment gotcha (iter-46)
+
+`PagedCacheManager.fetchPrefix` walks tokens in `blockSize`-sized
+chunks (default 64). For prompts shorter than `blockSize` the
+while-loop never enters, `fetchPrefix` returns `nil` WITHOUT
+incrementing `cacheHits` or `cacheMisses`, and the SSM-companion
+fetch is gated inside the paged hit branch — so sub-block chat
+prompts get ZERO cache tiers from paged+SSM. The memory tier (L1.5)
+still tries at whole-prompt granularity but its exact-hash match
+only rescues replays of an identical prompt. Follow-up options:
+(a) lower `pagedCacheBlockSize` default, (b) sub-block fallback key,
+(c) promote memory tier to prefix-match independently of paged.
 
 ## Layer-kind support in TQDiskSerializer v2
 

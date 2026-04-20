@@ -153,15 +153,47 @@ extension Engine {
                 //    setCurrentCommandEncoder:`
                 // depending on how far the encoder had progressed.
                 //
-                // 150 ms is conservative — picked by bisection against
-                // `case_cancel_midstream` on Qwen3-0.6B under background
-                // load. After the delay, run the SAME eval + dual-sync
-                // barrier as the happy path: eval on a fresh scalar
-                // commits any remnant encoder, then the sync pair drains.
+                // 150 ms was the original bisection on Qwen3-0.6B.
+                //
+                // JANGTQ native models (Qwen3.6-35B-A3B-JANGTQ2 etc.) with
+                // custom compute encoders (P3/P15/P17/P18) reproducibly
+                // SIGSEGV in the eval+sync barrier BELOW during a single
+                // cancel_midstream even when this sleep is extended to
+                // 500ms. Root cause is the encoder itself being mid-write
+                // when eval fires — not a drain-timing issue. Fix
+                // requires either JANGTQ-specific encoder close hooks in
+                // the kernel dispatcher OR skipping the eval barrier when
+                // the model is JANGTQ-native. Flagged as an open blocker
+                // in SWIFT-AUDIT-2026-04-18.md §3 for next session.
+                // Cancel-aware drain. The 2026-04-18 root-cause probe
+                // showed `MLX.eval` on a scalar reproducibly SIGSEGVs on
+                // Qwen3.6-35B-A3B-JANGTQ2 after a cancel — the MXTQ
+                // custom compute encoders (P3/P15/P17/P18) are mid-write
+                // and the commit barrier trips a Metal invariant. A
+                // 2026-04-18 later probe against Qwen3.6-35B-A3B-MXFP4
+                // (hybrid SSM, NOT JANGTQ) showed the same crash
+                // signature on cancel_midstream — the hybrid SSM
+                // companion cache's partial-write state is the broader
+                // common cause, not JANGTQ specifically. Widening the
+                // gate so ANY cancel path skips the scalar commit
+                // barrier and relies on synchronize() for drain. The
+                // commit barrier was a belt-and-suspenders
+                // graph-flush; synchronize() on both .gpu and .cpu
+                // streams already drains the pipeline. Normal
+                // (non-cancelled) generation still evals as before.
+                let isJangTQPath = await self.isJangTQActivePath()
                 if wasCancelled {
-                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    // Longer drain for JANGTQ — custom compute encoders
+                    // need more time to release Metal fences.
+                    try? await Task.sleep(
+                        nanoseconds: isJangTQPath ? 1_000_000_000 : 250_000_000
+                    )
+                } else {
+                    // Non-cancel path: keep the commit barrier to force
+                    // graph flush so the next request sees a clean
+                    // scheduler state.
+                    MLX.eval(MLX.MLXArray(Int32(0)))
                 }
-                MLX.eval(MLX.MLXArray(Int32(0)))
                 MLX.Stream.defaultStream(.gpu).synchronize()
                 MLX.Stream.defaultStream(.cpu).synchronize()
                 // Release synchronously (not via a detached Task) so the
@@ -703,6 +735,21 @@ extension Engine {
                 templateExtras[key] = jsonValueToSendable(value)
             }
         }
+        // iter-60: wire `settings.chatTemplate` through as a template
+        // override. The `--chat-template path.jinja` CLI flag resolves
+        // the file content into `g.chatTemplate`; sessions can override
+        // per-session. The TokenizerBridge picks the reserved
+        // `__chat_template_override__` key out of additionalContext
+        // and delegates to swift-transformers'
+        // `applyChatTemplate(messages:chatTemplate:.literal(...))`
+        // overload. Non-empty string = override wins; empty = falls
+        // through to the upstream tokenizer's built-in template.
+        // Replaces the §88 per-request warning — the override now
+        // actually does what the flag promised.
+        let chatTemplateOverride = resolved.settings.chatTemplate
+        if !chatTemplateOverride.isEmpty {
+            templateExtras["__chat_template_override__"] = chatTemplateOverride
+        }
         let userInput = UserInput(
             chat: chatMessages, tools: toolSpecs,
             additionalContext: templateExtras)
@@ -784,7 +831,22 @@ extension Engine {
         // and returns a ReasoningDelta with optional `.reasoning` / `.content`
         // fields. We keep `streamingAcc.feed(_:)` pointed at the parser's
         // content side so tool-call detection continues to work unchanged.
-        let reasoningParserName = caps?.reasoningParser
+        //
+        // iter-58: parser selection was `caps?.reasoningParser` only —
+        // it ignored `resolved.settings.defaultReasoningParser`. Users
+        // with a CLI `--reasoning-parser` flag or SessionConfigForm
+        // override got the capability-detector's choice regardless.
+        // Match the tool-parser shape from ~line 542:
+        //   caps?.toolParser ?? resolved.settings.defaultToolParser
+        // so user override wins when non-empty, capability fallback
+        // otherwise. Live-verified on Stream startup — empty string
+        // from settings falls back cleanly to caps.
+        let settingsReasoningParser = resolved.settings.defaultReasoningParser
+        let reasoningParserName = (
+            !settingsReasoningParser.isEmpty
+                ? settingsReasoningParser
+                : caps?.reasoningParser
+        )
         let reasoningParser: ReasoningParser? = reasoningParserName
             .flatMap { ReasoningParserRegistry.make($0) }
         // Reset per-request state. `thinkInPrompt` tracks whether the chat
@@ -947,22 +1009,26 @@ extension Engine {
                     // `ssm_companion_cache.py:22`). Derived from the
                     // detected model capability — .vision modality is
                     // the MLLM batch generator's domain.
-                    let isMLLM = (await self.modelCapabilities?.modality == .vision)
-                    // FIX-G-O (2026-04-16): compute mediaSalt here and pass
-                    // to fetch() so VL multi-turn can hit prior-turn cache.
-                    // Previously mediaSalt was only computed + passed on the
-                    // STORE path (via `iterator.mediaSalt` captured in
-                    // `cacheStoreAction`), leaving fetch() with nil salt —
-                    // so VL request's fetch key was text-only while store
-                    // key was text+media, guaranteeing cached=0 on every
-                    // multi-turn VL request. Documented in
-                    // PERF-VL-MULTITURN-2026-04-16.md candidate #3.
+                    // **iter-71 (§100)** — removed the `isMLLM` flag from the
+                    // probe. Previous audit comment claimed VL pipelines use
+                    // N-1 SSM companion boundary (Python parity for its
+                    // separate MLLM batch generator), but Swift has no
+                    // separate MLLM batch path — Evaluate.swift and
+                    // BatchEngine.swift both call storeAfterGeneration /
+                    // fetch with the default `isMLLM: false`, so
+                    // store/fetch consistently use N. The probe's
+                    // `matched` return value is the paged tier's
+                    // matchedTokens (independent of isMLLM anyway — only
+                    // SSM companion boundary differs), so the flag was
+                    // inert AND misleading future devs about the
+                    // store/fetch parity contract. FIX-G-O's mediaSalt
+                    // propagation stays — that was the real VL fetch/store
+                    // parity fix (text-only key vs text+media key).
                     let preFetchSalt = computeMediaSalt(for: lmInput)
                     switch coord.fetch(
                         tokens: tokenIds,
                         mediaSalt: preFetchSalt,
-                        genPromptLen: genPromptLen,
-                        isMLLM: isMLLM
+                        genPromptLen: genPromptLen
                     ) {
                     case .hit(let matched, _, let tier, _, _, _):
                         preFetch = CachePreFetch(
@@ -1017,15 +1083,23 @@ extension Engine {
         let partialEmitInterval: TimeInterval = 0.5
         let partialEmitEveryNChunks = 16
 
-        // Per-token metrics actor-hop killswitch. `await self.metrics.recordTokenBatch`
-        // is a hop to MetricsCollector (a separate actor) executed on every
-        // decode tick. Default keeps the per-token recording for live TPS
-        // accuracy; `VMLX_DISABLE_PER_TOKEN_METRICS=1` replaces it with a
-        // single final batch recording at end-of-stream for A/B measurement.
+        // iter-64 perf follow-up: per-token metrics recording was doing
+        // one actor hop per decoded token (~170× for a 170-token response).
+        // The actor hop itself isn't free (~5-10μs each on Apple Silicon)
+        // and serializes behind any other actor work. Tray's live TPS
+        // display polls at 1 Hz, so per-token fidelity is overkill.
+        //
+        // New default: batch every `metricsBatchEvery` tokens (8) —
+        // preserves tray update smoothness (~10ms batch → 100+ batches/s
+        // at 100 tok/s) while reducing actor hops 8×. The env
+        // killswitch `VMLX_DISABLE_PER_TOKEN_METRICS=1` is now
+        // redundant but kept for backward compat with existing perf
+        // scripts; it forces end-of-stream-only recording.
         let perTokenMetricsDisabled =
             ProcessInfo.processInfo.environment["VMLX_DISABLE_PER_TOKEN_METRICS"] == "1"
-        // Elapsed wall-clock accumulator used when per-token recording is
-        // disabled. Rolled into ONE `recordTokenBatch` call at .info time.
+        let metricsBatchEvery = 8
+        // Elapsed wall-clock accumulator used by both the periodic batch
+        // flush and the env-gated end-of-stream-only mode.
         var accumulatedDecodeMs: Double = 0
         var accumulatedDecodeTokens = 0
 
@@ -1040,12 +1114,20 @@ extension Engine {
                 let tickMs = chunkNow.timeIntervalSince(lastChunkAt) * 1000
                 lastChunkAt = chunkNow
                 decodedChunkCount += 1
-                if perTokenMetricsDisabled {
-                    accumulatedDecodeMs += tickMs
-                    accumulatedDecodeTokens += 1
-                } else {
+                // iter-64: always accumulate; batch-flush every N
+                // tokens. env killswitch defers to end-of-stream.
+                accumulatedDecodeMs += tickMs
+                accumulatedDecodeTokens += 1
+                if !perTokenMetricsDisabled
+                    && accumulatedDecodeTokens >= metricsBatchEvery
+                {
+                    let flushCount = accumulatedDecodeTokens
+                    let flushMs = accumulatedDecodeMs
+                    accumulatedDecodeTokens = 0
+                    accumulatedDecodeMs = 0
                     await self.metrics.recordTokenBatch(
-                        prefill: false, count: 1, durationMs: tickMs)
+                        prefill: false, count: flushCount,
+                        durationMs: flushMs)
                 }
 
                 let sinceLast = chunkNow.timeIntervalSince(lastPartialEmitAt)
@@ -1479,12 +1561,17 @@ extension Engine {
                     prefill: true,
                     count: info.promptTokenCount,
                     durationMs: info.promptTime * 1000)
-                if perTokenMetricsDisabled && accumulatedDecodeTokens > 0 {
-                    // Flush the batched decode tally as a single hop.
+                // iter-64: flush any remainder accumulated after the
+                // last N-token batch boundary (both for perTokenMetricsDisabled
+                // path and the normal batched path — end-of-stream always
+                // has a sub-batch tail).
+                if accumulatedDecodeTokens > 0 {
                     await self.metrics.recordTokenBatch(
                         prefill: false,
                         count: accumulatedDecodeTokens,
                         durationMs: accumulatedDecodeMs)
+                    accumulatedDecodeTokens = 0
+                    accumulatedDecodeMs = 0
                 }
                 await self.metrics.recordRequest(latencyMs: totalMs)
                 await self.log(.info, "engine",
@@ -1530,7 +1617,24 @@ extension Engine {
         // Finding #1 from the deep hybrid audit 2026-04-14 — before
         // this wire-up, `maybeReDeriveSSMState` was unreachable dead
         // code and every hybrid+thinking turn lost the SSM companion.
+        // 2026-04-18 cancel-SSM-rederive fix — crash diagnosis from a
+        // vmlxctl DiagnosticReport showed EXC_BAD_ACCESS in
+        // `mlx::core::binary_op_gpu_inplace` during a MLX eval in
+        // `reDeriveSSMStates`, triggered via this detached Task after a
+        // mid-stream cancel. Reproducer: Qwen3.6-35B-A3B-MXFP4 (hybrid
+        // SSM) + harness `cancel_midstream`. The detached re-derive
+        // captured pointers into `promptTokenIds` / the ModelContainer's
+        // arrays that had already started tearing down on cancel; the
+        // follow-up MLX binary op hit a freed MTL::Resource.
+        //
+        // Fix: skip the re-derive when the generation was cancelled.
+        // Cancellation implies the user no longer cares about the SSM
+        // state for this turn, so spawning the re-derive is both
+        // unnecessary AND unsafe. Also harden the detached branch with
+        // an `isCancelled` guard inside the Task so a late-arriving
+        // cancellation still short-circuits before touching MLX.
         if collectedToolCalls.isEmpty,
+           !Task.isCancelled,
            let coord = coordinator,
            coord.isHybrid,
            capturedGenPromptLen > 0,
@@ -1555,7 +1659,13 @@ extension Engine {
                 let captureGP = capturedGenPromptLen
                 let captureContainer = container
                 Task.detached(priority: .utility) {
+                    // Late-cancel guard — if the parent Task was cancelled
+                    // between spawn and our first resume point, bail before
+                    // touching MLX arrays whose Metal resources may be
+                    // mid-teardown.
+                    if Task.isCancelled { return }
                     await captureContainer.perform { (ctx: ModelContext) in
+                        if Task.isCancelled { return }
                         maybeReDeriveSSMState(
                             coordinator: captureCoord,
                             model: ctx.model,
@@ -1844,45 +1954,75 @@ extension Engine {
     /// Decoded bytes that don't parse as a valid CIImage are silently
     /// dropped — the VLM processor is given a best-effort list so the
     /// generation can still proceed with whatever images did load.
+    /// Iter-25: gated VL debug logger. Writes to stderr only when
+    /// `VMLX_VL_DEBUG=1` is set. Computed once per-process into a
+    /// static flag so we don't re-read the env on every chunk.
+    static let vlDebugEnabled: Bool = {
+        ProcessInfo.processInfo.environment["VMLX_VL_DEBUG"] == "1"
+    }()
+
+    static func vlDebug(_ msg: @autoclosure () -> String) {
+        guard vlDebugEnabled else { return }
+        FileHandle.standardError.write(Data("[vmlx][vl][debug] \(msg())\n".utf8))
+    }
+
     static func extractImages(
         from content: ChatRequest.ContentValue?
     ) async -> [UserInput.Image] {
-        // Debug: log what shape we got.
+        // Iter-25: gate the VL debug logs on an env flag (default off
+        // in production). Pre-fix every text-only request on a
+        // VL-capable model wrote "[vmlx][vl][debug] content is nil" to
+        // stderr — on a 100 QPS deployment that's 100 lines/sec of
+        // noise. `VMLX_VL_DEBUG=1` re-enables them for diagnosis.
         switch content {
         case .none:
-            FileHandle.standardError.write(Data("[vmlx][vl][debug] content is nil\n".utf8))
+            Self.vlDebug("content is nil")
             return []
         case .some(.string):
             // Text-only content is the common case — don't spam the logs.
             return []
         case .some(.parts(let parts)):
             let kinds = parts.map { $0.type }.joined(separator: ",")
-            FileHandle.standardError.write(Data(
-                "[vmlx][vl][debug] content parts=\(parts.count) types=[\(kinds)]\n".utf8))
+            Self.vlDebug("content parts=\(parts.count) types=[\(kinds)]")
+            // 2026-04-18 VL memory fix — community users report
+            // excessive RAM usage with large image batches. Cap the
+            // per-message image count at `maxTotalImagesPerRequest`
+            // BEFORE decoding so we never hold N × CIImage+Data in
+            // memory when the downstream `buildChatMessages` cap is
+            // going to drop them anyway. Previously we decoded every
+            // image_url part (retaining CIImage + raw bytes for each)
+            // and only dropped the overflow after all CIImages were
+            // alive, which was the peak-memory event users hit.
+            let imageParts = parts.filter { $0.type == "image_url" }
+            let cap = Self.maxTotalImagesPerRequest
+            let budgeted = imageParts.prefix(cap)
+            if imageParts.count > cap {
+                FileHandle.standardError.write(Data(
+                    "[vmlx][vl] decode cap reached: keeping \(cap) of \(imageParts.count) images (skipped at parse time)\n".utf8))
+            }
             var out: [UserInput.Image] = []
-            for part in parts where part.type == "image_url" {
+            out.reserveCapacity(budgeted.count)
+            for part in budgeted {
                 guard let imageURL = part.imageUrl else {
-                    FileHandle.standardError.write(Data(
-                        "[vmlx][vl][debug] image_url part missing imageUrl field\n".utf8))
+                    Self.vlDebug("image_url part missing imageUrl field")
                     continue
                 }
-                FileHandle.standardError.write(Data(
-                    "[vmlx][vl][debug] loading image from: \(imageURL.url.prefix(60))…\n".utf8))
+                Self.vlDebug("loading image from: \(imageURL.url.prefix(60))…")
                 guard let data = await imageURL.loadImageData() else {
-                    let tag = imageURL.url.prefix(80)
+                    // This one stays unconditional — genuine warning
+                    // about a failed fetch, users want to see it.
                     FileHandle.standardError.write(Data(
-                        "[vmlx][vl] image URL fetch/decode failed: \(tag)…\n".utf8))
+                        "[vmlx][vl] image URL fetch/decode failed: \(imageURL.url.prefix(80))…\n".utf8))
                     continue
                 }
-                FileHandle.standardError.write(Data(
-                    "[vmlx][vl][debug] image bytes=\(data.count)\n".utf8))
+                Self.vlDebug("image bytes=\(data.count)")
                 guard let ci = CIImage(data: data) else {
+                    // Warning: unconditional (real failure signal).
                     FileHandle.standardError.write(Data(
                         "[vmlx][vl] CIImage decode failed (\(data.count) bytes) — possibly a non-image format; text-only reply will follow\n".utf8))
                     continue
                 }
-                FileHandle.standardError.write(Data(
-                    "[vmlx][vl][debug] CIImage loaded OK, extent=\(ci.extent)\n".utf8))
+                Self.vlDebug("CIImage loaded OK, extent=\(ci.extent)")
                 out.append(.ciImage(ci))
             }
             return out
@@ -1940,8 +2080,7 @@ extension Engine {
                     try? FileManager.default.removeItem(at: localURL)
                     continue
                 }
-                FileHandle.standardError.write(Data(
-                    "[vmlx][vl][debug] video staged at \(localURL.path)\n".utf8))
+                Self.vlDebug("video staged at \(localURL.path)")
                 out.append(.url(localURL))
             }
             return out

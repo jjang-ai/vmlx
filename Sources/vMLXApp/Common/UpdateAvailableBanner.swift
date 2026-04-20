@@ -112,8 +112,18 @@ actor UpdateAvailableService {
                 return cachedInfo()
             }
             let latestVersion = rawTag.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-            let htmlURL = (json["html_url"] as? String)
-                ?? "https://github.com/jjang-ai/mlxstudio/releases/latest"
+            // **iter-83 (§111)** — validate the release URL before
+            // trusting it. `NSWorkspace.shared.open(url)` is executed
+            // verbatim when the user hits the Download button, and it
+            // will happily dispatch ANY scheme (javascript:, file:,
+            // vmlx:// custom scheme, ftp:, etc.). A compromised
+            // GitHub API response or a MITM on the update-check
+            // request could swap `html_url` for a phishing page or a
+            // local-file trigger. Require https:// + our own repo
+            // domain; fall back to a hardcoded safe URL otherwise.
+            let htmlURL = Self.validatedReleaseURL(
+                json["html_url"] as? String
+            ) ?? "https://github.com/jjang-ai/mlxstudio/releases/latest"
 
             let current = Self.currentVersion()
             if Self.compareVersions(latestVersion, current) == .orderedDescending {
@@ -148,6 +158,30 @@ actor UpdateAvailableService {
     static func currentVersion() -> String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
             ?? "0.0.0"
+    }
+
+    // MARK: - iter-83 §111 release URL validation
+
+    /// Verify that the release URL coming back from the GitHub API
+    /// points at our release page on `github.com` with an `https`
+    /// scheme. Rejects any other scheme (js:, file:, data:, custom
+    /// URL schemes), hosts (phishing lookalikes), or malformed URLs.
+    /// Returns the original string when safe; `nil` when rejected so
+    /// the caller can fall back to a hardcoded URL.
+    internal static func validatedReleaseURL(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty,
+              let components = URLComponents(string: raw),
+              components.scheme?.lowercased() == "https",
+              let host = components.host?.lowercased()
+        else {
+            return nil
+        }
+        // Only accept the release host — github.com (renders the HTML
+        // release page) or api.github.com (JSON API). Everything else
+        // including GitHub Pages sub-domains is out.
+        let allowedHosts: Set<String> = ["github.com", "api.github.com"]
+        guard allowedHosts.contains(host) else { return nil }
+        return raw
     }
 
     // MARK: - Semver compare

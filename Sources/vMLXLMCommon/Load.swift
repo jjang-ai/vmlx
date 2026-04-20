@@ -38,7 +38,7 @@ public func loadWeights(
     // MiniMax-M2.7-JANGTQ-CRACK (no sidecar — signs regenerate at
     // runtime from mxtq_seed) through the affine expander, which then
     // blew up because the expansion didn't match the TQ-native model
-    // shape. See `/Users/eric/jang/jang-tools/jang_tools/load_jangtq.py`
+    // shape. See `jang_tools/load_jangtq.py` in the jang-tools repo
     // for the Python reference loader.
     let jangtqSidecarURL = modelDirectory.appendingPathComponent("jangtq_runtime.safetensors")
     // Case-insensitive compare — jang-tools writes `"mxtq"` (lowercase)
@@ -159,7 +159,7 @@ public func loadWeights(
               + "convert_qwen35_jangtq / convert_glm4_jangtq / "
               + "convert_minimax_jangtq to regenerate .tq_packed shards, "
               + "or (c) delete jangtq_runtime.safetensors if this is an "
-              + "affine JANG bundle. See /Users/eric/jang/jang-tools/ for "
+              + "affine JANG bundle. See the jang-tools repo for "
               + "the Python reference loader.")
         }
     }
@@ -289,8 +289,19 @@ public func loadWeights(
     // Use .noUnusedKeys instead of .all — MXFP4/MXFP8 quantized layers don't have .biases
     // in the weight files, but QuantizedLinear's optional .biases property gets initialized
     // by the quantize step. Strict .all verification would fail on the missing keys.
-    let parameters = ModuleParameters.unflattened(weights)
-    try model.update(parameters: parameters, verify: [.noUnusedKeys])
+    //
+    // 2026-04-18 memory fix — community users on a 3L MiniMax-M2.7-JANGTQ
+    // report ~2x RAM at load vs Python, swapping 50 GB and hanging on
+    // first response. Root cause: holding `weights` + `parameters`
+    // (NestedDictionary) alive through the graph-eval step below
+    // doubles the MLXArray refcount for every tensor. The Python
+    // loader drops its equivalent dict via refcount decay on scope
+    // exit; Swift needs the explicit clear plus an inline temporary
+    // for `parameters` so it dies after model.update returns. No cost
+    // on the success path; only helps giant JANGTQ bundles.
+    try model.update(parameters: ModuleParameters.unflattened(weights),
+                     verify: [.noUnusedKeys])
+    weights.removeAll(keepingCapacity: false)
 
     // Convert all float16/float32 parameters to bfloat16 to prevent AsType cascades.
     // float16 causes AsType when mixed with internal float32 ops (softmax, RMSNorm).

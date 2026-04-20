@@ -6,11 +6,11 @@
 // Field-name parity references:
 //
 //   Python CLI flags:
-//     /Users/eric/mlx/vllm-mlx/vmlx_engine/cli.py
+//     vmlx_engine/cli.py
 //       serve_parser block at line 881 (full list of ~70 --flags)
 //
 //   Electron SQLite schema (for forward-compat import from Electron vMLX):
-//     /Users/eric/mlx/vllm-mlx/panel/src/main/database.ts
+//     panel/src/main/database.ts
 //       CREATE TABLE sessions       (line 259)
 //       CREATE TABLE chats          (line 203)
 //       CREATE TABLE chat_overrides (line 228, migrated cols 350-429)
@@ -185,15 +185,29 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // `KVCacheSimple` layers and skips `MambaCache`/`RotatingKVCache`/
     // `CacheList` — Nemotron-H, Qwen3-Next, Jamba, FalconH1 etc. keep
     // their SSM paths untouched.
-    // Default-OFF per perf audit 2026-04-16. Flipped from true because the
-    // compress+dequant cycle dominated decode throughput on MoE/hybrid
-    // models (see `kvCacheQuantization` docstring above for measurements).
+    // Default-ON (iter-64 — user directive): TurboQuant KV cache is the
+    // NATIVE DEFAULT for vMLX v2. Production priority is memory savings
+    // on long contexts over raw decode throughput. Users who want to
+    // A/B against plain KV can flip `enableTurboQuant=false` via the
+    // Server tab's Cache section, the `vmlxctl serve --disable-turboquant`
+    // flag, or the `VMLX_DISABLE_TURBO_QUANT=1` env killswitch.
+    //
+    // History: iter-16 (2026-04-16) flipped this to false after a perf
+    // audit found 25-40% decode regressions on MoE/hybrid models. The
+    // user directive in iter-64 explicitly reinstates default-on because
+    // (a) most production queries need long context more than peak tok/s,
+    // (b) MLA models already skip TQ via `cacheTypeIsMLA` guard at
+    // Stream.swift:~2146, (c) hybrid-SSM mamba layers skip TQ via
+    // `maybeQuantizeKVCache`'s `KVCacheSimple`-only compression (SSM
+    // state + rotating windows pass through untouched), (d) the env
+    // killswitch makes A/B testing trivial.
+    //
     // JANG models with calibrated `turboquant` blocks in their
     // `jang_config.json` still auto-activate TQ through the explicit
     // `loadedJangConfig?.turboquant` check in Stream.swift — that path
-    // does NOT read this flag so calibrated models keep their ship-time
-    // behavior.
-    public var enableTurboQuant: Bool = false
+    // does NOT read this flag, so calibrated models keep their ship-time
+    // behavior regardless of this default.
+    public var enableTurboQuant: Bool = true
     public var turboQuantBits: Int = 4
 
     // Hybrid-SSM companion cache re-derive. When a thinking-template
@@ -260,7 +274,19 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var dflashTargetHiddenDim: Int = 3072    // JangDFlashSpecConfig.targetHiddenDim
 
     // Tool calling
-    public var enableAutoToolChoice: Bool = false // cli.py --enable-auto-tool-choice
+    //
+    // iter-50 audit note on `enableAutoToolChoice`: this is a vLLM-
+    // compat flag (`--enable-auto-tool-choice`) that in vLLM gates
+    // whether the server auto-parses tool calls from model output.
+    // The Swift engine ALWAYS auto-parses when `request.tools` is
+    // present — parser selection flows through `caps.toolParser ?? resolved.settings.defaultToolParser`
+    // in Stream.swift. The flag is kept for CLI compat with Python
+    // pipelines (so `--enable-auto-tool-choice` on the command line
+    // doesn't error out), persisted through the resolver, but has
+    // no runtime gate. Future work: either honor it (e.g. to hard-
+    // disable parsing for some scripted client) or drop it along
+    // with the resolver wire-through.
+    public var enableAutoToolChoice: Bool = false // cli.py --enable-auto-tool-choice (dead gate — see audit note)
     public var defaultToolParser: String = ""      // cli.py --tool-call-parser default=None (auto-detected from model)
     public var defaultReasoningParser: String = "" // cli.py --reasoning-parser default=None (auto-detected from model)
 
@@ -378,6 +404,11 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var maxNumSeqs: Int? = nil
     public var prefillStepSize: Int? = nil
     public var maxCacheBlocks: Int? = nil
+    // iter-46: paged-cache block size, per-session override. Defaults
+    // to GlobalSettings.pagedCacheBlockSize when nil. Determines the
+    // minimum prompt length that can produce a paged-cache hit —
+    // sub-block prompts return nil from fetchPrefix entirely.
+    public var pagedCacheBlockSize: Int? = nil
 
     public var enableTurboQuant: Bool? = nil
     public var turboQuantBits: Int? = nil

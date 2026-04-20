@@ -334,8 +334,11 @@ public actor DownloadManager {
             )
         }
         let info = try JSONDecoder().decode(ModelInfo.self, from: data)
-        // Restrict to weight + config + tokenizer files.
+        // Restrict to weight + config + tokenizer files, AND
+        // reject anything that could escape the destination
+        // directory on disk.
         return info.siblings.filter { sib in
+            guard Self.isSafeFilename(sib.rfilename) else { return false }
             let f = sib.rfilename.lowercased()
             return f.hasSuffix(".safetensors")
                 || f.hasSuffix(".json")
@@ -343,6 +346,36 @@ public actor DownloadManager {
                 || f.hasSuffix(".model")
                 || f.hasSuffix(".jinja")
         }
+    }
+
+    /// **iter-82 (§110)** — path-traversal guard for the filename
+    /// coming back from the HuggingFace API. A compromised,
+    /// man-in-the-middled, or malicious-mirror HF API response
+    /// could set `rfilename` to `"../../../.ssh/authorized_keys"`;
+    /// `URL.appendingPathComponent` preserves `..` literally but
+    /// POSIX path resolution collapses them, so a write would
+    /// land OUTSIDE `destDir`. This check rejects any filename
+    /// that starts with `/`, contains `..` as a path component,
+    /// or is empty/whitespace — defense in depth independent of
+    /// TLS validation on the transport.
+    internal static func isSafeFilename(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+        // Absolute path starting at root.
+        if trimmed.hasPrefix("/") { return false }
+        // Windows-style absolute or UNC path.
+        if trimmed.hasPrefix("\\") { return false }
+        // Path-traversal segment anywhere in the component chain.
+        // Split on both `/` and `\` to defend against cross-platform
+        // tricks; any segment equal to `..` is a traversal.
+        let segments = trimmed.split(whereSeparator: { $0 == "/" || $0 == "\\" })
+        for seg in segments where seg == ".." {
+            return false
+        }
+        // Null byte — POSIX truncates filename at `\0`; reject
+        // rather than silently writing to a truncated path.
+        if trimmed.contains("\0") { return false }
+        return true
     }
 
     // MARK: - File download

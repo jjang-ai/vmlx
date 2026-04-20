@@ -32,12 +32,16 @@ public actor Engine {
         // Measured impact of flipping to default-off: Nemotron-Cascade-2-30B
         // A3B 2.4 → 59.8 tok/s (25× speedup), Gemma-4-26B-A4B 34.9 → 49.0
         // tok/s (+40%), Qwen3.5-9B 69.5 → 78.3 tok/s (+13%). The decode-time
-        // compress+dequant cycle on every attention-half layer dominated
-        // decode throughput on MoE and hybrid models. Users who need the
-        // 4× KV memory savings on long contexts can opt in via settings or
-        // the jang_config.json `turboquant` block (which auto-activates for
-        // models explicitly shipped with calibrated TQ bit widths).
-        public var enableTurboQuant: Bool = false
+        // iter-64: flipped back to true per user directive — TurboQuant
+        // is the native default for vMLX v2. Production priority is
+        // memory savings on long contexts; users measuring raw decode
+        // tok/s can disable via settings UI, `vmlxctl serve
+        // --disable-turboquant`, or `VMLX_DISABLE_TURBO_QUANT=1`. MLA
+        // models auto-skip via `cacheTypeIsMLA` guard (Stream.swift:~2146);
+        // hybrid-SSM mamba layers auto-skip via the `KVCacheSimple`-only
+        // compression path in `maybeQuantizeKVCache`. JANG calibrated
+        // models continue to auto-activate regardless of this flag.
+        public var enableTurboQuant: Bool = true
         public var enableJANG: Bool = true
         public var enablePrefixCache: Bool = true
         public var enableSSMCompanion: Bool = true
@@ -331,6 +335,16 @@ public actor Engine {
         self.currentStreamTask?.cancel()
     }
 
+    /// True if the currently loaded model has `jang_config.turboquant.enabled`.
+    /// Used by the stream cancellation path to gate the scalar-eval commit
+    /// barrier — JANGTQ native kernels reproducibly SIGSEGV on eval after
+    /// mid-stream cancel (see Stream.swift:cleanupAfterCancel). Runtime
+    /// accessor because the cancel path lives outside the actor isolation
+    /// of `Stream.streamReal`'s outer Task closure.
+    internal func isJangTQActivePath() -> Bool {
+        self.loadedJangConfig?.turboquant.enabled == true
+    }
+
     /// Register `task` under `id` so a per-id cancel can find it later.
     public func registerStreamTask(id: String, task: Task<Void, Never>) {
         streamTasksByID[id] = task
@@ -338,6 +352,39 @@ public actor Engine {
     /// Remove the registration when the stream finishes naturally.
     public func unregisterStreamTask(id: String) {
         streamTasksByID.removeValue(forKey: id)
+        // Iter-24: also prune the registration-gate bookkeeping so
+        // `streamRegistrationDone` doesn't grow unbounded across the
+        // process lifetime. Waiters should all have been resumed at
+        // mark time; any still parked at this point are anomalous
+        // (pump finished before its registration completed — shouldn't
+        // happen given the gate above, but clear them defensively).
+        streamRegistrationDone.remove(id)
+        if let leftover = streamRegistrationWaiters.removeValue(forKey: id) {
+            for w in leftover { w.resume() }
+        }
+    }
+
+    /// Iter-24 streamid-register race gate. Per-id continuations
+    /// (`await ensureStreamRegistrationFinished(id:)`) parked until
+    /// `markStreamRegistrationFinished(id:)` fires. Without this, the
+    /// pump Task could start yielding chunks BEFORE its handle was
+    /// registered in `streamTasksByID` — a fast cancel-by-id in that
+    /// window silently no-op'd. Now the pump body waits one actor
+    /// hop to guarantee registration has landed.
+    private var streamRegistrationWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private var streamRegistrationDone: Set<String> = []
+
+    func ensureStreamRegistrationFinished(id: String) async {
+        if streamRegistrationDone.contains(id) { return }
+        await withCheckedContinuation { cont in
+            streamRegistrationWaiters[id, default: []].append(cont)
+        }
+    }
+
+    func markStreamRegistrationFinished(id: String) {
+        streamRegistrationDone.insert(id)
+        let waiters = streamRegistrationWaiters.removeValue(forKey: id) ?? []
+        for w in waiters { w.resume() }
     }
 
     /// Currently bound RemoteEngineClient, when this engine is being used
@@ -359,7 +406,22 @@ public actor Engine {
     /// through a task hop so the actor can reach `currentStreamTask`
     /// directly. Safe to call when no stream is active (no-op).
     public func cancelStream() {
+        // Cancel the most-recent stream tracked by `currentStreamTask`
+        // first (back-compat with callers that never started per-id
+        // tracking, e.g. CLI REPL + Chat VM internal calls).
         currentStreamTask?.cancel()
+        // 2026-04-18 iter-21: parallel-load correctness. Under
+        // concurrent requests, `currentStreamTask` only retains the
+        // most-recent stream's handle — every earlier stream is invisible
+        // to the no-id cancel, so Engine.stop() or an admin-kill was
+        // leaking tasks while advertising they'd been cancelled. Walk
+        // the by-id registry too. Drain under lock by snapshotting keys
+        // first so the subsequent removeValue doesn't mutate during
+        // iteration.
+        for (id, task) in streamTasksByID {
+            task.cancel()
+            streamTasksByID.removeValue(forKey: id)
+        }
         if let rc = remoteClient {
             Task { await rc.cancelStream() }
         }
@@ -725,6 +787,23 @@ public actor Engine {
                 }
                 let fail: @Sendable (String) async -> Void = { msg in
                     await self.logs.append(.error, category: "engine", "Load failed: \(msg)")
+                    // Iter-20: clean up partial-load state BEFORE
+                    // transitioning to .error. Without this, a load
+                    // that threw in Phase 3.5+ (FlashMoE apply, cache
+                    // coordinator init, warmup) could leave the Engine
+                    // with `loaded == nil` but `loadedModelPath` set
+                    // from a prior-but-now-invalid path. Stream.swift
+                    // guards on `loaded != nil` so that's safe, but
+                    // `lastLoadOptions` kept stale data that
+                    // wakeFromStandby re-loaded → the user would see
+                    // the OLD model spring back to life instead of the
+                    // one they just tried to load. Fail closed: wipe
+                    // every load-related cache so the next explicit
+                    // load starts from a clean slate.
+                    await self.setLoaded(nil)
+                    await self.setLoadedModelPath(nil)
+                    await self.setLoadedJangConfig(nil)
+                    await self.setLastLoadOptions(nil)
                     await self.transition(.error(msg))
                     continuation.yield(.failed(msg))
                     continuation.finish()
@@ -1289,8 +1368,26 @@ public actor Engine {
         // here. When true, CacheCoordinator.fetch/store walks the
         // SSMStateCache companion tier alongside the paged KV cache.
         let isHybrid = self.modelCapabilities?.cacheType == "hybrid"
-        if isHybrid {
+        // iter-54: respect the user's `enableSSMCompanion` toggle —
+        // previously we unconditionally flipped hybrid-mode on when
+        // the model was detected as hybrid, regardless of the
+        // setting. Users could disable the companion via Server tab
+        // or Tray and the engine silently ignored them. Now:
+        //   • hybrid model + toggle on  → companion active (status quo)
+        //   • hybrid model + toggle off → companion skipped, SSM
+        //     state re-computed on every request (slower but honors
+        //     the user's choice — they might be debugging or avoiding
+        //     the companion for a specific reason).
+        //   • non-hybrid model → always off (nothing to gate).
+        let companionOn = isHybrid && g.enableSSMCompanion
+        if companionOn {
             coord.setHybrid(true)
+        } else if isHybrid {
+            await logs.append(
+                .info, category: "cache",
+                "SSM companion cache disabled via enableSSMCompanion=false; "
+                + "hybrid-aware fetch/store skipped (recomputing SSM state "
+                + "on every request).")
         }
         // MLA ⊥ TurboQuant: log the implicit skip at load time so the
         // operator understands why their TQ flag is being ignored. The
@@ -1383,7 +1480,32 @@ public actor Engine {
     ) -> AsyncThrowingStream<StreamChunk, Error> {
         let upstream = streamReal(request: request)
         return AsyncThrowingStream { continuation in
+            // Iter-24: register BEFORE starting the pump body so a
+            // fast `/v1/chat/completions/:id/cancel` can't land
+            // between stream creation and registration. Pre-fix
+            // registration lived in a sibling detached Task, creating
+            // a narrow window where streamTasksByID[id] was empty
+            // while the stream was already yielding. Now we build
+            // `pump` first, then register its handle synchronously
+            // via actor hop, then start consuming — `pump` itself
+            // awaits a register-complete gate so it doesn't race
+            // ahead.
+            //
+            // Also plugs the inverse race (short stream finishes
+            // before detached register runs → register arrives AFTER
+            // unregister, leaving a permanent entry) because we now
+            // register-before-consume.
+            let registered = Task<Void, Never> { }  // placeholder; overwritten below
+            _ = registered
             let pump = Task { [weak self] in
+                guard let self = self else {
+                    continuation.finish()
+                    return
+                }
+                // Wait until our own handle has been registered so
+                // an in-flight cancel-by-id can target us before we
+                // produce the first chunk.
+                await self.ensureStreamRegistrationFinished(id: id)
                 do {
                     for try await chunk in upstream {
                         continuation.yield(chunk)
@@ -1392,10 +1514,11 @@ public actor Engine {
                 } catch {
                     continuation.finish(throwing: error)
                 }
-                await self?.unregisterStreamTask(id: id)
+                await self.unregisterStreamTask(id: id)
             }
             Task { [weak self] in
                 await self?.registerStreamTask(id: id, task: pump)
+                await self?.markStreamRegistrationFinished(id: id)
             }
             continuation.onTermination = { _ in pump.cancel() }
         }
@@ -1420,8 +1543,12 @@ public actor Engine {
     /// each input. Returns one Float vector per input.
     public func generateEmbeddings(inputs: [String]) async throws -> [[Float]] {
         guard let container = self.embeddingContainer else {
-            throw EngineError.notImplemented(
-                "Engine.generateEmbeddings - no embedding model loaded (call loadEmbeddingModel first)")
+            // Iter-32: was `.notImplemented` which mapped to HTTP 500.
+            // No-embedding-model is a real user-actionable config
+            // error, not a missing feature — route it as `.notLoaded`
+            // so OpenAIRoutes.mapEngineError returns 503 Service
+            // Unavailable. Clean error envelope for SDK clients.
+            throw EngineError.notLoaded
         }
         return await container.perform {
             (model, tokenizer, pooling) -> [[Float]] in
@@ -1975,6 +2102,12 @@ public actor Engine {
             "missCount": ssm.misses,
             "hitRate": ssmHitRate,
             "maxEntries": coord.config.ssmMaxEntries,
+            // iter-40: counter for the hybrid-SSM re-derive watcher.
+            // Bumped each time `maybeReDeriveSSMState` successfully
+            // runs a prompt-only pass and stores a clean state. Users
+            // asked to see this in the CachePanel — previously the
+            // watcher fired silently with no observability.
+            "reDerives": ssm.reDerives,
         ] as [String: Any]
 
         // Prefix cache (same underlying paged pool) --------------------------
@@ -1983,7 +2116,65 @@ public actor Engine {
             "size": coord.config.maxCacheBlocks,
         ] as [String: Any]
 
+        // Iter-33: surface model-cache architecture signals the user
+        // asked about (hybrid SSM, sliding-window attention, TQ KV,
+        // quantized KV). Counts are walked from the loaded container's
+        // cache layer array — ground truth, not a heuristic. Shown in
+        // `CachePanel` as a per-model "architecture" row so users can
+        // verify at a glance that their hybrid / SWA / SSM model is
+        // actually using those code paths.
+        if let container = self.loaded {
+            out["architecture"] = await self.computeCacheLayerBreakdown(container: container)
+        } else {
+            out["architecture"] = [:] as [String: Any]
+        }
+
         return out
+    }
+
+    /// Walk the loaded model's cache array and classify each layer by
+    /// type. Counts are returned as a flat dict: `{"kvSimple":N,
+    /// "rotating":N, "turboQuant":N, "quantized":N, "mamba":N,
+    /// "other":N, "total":N, "slidingWindowActive":Bool, "hybridSSMActive":Bool}`.
+    /// Synchronous inside `container.perform` because cache arrays are
+    /// just Swift object references — no MLX eval involved.
+    private func computeCacheLayerBreakdown(
+        container: vMLXLMCommon.ModelContainer
+    ) async -> [String: Any] {
+        return await container.perform { ctx -> [String: Any] in
+            // Build a fresh cache list from the loaded model so we see
+            // the same per-layer shape a real generation would.
+            // `GenerateParameters.defaults` is the minimum surface the
+            // protocol needs; the cache count + types stay stable
+            // regardless of maxTokens / temp.
+            let cache = ctx.model.newCache(parameters: nil)
+            var counts: [String: Int] = [
+                "kvSimple": 0, "rotating": 0, "turboQuant": 0,
+                "quantized": 0, "mamba": 0, "other": 0,
+            ]
+            for layer in cache {
+                if layer is RotatingKVCache {
+                    counts["rotating", default: 0] += 1
+                } else if layer is TurboQuantKVCache {
+                    counts["turboQuant", default: 0] += 1
+                } else if layer is QuantizedKVCache {
+                    counts["quantized", default: 0] += 1
+                } else if layer is MambaCache {
+                    counts["mamba", default: 0] += 1
+                } else if layer is KVCacheSimple {
+                    counts["kvSimple", default: 0] += 1
+                } else {
+                    counts["other", default: 0] += 1
+                }
+            }
+            let total = counts.values.reduce(0, +)
+            var out: [String: Any] = counts.mapValues { $0 as Any }
+            out["total"] = total
+            out["slidingWindowActive"] = (counts["rotating"] ?? 0) > 0
+            out["hybridSSMActive"] = (counts["mamba"] ?? 0) > 0
+            out["turboQuantActive"] = (counts["turboQuant"] ?? 0) > 0
+            return out
+        }
     }
 
     /// Clear all cache tiers without changing engine state.

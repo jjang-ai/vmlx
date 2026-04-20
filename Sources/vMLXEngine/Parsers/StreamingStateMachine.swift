@@ -48,22 +48,52 @@ public final class StreamingAccumulator {
     public func feed(_ delta: String) -> ReasoningDelta? {
         previous = current
         current += delta
-        if hasToolCallMarker(current) {
+        if hasToolCallMarkerAfterAppend(delta: delta) {
+            _bufferedCache = true
             return nil
         }
+        _bufferedCache = false
         guard let parser = reasoningParser else {
             return ReasoningDelta(content: delta)
         }
         return parser.extractReasoningStreaming(previous: previous, current: current, delta: delta)
     }
 
-    /// Does the current buffer contain any tool-call marker?
-    public var buffered: Bool { hasToolCallMarker(current) }
+    /// Iter-31: per-token O(N) → O(1) amortized. Pre-fix this scanned
+    /// the full `current` buffer for 8 markers on every token. For a
+    /// 200-token response the last feed scanned ~8000 char positions;
+    /// quadratic in response length. Optimization: `previous` was
+    /// already marker-free (else we'd be buffered and `buffered`
+    /// below would short-circuit). So a newly-introduced marker must
+    /// straddle the `previous`/`delta` boundary or live entirely
+    /// inside `delta`. We only need to scan
+    /// `previous.suffix(maxMarkerLen - 1) + delta`.
+    private let maxMarkerLen: Int = toolCallMarkers.map { $0.count }.max() ?? 0
 
+    private func hasToolCallMarkerAfterAppend(delta: String) -> Bool {
+        // Short-circuit cheap case: delta is small, marker is small.
+        // Build just the needed suffix + delta.
+        let tailLen = max(0, maxMarkerLen - 1)
+        let prevTail = previous.suffix(tailLen)
+        let scan = String(prevTail) + delta
+        for m in toolCallMarkers where scan.contains(m) { return true }
+        return false
+    }
+
+    /// Legacy full-buffer scan — kept for `buffered` initial state
+    /// probes and tests that seed a non-empty `current` without
+    /// calling `feed()` to build it up. Hot path is
+    /// `hasToolCallMarkerAfterAppend`.
     public func hasToolCallMarker(_ text: String) -> Bool {
         for m in toolCallMarkers where text.contains(m) { return true }
         return false
     }
+
+    /// Does the current buffer contain any tool-call marker? Cached
+    /// from the last `feed()` call to avoid re-scanning. Initial
+    /// state (before any feed) returns false via default.
+    public var buffered: Bool { _bufferedCache }
+    private var _bufferedCache: Bool = false
 
     public func reset() {
         previous = ""

@@ -98,6 +98,27 @@ public actor IdleTimer {
 
     public func currentConfig() -> Config { config }
 
+    /// Live countdown to the next unfired sleep event, or `nil` when the
+    /// timer is disabled, both events have already fired, or we're
+    /// already past the event boundary. Callers (tray / chat banner)
+    /// poll this to render "Sleeps in 3:45".
+    ///
+    /// Returns a (kind, seconds) pair so the UI can label the banner
+    /// correctly (soft-sleep vs deep-sleep).
+    public func nextSleepCountdown() -> (kind: Event, seconds: TimeInterval)? {
+        guard config.enabled else { return nil }
+        let elapsed = Date().timeIntervalSince(lastActivity)
+        if !softFired {
+            let remaining = config.softAfter - elapsed
+            return remaining > 0 ? (.softSleep, remaining) : nil
+        }
+        if !deepFired {
+            let remaining = config.deepAfter - elapsed
+            return remaining > 0 ? (.deepSleep, remaining) : nil
+        }
+        return nil
+    }
+
     public func subscribe() -> AsyncStream<Event> {
         AsyncStream { continuation in
             let id = UUID()

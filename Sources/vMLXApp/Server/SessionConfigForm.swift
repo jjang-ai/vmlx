@@ -87,19 +87,19 @@ struct SessionConfigForm: View {
                     disclosure("Logging", isOn: $openLogging) { loggingSection }
                 } else {
                     // Local engine mode: full stack.
-                    disclosure("Engine", isOn: $openEngine) { engineSection }
+                    disclosure("Engine", isOn: $openEngine, loadTimeOnly: true) { engineSection }
                     divider
-                    disclosure("Cache", isOn: $openCache) { cacheSection }
+                    disclosure("Cache", isOn: $openCache, loadTimeOnly: true) { cacheSection }
                     divider
                     disclosure("Inference defaults", isOn: $openInference) { inferenceSection }
                     divider
                     disclosure("Lifecycle", isOn: $openLifecycle) { lifecycleSection }
                     divider
-                    disclosure("Server", isOn: $openServer) { serverSection }
+                    disclosure("Server", isOn: $openServer, loadTimeOnly: true) { serverSection }
                     divider
                     disclosure("Auth", isOn: $openAuth) { authSection }
                     divider
-                    disclosure("Advanced", isOn: $openAdvanced) { advancedSection }
+                    disclosure("Advanced", isOn: $openAdvanced, loadTimeOnly: true) { advancedSection }
                     divider
                     disclosure("Logging", isOn: $openLogging) { loggingSection }
                 }
@@ -198,6 +198,17 @@ struct SessionConfigForm: View {
         ValidatedField(title: "Max cache blocks",
                        value: intBinding(\.maxCacheBlocks, default: globalDefaults.maxCacheBlocks),
                        range: 16...10000, step: 16)
+        // iter-46 fix: pagedCacheBlockSize gates whether short prompts
+        // get any paged-cache benefit. Default 64 means sub-64-token
+        // chat prompts return nil from fetchPrefix without counting
+        // hits or misses. Lowering to 32 halves the short-prompt
+        // dead-zone at the cost of a ~2x hash-map size. Exposed here
+        // so power users running short chat workloads can tune.
+        // Only a CLI flag existed before this iter.
+        ValidatedField(title: "Paged block size",
+                       value: intBinding(\.pagedCacheBlockSize,
+                                         default: globalDefaults.pagedCacheBlockSize),
+                       range: 8...256, step: 8)
         // Memory cache (L1.5) — byte-budgeted LRU between paged L1 and disk L2.
         // Sub-controls (% and TTL) are gated on the parent toggle so the
         // user doesn't think they're tweaking something live when the
@@ -232,7 +243,22 @@ struct SessionConfigForm: View {
         }
         toggleRow("Prefix cache",     boolBinding(\.enablePrefixCache,     default: globalDefaults.enablePrefixCache))
         toggleRow("SSM companion",    boolBinding(\.enableSSMCompanion,    default: globalDefaults.enableSSMCompanion))
-        toggleRow("Block disk cache", boolBinding(\.enableBlockDiskCache,  default: globalDefaults.enableBlockDiskCache))
+        // iter-54: Block disk cache is orphaned Python-parity — the
+        // engine reads `enableDiskCache` + `diskCacheDir/MaxGB` for
+        // L2. `enableBlockDiskCache` + `blockDiskCache{Dir,MaxGB}`
+        // fields exist in SettingsTypes for forward-compat with a
+        // planned block-level store but have no Swift consumer. Keep
+        // the toggle visible so Python users migrating don't wonder
+        // where the field went, but badge it clearly.
+        toggleRow("Block disk cache (coming soon, use L2 below)",
+                  boolBinding(\.enableBlockDiskCache,
+                              default: globalDefaults.enableBlockDiskCache))
+        Text("Block disk cache is a Python-parity field for a planned block-level KV store. The Swift engine uses the L2 disk cache below instead — toggle has no effect today.")
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textLow)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 4)
+            .padding(.bottom, 2)
         toggleRow("L2 disk cache",    boolBinding(\.enableDiskCache,       default: globalDefaults.enableDiskCache))
         // Directory + GB cap: previously only in Tray, not per-session.
         // Audit 2026-04-16 — disk cache dir was unconfigurable anywhere
@@ -530,11 +556,26 @@ struct SessionConfigForm: View {
         // The engine logs a one-shot warning per request when the flag is
         // on so users aren't silently no-opped. See `EngineDFlash.swift`
         // / `StreamDFlash.swift` for the integrated DFlash replacement.
+        // iter-53: added explicit caption — the log warning only
+        // surfaces in the logs tab, and users flipping the toggle
+        // need to see the gap up-front.
         toggleRow("Smelt mode (Python engine only)",
                   boolBinding(\.smelt, default: globalDefaults.smelt))
+        Text("Smelt (partial expert loading) is Python-only today. Toggle persists but the Swift engine loads full experts and emits a `smelt mode is enabled but not wired` warning per request. DFlash below is the Swift equivalent for speculative decode.")
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textLow)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 4)
+            .padding(.bottom, 2)
         if (s.smelt ?? globalDefaults.smelt) {
+            // iter-62: globalDefaults.smeltMode defaults to "" which
+            // renders as a blank placeholder that looks like the field
+            // is broken. Fall back to "(inherit global)" so users know
+            // the field accepts input but currently has no default.
             textFieldRow("Smelt variant",
-                         placeholder: globalDefaults.smeltMode,
+                         placeholder: globalDefaults.smeltMode.isEmpty
+                            ? "(inherit global — e.g. routed/default)"
+                            : globalDefaults.smeltMode,
                          value: Binding(
                             get: { s.smeltMode ?? "" },
                             set: { s.smeltMode = $0.isEmpty ? nil : $0; commit() }
@@ -549,8 +590,14 @@ struct SessionConfigForm: View {
         toggleRow("DFlash speculative decoding",
                   boolBinding(\.dflash, default: globalDefaults.dflash))
         if (s.dflash ?? globalDefaults.dflash) {
+            // iter-62: drafter path defaults to "" globally — show a
+            // helpful placeholder so users know what to put there.
+            // Engine logs a skip + falls back to standard token iter
+            // when empty (see EngineDFlash.swift:92).
             textFieldRow("DFlash drafter path",
-                         placeholder: globalDefaults.dflashDrafterPath,
+                         placeholder: globalDefaults.dflashDrafterPath.isEmpty
+                            ? "/path/to/drafter.safetensors (inherit global = none)"
+                            : globalDefaults.dflashDrafterPath,
                          value: Binding(
                             get: { s.dflashDrafterPath ?? "" },
                             set: { s.dflashDrafterPath = $0.isEmpty ? nil : $0; commit() }
@@ -565,7 +612,9 @@ struct SessionConfigForm: View {
                            value: intBinding(\.dflashNumPaths, default: globalDefaults.dflashNumPaths),
                            range: 1...256, step: 1)
             textFieldRow("DFlash tap layers (csv)",
-                         placeholder: globalDefaults.dflashTapLayers,
+                         placeholder: globalDefaults.dflashTapLayers.isEmpty
+                            ? "e.g. 10,22,34,46,58 (inherit global = none)"
+                            : globalDefaults.dflashTapLayers,
                          value: Binding(
                             get: { s.dflashTapLayers ?? "" },
                             set: { s.dflashTapLayers = $0.isEmpty ? nil : $0; commit() }
@@ -595,11 +644,26 @@ struct SessionConfigForm: View {
         }
 
         // Distributed — host / port hidden when off. Audit finding #2.
-        toggleRow("Distributed",
+        // iter-53: distributed is UI-only today. No engine consumer
+        // reads `settings.distributed` — the GlobalSettings field has
+        // a `// doc-only` comment, the resolver threads it through
+        // but nothing else. Flipping the toggle persists to SQLite
+        // and gets dispersed across the tier chain with zero runtime
+        // effect. Rather than ship a dead toggle, show the row with
+        // a "Coming soon" caption so users aren't surprised.
+        toggleRow("Distributed (coming soon)",
                   boolBinding(\.distributed, default: globalDefaults.distributed))
+        Text("Distributed compute across multiple Macs is planned for v1.1 (feat/distributed-rdma branch). Toggle persists to settings but has no runtime effect yet.")
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textLow)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 4)
+            .padding(.bottom, 2)
         if (s.distributed ?? globalDefaults.distributed) {
             textFieldRow("Distributed host",
-                         placeholder: globalDefaults.distributedHost,
+                         placeholder: globalDefaults.distributedHost.isEmpty
+                            ? "e.g. rdma.local (coming soon)"
+                            : globalDefaults.distributedHost,
                          value: Binding(
                             get: { s.distributedHost ?? "" },
                             set: { s.distributedHost = $0.isEmpty ? nil : $0; commit() }
@@ -711,10 +775,27 @@ struct SessionConfigForm: View {
     private func disclosure<Content: View>(
         _ title: String,
         isOn: Binding<Bool>,
+        loadTimeOnly: Bool = false,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         DisclosureGroup(isExpanded: isOn) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                if loadTimeOnly {
+                    // iter-44: load-time knobs (engine kind, cache
+                    // block count, TurboQuant bits, etc.) are baked
+                    // into the model container during
+                    // `setupCacheCoordinator` / `Engine.load`. Changing
+                    // them on a running session silently persists the
+                    // new value to SQLite but the running engine keeps
+                    // using the OLD one — user complaint trap. This
+                    // caption tells users they need a Stop + Start
+                    // (or Restart) cycle for the change to apply.
+                    Text("Changes apply on next session start — restart the session to pick up new values.")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textLow)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 2)
+                }
                 content()
             }
             .padding(.top, Theme.Spacing.sm)

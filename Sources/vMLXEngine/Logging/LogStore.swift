@@ -155,9 +155,28 @@ public actor LogStore {
             }
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
-                Task { await self.unregister(id: id) }
+                Task { await self.markAndUnregister(id: id) }
             }
         }
+    }
+
+    /// Set of subscribers that were torn down by their consumer before
+    /// the register Task had a chance to run. Iter-29: without this,
+    /// `onTermination` → `unregister` could land before `register`,
+    /// leaving a phantom continuation in `subscribers` that every
+    /// `append` would fan out to forever. `markAndUnregister` records
+    /// the id here so `register` can refuse to add it in the first
+    /// place on a late-arriving registration.
+    private var tombstoned: Set<UUID> = []
+
+    private func markAndUnregister(id: UUID) {
+        tombstoned.insert(id)
+        unregister(id: id)
+        // Keep the tombstone set from growing unbounded — the vast
+        // majority of tombstones fire BEFORE register and get consumed
+        // there. Any that don't are already leaking memory per
+        // pre-iter-29 behavior, so opportunistically prune.
+        if tombstoned.count > 64 { tombstoned.removeAll() }
     }
 
     private func register(
@@ -165,6 +184,14 @@ public actor LogStore {
         continuation: AsyncStream<Line>.Continuation,
         minLevel: Level
     ) {
+        // Iter-29: if the consumer already terminated (tombstoned), the
+        // register call arrived late — don't add the entry, just finish
+        // the continuation so any replay lines don't get queued into a
+        // stream nobody is reading.
+        if tombstoned.remove(id) != nil {
+            continuation.finish()
+            return
+        }
         // Replay last N lines that match the subscriber's threshold.
         let recent = ring.all().suffix(replayCount).filter { $0.level >= minLevel }
         for line in recent {

@@ -15,6 +15,7 @@ struct CachePanel: View {
     @State private var stats: [String: Any] = [:]
     @State private var loaded: Bool = false
     @State private var pollTask: Task<Void, Never>? = nil
+    @State private var archExpanded: Bool = true
     @State private var pagedExpanded: Bool = true
     @State private var memoryExpanded: Bool = true
     @State private var diskExpanded: Bool = true
@@ -36,6 +37,22 @@ struct CachePanel: View {
                     .foregroundStyle(Theme.Colors.textLow)
                     .padding(.vertical, Theme.Spacing.sm)
             } else {
+                DisclosureGroup(isExpanded: $archExpanded) {
+                    architectureSection
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Text("Model architecture")
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.Colors.textHigh)
+                        if archBool("hybridSSMActive") { hybridPill }
+                        if archBool("slidingWindowActive") { swaPill }
+                        if archBool("turboQuantActive") { tqPill }
+                    }
+                }
+                .tint(Theme.Colors.textMid)
+
+                Divider().overlay(Theme.Colors.border)
+
                 DisclosureGroup(isExpanded: $pagedExpanded) {
                     pagedSection
                 } label: {
@@ -95,13 +112,54 @@ struct CachePanel: View {
 
     // MARK: - Sections
 
+    /// Per-layer cache breakdown surfaced from `Engine.cacheStats().architecture`.
+    /// Ground truth: walked from the loaded model's cache array, not heuristics.
+    /// Layer kinds: `rotating` = sliding-window attention, `mamba` = SSM,
+    /// `turboQuant` = TurboQuant KV, `quantized` = Quantized KV, `kvSimple` =
+    /// vanilla KV, `other` = unrecognized custom cache.
+    @ViewBuilder
+    private var architectureSection: some View {
+        let total = archInt("total")
+        let kv = archInt("kvSimple")
+        let rot = archInt("rotating")
+        let tq = archInt("turboQuant")
+        let q = archInt("quantized")
+        let m = archInt("mamba")
+        let other = archInt("other")
+
+        if total == 0 {
+            Text("Load a model to see per-layer cache breakdown.")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textLow)
+                .padding(.top, Theme.Spacing.sm)
+        } else {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                ], spacing: Theme.Spacing.sm) {
+                    statCell("Total layers", "\(total)")
+                    statCell("KV simple", "\(kv)")
+                    statCell("Sliding window", "\(rot)")
+                    statCell("Hybrid SSM", "\(m)")
+                    statCell("TurboQuant KV", "\(tq)")
+                    statCell("Quantized KV", "\(q)")
+                    if other > 0 {
+                        statCell("Other", "\(other)")
+                    }
+                }
+                .padding(.top, 2)
+            }
+            .padding(.top, Theme.Spacing.sm)
+        }
+    }
+
     @ViewBuilder
     private var pagedSection: some View {
         if (paged("enabled") as? Bool) == true {
             let inUse = pagedInt("blocksInUse")
             let maxBlocks = pagedInt("maxBlocks")
             let usable = max(maxBlocks - 1, 1)
-            let util = pagedDouble("utilizationPct")
             let hits = pagedInt("hitCount")
             let misses = pagedInt("missCount")
             let hitRate = pagedDouble("hitRate")
@@ -218,6 +276,11 @@ struct CachePanel: View {
             let misses = ssmInt("missCount")
             let hitRate = ssmDouble("hitRate")
             let maxEntries = ssmInt("maxEntries")
+            // iter-40: re-derive watcher activity. Fires when a
+            // thinking-template turn triggers a fresh prompt-only
+            // forward pass because the post-generation SSM state is
+            // contaminated. Zero for non-thinking models.
+            let reDerives = ssmInt("reDerives")
 
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 LazyVGrid(columns: [
@@ -227,6 +290,7 @@ struct CachePanel: View {
                     statCell("Max entries", "\(maxEntries)")
                     statCell("Hit rate", String(format: "%.1f%%", hitRate * 100.0))
                     statCell("Hits / Misses", "\(hits) / \(misses)")
+                    statCell("Re-derives", "\(reDerives)")
                 }
             }
             .padding(.top, Theme.Spacing.sm)
@@ -323,15 +387,28 @@ struct CachePanel: View {
     }
 
     private var hybridPill: some View {
-        Text("hybrid")
+        pill(text: "hybrid", tint: Theme.Colors.accent, textTint: Theme.Colors.accentHi)
+    }
+
+    private var swaPill: some View {
+        pill(text: "SWA", tint: Theme.Colors.success, textTint: Theme.Colors.success)
+    }
+
+    private var tqPill: some View {
+        pill(text: "TQ", tint: Theme.Colors.accent, textTint: Theme.Colors.accentHi)
+    }
+
+    @ViewBuilder
+    private func pill(text: String, tint: Color, textTint: Color) -> some View {
+        Text(text)
             .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.accentHi)
+            .foregroundStyle(textTint)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(
-                Capsule().fill(Theme.Colors.accent.opacity(0.15))
+                Capsule().fill(tint.opacity(0.15))
             )
-            .overlay(Capsule().stroke(Theme.Colors.accent.opacity(0.4), lineWidth: 1))
+            .overlay(Capsule().stroke(tint.opacity(0.4), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -381,14 +458,6 @@ struct CachePanel: View {
                 return "SSM companion tier is auto-enabled for hybrid models (Nemotron-H, Qwen3.5-A3B, Jamba, FalconH1, Mamba variants). Off for pure-attention models."
             }
         }
-    }
-
-    @available(*, deprecated, message: "use disabledHint(_:)")
-    private var disabledLine: some View {
-        Text("Disabled")
-            .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.textLow)
-            .padding(.top, Theme.Spacing.sm)
     }
 
     @ViewBuilder
@@ -480,6 +549,9 @@ struct CachePanel: View {
     private func memory(_ key: String) -> Any? { (stats["memory"] as? [String: Any])?[key] }
     private func disk(_ key: String) -> Any? { (stats["disk"] as? [String: Any])?[key] }
     private func ssm(_ key: String) -> Any? { (stats["ssmCompanion"] as? [String: Any])?[key] }
+    private func arch(_ key: String) -> Any? { (stats["architecture"] as? [String: Any])?[key] }
+    private func archInt(_ key: String) -> Int { (arch(key) as? Int) ?? 0 }
+    private func archBool(_ key: String) -> Bool { (arch(key) as? Bool) ?? false }
 
     private func pagedInt(_ key: String) -> Int { (paged(key) as? Int) ?? 0 }
     private func pagedDouble(_ key: String) -> Double { (paged(key) as? Double) ?? 0 }

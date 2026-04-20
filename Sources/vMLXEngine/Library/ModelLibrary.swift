@@ -743,7 +743,7 @@ public actor ModelLibrary {
             guard ext == "safetensors" || ext == "bin" || ext == "gguf" else { continue }
             let resolved = url.resolvingSymlinksInPath()
             // HF cache snapshots are filled with symlinks to blobs/ or
-            // to user-configured stores (`/Users/eric/mlx-models/...`).
+            // to user-configured stores (e.g. `~/mlx-models/...`).
             // If the target is missing (user moved/deleted the blob),
             // `attributesOfItem(atPath:)` silently falls back to lstat
             // and returns the SYMLINK's own size — ~93 bytes per link.

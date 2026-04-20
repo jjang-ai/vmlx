@@ -43,6 +43,9 @@ public struct GatewayServer {
     /// Default engine used by routes that aren't model-keyed (admin,
     /// metrics, mcp, image gen). The first registered session works.
     public let defaultEngine: Engine
+    /// Allowed CORS origins — same contract as `Server.allowedOrigins`.
+    /// iter-49 companion fix: gateway was also hardcoded to `.all`.
+    public let allowedOrigins: [String]
 
     public init(
         host: String = "127.0.0.1",
@@ -52,7 +55,8 @@ public struct GatewayServer {
         logLevel: LogStore.Level = .info,
         defaultEngine: Engine,
         resolver: @escaping EngineResolver,
-        enumerate: @escaping EngineEnumerator
+        enumerate: @escaping EngineEnumerator,
+        allowedOrigins: [String] = ["*"]
     ) {
         self.host = host
         self.port = port
@@ -62,6 +66,7 @@ public struct GatewayServer {
         self.defaultEngine = defaultEngine
         self.resolver = resolver
         self.enumerate = enumerate
+        self.allowedOrigins = allowedOrigins
     }
 
     public func run() async throws {
@@ -75,9 +80,17 @@ public struct GatewayServer {
 
         let router = Router()
 
+        // iter-49: CORS now honors `allowedOrigins` (previously
+        // hardcoded `.all`). See `Server.resolveAllowOrigin`.
         router.add(middleware: CORSMiddleware(
-            allowOrigin: .all,
-            allowHeaders: [.accept, .authorization, .contentType, .origin, .userAgent],
+            allowOrigin: Server.resolveAllowOrigin(allowedOrigins),
+            allowHeaders: [
+                .accept, .authorization, .contentType, .origin, .userAgent,
+                // iter-76 (§104): accept x-api-key (Anthropic SDK) +
+                // x-admin-token for parity with per-session server.
+                HTTPField.Name("x-api-key")!,
+                HTTPField.Name("x-admin-token")!,
+            ],
             allowMethods: [.get, .post, .put, .delete, .options, .head]
         ))
         router.add(middleware: BearerAuthMiddleware(apiKey: apiKey))
@@ -181,9 +194,16 @@ public struct GatewayServer {
             guard let engine = await resolver(model) else {
                 return await Self.modelNotFound(model: model, enumerate: enumerate)
             }
+            // iter-62: JIT wake — mirror §89 from per-session Server.
+            // A soft-slept engine returned 503 notLoaded on gateway
+            // embeddings requests, breaking RAG clients polling the
+            // multi-model gateway port.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.embeddings(request: obj)
                 return Self.json(result)
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -319,6 +339,8 @@ public struct GatewayServer {
                 if let fr = chunk.finishReason { finishReason = fr }
                 if let u = chunk.usage { usage = u }
             }
+        } catch let err as EngineError {
+            return OpenAIRoutes.mapEngineError(err)
         } catch {
             return errorJSON(.internalServerError, "\(error)")
         }

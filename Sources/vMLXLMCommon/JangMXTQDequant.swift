@@ -2,7 +2,7 @@
 // JANG MXTQ (TurboQuant-packed) dequantization for mlx-swift-lm.
 //
 // Ported from:
-//   /Users/eric/mlx/vllm-mlx/vmlx_engine/utils/jang_loader.py
+//   vmlx_engine/utils/jang_loader.py
 //   Lines 619-707 (`_load_jang_v2` MXTQ branch)
 //
 // And the Python reference primitives:

@@ -294,23 +294,34 @@ public final class LlamaToolCallParser: ToolCallParser {
         // Variant 2: <|python_tag|>{"name":"...","parameters":{...}}  (Llama 3.1/3.2 style)
         // The model may emit `parameters` or `parameters_json` (string-escaped nested JSON)
         // or `arguments`. We normalise all three.
+        //
+        // Multi-marker case (live-caught against llama-3.2-1b, harness case
+        // `tool_call`): model sometimes emits `<|python_tag|>X<|python_tag|>Y`.
+        // Split on the marker, drop the pre-tag prefix, try each fragment
+        // as a candidate JSON object — fragments that fail to parse are
+        // dropped silently so a single bad call doesn't nullify the rest.
         let pythonTag = "<|python_tag|>"
-        guard let tagRange = modelOutput.range(of: pythonTag) else {
+        guard modelOutput.range(of: pythonTag) != nil else {
             return ExtractedToolCallInformation(toolsCalled: false, toolCalls: [], content: modelOutput)
         }
-        let prefix = String(modelOutput[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let tail = String(modelOutput[tagRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let tailNoEot = tail
-            .replacingOccurrences(of: "<|eot_id|>", with: "")
-            .replacingOccurrences(of: "<|eom_id|>", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Tail can be one JSON object or a semicolon-separated list.
-        let rawCalls: [String]
-        if tailNoEot.hasPrefix("[") {
-            rawCalls = [tailNoEot]
-        } else {
-            rawCalls = tailNoEot.components(separatedBy: ";").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let segments = modelOutput.components(separatedBy: pythonTag)
+        let prefix = (segments.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterTag = segments.dropFirst()
+        var rawCalls: [String] = []
+        for seg in afterTag {
+            let cleaned = seg
+                .replacingOccurrences(of: "<|eot_id|>", with: "")
+                .replacingOccurrences(of: "<|eom_id|>", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned.isEmpty { continue }
+            if cleaned.hasPrefix("[") {
+                rawCalls.append(cleaned)
+            } else {
+                let parts = cleaned.components(separatedBy: ";")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                rawCalls.append(contentsOf: parts)
+            }
         }
 
         // Only emit when the model has actually finished the JSON object —

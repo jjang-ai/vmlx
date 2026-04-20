@@ -46,7 +46,6 @@ struct ChatSettingsPopover: View {
     @State private var openBuiltinTools = false
     @State private var openWorkdir = false
     @State private var openMCP = false
-    @State private var openWireApi = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,7 +61,14 @@ struct ChatSettingsPopover: View {
                     builtinToolsSection
                     workdirSection
                     mcpSection
-                    wireApiSection
+                    // iter-43: wireApiSection removed from the in-app
+                    // chat popover. The chat path calls Engine.stream
+                    // directly — there's no HTTP client in the loop —
+                    // so the picker had no observable effect. For
+                    // remote-endpoint sessions use the Server tab's
+                    // Session Config (SessionConfigForm) remote-URL
+                    // pane; that surface knows which SDK wire format
+                    // to negotiate against the upstream.
                 }
                 .padding(Theme.Spacing.md)
             }
@@ -328,38 +334,32 @@ struct ChatSettingsPopover: View {
     private var builtinToolsSection: some View {
         DisclosureGroup(isExpanded: $openBuiltinTools) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                toggleRow("Web Search", value: Binding(
-                    get: { draft.webSearchEnabled },
-                    set: { draft.webSearchEnabled = $0; writeBack() }
-                ), traceKey: "webSearchEnabled")
-                toggleRow("Fetch URL", value: Binding(
-                    get: { draft.fetchUrlEnabled },
-                    set: { draft.fetchUrlEnabled = $0; writeBack() }
-                ), traceKey: "fetchUrlEnabled")
-                toggleRow("File Tools", value: Binding(
-                    get: { draft.fileToolsEnabled },
-                    set: { draft.fileToolsEnabled = $0; writeBack() }
-                ), traceKey: "fileToolsEnabled")
-                toggleRow("Search Tools", value: Binding(
-                    get: { draft.searchToolsEnabled },
-                    set: { draft.searchToolsEnabled = $0; writeBack() }
-                ), traceKey: "searchToolsEnabled")
-                toggleRow("Shell", value: Binding(
+                // Iter-42: only `shellEnabled` (→ BashTool) is actually
+                // wired to ChatViewModel and routes through to an
+                // engine-side tool executor. The other toggles we used
+                // to surface here (Web Search / Fetch URL / File Tools
+                // / Search Tools / Git / Utility / Brave Search) had
+                // no corresponding tool implementation — flipping them
+                // wrote to SQLite with zero observable effect. Rather
+                // than leave traps in the UI, show only the working
+                // toggle plus a disabled "coming soon" row for each
+                // of the unwired ones. They keep their SQLite column
+                // for forward-compatibility so existing DB rows don't
+                // break, but the UI makes the status honest.
+                toggleRow("Shell (bash)", value: Binding(
                     get: { draft.shellEnabled },
                     set: { draft.shellEnabled = $0; writeBack() }
                 ), traceKey: "shellEnabled")
-                toggleRow("Git", value: Binding(
-                    get: { draft.gitEnabled },
-                    set: { draft.gitEnabled = $0; writeBack() }
-                ), traceKey: "gitEnabled")
-                toggleRow("Utility Tools", value: Binding(
-                    get: { draft.utilityToolsEnabled },
-                    set: { draft.utilityToolsEnabled = $0; writeBack() }
-                ), traceKey: "utilityToolsEnabled")
-                toggleRow("Brave Search", value: Binding(
-                    get: { draft.braveSearchEnabled },
-                    set: { draft.braveSearchEnabled = $0; writeBack() }
-                ), traceKey: "braveSearchEnabled")
+                Text("Shell is the only Built-in Tool wired end-to-end today. It maps to BashTool via ChatViewModel → Stream.executeToolCall. Enable MCP in Server → Tools tab for extended capability (MCP tools register through `tools:` array).")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+                Text("Coming soon: Web Search, Fetch URL, File Tools, Search Tools, Git, Utility Tools, Brave Search.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
             }
             .padding(.top, Theme.Spacing.xs)
         } label: { sectionLabel("Built-in Tools") }
@@ -417,38 +417,11 @@ struct ChatSettingsPopover: View {
         .tint(Theme.Colors.textMid)
     }
 
-    private var wireApiSection: some View {
-        DisclosureGroup(isExpanded: $openWireApi) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                HStack {
-                    Text("Wire API").font(Theme.Typography.body)
-                        .foregroundStyle(Theme.Colors.textHigh)
-                    Spacer()
-                    Picker("", selection: Binding<String>(
-                        get: { draft.wireApi ?? "__inherit__" },
-                        set: { v in
-                            draft.wireApi = (v == "__inherit__") ? nil : v
-                            writeBack()
-                        }
-                    )) {
-                        Text("Inherit").tag("__inherit__")
-                        Text("Auto").tag("auto")
-                        Text("OpenAI").tag("openai")
-                        Text("Anthropic").tag("anthropic")
-                        Text("Ollama").tag("ollama")
-                    }
-                    .pickerStyle(.menu)
-                    .frame(width: 180)
-                }
-                tierChipRow(traceKey: "wireApi",
-                            isChatSet: draft.wireApi != nil) {
-                    draft.wireApi = nil; writeBack()
-                }
-            }
-            .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Wire API") }
-        .tint(Theme.Colors.textMid)
-    }
+    // iter-50 zombie cleanup: wireApiSection removed entirely. The
+    // body-level call site already dropped in iter-43; this private
+    // view was still compiled but unreferenced. Dropping it also
+    // drops the `openWireApi` binding below (see @State cleanup).
+    // ChatSettings.wireApi field stays for forward-compat.
 
     // MARK: - Footer
 

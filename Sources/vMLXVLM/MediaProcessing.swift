@@ -429,8 +429,18 @@ public enum MediaProcessing {
         let timescale = duration.timescale
         let sampledTimes = sampledTimeValues.map { CMTime(value: $0, timescale: timescale) }
 
-        // Collect the frames
-        var ciImages: [CIImage] = []
+        // 2026-04-18 VL+video memory fix — community users report
+        // swap-storming when processing videos. The old path retained
+        // every sampled CIImage in `ciImages` AND every post-decoded
+        // fp32 MLXArray in `framesAsArrays` simultaneously, so peak
+        // resident set was ≈ 2× `frameCount × frameBytes`. For a 60 s
+        // 1080p clip at 2 FPS that's ~3.6 GB per video request; a 4K
+        // clip or a multi-video message balloons further. Converting
+        // each CIImage to an MLXArray inside the loop and dropping the
+        // CIImage ref immediately halves peak memory. Identical output
+        // shape/values — the final `ProcessedFrames.frames` list is
+        // constructed in the same order as before.
+        var frameArrays: [MLXArray] = []
         var timestamps: [CMTime] = []
 
         for await result in generator.images(for: sampledTimes) {
@@ -439,16 +449,17 @@ public enum MediaProcessing {
                 let ciImage = CIImage(
                     cgImage: image, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
                 let frame = try frameProcessing(.init(frame: ciImage, timeStamp: actual))
-                ciImages.append(frame.frame)
+                // Eager-convert to MLXArray so the CIImage + its CGImage
+                // backing can drop refcount at the end of this iteration.
+                frameArrays.append(frame.frame.asMLXArray())
                 timestamps.append(frame.timeStamp)
             case .failure(requestedTime: _, _):
                 break
             }
         }
 
-        let framesAsArrays = ciImages.map { $0.asMLXArray() }
         return ProcessedFrames(
-            frames: framesAsArrays,
+            frames: frameArrays,
             timestamps: timestamps,
             totalDuration: duration
         )
@@ -481,8 +492,10 @@ public enum MediaProcessing {
         // Construct a CMTime using the sampled CMTimeValue's and the asset's timescale
         let timescale = duration.timescale
 
-        // Collect the frames
-        var ciImages: [CIImage] = []
+        // Same memory fix as the AVAsset overload above: eager-convert
+        // each sampled frame to an MLXArray and drop the CIImage ref in
+        // the same iteration. See the longer comment there for context.
+        var frameArrays: [MLXArray] = []
         var timestamps: [CMTime] = []
 
         // See https://github.com/ml-explore/mlx-swift-lm/pull/64#discussion_r2713532157
@@ -507,14 +520,13 @@ public enum MediaProcessing {
                 let videoFrame = videoFrames[targetIndex]
                 let frame = try frameProcessing(
                     .init(frame: videoFrame.frame, timeStamp: videoFrame.timeStamp))
-                ciImages.append(frame.frame)
+                frameArrays.append(frame.frame.asMLXArray())
                 timestamps.append(frame.timeStamp)
             }
         }
 
-        let framesAsArrays = ciImages.map { $0.asMLXArray() }
         return ProcessedFrames(
-            frames: framesAsArrays,
+            frames: frameArrays,
             timestamps: timestamps,
             totalDuration: duration
         )

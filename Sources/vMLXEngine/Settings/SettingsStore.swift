@@ -39,7 +39,22 @@ public actor SettingsStore {
         let decoder = JSONDecoder()
         if let data = database.getGlobal(),
            let g = try? decoder.decode(GlobalSettings.self, from: data) {
-            self.globalCache = g
+            // Defensive clamp — §26 NO-REGRESSION. A harness run or stale
+            // test artifact can leave `defaultMaxTokens` at a pathologically
+            // small value (seen in the wild: 60, 4) which then truncates
+            // EVERY user chat response to that length. The code default is
+            // 32768; anything under 256 is almost certainly polluted and
+            // should be rejected.
+            var gc = g
+            if gc.defaultMaxTokens < 256 {
+                gc.defaultMaxTokens = GlobalSettings().defaultMaxTokens
+                // Persist the repair so subsequent loads see the clamped
+                // value + external inspectors don't see the bad state.
+                if let fixed = try? JSONEncoder().encode(gc) {
+                    database.setGlobal(fixed)
+                }
+            }
+            self.globalCache = gc
         } else {
             self.globalCache = GlobalSettings()
             // First-run: seed the DB so user_version is bumped and defaults
@@ -149,14 +164,24 @@ public actor SettingsStore {
 
     /// Force any pending debounced writes to flush immediately. Useful for
     /// app-will-terminate handlers and for unit tests.
+    ///
+    /// **iter-72 (§101)** — snapshot the pending-task keys BEFORE
+    /// iterating. `flushSession(id)` / `flushChat(id)` both call
+    /// `removeValue(forKey: id)` on their respective task dicts, so
+    /// iterating `for (id, t) in sessionSaveTasks` directly mutated
+    /// the dict mid-enumeration. Swift's dictionary iterator will
+    /// either crash with "Dictionary was mutated while being
+    /// enumerated" in debug or silently skip/repeat entries in
+    /// release. Snapshotting keys + looking up the task object via
+    /// subscript per-iteration avoids both failure modes.
     public func flushPending() async {
         if let t = globalSaveTask { t.cancel(); await flushGlobal() }
-        for (id, t) in sessionSaveTasks {
-            t.cancel()
+        for id in Array(sessionSaveTasks.keys) {
+            sessionSaveTasks[id]?.cancel()
             await flushSession(id)
         }
-        for (id, t) in chatSaveTasks {
-            t.cancel()
+        for id in Array(chatSaveTasks.keys) {
+            chatSaveTasks[id]?.cancel()
             await flushChat(id)
         }
     }
@@ -291,6 +316,7 @@ public actor SettingsStore {
         if let v = s?.memoryCachePercent { out.memoryCachePercent = v; trace["memoryCachePercent"] = .session } else { trace["memoryCachePercent"] = .global }
         if let v = s?.memoryCacheTTLMinutes { out.memoryCacheTTLMinutes = v; trace["memoryCacheTTLMinutes"] = .session } else { trace["memoryCacheTTLMinutes"] = .global }
         if let v = s?.maxCacheBlocks { out.maxCacheBlocks = v; trace["maxCacheBlocks"] = .session } else { trace["maxCacheBlocks"] = .global }
+        if let v = s?.pagedCacheBlockSize { out.pagedCacheBlockSize = v; trace["pagedCacheBlockSize"] = .session } else { trace["pagedCacheBlockSize"] = .global }
         if let v = s?.enableTurboQuant { out.enableTurboQuant = v; trace["enableTurboQuant"] = .session } else { trace["enableTurboQuant"] = .global }
         if let v = s?.turboQuantBits { out.turboQuantBits = v; trace["turboQuantBits"] = .session } else { trace["turboQuantBits"] = .global }
         if let v = s?.enableJANG { out.enableJANG = v; trace["enableJANG"] = .session } else { trace["enableJANG"] = .global }

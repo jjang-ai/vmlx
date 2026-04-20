@@ -154,11 +154,42 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
         tools: [[String: any Sendable]]?,
         additionalContext: [String: any Sendable]?
     ) throws -> [Int] {
+        // iter-60: honor a caller-supplied chat-template override. The
+        // engine sneaks the override through as a reserved
+        // `__chat_template_override__` key in additionalContext so we
+        // don't have to change the vMLXLMCommon.Tokenizer protocol.
+        // When present + non-empty, swap to the swift-transformers
+        // overload that takes `chatTemplate: .literal(...)`. This wires
+        // up `--chat-template` (CLI) and `settings.chatTemplate`
+        // (session/global) which pre-iter-60 were parsed + persisted
+        // but never consumed (see §88 warning in Stream.swift).
+        let overrideKey = "__chat_template_override__"
+        var cleanContext = additionalContext
+        let overrideTemplate: String? = {
+            guard let raw = additionalContext?[overrideKey] as? String,
+                  !raw.isEmpty
+            else { return nil }
+            cleanContext?.removeValue(forKey: overrideKey)
+            return raw
+        }()
         do {
+            if let template = overrideTemplate {
+                return try upstream.applyChatTemplate(
+                    messages: messages,
+                    chatTemplate: .literal(template),
+                    addGenerationPrompt: ChatTemplateFallback.bool(
+                        in: cleanContext,
+                        key: "add_generation_prompt",
+                        default: true),
+                    truncation: false,
+                    maxLength: nil,
+                    tools: tools,
+                    additionalContext: cleanContext)
+            }
             return try upstream.applyChatTemplate(
                 messages: messages,
                 tools: tools,
-                additionalContext: additionalContext)
+                additionalContext: cleanContext)
         } catch Tokenizers.TokenizerError.missingChatTemplate {
             // No template at all — let the upstream "missing template"
             // branch rethrow so downstream code can pick a default.
