@@ -225,41 +225,44 @@ public enum OpenAIRoutes {
         // POST /v1/responses/{id}/cancel
         // POST /v1/completions/{id}/cancel
         //
-        // OpenAI-compatible request cancellation. The Python server tracks
-        // active requests by id and routes the cancel to the specific
-        // generation task. The Swift engine currently exposes a single
-        // `cancelStream()` that cancels the in-flight stream regardless of
-        // id — this matches the common case (a chat client aborts the
-        // turn it just sent) but does NOT correctly handle parallel
-        // batched requests where multiple streams race. Build-state audit
-        // 2026-04-15 #2 — gap is acknowledged in the response payload via
-        // the `note` field so SDK callers know the semantics.
+        // OpenAI-compatible request cancellation. Engine tracks active
+        // streams in `streamTasksByID` so `cancelStream(id:)` targets
+        // the specific generation task registered under the caller's id.
+        //
+        // iter-123 §149: previously, when the per-id lookup missed
+        // (unknown/stale id, or stream finished before the cancel
+        // arrived), the handler fell back to `engine.cancelStream()`
+        // — the no-arg variant that drains EVERY in-flight stream.
+        // Under multi-user / gateway deployments that was a wrong-id
+        // sledgehammer: a misaddressed cancel would kill an unrelated
+        // user's in-flight response. The responses also lied: they
+        // always emitted `cancelled: true` even when no stream was
+        // found. Fix: return 404 with `cancelled: false, found: false`
+        // when the id isn't known; emit 200 with `cancelled: true`
+        // only when a real per-id match was killed.
         router.post("/v1/chat/completions/:id/cancel") { req, ctx -> Response in
             let id = ctx.parameters.get("id") ?? ""
             let hit = await engine.cancelStream(id: id)
-            if !hit { await engine.cancelStream() }
             return Self.json([
                 "id": id, "object": "chat.completion.cancel",
-                "cancelled": true, "found": hit,
-            ])
+                "cancelled": hit, "found": hit,
+            ], status: hit ? .ok : .notFound)
         }
         router.post("/v1/responses/:id/cancel") { req, ctx -> Response in
             let id = ctx.parameters.get("id") ?? ""
             let hit = await engine.cancelStream(id: id)
-            if !hit { await engine.cancelStream() }
             return Self.json([
                 "id": id, "object": "response.cancel",
-                "cancelled": true, "found": hit,
-            ])
+                "cancelled": hit, "found": hit,
+            ], status: hit ? .ok : .notFound)
         }
         router.post("/v1/completions/:id/cancel") { req, ctx -> Response in
             let id = ctx.parameters.get("id") ?? ""
             let hit = await engine.cancelStream(id: id)
-            if !hit { await engine.cancelStream() }
             return Self.json([
                 "id": id, "object": "completion.cancel",
-                "cancelled": true, "found": hit,
-            ])
+                "cancelled": hit, "found": hit,
+            ], status: hit ? .ok : .notFound)
         }
 
         // POST /v1/completions — legacy text-completion endpoint.
