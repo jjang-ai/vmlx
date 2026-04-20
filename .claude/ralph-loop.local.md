@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 47
+iteration: 48
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 365/365 source-scan tests green, 125/125 regression guards + 15 matrix
-  rows (§57–§129)
+- 366/366 source-scan tests green, 126/126 regression guards + 15 matrix
+  rows (§57–§130)
+- iter-103 work:
+  1. FluxBackend output PNG leak (§130) — **real resource leak,
+     extends §126 sweep**. FluxBackend cleans up input files
+     (src-*.png + mask-*.png) per-call, but the OUTPUT PNG is
+     the caller's return value (handed to ImageScreen /
+     ChatViewModel for display), so nobody deletes it. In
+     practice users rarely save every generated image → every
+     image generation leaks 2-10 MB into
+     `/var/folders/.../T/vmlx-flux-out/`. Dozens of images per
+     day × weeks of usage = many GB of orphaned PNGs. The §126
+     startup sweep only matched top-level `vmlx-*` prefixes;
+     files inside the `vmlx-flux-out` directory don't carry
+     any prefix (they're named `out-<hash>.png`), so they
+     never got caught. Fix: extended
+     `sweepAgedVMLXTempArtifacts` with a second pass that
+     walks inside `vmlx-flux-out/` and removes files older
+     than the same 1h cutoff, without removing the directory
+     itself (FluxBackend recreates it per-call). §130
+     regression guard asserts the "vmlx-flux-out" reference,
+     the iter-103 marker, and the mtime-cutoff inner check.
 - iter-102 work:
   1. enableAutoToolChoice audit-note accuracy (§129) — **docs-
      vs-behavior drift**. Known Gap #3 has said "kept for CLI

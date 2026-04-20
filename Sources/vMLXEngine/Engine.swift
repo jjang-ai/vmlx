@@ -531,6 +531,30 @@ public actor Engine {
                   mtime < cutoff else { continue }
             try? fm.removeItem(at: url)
         }
+        // iter-103 §130: `vmlx-flux-out/` is a persistent directory
+        // that FluxBackend writes source/mask inputs + output PNGs
+        // into. Inputs are cleaned up per-call (FluxBackend.swift:218
+        // + 227) but outputs are kept because the returned URL is the
+        // caller's result — ImageScreen / ChatViewModel holds the
+        // reference and may display or save the image later. In
+        // practice users rarely save every generated image; the
+        // outputs accumulate at ~2-10 MB per image × dozens per day.
+        // Don't remove the directory itself (FluxBackend recreates
+        // it per-call, but the cost is negligible) — walk inside
+        // and sweep only files that haven't been touched in >1h.
+        let fluxDir = tmp.appendingPathComponent("vmlx-flux-out", isDirectory: true)
+        if let fluxEntries = try? fm.contentsOfDirectory(
+            at: fluxDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for url in fluxEntries {
+                let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                guard let mtime = vals?.contentModificationDate,
+                      mtime < cutoff else { continue }
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     /// Re-load the MCP server catalog from a specific JSON file. Called by
