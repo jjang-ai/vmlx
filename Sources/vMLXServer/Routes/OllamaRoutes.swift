@@ -454,7 +454,17 @@ public enum OllamaRoutes {
                 // {"embeddings": [[...],[...]]} for a list. Extract from
                 // the OpenAI-style {"data": [{"embedding": [...]}]} envelope.
                 let data = (result["data"] as? [[String: Any]]) ?? []
-                let vectors = data.compactMap { $0["embedding"] as? [Double] }
+                // iter-106 §132: engine.embeddings stores vectors as
+                // [Float] inside the [String: Any] response dict. A prior
+                // `as? [Double]` cast ALWAYS returned nil — Swift array
+                // casts require element-type identity, no bridging — so
+                // this Ollama adapter was silently shipping empty vectors
+                // for months. Cast to [Float] (the real underlying type);
+                // JSONSerialization will bridge the floats through
+                // NSNumber on the wire regardless.
+                let vectors: [[Float]] = data.compactMap {
+                    $0["embedding"] as? [Float]
+                }
                 if vectors.count == 1 {
                     return OpenAIRoutes.json([
                         "embedding": vectors[0],

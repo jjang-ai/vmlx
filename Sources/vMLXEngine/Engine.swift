@@ -1694,12 +1694,35 @@ public actor Engine {
         } else {
             throw EngineError.invalidRequest("embeddings: missing or invalid 'input' field — expected string or [string]")
         }
+        // iter-106 §132: empty array crashed downstream at MLX.stacked([])
+        // since generateEmbeddings has no zero-row guard. OpenAI returns
+        // 400 for empty input; match that behavior here rather than
+        // 500-ing from a native crash.
+        guard !inputs.isEmpty else {
+            throw EngineError.invalidRequest("embeddings: 'input' must contain at least one item")
+        }
         let vectors = try await generateEmbeddings(inputs: inputs)
         let modelName = (request["model"] as? String)
             ?? self.embeddingModelPath?.lastPathComponent
             ?? "unknown"
+        // iter-106 §132: OpenAI Python SDK ≥1.47 defaults
+        // `encoding_format="base64"` for wire-efficiency — the SDK then
+        // base64-decodes into a numpy float32 array. Honor the request
+        // field so SDK clients get the shape they're parsing for;
+        // default stays "float" for curl/JSON humans + legacy tooling.
+        let encodingFormat = (request["encoding_format"] as? String) ?? "float"
         let data: [[String: Any]] = vectors.enumerated().map { (i, v) in
-            ["object": "embedding", "index": i, "embedding": v]
+            var entry: [String: Any] = ["object": "embedding", "index": i]
+            if encodingFormat == "base64" {
+                var floats = v
+                let bytes = floats.withUnsafeMutableBufferPointer { buf in
+                    Data(buffer: buf)
+                }
+                entry["embedding"] = bytes.base64EncodedString()
+            } else {
+                entry["embedding"] = v
+            }
+            return entry
         }
         var totalTokens = 0
         if let container = self.embeddingContainer {
