@@ -67,7 +67,19 @@ public actor RemoteEngineClient {
 
     // MARK: - State
 
-    private var liveTask: URLSessionDataTask?
+    /// iter-127 §153: handle to the outer Swift Task that drives the
+    /// in-flight `stream(request:)` body. `cancelStream()` cancels
+    /// this — which propagates into the `for try await byte in bytes`
+    /// loop via `Task.isCancelled`, which aborts the `URLSession
+    /// .shared.bytes(for:)` AsyncBytes iterator, which cancels the
+    /// underlying URLSession data task. Pre-iter-127 this was declared
+    /// as a `URLSessionDataTask?` and NEVER ASSIGNED — `cancelStream`
+    /// was a pure no-op, and `/v1/chat/completions/:id/cancel` against
+    /// a remote-bound session silently failed. The in-app Stop button
+    /// happened to work because ChatViewModel's outer `streamTask.cancel()`
+    /// short-circuited via `continuation.onTermination`, but the HTTP
+    /// cancel route had no such path.
+    private var liveStreamTask: Task<Void, Error>?
 
     public init(endpoint: URL, kind: Kind, apiKey: String?, modelName: String) {
         self.endpoint = endpoint
@@ -84,7 +96,7 @@ public actor RemoteEngineClient {
     /// swap engines without a branch.
     public func stream(request: ChatRequest) -> AsyncThrowingStream<StreamChunk, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task<Void, Error> {
                 do {
                     switch self.kind {
                     case .openai:
@@ -101,14 +113,30 @@ public actor RemoteEngineClient {
                     continuation.finish(throwing: error)
                 }
             }
+            // iter-127 §153: register the task on the actor so
+            // `cancelStream()` can reach it. The register hop is
+            // separate because the AsyncThrowingStream init closure
+            // is @Sendable + synchronous and can't await the actor
+            // directly — a detached Task lands the handle on the
+            // actor's serial queue before the consumer asks to cancel.
+            Task { [weak self] in await self?.setLiveStreamTask(task) }
             continuation.onTermination = { _ in task.cancel() }
         }
     }
 
-    /// Cancel the in-flight request, if any.
+    private func setLiveStreamTask(_ task: Task<Void, Error>) {
+        liveStreamTask = task
+    }
+
+    /// Cancel the in-flight request, if any. iter-127 §153: cancels the
+    /// outer Swift Task driving `stream(request:)`, which propagates
+    /// into the AsyncBytes iterator and aborts the underlying URLSession
+    /// data task. Called by `Engine.cancelStream()` when a remote-bound
+    /// session receives a stop signal via the Chat button OR the HTTP
+    /// `/v1/chat/completions/:id/cancel` route.
     public func cancelStream() {
-        liveTask?.cancel()
-        liveTask = nil
+        liveStreamTask?.cancel()
+        liveStreamTask = nil
     }
 
     /// GET /v1/models (OpenAI) or /api/tags (Ollama). Returns model ids.
