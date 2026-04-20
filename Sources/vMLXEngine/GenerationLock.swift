@@ -32,6 +32,18 @@ public actor GenerationLock {
 
     public init() {}
 
+    /// iter-85 §163: introspection for /health scheduler honesty. Lets
+    /// the /health handler report queue depth so callers that send
+    /// concurrent requests see that they actually queue FIFO rather
+    /// than run in parallel. Without this, a client sending two
+    /// requests assumes both are decoding simultaneously when the
+    /// second is really stuck behind the first.
+    public var isHeld: Bool { held }
+    public var waitingCount: Int { waiters.count }
+    /// 1 if held + N queued waiters. Mirrors the textbook
+    /// "tasks in flight OR blocked" count.
+    public var inflightOrQueued: Int { (held ? 1 : 0) + waiters.count }
+
     public func acquire() async {
         if !held {
             held = true

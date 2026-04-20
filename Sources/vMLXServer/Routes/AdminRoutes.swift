@@ -48,10 +48,23 @@ public enum AdminRoutes {
                     $0.canonicalPath.standardizedFileURL == canonical
                 })?.displayName ?? lp.lastPathComponent
             }
+            // iter-85 §163: expose real scheduler pattern so callers
+            // don't assume they're hitting a continuous-batching
+            // engine. Swift vMLX serializes MLX Metal work per-engine
+            // because MTLCommandBuffer is not concurrency-safe — see
+            // GenerationLock.swift. Surfaces queue depth so clients
+            // that send bursts can tell they're queued behind an
+            // in-flight request rather than actually interleaved.
+            let lock = await engine.generationLock
+            let inflight = await lock.isHeld ? 1 : 0
+            let waiting = await lock.waitingCount
             var body: [String: Any] = [
                 "status": "ok",
                 "engine": "vmlx-swift",
                 "state": stateStr,
+                "scheduling": "serial-fifo",
+                "inflight": inflight,
+                "waiting": waiting,
             ]
             if let model { body["model"] = model }
             if let detail { body["detail"] = detail }
