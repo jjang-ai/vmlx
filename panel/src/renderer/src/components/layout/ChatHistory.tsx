@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Pencil, Trash2, X, Check, MessageSquare, Search } from 'lucide-react'
+import { Pencil, Trash2, X, Check, MessageSquare, Search, Trash } from 'lucide-react'
 
 interface ChatSummary {
   id: string
@@ -97,7 +97,10 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!confirm('Delete this chat?')) return
+    // vmlx#70: shift-click skips the confirm dialog for quick-delete mode
+    // (matches the convention @scannermobs asked for — other apps use
+    // shift as a modifier for destructive actions).
+    if (!e.shiftKey && !confirm('Delete this chat?')) return
     await window.api.chat.delete(id)
     // Deselect if the deleted chat was the active one
     if (id === currentChatId) {
@@ -105,6 +108,29 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
     }
     // Reload from DB to get a consistent view (avoids stale backfill on next refresh)
     loadChats()
+  }
+
+  // vmlx#70 @scannermobs: bulk-wipe all chats across every model. Calls
+  // the already-exposed chat:deleteAll IPC (ChatList.tsx had it, but the
+  // global Sidebar ChatHistory was stuck per-chat-only).
+  const handleClearAll = async () => {
+    const total = chats.length
+    if (total === 0) return
+    if (!confirm(
+      `Delete ALL ${total} chat${total === 1 ? '' : 's'} across every model?\n\n` +
+      `This wipes the chat rows and their messages. Cannot be undone.`
+    )) return
+    try {
+      const res = await window.api.chat.deleteAll()
+      if (!res?.success) {
+        console.error('[ChatHistory] clearAll failed:', res?.error)
+        return
+      }
+      if (currentChatId) onChatSelect('', '')
+      await loadChats()
+    } catch (err) {
+      console.error('[ChatHistory] clearAll error:', err)
+    }
   }
 
   // Filter by search
@@ -139,6 +165,24 @@ export function ChatHistory({ currentChatId, onChatSelect, searchQuery }: ChatHi
 
   return (
     <div className="flex-1 overflow-y-auto">
+      {/* vmlx#70: bulk-delete header — shown when there's at least one chat */}
+      {chats.length > 0 && !searchQuery && (
+        <div className="px-3 pt-2 pb-1 flex items-center justify-between border-b border-border/40">
+          <span className="text-[10px] text-muted-foreground/70">
+            {chats.length} chat{chats.length === 1 ? '' : 's'} • shift-click × to skip confirm
+          </span>
+          <button
+            type="button"
+            onClick={handleClearAll}
+            className="text-[10px] text-destructive hover:text-destructive/80 hover:underline flex items-center gap-1"
+            aria-label="Clear all chats"
+            title="Delete every chat across every model (with confirm)"
+          >
+            <Trash className="h-3 w-3" />
+            Clear All
+          </button>
+        </div>
+      )}
       {groups.map(group => (
         <div key={group.label}>
           <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

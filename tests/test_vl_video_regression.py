@@ -8719,3 +8719,87 @@ class TestMlxStudio79ClaudeCodeCompat:
             f"expected 3 INFO lines for 3 distinct pairs, got "
             f"{len(mismatch_records)}: {mismatch_records}"
         )
+
+
+class TestChatHistoryClearAllButton:
+    """v1.3.68 / vmlx#70 — @scannermobs asked for bulk chat deletion.
+    The chat:deleteAll IPC handler already existed (wired into the per-
+    model ChatList.tsx sidebar in SessionView). But the global Sidebar's
+    ChatHistory.tsx had only per-chat delete — no bulk button, no
+    shift-modifier quick-delete. Users on the main view couldn't wipe
+    all chats at once.
+
+    This class pins the panel-side fix. Source-only asserts since the
+    panel code is TypeScript — no Python engine path to integration-
+    test from pytest. The panel's own vitest suite covers the click
+    handler behavior."""
+
+    PANEL_CH = "/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/layout/ChatHistory.tsx"
+
+    def test_chat_history_has_handle_clear_all(self):
+        """handleClearAll function must exist and call deleteAll() IPC."""
+        src = Path(self.PANEL_CH).read_text()
+        assert "handleClearAll" in src, (
+            "ChatHistory missing handleClearAll — bulk delete will regress"
+        )
+        assert "window.api.chat.deleteAll" in src, (
+            "handleClearAll must call window.api.chat.deleteAll (the IPC "
+            "that reaches chat:deleteAll → db.deleteAllChats)"
+        )
+
+    def test_chat_history_has_clear_all_button(self):
+        """Clear All button must be rendered with an accessible label."""
+        src = Path(self.PANEL_CH).read_text()
+        assert 'aria-label="Clear all chats"' in src, (
+            "ChatHistory must expose Clear All button with accessible "
+            "label for screen readers + keyboard navigation"
+        )
+
+    def test_chat_history_has_shift_click_quick_delete(self):
+        """@scannermobs asked for shift-modifier to skip confirm — match
+        the convention in other apps."""
+        src = Path(self.PANEL_CH).read_text()
+        assert "e.shiftKey" in src, (
+            "handleDelete must check e.shiftKey to enable quick-delete "
+            "mode (skip confirm when shift is held)"
+        )
+
+
+class TestModelDeleteAlwaysVisible:
+    """v1.3.68 / vmlx#57 — @JeffreyArts couldn't find the model delete
+    feature. It existed since an earlier release (CreateSession.tsx
+    per-row trash icon + models:deleteLocal IPC with full safety
+    guards), but the CSS class was `opacity-0 group-hover:opacity-100`
+    — the button was invisible until mouse hover, so users who didn't
+    hover never discovered it.
+
+    Fix: icon now `opacity-60 group-hover:opacity-100` — always
+    visible at 60% brightness, pops to 100% on hover. Same click
+    behavior, same confirmation dialog, same safety checks."""
+
+    CREATE_SESSION = "/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/CreateSession.tsx"
+
+    def test_model_delete_icon_not_invisible_by_default(self):
+        """The trash icon must NOT start at opacity-0 — that's the
+        invisibility that caused vmlx#57."""
+        src = Path(self.CREATE_SESSION).read_text()
+        assert "opacity-60 group-hover:opacity-100" in src, (
+            "CreateSession trash icon should use opacity-60 (visible) + "
+            "group-hover:opacity-100 (brighten on hover). Regressing "
+            "back to opacity-0 re-hides the delete feature."
+        )
+        # Negative: the old invisible class string must be gone.
+        assert "opacity-0 group-hover:opacity-100" not in src, (
+            "stale invisible-by-default class re-introduced — "
+            "vmlx#57 will regress"
+        )
+
+    def test_model_delete_confirmation_dialog_shows_path(self):
+        """Confirm dialog must quote the model path so users see EXACTLY
+        what will be rm'd — especially important for models inside
+        system dirs."""
+        src = Path(self.CREATE_SESSION).read_text()
+        assert "Path: ${model.path}" in src, (
+            "confirm dialog must include the full model.path so user "
+            "can verify before committing to the delete"
+        )

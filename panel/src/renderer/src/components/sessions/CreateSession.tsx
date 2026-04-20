@@ -592,7 +592,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                           alert(`Failed to delete: ${(err as Error).message}`)
                         }
                       }}
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-red-500/15 hover:text-red-400 text-muted-foreground text-xs"
+                      className="absolute top-2 right-2 opacity-60 group-hover:opacity-100 transition-opacity p-1.5 rounded hover:bg-red-500/15 hover:text-red-400 text-muted-foreground text-xs"
                       title={`Delete ${model.name} from disk`}
                       aria-label={`Delete ${model.name} from disk`}
                     >
