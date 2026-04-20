@@ -42,6 +42,19 @@ final class ChatViewModel {
     }
     private var drafts: [UUID: ChatDraft] = [:]
 
+    /// iter-110 §136: snapshot cache for ChatSettings captured at
+    /// `deleteSession` / `clearAllSessions` time, read by the matching
+    /// undo closure to restore per-chat reasoning_effort / systemPrompt /
+    /// tools / etc. Populated by a MainActor-scheduled Task that runs
+    /// immediately after the delete call site, so by the time the user
+    /// clicks Undo (minimum human reaction ~100ms, the one-hop actor
+    /// read is sub-millisecond) the box is filled. Race window is
+    /// effectively zero in practice; worst case an ultra-fast undo
+    /// loses settings customizations (session survives, defaults kick
+    /// in) — strictly better than the prior behavior where every
+    /// deleted chat leaked its ChatSettings row forever.
+    private var deletedChatSettings: [UUID: ChatSettings] = [:]
+
     /// Per-session scrollback of user prompts for the Up-arrow input recall
     /// shortcut. Only user messages go here; `historyCursor` tracks the
     /// current recall index (nil = not recalling).
@@ -314,6 +327,21 @@ final class ChatViewModel {
         // also re-seat it, handled below.
         let snapshotDraft = drafts[id]
         Database.shared.deleteSession(id)
+        // iter-110 §136: close the ChatSettings row leak on permanent
+        // delete. Snapshot + delete async; undo closure reads the
+        // snapshot back and re-setChat. Race window is sub-millisecond
+        // (one actor hop vs. human reaction time) so in practice the
+        // box is populated by the time undo fires.
+        if let engine = app?.engine {
+            let chatIdCopy = id
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if let snap = await engine.settings.chat(chatIdCopy) {
+                    self.deletedChatSettings[chatIdCopy] = snap
+                }
+                await engine.settings.deleteChat(chatIdCopy)
+            }
+        }
         sessions.removeAll { $0.id == id }
         drafts.removeValue(forKey: id)
         if activeSessionId == id {
@@ -328,6 +356,16 @@ final class ChatViewModel {
             Database.shared.withTransaction {
                 Database.shared.upsertSession(snapshot)
                 for m in snapshotMessages { Database.shared.upsertMessage(m) }
+            }
+            // iter-110 §136: restore ChatSettings snapshot captured at
+            // delete time. If the capture Task hadn't completed before
+            // this undo fires (tiny race window), the dict lookup
+            // returns nil and the session restores with session/global
+            // default settings — acceptable degradation.
+            if let engine = self.app?.engine,
+               let snap = self.deletedChatSettings.removeValue(forKey: id)
+            {
+                Task { await engine.settings.setChat(id, snap) }
             }
             self.sessions = Database.shared.allSessions()
             if let d = snapshotDraft {
@@ -386,6 +424,11 @@ final class ChatViewModel {
         // cross-chat wise because they're UUID-keyed, but a slow leak
         // if the user does repeated clear cycles).
         let snapshotDrafts = drafts
+        // iter-110 §136: capture IDs we're about to delete so the
+        // async ChatSettings-cleanup task can loop through them. The
+        // same snapshot box (`deletedChatSettings`) is populated
+        // one-by-one; undo drains the whole dict.
+        let idsToCleanSettings = sessions.map(\.id)
         for s in sessions {
             Database.shared.deleteSession(s.id)
         }
@@ -394,6 +437,17 @@ final class ChatViewModel {
         drafts.removeAll(keepingCapacity: false)
         activeSessionId = nil
         messages = []
+        if let engine = app?.engine {
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                for chatId in idsToCleanSettings {
+                    if let snap = await engine.settings.chat(chatId) {
+                        self.deletedChatSettings[chatId] = snap
+                    }
+                    await engine.settings.deleteChat(chatId)
+                }
+            }
+        }
         // Land in a fresh empty session so the chat screen isn't blank.
         newSession()
         pushUndo("Clear all chats (\(snapshotSessions.count))") { [weak self] in
@@ -414,6 +468,22 @@ final class ChatViewModel {
                 }
             }
             self.sessions = Database.shared.allSessions()
+            // iter-110 §136: drain the ChatSettings snapshot dict back
+            // into the engine. Same caveat as deleteSession undo —
+            // settings that hadn't been captured yet (undo fires
+            // before the capture Task ran) stay empty; restored
+            // sessions get session/global defaults in that edge case.
+            if let engine = self.app?.engine {
+                let drained = self.deletedChatSettings
+                self.deletedChatSettings.removeAll()
+                if !drained.isEmpty {
+                    Task {
+                        for (chatId, snap) in drained {
+                            await engine.settings.setChat(chatId, snap)
+                        }
+                    }
+                }
+            }
             // Re-seat every snapshotted draft so undo fully restores
             // the pre-wipe compose state across all chats.
             for (id, d) in snapshotDrafts {
