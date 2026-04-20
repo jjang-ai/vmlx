@@ -25,6 +25,10 @@ actor HTTPServerActor {
     private let engine: Engine
     private let sessionId: UUID
     private var runTask: Task<Void, Error>?
+    /// iter-135 §161: hold the running Server so applyAuthCredentials
+    /// can reach its AuthTokenBox without tearing down the listener.
+    /// Cleared on stop().
+    private var runningServer: Server?
     private(set) var host: String = "127.0.0.1"
     private(set) var port: Int = 8000
     private(set) var lastError: String?
@@ -84,6 +88,10 @@ actor HTTPServerActor {
             rateLimitPerMinute: rateLimitPerMinute,
             allowedOrigins: allowedOrigins
         )
+        // iter-135 §161: retain the Server reference so
+        // `applyAuthCredentials` can reach its `authTokens` box while
+        // the listener is running.
+        self.runningServer = srv
         runTask = Task {
             do {
                 try await srv.run()
@@ -95,9 +103,20 @@ actor HTTPServerActor {
         }
     }
 
+    /// iter-135 §161: swap live auth credentials on the running Server.
+    /// No-op when no server is running (callers can safely invoke on
+    /// stopped sessions during a global settings apply). Takes effect
+    /// at the NEXT incoming request — in-flight requests already past
+    /// the middleware continue with the old values on their outbound
+    /// response, which is expected behavior for auth changes.
+    func applyAuthCredentials(apiKey: String?, adminToken: String?) {
+        runningServer?.applyAuthCredentials(apiKey: apiKey, adminToken: adminToken)
+    }
+
     /// Gracefully cancel the run task and wait for it to finish. If there
     /// is no task, this is a no-op.
     func stop() async {
+        runningServer = nil
         guard let task = runTask else { return }
         runTask = nil
         task.cancel()

@@ -46,6 +46,8 @@ public struct GatewayServer {
     /// Allowed CORS origins — same contract as `Server.allowedOrigins`.
     /// iter-49 companion fix: gateway was also hardcoded to `.all`.
     public let allowedOrigins: [String]
+    /// iter-135 §161: live-mutable credential box. See Server.swift.
+    public let authTokens: AuthTokenBox
 
     public init(
         host: String = "127.0.0.1",
@@ -67,6 +69,13 @@ public struct GatewayServer {
         self.resolver = resolver
         self.enumerate = enumerate
         self.allowedOrigins = allowedOrigins
+        self.authTokens = AuthTokenBox(apiKey: apiKey, adminToken: adminToken)
+    }
+
+    /// iter-135 §161: swap live credentials without restarting. Mirrors
+    /// `Server.applyAuthCredentials`.
+    public func applyAuthCredentials(apiKey: String?, adminToken: String?) {
+        authTokens.update(apiKey: apiKey, adminToken: adminToken)
     }
 
     public func run() async throws {
@@ -93,8 +102,9 @@ public struct GatewayServer {
             ],
             allowMethods: [.get, .post, .put, .delete, .options, .head]
         ))
-        router.add(middleware: BearerAuthMiddleware(apiKey: apiKey))
-        router.add(middleware: AdminAuthMiddleware(adminToken: adminToken))
+        // iter-135 §161: box-based middleware — see Server.swift note.
+        router.add(middleware: BearerAuthMiddleware(tokens: authTokens))
+        router.add(middleware: AdminAuthMiddleware(tokens: authTokens))
         router.add(middleware: RequestLoggerMiddleware(engine: defaultEngine, minLevel: logLevel))
 
         await defaultEngine.logs.append(

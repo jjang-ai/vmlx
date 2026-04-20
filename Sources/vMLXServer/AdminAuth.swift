@@ -23,14 +23,33 @@ import Hummingbird
 ///   * `Authorization: Bearer <token>` (OpenAI-style)
 ///   * `X-Admin-Token: <token>`        (compat with existing curl examples)
 public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
-    let adminToken: String?
+    // iter-135 §161: box OR literal. Same pattern as BearerAuthMiddleware.
+    let literal: String?
+    let tokens: AuthTokenBox?
 
     public init(adminToken: String?) {
         if let t = adminToken, !t.isEmpty {
-            self.adminToken = t
+            self.literal = t
         } else {
-            self.adminToken = nil
+            self.literal = nil
         }
+        self.tokens = nil
+    }
+
+    public init(tokens: AuthTokenBox) {
+        self.literal = nil
+        self.tokens = tokens
+    }
+
+    /// Effective admin token resolved per-request. Empty-string is
+    /// treated as nil (no gate) to match the literal init's
+    /// normalization.
+    var adminToken: String? {
+        if let box = tokens {
+            let t = box.adminToken
+            return (t?.isEmpty == false) ? t : nil
+        }
+        return literal
     }
 
     public func handle(
