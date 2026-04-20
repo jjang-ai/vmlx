@@ -174,14 +174,30 @@ public actor RemoteEngineClient {
         try checkHTTPAsync(response)
 
         // Server-Sent Events parser: each chunk is `data: {json}\n\n`.
-        var lineBuffer = ""
+        // iter-97 §124: accumulate raw bytes, not per-byte Unicode
+        // scalars. The earlier per-byte-scalar pipeline (see git
+        // history) treated every UInt8 as a separate scalar in
+        // U+0000..U+00FF, corrupting UTF-8 multi-byte sequences —
+        // a non-ASCII content byte `0xE2` would become scalar
+        // U+00E2 instead of being part of a `[0xE2, 0x9C, 0x85]`
+        // (✅) sequence. data(using: .utf8) then re-encoded each
+        // character to a 2-byte UTF-8 sequence, producing garbled
+        // bytes that didn't match the original payload. JSON decode
+        // happened to still succeed (structural chars are ASCII)
+        // but string VALUES contained mojibake. Real breakage for
+        // remote OpenAI-compatible servers serving emoji / accented
+        // chars / CJK content. Fix: accumulate as [UInt8], decode
+        // to String with String(bytes:encoding: .utf8) on the line
+        // boundary.
+        var lineBytes: [UInt8] = []
         for try await byte in bytes {
             if Task.isCancelled { throw CancellationError() }
-            let scalar = Unicode.Scalar(byte)
-            lineBuffer.append(Character(scalar))
-            if lineBuffer.hasSuffix("\n") {
-                let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                lineBuffer = ""
+            lineBytes.append(byte)
+            if byte == 0x0A {  // '\n'
+                defer { lineBytes.removeAll(keepingCapacity: true) }
+                guard let line = String(bytes: lineBytes, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                else { continue }
                 guard line.hasPrefix("data: ") else { continue }
                 let payload = String(line.dropFirst("data: ".count))
                 if payload == "[DONE]" { break }
@@ -295,14 +311,19 @@ public actor RemoteEngineClient {
         try checkHTTPAsync(response)
 
         // Ollama NDJSON: one JSON object per line, terminated by `"done":true`.
-        var lineBuffer = ""
+        // iter-97 §124: same UTF-8-safe byte accumulation as the OpenAI
+        // path. Ollama responses routinely carry non-ASCII content
+        // (Chinese Qwen responses, tokens with accents) — the earlier
+        // per-byte-scalar pipeline mojibake'd them.
+        var lineBytes: [UInt8] = []
         for try await byte in bytes {
             if Task.isCancelled { throw CancellationError() }
-            let scalar = Unicode.Scalar(byte)
-            lineBuffer.append(Character(scalar))
-            if lineBuffer.hasSuffix("\n") {
-                let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                lineBuffer = ""
+            lineBytes.append(byte)
+            if byte == 0x0A {
+                defer { lineBytes.removeAll(keepingCapacity: true) }
+                guard let line = String(bytes: lineBytes, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                else { continue }
                 guard !line.isEmpty,
                       let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -372,14 +393,20 @@ public actor RemoteEngineClient {
         try checkHTTPAsync(response)
 
         // Anthropic SSE stream: event: content_block_delta → data: {delta:{text}}
-        var lineBuffer = ""
+        // iter-97 §124: UTF-8-safe byte accumulation. Anthropic's
+        // content_block_delta text field is the user-visible response
+        // body — corrupting it on any non-ASCII character was a real
+        // breakage for Claude responses containing emoji or accented
+        // chars.
+        var lineBytes: [UInt8] = []
         for try await byte in bytes {
             if Task.isCancelled { throw CancellationError() }
-            let scalar = Unicode.Scalar(byte)
-            lineBuffer.append(Character(scalar))
-            if lineBuffer.hasSuffix("\n") {
-                let line = lineBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                lineBuffer = ""
+            lineBytes.append(byte)
+            if byte == 0x0A {
+                defer { lineBytes.removeAll(keepingCapacity: true) }
+                guard let line = String(bytes: lineBytes, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                else { continue }
                 guard line.hasPrefix("data: ") else { continue }
                 let payload = String(line.dropFirst("data: ".count))
                 if payload == "[DONE]" { break }

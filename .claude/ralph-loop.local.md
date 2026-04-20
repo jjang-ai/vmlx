@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 41
+iteration: 42
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 359/359 source-scan tests green, 119/119 regression guards + 15 matrix
-  rows (§57–§123)
+- 360/360 source-scan tests green, 120/120 regression guards + 15 matrix
+  rows (§57–§124)
+- iter-97 work:
+  1. RemoteEngineClient UTF-8 corruption (§124) — **real i18n
+     data-corruption bug**. All three streaming parsers
+     (`streamOpenAI`, `streamOllama`, `streamAnthropic`) used
+     `Unicode.Scalar(byte)` + `Character(scalar)` to accumulate
+     each HTTP byte as a separate Unicode scalar in
+     U+0000..U+00FF. Works for ASCII, corrupts UTF-8 multi-byte
+     sequences. A non-ASCII byte `0xE2` (start of ✅) became
+     scalar U+00E2 instead of being part of `[0xE2, 0x9C, 0x85]`.
+     `data(using: .utf8)` then re-encoded each char as a 2-byte
+     UTF-8 sequence, producing garbled bytes different from the
+     input. JSON decode still succeeded (structural chars are
+     ASCII) but string VALUES were mojibake. Emoji, accented
+     chars, CJK — all broke on remote OpenAI/Ollama/Anthropic
+     streaming responses. Fix: accumulate `[UInt8]`, detect line
+     boundary on raw byte 0x0A, decode via
+     `String(bytes: lineBytes, encoding: .utf8)`. UTF-8-safe and
+     drops a per-byte allocation. Applied to all three streamers.
+     §124 regression guard asserts the old pattern is gone + the
+     new pattern appears in all three sites.
 - iter-96 work:
   1. API key revoke stale-enforcement bug (§123) — **real security
      UX bug**. The revoke confirmation dialog promised "Any client
