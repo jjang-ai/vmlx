@@ -6,7 +6,7 @@ import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import { db } from '../database'
-import { getImageModel } from '../../shared/imageModels'
+import { getImageModel, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
 
@@ -493,10 +493,17 @@ export function registerImageHandlers(): void {
           // and passed as CLI flags by buildArgs() — NOT via additionalArgs (avoids duplication)
           const mode = imageMode || 'generate'
 
-          // Look up model definition for explicit mflux class + name (NO regex detection)
-          const modelDef = getImageModel(modelName)
+          // Look up model definition.
+          // mlxstudio#82: use fuzzy resolver (directory basenames like
+          // "FLUX.2-klein-9B" or "FLUX.1-dev-mflux-8bit" need more than
+          // exact-id match). Fuzzy resolver rule #1 is exact-id so this
+          // is a strict superset of getImageModel().
+          const modelDef = resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
           const mfluxName = modelDef?.mfluxName || modelName
           const mfluxClass = serverSettings?.mfluxClass || modelDef?.mfluxClass || ''
+          if (modelDef && modelDef.id !== modelName) {
+            console.log(`[IMAGE] mlxstudio#82: resolved '${modelName}' -> modelDef id=${modelDef.id}, mfluxClass=${modelDef.mfluxClass}, mfluxName=${modelDef.mfluxName}`)
+          }
 
           const config: Partial<ServerConfig> = {
             host: serverSettings?.host || '127.0.0.1',
@@ -566,11 +573,16 @@ export function registerImageHandlers(): void {
         const imageMode: 'generate' | 'edit' = cfg.imageMode || 'generate'
         // Read quantize from config
         const quantize = cfg.imageQuantize ?? 0
-        // Model name: prefer servedModelName (canonical ID like "schnell"),
-        // then session modelName, then last path component as fallback
-        const modelName = cfg.servedModelName
+        // mlxstudio#82: display the directory basename exactly as on disk.
+        // Prior flip prefers cfg.servedModelName (canonical mflux form like
+        // "flux2-klein-9b") which stripped dots and diverged from the
+        // session list / config form — Mark reported seeing "FLUX2" here
+        // and "FLUX.2" elsewhere. `servedModelName` is an API routing key,
+        // not a display label. Use it only when modelPath is missing.
+        const pathBase = s.modelPath?.includes('/') ? s.modelPath.split('/').pop()! : s.modelPath
+        const modelName = pathBase
           || (s.modelName?.includes('/') ? s.modelName.split('/').pop()! : s.modelName)
-          || (s.modelPath?.includes('/') ? s.modelPath.split('/').pop()! : s.modelPath)
+          || cfg.servedModelName
           || ''
         return {
           sessionId: s.id,

@@ -5,9 +5,10 @@ import { EventEmitter } from 'events'
 import { existsSync, readdirSync, statSync } from 'fs'
 import { createServer } from 'net'
 import { homedir, totalmem, freemem } from 'os'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
+import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -1690,11 +1691,28 @@ export class SessionManager extends EventEmitter {
     // Image models: skip all text-specific flags (parsers, batching, cache, etc.)
     // The Python server auto-detects image vs text from the model directory
     if (isImage) {
+      // mlxstudio#82: for Server-tab image launches, config.mfluxClass /
+      // config.servedModelName are often both empty (the Server-tab session
+      // form doesn't require them). Fall back to fuzzy-matching the model
+      // path's directory basename against IMAGE_MODELS so we emit the
+      // right --mflux-class and --served-model-name flags automatically.
+      // Without this, the engine sees just `/Volumes/.../FLUX.2-klein-9B`
+      // and fails class resolution on startup — Mark's exact log path.
+      let effectiveMfluxClass = config.mfluxClass
+      let effectiveServedName = config.servedModelName
+      if ((!effectiveMfluxClass || !effectiveServedName) && config.modelPath) {
+        const dirBase = basename(config.modelPath.replace(/\/+$/, ''))
+        const resolved = resolveImageModelFromDirectoryName(dirBase)
+        if (resolved) {
+          if (!effectiveMfluxClass) effectiveMfluxClass = resolved.mfluxClass
+          if (!effectiveServedName) effectiveServedName = resolved.mfluxName
+        }
+      }
       // Image-specific settings (explicit flags, not via additionalArgs)
       if (config.imageMode === 'edit') args.push('--image-mode', 'edit')
       if (config.imageQuantize && config.imageQuantize > 0) args.push('--image-quantize', config.imageQuantize.toString())
-      if (config.servedModelName) args.push('--served-model-name', config.servedModelName)
-      if (config.mfluxClass) args.push('--mflux-class', config.mfluxClass)
+      if (effectiveServedName) args.push('--served-model-name', effectiveServedName)
+      if (effectiveMfluxClass) args.push('--mflux-class', effectiveMfluxClass)
       // Logging + CORS still apply to image servers
       if (config.logLevel && config.logLevel !== 'INFO') args.push('--log-level', config.logLevel)
       if (config.corsOrigins && config.corsOrigins !== '*') args.push('--allowed-origins', config.corsOrigins)
