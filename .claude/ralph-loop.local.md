@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 52
+iteration: 53
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,22 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 368/368 source-scan tests green, 128/128 regression guards + 15 matrix
-  rows (§57–§132)
+- 369/369 source-scan tests green, 129/129 regression guards + 15 matrix
+  rows (§57–§133)
+- iter-107 work:
+  1. Rerank cosine scores silent zero (§133) — **same root-cause
+     class as §132**, different code path. Engine.rerank reuses
+     embeddings() to batch query+doc vectors, then cosine-similarity
+     pairs. The inner vec() helper did
+     `row["embedding"] as? [Double]`. Engine stores [Float]; cast
+     returned nil; vec() returned []; cosineSimilarity's empty-
+     vector guard returned 0; every score was 0; `scored.sort` on
+     identical scores is a stable no-op, so users got documents
+     back in INPUT order. Usually looked "reasonable" in short-list
+     dev tests, masking the bug in production. Fix: cast to [Float]
+     (the real type), map to Double for the math. §133 pins the
+     [Float] cast + the Double upcast + absence of the old buggy
+     line. Build clean, guard green.
 - iter-106 work:
   1. Embeddings API audit (§132) — three real bugs. (a) Ollama
      `/api/embeddings` + `/api/embed` cast `$0["embedding"] as?

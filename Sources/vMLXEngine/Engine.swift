@@ -1937,8 +1937,16 @@ public actor Engine {
             throw EngineError.notImplemented("rerank: embedding backend returned malformed data")
         }
 
+        // iter-107 §133: same root cause as §132 — embeddings() stores
+        // vectors as [Float], and `row["embedding"] as? [Double]`
+        // ALWAYS returned nil since Swift arrays don't bridge across
+        // element types. Every rerank call was producing all-zero
+        // cosine scores → meaningless ranks (just input order). Cast
+        // to [Float] and upcast element-wise to Double for the math
+        // (cosineSimilarity is written in Double for range safety).
         func vec(_ row: [String: Any]) -> [Double] {
-            (row["embedding"] as? [Double]) ?? []
+            guard let floats = row["embedding"] as? [Float] else { return [] }
+            return floats.map { Double($0) }
         }
 
         let queryVec = vec(data[0])
