@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 62
+iteration: 63
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,25 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 378/378 source-scan tests green, 138/138 regression guards + 15 matrix
-  rows (§57–§142)
+- 379/379 source-scan tests green, 139/139 regression guards + 15 matrix
+  rows (§57–§143)
+- iter-117 work:
+  1. /v1/models + drafter path leak sweep (§143) — **broader
+     sweep, same class as §141/§142**. Two more leak sites found:
+     (1) OpenAIRoutes `/v1/models` emitted `vmlx.path =
+     e.canonicalPath.path` for EVERY installed model — enumerating
+     the entire library meant a single GET could harvest the
+     user's complete HF-cache layout (every model's snapshot-hash
+     path). (2) GatewayServer `/v1/models` had the same leak on
+     the multi-session gateway port. Also `speculative.drafter`
+     path for the loaded DFlash drafter. Fix: promoted
+     `redactHomeDir` from §142's private AdapterRoutes copy to
+     shared `OpenAIRoutes.redactHomeDir`. Both /v1/models sites
+     + drafter path + AdapterRoutes delegation now go through
+     the single canonical helper. §143 pins helper location +
+     both call-sites + drafter path + AdapterRoutes delegation
+     + absence of the old leaky patterns. Build clean, both
+     §142 and §143 guards green.
 - iter-116 work:
   1. /v1/adapters home-dir path leak (§142) — **same class as
      §141, different route**. GET /v1/adapters returned

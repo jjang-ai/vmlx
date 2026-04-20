@@ -121,6 +121,8 @@ public struct GatewayServer {
                         "object": "model",
                         "created": created,
                         "owned_by": e.isJANG ? "jjang-ai" : "mlx-community",
+                        // iter-117 §143: redact per-model canonicalPath.
+                        // Same rationale as OpenAIRoutes /v1/models.
                         "vmlx": [
                             "family": e.family,
                             "modality": e.modality.rawValue,
@@ -128,7 +130,7 @@ public struct GatewayServer {
                             "is_jang": e.isJANG,
                             "is_mxtq": e.isMXTQ,
                             "quant_bits": e.quantBits as Any,
-                            "path": e.canonicalPath.path,
+                            "path": OpenAIRoutes.redactHomeDir(e.canonicalPath.path),
                         ],
                     ])
                 }

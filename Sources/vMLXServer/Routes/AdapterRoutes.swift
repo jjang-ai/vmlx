@@ -82,7 +82,9 @@ public enum AdapterRoutes {
         }
         return [
             "active": [
-                "path": redactHomeDir(a.path),
+                // iter-117 §143: delegate to shared OpenAIRoutes.redactHomeDir
+                // (was §142's private copy; promoted for /v1/models reuse).
+                "path": OpenAIRoutes.redactHomeDir(a.path),
                 "name": (a.path as NSString).lastPathComponent,
                 "fine_tune_type": a.fineTuneType,
                 "rank": a.rank,
@@ -91,24 +93,5 @@ public enum AdapterRoutes {
                 "fused": a.fused,
             ] as [String: Any]
         ]
-    }
-
-    /// iter-116 §142: replace the user's home directory with `~/` in
-    /// paths returned over the wire. GET /v1/adapters isn't admin-
-    /// gated (admin auth only covers the destructive POST routes per
-    /// §103), so any API-key-holding peer can query adapter state.
-    /// Same leak class as §141 — absolute paths disclose the user's
-    /// home-dir naming + directory structure. The redacted form
-    /// preserves enough info for users to recognize their own
-    /// adapter while hiding the absolute prefix from shared-key LAN
-    /// peers. Also added a `name` field (lastPathComponent) so UI
-    /// clients have a clean display-name without parsing paths.
-    static func redactHomeDir(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path.hasPrefix(home) {
-            let suffix = path.dropFirst(home.count)
-            return "~" + suffix
-        }
-        return path
     }
 }
