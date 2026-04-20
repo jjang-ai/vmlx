@@ -4940,7 +4940,18 @@ async def create_chat_completion(
 
     if request.messages:
         _user_msgs = [m for m in request.messages if getattr(m, "role", None) == "user"]
-        if _user_msgs and not any(_has_non_empty_content(m) for m in _user_msgs):
+        # Two bugs gated by this check:
+        # (iter 26) user message with empty content → 500 reshape crash
+        # (iter 27) NO user messages at all (only system) → same 500 crash
+        # Both resolve to "the engine will have 0 prompt tokens to work with".
+        if not _user_msgs:
+            raise HTTPException(
+                status_code=400,
+                detail="No user message — at least one message with role='user' "
+                       "and non-empty content is required. (System-only prompts "
+                       "cannot generate output.)"
+            )
+        if not any(_has_non_empty_content(m) for m in _user_msgs):
             raise HTTPException(
                 status_code=400,
                 detail="Empty user content — at least one user message must have "
