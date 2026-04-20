@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 30
+iteration: 31
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,7 +285,24 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 415/415 tests green, 108/108 regression guards + 15 matrix rows (§57–§113)
+- 350/350 source-scan tests green (MLX Metal-requiring suites skipped in this
+  harness — documented env limitation), 109/109 regression guards + 15 matrix
+  rows (§57–§114)
+- iter-86 work:
+  1. GatewayActor model-resolve tolerant-match bug (§114) — **real
+     production bug**. The tolerant match previously accepted
+     `k.hasSuffix("/" + model) || k.hasSuffix(model)`. The second
+     clause allowed ANY suffix to match, so a client request of
+     `model: "4bit"` collided with `mlx-community/gemma-4-e2b-it-4bit`
+     (suffix matches). Under parallel load with multiple engines
+     registered, `resolve()` returned whichever one was visited first
+     in the dictionary iteration order — non-deterministic dispatch
+     to the wrong engine. Fix: drop the unbounded `hasSuffix(model)`
+     fallback, keep only the `"/" + model` boundary form, so bare-
+     repo name `gemma-4-e2b-it-4bit` still matches `mlx-community/
+     gemma-4-e2b-it-4bit` but a substring like `4bit` or `-4bit`
+     never does. Verified locally — §114 regression guard pins the
+     boundary form and asserts the dangerous fallback is absent.
 - iter-85 work:
   1. Unload memory reclamation audit (§113) — **REAL USER-VISIBLE FIX**.
      `Engine.stop()` and `Engine.deepSleep()` dropped their model
