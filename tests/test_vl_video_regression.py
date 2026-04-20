@@ -7957,3 +7957,66 @@ class TestEmptyContentReturns400:
             f"Multi-turn tool flow rejected at 400 — guard is over-strict: "
             f"{r.status_code}: {r.json()}"
         )
+
+    def test_only_system_message_returns_400(self):
+        """iter 27 edge case: messages list contains only a system
+        message (no user). Previously crashed with the same 500
+        reshape error — guard now returns 400. System-only prompts
+        cannot generate output because the model has nothing to reply
+        to, so this is a user error."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "system", "content": "Be terse."}],
+                "max_tokens": 10,
+            },
+        )
+        assert r.status_code == 400, (
+            f"System-only message must → 400, got {r.status_code}: {r.text[:200]}"
+        )
+        detail = r.json().get("detail", "").lower()
+        assert "user message" in detail or "no user" in detail, (
+            f"400 detail must mention missing user message, got: {r.json()}"
+        )
+
+    def test_only_assistant_message_returns_400(self):
+        """iter 27 companion: messages with only assistant content
+        (no user prompt to answer) also must not crash with 500."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [
+                    {"role": "assistant", "content": "I said earlier..."},
+                ],
+                "max_tokens": 10,
+            },
+        )
+        assert r.status_code == 400, (
+            f"Assistant-only messages must → 400, got {r.status_code}"
+        )
+
+    def test_system_plus_user_is_valid(self):
+        """Positive control: the legal system+user combination must NOT
+        be rejected by the guard (would break server usage with system
+        prompts entirely)."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [
+                    {"role": "system", "content": "Be terse."},
+                    {"role": "user", "content": "hello"},
+                ],
+                "max_tokens": 5,
+            },
+        )
+        # Must NOT be 400 — engine may 500 without a real model loaded
+        # but the validation layer shouldn't reject.
+        assert r.status_code != 400, (
+            f"system+user must NOT trip the empty-content guard, got 400: {r.json()}"
+        )
