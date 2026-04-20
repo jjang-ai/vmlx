@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 40
+iteration: 41
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,29 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 358/358 source-scan tests green, 118/118 regression guards + 15 matrix
-  rows (§57–§122)
+- 359/359 source-scan tests green, 119/119 regression guards + 15 matrix
+  rows (§57–§123)
+- iter-96 work:
+  1. API key revoke stale-enforcement bug (§123) — **real security
+     UX bug**. The revoke confirmation dialog promised "Any client
+     using this key will immediately lose access", but
+     `APIKeyManager.revoke(id:)` only deleted the row from SQLite +
+     Keychain — it did NOT update `settings.apiKey`, which is what
+     `BearerAuthMiddleware` actually enforces (middleware takes a
+     single `apiKey: String?` at init, checked via constant-time
+     compare in §115). Result: if the revoked key happened to be
+     the one currently in `settings.apiKey`, the middleware's in-
+     memory copy was never invalidated and clients kept
+     authenticating with the "revoked" key indefinitely. The UI
+     promise was a lie. Fix: in the revoke dialog action, capture
+     the value being revoked BEFORE deletion, call a new
+     `resyncBearerIfRevoked(wasValue:)` helper that checks whether
+     the revoked value equals `settings.apiKey` and, if yes,
+     `applySettings` with `remaining.first?.value` (most-recent
+     remaining key) or nil (disable bearer auth when no keys
+     remain). The guard `g.apiKey == revokedValue` ensures we
+     never touch the enforcement key on revokes of NON-active
+     keys. §123 regression guard pins all four checkpoints.
 - iter-95 work:
   1. ChatExporter VL media data-loss (§122) — **real archival
      bug**. `exportToJSON` at `version: 1` serialized only
