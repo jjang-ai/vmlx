@@ -17,9 +17,17 @@ import MLX
 /// Python implementation in vmlx_engine/ for porting reference.
 public actor Engine {
 
+    /// iter-85 §163: these case names mirror the Python vmlx_engine
+    /// module layout (`engine/simple.py` vs `engine/batched.py`) but
+    /// the Swift engine does NOT currently branch on the value — both
+    /// cases route through the same `performStreamingGeneration`
+    /// path, serialized by `GenerationLock`. The setting is kept for
+    /// Python-parity in settings JSON and for future wiring when a
+    /// real continuous-batching path lands. Actual concurrent request
+    /// handling today is FIFO serial; see `/health.scheduling`.
     public enum EngineKind: Sendable {
-        case simple   // single-stream, vmlx_engine/engine/simple.py
-        case batched  // multi-stream + paged cache, vmlx_engine/engine/batched.py
+        case simple   // Python parity — no Swift behavioral effect.
+        case batched  // Python parity — no Swift behavioral effect yet.
     }
 
     public struct LoadOptions: Sendable {
