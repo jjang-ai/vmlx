@@ -48,8 +48,15 @@ public enum OpenAIRoutes {
                    e.canonicalPath.path == lp
                 {
                     speculative["kind"] = "dflash"
-                    speculative["drafter"] = dflashPath as Any
+                    // iter-117 §143: redact drafter path too.
+                    speculative["drafter"] = dflashPath.map(Self.redactHomeDir) as Any
                 }
+                // iter-117 §143: redact per-model canonicalPath. /v1/models
+                // enumerates the entire model library — without redaction
+                // any API-key-holding peer could learn the user's full
+                // HF-cache layout (every installed model's snapshot hash
+                // path), which is even more disclosive than the single-
+                // model leaks §141/§142 closed.
                 var vmlx: [String: Any] = [
                     "family": e.family,
                     "modality": e.modality.rawValue,
@@ -57,7 +64,7 @@ public enum OpenAIRoutes {
                     "is_jang": e.isJANG,
                     "is_mxtq": e.isMXTQ,
                     "quant_bits": e.quantBits as Any,
-                    "path": e.canonicalPath.path,
+                    "path": Self.redactHomeDir(e.canonicalPath.path),
                 ]
                 if !speculative.isEmpty {
                     vmlx["speculative_decoding"] = speculative
@@ -970,6 +977,20 @@ public enum OpenAIRoutes {
             return String(str[first...last])
         }
         return "\"\""
+    }
+
+    /// iter-117 §143: shared home-directory redaction helper. Replaces
+    /// `$HOME` prefix in a filesystem path with `~/` so API responses
+    /// don't disclose the user's absolute home-dir layout to API-key-
+    /// holding peers (a concern for LAN-bound vMLX servers). Extracted
+    /// here from the §142 AdapterRoutes copy so /v1/models and future
+    /// routes share the same canonical implementation.
+    static func redactHomeDir(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
     }
 
     static func json(_ obj: [String: Any], status: HTTPResponse.Status = .ok) -> Response {
