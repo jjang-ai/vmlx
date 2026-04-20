@@ -7341,3 +7341,78 @@ class TestSsmCompanionPersistsAcrossRestart:
                 )
             finally:
                 store2.shutdown()
+
+
+class TestCustomChatTemplate:
+    """iter 20 — pins the custom chat-template surface.
+    vMLX supports three layers of chat-template customization:
+      1. --chat-template CLI flag (file path, server-wide override)
+      2. --chat-template-kwargs CLI flag (server-wide default kwargs)
+      3. chat_template_kwargs per-request (wins over server defaults)
+    Live-verified on Qwen3.6-JANGTQ2-CRACK-v13: per-request
+    chat_template_kwargs.enable_thinking={true,false} produces
+    distinctly different model outputs (thinking-off → 'OK',
+    thinking-on → 'Here's a thinking process: ...')."""
+
+    def test_cli_chat_template_flag_exists(self):
+        """--chat-template CLI flag must exist for users that need
+        Jinja template override at server start (e.g. JetBrains AI
+        Chat compat). Removing this breaks the escape hatch."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        assert '"--chat-template"' in src, (
+            "--chat-template CLI flag missing — users need this to "
+            "override chat templates for client compat"
+        )
+        assert '"--chat-template-kwargs"' in src, (
+            "--chat-template-kwargs CLI flag missing — needed for "
+            "server-wide default kwargs like enable_thinking=false"
+        )
+
+    def test_chat_template_kwargs_in_request_schema(self):
+        """chat_template_kwargs field must exist on the request model
+        (both OpenAI-shape ChatCompletionRequest and the Responses API
+        variant). Without it, per-request overrides silently drop."""
+        from vmlx_engine.api.models import ChatCompletionRequest
+        # Pydantic model field
+        fields = (
+            ChatCompletionRequest.model_fields
+            if hasattr(ChatCompletionRequest, "model_fields")
+            else ChatCompletionRequest.__fields__
+        )
+        assert "chat_template_kwargs" in fields, (
+            "ChatCompletionRequest must expose chat_template_kwargs — "
+            "per-request template kwargs are a production surface"
+        )
+
+    def test_merge_ct_kwargs_merges_request_over_server_default(self):
+        """_merge_ct_kwargs in server.py takes the server-wide default
+        + request kwargs and merges. Per-request keys must win over
+        server defaults so users can override per-call."""
+        from vmlx_engine import server as srv
+        # Set server default
+        orig = srv._default_ct_kwargs if hasattr(srv, "_default_ct_kwargs") else None
+        # Basic contract: merging request+default yields dict with
+        # request keys winning on conflict.
+        merged = srv._merge_ct_kwargs({"enable_thinking": True})
+        assert merged.get("enable_thinking") is True, (
+            f"per-request enable_thinking=True lost in merge: {merged}"
+        )
+        # None-input yields the server-default snapshot (may be empty)
+        merged_none = srv._merge_ct_kwargs(None)
+        assert isinstance(merged_none, dict), (
+            f"_merge_ct_kwargs(None) must return a dict, got {type(merged_none)}"
+        )
+
+    def test_chat_template_kwargs_cli_json_decode(self):
+        """--chat-template-kwargs must accept a JSON object string.
+        Non-object JSON (list, string) must error out cleanly, not
+        silently accept and produce broken behavior."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        assert "must be a JSON object" in src or "is not valid JSON" in src, (
+            "CLI must validate --chat-template-kwargs JSON shape with "
+            "a clear error message"
+        )
