@@ -4909,6 +4909,44 @@ async def create_chat_completion(
     # Normalize response model field to the resolved name
     request.model = resolved_name
 
+    # Reject empty prompts with a clear 400 instead of letting mlx-vlm
+    # crash inside stream_generate with ValueError:
+    # "[reshape] Cannot infer the shape of an empty array".
+    # A message with content="" contributes zero tokens — the model has
+    # nothing to decode. Covers str content, content parts list with
+    # no non-empty text, and messages arrays that are empty after role
+    # filtering. iter 26 added: caught live on Qwen3.6-JANGTQ2.
+    def _has_non_empty_content(msg) -> bool:
+        c = getattr(msg, "content", None)
+        if c is None:
+            # assistant with tool_calls only is valid even if content is None
+            if getattr(msg, "tool_calls", None):
+                return True
+            return False
+        if isinstance(c, str):
+            return c.strip() != ""
+        if isinstance(c, list):
+            # content parts — at least one text/image/video part with a value
+            for p in c:
+                t = getattr(p, "type", None) or (p.get("type") if isinstance(p, dict) else None)
+                if t == "text":
+                    txt = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
+                    if txt and str(txt).strip():
+                        return True
+                elif t in ("image_url", "video_url", "image", "input_audio"):
+                    return True
+            return False
+        return bool(c)
+
+    if request.messages:
+        _user_msgs = [m for m in request.messages if getattr(m, "role", None) == "user"]
+        if _user_msgs and not any(_has_non_empty_content(m) for m in _user_msgs):
+            raise HTTPException(
+                status_code=400,
+                detail="Empty user content — at least one user message must have "
+                       "non-empty text, image, video, or audio content."
+            )
+
     # Warn about unsupported penalty parameters
     if request.frequency_penalty and request.frequency_penalty != 0:
         logger.warning(

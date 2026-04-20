@@ -7835,3 +7835,125 @@ class TestVlTurboQuantDecodeSpeedBaseline:
             "ralph-loop state must document VL decode tok/s baseline "
             "for future regression comparison"
         )
+
+
+class TestEmptyContentReturns400:
+    """iter 26 — regression pin for the 500 → 400 fix caught live on
+    Qwen3.6-JANGTQ2-CRACK-v13. mlx-vlm's stream_generate crashes with
+    'ValueError: [reshape] Cannot infer the shape of an empty array'
+    when a user message has no tokens. We now validate upfront and
+    return 400 Bad Request with a clear detail.
+
+    Three empty-content variants covered + a positive control."""
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+        return TestClient(srv.app)
+
+    def test_empty_string_content_returns_400(self):
+        """content = \"\" must be rejected with 400 before reaching
+        the engine."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": ""}],
+                "max_tokens": 5,
+            },
+        )
+        assert r.status_code == 400, (
+            f"Empty string content must → 400, got {r.status_code}: {r.text[:200]}"
+        )
+        assert "empty user content" in r.json().get("detail", "").lower(), (
+            f"400 detail must mention empty content, got: {r.json()}"
+        )
+
+    def test_empty_content_parts_list_returns_400(self):
+        """content = [] must be rejected."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": []}],
+                "max_tokens": 5,
+            },
+        )
+        assert r.status_code == 400, (
+            f"Empty list content must → 400, got {r.status_code}"
+        )
+
+    def test_content_with_only_empty_text_part_returns_400(self):
+        """content = [{type: text, text: ''}] must be rejected —
+        this is the shape some UIs send when the user clicks send
+        with an empty input."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": ""},
+                ]}],
+                "max_tokens": 5,
+            },
+        )
+        assert r.status_code == 400, (
+            f"Empty text-part content must → 400, got {r.status_code}"
+        )
+
+    def test_content_with_image_url_but_empty_text_is_valid(self):
+        """A message with an image_url content part is valid even if
+        the text part is empty or absent — the image IS the prompt.
+        This test ensures the empty-content guard doesn't over-reject."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+                ]}],
+                "max_tokens": 5,
+            },
+        )
+        # We don't care about the engine actually generating — just
+        # that we didn't reject at the validation layer. The engine
+        # may 500 because there's no model loaded under test, but the
+        # 400 guard specifically shouldn't fire.
+        assert r.status_code != 400, (
+            f"Message with image content-part must NOT be 400-rejected "
+            f"(the empty text is fine when an image is present); "
+            f"got {r.status_code}: {r.json()}"
+        )
+
+    def test_assistant_tool_calls_only_message_passes_validation(self):
+        """Assistant message with tool_calls array + null content is
+        valid for multi-turn tool flows (see iter 24). The guard must
+        not reject such messages — only user messages with no content
+        are invalid."""
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": None, "tool_calls": [{
+                        "id": "c1", "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }]},
+                    {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+                    {"role": "user", "content": "thanks"},
+                ],
+                "max_tokens": 5,
+            },
+        )
+        # Must NOT be 400 — multi-turn tool flow is the canonical shape
+        assert r.status_code != 400, (
+            f"Multi-turn tool flow rejected at 400 — guard is over-strict: "
+            f"{r.status_code}: {r.json()}"
+        )
