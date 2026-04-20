@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 36
+iteration: 37
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,27 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 354/354 source-scan tests green, 114/114 regression guards + 15 matrix
-  rows (§57–§118)
+- 355/355 source-scan tests green, 115/115 regression guards + 15 matrix
+  rows (§57–§119)
+- iter-92 work:
+  1. Terminal cwd UI↔engine drift (§119) — **real UX bug**.
+     `TerminalScreen` kept its own `@State cwd` separate from
+     `Engine.terminalCwd` (the authoritative bash working dir used
+     by `ToolDispatcher.executeBashTool`). The raw-shell fallback
+     path updated UI.cwd (§87 iter-56) but not engine.terminalCwd;
+     the model-mode bash path updated engine.terminalCwd
+     (ToolDispatcher:144) but not UI.cwd. Result: after a model-
+     mode `cd foo`, the TerminalScreen header still showed the
+     old path but the next bash invocation ran in the new dir —
+     "header says I'm in ~/, but `ls` returns a different listing".
+     And after a raw-shell `cd foo`, loading a model and switching
+     to model-mode bash started from stale engine cwd, losing the
+     UI-visible cwd change. Fix: on model-mode .done pull
+     engine.terminalCwd back into UI.cwd; on raw-shell update,
+     push the new value into engine via `updateTerminalCwd`.
+     `updateTerminalCwd` is a no-op when the value matches, so
+     bidirectional sync is idempotent. §119 regression guard
+     asserts both call sites exist.
 - iter-91 work (no-code audit):
   1. **Cross-protocol error-path sweep.** After the §118 SSE fix,
      verified the other three streaming encoders + all non-streaming

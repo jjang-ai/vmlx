@@ -342,6 +342,23 @@ struct TerminalScreen: View {
                             transcript[idx].text = text
                             transcript[idx].exitCode = code
                         }
+                        // iter-92 §119: sync UI-side `cwd` from the
+                        // engine's authoritative `terminalCwd`.
+                        // `ToolDispatcher.executeBashTool` already calls
+                        // `engine.updateTerminalCwd(result.newCwd)` so
+                        // the engine tracks the post-exec pwd, but the
+                        // UI's `@State cwd` was only updated from the
+                        // raw-shell fallback (§87). Model-mode bash
+                        // `cd foo` updated the engine but the header
+                        // path at the top of TerminalScreen silently
+                        // stayed at the old value, and the next raw-
+                        // shell invocation used the stale UI cwd —
+                        // divergence between what the user sees and
+                        // what the next command runs in.
+                        if let engineCwd = await engine.terminalCwd,
+                           engineCwd != cwd {
+                            cwd = engineCwd
+                        }
                         // Start a fresh assistant turn for the next pass.
                         activeAssistantId = UUID()
                         transcript.append(TerminalTurn(
@@ -418,8 +435,15 @@ struct TerminalScreen: View {
         // `pwd` marker it appends to the wrapped script; previously
         // the raw-shell fallback discarded `result.newCwd`, so every
         // `cd` was silently undone on the next command.
+        //
+        // iter-92 §119: also push the new cwd into the engine so if
+        // the user later loads a model and switches to model-mode
+        // bash, the engine's `terminalCwd` is already aligned with
+        // what the UI displays. `updateTerminalCwd` is a no-op when
+        // the value matches, so double-updates are cheap.
         if let newCwd = result.newCwd, newCwd != cwd {
             cwd = newCwd
+            await state.engine.updateTerminalCwd(newCwd)
         }
     }
 }
