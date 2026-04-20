@@ -6626,3 +6626,90 @@ class TestPagedCacheBlockIndexStability:
             assert hasattr(stats, field), (
                 f"CacheStats missing '{field}' — /v1/cache/stats schema broken"
             )
+
+
+class TestBlockDiskStoreLruEviction:
+    """iter 14 — pins BlockDiskStore LRU eviction when max_size_gb cap
+    is exceeded. Live-verified in iter 14 that a 1MB cap with 12
+    ~256KB writes evicts 10 blocks, keeping disk size at ~80% of cap.
+    Without eviction, a long-lived server would fill /tmp disk and
+    OS-kill the process on swap pressure."""
+
+    def test_lru_evicts_when_cap_exceeded(self):
+        """Writes beyond max_size_gb trigger LRU eviction to 80% of cap.
+        Catches a broken _maybe_evict() or a silently-disabled trim."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store = BlockDiskStore(cache_dir=d, max_size_gb=0.001)  # 1MB
+            try:
+                # Write 12 blocks × ~256KB each (1 layer of 16x64x64 float32).
+                # Cap of 1MB → eviction should fire several times.
+                for i in range(12):
+                    k = mx.zeros((16, 64, 64))
+                    v = mx.zeros((16, 64, 64))
+                    bh = hashlib.sha256(f"blk_{i}".encode()).digest()
+                    store.write_block_async(bh, [("kv", k, v)], token_count=64)
+                    time.sleep(0.02)
+                # Drain background writer
+                time.sleep(2.0)
+                stats = store.get_stats()
+                # Must have evicted at least half of what we wrote
+                assert stats["disk_evictions"] >= 6, (
+                    f"LRU eviction did not fire: evictions={stats['disk_evictions']}, "
+                    f"writes={stats['disk_writes']}"
+                )
+                # Remaining disk size must be at or below cap
+                assert stats["disk_size_bytes"] <= store.max_size_bytes, (
+                    f"Disk size {stats['disk_size_bytes']} exceeds cap "
+                    f"{store.max_size_bytes} — eviction target broken"
+                )
+            finally:
+                store.shutdown()
+
+    def test_unlimited_cap_no_eviction(self):
+        """max_size_gb=0 means unlimited — verify eviction is suppressed
+        and blocks accumulate. Catches accidental 0-interpreted-as-tiny bugs."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store = BlockDiskStore(cache_dir=d, max_size_gb=0)  # unlimited
+            try:
+                for i in range(8):
+                    k = mx.zeros((4, 16, 16))
+                    v = mx.zeros((4, 16, 16))
+                    bh = hashlib.sha256(f"unlim_{i}".encode()).digest()
+                    store.write_block_async(bh, [("kv", k, v)], token_count=16)
+                    time.sleep(0.02)
+                time.sleep(2.0)
+                stats = store.get_stats()
+                assert stats["disk_evictions"] == 0, (
+                    f"Unlimited cap had evictions={stats['disk_evictions']}"
+                )
+                assert stats["blocks_on_disk"] == 8, (
+                    f"Expected 8 blocks retained, got {stats['blocks_on_disk']}"
+                )
+            finally:
+                store.shutdown()
+
+    def test_get_stats_schema_has_eviction_field(self):
+        """UI + /v1/cache/stats depend on disk_evictions field presence."""
+        import tempfile
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store = BlockDiskStore(cache_dir=d, max_size_gb=0.1)
+            try:
+                stats = store.get_stats()
+                for key in (
+                    "blocks_on_disk", "disk_size_bytes", "disk_size_gb",
+                    "disk_hits", "disk_misses", "disk_writes",
+                    "disk_evictions",
+                ):
+                    assert key in stats, (
+                        f"BlockDiskStore.get_stats missing '{key}' — "
+                        f"/v1/cache/stats schema broken"
+                    )
+            finally:
+                store.shutdown()
