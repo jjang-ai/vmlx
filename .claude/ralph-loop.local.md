@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 48
+iteration: 49
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -287,6 +287,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
 ## Scoreboard
 - 366/366 source-scan tests green, 126/126 regression guards + 15 matrix
   rows (§57–§130)
+- iter-104 work (no-code audit):
+  1. **SQL safety sweep** — no user-data SQL interpolation. All
+     `sqlite3_exec` call sites pass schema / PRAGMA strings only;
+     every CRUD path uses `sqlite3_prepare_v2` + `sqlite3_bind_*`
+     parameterized queries. Two table-name-interpolating private
+     helpers in SettingsDB.swift (`deleteRow` + read helper) are
+     called with hardcoded table names only — no user reach.
+     Checked: Database.swift, ImageHistoryStore.swift,
+     BenchmarkPanel.swift, ModelLibraryDB.swift, SettingsDB.swift,
+     DiskCache.swift. No fix needed.
+  2. **Env-var parsing sweep** — all `VMLX_*` env reads are
+     range-checked or limited to "1"-vs-other boolean semantics.
+     `VMLX_SSE_HEARTBEAT_SEC` has `v >= 0` check (0 disables,
+     positive enables, no upper bound but unbounded values are
+     functionally-equivalent to 0). `VMLX_MINIMAX_TOPK` has both
+     lower (>= 1) and upper (<= numExpertsPerTok) bounds.
+     Boolean-style (`VMLX_DISABLE_CACHE_COORD`, `VMLX_DISABLE_VL_RACE_BARRIER`,
+     `VMLX_DISABLE_PER_TOKEN_METRICS`, `VMLX_DISABLE_SSM_RE_DERIVE_ASYNC`,
+     `VMLX_VL_DEBUG`, `VMLX_COMPILED_DECODE`, `VMLX_DISABLE_TURBO_QUANT`,
+     `VMLX_CAPS_LOG`, `VMLX_DISABLE_COMPILE_DECODE`, `VMLX_OLLAMA_DEBUG`)
+     all use `== "1"` which is safe — any other value including
+     empty, "true", "yes" is treated as off. No fix needed.
 - iter-103 work:
   1. FluxBackend output PNG leak (§130) — **real resource leak,
      extends §126 sweep**. FluxBackend cleans up input files
