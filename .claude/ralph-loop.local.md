@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 29
+iteration: 30
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,7 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 415/415 tests green, 107/107 regression guards + 15 matrix rows (§57–§112)
+- 415/415 tests green, 108/108 regression guards + 15 matrix rows (§57–§113)
+- iter-85 work:
+  1. Unload memory reclamation audit (§113) — **REAL USER-VISIBLE FIX**.
+     `Engine.stop()` and `Engine.deepSleep()` dropped their model
+     references to nil (`loaded = nil` + `cacheCoordinator = nil`)
+     but never told MLX to flush its pooled Metal buffer cache. When
+     the Swift references drop to zero ARC, MLX retains the buffers
+     internally in its allocator until the next allocation pressure
+     forces a flush — so a user who deep-sleeps a 30GB Nemotron
+     expecting their RAM back watched Activity Monitor continue to
+     show the process holding all 30GB for minutes or until the next
+     model load event. Cross-checked against
+     `Sources/MLX/Memory.swift:356` — `Memory.clearCache()` is the
+     public API for "cause all cached buffers to be deallocated" and
+     is thread-safe via the shared evalLock. Safe to call after
+     nil-ing because it only drops buffers that aren't currently
+     referenced, and both paths have already cancelled in-flight
+     streams (stop) or cleared the CacheCoordinator (deepSleep)
+     before reaching the call. Added the call to both paths with a
+     doc comment explaining why the RSS drop behavior matters; §113
+     regression guard pins both call sites so a future refactor
+     can't silently drop either one.
 - iter-84 work (pushed to origin/dev as 71c5b1f):
   1. Swift 6 actor-isolation cleanup (§112). `Engine` is an actor,
      so every stored property (`settings: SettingsStore`) was
