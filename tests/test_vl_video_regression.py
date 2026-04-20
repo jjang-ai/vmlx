@@ -8803,3 +8803,36 @@ class TestModelDeleteAlwaysVisible:
             "confirm dialog must include the full model.path so user "
             "can verify before committing to the delete"
         )
+
+
+class TestContextLengthMemoryAdvisory:
+    """v1.3.69 / vmlx#85 @Benjamin-Wegener — "Can I run Gemma-4-26B at
+    30k context on 16GB Mac Mini M4?"
+
+    The default --max-tokens=32768 is already wide enough, but on low-
+    RAM Macs the actual memory-safe limit is much smaller. The engine
+    already computes this via `_estimate_max_prompt_tokens()` but
+    previously only logged the result; it didn't warn the user that
+    their configured max could OOM.
+
+    Fix: emit a WARNING when `_default_max_tokens > _max_prompt_tokens`
+    with a clear recommendation."""
+
+    SERVER_PY = "/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
+
+    def test_advisory_log_present_when_over_safe_limit(self):
+        """Startup code must emit a CONTEXT ADVISORY warning when the
+        user's --max-tokens exceeds _max_prompt_tokens."""
+        src = Path(self.SERVER_PY).read_text()
+        assert "CONTEXT ADVISORY (vmlx#85)" in src, (
+            "startup must emit vmlx#85 memory advisory when configured "
+            "max_tokens exceeds memory-safe limit"
+        )
+
+    def test_advisory_includes_actionable_recommendation(self):
+        """Advisory must tell user exactly what to do: set --max-tokens "
+        "to the safe limit or use a larger-RAM Mac."""
+        src = Path(self.SERVER_PY).read_text()
+        assert "set --max-tokens=" in src and "to silence this warning" in src, (
+            "advisory must include the concrete fix (set --max-tokens=N)"
+        )

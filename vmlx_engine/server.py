@@ -1927,6 +1927,22 @@ def load_model(
             f"Max safe prompt length: ~{_max_prompt_tokens:,} tokens "
             f"(based on available GPU memory)"
         )
+        # vmlx#85 @Benjamin-Wegener: advise user when their requested
+        # max_tokens exceeds the memory-safe limit. This is the most
+        # common question — "can I run <big model> at <large context>
+        # on <low RAM Mac>?" — and the answer is usually "yes, but
+        # only up to N tokens before Metal OOM."
+        if _default_max_tokens > _max_prompt_tokens:
+            logger.warning(
+                f"CONTEXT ADVISORY (vmlx#85): --max-tokens="
+                f"{_default_max_tokens} exceeds the memory-safe limit "
+                f"(~{_max_prompt_tokens:,} tokens) for this model on "
+                f"this Mac. Prompts longer than ~{_max_prompt_tokens:,} "
+                f"tokens will be REJECTED with a 400 error to avoid "
+                f"Metal OOM. Use a Mac with more RAM, a smaller model, "
+                f"or set --max-tokens={_max_prompt_tokens} explicitly "
+                f"to silence this warning."
+            )
 
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
     try:
