@@ -8020,3 +8020,147 @@ class TestEmptyContentReturns400:
         assert r.status_code != 400, (
             f"system+user must NOT trip the empty-content guard, got 400: {r.json()}"
         )
+
+
+class TestReasoningParserWiring:
+    """iter 28 — pins Eric's directive after Swift-side leak pattern
+    flagged: 'TextToolTokenLoopHandler only wires ToolCallProcessor —
+    no ReasoningParser. So <think>...</think> passes straight through
+    as .chunk te...'. Our Python engine's wiring audit:
+
+      - CLI auto-configures ReasoningParser from jang_config.capabilities
+        (cli.py:179-186 `server._reasoning_parser = _rp_cls()`).
+      - Server per-request clones it (server.py:5292, 5953, 6415).
+      - Per-request parser extracts <think>...</think> into
+        reasoning_content; tool-call parser runs on cleaned content.
+
+    Pinning the full chain so future refactors don't regress."""
+
+    def test_reasoning_parser_auto_applied_from_registry(self):
+        """cli.py must auto-set server._reasoning_parser from the
+        registry when no explicit --reasoning-parser is given."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        assert "Auto-configured reasoning parser from registry" in src, (
+            "CLI must auto-apply registry.reasoning_parser when user "
+            "didn't pass --reasoning-parser. Without this, jang_stamp "
+            "parsers stay dormant."
+        )
+        assert "_mc.reasoning_parser" in src, (
+            "CLI must read registry.reasoning_parser field"
+        )
+        assert "_rp_cls = get_parser(_mc.reasoning_parser)" in src, (
+            "CLI must instantiate the named parser class"
+        )
+
+    def test_server_clones_parser_per_request(self):
+        """server.py must clone _reasoning_parser per-request via
+        `_reasoning_parser.__class__()` — shared state across
+        concurrent requests would cause partial-stream contamination."""
+        from vmlx_engine import server as srv
+        import inspect
+        src = inspect.getsource(srv)
+        clone_count = src.count("_reasoning_parser.__class__()")
+        assert clone_count >= 3, (
+            f"Per-request clone must happen at all 3 entry points "
+            f"(chat, chat streaming, responses), found {clone_count}"
+        )
+
+    def test_tool_parser_runs_after_reasoning_strip(self):
+        """Tool-call parser runs on text after reasoning extraction,
+        not on raw output — ensures <think>-leaked tool calls still
+        get extracted (and reasoning isn't re-scraped as tool args)."""
+        from vmlx_engine import server as srv
+        import inspect
+        src = inspect.getsource(srv)
+        assert "_strip_think_for_tool_parse" in src, (
+            "iter 8 consolidation: tool parse must call the strip helper"
+        )
+        # extract_reasoning comes BEFORE tool parse in all paths
+        assert src.count("extract_reasoning") >= 3, (
+            "Each path must call extract_reasoning separately"
+        )
+
+    def test_qwen3_parser_extracts_think_block(self):
+        """Qwen3 parser must extract <think>...</think> content into
+        reasoning_content, strip it from content. This is the specific
+        case the Swift gap missed."""
+        from vmlx_engine.reasoning import get_parser
+        p = get_parser("qwen3")()
+        raw = "<think>I am thinking about 5+3 = 8</think>The answer is 8."
+        reasoning, content = p.extract_reasoning(raw)
+        assert reasoning and "thinking about" in reasoning, (
+            f"Qwen3 parser failed to extract reasoning from <think> block: {reasoning!r}"
+        )
+        assert content and "answer is 8" in content, (
+            f"Qwen3 parser failed to yield clean content: {content!r}"
+        )
+        assert "<think>" not in (content or ""), (
+            f"<think> tag LEAKED into content: {content!r}"
+        )
+        assert "</think>" not in (content or ""), (
+            f"</think> tag LEAKED into content: {content!r}"
+        )
+
+    def test_deepseek_r1_parser_extracts_think_block(self):
+        """DeepSeek-R1 parser must similarly route <think> content."""
+        from vmlx_engine.reasoning import get_parser
+        p = get_parser("deepseek_r1")()
+        raw = "<think>Step by step.</think>Final answer."
+        reasoning, content = p.extract_reasoning(raw)
+        assert reasoning and "step by step" in reasoning.lower()
+        assert "<think>" not in (content or "")
+
+    def test_parsers_importable(self):
+        """Every parser name referenced in jang_config.capabilities
+        across the model library must be importable via get_parser."""
+        from vmlx_engine.reasoning import get_parser
+        # The canonical names stamped on JANG/JANGTQ models
+        for name in ("qwen3", "deepseek_r1", "gemma4", "mistral", "openai_gptoss"):
+            cls = get_parser(name)
+            assert cls is not None, f"get_parser({name!r}) returned None"
+            # Must be instantiable
+            inst = cls()
+            assert hasattr(inst, "extract_reasoning"), (
+                f"{name} parser missing extract_reasoning method"
+            )
+
+    def test_none_parser_disables_extraction(self):
+        """--reasoning-parser none must be an explicit opt-out.
+        Users like Raymond Wong relied on this for unconventional
+        templates (GLM-5.1-JANG_1L)."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        # "none" is a valid choice that sets parser to None
+        assert "none" in src.lower(), (
+            "--reasoning-parser none choice must be valid CLI"
+        )
+        # cli source must set server._reasoning_parser = None on 'none'
+        assert "server._reasoning_parser = None" in src, (
+            "--reasoning-parser none must explicitly disable the parser"
+        )
+
+    def test_interleaved_think_and_tool_call(self):
+        """Critical: when a model emits both <think>...</think> AND
+        a tool_call marker, both must be extracted correctly. Reasoning
+        goes to reasoning_content; tool_call is parsed by the tool
+        parser after the think block is stripped."""
+        from vmlx_engine.reasoning import get_parser
+        p = get_parser("qwen3")()
+        raw = '<think>I should call the calc tool.</think><tool_call>\n{"name": "calc", "arguments": {"a": 1}}\n</tool_call>'
+        reasoning, content = p.extract_reasoning(raw)
+        assert reasoning and "call the calc tool" in reasoning, (
+            f"Reasoning not extracted: {reasoning!r}"
+        )
+        # Content has the tool_call markers; tool parser picks them up
+        assert content is not None
+        assert "tool_call" in (content or "").lower() or "calc" in (content or ""), (
+            f"Tool call markers missing from cleaned content: {content!r}"
+        )
+        # No think-block residue
+        assert "<think>" not in (content or "")
+        assert "call the calc tool" not in (content or ""), (
+            f"Reasoning LEAKED into content on interleaved case: {content!r}"
+        )
