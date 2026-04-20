@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 50
+iteration: 52
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,22 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 367/367 source-scan tests green, 127/127 regression guards + 15 matrix
-  rows (§57–§131)
+- 368/368 source-scan tests green, 128/128 regression guards + 15 matrix
+  rows (§57–§132)
+- iter-106 work:
+  1. Embeddings API audit (§132) — three real bugs. (a) Ollama
+     `/api/embeddings` + `/api/embed` cast `$0["embedding"] as?
+     [Double]` on the engine dict. Engine stores vectors as [Float];
+     Swift array casts don't bridge across Float/Double, so compactMap
+     ALWAYS returned []. Every Ollama embed call silently shipped
+     empty vectors — LangChain/llama-index/Copilot/Open-WebUI affected.
+     Fixed: cast to [Float]. (b) Engine.embeddings had no empty-input
+     guard; `inputs = []` crashed at `MLX.stacked([])`. Now throws
+     400 like OpenAI. (c) OpenAI Python SDK ≥1.47 defaults
+     `encoding_format="base64"` and decodes into numpy float32 on
+     receive; we were silently ignoring the field, SDK clients
+     crashed on parse. Now honored, default stays "float" for
+     curl/JSON. Build clean, §132 guard green.
 - iter-105 work:
   1. DiskCache corrupt-entry DB row orphan (§131) — **real budget
      accounting bug**. `DiskCache.fetch()` catches deserialize
