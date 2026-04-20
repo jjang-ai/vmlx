@@ -113,6 +113,12 @@ struct SessionCard: View {
     }
 
     private var dotColor: Color {
+        // iter-128 §154: remote sessions have no local engine lifecycle.
+        // The local Engine stays `.stopped` forever (never loaded), so
+        // rendering its state as the pill color would surface "Stopped"
+        // on a session that's actually configured and ready to chat
+        // against an external endpoint. Override to a "connected" shade.
+        if session.isRemote { return Theme.Colors.accent }
         switch session.state {
         case .stopped: return Theme.Colors.textLow
         case .loading: return Theme.Colors.accent
@@ -123,6 +129,10 @@ struct SessionCard: View {
     }
 
     private var statusLabel: String {
+        // iter-128 §154: see dotColor — remote sessions get their own
+        // label so the card reflects the actual semantics instead of
+        // mirroring the (always-stopped) local engine state.
+        if session.isRemote { return "Remote" }
         switch session.state {
         case .stopped:        return "Stopped"
         case .loading:        return "Loading \(formatElapsed(loadingElapsed))"
@@ -163,13 +173,25 @@ struct SessionCard: View {
 
     private var infoRow: some View {
         HStack(spacing: Theme.Spacing.md) {
-            Text("\(session.host):\(session.port)")
-                .font(Theme.Typography.mono)
-                .foregroundStyle(Theme.Colors.textMid)
-            if let pid = session.pid {
-                Text("PID \(pid)")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.textLow)
+            // iter-128 §154: remote sessions store the endpoint URL in
+            // `session.host` and `0` in `session.port` — rendering
+            // "https://api.openai.com/v1:0" looked broken. Show just the
+            // URL for remote; keep host:port for local.
+            if session.isRemote {
+                Text(session.host)
+                    .font(Theme.Typography.mono)
+                    .foregroundStyle(Theme.Colors.textMid)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Text("\(session.host):\(session.port)")
+                    .font(Theme.Typography.mono)
+                    .foregroundStyle(Theme.Colors.textMid)
+                if let pid = session.pid {
+                    Text("PID \(pid)")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textLow)
+                }
             }
             Spacer()
         }
@@ -179,16 +201,26 @@ struct SessionCard: View {
 
     private var actionsRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            switch session.state {
-            case .stopped, .error:
-                actionButton("Start", color: Theme.Colors.accent, action: onStart)
-            case .standby:
-                actionButton("Wake", color: Theme.Colors.accent, action: onWake)
-                actionButton("Stop", color: Theme.Colors.danger, action: onStop)
-            case .running:
-                actionButton("Stop", color: Theme.Colors.danger, action: onStop)
-            case .loading:
-                actionButton("Cancel", color: Theme.Colors.danger, action: onStop)
+            if session.isRemote {
+                // iter-128 §154: remote sessions have no local lifecycle to
+                // start/stop/wake — the "engine" is an external server we
+                // dispatch requests to. No action buttons needed; the card
+                // remains clickable (onSelect wraps the whole VStack) so
+                // the user can still open settings to edit the remote URL
+                // or delete the session via the context menu.
+                EmptyView()
+            } else {
+                switch session.state {
+                case .stopped, .error:
+                    actionButton("Start", color: Theme.Colors.accent, action: onStart)
+                case .standby:
+                    actionButton("Wake", color: Theme.Colors.accent, action: onWake)
+                    actionButton("Stop", color: Theme.Colors.danger, action: onStop)
+                case .running:
+                    actionButton("Stop", color: Theme.Colors.danger, action: onStop)
+                case .loading:
+                    actionButton("Cancel", color: Theme.Colors.danger, action: onStop)
+                }
             }
             Spacer()
         }

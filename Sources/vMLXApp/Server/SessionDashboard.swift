@@ -25,6 +25,14 @@ struct Session: Identifiable, Equatable {
     var latencyMs: Double?
     var state: EngineState
     var loadProgress: LoadProgress?
+    /// iter-128 §154: session is bound to a remote OpenAI/Ollama/Anthropic
+    /// endpoint via `SessionSettings.remoteURL` instead of serving a local
+    /// model. Local engine stays `.stopped` for these — it's genuinely
+    /// never loaded — but the session is functionally "ready" once the
+    /// user has configured a valid URL + API key. Before §154, SessionCard
+    /// rendered this as literal "Stopped / Start" which misled users into
+    /// repeatedly clicking a no-op Start button.
+    var isRemote: Bool = false
 
     /// True while the engine is actively serving requests.
     var isRunning: Bool {

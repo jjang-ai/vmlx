@@ -675,7 +675,8 @@ final class AppState {
                 pid: nil,
                 latencyMs: nil,
                 state: hydratedState,
-                loadProgress: nil
+                loadProgress: nil,
+                isRemote: s.isRemote
             )
             restored.append(session)
         }
@@ -790,7 +791,8 @@ final class AppState {
             pid: nil,
             latencyMs: nil,
             state: .stopped,
-            loadProgress: nil
+            loadProgress: nil,
+            isRemote: settings.isRemote
         )
         sessions.append(session)
         return id
