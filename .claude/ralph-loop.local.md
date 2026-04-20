@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 63
+iteration: 64
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,24 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 379/379 source-scan tests green, 139/139 regression guards + 15 matrix
-  rows (§57–§143)
+- 380/380 source-scan tests green, 140/140 regression guards + 15 matrix
+  rows (§57–§144)
+- iter-118 work:
+  1. Gateway /health unauth model-library enumeration (§144) —
+     **real info-leak fix**. Gateway `/health` response included
+     `models: [all displayNames]` sourced from
+     `engine.modelLibrary.entries()` — enumerates the user's
+     ENTIRE installed model library, not just loaded. /health is
+     bearer-auth-exempt per §104 so external monitors can probe
+     liveness without the API key. Combined: free unauth
+     enumeration of the user's on-disk model set — any LAN peer
+     could scrape the full library by hitting /health with no
+     credentials. Fix: return only currently-loaded model names
+     per session (mirrors per-session /health which exposes just
+     the loaded model). Added `loaded_models_count` for name-
+     free liveness probes. §144 pins marker + absence of the old
+     full-library enumeration + loadedModelPath gating + both
+     new fields. Build clean, guard green.
 - iter-117 work:
   1. /v1/models + drafter path leak sweep (§143) — **broader
      sweep, same class as §141/§142**. Two more leak sites found:
