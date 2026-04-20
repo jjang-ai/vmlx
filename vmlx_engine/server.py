@@ -4614,7 +4614,21 @@ async def create_speech(request: AudioSpeechRequest):
         raise HTTPException(status_code=503, detail=detail)
     except Exception as e:
         logger.error(f"TTS generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Distinguish bad-model/bad-input errors (→ 400) from real runtime
+        # errors (→ 500). HF "Repository Not Found" and mlx-audio's
+        # "Unsupported model" are user-fixable input errors.
+        _msg = str(e)
+        _is_user_err = (
+            "Repository Not Found" in _msg
+            or "Repository not found" in _msg
+            or "RepositoryNotFoundError" in _msg
+            or "Unsupported model" in _msg
+            or "No such file" in _msg
+        )
+        raise HTTPException(
+            status_code=400 if _is_user_err else 500,
+            detail=_msg,
+        )
 
 
 @app.get("/v1/audio/voices", dependencies=[Depends(verify_api_key)])

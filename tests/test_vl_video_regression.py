@@ -5605,3 +5605,54 @@ class TestBlockDiskStoreMetadataKeyCollision:
                 assert layer[0] == "kv"
         finally:
             os.unlink(tmp)
+
+
+class TestAudioSpeechBadModelError:
+    """TTS /v1/audio/speech returned 500 on bad model names — same
+    class of bug as /v1/rerank. User input errors (repo not found,
+    unsupported model) must map to 400, not 500, so clients don't
+    retry pointlessly.
+
+    Live-repro 2026-04-20 on Qwen3-0.6B chat server:
+        POST /v1/audio/speech {"model":"tts-1",...}
+        → HTTP 500 + 'Repository Not Found for url: ...tts-1...'
+    """
+
+    def test_source_maps_repo_not_found_to_400(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        idx = src.find('"/v1/audio/speech"')
+        assert idx > 0
+        # Find the TTS handler body
+        end_idx = src.find('"/v1/audio/voices"', idx)
+        body = src[idx:end_idx]
+        # Must classify user-fixable errors
+        assert "Repository Not Found" in body or "Repository not found" in body, (
+            "TTS handler must classify HF repo-not-found as 400"
+        )
+        assert "_is_user_err" in body, (
+            "TTS must have a user-error branch returning 400"
+        )
+        assert "status_code=400" in body
+
+
+class TestRerankRequestErrorHandling:
+    """Same pattern as TTS — /v1/rerank must return 400 for bad model
+    inputs, not 500. Reranker load is lazy inside .rerank() so the
+    error surfaces at the inference call."""
+
+    def test_source_maps_load_errors_to_400(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Rerank handler has its own error branch
+        idx = src.find("def create_rerank")
+        assert idx > 0
+        end_idx = src.find("def ", idx + 10)
+        body = src[idx:end_idx]
+        assert "_is_load_err" in body, (
+            "rerank must have a load-error branch"
+        )
+        assert "Model not found" in body
+        assert "status_code=400" in body
