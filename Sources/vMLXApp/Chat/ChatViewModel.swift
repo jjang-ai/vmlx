@@ -507,6 +507,21 @@ final class ChatViewModel {
         // row back in SQLite; we re-insert in-memory at the captured
         // index to preserve ordering.
         guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+        // iter-111 §137: if the user deletes the currently-streaming
+        // assistant (always the LAST message while `isGenerating`),
+        // cancel the stream task first. Without this the engine keeps
+        // generating tokens that silently drop at the firstIndex
+        // lookup in the stream loop (line ~975) since the message no
+        // longer exists — wasting engine cycles until the stream
+        // naturally completes. We flip `intentionalStop` so the
+        // cancellation surfaces as a clean stop rather than a red
+        // error banner elsewhere. Earlier-message deletes don't touch
+        // the stream; the engine's prompt context was already consumed
+        // at prefill so they can continue cleanly.
+        if isGenerating && idx == messages.count - 1 {
+            intentionalStop = true
+            streamTask?.cancel()
+        }
         let snapshot = messages[idx]
         Database.shared.deleteMessage(id)
         messages.remove(at: idx)
