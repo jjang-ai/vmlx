@@ -335,10 +335,18 @@ public enum OllamaRoutes {
                 "done": true,
                 "done_reason": finishReason ?? "stop",
             ]
-            if let u = usage {
-                obj["prompt_eval_count"] = u.promptTokens
-                obj["eval_count"] = u.completionTokens
-            }
+            // iter-105 §183: route through the shared applyOllamaTimings
+            // helper so /api/chat non-stream emits the full timing
+            // envelope (prompt_eval_count / eval_count / total_duration /
+            // prompt_eval_duration / eval_duration / load_duration) and
+            // stays in lockstep with /api/generate non-stream (line
+            // ~437 below) plus both streaming encoders (JSONLEncoder
+            // lines 115/186). Prior inline assignment emitted only
+            // the two count fields — latency UIs (Copilot, LangChain,
+            // Open WebUI, OllamaJS) that key off *_duration got zeros
+            // for non-stream /api/chat while the same model hit via
+            // /api/generate reported real numbers. Hard rule #6.
+            JSONLEncoder.applyOllamaTimings(into: &obj, usage: usage)
             return OpenAIRoutes.json(obj)
         }
 
