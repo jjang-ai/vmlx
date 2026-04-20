@@ -2054,10 +2054,49 @@ public actor Engine {
                 "object": "list",
                 "model": request["model"] ?? "",
                 "results": [] as [Any],
+                "usage": [
+                    "prompt_tokens": 0,
+                    "total_tokens": 0,
+                ] as [String: Any],
             ]
         }
-        let topN = (request["top_n"] as? Int) ?? documents.count
+        // iter-103 §181: validate `top_n` rather than silently clamping.
+        // Prior code ran `max(1, topN)` which treated `top_n=0` as 1 and
+        // `top_n=-5` as 1 — silently wrong. Cohere/Jina both 400 on
+        // non-positive top_n; match that contract.
+        let topN: Int
+        if let tn = request["top_n"] as? Int {
+            guard tn > 0 else {
+                throw EngineError.invalidRequest("rerank: 'top_n' must be a positive integer")
+            }
+            topN = tn
+        } else {
+            topN = documents.count
+        }
         let returnDocs = (request["return_documents"] as? Bool) ?? true
+
+        // iter-103 §181: surface silent-dropped Cohere/Jina/Voyage
+        // fields so callers don't assume they took effect. Each of
+        // these requires server-side chunking or truncation logic
+        // that isn't wired into vMLXEmbedders yet — we intentionally
+        // ignore them rather than erroring (so existing Cohere SDK
+        // calls don't break), but log a warning so the mismatch is
+        // visible in the server log.
+        //
+        // FIXME(iter-103 §181): wire these through to the embedding
+        // path once vMLXEmbedders grows per-doc chunking + truncation:
+        //   - `max_chunks_per_doc` — Cohere-style chunking before embed
+        //   - `rank_fields`        — rerank on JSON field subset
+        //   - `truncation`         — explicit truncation flag (we
+        //      currently lean on the embedding tokenizer's max_length
+        //      for implicit truncation, which is the Voyage default
+        //      behavior but not the Cohere/Jina one).
+        for ignored in ["max_chunks_per_doc", "rank_fields", "truncation"]
+            where request[ignored] != nil
+        {
+            await logs.append(.warn, category: "rerank",
+                "rerank: ignoring unsupported field '\(ignored)' — see iter-103 §181 FIXME")
+        }
 
         // Compute embeddings via the existing path by reusing the
         // embeddings() entry point: query + documents all in one batch.
@@ -2096,7 +2135,10 @@ public actor Engine {
         }
         // Sort by descending similarity.
         scored.sort { $0.score > $1.score }
-        let top = Array(scored.prefix(max(1, topN)))
+        // iter-103 §181: `prefix(topN)` already clamps to documents.count
+        // natively — no need for the old `max(1, topN)` which masked the
+        // input-validation gap (now handled up-front via the throw above).
+        let top = Array(scored.prefix(topN))
 
         let results: [[String: Any]] = top.map { row in
             var out: [String: Any] = [
@@ -2108,10 +2150,24 @@ public actor Engine {
             }
             return out
         }
+        // iter-103 §181: forward usage from the underlying embeddings
+        // call so rerank clients see real token counts (Cohere/Jina
+        // ship `meta.billed_units` / `usage` with every response).
+        // Prior implementation silently dropped this → billing/latency
+        // dashboards saw zeros.
+        var usage: [String: Any] = [
+            "prompt_tokens": 0,
+            "total_tokens": 0,
+        ]
+        if let embUsage = embResponse["usage"] as? [String: Any] {
+            if let p = embUsage["prompt_tokens"] as? Int { usage["prompt_tokens"] = p }
+            if let t = embUsage["total_tokens"] as? Int { usage["total_tokens"] = t }
+        }
         return [
             "object": "list",
             "model": request["model"] ?? "",
             "results": results,
+            "usage": usage,
         ]
     }
 
