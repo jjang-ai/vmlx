@@ -288,8 +288,12 @@ entry[4]: token='Hello'  logprob=-0.0000
 | Non-streaming delivery | Accumulated array in final response | All token logprobs in `choices[0].logprobs.content` |
 | Speculative decoding | Returns empty logprobs | `SpeculativeTokenIterator` has no logprobs collector; speculative decoding changes token selection semantics making logprobs misleading |
 | `TokenGeneration` mode | No logprobs emitted | The `.logprob` case only exists on `Generation`, not `TokenGeneration`; raw token mode has no text context for logprobs |
-| `bytes` field (OpenAI `bytes` array) | Not implemented | Would require UTF-8 encoding of token strings; deferred — `bytes_offset` is emitted instead |
+| `bytes` field (OpenAI `bytes` array) | **Implemented (§163.B1)** — `bytes: [Int]` UTF-8 byte array of the token string (spec-compliant, not `bytes_offset`). lm-evaluation-harness and official OpenAI SDKs key on this exact field name. |
 | `prompt_logprobs` | Not implemented | Requires capturing logits during prefill; separate code path from decode; deferred to follow-up |
+| Stop-sequence rollback semantics (§163.B3) | **Logprobs count == sampled-token count**, not per emitted character. When a stop sequence trims the final content delta, the logprob for that sampled step still appears in `logprobs.content`. This matches OpenAI's actual behavior — logprob entries reflect sampling decisions, not what survived post-processing. |
+| Reasoning / tool-call tokens (§163.B6) | **Filtered from `logprobs.content`**. Tokens whose text was entirely consumed by the reasoning parser (`<think>…</think>`) or by a tool-call marker buffer are dropped from the content logprobs array. OpenAI's contract is that `choices[0].logprobs.content[i]` maps 1:1 with tokens of `message.content`; reasoning lives on `message.reasoning_content` and tool-call bytes live on `message.tool_calls` — neither participate in `logprobs.content`. |
+| Single SSE frame per token (§163.B4) | **Implemented** — `delta.logprobs.content` is bundled into the SAME SSE frame as the matching `delta.content` slice. Strict consumers (lm-evaluation-harness, LangChain logprob-aware chains) that map `delta.logprobs.content[i]` to the character just produced now see them on the same wire tick. |
+| Top-K selection (§163.B2) | **Partial scan** — single GPU→CPU copy of the logprob row followed by an in-place top-N scan (O(V·N) for N≤20 vs. former O(V log V) full sort). Saves several ms/token on 150k-vocab Qwen3.5-35B with `top_logprobs: 20`. |
 
 ## Future Work
 
@@ -299,17 +303,13 @@ OpenAI supports returning log probabilities for the input prompt tokens. This re
 
 **Estimated complexity:** Medium — needs prefill logit interception and a separate accumulator.
 
-### 2. `bytes` Field per Token
+### 2. `bytes` Field per Token — **DONE (§163.B1)**
 
-OpenAI returns a `bytes` field (array of integers) alongside each token in logprobs, representing the raw UTF-8 bytes. Currently we emit `bytes_offset` but not `bytes`. Adding this requires encoding each token string to UTF-8 and returning the byte array.
+Each token carries `bytes: [Int]` (UTF-8 byte array of the token string). Populated at capture time in `LogprobsCollector.capture()`; emitted by both the chat-completions and legacy-completions routes and the SSE encoder. Spec-compliant with OpenAI's `chat.completion.choices[0].logprobs.content[i].bytes`.
 
-**Estimated complexity:** Low — straightforward addition in `LogprobsCollector.capture()` and both encoders.
+### 3. `text_completion` Logprobs (Legacy `/v1/completions`) — **DONE (§163.B5)**
 
-### 3. `text_completion` Logprobs (Legacy `/v1/completions`)
-
-The legacy completions endpoint (`/v1/completions`) has a different logprobs format that includes `text_offset` alongside each token. The SSEEncoder already has a `textCompletionStream()` method that would need the same logprobs wiring.
-
-**Estimated complexity:** Low — same data, different JSON shape.
+Non-streaming `/v1/completions` response now emits `choices[0].logprobs = {tokens, token_logprobs, top_logprobs, text_offset}` in the legacy flat-array shape (distinct from chat's `{content: [...]}`). This is the exact shape lm-evaluation-harness reads. SSE streaming for the legacy endpoint is a follow-up.
 
 ### 4. Logprobs Unit Tests
 
