@@ -286,12 +286,25 @@ final class ChatViewModel {
     /// Cmd-Shift-T: reopen the most-recently closed chat.
     func reopenLastClosed() {
         guard let s = recentlyClosed.popLast() else { return }
+        // iter-113 §139: defense-in-depth — if the session was deleted
+        // from disk (by whatever path), don't resurrect an empty zombie
+        // row in the sidebar. Iterate popLast until we find a session
+        // that still exists in SQLite, OR the stack is empty. The
+        // primary fix is in `deleteSession` which strips the snapshot,
+        // but future code paths that delete without going through that
+        // method should not be able to produce zombies.
+        var candidate: ChatSession? = s
+        let existing = Set(Database.shared.allSessions().map(\.id))
+        while let c = candidate, !existing.contains(c.id) {
+            candidate = recentlyClosed.popLast()
+        }
+        guard let restore = candidate else { return }
         // Only re-insert if it isn't already present (closed + undeleted
         // could race with another insert).
-        if !sessions.contains(where: { $0.id == s.id }) {
-            sessions.insert(s, at: 0)
+        if !sessions.contains(where: { $0.id == restore.id }) {
+            sessions.insert(restore, at: 0)
         }
-        selectSession(s.id)
+        selectSession(restore.id)
     }
 
     // iter-112 §138: `recallPreviousInput()` deleted — see inputHistory
@@ -332,6 +345,15 @@ final class ChatViewModel {
         }
         sessions.removeAll { $0.id == id }
         drafts.removeValue(forKey: id)
+        // iter-113 §139: strip the session from `recentlyClosed` if it was
+        // previously closed via Cmd-W. Without this, the sequence
+        //   Cmd-W (close) → right-click Delete → Cmd-Shift-T (reopen)
+        // would pop the stale snapshot back into the sidebar while the
+        // SQLite row + messages were already gone, producing a zombie
+        // chat that renders empty and can't be fully recovered. The
+        // regular delete-undo (Cmd-Z) is the right way to restore —
+        // Cmd-Shift-T is only for accidental Cmd-W closures.
+        recentlyClosed.removeAll { $0.id == id }
         if activeSessionId == id {
             activeSessionId = sessions.first?.id
             messages = activeSessionId.map { Database.shared.messages(for: $0) } ?? []
