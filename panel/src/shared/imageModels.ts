@@ -234,6 +234,81 @@ export function getImageModel(id: string): ImageModelDef | undefined {
   return IMAGE_MODELS.find(m => m.id === id)
 }
 
+/**
+ * mlxstudio#82: fuzzy-match a user-facing model name (which is often just a
+ * directory basename — e.g. `FLUX.2-klein-9B`, `FLUX.1-dev-mflux-8bit`,
+ * `INT-Qwen-Image-Edit`) to the canonical IMAGE_MODELS entry.
+ *
+ * The exact-id-match rule `getImageModel()` uses covers the case where the
+ * Image tab picker passes `"klein-9b"` or `"schnell"`, but NOT the Server tab
+ * case where the user launches a scanned directory whose basename is the HF
+ * repo name (`FLUX.2-klein-9B`) or a user-renamed variant (`INT-...`).
+ *
+ * Applied in order, stop at first hit:
+ *   1. exact id
+ *   2. exact `mfluxName`
+ *   3. normalized form (lowercase + strip hf-org + strip `-mflux[-Nbit]`,
+ *      `-Nbit`, `_Nbit`, `int-/ext-` prefixes) → retry id + mfluxName
+ *   4. same as 3 but also drop `.` → retry id + mfluxName
+ *   5. match basename(repoMap[q]) for any quantize
+ */
+export function resolveImageModelFromDirectoryName(name: string): ImageModelDef | undefined {
+  if (!name) return undefined
+  // Rule 1: exact id
+  const byId = IMAGE_MODELS.find(m => m.id === name)
+  if (byId) return byId
+  // Rule 2: exact mfluxName
+  const byMfluxName = IMAGE_MODELS.find(m => m.mfluxName === name)
+  if (byMfluxName) return byMfluxName
+
+  // Rule 3: normalize and retry
+  const normalize = (s: string): string => {
+    let out = s.trim().toLowerCase()
+    if (out.includes('/')) out = out.split('/').pop() || out
+    out = out.replace(/-mflux-\d+bit$/, '')
+    out = out.replace(/-mflux$/, '')
+    out = out.replace(/[-_]\d+bit$/, '')
+    for (const p of ['int-', 'ext-', 'int_', 'ext_']) {
+      if (out.startsWith(p)) { out = out.slice(p.length); break }
+    }
+    return out
+  }
+  const norm = normalize(name)
+  const byIdNorm = IMAGE_MODELS.find(m => m.id.toLowerCase() === norm)
+  if (byIdNorm) return byIdNorm
+  const byMfluxNorm = IMAGE_MODELS.find(m => m.mfluxName.toLowerCase() === norm)
+  if (byMfluxNorm) return byMfluxNorm
+
+  // Rule 4: also drop dots
+  const normNoDot = norm.replace(/\./g, '')
+  const byIdNoDot = IMAGE_MODELS.find(m => m.id.toLowerCase() === normNoDot)
+  if (byIdNoDot) return byIdNoDot
+  const byMfluxNoDot = IMAGE_MODELS.find(m => m.mfluxName.toLowerCase() === normNoDot)
+  if (byMfluxNoDot) return byMfluxNoDot
+
+  // Rule 5: match repoMap basename — user likely downloaded the HF repo
+  // into a directory named after the repo (e.g. `FLUX.2-klein-9B-mflux-4bit`
+  // from `RunPod/FLUX.2-klein-4B-mflux-4bit`).
+  const lowerName = name.toLowerCase()
+  for (const m of IMAGE_MODELS) {
+    for (const repoId of Object.values(m.repoMap)) {
+      const base = repoId.split('/').pop()
+      if (base && lowerName === base.toLowerCase()) return m
+    }
+  }
+  // Rule 5b: same check against normalized input (handles user-renamed
+  // directories that stripped the HF decoration).
+  for (const m of IMAGE_MODELS) {
+    for (const repoId of Object.values(m.repoMap)) {
+      const base = repoId.split('/').pop()
+      if (!base) continue
+      const baseNorm = normalize(base)
+      if (norm === baseNorm) return m
+    }
+  }
+  return undefined
+}
+
 /** Get default inference steps for a model ID */
 export function getDefaultSteps(modelId: string): number {
   return getImageModel(modelId)?.steps ?? 4

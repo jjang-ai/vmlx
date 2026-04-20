@@ -87,6 +87,10 @@ SUPPORTED_MODELS: dict[str, str] = {
     "flux.2-klein-9b": "flux2-klein-9b",
     "flux.2-klein-base-4b": "flux2-klein-base-4b",
     "flux.2-klein-base-9b": "flux2-klein-base-9b",
+    # mlxstudio#82: FLUX.1 dotted HF repo forms (gen variants only; edit
+    # variants live in EDIT_MODELS to keep the two tables non-overlapping).
+    "flux.1-dev": "dev",
+    "flux.1-schnell": "schnell",
 }
 
 EDIT_MODELS: dict[str, str] = {
@@ -99,6 +103,9 @@ EDIT_MODELS: dict[str, str] = {
     "fill": "dev-fill",
     "fill-dev": "dev-fill",
     "dev-fill": "dev-fill",
+    # mlxstudio#82: FLUX.1 dotted HF repo forms for edit variants
+    "flux.1-kontext-dev": "dev-kontext",
+    "flux.1-fill-dev": "dev-fill",
 }
 
 # Map mflux canonical name -> mfluxClass (for legacy load paths that don't pass mflux_class)
@@ -119,7 +126,110 @@ _NAME_TO_CLASS: dict[str, str] = {
     "fibo-lite": "FIBO",
     "seedvr2-3b": "SeedVR2",
     "seedvr2-7b": "SeedVR2",
+    # mlxstudio#82: dotted HF forms resolve via SUPPORTED_MODELS/EDIT_MODELS
+    # -> canonical undotted name -> this table. No direct dotted entries
+    # needed (would just duplicate and break test_default_steps_covers_all_names
+    # which asserts every _NAME_TO_CLASS key has a DEFAULT_STEPS entry).
 }
+
+
+# mlxstudio#82: diffusers `_class_name` values from model_index.json that we
+# can map deterministically to an mflux class. This is the LAST-RESORT
+# fallback for user-renamed directories where name-based resolution fails.
+#
+# Some pipelines (FluxPipeline, Flux2KleinPipeline) are ambiguous between
+# variants (schnell/dev, klein-4b/9b); in those cases we pick a sensible
+# default and emit a WARNING so the user can override via --mflux-name.
+_DIFFUSERS_CLASS_TO_MFLUX: dict[str, tuple[str, str]] = {
+    # (mflux_class, default mflux_name — mflux canonical key)
+    "FluxPipeline": ("Flux1", "dev"),  # ambiguous schnell/dev; default dev
+    "FluxControlPipeline": ("Flux1", "dev"),
+    "Flux2KleinPipeline": ("Flux2Klein", "flux2-klein-9b"),  # default to larger
+    "Flux2KleinBasePipeline": ("Flux2Klein", "flux2-klein-base-9b"),
+    "ZImagePipeline": ("ZImage", "z-image-turbo"),
+    "ZImageTurboPipeline": ("ZImage", "z-image-turbo"),
+    "FIBOPipeline": ("FIBO", "fibo"),
+    "QwenImagePipeline": ("QwenImage", "qwen-image"),
+    "QwenImageEditPipeline": ("QwenImageEdit", "qwen-image-edit"),
+    "FluxKontextPipeline": ("Flux1Kontext", "dev-kontext"),
+    "FluxFillPipeline": ("Flux1Fill", "dev-fill"),
+    "SeedVR2Pipeline": ("SeedVR2", "seedvr2-3b"),
+}
+
+
+def _detect_class_from_model_index(model_path: str | None) -> tuple[str, str] | None:
+    """Last-resort class resolution for user-renamed model directories.
+
+    Read `{model_path}/model_index.json` (standard diffusers metadata) and
+    map its `_class_name` field to an (mflux_class, default_mflux_name) tuple.
+
+    Returns None if model_path is missing, model_index.json is absent, the
+    file is unreadable, or the `_class_name` is not in
+    `_DIFFUSERS_CLASS_TO_MFLUX`. Errors are logged but do not raise.
+
+    Used by ImageGenEngine.load() when name-based resolution cannot find a
+    matching canonical name — covers directory names like
+    `FLUX.2-klien-blah-blah` (typo) or `INT_QIE` (user shortened).
+    """
+    if not model_path:
+        return None
+    try:
+        import json
+        idx_path = Path(model_path) / "model_index.json"
+        if not idx_path.exists():
+            return None
+        data = json.loads(idx_path.read_text())
+        class_name = data.get("_class_name")
+        if not isinstance(class_name, str):
+            return None
+        mapping = _DIFFUSERS_CLASS_TO_MFLUX.get(class_name)
+        if mapping:
+            logger.info(
+                f"mlxstudio#82: model_index.json _class_name='{class_name}' "
+                f"-> mflux_class={mapping[0]}, default mflux_name={mapping[1]} "
+                f"(pass --mflux-name explicitly to override for ambiguous variants)"
+            )
+            return mapping
+        logger.warning(
+            f"mlxstudio#82: model_index.json _class_name='{class_name}' is not "
+            f"in the known mflux-class map. Pass --mflux-class explicitly."
+        )
+    except Exception as e:
+        logger.warning(f"mlxstudio#82: failed to read model_index.json at {model_path}: {e}")
+    return None
+
+
+def _normalize_for_lookup(raw: str) -> str:
+    """Normalize a user-facing model name into the form used as a key in
+    SUPPORTED_MODELS / EDIT_MODELS / _NAME_TO_CLASS.
+
+    Rules (applied in order):
+      1. Lowercase
+      2. Strip HuggingFace org prefix (`org/name` -> `name`)
+      3. Strip quant decoration suffixes: `-mflux-Nbit`, `-mflux`, `-Nbit`, `_Nbit`
+      4. Strip explicit user prefix markers used in the UI (e.g. `int-`, `ext-`,
+         `int_`, `ext_`) — Mark (@LewnWorx, mlxstudio#82) renames launched
+         instances with INT/EXT prefixes for local/external differentiation.
+
+    Dotted forms (`flux.1-dev`, `flux.2-klein-9b`) are NOT collapsed to undotted
+    here because both forms are explicit entries in the alias tables — keeping
+    the two forms distinct lets callers who store the dotted form still match
+    directly without the lookup fiddling with the key shape.
+    """
+    import re
+    s = (raw or "").strip().lower()
+    if "/" in s:
+        s = s.rsplit("/", 1)[-1]
+    # Order matters: -mflux-Nbit before -mflux before -Nbit
+    s = re.sub(r"-mflux-\d+bit$", "", s)
+    s = re.sub(r"-mflux$", "", s)
+    s = re.sub(r"[-_]\d+bit$", "", s)
+    # Mark's INT-/EXT- convention for renamed local/external instances
+    for prefix in ("int-", "ext-", "int_", "ext_"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    return s
 
 
 def _fix_quantized_layers(model) -> int:
@@ -259,80 +369,68 @@ class ImageGenEngine:
         except ImportError:
             raise ImportError("mflux not installed. Install with: pip install mflux")
 
-        # Resolve canonical mflux name
-        resolved_name = mflux_name
-        if not resolved_name:
-            # Normalize: strip HF org prefix, lowercase for lookup
-            _lookup = model_name.lower()
-            if "/" in _lookup:
-                _lookup = _lookup.rsplit("/", 1)[-1]
-            # vmlx#96: strip common user-directory decorations in addition to
-            # -{N}bit. Directory names from mflux conversions often look like:
-            #   Z-Image-Turbo-mflux-8bit
-            #   flux2-klein-9b-mflux-4bit
-            #   Qwen-Image-Edit-mflux
-            # Relocated models (external drives etc.) are named by the user
-            # and drift from our canonical keys. Peel off the decorations so
-            # the lookup still hits.
-            import re
-            _lookup = re.sub(r'-\d+bit$', '', _lookup)
-            _lookup = re.sub(r'-mflux$', '', _lookup)
-            _lookup = re.sub(r'-mflux-\d+bit$', '', _lookup)
-            # Also handle the combination -mflux-{Nbit} (not caught by the
-            # two patterns above if stripped in wrong order).
-            _lookup = re.sub(r'-\d+bit$', '', _lookup)
-            resolved_name = SUPPORTED_MODELS.get(_lookup)
-            if not resolved_name:
-                resolved_name = EDIT_MODELS.get(_lookup)
-            if not resolved_name:
-                # Fallback: use the NORMALIZED _lookup (not original model_name)
-                # so the downstream _NAME_TO_CLASS lookup has a chance. If
-                # _lookup is itself a canonical _NAME_TO_CLASS key this works.
-                resolved_name = _lookup
+        # mlxstudio#82: resolve canonical mflux name via unconditional
+        # normalization. Prior behaviour skipped the normalization block
+        # whenever caller passed `mflux_name` explicitly, which trapped
+        # raw directory basenames (e.g. "FLUX.2-klein-9B") in the raw form
+        # where downstream ModelConfig.from_name() and _NAME_TO_CLASS lookups
+        # would miss.
+        #
+        # The normalized form is used for table lookups; the final
+        # `resolved_name` is the canonical mflux value ("dev", "flux2-klein-9b",
+        # etc.) that mflux's ModelConfig.from_name() understands.
+        raw_input = mflux_name or model_name
+        normalized = _normalize_for_lookup(raw_input)
+        canonical = (
+            SUPPORTED_MODELS.get(normalized)
+            or EDIT_MODELS.get(normalized)
+        )
+        if canonical:
+            resolved_name = canonical
+        elif mflux_name:
+            # Caller asserted a canonical name; honour it (they may know about
+            # a newer mflux entry we haven't aliased yet). mflux will raise if
+            # it's truly unknown.
+            resolved_name = mflux_name
+        else:
+            # No canonical hit; use the normalized form so the class lookup
+            # below gets a chance against its dotted-form entries.
+            resolved_name = normalized
 
         # Resolve mflux class
         resolved_class = mflux_class
         if not resolved_class:
-            resolved_class = _NAME_TO_CLASS.get(resolved_name)
-            # vmlx#96: try the lowercased variant as a last resort — stored
-            # configs sometimes carry the directory casing.
-            if not resolved_class and resolved_name != resolved_name.lower():
-                resolved_class = _NAME_TO_CLASS.get(resolved_name.lower())
-
-            # vmlx#96: second-chance decoration strip for relocated models.
-            # When caller passes `mflux_name` explicitly (stored session
-            # config referencing a directory named like
-            # "Z-Image-Turbo-mflux-8bit"), the primary normalization block
-            # above was SKIPPED because `resolved_name` was pre-set. Apply
-            # the same regex strips here so these paths still resolve.
+            resolved_class = (
+                _NAME_TO_CLASS.get(resolved_name)
+                or _NAME_TO_CLASS.get(resolved_name.lower())
+                or _NAME_TO_CLASS.get(normalized)
+            )
+            if resolved_class and resolved_name != normalized and canonical:
+                logger.info(
+                    f"mlxstudio#82: resolved directory name '{raw_input}' "
+                    f"-> mflux name '{resolved_name}' -> class {resolved_class}"
+                )
             if not resolved_class:
-                import re as _re
-                _alt = resolved_name.lower()
-                if "/" in _alt:
-                    _alt = _alt.rsplit("/", 1)[-1]
-                _alt = _re.sub(r"-\d+bit$", "", _alt)
-                _alt = _re.sub(r"-mflux$", "", _alt)
-                _alt = _re.sub(r"-mflux-\d+bit$", "", _alt)
-                _alt = _re.sub(r"-\d+bit$", "", _alt)
-                if _alt and _alt != resolved_name.lower():
-                    _cls = _NAME_TO_CLASS.get(_alt)
-                    if _cls:
-                        resolved_class = _cls
-                        logger.info(
-                            f"vmlx#96: resolved relocated model "
-                            f"'{resolved_name}' via decoration-strip to "
-                            f"'{_alt}' -> {_cls}"
-                        )
-                        # Canonicalize resolved_name so downstream code
-                        # (ModelConfig.from_name, SUPPORTED_MODELS) hits.
-                        resolved_name = _alt
-
+                # mlxstudio#82: last-resort — read model_index.json's _class_name
+                # for user-renamed directories that no name-based pattern can
+                # resolve (e.g. `INT_QIE`, `FLUX.2-klien-blah-blah`).
+                idx_match = _detect_class_from_model_index(model_path)
+                if idx_match is not None:
+                    resolved_class, _default_name = idx_match
+                    # If caller didn't supply a matching canonical name,
+                    # adopt the one the _class_name implies. mflux's
+                    # ModelConfig.from_name() requires a canonical key, and
+                    # the raw user directory name won't satisfy it.
+                    if resolved_name not in SUPPORTED_MODELS.values() and resolved_name not in EDIT_MODELS.values():
+                        resolved_name = _default_name
             if not resolved_class:
                 raise ValueError(
                     f"Cannot determine mflux class for model '{model_name}' "
-                    f"(resolved name: '{resolved_name}'). "
-                    f"Pass mflux_class explicitly or add to _NAME_TO_CLASS. "
-                    f"Known keys: {sorted(_NAME_TO_CLASS.keys())}"
+                    f"(resolved name: '{resolved_name}', normalized: '{normalized}'). "
+                    f"Pass mflux_class explicitly, add to _NAME_TO_CLASS, or "
+                    f"ensure the model path contains a model_index.json whose "
+                    f"_class_name is one of: {sorted(_DIFFUSERS_CLASS_TO_MFLUX.keys())}. "
+                    f"Known keys: {sorted(set(_NAME_TO_CLASS.keys()))}"
                 )
 
         logger.info(f"Loading image model: {resolved_name} (class={resolved_class}, quantize={quantize})")
