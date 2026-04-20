@@ -68,8 +68,14 @@ actor GatewayActor {
             return nil
         }
         if let engine = registry[model]?.engine { return engine }
-        // Tolerant match: bare repo name vs full display name.
-        for (k, box) in registry where k.hasSuffix("/" + model) || k.hasSuffix(model) {
+        // iter-86 §114: tolerant bare-repo match. MUST require a `/`
+        // boundary so a client passing `model: "4bit"` doesn't
+        // accidentally match a registry key ending in `-4bit`
+        // (`mlx-community/gemma-4-e2b-it-4bit`). The previous
+        // unbounded suffix fallback (hasSuffix on the raw model
+        // string) picked whichever engine registered first, which
+        // is non-deterministic under concurrent load.
+        for (k, box) in registry where k.hasSuffix("/" + model) {
             if let engine = box.engine { return engine }
         }
         return nil
