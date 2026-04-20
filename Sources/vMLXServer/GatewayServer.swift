@@ -146,19 +146,40 @@ public struct GatewayServer {
         // scrapers can distinguish concurrent sessions inside one gateway.
         MetricsRoutes.registerGateway(on: router, enumerate: enumerate)
 
-        // GET /health — gateway-level health check. Lists every routed model.
+        // GET /health — gateway-level health check.
+        //
+        // iter-118 §144: /health is bearer-auth-exempt (§104) so LAN
+        // monitors can probe liveness without the API key. Previously
+        // the response included `models: [all displayNames]` — sourced
+        // from `engine.modelLibrary.entries()` which enumerates EVERY
+        // installed model (not just loaded). That made the endpoint a
+        // free unauth model-library enumeration: any LAN peer could
+        // scrape the entire list of what the user has on disk. Now we
+        // return only the currently-loaded model name per session —
+        // matches the per-session /health which only exposes the loaded
+        // model (AdminRoutes.swift:41-50). Plus `loaded_models_count`
+        // for liveness assertions that don't leak names either.
         router.get("/health") { _, _ -> Response in
             let engines = await enumerate()
-            var models: [String] = []
+            var loadedModels: [String] = []
             for engine in engines {
-                let entries = await engine.modelLibrary.entries()
-                models.append(contentsOf: entries.map(\.displayName))
+                if let lp = await engine.loadedModelPath {
+                    // Mirror the per-session /health displayName resolution
+                    // so gateway users see the same repo-shape name.
+                    let entries = await engine.modelLibrary.entries()
+                    let canonical = lp.resolvingSymlinksInPath().standardizedFileURL
+                    let name = entries.first(where: {
+                        $0.canonicalPath.standardizedFileURL == canonical
+                    })?.displayName ?? lp.lastPathComponent
+                    loadedModels.append(name)
+                }
             }
             return Self.json([
                 "status": "ok",
                 "engine": "vmlx-swift-gateway",
                 "sessions": engines.count,
-                "models": models,
+                "loaded_models": loadedModels,
+                "loaded_models_count": loadedModels.count,
             ])
         }
 
