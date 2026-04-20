@@ -411,11 +411,40 @@ struct APIScreen: View {
     private var revokeDialogActions: some View {
         Button("Revoke", role: .destructive) {
             if let id = pendingRevokeId {
+                // iter-96 §123: capture the value being revoked BEFORE
+                // the delete so we can compare it against the live
+                // enforcement key and re-sync if they match.
+                let revokedValue = APIKeyManager.shared.list()
+                    .first(where: { $0.id == id })?.value
                 APIKeyManager.shared.revoke(id: id)
+                if let revoked = revokedValue {
+                    resyncBearerIfRevoked(wasValue: revoked)
+                }
             }
             pendingRevokeId = nil
         }
         Button("Cancel", role: .cancel) { pendingRevokeId = nil }
+    }
+
+    /// iter-96 §123: the dialog promises "any client using this key will
+    /// immediately lose access," but `APIKeyManager.revoke` only deletes
+    /// the row from SQLite + Keychain — it doesn't touch
+    /// `settings.apiKey`, which is what `BearerAuthMiddleware`
+    /// actually checks. If the revoked key happens to be the one
+    /// currently in `settings.apiKey`, clients using it kept
+    /// authenticating successfully because the middleware still had
+    /// the old value in memory. Now, on every revoke, check whether
+    /// the revoked value matched the live enforcement key and if so
+    /// pick a replacement (most-recent remaining key) or null out
+    /// bearer auth entirely when no keys remain.
+    private func resyncBearerIfRevoked(wasValue revokedValue: String) {
+        Task {
+            var g = await app.engine.settings.global()
+            guard g.apiKey == revokedValue else { return }
+            let remaining = APIKeyManager.shared.list()
+            g.apiKey = remaining.first?.value
+            await app.engine.applySettings(g)
+        }
     }
 
     private var revokeDialogMessage: Text {
