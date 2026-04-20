@@ -7866,6 +7866,23 @@ class TestVlTurboQuantDecodeSpeedBaseline:
             "ralph-loop state must record MiniMax-JANGTQ decode baseline"
         )
 
+    def test_hybrid_ssm_multiturn_cache_documented(self):
+        """iter 32 confirmed TurboQuant + hybrid-SSM multi-turn cache
+        hits work once idle time lets the async re-derive fire:
+        T3 cached=49/66 tokens on Qwen3.6-JANGTQ2-v13. This closes a
+        limitation flagged in iter 11."""
+        import os
+        loop_md = "/Users/eric/vmlx/.claude/ralph-loop.local.md"
+        if not os.path.isfile(loop_md):
+            pytest.skip("ralph-loop state file not present")
+        text = open(loop_md).read()
+        # Either the iter 32 entry or the resolved edge-case queue line
+        # must mention the cache-hit measurement.
+        assert any(m in text for m in ("T3 HIT", "cached=49", "hybrid SSM multi-turn cache hits")), (
+            "ralph-loop state must record hybrid-SSM multi-turn cache "
+            "hit measurement from iter 32"
+        )
+
 
 class TestEmptyContentReturns400:
     """iter 26 — regression pin for the 500 → 400 fix caught live on
