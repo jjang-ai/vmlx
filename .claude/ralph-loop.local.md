@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 43
+iteration: 44
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 361/361 source-scan tests green, 121/121 regression guards + 15 matrix
-  rows (§57–§125)
+- 362/362 source-scan tests green, 122/122 regression guards + 15 matrix
+  rows (§57–§126)
+- iter-99 work:
+  1. Engine startup sweep for orphan vmlx-* temp artifacts (§126)
+     — **crash recovery + per-call leak containment**.
+     `ChatRequest.VideoURL.loadVideoLocalURL` writes decoded video
+     bytes to `vmlx-video-<UUID>.<ext>` when an HTTP API client
+     posts a `data:video/...` or `https://` URL. `Stream.extractVideos`
+     uses the local URL during prefill and does NOT clean up on the
+     SUCCESS path (only on the "no video track detected" reject).
+     Every HTTP VL video request with inline payload left an orphan
+     in `/var/folders/.../T/vmlx-video-*`. The §117 WhisperAudio
+     defer and §125 tokenizer-shadow defer both cover the happy
+     path, but a crash mid-operation still leaves orphans. Fix:
+     at `Engine.init` fire a detached task that sweeps `vmlx-video-*`
+     + `vmlx-whisper-*` + `vmlx-tokenizer-shadow-*` files older
+     than 1 hour. Crash-recovers prior runs AND makes per-call
+     leaks self-bounded. 1h TTL is lenient enough that in-flight
+     work never gets swept (even a 30-min video inference
+     completes well inside the window). §126 regression guard
+     pins the init call, helper definition, all three file
+     prefixes, and the 3600-second TTL.
 - iter-98 work:
   1. Tokenizer shadow-dir temp leak (§125) — **real resource leak**.
      `TransformersTokenizerLoader.makeShadowWithPatchedTokenizerClass`
