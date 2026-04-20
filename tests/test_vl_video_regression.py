@@ -7416,3 +7416,88 @@ class TestCustomChatTemplate:
             "CLI must validate --chat-template-kwargs JSON shape with "
             "a clear error message"
         )
+
+
+class TestSpeculativeDecodingContract:
+    """iter 21 — pins the speculative decoding contract surfaced in
+    vmlx GitHub #44. Current behavior (with warnings, not errors):
+
+      --speculative-model + --continuous-batching →
+        draft model loads, but BatchedEngine requests use standard
+        generation (warning emitted). SimpleEngine requests use
+        speculative decoding.
+
+      --speculative-model + VLM (is_mllm detected) →
+        draft model loads, but VLM requests ignore it (mlx-vlm has
+        no spec-decode path; warning emitted).
+
+      --speculative-model + --distributed →
+        HARD ERROR. Mutually exclusive (draft must be co-located).
+
+    These warning messages are the user's signal that the combo
+    doesn't actually accelerate their setup. Removing them would
+    mask a silent no-op."""
+
+    def test_cli_speculative_flags_exist(self):
+        """--speculative-model, --num-draft-tokens, --enable-pld
+        flags must exist per the #44 feature request contract."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        for flag in ('"--speculative-model"', '"--num-draft-tokens"', '"--enable-pld"'):
+            assert flag in src, f"CLI missing {flag} — breaks #44 API"
+
+    def test_continuous_batching_warning_present(self):
+        """When --speculative-model AND --continuous-batching are
+        both set, user MUST see the incompatibility warning.
+        Without this, users think they're getting spec-decode when
+        BatchedEngine silently skips it."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        # Warning text from cli.py ~line 594
+        assert "incompatible with --continuous-batching" in src, (
+            "CLI must warn when speculative + continuous-batching are "
+            "combined — see vmlx#44."
+        )
+        assert "standard (non-speculative) generation" in src, (
+            "Warning must explain that BatchedEngine falls back to "
+            "non-speculative generation"
+        )
+
+    def test_vlm_warning_present(self):
+        """--speculative-model + VLM model must warn that the draft
+        model is ignored for VLM requests. mlx-vlm has no spec decoding
+        support today."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        assert "incompatible with multimodal (VLM)" in src, (
+            "CLI must warn when speculative model is loaded against a VLM"
+        )
+        assert "ignored for VLM requests" in src, (
+            "Warning must state the concrete consequence (draft ignored)"
+        )
+
+    def test_distributed_speculative_is_hard_error(self):
+        """--distributed + --speculative-model is a HARD ERROR, not
+        a warning. Draft must be co-located for speculative-decode
+        latency benefits."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        assert "mutually exclusive" in src, (
+            "CLI must reject --distributed + --speculative-model as "
+            "mutually exclusive (hard error, not warning)"
+        )
+        assert "sys.exit" in src or "exit(" in src, (
+            "Mutually-exclusive combo must sys.exit, not just print"
+        )
+
+    def test_speculative_module_importable(self):
+        """The vmlx_engine.speculative module + SpeculativeConfig +
+        load_draft_model symbols must be importable. Without them,
+        the cli.py branch silently crashes."""
+        from vmlx_engine.speculative import SpeculativeConfig, load_draft_model
+        assert SpeculativeConfig is not None
+        assert callable(load_draft_model)
