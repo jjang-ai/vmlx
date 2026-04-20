@@ -41,6 +41,12 @@ public enum SSEEncoder {
             var finishReason: String? = nil
             var lastUsage: StreamChunk.Usage? = nil
             var toolCallIndex = 0
+            // iter-90 §118: track whether the stream ended due to an
+            // upstream throw. When true, the final stop-finish chunk
+            // and the usage frame are skipped — emitting them after
+            // an error event was misleading to clients that treat
+            // `finish_reason: "stop"` as "clean completion".
+            var hadError = false
 
             // Merge upstream with a periodic heartbeat (see
             // `sseMergeWithHeartbeat` docs). Protects thinking models
@@ -100,6 +106,7 @@ public enum SSEEncoder {
                     }
                 }
             } catch {
+                hadError = true
                 let errObj: [String: Any] = [
                     "error": [
                         "message": "\(error)",
@@ -110,15 +117,22 @@ public enum SSEEncoder {
                 try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
             }
 
-            // Final chunk: empty delta + finish_reason
-            let finalChunk = Self.chunkJSON(
-                id: id, model: model, created: created,
-                delta: [:],
-                finishReason: finishReason ?? "stop"
-            )
-            try await writer.write(allocator.buffer(string: "data: \(finalChunk)\n\n"))
+            // Final chunk: empty delta + finish_reason. Skipped on
+            // error path — emitting a `finish_reason: "stop"` frame
+            // after an error event signals "clean completion" to
+            // OpenAI SDK clients and triggers their post-completion
+            // hooks (log usage, close UI spinner, etc) as if the
+            // generation succeeded.
+            if !hadError {
+                let finalChunk = Self.chunkJSON(
+                    id: id, model: model, created: created,
+                    delta: [:],
+                    finishReason: finishReason ?? "stop"
+                )
+                try await writer.write(allocator.buffer(string: "data: \(finalChunk)\n\n"))
+            }
 
-            if includeUsage, let u = lastUsage {
+            if !hadError, includeUsage, let u = lastUsage {
                 var usageDict: [String: Any] = [
                     "prompt_tokens": u.promptTokens,
                     "completion_tokens": u.completionTokens,
@@ -161,6 +175,10 @@ public enum SSEEncoder {
         ResponseBody { writer in
             let allocator = ByteBufferAllocator()
             var finishReason: String? = nil
+            // iter-90 §118: mirror chatCompletionStream — skip the
+            // final finish_reason=stop frame if an upstream throw
+            // terminated the loop.
+            var hadError = false
             let merged = sseMergeWithHeartbeat(
                 upstream: upstream, interval: sseHeartbeatInterval)
             do {
@@ -190,6 +208,7 @@ public enum SSEEncoder {
                     }
                 }
             } catch {
+                hadError = true
                 let errObj: [String: Any] = [
                     "error": [
                         "message": "\(error)",
@@ -200,19 +219,21 @@ public enum SSEEncoder {
                 try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
             }
 
-            let finalObj: [String: Any] = [
-                "id": id,
-                "object": "text_completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [[
-                    "index": 0,
-                    "text": "",
-                    "finish_reason": finishReason ?? "stop",
-                ] as [String: Any]],
-            ]
-            let finalJ = Self.asciiJSON(finalObj)
-            try await writer.write(allocator.buffer(string: "data: \(finalJ)\n\n"))
+            if !hadError {
+                let finalObj: [String: Any] = [
+                    "id": id,
+                    "object": "text_completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [[
+                        "index": 0,
+                        "text": "",
+                        "finish_reason": finishReason ?? "stop",
+                    ] as [String: Any]],
+                ]
+                let finalJ = Self.asciiJSON(finalObj)
+                try await writer.write(allocator.buffer(string: "data: \(finalJ)\n\n"))
+            }
             try await writer.write(allocator.buffer(string: "data: [DONE]\n\n"))
             try await writer.finish(nil)
         }
@@ -274,6 +295,9 @@ public enum SSEEncoder {
             var nextOutputIndex = 0
             var finishReason: String? = nil
             var lastUsage: StreamChunk.Usage? = nil
+            // iter-90 §118: track whether the upstream stream threw so
+            // the final event can differentiate success vs failure.
+            var hadError = false
             var seenToolCalls: [String: (outputIndex: Int, itemId: String, name: String)] = [:]
             // Accumulate each tool_call's streaming arguments by call id so
             // `response.output_item.done` can emit the FINAL assembled
@@ -485,6 +509,7 @@ public enum SSEEncoder {
                     }
                 }
             } catch {
+                hadError = true
                 let errObj: [String: Any] = [
                     "type": "error",
                     "error": [
@@ -497,17 +522,32 @@ public enum SSEEncoder {
 
             try await closeCurrent()
 
+            // iter-90 §118: on error, emit `response.failed` with
+            // status=failed instead of `response.completed` with
+            // status=completed. The OpenAI Responses spec uses
+            // `response.failed` / `response.incomplete` for error
+            // and interrupted paths; emitting `response.completed`
+            // after an error event gave SDK clients inconsistent
+            // signals (they'd mark the response a success in their
+            // telemetry and close the UI spinner as if everything
+            // went fine).
+            let finalStatus: String = hadError
+                ? "failed"
+                : (finishReason == "length" ? "incomplete" : "completed")
+            let finalEvent: String = hadError
+                ? "response.failed"
+                : "response.completed"
             var completed: [String: Any] = [
-                "type": "response.completed",
+                "type": finalEvent,
                 "response": [
                     "id": id,
                     "object": "response",
                     "created_at": created,
-                    "status": finishReason == "length" ? "incomplete" : "completed",
+                    "status": finalStatus,
                     "model": model,
                 ] as [String: Any],
             ]
-            if let u = lastUsage {
+            if !hadError, let u = lastUsage {
                 var r = completed["response"] as! [String: Any]
                 // iter-67 (§96) — include tokens_per_second / ttft_ms /
                 // prefill_ms / total_ms in the `response.completed`
@@ -516,7 +556,7 @@ public enum SSEEncoder {
                 r["usage"] = OpenAIRoutes.responsesUsageEnvelope(u)
                 completed["response"] = r
             }
-            try await send("response.completed", completed)
+            try await send(finalEvent, completed)
 
             try await writer.write(allocator.buffer(string: "data: [DONE]\n\n"))
             try await writer.finish(nil)
