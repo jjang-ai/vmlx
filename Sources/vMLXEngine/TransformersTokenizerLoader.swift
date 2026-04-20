@@ -52,6 +52,18 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
             let shadow = try Self.makeShadowWithPatchedTokenizerClass(
                 sourceDir: directory,
                 newClass: Self.fallbackTokenizerClass(for: name, in: directory))
+            // iter-98 §125: `AutoTokenizer.from(modelFolder:)` reads the
+            // shadow's `tokenizer_config.json` + `tokenizer.json` once and
+            // returns a tokenizer object that no longer references the
+            // folder. The shadow dir was otherwise orphaned under
+            // `/var/folders/.../T/vmlx-tokenizer-shadow-<UUID>` for the
+            // process lifetime, accumulating every time a JANG model
+            // with a custom tokenizer class name got loaded (e.g.
+            // "TokenizersBackend", "Qwen3Tokenizer"). Nuke it via defer
+            // once the tokenizer is hydrated. `try?` on the remove
+            // because failure to clean up is a log-only concern — the
+            // bridge has the weights it needs by this point.
+            defer { try? FileManager.default.removeItem(at: shadow) }
             let upstream = try await AutoTokenizer.from(modelFolder: shadow)
             return TransformersTokenizerBridge(upstream)
         }
