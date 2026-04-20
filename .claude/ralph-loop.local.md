@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 33
+iteration: 34
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,21 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 352/352 source-scan tests green, 112/112 regression guards + 15 matrix
-  rows (§57–§116)
+- 353/353 source-scan tests green, 113/113 regression guards + 15 matrix
+  rows (§57–§117)
+- iter-89 work:
+  1. WhisperAudio.decodeData temp-file leak (§117) — **real resource
+     leak**. `decodeData(_:fileExtension:)` registered its cleanup
+     `defer { try? FileManager.default.removeItem(at: tmp) }` AFTER
+     the `try data.write(to: tmp)` call. If the write throws (disk
+     full, permission race, sandbox change, partial-write that
+     succeeds-then-fails mid-way) the defer was never installed, so
+     the partial `/tmp/vmlx-whisper-<UUID>.<ext>` file leaked. Under
+     sustained audio-transcription traffic the temp dir would
+     accumulate stale files indefinitely. Fix: move the defer
+     BEFORE the write — standard Swift idiom for exception-safe
+     cleanup of pre-created resources. §117 regression guard scans
+     the decodeData body and asserts `defer` offset < write offset.
 - iter-88 work:
   1. cancelStream snapshot-then-drain (§116) — **real concurrency
      bug**. `Engine.cancelStream()` used `for (id, task) in
