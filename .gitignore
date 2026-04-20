@@ -30,6 +30,11 @@ vMLX.xcodeproj/
 
 # Internal — never push to dev
 Tests/
+.claude/
+SESSION-*.md
+SWIFT-V2-PRODUCTION-AUDIT-*.md
+tests/e2e/AUDIT-REPORT.md
+tests/e2e/MATRIX.md
 docs/SESSION-*.md
 docs/session-*.md
 AUDIT-*.md
