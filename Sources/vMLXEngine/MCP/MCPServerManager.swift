@@ -228,7 +228,21 @@ public actor MCPServerManager {
         guard let client = clients[serverName] else {
             throw MCPError.serverNotFound(name: serverName)
         }
-        return try await client.callTool(name: toolName, arguments: arguments)
+        // iter-93 §120: if the client throws `.processFailure`, the
+        // subprocess died between calls — handleEOF nilled `process`
+        // on its side but the manager's `clients` map still holds
+        // the zombie. Next invocation would keep throwing through
+        // the stale stdin pipe. Tear it down so the NEXT call starts
+        // fresh via the lazy-start branch above. Status is surfaced
+        // as `.error` so /v1/mcp/servers shows the dead state.
+        do {
+            return try await client.callTool(name: toolName, arguments: arguments)
+        } catch let mcpError as MCPError {
+            if case .processFailure(let reason) = mcpError {
+                await markServerDead(serverName, reason: reason)
+            }
+            throw mcpError
+        }
     }
 
     /// Raw JSON-RPC passthrough — forwards an arbitrary `method` +
@@ -254,6 +268,38 @@ public actor MCPServerManager {
         guard let client = clients[serverName] else {
             throw MCPError.serverNotFound(name: serverName)
         }
-        return try await client.call(method: method, params: params)
+        // iter-93 §120: same dead-subprocess teardown as executeTool.
+        do {
+            return try await client.call(method: method, params: params)
+        } catch let mcpError as MCPError {
+            if case .processFailure(let reason) = mcpError {
+                await markServerDead(serverName, reason: reason)
+            }
+            throw mcpError
+        }
+    }
+
+    /// Tear down a zombie client after its subprocess died between
+    /// calls. Called from the `.processFailure` branch of
+    /// `executeTool` / `rawCall`. Status transitions to `.error` so
+    /// `/v1/mcp/servers` surfaces the dead state, and the client is
+    /// dropped from the registry so the NEXT call triggers the
+    /// lazy-start branch above (fresh subprocess).
+    private func markServerDead(_ name: String, reason: String) async {
+        if let client = clients.removeValue(forKey: name) {
+            await client.stop()
+        }
+        tools.removeValue(forKey: name)
+        if let s = statuses[name] {
+            statuses[name] = MCPServerStatus(
+                name: s.name,
+                state: .error,
+                transport: s.transport,
+                toolsCount: 0,
+                error: "subprocess died: \(reason)",
+                lastConnected: s.lastConnected,
+                timeoutSeconds: s.timeoutSeconds
+            )
+        }
     }
 }
