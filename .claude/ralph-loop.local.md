@@ -285,8 +285,23 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 414/414 tests green, 106/106 regression guards + 15 matrix rows (§57–§111)
-- iter-83 work:
+- 415/415 tests green, 107/107 regression guards + 15 matrix rows (§57–§112)
+- iter-84 work (pushed to origin/dev as 71c5b1f):
+  1. Swift 6 actor-isolation cleanup (§112). `Engine` is an actor,
+     so every stored property (`settings: SettingsStore`) was
+     actor-isolated by default — UI reads of `app.engine.settings`
+     emitted "actor-isolated property 'settings' cannot be accessed
+     from outside of the actor" warnings (slated to become errors
+     in Swift 6 language mode). SettingsStore is itself an actor,
+     so the reference doesn't need engine-level serialization —
+     marked `nonisolated public let`. Also dropped several
+     redundant `await`s in `Task { }` closures inside actor methods
+     (Task inherits the enclosing actor's isolation in Swift 6, so
+     sync-flush helpers don't need an actor hop). And fully qualified
+     `ChatRequest.ToolChoice.none` at AnthropicRoutes.swift:634 to
+     silence the Optional-enum ambiguity warning. Release build now
+     down to 1 warning (upstream MLX/IO.swift void-return).
+- iter-83 work (pushed as d219861):
   1. UpdateService auto-updater audit (§111) — **DEFENSIVE FIX**.
      `UpdateInfo.htmlURL` came from the GitHub API's `html_url`
      field and was passed to `NSWorkspace.shared.open(url)` on
