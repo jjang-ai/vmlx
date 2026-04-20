@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 60
+iteration: 61
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,25 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 376/376 source-scan tests green, 136/136 regression guards + 15 matrix
-  rows (§57–§140)
+- 377/377 source-scan tests green, 137/137 regression guards + 15 matrix
+  rows (§57–§141)
+- iter-115 work:
+  1. /api/show filesystem path leak (§141) — **real info-leak
+     fix**. The Ollama `/api/show` response included
+     `"modelfile": "# vMLX JANG: <bool>\nPATH <absolute path>\n"`
+     exposing the user's full canonical path on disk (e.g.
+     `/Users/eric/.cache/huggingface/hub/models--<org>--<repo>/
+     snapshots/<hash>/`) to any API-key-holding client. When
+     vMLX is bound to 0.0.0.0 for LAN access, that's home-dir
+     naming + HF-cache layout + sometimes credential-adjacent
+     path components exposed to every LAN peer with the key.
+     Fix: replace with Ollama-standard `FROM <displayName>`
+     stanza — what real Ollama emits and what SDK clients parse
+     (openai-python, LangChain, Copilot all ignore everything
+     except FROM / PARAMETER / TEMPLATE). displayName is a repo-
+     path string already visible in the user's picker, so no new
+     disclosure. §141 pins marker + FROM stanza + absence of the
+     old canonicalPath leak. Build clean, guard green.
 - iter-114 work:
   1. ChatRequest rejects empty stop sequences (§140) — **API
      truthfulness fix**. `validate()` counted stop sequences (up

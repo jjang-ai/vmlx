@@ -121,9 +121,25 @@ public enum OllamaRoutes {
             // `OllamaCapabilities` so `swift test` covers the classifier.
             let caps = OllamaCapabilities.capabilities(family: e.family,
                                                        modality: e.modality)
+            // iter-115 §141: the `modelfile` field previously emitted
+            // `# vMLX JANG: true\nPATH /Users/eric/.cache/huggingface/...`
+            // which leaked the user's absolute filesystem path on disk.
+            // Any API-key-holding client (including LAN peers when the
+            // server is bound to 0.0.0.0) could learn home-dir naming,
+            // HF-cache layout, and sometimes credential-adjacent path
+            // components. Replace with the Ollama-standard `FROM <name>`
+            // stanza — what real Ollama emits and what SDK clients
+            // actually parse (openai-python, LangChain, Copilot all
+            // ignore everything except FROM + PARAMETER + TEMPLATE).
+            let modelfile = """
+                # vMLX model
+                FROM \(e.displayName)
+                # format: \(e.isJANG ? "jang" : "mlx")
+
+                """
             return OpenAIRoutes.json([
                 "license": "",
-                "modelfile": "# vMLX JANG: \(e.isJANG)\nPATH \(e.canonicalPath.path)\n",
+                "modelfile": modelfile,
                 "parameters": "",
                 "template": "",
                 "details": [
