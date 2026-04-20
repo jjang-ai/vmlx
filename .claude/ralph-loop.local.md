@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 55
+iteration: 56
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,26 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 371/371 source-scan tests green, 131/131 regression guards + 15 matrix
-  rows (§57–§135)
+- 372/372 source-scan tests green, 132/132 regression guards + 15 matrix
+  rows (§57–§136)
+- iter-110 work:
+  1. ChatSettings row leak on delete (§136) — **real data leak**.
+     `deleteSession` + `clearAllSessions` dropped SQLite messages /
+     session rows + the draft stash (§99), but never touched
+     `engine.settings.chat(id)`. Every permanent delete left the
+     chat's ChatSettings row (custom reasoning_effort / systemPrompt
+     / stopSequences / tools / toolChoice / maxToolIterations /
+     hideToolStatus / workingDirectory / modelAlias / etc.) in
+     SQLite forever. UUID-keyed so harmless cross-chat, but a slow
+     leak for power users churning chats, and the branchSession
+     (§134) undo-path symmetry was missing. Fix: added
+     `deletedChatSettings: [UUID: ChatSettings]` main-actor snapshot
+     dict. Delete site fires a @MainActor Task that snapshots
+     ChatSettings, stores in dict, then deletes the row. Undo
+     drains the dict back via setChat. Sub-ms actor hops vs human
+     reaction time → dict populated before any realistic undo. §136
+     pins the dict + both delete-path call-sites + both undo-path
+     drains. Build clean.
 - iter-109 work:
   1. editMessage + regenerate VM-level guards (§135) —
      **consistency + non-UI caller protection**. Both were missing
