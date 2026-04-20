@@ -24,7 +24,17 @@ struct ChatScreen: View {
                 EngineStateBanner(state: app.engineState,
                                   loadProgress: app.loadProgress,
                                   isStreaming: vm.isGenerating,
-                                  hasContent: !(vm.messages.last?.content.isEmpty ?? true)) {
+                                  hasContent: !(vm.messages.last?.content.isEmpty ?? true),
+                                  // iter-129 §155: pass through the
+                                  // selected session's isRemote so the
+                                  // banner suppresses "Load Model" on
+                                  // remote chats. Resolves via
+                                  // selectedServerSessionId → session
+                                  // row → isRemote. False for no-
+                                  // session or local sessions.
+                                  isRemote: app.sessions.first(where: {
+                                      $0.id == app.selectedServerSessionId
+                                  })?.isRemote ?? false) {
                     // User complaint: the "Load Model" banner button used to
                     // bounce to `app.mode = .server` — a pointless detour
                     // when the chat already knows which model it wants. Try
@@ -114,11 +124,28 @@ struct EngineStateBanner: View {
     let loadProgress: LoadProgress?
     let isStreaming: Bool
     let hasContent: Bool
+    /// iter-129 §155: chat is bound to a remote endpoint. Local engine
+    /// state is always `.stopped` for remote sessions — rendering the
+    /// "Model is not running / Load Model" banner would lie to the
+    /// user. When true, the banner suppresses the `.stopped` and
+    /// `.standby` branches since there's no local lifecycle to expose.
+    /// Errors still render (remote HTTP failures surface via the
+    /// RemoteEngineClient error path → vm.bannerMessage → vm shows
+    /// error via MessageList's error bubble rather than this banner).
+    var isRemote: Bool = false
     let onLoadModel: () -> Void
     let onRetry: () -> Void
 
     var body: some View {
         Group {
+            // iter-129 §155: remote chats have no local engine state to
+            // render — dispatch goes to RemoteEngineClient, not
+            // app.engine. Short-circuit to EmptyView so the banner
+            // stays out of the way. The `isStreaming` evaluating strip
+            // is handled by MessageList for remote-streaming chats.
+            if isRemote {
+                EmptyView()
+            } else {
             switch state {
             case .loading:
                 // iter-68 (§97): chat-side banner now surfaces the text
@@ -178,6 +205,7 @@ struct EngineStateBanner: View {
                     EmptyView()
                 }
             }
+            } // close else branch of `if isRemote`
         }
         .animation(.easeOut(duration: 0.18), value: stateKey)
     }

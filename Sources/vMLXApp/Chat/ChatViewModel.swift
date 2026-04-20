@@ -707,7 +707,14 @@ final class ChatViewModel {
             let globalHasModel = (appRef.selectedModelPath != nil) &&
                                  appRef.engineState != .stopped &&
                                  !isErrorState(appRef.engineState)
+            // iter-129 §155: remote sessions are functionally "live" even
+            // though their local Engine actor stays `.stopped` forever —
+            // requests dispatch via RemoteEngineClient, not the local
+            // engine. Count any remote session as live so users with only
+            // a remote configured don't bounce off the "Load a model
+            // first" banner.
             let anySessionLive = appRef.sessions.contains {
+                if $0.isRemote { return true }
                 switch $0.state {
                 case .running, .loading, .standby: return true
                 case .stopped, .error: return false
