@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 53
+iteration: 54
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,27 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 369/369 source-scan tests green, 129/129 regression guards + 15 matrix
-  rows (§57–§133)
+- 370/370 source-scan tests green, 130/130 regression guards + 15 matrix
+  rows (§57–§134)
+- iter-108 work:
+  1. Chat branch drops per-chat settings (§134) — **real UX bug**.
+     `ChatViewModel.branchSession(from:)` copies every message
+     before the anchor into a fresh chat (new UUID, SQLite
+     transaction, re-id'd rows) and switches the user in. But
+     `ChatSettings` is keyed by chat UUID — so the fork inherited
+     SESSION defaults for every per-chat override: reasoning_effort,
+     systemPrompt, stopSequences, tools, toolChoice, workingDirectory,
+     hideToolStatus, modelAlias, temperature/topP overrides, etc.
+     User complaint shape: "I branched my thinking chat and it
+     stopped thinking" / "where did my tools go after I forked" /
+     "my system prompt vanished in the fork". Fix: after the
+     transaction, read source's ChatSettings from engine.settings
+     and setChat it on the fork's UUID — write goes through the
+     normal 500ms debounce so it flushes on the same quit drain as
+     regular writes. Undo path symmetrically `deleteChat(forkId)`
+     so undo can't leave orphan settings rows. §134 regression
+     guard pins the marker, the read, the write, and the undo
+     cleanup. Build clean.
 - iter-107 work:
   1. Rerank cosine scores silent zero (§133) — **same root-cause
      class as §132**, different code path. Engine.rerank reuses
