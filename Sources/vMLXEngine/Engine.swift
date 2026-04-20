@@ -1876,26 +1876,35 @@ public actor Engine {
         }
         let model = (request["model"] as? String) ?? "flux1-schnell"
 
-        // Parse `size` as "WxH"; default to square 1024.
+        // Parse `size` as "WxH"; default to square 1024. iter-100 §178:
+        // strict parse — malformed values (e.g. "large", "1024x",
+        // "512x-10") previously silently fell back to 1024×1024
+        // default. A caller who typed the size wrong got a different
+        // image than they asked for with no error — OpenAI's SDK
+        // would surface a 400 in the same situation. Match that.
         var width = 1024
         var height = 1024
-        if let size = request["size"] as? String {
+        if let size = request["size"] as? String, !size.isEmpty {
             let parts = size.split(separator: "x")
-            if parts.count == 2,
-               let w = Int(parts[0]), let h = Int(parts[1])
-            {
-                width = w; height = h
+            guard parts.count == 2,
+                  let w = Int(parts[0]), let h = Int(parts[1]),
+                  w > 0, h > 0
+            else {
+                throw EngineError.invalidRequest("generateImage: invalid 'size' value '\(size)' — expected 'WIDTHxHEIGHT' (e.g. '1024x1024') with positive integers")
             }
+            width = w; height = h
         }
         let n = (request["n"] as? Int) ?? 1
+        guard n >= 1 && n <= 10 else {
+            throw EngineError.invalidRequest("generateImage: 'n' must be between 1 and 10 (got \(n))")
+        }
         let seed = (request["seed"] as? Int) ?? -1
         let responseFormat = (request["response_format"] as? String) ?? "url"
 
         var settings = ImageGenSettings()
         settings.width = width
         settings.height = height
-        settings.numImages = max(1, n)
-        settings.seed = seed
+        settings.numImages = 1  // FluxBackend.generateImage returns ONE URL per call; we loop below.
         // Steps + guidance come from the model's default unless the
         // caller explicitly overrides. OpenAI's wire spec doesn't have
         // them, so we only read from vMLX extensions.
@@ -1904,22 +1913,41 @@ public actor Engine {
             settings.guidance = guidance
         }
 
-        let url = try await self.generateImage(
-            prompt: prompt, model: model, settings: settings
-        )
-
-        let created = Int(Date().timeIntervalSince1970)
-        var entry: [String: Any] = [:]
-        if responseFormat == "b64_json" {
-            if let data = try? Data(contentsOf: url) {
-                entry["b64_json"] = data.base64EncodedString()
+        // iter-100 §178: honor `n > 1`. Pre-fix, settings.numImages
+        // was forwarded but FluxBackend.generateImage returns a single
+        // URL so only one image came back even when the caller asked
+        // for 4. Loop instead and vary the seed per iteration so the
+        // images are distinct (same base seed → identical images).
+        var entries: [[String: Any]] = []
+        entries.reserveCapacity(n)
+        for i in 0..<n {
+            var perSettings = settings
+            if seed >= 0 {
+                // Deterministic: seed+i walks through the sampling
+                // space in a repeatable way for the client's seed.
+                perSettings.seed = seed &+ i
+            } else {
+                // Non-deterministic path: re-seed randomly per image
+                // so callers don't get duplicates.
+                perSettings.seed = Int.random(in: 0..<Int(Int32.max))
             }
-        } else {
-            entry["url"] = url.absoluteString
+            let url = try await self.generateImage(
+                prompt: prompt, model: model, settings: perSettings
+            )
+            var entry: [String: Any] = [:]
+            if responseFormat == "b64_json" {
+                if let data = try? Data(contentsOf: url) {
+                    entry["b64_json"] = data.base64EncodedString()
+                }
+            } else {
+                entry["url"] = url.absoluteString
+            }
+            entries.append(entry)
         }
+        let created = Int(Date().timeIntervalSince1970)
         return [
             "created": created,
-            "data": [entry],
+            "data": entries,
         ]
     }
 
