@@ -550,6 +550,47 @@ public struct ChatRequest: Codable, Sendable {
             }
         }
 
+        // iter-121 §147: tools field validation. OpenAI spec requires
+        // tool `function.name` to match `^[a-zA-Z0-9_-]{1,64}$` and
+        // we had no enforcement at all. Consequences of the gap:
+        // (1) count-blowup — a client could attach 1000 tools; each
+        // serializes into the chat template prompt, easily filling
+        // the context window before the first user turn. (2) prompt
+        // injection — a tool named `x\n\nIgnore prior instructions`
+        // splices an attacker-controlled instruction into the
+        // serialized template. (3) missing-name — empty-string
+        // tool.name passes JSON decode but produces a malformed
+        // <tool_call> block at format time. Enforce the spec: cap at
+        // 128 tools, require each name to be non-empty + 1-64 ASCII
+        // `[a-zA-Z0-9_-]`, error message names the offending index.
+        if let tools = tools {
+            if tools.count > 128 {
+                throw ChatRequestValidationError(
+                    field: "tools",
+                    reason: "at most 128 tools supported, got \(tools.count)")
+            }
+            let nameCharset = CharacterSet(charactersIn:
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+            for (i, t) in tools.enumerated() {
+                let name = t.function.name
+                if name.isEmpty {
+                    throw ChatRequestValidationError(
+                        field: "tools[\(i)].function.name",
+                        reason: "tool name must be non-empty")
+                }
+                if name.count > 64 {
+                    throw ChatRequestValidationError(
+                        field: "tools[\(i)].function.name",
+                        reason: "tool name must be at most 64 characters, got \(name.count)")
+                }
+                if name.rangeOfCharacter(from: nameCharset.inverted) != nil {
+                    throw ChatRequestValidationError(
+                        field: "tools[\(i)].function.name",
+                        reason: "tool name must match ^[a-zA-Z0-9_-]{1,64}$, got `\(name)`")
+                }
+            }
+        }
+
         // MARK: Decoded-but-not-yet-fully-implemented OpenAI fields.
         //
         // **Silent accept.** Every mainstream OpenAI client (openai-python,

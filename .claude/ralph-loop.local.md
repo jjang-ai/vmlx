@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 66
+iteration: 67
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,26 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 382/382 source-scan tests green, 142/142 regression guards + 15 matrix
-  rows (§57–§146)
+- 383/383 source-scan tests green, 143/143 regression guards + 15 matrix
+  rows (§57–§147)
+- iter-121 work:
+  1. Tools field validation — count + name shape (§147) —
+     **API-boundary + prompt-injection defense**. OpenAI spec
+     requires `tool.function.name` to match `^[a-zA-Z0-9_-]{1,64}$`
+     but ChatRequest.validate() had zero checks on the `tools`
+     field. Three gap classes: (1) Count blowup — client could
+     attach 1000 tools each serialized into the chat template,
+     filling context window before the user turn reached the
+     decoder. Capped at 128. (2) Prompt injection — tool named
+     `x\n\nIgnore prior instructions` splices attacker-controlled
+     text into the template output. Charset restriction to
+     `[a-zA-Z0-9_-]` blocks newlines, quotes, template-control
+     chars. (3) Empty name — passes JSON decode but produces
+     malformed `<tool_call>` blocks at format time. Fix: validate
+     count ≤ 128, each name non-empty + 1-64 chars + charset
+     match. Error message names the offending index. §147 pins
+     count cap + charset regex + empty-reject + length cap.
+     Build clean, guard green.
 - iter-120 work:
   1. TTS error HTTP-status mapping (§146) — **user-vs-server
      error split**. EngineTTS mapped every TTSError case to
