@@ -62,16 +62,31 @@ public enum MCPRoutes {
                 return OpenAIRoutes.errorJSON(.badRequest, "missing 'name'")
             }
             let arguments = (obj["arguments"] as? [String: Any]) ?? [:]
+            // **iter-78 (§106)** — audit trail for MCP tool invocation.
+            // HTTP-level logs (RequestLoggerMiddleware) record
+            // "POST /v1/mcp/execute 200" but the tool NAME lives in
+            // the request body, so log-grepping for "which tool ran
+            // and when" would come up empty. We log the namespaced
+            // name pre-invocation + the success/fail outcome post.
+            // Arguments are deliberately NOT logged — they may contain
+            // user prompts, file contents, credentials, etc.
+            await engine.log(.info, "mcp", "HTTP execute → \(name)")
             do {
                 let result = try await engine.mcp.executeTool(
                     namespaced: name, arguments: arguments
                 )
+                await engine.log(
+                    result.isError ? .warn : .info,
+                    "mcp",
+                    "HTTP execute ← \(name) is_error=\(result.isError)")
                 return OpenAIRoutes.json([
                     "tool_name": result.toolName,
                     "content": result.content,
                     "is_error": result.isError,
                 ])
             } catch {
+                await engine.log(.error, "mcp",
+                    "HTTP execute ✗ \(name) \(error)")
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
         }
@@ -119,10 +134,20 @@ public enum MCPRoutes {
                 params = (obj["params"] as? [String: Any]) ?? obj
             }
 
+            // iter-78 (§106) — audit trail for raw JSON-RPC calls.
+            // The method is already in the URL path so HTTP access
+            // logs capture it, but a consolidated engine-side entry
+            // makes the mcp audit trail self-contained (same
+            // category as executeTool above). Params are NOT logged
+            // for the same sensitivity reason as executeTool.
+            await engine.log(.info, "mcp",
+                "HTTP raw → \(serverName)/\(method)")
             do {
                 let result = try await engine.mcp.rawCall(
                     server: serverName, method: method, params: params
                 )
+                await engine.log(.info, "mcp",
+                    "HTTP raw ← \(serverName)/\(method) ok")
                 return OpenAIRoutes.json(result)
             } catch let e as MCPError {
                 let status: HTTPResponse.Status
@@ -131,8 +156,12 @@ public enum MCPRoutes {
                 case .timeout: status = .gatewayTimeout
                 default: status = .internalServerError
                 }
+                await engine.log(.error, "mcp",
+                    "HTTP raw ✗ \(serverName)/\(method) \(e)")
                 return OpenAIRoutes.errorJSON(status, "\(e)")
             } catch {
+                await engine.log(.error, "mcp",
+                    "HTTP raw ✗ \(serverName)/\(method) \(error)")
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
         }

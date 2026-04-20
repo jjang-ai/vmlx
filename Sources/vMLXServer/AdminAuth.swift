@@ -43,12 +43,33 @@ public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
             return try await next(request, context)
         }
 
-        // Only gate admin + cache paths — regular /v1/chat/completions etc
-        // must remain accessible with just the user API key.
+        // Only gate admin + cache + destructive model-mutation paths.
+        // Regular inference routes (`/v1/chat/completions`,
+        // `/v1/embeddings`, `/api/chat`, `/api/generate`, etc.) must
+        // remain accessible with just the user API key.
+        //
+        // **iter-75 (§103)** — previously only `/admin/*` and
+        // `/v1/cache/*` were gated. The audit surfaced four
+        // destructive routes that bypassed the gate:
+        //   - POST /v1/adapters/load   (arbitrary-path LoRA load)
+        //   - POST /v1/adapters/unload (unload current adapter)
+        //   - POST /v1/adapters/fuse   (PERMANENT weight fusion)
+        //   - DELETE /api/delete       (PERMANENT on-disk model delete)
+        // A LAN peer with the user API key could wipe models off
+        // disk or fuse a rogue adapter into base weights. Now
+        // gated alongside /admin/ and /v1/cache/. The safe read
+        // path `GET /v1/adapters` (list-only) stays open so SDKs
+        // can still inspect the active-adapter state.
         let path = request.uri.path
+        let method = request.method
         let isAdmin = path.hasPrefix("/admin/") || path == "/admin"
         let isCache = path.hasPrefix("/v1/cache/") || path == "/v1/cache"
-        guard isAdmin || isCache else {
+        let isAdapterMutation =
+            path == "/v1/adapters/load"
+            || path == "/v1/adapters/unload"
+            || path == "/v1/adapters/fuse"
+        let isOllamaDelete = (path == "/api/delete" && method == .delete)
+        guard isAdmin || isCache || isAdapterMutation || isOllamaDelete else {
             return try await next(request, context)
         }
 

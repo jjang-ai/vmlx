@@ -143,10 +143,7 @@ public enum OpenAIRoutes {
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -196,12 +193,23 @@ public enum OpenAIRoutes {
                 ] as [String: Any]],
             ]
             if let u = usage {
-                obj["usage"] = [
+                var usageObj: [String: Any] = [
                     "prompt_tokens": u.promptTokens,
                     "completion_tokens": u.completionTokens,
                     "total_tokens": u.promptTokens + u.completionTokens,
                     "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
-                ] as [String: Any]
+                ]
+                // iter-64: surface timing + tokens_per_second in the
+                // non-stream envelope for parity with the SSE stream
+                // encoder. Clients (benchmarks, langchain, custom
+                // dashboards) previously had no way to read tok/s from
+                // a non-stream completion — they'd compute it from
+                // wall-clock which double-counts HTTP round-trip.
+                if let tps = u.tokensPerSecond { usageObj["tokens_per_second"] = tps }
+                if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
+                if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
+                if let total = u.totalMs { usageObj["total_ms"] = total }
+                obj["usage"] = usageObj
             }
             return Self.json(obj)
         }
@@ -324,10 +332,7 @@ public enum OpenAIRoutes {
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -506,6 +511,18 @@ public enum OpenAIRoutes {
                 tools: tools,
                 toolChoice: toolChoice
             )
+            // iter-67 (§96) — /v1/responses was the last chat-style route
+            // skipping `chatReq.validate()`. Chat/completions (line 93) +
+            // Anthropic /v1/messages (line 43) both call it; Responses
+            // silently let negative max_output_tokens / temperature=99 /
+            // etc. reach the engine as a 200 → partial stream. Align.
+            do {
+                try chatReq.validate()
+            } catch let err as ChatRequestValidationError {
+                return Self.errorJSON(.badRequest, err.description)
+            } catch {
+                return Self.errorJSON(.badRequest, "invalid request: \(error)")
+            }
             await engine.wakeFromStandby()
 
             let id = "resp_\(UUID().uuidString.prefix(8).lowercased())"
@@ -541,10 +558,7 @@ public enum OpenAIRoutes {
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -595,11 +609,7 @@ public enum OpenAIRoutes {
                 "output": output,
             ]
             if let u = usage {
-                out["usage"] = [
-                    "input_tokens": u.promptTokens,
-                    "output_tokens": u.completionTokens,
-                    "total_tokens": u.promptTokens + u.completionTokens,
-                ] as [String: Any]
+                out["usage"] = Self.responsesUsageEnvelope(u)
             }
             return Self.json(out)
         }
@@ -612,15 +622,18 @@ public enum OpenAIRoutes {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return Self.errorJSON(.badRequest, "invalid JSON body")
             }
+            // iter-60: JIT wake — previously only chat/completions/
+            // responses routes pulled the engine out of standby. An
+            // embeddings request against a soft-slept engine would
+            // 503 with `notLoaded` even though the model is resident.
+            // Matches the chat-route pattern one level up.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.embeddings(request: obj)
                 return Self.json(result)
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -638,6 +651,8 @@ public enum OpenAIRoutes {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return Self.errorJSON(.badRequest, "invalid JSON body")
             }
+            // iter-60: JIT wake — see embeddings rationale above.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.generateImage(request: obj)
                 return Self.json(result)
@@ -715,15 +730,14 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.badRequest,
                     "Accepts multipart/form-data (OpenAI SDK) or JSON body with base64 fields.")
             }
+            // iter-60: JIT wake — see embeddings rationale above.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.editImage(request: request)
                 return Self.json(result)
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -766,7 +780,22 @@ public enum OpenAIRoutes {
                         if let fname = part.filename,
                            let dot = fname.lastIndex(of: ".")
                         {
-                            fileExt = String(fname[fname.index(after: dot)...])
+                            // iter-80 (§108): sanitize fileExt — it
+                            // flows into `WhisperAudio.decodeData`
+                            // which uses it as a component of the
+                            // temp file name. A filename like
+                            // `audio.wav/evil` would produce ext
+                            // `wav/evil`, which `appendingPathComponent`
+                            // then treats as a multi-segment path.
+                            // `Data.write(to:)` fails if the
+                            // intermediate dir doesn't exist so it
+                            // isn't actively exploitable, but we
+                            // reject anything that isn't
+                            // alphanumeric to keep the temp path
+                            // well-formed and avoid surprising the
+                            // decoder's mime sniff.
+                            fileExt = sanitizeFileExt(
+                                String(fname[fname.index(after: dot)...])) ?? fileExt
                         }
                     case "model":
                         modelName = String(data: part.body, encoding: .utf8) ?? ""
@@ -792,7 +821,11 @@ public enum OpenAIRoutes {
                        let decoded = Data(base64Encoded: b64) {
                         audioData = decoded
                     }
-                    if let e = obj["file_extension"] as? String { fileExt = e }
+                    if let e = obj["file_extension"] as? String,
+                       let clean = sanitizeFileExt(e)
+                    {
+                        fileExt = clean
+                    }
                     if let m = obj["model"] as? String { modelName = m }
                     if let l = obj["language"] as? String { language = l }
                     if let r = obj["response_format"] as? String { responseFormat = r }
@@ -813,6 +846,8 @@ public enum OpenAIRoutes {
             if !modelName.isEmpty { dict["model"] = modelName }
             if let language { dict["language"] = language }
 
+            // iter-60: JIT wake for audio transcription too.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.transcribe(request: dict)
                 let text = (result["text"] as? String) ?? ""
@@ -845,10 +880,7 @@ public enum OpenAIRoutes {
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -871,6 +903,8 @@ public enum OpenAIRoutes {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return Self.errorJSON(.badRequest, "invalid JSON body")
             }
+            // iter-60: JIT wake for TTS too.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.synthesizeSpeech(request: obj)
                 var headers: HTTPFields = [:]
@@ -883,10 +917,7 @@ public enum OpenAIRoutes {
                 return Response(status: .ok, headers: headers, body: .init(byteBuffer: buf))
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -909,15 +940,14 @@ public enum OpenAIRoutes {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return Self.errorJSON(.badRequest, "invalid JSON body")
             }
+            // iter-60: JIT wake for rerank too (embedding-model path).
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.rerank(request: obj)
                 return Self.json(result)
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
-                if case .invalidRequest(let msg) = err {
-                    return Self.errorJSON(.badRequest, msg)
-                }
-                return Self.errorJSON(.internalServerError, "\(err)")
+                return Self.mapEngineError(err)
             } catch {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
@@ -989,5 +1019,87 @@ public enum OpenAIRoutes {
                 "code": status.code,
             ] as [String: Any]
         ], status: status)
+    }
+
+    /// Single source of truth for `EngineError → HTTP status` mapping.
+    /// Every route that collects a non-streaming response from the
+    /// engine should funnel its `catch let err as EngineError` through
+    /// this helper so third-party SDKs see contract-correct codes
+    /// regardless of protocol (OpenAI / Ollama / Anthropic / Responses).
+    /// Previously each site hand-rolled `if case .invalidRequest ...`
+    /// and bucketed everything else to 500, which mis-reported
+    /// toolChoiceNotSatisfied (should be 422), modelNotFound (404),
+    /// notLoaded (503) and requestTimeout (504).
+    /// **iter-67 (§96)** — OpenAI Responses API usage envelope with
+    /// timing fields. Mirrors the iter-64 chat/completions envelope,
+    /// iter-63 Ollama envelope, and iter-65 Anthropic envelope so the
+    /// `/v1/responses` surface reports `tokens_per_second / ttft_ms /
+    /// prefill_ms / total_ms` alongside the baseline token counts.
+    /// The OpenAI Responses spec only requires the three token counts;
+    /// extra keys are tolerated by `openai-python >= 1.40`, Cline,
+    /// and other Responses clients that dispatch on known keys.
+    ///
+    /// Called from two sites: the non-stream response body and
+    /// `SSEEncoder.responsesStream`'s `response.completed` event.
+    public static func responsesUsageEnvelope(_ u: StreamChunk.Usage) -> [String: Any] {
+        var r: [String: Any] = [
+            "input_tokens": u.promptTokens,
+            "output_tokens": u.completionTokens,
+            "total_tokens": u.promptTokens + u.completionTokens,
+        ]
+        if let tps = u.tokensPerSecond { r["tokens_per_second"] = tps }
+        if let ttft = u.ttftMs { r["ttft_ms"] = ttft }
+        if let prefill = u.prefillMs { r["prefill_ms"] = prefill }
+        if let total = u.totalMs { r["total_ms"] = total }
+        return r
+    }
+
+    /// **iter-80 (§108)** — sanitize a user-supplied audio file
+    /// extension before it's joined into a temp file path inside
+    /// `WhisperAudio.decodeData`. Only alphanumeric ASCII characters
+    /// are allowed (1-8 chars typical: wav/mp3/m4a/flac/ogg/opus/aac
+    /// /webm). Returns nil if the input has ANY forbidden character
+    /// or is empty after trimming — the caller falls back to the
+    /// default "wav".
+    ///
+    /// This is defense-in-depth: `appendingPathComponent` treats
+    /// forward slashes as path separators, and `Data.write(to:)`
+    /// would fail on a nonexistent intermediate directory, but an
+    /// attacker who could race a sibling process to create the
+    /// expected temp subdirectory might produce surprising writes.
+    /// Reject the input upstream.
+    public static func sanitizeFileExt(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed.count <= 8 else { return nil }
+        for ch in trimmed {
+            guard ch.isASCII, ch.isLetter || ch.isNumber else {
+                return nil
+            }
+        }
+        return trimmed.lowercased()
+    }
+
+    static func mapEngineError(_ err: EngineError) -> Response {
+        switch err {
+        case .invalidRequest(let msg):
+            return errorJSON(.badRequest, msg)
+        case .toolChoiceNotSatisfied(let msg):
+            return errorJSON(.unprocessableContent, msg)
+        case .promptTooLong:
+            // Hummingbird's HTTPResponse.Status lacks 413 by a stable
+            // name; 400 with a descriptive message is the safe fallback.
+            return errorJSON(.badRequest, err.description)
+        case .modelNotFound:
+            return errorJSON(.notFound, err.description)
+        case .notLoaded:
+            return errorJSON(.serviceUnavailable, err.description)
+        case .requestTimeout:
+            return errorJSON(.gatewayTimeout, err.description)
+        case .toolCallRepetition:
+            return errorJSON(.unprocessableContent, err.description)
+        case .portInUse, .unsupportedModelType, .notImplemented,
+             .adapterMissingFile, .adapterAlreadyFused, .adapterNotLoaded:
+            return errorJSON(.internalServerError, err.description)
+        }
     }
 }

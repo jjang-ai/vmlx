@@ -89,7 +89,13 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
     private var prefixTokenCount: Int = 0
 
     /// Pre-allocated window step size. Window grows in chunks to avoid per-token allocation.
-    private let windowStep = 256
+    /// Bumped 256 → 4096 on 2026-04-18 to address Qwen3.6-JANGTQ2 burst crash
+    /// (`concurrent_burst` 5-way killed the server under Metal memory pressure
+    /// from simultaneous window reallocs). 4096 amortizes realloc cost 16×
+    /// while keeping the per-slot footprint bounded (~8MB extra per layer
+    /// per slot at typical 35B dims). If users report context > 4096 tokens
+    /// slowdown, raise further — this is a conservative bump.
+    private let windowStep = 4096
 
     /// Number of tokens written into the window region of the unified buffer.
     private var windowOffset = 0

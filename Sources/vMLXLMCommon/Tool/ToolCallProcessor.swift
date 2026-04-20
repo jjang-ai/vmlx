@@ -171,16 +171,42 @@ public class ToolCallProcessor {
                 state = .normal
                 toolCallBuffer = ""
 
+                // **iter-73 §102** — when .normal → .potentialToolCall →
+                // .collectingToolCall all happen inside one processChunk
+                // call (i.e. the input chunk contained `text<tool_call>
+                // ...</tool_call>` as a single unit), `leadingToken`
+                // holds the visible-content prefix we split off in the
+                // .normal branch. Previously this branch returned only
+                // the post-endTag trailing token and silently dropped
+                // `leadingToken`, swallowing any content the caller
+                // saw before the tool tag. Real-world streaming rarely
+                // hits this path (the detokenizer emits one token per
+                // chunk) but batched tokenizers and non-streaming
+                // replay DO, and no-emit breaks UI/SDK clients that
+                // render `text<tool_call>` prefix verbatim.
+                let lead = leadingToken ?? ""
+
                 // If the token contains the start character, there may be more tool calls to come
                 if let trailingToken, let startChar = startTagFirstChar,
                     trailingToken.contains(startChar)
                 {
-                    return processChunk(trailingToken)
+                    let recurse = processChunk(trailingToken) ?? ""
+                    let combined = lead + recurse
+                    return combined.isEmpty ? nil : combined
                 } else {
-                    // Otherwise, return the collected token, or nil if it's empty
-                    return trailingToken?.isEmpty ?? true ? nil : trailingToken
+                    let tail = trailingToken ?? ""
+                    let combined = lead + tail
+                    return combined.isEmpty ? nil : combined
                 }
             } else {
+                // End tag not yet arrived; keep buffering. But the
+                // leading content we split off at .normal→potential
+                // entry can be returned NOW — it's not part of the
+                // tool-call payload and the caller shouldn't have to
+                // wait for the end tag to see it.
+                if let lead = leadingToken, !lead.isEmpty {
+                    return lead
+                }
                 return nil
             }
         }

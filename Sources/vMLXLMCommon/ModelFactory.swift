@@ -6,7 +6,7 @@ import Foundation
 package let tokenizerDownloadPatterns = ["*.json", "*.jinja"]
 package let modelDownloadPatterns = ["*.safetensors"] + tokenizerDownloadPatterns
 
-public enum ModelFactoryError: LocalizedError {
+public enum ModelFactoryError: LocalizedError, CustomStringConvertible {
     case unsupportedModelType(String)
     case unsupportedProcessorType(String)
     case configurationFileError(String, String, Error)
@@ -28,6 +28,16 @@ public enum ModelFactoryError: LocalizedError {
             return "Failed to parse \(file) for model '\(modelName)': \(errorDetail)"
         }
     }
+
+    // `LocalizedError.errorDescription` is only consulted by
+    // `(error as NSError).localizedDescription` — it is NOT used by
+    // `String(describing:)` / `"\(error)"`. Engine.swift's load-fail
+    // path reports errors through `await fail("\(error)")`, which the
+    // UI flashes as "Engine load failed: <msg>". Without this
+    // conformance the user saw the enum-case form, e.g.
+    // `unsupportedModelType("deepseek_v3")` instead of the crafted
+    // "Unsupported model type: deepseek_v3". **iter-66 (§95)**.
+    public var description: String { errorDescription ?? "\(Self.self)" }
 
     private func extractDecodingErrorDetail(_ error: DecodingError) -> String {
         switch error {

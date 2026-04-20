@@ -42,6 +42,11 @@ struct TrayItem: View {
     @State private var pushDebounce: Task<Void, Never>? = nil
     // Logs tail — last 5 lines from engine.logs.
     @State private var logTail: [String] = []
+    // Live cache architecture flags for the header pills. Refreshed at the
+    // same 1 Hz cadence as `snapshot` so users get visual confirmation
+    // whether the loaded model actually uses hybrid SSM / SWA / TQ
+    // without cracking open the Server → Cache panel.
+    @State private var archFlags = ArchPillFlags()
     // Disclosure group open/closed state, persisted across popover re-opens.
     @State private var showLifecycle = true
     @State private var showServer = false
@@ -104,8 +109,13 @@ struct TrayItem: View {
                 .foregroundColor(stateColor)
                 .font(.system(size: 18, weight: .semibold))
             VStack(alignment: .leading, spacing: 2) {
-                Text(stateLabel)
-                    .font(.system(size: 13, weight: .semibold))
+                HStack(spacing: 4) {
+                    Text(stateLabel)
+                        .font(.system(size: 13, weight: .semibold))
+                    if archFlags.hybrid { trayArchPill("hybrid", tint: .accentColor) }
+                    if archFlags.swa    { trayArchPill("SWA",    tint: .green) }
+                    if archFlags.tq     { trayArchPill("TQ",     tint: .accentColor) }
+                }
                 Text(modelName)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -630,17 +640,28 @@ struct TrayItem: View {
                         set: { draft.flashMoeSlotBank = Int($0); schedulePush() }),
                     range: 16...2048, step: 16,
                     format: "%.0f")
+                // iter-57: Prefetch picker persists to
+                // `flashMoePrefetch` but `applyFlashMoEIfEnabled` never
+                // reads it — FlashMoEExpertLoader is always constructed
+                // with the default (none). "Temporal" is an unrealized
+                // README-only feature. Show the picker but label the
+                // non-default option so users don't wait for a warm-up
+                // that never happens.
                 Picker(
-                    "Prefetch",
+                    "Prefetch (coming soon)",
                     selection: Binding(
                         get: { draft.flashMoePrefetch },
                         set: { draft.flashMoePrefetch = $0; schedulePush() })
                 ) {
                     Text("None").tag("none")
-                    Text("Temporal").tag("temporal")
+                    Text("Temporal (coming soon)").tag("temporal")
                 }
                 .pickerStyle(.segmented)
                 .font(.system(size: 10))
+                Text("Expert-slot prefetch strategy. Temporal warm-up is planned but not wired today — selecting it persists but the loader loads experts on-demand regardless.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -792,6 +813,7 @@ struct TrayItem: View {
         let eng = app.engine
         metricsTask = Task { @MainActor [weak app] in
             let stream = await eng.metrics.subscribe()
+            var tick = 0
             for await snap in stream {
                 if Task.isCancelled { break }
                 self.snapshot = snap
@@ -801,6 +823,15 @@ struct TrayItem: View {
                 if let all = await app?.engine.logs.snapshot() {
                     self.logTail = all.suffix(5).map { $0.message }
                 }
+                // Refresh arch flags every ~4 ticks (~4 s) since model
+                // architecture doesn't change between loads — polling
+                // faster than the metrics stream would waste cache-stat
+                // round-trips.
+                if tick % 4 == 0, let e = app?.engine {
+                    let stats = (try? await e.cacheStats()) ?? [:]
+                    self.archFlags = ArchPillFlags(stats: stats)
+                }
+                tick &+= 1
             }
         }
     }
@@ -832,7 +863,18 @@ struct TrayItem: View {
         switch app.engineState {
         case .stopped:        return "Stopped"
         case .loading:        return "Loading…"
-        case .running:        return "Running"
+        case .running:
+            // Repeated user ask: surface the idle-sleep countdown so it
+            // stops being invisible. When the engine is running AND
+            // there's a pending soft-sleep / deep-sleep event, append
+            // "· Sleeps in MM:SS" to the state label.
+            if let s = app.idleCountdownSeconds, s > 0 {
+                let total = Int(s)
+                let m = total / 60, r = total % 60
+                let kind = app.idleCountdownKindIsDeep ? "Deep sleep" : "Sleeps"
+                return String(format: "Running · %@ in %d:%02d", kind, m, r)
+            }
+            return "Running"
         case .standby(.soft): return "Light sleep"
         case .standby(.deep): return "Deep sleep"
         case .error:          return "Error"
@@ -883,14 +925,54 @@ struct TrayItem: View {
     /// Maps an `EngineState` to an SF symbol. Static so the scene closure in
     /// `vMLXApp` can call it at Scene-construction time without instantiating
     /// the view.
+    /// Pill for the tray header — compact, outline-style, matches the
+    /// CachePanel pill visual so users see the same signal in two places.
+    @ViewBuilder
+    private func trayArchPill(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 0.5))
+            .accessibilityLabel(text)
+            .accessibilityHint("Active cache architecture flag")
+    }
+
     static func icon(for state: EngineState) -> String {
         switch state {
         case .stopped:        return "circle"
         case .loading:        return "circle.dotted"
         case .running:        return "circle.fill"
-        case .standby:        return "moon"
+        // iter-42: distinguish soft vs deep sleep visually. Previously
+        // both sleep depths collapsed to `moon`, so a user glancing at
+        // the menu bar couldn't tell whether weights were still in
+        // memory (soft — quick wake) or dropped (deep — reload needed).
+        // `moon` = soft, `moon.zzz.fill` = deep, matching the
+        // lifecycle-button icons already used in the popover.
+        case .standby(.soft): return "moon"
+        case .standby(.deep): return "moon.zzz.fill"
         case .error:          return "exclamationmark.circle"
         }
+    }
+}
+
+/// Cache architecture pill flags derived from `Engine.cacheStats().architecture`.
+/// Populated on the metrics poll loop; empty flags when the model isn't
+/// loaded or the architecture dict is missing.
+struct ArchPillFlags: Equatable, Sendable {
+    var hybrid: Bool = false
+    var swa: Bool = false
+    var tq: Bool = false
+
+    init() { }
+
+    init(stats: [String: Any]) {
+        let arch = (stats["architecture"] as? [String: Any]) ?? [:]
+        self.hybrid = (arch["hybridSSMActive"] as? Bool) ?? false
+        self.swa = (arch["slidingWindowActive"] as? Bool) ?? false
+        self.tq = (arch["turboQuantActive"] as? Bool) ?? false
     }
 }
 

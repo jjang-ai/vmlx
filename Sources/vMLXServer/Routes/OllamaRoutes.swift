@@ -67,16 +67,34 @@ public enum OllamaRoutes {
 
         // GET /api/ps — currently-loaded model list. Since the Swift app
         // runs one engine per session, report whatever is loaded now.
+        //
+        // iter-37: was returning `path.lastPathComponent` which for HF
+        // cache layouts is the 40-char snapshot hash, not the clean
+        // `org/repo` slug. Ollama clients (Copilot, Open WebUI) key off
+        // this field to find the model — if the name is a hash, the
+        // picker can't match anything. Now we look up the ModelLibrary
+        // entry by canonical path and return its resolved displayName,
+        // with `path.lastPathComponent` as a safe fallback when the
+        // library doesn't have an entry yet (first-load race).
         router.get("/api/ps") { _, _ -> Response in
             let loadedPath = await engine.loadedModelPath
             guard let path = loadedPath else {
                 return OpenAIRoutes.json(["models": []])
             }
+            // Ensure the library has scanned at least once so
+            // `displayName` is actually populated. `scan(force:false)`
+            // hits the 5-minute freshness cache, so this is cheap.
+            _ = await engine.modelLibrary.scan(force: false)
+            let entries = await engine.modelLibrary.entries()
+            let canonical = path.resolvingSymlinksInPath().standardizedFileURL
+            let displayName = entries.first(where: {
+                $0.canonicalPath.standardizedFileURL == canonical
+            })?.displayName ?? path.lastPathComponent
             let iso = ISO8601DateFormatter().string(from: Date())
             return OpenAIRoutes.json([
                 "models": [[
-                    "name": path.lastPathComponent,
-                    "model": path.lastPathComponent,
+                    "name": displayName,
+                    "model": displayName,
                     "size": 0,
                     "digest": "",
                     "details": [:] as [String: Any],
@@ -98,6 +116,11 @@ public enum OllamaRoutes {
             guard let e = entries.first(where: { $0.displayName == name }) else {
                 return OpenAIRoutes.errorJSON(.notFound, "model not found: \(name)")
             }
+            // Capabilities array — Ollama 0.20.x clients (GitHub Copilot,
+            // Open WebUI) filter the picker by this field. Extracted to
+            // `OllamaCapabilities` so `swift test` covers the classifier.
+            let caps = OllamaCapabilities.capabilities(family: e.family,
+                                                       modality: e.modality)
             return OpenAIRoutes.json([
                 "license": "",
                 "modelfile": "# vMLX JANG: \(e.isJANG)\nPATH \(e.canonicalPath.path)\n",
@@ -111,6 +134,7 @@ public enum OllamaRoutes {
                     "parameter_size": Self.humanParamSize(e.totalSizeBytes, quantBits: e.quantBits),
                     "quantization_level": e.quantBits.map { "Q\($0)" } ?? "",
                 ] as [String: Any],
+                "capabilities": caps,
             ])
         }
 
@@ -243,6 +267,16 @@ public enum OllamaRoutes {
             guard let chatReq = Self.ollamaToChatRequest(ollamaBody) else {
                 return OpenAIRoutes.errorJSON(.badRequest, "missing messages")
             }
+            // 2026-04-18 validate parity — see AnthropicRoutes for the
+            // background. Reject out-of-range temperature / negative
+            // max_tokens etc with 400 before invoking the engine.
+            do {
+                try chatReq.validate()
+            } catch let err as ChatRequestValidationError {
+                return OpenAIRoutes.errorJSON(.badRequest, err.description)
+            } catch {
+                return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
+            }
 
             await engine.wakeFromStandby()
             // 4-tier settings resolution happens inside `Engine.stream`.
@@ -271,6 +305,8 @@ public enum OllamaRoutes {
                     if let u = chunk.usage { usage = u }
                     if let fr = chunk.finishReason { finishReason = fr }
                 }
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -336,6 +372,14 @@ public enum OllamaRoutes {
                 seed: options["seed"] as? Int,
                 enableThinking: obj["think"] as? Bool
             )
+            // 2026-04-18 validate parity — see /api/chat above.
+            do {
+                try chatReq.validate()
+            } catch let err as ChatRequestValidationError {
+                return OpenAIRoutes.errorJSON(.badRequest, err.description)
+            } catch {
+                return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
+            }
             await engine.wakeFromStandby()
             let upstream = await engine.stream(request: chatReq)
 
@@ -358,6 +402,8 @@ public enum OllamaRoutes {
                     if let c = chunk.content { content += c }
                     if let u = chunk.usage { usage = u }
                 }
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -368,10 +414,11 @@ public enum OllamaRoutes {
                 "done": true,
                 "done_reason": "stop",
             ]
-            if let u = usage {
-                out["prompt_eval_count"] = u.promptTokens
-                out["eval_count"] = u.completionTokens
-            }
+            // iter-64: share the timing-envelope helper with the NDJSON
+            // streaming encoders so non-stream + stream emit identical
+            // fields on their final `done:true` chunk. Inline logic
+            // previously lived in §93 (iter-63).
+            JSONLEncoder.applyOllamaTimings(into: &out, usage: usage)
             return OpenAIRoutes.json(out)
         }
 
@@ -396,6 +443,11 @@ public enum OllamaRoutes {
             } else {
                 return OpenAIRoutes.errorJSON(.badRequest, "missing 'prompt' or 'input'")
             }
+            // iter-63: JIT wake — mirror §89 (OpenAI) and §91 (gateway).
+            // Ollama `/api/embeddings` + `/api/embed` against a soft-
+            // slept engine was returning 503 notLoaded, breaking tools
+            // like LangChain/Copilot/OllamaJS that auto-reconnect.
+            await engine.wakeFromStandby()
             do {
                 let result = try await engine.embeddings(request: openAI)
                 // Ollama shape: {"embedding": [...]} for a single input,
@@ -413,6 +465,8 @@ public enum OllamaRoutes {
                     "embeddings": vectors,
                     "model": result["model"] ?? "",
                 ])
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -452,6 +506,8 @@ public enum OllamaRoutes {
                     "status": "success",
                     "deleted": match.displayName,
                 ])
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -570,10 +626,14 @@ public enum OllamaRoutes {
             "num_predict", "temperature", "top_p", "top_k", "min_p",
             "repeat_penalty", "stop", "seed",
         ]
+        // Iter-26: gate the unsupported-options warning on the same
+        // VL debug flag pattern. Ollama clients that send typo'd
+        // options (common in ops scripts) would blast stderr on every
+        // request. Warning still lands via `VMLX_OLLAMA_DEBUG=1`.
         let unknownKeys = opts.keys.filter { !knownOptionKeys.contains($0) }
-        if !unknownKeys.isEmpty {
-            // Can't reach the engine.log actor from this static helper.
-            // Print to stderr so the operator sees it in the server log.
+        if !unknownKeys.isEmpty,
+           ProcessInfo.processInfo.environment["VMLX_OLLAMA_DEBUG"] == "1"
+        {
             let names = unknownKeys.sorted().joined(separator: ", ")
             FileHandle.standardError.write(Data(
                 "[ollama] /api/chat: ignored unsupported options: \(names)\n".utf8))

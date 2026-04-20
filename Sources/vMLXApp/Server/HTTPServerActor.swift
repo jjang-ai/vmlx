@@ -51,7 +51,7 @@ actor HTTPServerActor {
     ///     is a no-op and every request is admitted.
     ///   - adminToken: Optional admin-token; when nil, `AdminAuthMiddleware`
     ///     is a no-op. When set, gates `/admin/*` and `/v1/cache/*`.
-    func start(host: String, port: Int, apiKey: String?, adminToken: String? = nil, logLevel: LogStore.Level = .info) async throws {
+    func start(host: String, port: Int, apiKey: String?, adminToken: String? = nil, logLevel: LogStore.Level = .info, allowedOrigins: [String] = ["*"], rateLimitPerMinute: Int = 0, tlsKeyPath: String? = nil, tlsCertPath: String? = nil) async throws {
         // If we're already running on the same endpoint, nothing to do.
         if let task = runTask, host == self.host, port == self.port, !task.isCancelled {
             return
@@ -78,7 +78,11 @@ actor HTTPServerActor {
             port: port,
             apiKey: apiKey,
             adminToken: adminToken,
-            logLevel: logLevel
+            logLevel: logLevel,
+            tlsKeyPath: tlsKeyPath,
+            tlsCertPath: tlsCertPath,
+            rateLimitPerMinute: rateLimitPerMinute,
+            allowedOrigins: allowedOrigins
         )
         runTask = Task {
             do {

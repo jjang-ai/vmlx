@@ -34,6 +34,18 @@ public enum AnthropicRoutes {
 
             // Translate Anthropic → ChatRequest. Full logic: server.py:2664.
             let chatReq = Self.anthropicToChatRequest(anthropicBody)
+            // 2026-04-18 validate-parity fix — OpenAI + gateway paths
+            // call `chatReq.validate()` before streaming; Anthropic was
+            // silently skipping the range check, so a wild temperature=99
+            // or negative max_tokens hit the engine as HTTP 200 instead
+            // of a clean 400. Live-triggered by the production audit.
+            do {
+                try chatReq.validate()
+            } catch let err as ChatRequestValidationError {
+                return OpenAIRoutes.errorJSON(.badRequest, err.description)
+            } catch {
+                return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
+            }
             await engine.wakeFromStandby()
             // 4-tier settings resolution happens inside `Engine.stream`.
             let upstream = await engine.stream(request: chatReq)
@@ -65,6 +77,8 @@ public enum AnthropicRoutes {
                     if let u = chunk.usage { usage = u }
                     if let fr = chunk.finishReason { finishReason = fr }
                 }
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -101,10 +115,7 @@ public enum AnthropicRoutes {
                 "content": blocks,
                 "model": model,
                 "stop_reason": Self.mapStopReason(finishReason),
-                "usage": [
-                    "input_tokens": usage?.promptTokens ?? 0,
-                    "output_tokens": usage?.completionTokens ?? 0,
-                ] as [String: Any],
+                "usage": Self.usageEnvelope(usage),
             ]
             return OpenAIRoutes.json(obj)
         }
@@ -201,8 +212,24 @@ public enum AnthropicRoutes {
 
             var finishReason: String? = nil
             var usage: StreamChunk.Usage? = nil
+            // Iter-18: wrap the upstream with the shared heartbeat
+            // helper so thinking-model prefill doesn't trigger a
+            // nginx / SDK idle-timeout disconnect. Anthropic SSE uses
+            // named events; emit the `ping` event (Anthropic's own
+            // keep-alive convention, documented in their streaming
+            // spec) so the anthropic-sdk-python/node parsers don't
+            // complain about unknown event names.
+            let merged = sseMergeWithHeartbeat(
+                upstream: upstream, interval: sseHeartbeatInterval)
             do {
-                for try await chunk in upstream {
+                for try await event in merged {
+                    if case .heartbeat = event {
+                        try await emit("ping", [
+                            "type": "ping",
+                        ])
+                        continue
+                    }
+                    guard case .chunk(let chunk) = event else { continue }
                     if let r = chunk.reasoning, !r.isEmpty {
                         switch open {
                         case .thinking: break
@@ -284,7 +311,7 @@ public enum AnthropicRoutes {
             try await emit("message_delta", [
                 "type": "message_delta",
                 "delta": ["stop_reason": Self.mapStopReason(finishReason)] as [String: Any],
-                "usage": ["output_tokens": usage?.completionTokens ?? 0] as [String: Any],
+                "usage": Self.usageEnvelope(usage),
             ])
             try await emit("message_stop", ["type": "message_stop"])
             try await writer.finish(nil)
@@ -297,6 +324,41 @@ public enum AnthropicRoutes {
         case "tool_calls": return "tool_use"
         default: return "end_turn"
         }
+    }
+
+    /// **iter-65 (§94)** — Anthropic usage envelope with optional timing
+    /// fields. Anthropic's published schema requires `input_tokens` +
+    /// `output_tokens`; extra keys are tolerated by `anthropic-sdk-*`
+    /// parsers (both Python and TypeScript SDKs dispatch on known keys
+    /// and ignore the rest). We add the same `tokens_per_second`,
+    /// `ttft_ms`, `prefill_ms`, `total_ms` quartet that OpenAI (iter-64)
+    /// and Ollama (iter-63) envelopes already carry, so every API
+    /// surface emits comparable timings for observability parity.
+    ///
+    /// `includeInputTokens` gates whether `input_tokens` is emitted.
+    /// The streaming `message_delta` final event historically carried
+    /// only `output_tokens` (Anthropic's own spec — the client already
+    /// has `input_tokens` from `message_start`), but iter-65 includes
+    /// it there too because clients observed the `message_start` value
+    /// was a stub `0` until usage was known. Emitting the real value
+    /// on `message_delta` keeps the stream truthful without breaking
+    /// the non-stream contract.
+    static func usageEnvelope(
+        _ usage: StreamChunk.Usage?,
+        includeInputTokens: Bool = true
+    ) -> [String: Any] {
+        var out: [String: Any] = [
+            "output_tokens": usage?.completionTokens ?? 0,
+        ]
+        if includeInputTokens {
+            out["input_tokens"] = usage?.promptTokens ?? 0
+        }
+        guard let u = usage else { return out }
+        if let tps = u.tokensPerSecond { out["tokens_per_second"] = tps }
+        if let ttft = u.ttftMs { out["ttft_ms"] = ttft }
+        if let prefill = u.prefillMs { out["prefill_ms"] = prefill }
+        if let total = u.totalMs { out["total_ms"] = total }
+        return out
     }
 
     /// Minimal Anthropic → ChatRequest. Full translation: server.py:2664 create_anthropic_message.

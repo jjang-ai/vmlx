@@ -37,6 +37,26 @@ final class Database {
         }
         runSQL("PRAGMA journal_mode=WAL;")
         runSQL("PRAGMA foreign_keys=ON;")
+        // Iter-28: `synchronous=NORMAL` is the SQLite-documented
+        // partner to WAL mode. Default is FULL which fsync's every
+        // commit — on the streaming chat path we upsertMessage every
+        // token, so 435 tok/s on Llama-1B was 435 fsyncs/sec of the
+        // WAL file. NORMAL keeps full durability within the last ~1s
+        // (WAL checkpoints to the main DB file), which for chat
+        // history data is plenty. Losing the last half-second of
+        // streaming text on a power-cut is a trivially acceptable
+        // tradeoff; losing it already happens because MLX state is
+        // non-persisted anyway. See SQLite docs:
+        // https://www.sqlite.org/pragma.html#pragma_synchronous
+        runSQL("PRAGMA synchronous=NORMAL;")
+        // Bigger cache (default 2MB → 32MB) — chat messages table
+        // fits entirely in RAM for any practical history, so reads
+        // stop hitting the page cache on session-switch. Negative
+        // value means KiB; `-32000` == 32 MB.
+        runSQL("PRAGMA cache_size=-32000;")
+        // Temp tables in RAM instead of disk. Relevant for
+        // transactions + group-by queries that SQLite materializes.
+        runSQL("PRAGMA temp_store=MEMORY;")
     }
 
     private func migrate() {
@@ -193,6 +213,25 @@ final class Database {
             let msg = err.map { String(cString: $0) } ?? "?"
             NSLog("vMLX sqlite failed: \(msg)")
             sqlite3_free(err)
+        }
+    }
+
+    /// Run `body` inside a SQLite transaction. Commits on clean
+    /// return, rolls back on thrown error. Used by bulk-insert
+    /// paths (chat clearAllSessions undo, chat-fork message copy)
+    /// so N upserts hit one fsync instead of N. Iter-27: pre-fix a
+    /// 20-chat x 50-msg undo was O(1000) synchronous fsyncs —
+    /// visible as a multi-second UI hiccup on rotational storage.
+    /// Not re-entrant; nested calls collapse to the outer txn's
+    /// fate.
+    func withTransaction(_ body: () throws -> Void) rethrows {
+        runSQL("BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            try body()
+            runSQL("COMMIT;")
+        } catch {
+            runSQL("ROLLBACK;")
+            throw error
         }
     }
 

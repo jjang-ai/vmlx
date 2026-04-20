@@ -196,7 +196,27 @@ public actor BashTool {
                 }
                 if process.isRunning {
                     timeoutFlag.set(true)
+                    // Send SIGTERM first so the process can clean up.
                     process.terminate()
+                    // **iter-81 (§109)** — SIGKILL fallback: if the
+                    // process ignores SIGTERM (traps it, or is stuck in
+                    // uninterruptible sleep waiting on I/O), escalate
+                    // to SIGKILL after a 2-second grace period. Without
+                    // this, a malicious script that does
+                    // `trap '' TERM; sleep 99999` would lock up the
+                    // pipe reader below forever, since
+                    // `readDataToEndOfFile()` blocks until the pipe
+                    // writer closes — which never happens while the
+                    // process is alive.
+                    for _ in 0..<20 {
+                        if !process.isRunning { break }
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                    if process.isRunning {
+                        // Fully qualify to disambiguate from the
+                        // actor's `kill(_:)` instance method.
+                        _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    }
                 }
             }
             await group.next()
@@ -206,10 +226,25 @@ public actor BashTool {
         let timedOut = timeoutFlag.get()
         let killed = timedOut
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        let rawStdout = String(data: outData, encoding: .utf8) ?? ""
-        let stderr = String(data: errData, encoding: .utf8) ?? ""
+        // **iter-81 (§109)** — cap stdout+stderr size so a runaway
+        // command (`cat /dev/urandom`, `yes`, a log of a crashing
+        // process) can't OOM the engine by blowing out the pipe
+        // reader. 1 MiB per stream is a reasonable ceiling for
+        // tool-call contexts — the model parses the captured output
+        // as context, and anything larger would blow the context
+        // window anyway. Excess bytes are dropped and a truncation
+        // marker is appended so the caller can tell the output was
+        // bounded.
+        let outData = Self.readCapped(
+            outPipe.fileHandleForReading,
+            cap: Self.maxOutputBytes)
+        let errData = Self.readCapped(
+            errPipe.fileHandleForReading,
+            cap: Self.maxOutputBytes)
+        let rawStdout = (String(data: outData.bytes, encoding: .utf8) ?? "")
+            + (outData.truncated ? Self.truncationMarker : "")
+        let stderr = (String(data: errData.bytes, encoding: .utf8) ?? "")
+            + (errData.truncated ? Self.truncationMarker : "")
 
         // Recover the post-exec cwd from the trailing marker line
         // (see `wrapCommand`). `cleanStdout` is the user-facing stdout
@@ -229,6 +264,51 @@ public actor BashTool {
     public func kill(_ id: UUID) {
         background[id]?.terminate()
         background.removeValue(forKey: id)
+    }
+
+    // MARK: - iter-81 §109 — bounded output
+
+    /// Maximum captured bytes per stream (stdout + stderr each). A
+    /// typical tool-call result fits in a few KB; 1 MiB gives plenty
+    /// of headroom for verbose compile output or log dumps while
+    /// still preventing a runaway command from OOM-ing the engine.
+    public static let maxOutputBytes = 1 * 1024 * 1024
+
+    /// Appended to truncated streams so the caller can detect
+    /// bounded output without parsing byte counts.
+    public static let truncationMarker =
+        "\n[vMLX: output truncated — stream exceeded 1 MiB cap]\n"
+
+    /// Read up to `cap` bytes from a file handle, discarding the
+    /// rest. Returns `(bytes, truncated)` so the caller can decide
+    /// whether to append a marker. Reads in 64 KiB chunks so we
+    /// never allocate more than ~64 KiB of transient buffer even
+    /// when the source is actively writing.
+    internal static func readCapped(
+        _ handle: FileHandle, cap: Int
+    ) -> (bytes: Data, truncated: Bool) {
+        var collected = Data()
+        collected.reserveCapacity(min(cap, 64 * 1024))
+        while collected.count < cap {
+            let want = min(64 * 1024, cap - collected.count)
+            let chunk = handle.availableData
+            if chunk.isEmpty { break }
+            if chunk.count <= want {
+                collected.append(chunk)
+            } else {
+                collected.append(chunk.prefix(want))
+                return (collected, true)
+            }
+        }
+        // We hit end-of-stream before the cap; the stream was NOT
+        // truncated.
+        if collected.count >= cap {
+            // Drain remaining bytes to let the pipe close cleanly
+            // without filling our buffer further.
+            while !handle.availableData.isEmpty { }
+            return (collected, true)
+        }
+        return (collected, false)
     }
 }
 

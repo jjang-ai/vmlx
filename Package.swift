@@ -520,6 +520,78 @@ let package = Package(
             ],
             path: "Sources/vMLXApp"
         ),
+
+        // MARK: - Parser unit tests (runnable via `swift test`)
+        // Minimal test target wiring — covers the parsers that live in
+        // vMLXEngine (tool-call + reasoning). Other vMLXTests files depend
+        // on vMLXApp (executable target, can't @testable import) so they
+        // stay Xcode-project-only for now. Added 2026-04-18 to enable
+        // CLI-level verification of ToolCallParser regression guards
+        // (§25 Llama multi-tag fix).
+        .testTarget(
+            name: "vMLXParserTests",
+            dependencies: [
+                "vMLXEngine",
+                "vMLXLMCommon",
+            ],
+            path: "Tests/vMLXTests",
+            // Curated minimal set that compiles clean against framework
+            // targets (no vMLXApp @testable). 49 of 60 test files are
+            // technically eligible but expanding triggers a Swift
+            // compiler crash (reproducible on CacheBlockTests) — safer
+            // to keep this subset runnable via `swift test` and leave
+            // the rest Xcode-project-only until compiler settles.
+            sources: [
+                "ParserTests.swift",
+                "AhoCorasickTests.swift",
+                "NumPyPCG64Tests.swift",
+                "CacheCoordinatorGenPromptLenTests.swift",
+                "SettingsStoreClampTests.swift",
+                "LogStoreTests.swift",
+                "OllamaCapabilitiesTests.swift",
+                "PerfFloorScriptTests.swift",
+                "RegressionConstantsTests.swift",
+                "CapabilityDetectionTests.swift",
+                "ChatRequestValidationTests.swift",
+                "ToolChoiceEnforcementTests.swift",
+                "ToolCallReasoningMatrixTests.swift",
+                "ReasoningInjectionTests.swift",
+                "PromptLengthGuardTests.swift",
+                "MCPConfigTests.swift",
+                // Second batch 2026-04-18 — vMLXEngine-only tests
+                "BenchmarkTests.swift",
+                "BenchmarkSummaryTests.swift",
+                "CacheStatsTests.swift",
+                "DownloadManagerTests.swift",
+                "IdleTimerTests.swift",
+                "IdleTimerResetOnStreamTests.swift",
+                "MetricsAccuracyTests.swift",
+                "MetricsCollectorTests.swift",
+                "ModelLibraryTests.swift",
+                "ModelLibraryWatcherTests.swift",
+                "StreamCancellationTests.swift",
+                "TurboQuantDefaultTests.swift",
+                // Third batch 2026-04-18 — more vMLXEngine + vMLXLMCommon
+                "ChatSettingsPopoverTests.swift",
+                "EmbeddingsTests.swift",
+                "MultiSessionEngineTests.swift",
+                "MultiTurnVLImageTests.swift",
+                "RealReasoningDispatchTests.swift",
+                "SessionConfigFormTests.swift",
+                "SettingsStoreTests.swift",
+                "VLImagePipelineTests.swift",
+                "TTSEngineTests.swift",
+                "MemoryAwarePrefixCacheTests.swift",
+                "DDTreeBuilderTests.swift",
+                // Iter-40: SSM re-derive counter + stats wiring
+                "SSMStateCacheReDeriveTests.swift",
+                // Metal-dependent tests excluded — `swift test` can't load
+                // the default.metallib from the SwiftPM bundle path;
+                // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,
+                // PagedCacheBlockRelease, FlashMoE, TQDiskSerializer,
+                // CacheCoordinatorRotatingGuard, CacheBlock stay Xcode-only.
+            ]
+        ),
     ],
     cxxLanguageStandard: .gnucxx20
 )

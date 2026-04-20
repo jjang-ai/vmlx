@@ -51,6 +51,12 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var content: String
     var reasoning: String?
     var imageData: [Data]        // inline base64-decoded images
+    /// Absolute `file://` URLs of attached videos. Stored as paths
+    /// rather than inline bytes because a 30 s 1080p clip is ~30 MB
+    /// and encoding inline into SQLite would 4x-bloat the DB. The
+    /// engine path (ChatRequest → video_url ContentPart) consumes
+    /// these as-is. Empty when no videos attached. Added iter-15.
+    var videoPaths: [String] = []
     var toolCallsJSON: String?   // raw tool_calls array JSON
     /// Lifecycle phase keyed by `tool_call.id`. Updated from streaming
     /// `StreamChunk.ToolStatus` events. Persisted alongside the raw
@@ -67,14 +73,15 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var usage: StreamChunk.Usage? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, sessionId, role, content, reasoning, imageData, toolCallsJSON
+        case id, sessionId, role, content, reasoning, imageData, videoPaths, toolCallsJSON
         case toolStatuses, createdAt, isStreaming
     }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.sessionId == rhs.sessionId && lhs.role == rhs.role &&
         lhs.content == rhs.content && lhs.reasoning == rhs.reasoning &&
-        lhs.imageData == rhs.imageData && lhs.toolCallsJSON == rhs.toolCallsJSON &&
+        lhs.imageData == rhs.imageData && lhs.videoPaths == rhs.videoPaths &&
+        lhs.toolCallsJSON == rhs.toolCallsJSON &&
         lhs.toolStatuses == rhs.toolStatuses &&
         lhs.createdAt == rhs.createdAt && lhs.isStreaming == rhs.isStreaming
     }
@@ -90,6 +97,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
          content: String = "",
          reasoning: String? = nil,
          imageData: [Data] = [],
+         videoPaths: [String] = [],
          toolCallsJSON: String? = nil,
          toolStatuses: [String: ToolCallStatus] = [:],
          createdAt: Date = .now,
@@ -100,10 +108,28 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.content = content
         self.reasoning = reasoning
         self.imageData = imageData
+        self.videoPaths = videoPaths
         self.toolCallsJSON = toolCallsJSON
         self.toolStatuses = toolStatuses
         self.createdAt = createdAt
         self.isStreaming = isStreaming
+    }
+
+    // Backward-compat decoder: pre-iter-15 rows have no `videoPaths`
+    // key. Default to empty without throwing so existing chats load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id          = try c.decode(UUID.self, forKey: .id)
+        self.sessionId   = try c.decode(UUID.self, forKey: .sessionId)
+        self.role        = try c.decode(Role.self, forKey: .role)
+        self.content     = try c.decode(String.self, forKey: .content)
+        self.reasoning   = try c.decodeIfPresent(String.self, forKey: .reasoning)
+        self.imageData   = try c.decodeIfPresent([Data].self, forKey: .imageData) ?? []
+        self.videoPaths  = try c.decodeIfPresent([String].self, forKey: .videoPaths) ?? []
+        self.toolCallsJSON = try c.decodeIfPresent(String.self, forKey: .toolCallsJSON)
+        self.toolStatuses  = try c.decodeIfPresent([String: ToolCallStatus].self, forKey: .toolStatuses) ?? [:]
+        self.createdAt   = try c.decode(Date.self, forKey: .createdAt)
+        self.isStreaming = try c.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
     }
 
     /// Decoded tool-call list for inline cards. Empty when nothing is set.

@@ -413,6 +413,14 @@ struct TerminalScreen: View {
             text: output.isEmpty ? "(no output)" : output,
             exitCode: result.exitCode
         ))
+        // iter-56: persist the post-exec cwd so `cd foo` sticks across
+        // commands. BashTool recovers the new cwd from a trailing
+        // `pwd` marker it appends to the wrapped script; previously
+        // the raw-shell fallback discarded `result.newCwd`, so every
+        // `cd` was silently undone on the next command.
+        if let newCwd = result.newCwd, newCwd != cwd {
+            cwd = newCwd
+        }
     }
 }
 

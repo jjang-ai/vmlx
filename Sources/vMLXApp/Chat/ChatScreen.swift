@@ -115,10 +115,21 @@ struct EngineStateBanner: View {
         Group {
             switch state {
             case .loading:
+                // iter-68 (§97): chat-side banner now surfaces the text
+                // percent alongside the visual bar. Before, the banner
+                // showed only "Loading model…" + label + bar while the
+                // server-tab SessionLoadBar and the tray item both
+                // rendered "NN%" explicitly. Banner parity matters
+                // because the chat is where users spend most of their
+                // load-wait time (they flip to chat once the server
+                // session is Starting…) and a determinate % beats a
+                // visual-only progress indicator on a long MoE load.
                 ColoredBanner(
                     icon: "arrow.down.circle",
                     tint: Theme.Colors.accent,
-                    title: "Loading model…",
+                    title: loadProgress?.fraction.map {
+                        "Loading model… \(Int($0 * 100))%"
+                    } ?? "Loading model…",
                     detail: loadProgress?.label,
                     showSpinner: true,
                     extra: AnyView(
@@ -137,7 +148,8 @@ struct EngineStateBanner: View {
                 ColoredBanner(
                     icon: "moon.stars",
                     tint: Theme.Colors.warning,
-                    title: "Model sleeping — will auto-wake on your next message"
+                    title: "Model sleeping — will auto-wake on your next message",
+                    cta: ("Wake now", onLoadModel)
                 )
             case .stopped:
                 ColoredBanner(
@@ -519,33 +531,46 @@ private struct ChatModelPicker: View {
             .menuStyle(.borderlessButton)
             .help("Pick a model · colored dot = load state. Right side ▶ / ■ toggles the model in/out of RAM without leaving the Chat tab.")
 
-            // Inline ▶ / ■ for the CURRENT chat's selected model. One
-            // click = start if stopped, stop if running. Matches the
-            // repeated user ask.
-            if let current = currentEntry() {
-                let s = loadState(for: current)
-                Button {
-                    Task {
-                        switch s {
-                        case .running, .loading, .standby:
-                            await stopModel(for: current)
-                        case .stopped, .absent:
-                            await startModel(for: current)
-                        }
+            // Always-visible Load/Unload button. Previously this was only
+            // rendered when `currentEntry()` was non-nil, which meant fresh
+            // installs (no chat alias + no selectedModelPath) had no
+            // visible Load Model control in the top bar — the user had to
+            // wait for the banner to render in `.stopped` state and there
+            // was no control at all for `.standby(.deep)`. Now we render
+            // the button unconditionally; when no model is picked yet it
+            // stays disabled with a hint tooltip, nudging the user to the
+            // picker on its left.
+            let currentState = currentEntryState()
+            Button {
+                guard let current = currentEntry() else { return }
+                Task {
+                    switch currentState {
+                    case .running, .loading, .standby:
+                        await stopModel(for: current)
+                    case .stopped, .absent:
+                        await startModel(for: current)
                     }
-                } label: {
-                    Image(systemName: iconName(for: s))
-                        .font(.system(size: 11))
-                        .foregroundStyle(iconColor(for: s))
-                        .padding(4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Theme.Colors.surface)
-                        )
                 }
-                .buttonStyle(.plain)
-                .help(buttonTooltip(for: s))
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: iconName(for: currentState))
+                        .font(.system(size: 11))
+                    Text(actionLabel(for: currentState))
+                        .font(Theme.Typography.caption)
+                }
+                .foregroundStyle(iconColor(for: currentState))
+                .padding(.horizontal, Theme.Spacing.sm)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Theme.Colors.surface)
+                )
             }
+            .buttonStyle(.plain)
+            .disabled(currentEntry() == nil)
+            .help(currentEntry() == nil
+                  ? "Pick a model in the menu on the left first"
+                  : buttonTooltip(for: currentState))
         }
         .task {
             await refresh()
@@ -580,6 +605,15 @@ private struct ChatModelPicker: View {
         case .standby: return "Wake / reload from standby"
         case .stopped: return "Load this model into RAM"
         case .absent:  return "Create a session and load this model"
+        }
+    }
+
+    private func actionLabel(for s: LoadState) -> String {
+        switch s {
+        case .running: return "Unload"
+        case .loading: return "Loading…"
+        case .standby: return "Wake"
+        case .stopped, .absent: return "Load Model"
         }
     }
 
@@ -713,5 +747,22 @@ private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
     } else {
         sid = await app.createSession(forModel: entry.canonicalPath)
     }
-    await app.startSession(sid)
+    // Fast-path: if the engine is ALREADY in standby (idle-fired or
+    // manually slept), calling `wakeFromStandby` is much cheaper than
+    // `startSession` — no re-registration with the gateway, no HTTP
+    // listener respin, and for soft-standby no weight reload. The
+    // banner's "Wake now" CTA routes through this inline helper, so
+    // picking the cheap path matters for perceived responsiveness.
+    // Fall back to full startSession for `.stopped` / `.error` / fresh
+    // sessions, which need the end-to-end init.
+    let eng = app.engine(for: sid)
+    if case .standby = eng.state {
+        await eng.wakeFromStandby()
+        // `rebindEngineObserver` so the global state tracker picks up
+        // the transition immediately (normally startSession does this).
+        app.selectedServerSessionId = sid
+        app.rebindEngineObserver()
+    } else {
+        await app.startSession(sid)
+    }
 }

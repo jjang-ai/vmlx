@@ -103,7 +103,8 @@ actor GatewayActor {
         apiKey: String?,
         adminToken: String?,
         logLevel: LogStore.Level,
-        defaultEngine: Engine
+        defaultEngine: Engine,
+        allowedOrigins: [String] = ["*"]
     ) async throws {
         if let task = runTask, host == self.host, port == self.port, !task.isCancelled {
             return
@@ -134,7 +135,8 @@ actor GatewayActor {
             enumerate: { [weak self] in
                 guard let self else { return [] }
                 return await self.allEngines()
-            }
+            },
+            allowedOrigins: allowedOrigins
         )
         runTask = Task {
             do {

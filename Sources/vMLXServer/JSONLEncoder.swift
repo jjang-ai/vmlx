@@ -30,36 +30,59 @@ public enum JSONLEncoder {
             // from vmlx_engine/api/ollama_adapter.py added in v1.3.50.
             var toolCallBuffer: [[String: Any]] = []
 
+            // 2026-04-18 heartbeat — Ollama NDJSON clients can't parse
+            // SSE comments, but they DO tolerate empty-content "ping"
+            // objects that look like any other delta (Ollama itself
+            // emits these during reasoning). When upstream is silent
+            // for > interval, emit a `{"message":{"content":""},"done":false}`
+            // line so the TCP connection stays warm through a 20-40 s
+            // thinking-model prefill + reasoning phase. Same env
+            // override as SSE (`VMLX_SSE_HEARTBEAT_SEC`).
+            let merged = sseMergeWithHeartbeat(
+                upstream: upstream, interval: sseHeartbeatInterval)
             do {
-                for try await chunk in upstream {
-                    var message: [String: Any] = ["role": "assistant", "content": chunk.content ?? ""]
-                    if let reasoning = chunk.reasoning, !reasoning.isEmpty {
-                        message["thinking"] = reasoning
-                    }
-                    if let tcs = chunk.toolCalls, !tcs.isEmpty {
-                        let encoded = tcs.map { tc -> [String: Any] in
-                            let args = Self.parseJSONObject(tc.function.arguments) ?? [:]
-                            return [
-                                "function": [
-                                    "name": tc.function.name,
-                                    "arguments": args,
-                                ] as [String: Any]
-                            ]
+                for try await event in merged {
+                    switch event {
+                    case .heartbeat:
+                        let hb: [String: Any] = [
+                            "model": model,
+                            "created_at": createdAt,
+                            "message": ["role": "assistant", "content": ""] as [String: Any],
+                            "done": false,
+                        ]
+                        try await writer.write(
+                            allocator.buffer(string: SSEEncoder.asciiJSON(hb) + "\n"))
+                        continue
+                    case .chunk(let chunk):
+                        var message: [String: Any] = ["role": "assistant", "content": chunk.content ?? ""]
+                        if let reasoning = chunk.reasoning, !reasoning.isEmpty {
+                            message["thinking"] = reasoning
                         }
-                        // Keep delta emission for clients that read inline,
-                        // AND buffer for the final chunk.
-                        message["tool_calls"] = encoded
-                        toolCallBuffer.append(contentsOf: encoded)
+                        if let tcs = chunk.toolCalls, !tcs.isEmpty {
+                            let encoded = tcs.map { tc -> [String: Any] in
+                                let args = Self.parseJSONObject(tc.function.arguments) ?? [:]
+                                return [
+                                    "function": [
+                                        "name": tc.function.name,
+                                        "arguments": args,
+                                    ] as [String: Any]
+                                ]
+                            }
+                            // Keep delta emission for clients that read inline,
+                            // AND buffer for the final chunk.
+                            message["tool_calls"] = encoded
+                            toolCallBuffer.append(contentsOf: encoded)
+                        }
+                        let obj: [String: Any] = [
+                            "model": model,
+                            "created_at": createdAt,
+                            "message": message,
+                            "done": false,
+                        ]
+                        try await writer.write(allocator.buffer(string: SSEEncoder.asciiJSON(obj) + "\n"))
+                        if let fr = chunk.finishReason { finishReason = fr }
+                        if let u = chunk.usage { lastUsage = u }
                     }
-                    let obj: [String: Any] = [
-                        "model": model,
-                        "created_at": createdAt,
-                        "message": message,
-                        "done": false,
-                    ]
-                    try await writer.write(allocator.buffer(string: SSEEncoder.asciiJSON(obj) + "\n"))
-                    if let fr = chunk.finishReason { finishReason = fr }
-                    if let u = chunk.usage { lastUsage = u }
                 }
             } catch {
                 let errObj: [String: Any] = [
@@ -89,10 +112,7 @@ public enum JSONLEncoder {
                 "done": true,
                 "done_reason": doneReason,
             ]
-            if let u = lastUsage {
-                finalObj["prompt_eval_count"] = u.promptTokens
-                finalObj["eval_count"] = u.completionTokens
-            }
+            Self.applyOllamaTimings(into: &finalObj, usage: lastUsage)
             try await writer.write(allocator.buffer(string: SSEEncoder.asciiJSON(finalObj) + "\n"))
             try await writer.finish(nil)
         }
@@ -113,21 +133,36 @@ public enum JSONLEncoder {
             var finishReason: String? = nil
             var lastUsage: StreamChunk.Usage? = nil
 
+            let merged = sseMergeWithHeartbeat(
+                upstream: upstream, interval: sseHeartbeatInterval)
             do {
-                for try await chunk in upstream {
-                    let response = chunk.content ?? ""
-                    var obj: [String: Any] = [
-                        "model": model,
-                        "created_at": createdAt,
-                        "response": response,
-                        "done": false,
-                    ]
-                    if let reasoning = chunk.reasoning, !reasoning.isEmpty {
-                        obj["thinking"] = reasoning
+                for try await event in merged {
+                    switch event {
+                    case .heartbeat:
+                        let hb: [String: Any] = [
+                            "model": model,
+                            "created_at": createdAt,
+                            "response": "",
+                            "done": false,
+                        ]
+                        try await writer.write(
+                            allocator.buffer(string: SSEEncoder.asciiJSON(hb) + "\n"))
+                        continue
+                    case .chunk(let chunk):
+                        let response = chunk.content ?? ""
+                        var obj: [String: Any] = [
+                            "model": model,
+                            "created_at": createdAt,
+                            "response": response,
+                            "done": false,
+                        ]
+                        if let reasoning = chunk.reasoning, !reasoning.isEmpty {
+                            obj["thinking"] = reasoning
+                        }
+                        try await writer.write(allocator.buffer(string: SSEEncoder.asciiJSON(obj) + "\n"))
+                        if let fr = chunk.finishReason { finishReason = fr }
+                        if let u = chunk.usage { lastUsage = u }
                     }
-                    try await writer.write(allocator.buffer(string: SSEEncoder.asciiJSON(obj) + "\n"))
-                    if let fr = chunk.finishReason { finishReason = fr }
-                    if let u = chunk.usage { lastUsage = u }
                 }
             } catch {
                 let errObj: [String: Any] = [
@@ -148,10 +183,7 @@ public enum JSONLEncoder {
                 "done": true,
                 "done_reason": finishReason ?? "stop",
             ]
-            if let u = lastUsage {
-                finalObj["prompt_eval_count"] = u.promptTokens
-                finalObj["eval_count"] = u.completionTokens
-            }
+            Self.applyOllamaTimings(into: &finalObj, usage: lastUsage)
             try await writer.write(allocator.buffer(string: SSEEncoder.asciiJSON(finalObj) + "\n"))
             try await writer.finish(nil)
         }
@@ -161,6 +193,32 @@ public enum JSONLEncoder {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.string(from: Date())
+    }
+
+    /// iter-64: shared timing-envelope emitter used by both the chat
+    /// and generate streaming encoders. Non-streaming `/api/generate`
+    /// already landed this mapping inline (§93). Mirrors that logic
+    /// so SSE and NDJSON clients see the same four nanosecond fields
+    /// on the final `done:true` chunk — required for LangChain,
+    /// Copilot, Open WebUI, OllamaJS latency UIs.
+    static func applyOllamaTimings(
+        into obj: inout [String: Any],
+        usage: StreamChunk.Usage?
+    ) {
+        guard let u = usage else { return }
+        obj["prompt_eval_count"] = u.promptTokens
+        obj["eval_count"] = u.completionTokens
+        if let totalMs = u.totalMs {
+            obj["total_duration"] = Int64(totalMs * 1_000_000)
+        }
+        if let prefillMs = u.prefillMs {
+            obj["prompt_eval_duration"] = Int64(prefillMs * 1_000_000)
+            if let totalMs = u.totalMs {
+                let evalMs = max(0, totalMs - prefillMs)
+                obj["eval_duration"] = Int64(evalMs * 1_000_000)
+            }
+        }
+        obj["load_duration"] = 0
     }
 
     static func parseJSONObject(_ s: String) -> [String: Any]? {

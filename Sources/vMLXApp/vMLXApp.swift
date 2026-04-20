@@ -41,15 +41,50 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// AppKit lifecycle bridge so we can hook `applicationWillTerminate`.
+///
+/// SwiftUI's pure-declarative lifecycle doesn't expose a pre-quit hook;
+/// without this adaptor, debounced SettingsStore writes (temperature /
+/// model-path / session port) scheduled within ~500 ms of quit can lose
+/// to the process exit. We call `engine.settings.flushPending()` and
+/// `engine.stop()` synchronously (2 s timeout each) so SQLite commits
+/// land on disk and the Metal runtime releases shaders.
+final class VMLXAppDelegate: NSObject, NSApplicationDelegate {
+
+    weak var appState: AppState?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        guard let app = appState else { return }
+        let flushSem = DispatchSemaphore(value: 0)
+        Task.detached {
+            await app.engine.settings.flushPending()
+            await app.engine.stop()
+            flushSem.signal()
+        }
+        _ = flushSem.wait(timeout: .now() + .seconds(2))
+    }
+}
+
 @main
 struct vMLXApp: App {
     @State private var appState = AppState()
+    @NSApplicationDelegateAdaptor(VMLXAppDelegate.self) private var appDelegate
     /// Persisted via `@AppStorage` so the pick survives relaunches.
     /// Default is `.dark` to match the pre-existing hardcoded value
     /// and not surprise existing users on upgrade.
     @AppStorage("vmlx.appearance") private var appearanceRaw: String = AppearanceMode.dark.rawValue
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .dark
+    }
+    /// Publish appState into the delegate on first access so it can
+    /// flush settings during `applicationWillTerminate`. `init()` on
+    /// App structs can't capture `@State` safely, but `body` is called
+    /// after SwiftUI wires State — so doing it lazily inside body is
+    /// the documented-safe place.
+    private func linkDelegate() {
+        if appDelegate.appState !== appState {
+            appDelegate.appState = appState
+        }
     }
 
     var body: some Scene {
@@ -58,6 +93,7 @@ struct vMLXApp: App {
                 .environment(appState)
                 .preferredColorScheme(appearance.colorScheme)
                 .background(Theme.Colors.background)
+                .onAppear { linkDelegate() }
                 .frame(minWidth: 1100, minHeight: 720)
         }
         .windowStyle(.hiddenTitleBar)
@@ -203,6 +239,34 @@ final class AppState {
         // with ` [interrupted]`. Called exactly once on app launch,
         // ahead of every ChatViewModel.attach(app:).
         Database.shared.markAllStreamingAsInterrupted()
+        // Sweep temp-staged chat videos older than 14 days so
+        // `/tmp/vmlx-chat-video-<UUID>.<ext>` orphans don't
+        // accumulate forever when users attach videos but never
+        // delete the containing chat. Live chats referencing swept
+        // files degrade to "file not found" in the MessageBubble
+        // chip — harmless. Cost: one FileManager scan on launch.
+        Self.sweepStaleChatVideoStagings()
+    }
+
+    /// Delete temp-staged chat video files older than 14 days.
+    /// Called from AppState.init; failures logged and ignored.
+    private static func sweepStaleChatVideoStagings() {
+        let tmp = FileManager.default.temporaryDirectory
+        let fm = FileManager.default
+        let cutoff = Date().addingTimeInterval(-14 * 24 * 3600)
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey]
+        guard let entries = try? fm.contentsOfDirectory(
+            at: tmp, includingPropertiesForKeys: Array(keys), options: .skipsHiddenFiles)
+        else { return }
+        for url in entries
+        where url.lastPathComponent.hasPrefix("vmlx-chat-video-") {
+            let values = try? url.resourceValues(forKeys: keys)
+            guard values?.isRegularFile == true,
+                  let mtime = values?.contentModificationDate,
+                  mtime < cutoff
+            else { continue }
+            try? fm.removeItem(at: url)
+        }
     }
 
     /// The engine currently driving UI events. Resolves to the engine of the
@@ -394,7 +458,8 @@ final class AppState {
                 apiKey: global.apiKey,
                 adminToken: global.adminToken,
                 logLevel: level,
-                defaultEngine: engine
+                defaultEngine: engine,
+                allowedOrigins: global.corsOrigins
             )
         } catch {
             flashBanner("Gateway failed to start on \(host):\(global.gatewayPort) — \(error)")
@@ -449,6 +514,16 @@ final class AppState {
     var loadProgress: LoadProgress? = nil
     var selectedModelPath: URL? = nil
     var activeSessionId: UUID? = nil
+
+    /// Seconds remaining until the currently-pending idle sleep event
+    /// fires (soft-sleep or deep-sleep). `nil` when the IdleTimer is
+    /// disabled or both events have already fired. Polled once per
+    /// second from `rebindEngineObserver`'s spawn Task. Drives the tray
+    /// "Sleeps in MM:SS" label so users stop being surprised when their
+    /// model suddenly light-sleeps mid-afternoon. Repeated user ask:
+    /// the idle countdown used to be totally invisible.
+    var idleCountdownSeconds: TimeInterval? = nil
+    var idleCountdownKindIsDeep: Bool = false
 
     /// Server-screen session list. Mirrors the Electron `sessions` IPC feed
     /// (`SessionsContext.tsx`). Each entry is a running *or* inactive model
@@ -558,6 +633,25 @@ final class AppState {
             // observer; we never need to hold the returned actor here,
             // the dict lookup in subsequent dispatch paths picks it up.
             _ = engine(for: id)
+            // 2026-04-18 iter-19: path-vanished guard. Users do delete
+            // model dirs from Finder / HF-cache cleanups / `rm -rf`
+            // between runs. Pre-fix the session card rendered cleanly
+            // but hitting Start produced a cryptic engine-level load
+            // error. Now we check upfront: if the path no longer
+            // resolves to a directory, hydrate the session in `.error`
+            // state so the UI surfaces a red banner immediately and
+            // Start is disabled. Remote sessions (isRemote) skip this
+            // guard — the endpoint is remote, the local path doesn't
+            // apply.
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            let pathExists = fm.fileExists(
+                atPath: modelPath.path, isDirectory: &isDir) && isDir.boolValue
+            let missingLocalModel = !s.isRemote && !pathExists
+            let hydratedState: EngineState = missingLocalModel
+                ? .error("Model directory not found at \(modelPath.lastPathComponent) — re-download or point to a different model")
+                : .stopped
+
             let session = Session(
                 id: id,
                 // HuggingFace cache paths end in a commit SHA
@@ -580,7 +674,7 @@ final class AppState {
                 port: s.port ?? 8000,
                 pid: nil,
                 latencyMs: nil,
-                state: .stopped,
+                state: hydratedState,
                 loadProgress: nil
             )
             restored.append(session)
@@ -601,6 +695,42 @@ final class AppState {
         let current = engine
         engineObserver = Task { @MainActor [weak self] in
             guard let self else { return }
+            // Sibling Task — 1 Hz idle-countdown poller. Lives alongside
+            // the state-subscription loop so both cancel together when
+            // the engine swaps. Writes `idleCountdownSeconds` so the
+            // tray / chat banner can render "Sleeps in MM:SS". Poll is
+            // cheap (single actor hop) and stops when the timer returns
+            // nil (disabled / fired / no pending event).
+            let countdownTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    guard let self else { break }
+                    // iter-61: gate the countdown on `.running`. The
+                    // IdleTimer keeps its internal `softFired`/`deepFired`
+                    // booleans but those don't flip when the user
+                    // MANUALLY soft-sleeps from the tray — so
+                    // `nextSleepCountdown()` keeps returning a non-nil
+                    // remaining time even though the engine is already
+                    // in `.standby(.soft)`. That made the tray show
+                    // "Sleeps in 3:45" next to a moon icon, which is
+                    // a user-visible UI lie. Gate the countdown on
+                    // the engine actually being in `.running` — only
+                    // then can the idle timer legitimately fire.
+                    let runningNow: Bool = {
+                        if case .running = current.state { return true }
+                        return false
+                    }()
+                    if runningNow,
+                       let next = await current.idleTimer.nextSleepCountdown()
+                    {
+                        self.idleCountdownSeconds = next.seconds
+                        self.idleCountdownKindIsDeep = (next.kind == .deepSleep)
+                    } else {
+                        self.idleCountdownSeconds = nil
+                    }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+            defer { countdownTask.cancel() }
             for await next in await current.subscribeState() {
                 if Task.isCancelled { break }
                 self.engineState = next
@@ -714,12 +844,23 @@ final class AppState {
             : (resolved.settings.defaultHost.isEmpty ? "127.0.0.1" : resolved.settings.defaultHost)
         let http = httpServer(for: id)
         do {
+            // iter-52: TLS plumbing. CLI had it since v1; SwiftUI
+            // sessions didn't — users with ssl_keyfile/ssl_certfile
+            // set in GlobalSettings got plain HTTP regardless.
+            // Empty strings → nil so `Server.run()` falls back to the
+            // HTTP path, non-empty → HTTPS via HummingbirdTLS.
+            let tlsKey = resolved.settings.sslKeyFile
+            let tlsCert = resolved.settings.sslCertFile
             try await http.start(
                 host: bindHost,
                 port: s.port,
                 apiKey: resolved.settings.apiKey,
                 adminToken: resolved.settings.adminToken,
-                logLevel: LogStore.Level(rawValue: resolved.settings.defaultLogLevel) ?? .info
+                logLevel: LogStore.Level(rawValue: resolved.settings.defaultLogLevel) ?? .info,
+                allowedOrigins: resolved.settings.corsOrigins,
+                rateLimitPerMinute: resolved.settings.rateLimit,
+                tlsKeyPath: tlsKey.isEmpty ? nil : tlsKey,
+                tlsCertPath: tlsCert.isEmpty ? nil : tlsCert
             )
             if let idx2 = sessions.firstIndex(where: { $0.id == id }) {
                 sessions[idx2].host = bindHost
@@ -923,13 +1064,35 @@ struct RootView: View {
                 }
             }
             st.onTrayStopServer = {
-                Task { await st.engine.stop() }
+                // iter-55: previously just `engine.stop()` which left
+                // the HTTP listener running with a dead engine —
+                // requests arriving after the tray Stop would fail
+                // with EngineError.notLoaded. Route through the full
+                // `stopSession` teardown so the listener + gateway
+                // registration unwind cleanly. Falls back to bare
+                // `engine.stop()` when no active session is selected
+                // (rare; happens before any session has loaded).
+                Task { @MainActor in
+                    if let id = st.selectedServerSessionId ?? st.sessions.first?.id {
+                        await st.stopSession(id)
+                    } else {
+                        await st.engine.stop()
+                    }
+                }
             }
             st.onTrayRestartServer = {
                 Task { @MainActor in
                     let eng = st.engine
                     let opts = await eng.lastLoadOptions
-                    await eng.stop()
+                    // Full teardown to drop the HTTP listener, then
+                    // re-load. Matches onTrayStopServer shape so
+                    // restart is a stop+start pair, not a silent
+                    // engine-only reload.
+                    if let id = st.selectedServerSessionId ?? st.sessions.first?.id {
+                        await st.stopSession(id)
+                    } else {
+                        await eng.stop()
+                    }
                     if let opts {
                         let stream = await eng.load(opts)
                         for try await _ in stream {}

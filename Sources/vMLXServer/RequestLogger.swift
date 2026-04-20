@@ -11,6 +11,32 @@ import vMLXEngine
 /// are captured per request and routed through the same log stream the
 /// LogsPanel tails. Log level is chosen by status code so 5xx responses
 /// bubble up to the "error" filter in the UI automatically.
+///
+/// **iter-79 sensitive-data invariant (§107)**:
+///
+///   - This middleware deliberately NEVER logs auth headers (any
+///     header-subscript lookup by the Authorization / x-api-key /
+///     x-admin-token names), request or response payload bytes,
+///     or the URL query string. Only method, path, status, and
+///     elapsed ms land in the LogStore — plus on throw, the
+///     thrown error's interpolated description.
+///
+///   - Route handlers throughout the server catch their own errors
+///     and return a structured JSON 4xx/5xx response, so only
+///     unexpected throws propagate up to this middleware. When
+///     they do, the interpolated text is typically a Foundation IO
+///     error (e.g. "Connection closed") or a Swift DecodingError
+///     (which carries a coding-path key list, NOT the decoded
+///     value).
+///
+///   - LogStore itself is bounded (5000-line ring buffer, see
+///     `LogStore.init(capacity:)`) so even a log-pump adversary
+///     can't indefinitely inflate engine memory via spammy
+///     requests.
+///
+/// The §107 regression guard pins this invariant: if a future
+/// change adds any sensitive-data-reader pattern to this file the
+/// test fires.
 public struct RequestLoggerMiddleware<Context: RequestContext>: RouterMiddleware {
     let engine: Engine
     let minLevel: LogStore.Level

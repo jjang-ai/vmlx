@@ -184,6 +184,17 @@ struct Serve: AsyncParsableCommand {
     var disableSsmReDerive: Bool = false
 
     func run() async throws {
+        // Ignore SIGPIPE so mid-stream client disconnect (curl drop,
+        // harness SIGTERM, websocket close) surfaces as EPIPE on the
+        // writer instead of terminating the process. See the long note
+        // on `VMLX.sigpipeInstall` above. Must precede the first
+        // network write — putting it at the top of `Serve.run` is the
+        // reliable placement (the `sigpipeInstall` static is lazy and
+        // may not fire before Hummingbird accepts the first connection).
+        // 2026-04-18 harness observation: Qwen3.6-35B-A3B-MXFP4
+        // cancel_midstream reproducibly silent-killed vmlxctl here.
+        _ = signal(SIGPIPE, SIG_IGN)
+
         let engine = Engine()
 
         // Override GlobalSettings with any CLI cache flags the user passed.
@@ -403,7 +414,8 @@ struct Serve: AsyncParsableCommand {
             adminToken: adminToken ?? resolvedSettings.adminToken,
             tlsKeyPath: resolvedSettings.sslKeyFile.isEmpty ? nil : resolvedSettings.sslKeyFile,
             tlsCertPath: resolvedSettings.sslCertFile.isEmpty ? nil : resolvedSettings.sslCertFile,
-            rateLimitPerMinute: resolvedSettings.rateLimit
+            rateLimitPerMinute: resolvedSettings.rateLimit,
+            allowedOrigins: resolvedSettings.corsOrigins
         )
         // Announce via stderr (unbuffered) AND stdout so both redirected
         // and terminal invocations show the URL. `print` uses block-
@@ -561,14 +573,34 @@ struct List: AsyncParsableCommand {
             return
         }
         // Column widths picked to accommodate the longest `org/repo-family`.
-        print(String(format: "%-50s %-10s %-8s %12s  %s",
-            "NAME", "FAMILY", "QUANT", "SIZE", "PATH"))
+        // Iter-36: switched from `String(format: "%-50s ...")` to native
+        // Swift padding. Variadic `%s` bridged through ObjC expects a
+        // `const char *`, but Swift String passed via CVarArg hands in a
+        // garbage pointer on modern toolchains — the crash surfaces as
+        // `_platform_strlen` SIGSEGV the first time `vmlxctl ls` finds
+        // any models. `Double`-based `%.2f` / `%12s` still use printf
+        // formatting via `formatBytes` but stay on numeric fast paths.
+        print(row("NAME", "FAMILY", "QUANT", "SIZE", "PATH"))
         for e in entries {
             let quant = e.quantBits.map { "Q\($0)" } ?? "fp16"
             let size = formatBytes(e.totalSizeBytes)
-            print(String(format: "%-50s %-10s %-8s %12s  %s",
-                e.displayName, e.family, quant, size, e.canonicalPath.path))
+            print(row(e.displayName, e.family, quant, size, e.canonicalPath.path))
         }
+    }
+
+    /// Print one row with fixed-width columns. Native Swift padding —
+    /// avoids the `%s` varargs bridge that SIGSEGVs on ARM64 macOS.
+    private func row(_ name: String, _ family: String, _ quant: String,
+                     _ size: String, _ path: String) -> String {
+        let nameCol   = name.padding(toLength: 50, withPad: " ", startingAt: 0)
+        let familyCol = family.padding(toLength: 10, withPad: " ", startingAt: 0)
+        let quantCol  = quant.padding(toLength: 8,  withPad: " ", startingAt: 0)
+        // Size right-aligned in 12 cols.
+        let sizeCol: String = {
+            if size.count >= 12 { return size }
+            return String(repeating: " ", count: 12 - size.count) + size
+        }()
+        return "\(nameCol) \(familyCol) \(quantCol) \(sizeCol)  \(path)"
     }
 
     private func formatBytes(_ b: Int64) -> String {

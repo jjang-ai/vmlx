@@ -3,6 +3,7 @@ import HTTPTypes
 import Hummingbird
 import HummingbirdTLS
 import NIOSSL
+import os
 import vMLXEngine
 
 /// vMLX HTTP server. Hummingbird 2.x, sandbox-safe (no fork/exec, no Python sidecar).
@@ -20,6 +21,16 @@ public struct Server {
     public let tlsKeyPath: String?
     public let tlsCertPath: String?
     public let rateLimitPerMinute: Int
+    /// Allowed CORS origins. `["*"]` (default) → fully permissive
+    /// `Access-Control-Allow-Origin: *`. A single entry other than
+    /// `"*"` maps to Hummingbird's `.custom(origin)`. Two or more
+    /// non-wildcard entries → `.originBased` (Hummingbird echoes the
+    /// request's `Origin` header; gating a specific allowlist with
+    /// Hummingbird's built-in middleware requires a wrapper, so for
+    /// now we accept any origin but at least the CORS header reflects
+    /// the actual request origin rather than a blanket `*`. A stricter
+    /// allowlist is TODO for a follow-up middleware.
+    public let allowedOrigins: [String]
 
     public init(
         engine: Engine,
@@ -30,7 +41,8 @@ public struct Server {
         logLevel: LogStore.Level = .info,
         tlsKeyPath: String? = nil,
         tlsCertPath: String? = nil,
-        rateLimitPerMinute: Int = 0
+        rateLimitPerMinute: Int = 0,
+        allowedOrigins: [String] = ["*"]
     ) {
         self.engine = engine
         self.host = host
@@ -41,6 +53,20 @@ public struct Server {
         self.tlsKeyPath = tlsKeyPath
         self.tlsCertPath = tlsCertPath
         self.rateLimitPerMinute = rateLimitPerMinute
+        self.allowedOrigins = allowedOrigins
+    }
+
+    /// Translate the user's `corsOrigins` list into Hummingbird's
+    /// `AllowOrigin` enum. See the `allowedOrigins` doc for the
+    /// mapping contract.
+    static func resolveAllowOrigin(
+        _ origins: [String]
+    ) -> CORSMiddleware<BasicRequestContext>.AllowOrigin {
+        let nonEmpty = origins.filter { !$0.isEmpty }
+        if nonEmpty.isEmpty { return .all }
+        if nonEmpty == ["*"] { return .all }
+        if nonEmpty.count == 1 { return .custom(nonEmpty[0]) }
+        return .originBased
     }
 
     public func run() async throws {
@@ -58,10 +84,24 @@ public struct Server {
 
         let router = Router()
 
-        // Middleware: permissive CORS (mirrors Python fastapi CORSMiddleware config)
+        // Middleware: CORS — now honors `allowedOrigins` from the
+        // session's cors_origins setting (mirrors Python fastapi
+        // CORSMiddleware config). Pre-iter-49 this was hardcoded
+        // `allowOrigin: .all`, so the cors_origins setting was a
+        // dead UI field. See `resolveAllowOrigin` for the list→enum
+        // mapping contract.
         router.add(middleware: CORSMiddleware(
-            allowOrigin: .all,
-            allowHeaders: [.accept, .authorization, .contentType, .origin, .userAgent],
+            allowOrigin: Self.resolveAllowOrigin(allowedOrigins),
+            allowHeaders: [
+                .accept, .authorization, .contentType, .origin, .userAgent,
+                // iter-76 (§104): x-api-key is the Anthropic SDK's
+                // authentication header. Browser-hosted clients hitting
+                // /v1/messages need this in the CORS allowlist so
+                // BearerAuthMiddleware can read it.
+                HTTPField.Name("x-api-key")!,
+                // x-admin-token mirrors the admin-auth sibling header.
+                HTTPField.Name("x-admin-token")!,
+            ],
             allowMethods: [.get, .post, .put, .delete, .options, .head]
         ))
         // Bearer auth (no-op if apiKey == nil)
@@ -149,12 +189,20 @@ public struct Server {
 /// `{"error": {"message": "rate limit exceeded", ...}}` body.
 public struct RateLimitMiddleware<Context: RequestContext>: RouterMiddleware {
     public let requestsPerMinute: Int
-    private let state = State()
 
-    final class State: @unchecked Sendable {
-        var hits: [String: [Date]] = [:]
-        let lock = NSLock()
-    }
+    // **iter-77 (§105)** — migrated from `NSLock` to
+    // `OSAllocatedUnfairLock` with `.withLock` scoped access. The
+    // previous implementation invoked bare lock / unlock calls on
+    // the `state` struct's NSLock directly inside this async method.
+    // Under Swift 6 strict concurrency those APIs are marked
+    // unavailable from async contexts (a bare lock call that
+    // suspends on an actor
+    // hop between it and `unlock()` would violate the sync mutex
+    // contract). SourceKit flagged this as a warning across multiple
+    // iterations. `.withLock` is the scoped form that works correctly
+    // in async code because the closure body is synchronous and the
+    // lock is released before any `await` can happen.
+    private let state = OSAllocatedUnfairLock<[String: [Date]]>(initialState: [:])
 
     public init(requestsPerMinute: Int) {
         self.requestsPerMinute = requestsPerMinute
@@ -167,16 +215,16 @@ public struct RateLimitMiddleware<Context: RequestContext>: RouterMiddleware {
     ) async throws -> Response {
         let key = peerKey(from: request, context: context)
         let now = Date()
-        var allowed = true
-        state.lock.lock()
-        var window = (state.hits[key] ?? []).filter { now.timeIntervalSince($0) < 60 }
-        if window.count >= requestsPerMinute {
-            allowed = false
-        } else {
+        let requestsPerMinute = self.requestsPerMinute
+        let allowed = state.withLock { hits -> Bool in
+            var window = (hits[key] ?? []).filter { now.timeIntervalSince($0) < 60 }
+            if window.count >= requestsPerMinute {
+                return false
+            }
             window.append(now)
-            state.hits[key] = window
+            hits[key] = window
+            return true
         }
-        state.lock.unlock()
         if !allowed {
             let body = #"{"error":{"message":"rate limit exceeded","type":"rate_limit_exceeded"}}"#
             var buf = ByteBuffer()

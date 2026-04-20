@@ -18,11 +18,44 @@ public enum AdminRoutes {
         on router: Router<Context>,
         engine: Engine
     ) {
+        // `/health` — liveness + real engine state. Monitors, uptime
+        // probes, and Ollama-compatible clients need to distinguish
+        // running vs soft-sleeping vs deep-sleeping vs error.
+        // Pre-iter-38 this was a static `{status:ok, engine:vmlx-swift}`
+        // regardless of whether the engine had loaded a model, had
+        // crashed, or was asleep — so probes couldn't tell a busy server
+        // from a dead one. `status:ok` kept for backward compat with
+        // anything grepping for that literal.
         router.get("/health") { _, _ -> Response in
-            OpenAIRoutes.json([
+            let state = engine.state
+            let (stateStr, detail): (String, String?) = {
+                switch state {
+                case .stopped:         return ("stopped", nil)
+                case .loading(let p):  return ("loading", p.phase.rawValue)
+                case .running:         return ("running", nil)
+                case .standby(.soft):  return ("soft_sleep", nil)
+                case .standby(.deep):  return ("deep_sleep", nil)
+                case .error(let msg):  return ("error", msg)
+                }
+            }()
+            let loadedPath = await engine.loadedModelPath
+            var model: String? = nil
+            if let lp = loadedPath {
+                _ = await engine.modelLibrary.scan(force: false)
+                let entries = await engine.modelLibrary.entries()
+                let canonical = lp.resolvingSymlinksInPath().standardizedFileURL
+                model = entries.first(where: {
+                    $0.canonicalPath.standardizedFileURL == canonical
+                })?.displayName ?? lp.lastPathComponent
+            }
+            var body: [String: Any] = [
                 "status": "ok",
                 "engine": "vmlx-swift",
-            ])
+                "state": stateStr,
+            ]
+            if let model { body["model"] = model }
+            if let detail { body["detail"] = detail }
+            return OpenAIRoutes.json(body)
         }
 
         router.post("/admin/soft-sleep") { _, _ -> Response in
@@ -124,6 +157,36 @@ public enum AdminRoutes {
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
+        }
+
+        // POST /admin/cache/clear — drop every tier's cache entries
+        // without unloading the model. Symmetric with the CachePanel
+        // "Clear caches" button + the corresponding `/v1/cache/clear`
+        // shape for external monitors. Pre-iter-41 only the Swift UI
+        // could invoke this via `Engine.clearCaches()` — HTTP callers
+        // had no way to flush and would see stale stats until the
+        // next model reload.
+        router.post("/admin/cache/clear") { _, _ -> Response in
+            await engine.clearCaches()
+            return OpenAIRoutes.json([
+                "object": "cache.clear",
+                "status": "cleared",
+            ])
+        }
+        // Client-facing alias under /v1 so SDKs following the OpenAI
+        // shape hit a path that looks like OpenAI's conventional
+        // namespace. **Note (iter-75)**: this IS still gated by
+        // `AdminAuthMiddleware` (`/v1/cache/*` is in the gate list) —
+        // the original comment claiming this path skipped auth was
+        // stale. Flushing every cache tier is destructive to running
+        // inference sessions (loses prefix hits, kills disk L2) so
+        // it belongs behind the admin token.
+        router.post("/v1/cache/clear") { _, _ -> Response in
+            await engine.clearCaches()
+            return OpenAIRoutes.json([
+                "object": "cache.clear",
+                "status": "cleared",
+            ])
         }
 
         router.get("/v1/cache/stats") { _, _ -> Response in

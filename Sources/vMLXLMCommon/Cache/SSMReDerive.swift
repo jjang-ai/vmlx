@@ -68,28 +68,49 @@ public func maybeReDeriveSSMState(
     genPromptLen: Int,
     enableSSMReDerive: Bool
 ) {
-    guard enableSSMReDerive,
-          coordinator.isHybrid,
-          genPromptLen > 0,
-          promptTokenIds.count > genPromptLen
-    else { return }
+    // iter-45: stderr breadcrumb so users + operators can see whether
+    // the SSM helper watcher actually fires. The counter (reDerives)
+    // only bumps on the happy path; without logs, a user seeing
+    // reDerives=0 couldn't tell if the feature is disabled, the model
+    // isn't hybrid, the prompt has no gen-suffix, or the MLX prep
+    // step threw. These `cache/ssm-rederive` lines make the decision
+    // tree visible.
+    func log(_ status: String) {
+        let line = "[vmlx][cache/ssm-rederive] \(status) hybrid=\(coordinator.isHybrid) genGP=\(genPromptLen) promptLen=\(promptTokenIds.count) enabled=\(enableSSMReDerive)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    guard enableSSMReDerive else { log("skip/disabled"); return }
+    guard coordinator.isHybrid else { log("skip/not-hybrid"); return }
+    guard genPromptLen > 0 else { log("skip/no-gen-prompt"); return }
+    guard promptTokenIds.count > genPromptLen else {
+        log("skip/prompt-shorter-than-gp"); return
+    }
 
     let stripped = Array(promptTokenIds.prefix(promptTokenIds.count - genPromptLen))
-    guard !stripped.isEmpty else { return }
+    guard !stripped.isEmpty else { log("skip/empty-stripped"); return }
 
     do {
         guard let states = try reDeriveSSMStates(
             model: model, tokens: stripped
-        ) else { return }
+        ) else { log("skip/no-ssm-states"); return }
         coordinator.ssmStateCache.store(
             ssmStates: states,
             tokens: stripped,
             boundary: stripped.count
         )
+        // Surface the re-derive event as a stats counter so
+        // users watching the CachePanel can see "hybrid SSM helper
+        // watcher" activity instead of wondering whether it ever ran.
+        coordinator.ssmStateCache.markReDeriveFired()
+        log("ok/stored stateCount=\(states.count)")
     } catch {
         // Best-effort. A failed re-derive just means the next turn
         // re-prefills normally — no worse than the pre-2026-04-14
-        // contamination-skip behavior.
+        // contamination-skip behavior. Log the specific error so
+        // operators can see if this is a recurring failure mode on
+        // their platform/model combo.
+        log("fail/\(error)")
     }
 }
 
@@ -116,7 +137,35 @@ public func reDeriveSSMStates(
         .reshaped([1, tokens.count])
     let input = LMInput(text: LMInput.Text(tokens: tokenArray))
 
-    _ = try model.prepare(input, cache: freshCache, windowSize: prefillStepSize)
+    // iter-45 FIX: the default `LLMModel.prepare` only runs chunks of
+    // length `prefillStepSize` through the forward pass, and returns
+    // any remaining tail as a `PrepareResult.tokens(...)` for the
+    // caller to run. Prior re-derive code discarded that tail — so
+    // for short prompts (len ≤ prefillStepSize, the common case for
+    // chat single-turn requests) ZERO forward passes happened and the
+    // SSM cache stayed empty, producing `skip/no-ssm-states` on every
+    // attempt. Fix: collect the prepare tail and explicitly run it
+    // through `callAsFunction` so the whole prompt touches every
+    // mamba layer, writing `conv_state` + `hidden_state` into the
+    // fresh cache.
+    let result = try model.prepare(
+        input, cache: freshCache, windowSize: prefillStepSize)
+    switch result {
+    case .tokens(let tail):
+        if tail.tokens.size > 0 {
+            let tailInput: MLXArray
+            if tail.tokens.shape.count >= 2 {
+                tailInput = tail.tokens
+            } else {
+                tailInput = tail.tokens.reshaped([1, tail.tokens.size])
+            }
+            _ = model.callAsFunction(tailInput, cache: freshCache)
+        }
+    case .logits:
+        break
+    @unknown default:
+        break
+    }
     MLX.eval(freshCache)
 
     let states = extractSSMStates(from: freshCache)
