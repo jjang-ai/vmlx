@@ -74,9 +74,22 @@ public enum SSEEncoder {
                             try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
                         }
                         if let content = chunk.content, !content.isEmpty {
+                            // §163.B4: OpenAI bundles logprobs + content
+                            // in the same delta frame. Previously we
+                            // emitted two separate frames per token,
+                            // breaking strict consumers (lm-eval-harness,
+                            // LangChain logprob-aware chains) that
+                            // expect logprobs[i].token to map 1:1 with
+                            // content[i]. When this chunk carries both,
+                            // bundle them and skip the redundant frame
+                            // in the logprobs-only branch below.
+                            var delta: [String: Any] = ["content": content]
+                            if let lps = chunk.logprobs, !lps.isEmpty {
+                                delta["logprobs"] = ["content": Self.encodeLogprobs(lps)]
+                            }
                             let j = Self.chunkJSON(
                                 id: id, model: model, created: created,
-                                delta: ["content": content],
+                                delta: delta,
                                 finishReason: nil
                             )
                             try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
@@ -104,26 +117,18 @@ public enum SSEEncoder {
                         }
                         if let fr = chunk.finishReason { finishReason = fr }
                         if let u = chunk.usage { lastUsage = u }
-                        // Emit logprobs data when present.
-                        if let lps = chunk.logprobs, !lps.isEmpty {
-                            let contentArr: [[String: Any]] = lps.map { lp in
-                                var entry: [String: Any] = [
-                                    "token": lp.token,
-                                    "logprob": lp.logprob,
-                                ]
-                                if let bo = lp.byteOffset {
-                                    entry["bytes_offset"] = bo
-                                }
-                                if !lp.topLogprobs.isEmpty {
-                                    entry["top_logprobs"] = lp.topLogprobs.map { alt in
-                                        [
-                                            "token": alt.token,
-                                            "logprob": alt.logprob,
-                                        ] as [String: Any]
-                                    }
-                                }
-                                return entry
-                            }
+                        // §163.B4: logprobs were merged into the content
+                        // frame above when content was present. Only
+                        // emit a standalone frame when logprobs arrive
+                        // WITHOUT content — e.g. the end-of-stream
+                        // flush, or reasoning-only chunks (which
+                        // deliberately don't carry logprobs on the
+                        // content delta so they don't pollute the
+                        // content-token array).
+                        if let lps = chunk.logprobs, !lps.isEmpty,
+                           (chunk.content ?? "").isEmpty
+                        {
+                            let contentArr = Self.encodeLogprobs(lps)
                             let logprobsDict: [String: Any] = ["content": contentArr]
                             let j = Self.chunkJSON(
                                 id: id, model: model, created: created,
@@ -619,6 +624,32 @@ public enum SSEEncoder {
 
             try await writer.write(allocator.buffer(string: "data: [DONE]\n\n"))
             try await writer.finish(nil)
+        }
+    }
+
+    // MARK: - Logprobs helper (OpenAI `logprobs.content[]` shape)
+
+    /// §163.B1: emit each token entry with `bytes: [Int]` (UTF-8 byte
+    /// array of the token string), NOT a byte offset. Matches the
+    /// official OpenAI wire format that lm-evaluation-harness and the
+    /// OpenAI SDKs key on.
+    static func encodeLogprobs(_ lps: [TokenLogprob]) -> [[String: Any]] {
+        lps.map { lp in
+            var entry: [String: Any] = [
+                "token": lp.token,
+                "logprob": lp.logprob,
+                "bytes": lp.bytes,
+            ]
+            if !lp.topLogprobs.isEmpty {
+                entry["top_logprobs"] = lp.topLogprobs.map { alt in
+                    [
+                        "token": alt.token,
+                        "logprob": alt.logprob,
+                        "bytes": alt.bytes,
+                    ] as [String: Any]
+                }
+            }
+            return entry
         }
     }
 
