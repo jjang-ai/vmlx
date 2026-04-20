@@ -8404,3 +8404,75 @@ class TestResponsesRequestNoResponseFormatAttr:
             "raw request.response_format re-introduced in create_response — "
             "will 500 on every /v1/responses call (1.3.63 regression)"
         )
+
+
+class TestImageEndpointModelCategoryGuards:
+    """v1.3.64 — prevent 500 Internal Server Error when caller sends a
+    model name to the wrong image endpoint. Before this fix:
+
+    - POST /v1/images/generations with model=qwen-image-edit → deep
+      mflux TypeError "unexpected keyword argument 'image_path'" → 500
+    - POST /v1/images/edits with model=schnell → silent fall-through to
+      generic img2img branch, ignoring the user's instruction-based-edit
+      intent (confusing UX; gen model pretends to honor an edit prompt).
+
+    Fix: explicit model-category validation returns 400 with a clear
+    message pointing to the correct endpoint."""
+
+    def test_generate_endpoint_rejects_edit_model_names(self):
+        """An edit-only model name on /v1/images/generations must 400
+        with a 'use /v1/images/edits' hint — not crash with 500."""
+        import inspect
+        from vmlx_engine import server as srv
+        src = inspect.getsource(srv.create_image)
+        # Must short-circuit with 400 BEFORE mflux is invoked.
+        assert "_EDIT_MODELS" in src, (
+            "create_image missing EDIT_MODELS category guard — will 500 "
+            "when caller passes qwen-image-edit / kontext / fill"
+        )
+        assert "/v1/images/edits" in src and "is an editing model" in src, (
+            "400 error message must redirect caller to /v1/images/edits"
+        )
+
+    def test_edit_endpoint_rejects_generation_model_names(self):
+        """A generation-only model name on /v1/images/edits must 400
+        rather than silently falling through to img2img."""
+        import inspect
+        from vmlx_engine import server as srv
+        src = inspect.getsource(srv.create_image_edit)
+        assert "SUPPORTED_MODELS" in src, (
+            "create_image_edit missing SUPPORTED_MODELS category guard — "
+            "will silently img2img when caller asks for instruction edit"
+        )
+        assert "/v1/images/generations" in src and "is a generation model" in src, (
+            "400 error message must redirect caller to /v1/images/generations"
+        )
+
+    def test_image_gen_engine_generate_rejects_edit_class(self):
+        """Defense in depth: even if the HTTP layer is bypassed,
+        ImageGenEngine.generate() must refuse to run on an edit-only
+        model class. Otherwise a deep mflux TypeError surfaces as 500."""
+        import inspect
+        from vmlx_engine.image_gen import ImageGenEngine
+        src = inspect.getsource(ImageGenEngine.generate)
+        assert "_gen_mclasses" in src, (
+            "generate() missing generation-class allowlist — editing "
+            "models will TypeError on image_path kwarg"
+        )
+        assert "editing model, not a generation model" in src, (
+            "error message must make the mismatch explicit"
+        )
+
+    def test_image_gen_engine_edit_rejects_generation_class(self):
+        """Defense in depth: ImageGenEngine.edit() must refuse generation
+        model classes rather than falling through to generic img2img."""
+        import inspect
+        from vmlx_engine.image_gen import ImageGenEngine
+        src = inspect.getsource(ImageGenEngine.edit)
+        assert "_edit_mclasses" in src, (
+            "edit() missing edit-class allowlist — generation models "
+            "silently fall through to img2img branch"
+        )
+        assert "is not an editing" in src, (
+            "error message must make the mismatch explicit"
+        )

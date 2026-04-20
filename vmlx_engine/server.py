@@ -4049,7 +4049,21 @@ async def create_image(request: Request):
                 )
 
         # Resolve aliases before comparison (e.g., "flux-schnell" → "schnell")
+        from .image_gen import EDIT_MODELS as _EDIT_MODELS
         from .image_gen import SUPPORTED_MODELS as _IMG_MODELS
+
+        # Reject edit-only models on the gen endpoint. Calling generate()
+        # with an edit model (e.g. qwen-image-edit) raises TypeError deep
+        # in mflux and surfaces as a confusing 500. Return a clear 400
+        # pointing the caller at /v1/images/edits.
+        if model and model.lower() in _EDIT_MODELS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{model}' is an editing model. Use "
+                    f"POST /v1/images/edits, not /v1/images/generations."
+                ),
+            )
 
         resolved_model = _IMG_MODELS.get(model.lower(), model) if model else model
 
@@ -4374,7 +4388,22 @@ async def create_image_edit(request: Request):
                         detail="mflux not installed. Install with: pip install mflux",
                     )
 
-            from .image_gen import EDIT_MODELS
+            from .image_gen import EDIT_MODELS, SUPPORTED_MODELS
+
+            # Reject gen-only models on the edit endpoint. Without this
+            # check, calling edit() with a gen model (e.g. "schnell")
+            # silently falls through to img2img, ignoring the user's
+            # explicit instruction-based-edit intent.
+            if model and model.lower() in SUPPORTED_MODELS and model.lower() not in EDIT_MODELS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model '{model}' is a generation model. Use "
+                        f"POST /v1/images/generations, not /v1/images/edits. "
+                        f"For instruction-based editing, load qwen-image-edit, "
+                        f"flux-kontext, or flux-fill."
+                    ),
+                )
 
             resolved = EDIT_MODELS.get(model.lower(), model)
 

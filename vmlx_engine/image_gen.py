@@ -462,6 +462,18 @@ class ImageGenEngine:
         width = (width // 16) * 16
         height = (height // 16) * 16
 
+        # Defense in depth: generate() requires a generation model. Calling
+        # it on an edit-only class (QwenImageEdit / Flux1Kontext / Flux1Fill /
+        # Flux2KleinEdit) surfaces as a deep mflux TypeError ("unexpected
+        # keyword argument 'image_path'"). Fail fast with a clear message.
+        _gen_mclasses = {"Flux1", "Flux2Klein", "ZImage", "FIBO", "QwenImage"}
+        if self._mflux_class and self._mflux_class not in _gen_mclasses:
+            raise ValueError(
+                f"Model '{self._model_name}' (class={self._mflux_class}) is an "
+                f"editing model, not a generation model. Use ImageGenEngine.edit() "
+                f"or load schnell / dev / z-image-turbo for generation."
+            )
+
         is_img2img = image_path is not None and image_strength is not None
         logger.info(
             f"{'img2img' if is_img2img else 'txt2img'}: {width}x{height}, {steps} steps, "
@@ -547,6 +559,18 @@ class ImageGenEngine:
 
         # Build kwargs based on the model class
         mclass = self._mflux_class or ""
+
+        # Defense in depth: explicit edit-model classes only. Without this,
+        # calling edit() on a generation model (Flux1 / ZImage / Flux2Klein)
+        # falls through to the generic img2img branch and silently performs
+        # variations instead of instruction-based editing.
+        _edit_mclasses = {"QwenImageEdit", "Flux1Kontext", "Flux1Fill", "Flux2KleinEdit"}
+        if mclass not in _edit_mclasses:
+            raise ValueError(
+                f"Model '{self._model_name}' (class={mclass}) is not an editing "
+                f"model. Route to ImageGenEngine.generate() for text-to-image or "
+                f"img2img, or load qwen-image-edit / flux-kontext / flux-fill."
+            )
 
         if mclass == "QwenImageEdit":
             qwen_kwargs: dict = dict(
