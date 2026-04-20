@@ -2154,6 +2154,26 @@ extension Engine {
         params.minP = Float(request.minP ?? resolved.minP)
         params.repetitionPenalty = Float(
             request.repetitionPenalty ?? resolved.repetitionPenalty)
+        // iter-95 §173: wire OpenAI `frequency_penalty` +
+        // `presence_penalty` through to the sampler. Evaluate.swift
+        // has supported both since iter-25 (see `FrequencyPenalty`
+        // + `PresencePenalty` LogitProcessor types at ~L477/L505)
+        // but `buildGenerateParameters` was only setting
+        // `repetitionPenalty`. Result: every chat completions
+        // request that specified `frequency_penalty: 1.0` or
+        // `presence_penalty: 0.8` was accepted (validate() allows
+        // [-2, 2]) but the value was silently dropped — users
+        // saw "penalty had no effect" with no diagnostic. Fix:
+        // forward the clamped Double into the Float fields only
+        // when non-nil + non-zero so the zero-cost path stays
+        // identical to before for the 99% case that doesn't set
+        // them.
+        if let fp = request.frequencyPenalty, fp != 0 {
+            params.frequencyPenalty = Float(fp)
+        }
+        if let pp = request.presencePenalty, pp != 0 {
+            params.presencePenalty = Float(pp)
+        }
         // iter-64: sampler seed. Samplers in Evaluate.swift hold
         // private RandomState instances that ignore the global
         // MLXRandom.seed() call earlier in stream(); this plumbs the
