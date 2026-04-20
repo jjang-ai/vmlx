@@ -178,6 +178,9 @@ struct TrayItem: View {
     /// One-word state label for the picker row so the menu stays scannable
     /// even with long model names.
     private static func sessionShortState(_ s: Session) -> String {
+        // iter-131 §157: remote sessions stay at local-engine .stopped
+        // forever but are functionally ready.
+        if s.isRemote { return "remote" }
         switch s.state {
         case .stopped:        return "stopped"
         case .loading:        return "loading"
@@ -859,7 +862,20 @@ struct TrayItem: View {
         app.selectedModelPath?.lastPathComponent ?? "(no model)"
     }
 
+    /// iter-131 §157: selected session is bound to a remote endpoint.
+    /// Tray renders "Remote" instead of the always-.stopped local state,
+    /// and hides Start/Stop/Wake/Sleep controls since there's no local
+    /// lifecycle to manage.
+    private var isRemoteSession: Bool {
+        guard let sid = app.selectedServerSessionId else { return false }
+        return app.sessions.first(where: { $0.id == sid })?.isRemote ?? false
+    }
+
     private var stateLabel: String {
+        // iter-131 §157: see isRemoteSession. The tray is the most
+        // "at-a-glance" surface in the app — it must not lie about
+        // a remote session's availability by showing "Stopped".
+        if isRemoteSession { return "Remote" }
         switch app.engineState {
         case .stopped:        return "Stopped"
         case .loading:        return "Loading…"
@@ -882,6 +898,7 @@ struct TrayItem: View {
     }
 
     private var stateColor: Color {
+        if isRemoteSession { return .accentColor }
         switch app.engineState {
         case .running:        return .green
         case .loading:        return .orange
@@ -892,30 +909,39 @@ struct TrayItem: View {
     }
 
     private var canStart: Bool {
+        // iter-131 §157: remote sessions have no local "start" — the
+        // endpoint is either reachable or not, there's nothing to
+        // boot here.
+        if isRemoteSession { return false }
         if case .stopped = app.engineState { return true }
         if case .error = app.engineState { return true }
         return false
     }
     private var canStop: Bool {
+        if isRemoteSession { return false }
         if case .running = app.engineState { return true }
         if case .standby = app.engineState { return true }
         return false
     }
     private var canRestart: Bool {
+        if isRemoteSession { return false }
         if case .running = app.engineState { return true }
         if case .standby = app.engineState { return true }
         return false
     }
     private var canSoftSleep: Bool {
+        if isRemoteSession { return false }
         if case .running = app.engineState { return true }
         return false
     }
     private var canDeepSleep: Bool {
+        if isRemoteSession { return false }
         if case .running = app.engineState { return true }
         if case .standby(.soft) = app.engineState { return true }
         return false
     }
     private var canWake: Bool {
+        if isRemoteSession { return false }
         if case .standby = app.engineState { return true }
         return false
     }
