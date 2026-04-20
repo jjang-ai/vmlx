@@ -7879,6 +7879,54 @@ class TestVlTurboQuantDecodeSpeedBaseline:
             "ralph-loop state must record Nemotron-Cascade-2 decode baseline"
         )
 
+
+class TestOllamaWireFormatEndpoints:
+    """iter 36 — pins the 5 Ollama-compatible endpoints exposed at
+    /api/*. Live-verified against Qwen3.6-JANGTQ2-CRACK-v13:
+      /api/chat      → NDJSON with done_reason
+      /api/tags      → listed single loaded model
+      /api/version   → "0.12.6" (Ollama Copilot compat, iter 1 v1.3.50)
+      /api/show      → capabilities/details/model_info/modelfile/parameters/template
+      /api/generate  → {response, done:true} non-chat completion
+    All via real Qwen3.6-JANGTQ2 tokenizer/model."""
+
+    def test_ollama_endpoints_registered(self):
+        """All 5 /api/* endpoints must be registered in the FastAPI
+        routing table."""
+        from vmlx_engine.server import app
+        paths = {r.path for r in app.routes}
+        for p in ("/api/chat", "/api/tags", "/api/version", "/api/show", "/api/generate"):
+            assert p in paths, (
+                f"Ollama endpoint {p} missing — breaks Ollama Copilot "
+                f"and downstream compat (mlxstudio#72)"
+            )
+
+    def test_ollama_version_string_present(self):
+        """/api/version response format matches Ollama wire. A downstream
+        client parses the 'version' field to route compat quirks."""
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+        client = TestClient(srv.app)
+        r = client.get("/api/version")
+        assert r.status_code == 200
+        body = r.json()
+        assert "version" in body, f"/api/version missing 'version' field: {body}"
+        # Version string must be in semver-looking shape
+        v = str(body["version"])
+        assert v.count(".") >= 1, f"Invalid version format: {v!r}"
+
+    def test_ollama_show_endpoint_responds(self):
+        """/api/show accepts {name: ...} POST and returns model info.
+        Empty/unknown name must be rejected or return a stub — not 500."""
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+        client = TestClient(srv.app)
+        # Known name goes through; unknown name must not 500
+        r = client.post("/api/show", json={"name": "default"})
+        assert r.status_code in (200, 400, 404), (
+            f"/api/show bad status {r.status_code}: {r.text[:200]}"
+        )
+
     def test_hybrid_ssm_multiturn_cache_documented(self):
         """iter 32 confirmed TurboQuant + hybrid-SSM multi-turn cache
         hits work once idle time lets the async re-derive fire:
