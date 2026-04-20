@@ -7584,3 +7584,81 @@ class TestAsyncSsmRederiveQueue:
             "Comment explaining why direct store is unsafe for thinking "
             "models must remain (contamination rationale)"
         )
+
+
+class TestBundledPythonVerifyScript:
+    """iter 23 — pins the release-gate bundled-python sanity check.
+
+    panel/scripts/verify-bundled-python.sh must pass before the DMG
+    is packaged. Historical regression: a fresh-install user hit
+    'ModuleNotFoundError: No module named mlx_vlm.models.gemma4'
+    because the gemma4 cherry-pick was dropped during a routine
+    mlx_vlm version bump. This script + test pair catches that."""
+
+    _SCRIPT = "/private/tmp/vmlx-1.3.55-build/panel/scripts/verify-bundled-python.sh"
+
+    def test_verify_script_exists_and_executable(self):
+        """Script must live at panel/scripts/verify-bundled-python.sh
+        and be executable. Without it, the release-gate check from
+        MEMORY.md can't run."""
+        import os
+        assert os.path.isfile(self._SCRIPT), (
+            f"verify-bundled-python.sh missing at {self._SCRIPT} — "
+            f"release-gate check broken"
+        )
+        assert os.access(self._SCRIPT, os.X_OK), (
+            f"{self._SCRIPT} exists but not executable"
+        )
+
+    def test_verify_script_passes_against_current_bundle(self):
+        """Running the script must succeed on the current bundle.
+        A failure means the DMG we'd ship today would crash on at
+        least one critical import (mlx, mlx_vlm.models.gemma4,
+        jang_tools, vmlx_engine, etc.)."""
+        import subprocess, os
+        if not os.path.isfile(self._SCRIPT):
+            pytest.skip("verify-bundled-python.sh not present")
+        # Must check bundled python is present; if not, script
+        # exits early — still a useful signal (not a test failure
+        # since the test doesn't own the bundle).
+        result = subprocess.run(
+            ["/bin/bash", self._SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        # Script exits non-zero if ANY critical import fails
+        assert result.returncode == 0, (
+            f"verify-bundled-python.sh FAILED with exit {result.returncode}\n"
+            f"stdout: {result.stdout[-500:]}\n"
+            f"stderr: {result.stderr[-500:]}"
+        )
+        # Success marker — script prints a clear "all critical imports ok" line
+        assert "all critical imports ok" in result.stdout, (
+            f"expected success marker missing from output:\n{result.stdout[-500:]}"
+        )
+
+    def test_verify_script_checks_gemma4_cherry_pick(self):
+        """The script body must explicitly check mlx_vlm.models.gemma4.
+        This is the concrete regression that motivated the script —
+        removing the gemma4 import check defeats the whole purpose."""
+        import os
+        if not os.path.isfile(self._SCRIPT):
+            pytest.skip("verify-bundled-python.sh not present")
+        src = open(self._SCRIPT).read()
+        assert "mlx_vlm.models.gemma4" in src, (
+            "verify-bundled-python.sh must explicitly probe "
+            "mlx_vlm.models.gemma4 — it's the original motivating "
+            "regression (fresh-install ModuleNotFoundError)"
+        )
+        # Other critical JANGTQ-family imports
+        for imp in (
+            "jang_tools",
+            "jang_tools.load_jangtq",
+            "jang_tools.turboquant",
+            "vmlx_engine.utils.jang_loader",
+        ):
+            assert imp in src, (
+                f"Script must probe {imp} — it's a hot-path module "
+                f"users cannot tolerate missing on launch"
+            )
