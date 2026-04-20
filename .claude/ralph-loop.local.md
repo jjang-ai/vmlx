@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 49
+iteration: 50
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,27 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 366/366 source-scan tests green, 126/126 regression guards + 15 matrix
-  rows (§57–§130)
+- 367/367 source-scan tests green, 127/127 regression guards + 15 matrix
+  rows (§57–§131)
+- iter-105 work:
+  1. DiskCache corrupt-entry DB row orphan (§131) — **real budget
+     accounting bug**. `DiskCache.fetch()` catches deserialize
+     errors (corrupt safetensors files from partial write / disk
+     full / format version drift), logs to stderr, and removes
+     the file on disk. But previously it did NOT drop the SQLite
+     row. `evictIfNeeded` calculates total-cache-size with
+     `SELECT COALESCE(SUM(file_size), 0) FROM cache_entries` —
+     so an orphan row claiming 50MB for a missing file inflated
+     the computed total and caused premature eviction of
+     healthy entries. The orphan row was functionally dead
+     (fetch short-circuits on `fileExists` before deserialize)
+     but budget-inflating until true-LRU eventually touched it
+     (could be many turns for a cold entry). Fix: new private
+     `deleteRow(hash:)` helper under the shared SQLite lock.
+     fetch's corrupt-file branch calls it in the same
+     `lock.withLock { misses += 1; deleteRow(hash: hash) }`
+     scope. §131 regression guard pins the helper + the fetch
+     call-site + the parameterized DELETE.
 - iter-104 work (no-code audit):
   1. **SQL safety sweep** — no user-data SQL interpolation. All
      `sqlite3_exec` call sites pass schema / PRAGMA strings only;
