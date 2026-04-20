@@ -492,6 +492,7 @@ let package = Package(
             dependencies: [
                 "vMLXEngine",
                 "vMLXTTS",
+                "vMLXLMCommon",
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdTLS", package: "hummingbird"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),

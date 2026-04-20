@@ -151,6 +151,15 @@ public struct GenerateParameters: Sendable {
     /// Callers mutate via direct assignment: `p.samplerSeed = 42`.
     public var samplerSeed: UInt64? = nil
 
+    /// When true, capture per-token log probabilities during generation.
+    /// The `LogprobsCollector` processor is automatically created by
+    /// `logprobsProcessor()` when this is true.
+    public var logprobs: Bool = false
+
+    /// Number of top log probabilities to capture per token position.
+    /// Only meaningful when `logprobs == true`. Range: 0–20.
+    public var topLogprobs: Int = 0
+
     public init(
         maxTokens: Int? = nil,
         maxKVSize: Int? = nil,
@@ -249,6 +258,137 @@ public struct GenerateParameters: Sendable {
             presenceContext: presenceContext,
             frequencyContext: frequencyContext
         )
+    }
+
+    /// Returns a `LogprobsCollector` when `logprobs == true`, nil otherwise.
+    /// The collector captures per-token log probabilities during generation.
+    /// Callers should compose this with any penalty processor via
+    /// `CompositeLogitProcessor` if both are needed.
+    public func logprobsProcessor() -> LogprobsCollector? {
+        guard logprobs else { return nil }
+        return LogprobsCollector(topLogprobs: topLogprobs)
+    }
+}
+
+// MARK: - Logprobs collection
+
+/// Per-token log probability data captured during generation.
+/// Carries the selected token's logprob and optionally the top-N
+/// alternative tokens at each position.
+public struct TokenLogprob: Sendable {
+    /// The token string (detokenized).
+    public var token: String
+    /// Log probability of the selected token.
+    public var logprob: Float
+    /// Byte offset of this token in the generated output.
+    public var byteOffset: Int?
+    /// Top-N alternative tokens with their log probabilities.
+    public var topLogprobs: [TopTokenLogprob]
+
+    public init(token: String, logprob: Float, byteOffset: Int? = nil,
+                topLogprobs: [TopTokenLogprob] = []) {
+        self.token = token
+        self.logprob = logprob
+        self.byteOffset = byteOffset
+        self.topLogprobs = topLogprobs
+    }
+}
+
+/// A single alternative token and its log probability.
+public struct TopTokenLogprob: Sendable {
+    public var token: String
+    public var logprob: Float
+
+    public init(token: String, logprob: Float) {
+        self.token = token
+        self.logprob = logprob
+    }
+}
+
+/// A `LogitProcessor` that captures per-token log probabilities.
+///
+/// After each sampling step, this processor records the log probability
+/// of the selected token and (optionally) the top-N alternatives.
+/// The collected data is retrieved via `collectedLogprobs` after
+/// generation completes.
+///
+/// Logprobs are computed *after* penalty processing (repetition,
+/// presence, frequency) so they reflect the actual sampling distribution.
+public struct LogprobsCollector: LogitProcessor {
+    let topLogprobs: Int
+    public private(set) var collectedLogprobs: [TokenLogprob] = []
+
+    public init(topLogprobs: Int = 0) {
+        self.topLogprobs = topLogprobs
+    }
+
+    public mutating func prompt(_ prompt: MLXArray) {
+        collectedLogprobs = []
+    }
+
+    public func process(logits: MLXArray) -> MLXArray {
+        // No-op: logprobs are captured after sampling in `didSample`.
+        return logits
+    }
+
+    public mutating func didSample(token: MLXArray) {
+        // This is called with the sampled token *after* the sampler has
+        // made its choice. We don't have the logits here — those are
+        // consumed inside the sampler. Instead, logprob capture happens
+        // inside the token loop via `captureLogprobs(logits:sampledToken:)`.
+    }
+
+    /// Capture log probabilities for a single token step.
+    /// Called from the token loop *after* sampling but before the token
+    /// is committed. Computes log-softmax of the full logit vector to
+    /// extract the chosen token's probability and top-N alternatives.
+    ///
+    /// - Parameters:
+    ///   - logits: raw logits BEFORE sampling (post-penalty).
+    ///   - sampledToken: the token ID selected by the sampler.
+    ///   - tokenizer: used to decode token IDs back to strings.
+    public mutating func capture(
+        logits: MLXArray,
+        sampledToken: Int,
+        tokenizer: Tokenizer
+    ) {
+        var lp = logits
+        if lp.dtype == .bfloat16 {
+            lp = lp.asType(.float32)
+        }
+        let logProbs = logSoftmax(lp)
+        let sampledLogprob = logProbs[0..., sampledToken].item(Float.self)
+
+        let tokenStr = tokenizer.decode(tokenIds: [sampledToken])
+
+        var topAlts: [TopTokenLogprob] = []
+        if topLogprobs > 0 {
+            let vocabSize = logProbs.dim(-1)
+            let flatLogProbs = logProbs.reshaped(-1)
+            // argSort returns ascending (smallest first). Take the last N
+            // (highest logprobs) and reverse to get descending order,
+            // matching the OpenAI wire format.
+            let sortedIndices = argSort(flatLogProbs, axis: -1)
+            let n = min(topLogprobs, vocabSize)
+            let total = sortedIndices.dim(0)
+            let topIndices = sortedIndices[(total - n)..<total].asArray(Int.self).reversed()
+            for idx in topIndices {
+                let lpVal = flatLogProbs[idx].item(Float.self)
+                let tokStr = tokenizer.decode(tokenIds: [idx])
+                topAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+            }
+        }
+
+        collectedLogprobs.append(TokenLogprob(
+            token: tokenStr,
+            logprob: sampledLogprob,
+            topLogprobs: topAlts
+        ))
+    }
+
+    /// Reset collected state for reuse.
+    public mutating func reset() {
+        collectedLogprobs = []
     }
 }
 
@@ -571,6 +711,10 @@ protocol TokenIteratorProtocol: Sequence, IteratorProtocol where Element == Int 
     var maxTokens: Int? { get }
     var tokenCount: Int { get }
     var promptPrefillTime: TimeInterval { get }
+    /// Per-token log probabilities collected during generation.
+    /// Empty when logprobs were not requested.
+    var collectedLogprobs: [TokenLogprob] { get }
+    mutating func popCollectedLogprobs() -> [TokenLogprob]
 }
 
 /// Generator of tokens.
@@ -607,6 +751,14 @@ public struct TokenIterator: TokenIteratorProtocol {
     var cache: [KVCache]
     var processor: LogitProcessor?
     let sampler: LogitSampler
+
+    /// Optional logprob collector — created when `GenerateParameters.logprobs`
+    /// is true. Captures per-token log probabilities during generation.
+    var logprobsCollector: LogprobsCollector?
+
+    /// Tokenizer reference for logprob token decoding. Only set when
+    /// `logprobsCollector` is active to avoid unnecessary retains.
+    let logprobsTokenizer: Tokenizer?
 
     var tokenCount = 0
     let maxTokens: Int?
@@ -660,6 +812,8 @@ public struct TokenIterator: TokenIteratorProtocol {
 
         self.processor = parameters.processor()
         self.sampler = parameters.sampler()
+        self.logprobsCollector = parameters.logprobsProcessor()
+        self.logprobsTokenizer = nil
         self.maxTokens = parameters.maxTokens
 
         self.kvBits = parameters.kvBits
@@ -690,11 +844,13 @@ public struct TokenIterator: TokenIteratorProtocol {
     ///   - cache: optional ``KVCache``
     ///   - parameters: the generation parameters
     ///   - cacheCoordinator: optional multi-tier cache coordinator for prefix reuse
+    ///   - tokenizer: optional tokenizer for logprob token decoding
     public init(
         input: LMInput, model: any LanguageModel, cache: [KVCache]? = nil,
         parameters: GenerateParameters,
         cacheCoordinator: CacheCoordinator? = nil,
-        genPromptLen: Int = 0
+        genPromptLen: Int = 0,
+        tokenizer: Tokenizer? = nil
     ) throws {
         self.model = model
         self.y = input.text
@@ -704,6 +860,8 @@ public struct TokenIterator: TokenIteratorProtocol {
 
         self.processor = parameters.processor()
         self.sampler = parameters.sampler()
+        self.logprobsCollector = parameters.logprobsProcessor()
+        self.logprobsTokenizer = self.logprobsCollector != nil ? tokenizer : nil
         self.maxTokens = parameters.maxTokens
 
         self.kvBits = parameters.kvBits
@@ -853,6 +1011,8 @@ public struct TokenIterator: TokenIteratorProtocol {
 
         self.processor = processor
         self.sampler = sampler
+        self.logprobsCollector = nil
+        self.logprobsTokenizer = nil
         self.maxTokens = maxTokens
 
         // No cache quantization for this direct initialization
@@ -897,12 +1057,27 @@ public struct TokenIterator: TokenIteratorProtocol {
         if var processor {
             logits = processor.process(logits: logits)
             let y = sampler.sample(logits: logits)
+            // Capture logprobs from post-penalty logits.
+            if var collector = logprobsCollector,
+               let tokenizer = logprobsTokenizer {
+                let tokenId = y.item(Int.self)
+                collector.capture(logits: logits, sampledToken: tokenId, tokenizer: tokenizer)
+                self.logprobsCollector = collector
+            }
             processor.didSample(token: y)
             self.processor = processor
             return y
         }
 
-        return sampler.sample(logits: logits)
+        let y = sampler.sample(logits: logits)
+        // Capture logprobs from raw logits (no penalty processor).
+        if var collector = logprobsCollector,
+           let tokenizer = logprobsTokenizer {
+            let tokenId = y.item(Int.self)
+            collector.capture(logits: logits, sampledToken: tokenId, tokenizer: tokenizer)
+            self.logprobsCollector = collector
+        }
+        return y
     }
 
     // Whether cache quantization is needed (skip the function call entirely when not)
@@ -1004,6 +1179,18 @@ public struct TokenIterator: TokenIteratorProtocol {
         }
 
         return previousY.tokens.item(Int.self)
+    }
+
+    public var collectedLogprobs: [TokenLogprob] {
+        logprobsCollector?.collectedLogprobs ?? []
+    }
+
+    public mutating func popCollectedLogprobs() -> [TokenLogprob] {
+        guard var collector = logprobsCollector else { return [] }
+        let result = collector.collectedLogprobs
+        collector.reset()
+        self.logprobsCollector = collector
+        return result
     }
 }
 
@@ -1260,6 +1447,10 @@ public struct SpeculativeTokenIterator: TokenIteratorProtocol {
         tokenCount += 1
         return token
     }
+
+    public var collectedLogprobs: [TokenLogprob] { [] }
+
+    public mutating func popCollectedLogprobs() -> [TokenLogprob] { [] }
 }
 
 /// Result of a call to a deprecated callback-based generate function.
@@ -1670,7 +1861,8 @@ public func generate(
 ) throws -> AsyncStream<Generation> {
     let iterator = try TokenIterator(
         input: input, model: context.model, cache: cache, parameters: parameters,
-        cacheCoordinator: cacheCoordinator, genPromptLen: genPromptLen)
+        cacheCoordinator: cacheCoordinator, genPromptLen: genPromptLen,
+        tokenizer: context.tokenizer)
     let (stream, _) = generateTask(
         promptTokenCount: input.text.tokens.size,
         modelConfiguration: context.configuration,
@@ -1865,7 +2057,7 @@ public func generateTokens(
 ) throws -> AsyncStream<TokenGeneration> {
     let iterator = try TokenIterator(
         input: input, model: context.model, cache: cache, parameters: parameters,
-        cacheCoordinator: cacheCoordinator)
+        cacheCoordinator: cacheCoordinator, tokenizer: context.tokenizer)
     let (stream, _) = generateTokenTask(
         promptTokenCount: input.text.tokens.size,
         modelConfiguration: context.configuration,
@@ -2058,7 +2250,8 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                 tokenizer: tokenizer
             )
 
-            for token in iterator {
+            var iter = iterator
+            while let token = iter.next() {
                 // Check for cancellation on every loop iteration.
                 if Task.isCancelled {
                     stopReason = .cancelled
@@ -2089,8 +2282,21 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                     stopReason = .cancelled
                     break
                 }
-            }
+                // Emit per-token logprob events when logprobs were requested.
+                // Only Generation (text) output supports logprobs — TokenGeneration
+                // does not have a .logprob case.
+                if Handler.Output.self == Generation.self {
+                    for lp in iter.popCollectedLogprobs() {
+                        if case .terminated = continuation.yield(Generation.logprob(lp) as! Handler.Output) {
+                            stopReason = .cancelled
+                            break
+                        }
+                    }
+                }
 
+                if stopReason == .cancelled { break }
+
+            }
             if stopReason == nil {
                 // Check the `maxTokens` reached condition BEFORE `Task.isCancelled`.
                 // Reaching max_tokens is a natural end-of-stream — the iterator
@@ -2100,7 +2306,7 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                 // `tokenCount` (decoded-in-this-loop), NOT `iterator.tokenCount`
                 // which in batched flows may be reset or shadowed by the
                 // iterator's own internal accounting.
-                if let maxTokens = iterator.maxTokens, tokenCount >= maxTokens {
+                if let maxTokens = iter.maxTokens, tokenCount >= maxTokens {
                     stopReason = .length
                 } else if Task.isCancelled {
                     stopReason = .cancelled
@@ -2131,7 +2337,7 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
             let info = GenerateCompletionInfo(
                 promptTokenCount: promptTokenCount,
                 generationTokenCount: tokenCount,
-                promptTime: promptTime + iterator.promptPrefillTime,
+                promptTime: promptTime + iter.promptPrefillTime,
                 generationTime: generateTime,
                 stopReason: stopReason ?? .cancelled
             )
@@ -2251,12 +2457,17 @@ public enum Generation: Sendable {
     /// A tool call from the language model.
     case toolCall(ToolCall)
 
+    /// Per-token log probability data. Emitted once per generated token
+    /// when `GenerateParameters.logprobs == true`.
+    case logprob(TokenLogprob)
+
     /// Generated text or nil
     public var chunk: String? {
         switch self {
         case .chunk(let string): string
         case .info: nil
         case .toolCall: nil
+        case .logprob: nil
         }
     }
 
@@ -2266,6 +2477,7 @@ public enum Generation: Sendable {
         case .chunk: nil
         case .info(let info): info
         case .toolCall: nil
+        case .logprob: nil
         }
     }
 
@@ -2275,6 +2487,17 @@ public enum Generation: Sendable {
         case .chunk: nil
         case .info: nil
         case .toolCall(let toolCall): toolCall
+        case .logprob: nil
+        }
+    }
+
+    /// Token log probability data, or nil.
+    public var logprob: TokenLogprob? {
+        switch self {
+        case .chunk: nil
+        case .info: nil
+        case .toolCall: nil
+        case .logprob(let lp): lp
         }
     }
 

@@ -1295,7 +1295,22 @@ extension Engine {
         var accumulatedDecodeMs: Double = 0
         var accumulatedDecodeTokens = 0
 
+
+        // Logprobs accumulator — per-token logprob events arrive from the
+        // Evaluate.swift token loop and are batched into StreamChunk.logprobs
+        // alongside content/reasoning deltas.
+        var pendingLogprobs: [TokenLogprob] = []
+        let shouldCollectLogprobs = (request.logprobs ?? false)
         var lastChunkAt = prefillStart
+        // Flush any accumulated logprob data alongside content. Called
+        // before each content/reasoning yield to batch pending logprobs
+        // into a dedicated StreamChunk.
+        func flushLogprobs() {
+            guard !pendingLogprobs.isEmpty else { return }
+            let lps = pendingLogprobs
+            pendingLogprobs = []
+            continuation.yield(StreamChunk(logprobs: lps))
+        }
         for await event in stream {
             if Task.isCancelled { break }
             switch event {
@@ -1572,6 +1587,8 @@ extension Engine {
                     }
                 }
 
+                // Flush accumulated logprobs before emitting content.
+                flushLogprobs()
                 if !emittableContent.isEmpty {
                     if !stopMatcher.isEmpty {
                         // Aho-Corasick stop scan. Append to the running
@@ -1671,6 +1688,8 @@ extension Engine {
                 ))
 
             case .info(let info):
+                // Flush any remaining logprobs before the final metrics.
+                flushLogprobs()
                 // End-of-stream flush for the hand-rolled `splitThinkTags`
                 // path. That splitter holds back up to 8 trailing chars in
                 // `pendingBuffer` for partial-tag safety (so a `</thi` at
@@ -1880,6 +1899,11 @@ extension Engine {
                     continuation.yield(StreamChunk(usage: usage))
                 }
 
+
+            case .logprob(let lp):
+                if shouldCollectLogprobs {
+                    pendingLogprobs.append(lp)
+                }
             }
         }
 
@@ -2467,6 +2491,11 @@ extension Engine {
         if let seed = request.seed {
             params.samplerSeed = UInt64(bitPattern: Int64(seed))
         }
+
+        // Logprobs: wire request fields into GenerateParameters so
+        // LogprobsCollector is activated inside the TokenIterator.
+        params.logprobs = request.logprobs ?? false
+        params.topLogprobs = request.topLogprobs ?? 0
 
         // Whole-model compiled decode (perf audit 2026-04-16). Enabling
         // `enableCompiledDecode` wraps the entire model forward pass in
