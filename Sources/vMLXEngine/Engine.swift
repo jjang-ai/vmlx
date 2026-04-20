@@ -995,6 +995,28 @@ public actor Engine {
                         label: "Weights loaded"
                     ))
 
+                    // iter-100 §127: checkpoint for mid-load cancel.
+                    // `stop()` calls `currentLoadTask?.cancel()` + wipes
+                    // `loaded`/`loadedModelPath`/`lastLoadOptions`. But
+                    // the mlx-swift load path (safetensors mmap,
+                    // tokenizer init, Metal warmup) doesn't honor Swift
+                    // task cancellation — it runs to completion. If we
+                    // blindly commit `container` here, setLoaded +
+                    // transition(.running) override stop()'s wipe and
+                    // the model springs back to life a few seconds
+                    // after the user clicked Stop. Checkpoint right
+                    // before setLoaded to bail cleanly, flush MLX
+                    // pooled buffers (§113), and stay in the state
+                    // that stop() put us in.
+                    if Task.isCancelled {
+                        await self.logs.append(.info, category: "engine",
+                            "Load cancelled mid-phase3; discarding loaded container")
+                        MLX.Memory.clearCache()
+                        continuation.yield(.failed("cancelled"))
+                        continuation.finish()
+                        return
+                    }
+
                     // Phase 3: cache + idle + metrics setup (fraction 0.85 → 0.90)
                     await self.setLoaded(container)
                     await self.setLoadedModelPath(opts.modelPath)

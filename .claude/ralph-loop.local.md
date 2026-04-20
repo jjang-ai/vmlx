@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 44
+iteration: 45
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 362/362 source-scan tests green, 122/122 regression guards + 15 matrix
-  rows (§57–§126)
+- 363/363 source-scan tests green, 123/123 regression guards + 15 matrix
+  rows (§57–§127)
+- iter-100 work:
+  1. Mid-load cancel race (§127) — **real UX bug**. `stop()`
+     cancelled `currentLoadTask` and wiped `loaded` /
+     `loadedModelPath` / `lastLoadOptions`, but the mlx-swift
+     load path (safetensors mmap, tokenizer init, Metal warmup)
+     doesn't honor Swift task cancellation — it runs to
+     completion. The load body then committed
+     `setLoaded(container)` + transitioned to `.running` a few
+     seconds later, overriding stop()'s wipe. User clicked
+     Stop, saw the state go `.stopped`, then watched the model
+     spring back to `.running` with a fresh engine they just
+     tried to abort. Real-reproducible on any load taking
+     >5 seconds (every realistic model). Fix: checkpoint
+     `Task.isCancelled` right before the final
+     `setLoaded(container)`. If cancelled, flush MLX pooled
+     buffers (§113), yield `.failed("cancelled")`, return.
+     Engine stays in whatever state stop() put it in, memory
+     is reclaimed. §127 regression guard asserts the
+     checkpoint lives BEFORE setLoaded (ordering matters) AND
+     that the cancel bail-out flushes Memory + yields cancelled.
 - iter-99 work:
   1. Engine startup sweep for orphan vmlx-* temp artifacts (§126)
      — **crash recovery + per-call leak containment**.
