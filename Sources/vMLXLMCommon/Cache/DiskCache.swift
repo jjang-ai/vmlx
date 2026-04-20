@@ -190,7 +190,18 @@ public final class DiskCache: @unchecked Sendable {
                 "[vmlx][cache/disk] fetch corrupt entry at \(url.lastPathComponent): \(error) — removing\n"
                 .utf8))
             try? FileManager.default.removeItem(at: url)
-            lock.withLock { misses += 1 }
+            // iter-105 §131: also drop the SQLite row for this hash.
+            // Otherwise the DB claims `file_size` bytes for a file that
+            // no longer exists, and `evictIfNeeded`'s
+            // `SELECT COALESCE(SUM(file_size), 0)` overestimates the
+            // cache total → triggers premature eviction of other live
+            // entries. `fetch` short-circuits on the `fileExists`
+            // check anyway so the row is functionally dead, just
+            // budget-inflating. Delete it in the same lock scope.
+            lock.withLock {
+                misses += 1
+                deleteRow(hash: hash)
+            }
             return nil
         }
     }
@@ -308,6 +319,27 @@ public final class DiskCache: @unchecked Sendable {
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
+    }
+
+    /// iter-105 §131: drop a specific entry row. Called from `fetch`
+    /// after the safetensors file turned out to be corrupt and was
+    /// removed on disk — the SQLite row would otherwise inflate the
+    /// eviction budget calculation (SUM(file_size)) until true-LRU
+    /// catches up, which can take many turns. Runs under the shared
+    /// SQLite lock; caller is responsible for `lock.withLock {…}`.
+    private func deleteRow(hash: String) {
+        guard let db else { return }
+        var stmt: OpaquePointer?
+        hash.withCString { cStr in
+            if sqlite3_prepare_v2(
+                db, "DELETE FROM cache_entries WHERE hash = ?",
+                -1, &stmt, nil
+            ) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, cStr, -1, nil)
+                sqlite3_step(stmt)
+            }
+            sqlite3_finalize(stmt)
+        }
     }
 
     /// Bump `last_accessed_at` to the current time for a given entry.
