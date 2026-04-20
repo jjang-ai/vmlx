@@ -1302,13 +1302,22 @@ extension Engine {
         var pendingLogprobs: [TokenLogprob] = []
         let shouldCollectLogprobs = (request.logprobs ?? false)
         var lastChunkAt = prefillStart
-        // Flush any accumulated logprob data alongside content. Called
-        // before each content/reasoning yield to batch pending logprobs
-        // into a dedicated StreamChunk.
-        func flushLogprobs() {
-            guard !pendingLogprobs.isEmpty else { return }
+        // §163.B4: take-and-clear the pending logprobs so the caller can
+        // bundle them into the SAME StreamChunk as the content delta.
+        // OpenAI emits logprobs inside `delta.logprobs.content[]` on the
+        // same SSE frame as `delta.content`; a standalone frame breaks
+        // strict consumers (lm-eval-harness, LangChain logprob chains)
+        // that expect 1:1 mapping between logprobs[i] and content[i].
+        // `flushLogprobs()` now only runs for end-of-stream drain when
+        // there is no further content to attach to.
+        func takeLogprobs() -> [TokenLogprob]? {
+            guard !pendingLogprobs.isEmpty else { return nil }
             let lps = pendingLogprobs
             pendingLogprobs = []
+            return lps
+        }
+        func flushLogprobs() {
+            guard let lps = takeLogprobs() else { return }
             continuation.yield(StreamChunk(logprobs: lps))
         }
         for await event in stream {
@@ -1587,9 +1596,15 @@ extension Engine {
                     }
                 }
 
-                // Flush accumulated logprobs before emitting content.
-                flushLogprobs()
+                // §163.B4: bundle pending logprobs into the SAME chunk
+                // as the content delta. OpenAI emits both in the same
+                // SSE frame. On a stop-rollback we still attach the
+                // logprobs to the partial-content chunk — logprobs are
+                // per-sampled-token, regardless of how many chars made
+                // it past the stop trim (see §163.B3 note in
+                // LOGPROBS-IMPLEMENTATION.md).
                 if !emittableContent.isEmpty {
+                    let attachedLogprobs = takeLogprobs()
                     if !stopMatcher.isEmpty {
                         // Aho-Corasick stop scan. Append to the running
                         // visible accumulator and look for a match. If
@@ -1612,15 +1627,36 @@ extension Engine {
                             let utf8 = Array(emittableContent.utf8)
                             if keepBytesInDelta > 0 {
                                 let keep = String(decoding: utf8.prefix(keepBytesInDelta), as: UTF8.self)
-                                continuation.yield(StreamChunk(content: keep))
+                                continuation.yield(StreamChunk(content: keep, logprobs: attachedLogprobs))
+                            } else if let lps = attachedLogprobs {
+                                // All content trimmed by stop match but
+                                // we still owe the caller the sampled-
+                                // token logprobs for this step.
+                                continuation.yield(StreamChunk(logprobs: lps))
                             }
                             stopHit = true
                         } else {
-                            continuation.yield(StreamChunk(content: emittableContent))
+                            continuation.yield(StreamChunk(content: emittableContent, logprobs: attachedLogprobs))
                         }
                     } else {
-                        continuation.yield(StreamChunk(content: emittableContent))
+                        continuation.yield(StreamChunk(content: emittableContent, logprobs: attachedLogprobs))
                     }
+                } else {
+                    // §163.B6: no content this tick → token contributed
+                    // purely to reasoning, tool-call JSON, or a
+                    // buffered prefix. OpenAI's
+                    // `choices[0].logprobs.content` MUST map 1:1 with
+                    // the tokens of `message.content`; reasoning/tool
+                    // tokens do not belong in that array. Dropping
+                    // pendingLogprobs here keeps alignment.
+                    //
+                    // Known corner: if a tool-call marker turns out NOT
+                    // to be a real call (parser rejects and bytes
+                    // later flush as content in case .info), those
+                    // logprobs are already dropped. Rare and
+                    // OpenAI-compat-preserving — flagged in
+                    // LOGPROBS-IMPLEMENTATION.md.
+                    pendingLogprobs = []
                 }
                 if stopHit { break }
 

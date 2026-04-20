@@ -280,16 +280,18 @@ public struct TokenLogprob: Sendable {
     public var token: String
     /// Log probability of the selected token.
     public var logprob: Float
-    /// Byte offset of this token in the generated output.
-    public var byteOffset: Int?
+    /// OpenAI spec §161.B1: UTF-8 byte array of the token string.
+    /// Not a byte offset — `Array(token.utf8).map(Int.init)`.
+    /// lm-evaluation-harness + official OpenAI SDKs key on this field.
+    public var bytes: [Int]
     /// Top-N alternative tokens with their log probabilities.
     public var topLogprobs: [TopTokenLogprob]
 
-    public init(token: String, logprob: Float, byteOffset: Int? = nil,
+    public init(token: String, logprob: Float, bytes: [Int] = [],
                 topLogprobs: [TopTokenLogprob] = []) {
         self.token = token
         self.logprob = logprob
-        self.byteOffset = byteOffset
+        self.bytes = bytes
         self.topLogprobs = topLogprobs
     }
 }
@@ -298,10 +300,13 @@ public struct TokenLogprob: Sendable {
 public struct TopTokenLogprob: Sendable {
     public var token: String
     public var logprob: Float
+    /// OpenAI spec §161.B1: UTF-8 byte array of the alternative token.
+    public var bytes: [Int]
 
-    public init(token: String, logprob: Float) {
+    public init(token: String, logprob: Float, bytes: [Int] = []) {
         self.token = token
         self.logprob = logprob
+        self.bytes = bytes
     }
 }
 
@@ -352,6 +357,10 @@ public struct LogprobsCollector: LogitProcessor {
         sampledToken: Int,
         tokenizer: Tokenizer
     ) {
+        // §163: batch=1 precondition — logits.reshaped(-1) below assumes
+        // a single request per iterator. If we ever add batched
+        // inference, this capture path must be revisited.
+        precondition(logits.dim(0) == 1, "LogprobsCollector requires batch=1")
         var lp = logits
         if lp.dtype == .bfloat16 {
             lp = lp.asType(.float32)
@@ -360,28 +369,50 @@ public struct LogprobsCollector: LogitProcessor {
         let sampledLogprob = logProbs[0..., sampledToken].item(Float.self)
 
         let tokenStr = tokenizer.decode(tokenIds: [sampledToken])
+        // §163.B1: OpenAI `bytes` field is the UTF-8 byte array of the
+        // token string. Populate at capture time so downstream emission
+        // is a straight copy.
+        let tokenBytes = Array(tokenStr.utf8).map { Int($0) }
 
         var topAlts: [TopTokenLogprob] = []
         if topLogprobs > 0 {
             let vocabSize = logProbs.dim(-1)
-            let flatLogProbs = logProbs.reshaped(-1)
-            // argSort returns ascending (smallest first). Take the last N
-            // (highest logprobs) and reverse to get descending order,
-            // matching the OpenAI wire format.
-            let sortedIndices = argSort(flatLogProbs, axis: -1)
             let n = min(topLogprobs, vocabSize)
-            let total = sortedIndices.dim(0)
-            let topIndices = sortedIndices[(total - n)..<total].asArray(Int.self).reversed()
-            for idx in topIndices {
-                let lpVal = flatLogProbs[idx].item(Float.self)
+            let flatLogProbs = logProbs.reshaped(-1)
+            // §163.B2: former path was argSort over the full vocab
+            // (150k tokens on Qwen3.5) every sampled token — O(V log V)
+            // on the GPU even though only N<=20 slots are ever needed.
+            // Single GPU→CPU copy + in-place top-N scan keeps the sort
+            // cost bounded by N (~20) per element rather than log V.
+            let flatHost = flatLogProbs.asArray(Float.self)
+            var topValues: [Float] = Array(repeating: -.infinity, count: n)
+            var topIndicesArr: [Int] = Array(repeating: 0, count: n)
+            for i in 0..<flatHost.count {
+                let v = flatHost[i]
+                if v > topValues[n - 1] {
+                    var j = n - 1
+                    while j > 0 && topValues[j - 1] < v {
+                        topValues[j] = topValues[j - 1]
+                        topIndicesArr[j] = topIndicesArr[j - 1]
+                        j -= 1
+                    }
+                    topValues[j] = v
+                    topIndicesArr[j] = i
+                }
+            }
+            for k in 0..<n {
+                let idx = topIndicesArr[k]
+                let lpVal = topValues[k]
                 let tokStr = tokenizer.decode(tokenIds: [idx])
-                topAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+                let tokBytes = Array(tokStr.utf8).map { Int($0) }
+                topAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal, bytes: tokBytes))
             }
         }
 
         collectedLogprobs.append(TokenLogprob(
             token: tokenStr,
             logprob: sampledLogprob,
+            bytes: tokenBytes,
             topLogprobs: topAlts
         ))
     }

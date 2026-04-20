@@ -226,19 +226,21 @@ public enum OpenAIRoutes {
             // Add logprobs to choices if collected
             if !allLogprobs.isEmpty {
                 if var choice = obj["choices"] as? [[String: Any]], !choice.isEmpty {
+                    // §163.B1: emit OpenAI-spec `bytes: [Int]` UTF-8
+                    // byte array (not `bytes_offset`). lm-eval-harness
+                    // and OpenAI SDKs key on this exact field name.
                     let contentArr: [[String: Any]] = allLogprobs.map { lp in
                         var entry: [String: Any] = [
                             "token": lp.token,
                             "logprob": lp.logprob,
+                            "bytes": lp.bytes,
                         ]
-                        if let bo = lp.byteOffset {
-                            entry["bytes_offset"] = bo
-                        }
                         if !lp.topLogprobs.isEmpty {
                             entry["top_logprobs"] = lp.topLogprobs.map { alt in
                                 [
                                     "token": alt.token,
                                     "logprob": alt.logprob,
+                                    "bytes": alt.bytes,
                                 ] as [String: Any]
                             }
                         }
@@ -466,16 +468,50 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
 
+            // §163.B5: legacy `/v1/completions` uses a DIFFERENT logprobs
+            // shape than chat completions. It's the flat-array form
+            // `{tokens, token_logprobs, top_logprobs, text_offset}`
+            // rather than chat's `{content: [...]}`. lm-eval-harness
+            // keys on this exact shape — emitting chat's shape here
+            // (or dropping it entirely, as the pre-§163 PR did) silently
+            // fails the whole benchmark-compat goal.
+            var choice0: [String: Any] = [
+                "text": content,
+                "index": 0,
+                "finish_reason": finishReason ?? "stop",
+            ]
+            if !allLogprobs.isEmpty {
+                var tokens: [String] = []
+                var tokenLogprobs: [Float] = []
+                var textOffsets: [Int] = []
+                var topLogprobsArr: [[String: Float]] = []
+                var runningOffset = 0
+                for lp in allLogprobs {
+                    tokens.append(lp.token)
+                    tokenLogprobs.append(lp.logprob)
+                    textOffsets.append(runningOffset)
+                    runningOffset += lp.token.utf8.count
+                    if lp.topLogprobs.isEmpty {
+                        topLogprobsArr.append([:])
+                    } else {
+                        var dict: [String: Float] = [:]
+                        for alt in lp.topLogprobs { dict[alt.token] = alt.logprob }
+                        topLogprobsArr.append(dict)
+                    }
+                }
+                choice0["logprobs"] = [
+                    "tokens": tokens,
+                    "token_logprobs": tokenLogprobs,
+                    "top_logprobs": topLogprobsArr,
+                    "text_offset": textOffsets,
+                ] as [String: Any]
+            }
             var obj2: [String: Any] = [
                 "id": id,
                 "object": "text_completion",
                 "created": created,
                 "model": model,
-                "choices": [[
-                    "text": content,
-                    "index": 0,
-                    "finish_reason": finishReason ?? "stop",
-                ] as [String: Any]],
+                "choices": [choice0],
             ]
             if let u = usage {
                 // iter-105 §183: hard rule #6 — every response body
