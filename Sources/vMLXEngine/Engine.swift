@@ -496,6 +496,41 @@ public actor Engine {
                     path: URL(fileURLWithPath: g.mcpConfigPath))
             }
         }
+        // iter-99 §126: one-shot sweep of vmlx-* temp artifacts older
+        // than 1 hour. Recovers from (a) process crashes mid-inference
+        // where Stream.swift couldn't clean up the video tmp files
+        // created by `ChatRequest.VideoURL.loadVideoLocalURL`, and
+        // (b) any future paths that forget to register a defer.
+        // Matches `vmlx-video-*`, `vmlx-whisper-*`, `vmlx-tokenizer-shadow-*`.
+        // 1-hour TTL is lenient enough that in-flight work isn't
+        // swept (a single inference call completes in seconds).
+        Task.detached {
+            Engine.sweepAgedVMLXTempArtifacts(olderThanSeconds: 3600)
+        }
+    }
+
+    /// Sweep vmlx-prefixed temp files in `FileManager.default.temporaryDirectory`
+    /// that have been idle (mtime older than `olderThanSeconds`). Called
+    /// once at engine init to recover from process crashes. Best-effort:
+    /// all errors are swallowed.
+    static func sweepAgedVMLXTempArtifacts(olderThanSeconds: TimeInterval) {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+        let cutoff = Date().addingTimeInterval(-olderThanSeconds)
+        guard let entries = try? fm.contentsOfDirectory(
+            at: tmp,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let prefixes = ["vmlx-video-", "vmlx-whisper-", "vmlx-tokenizer-shadow-"]
+        for url in entries {
+            let name = url.lastPathComponent
+            guard prefixes.contains(where: { name.hasPrefix($0) }) else { continue }
+            let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            guard let mtime = vals?.contentModificationDate,
+                  mtime < cutoff else { continue }
+            try? fm.removeItem(at: url)
+        }
     }
 
     /// Re-load the MCP server catalog from a specific JSON file. Called by
