@@ -306,6 +306,20 @@ public enum OpenAIRoutes {
                 stop: obj["stop"] as? [String],
                 seed: obj["seed"] as? Int
             )
+            // iter-119 §145: pre-flight validation, same class as iter-67
+            // §96 for /v1/responses. /v1/completions was the last chat-
+            // shape route skipping validate() — bad temperature /
+            // max_tokens / stop silently leaked past the 400 wall and
+            // produced mid-stream fatals inside the engine. Reject
+            // cleanly at the HTTP boundary for API-spec parity with
+            // /v1/chat/completions and /v1/responses.
+            do {
+                try chatReq.validate()
+            } catch let err as ChatRequestValidationError {
+                return Self.errorJSON(.badRequest, err.description)
+            } catch {
+                return Self.errorJSON(.badRequest, "invalid request: \(error)")
+            }
             await engine.wakeFromStandby()
 
             let id = "cmpl-\(UUID().uuidString.prefix(8).lowercased())"
