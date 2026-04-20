@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 61
+iteration: 62
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,23 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 377/377 source-scan tests green, 137/137 regression guards + 15 matrix
-  rows (§57–§141)
+- 378/378 source-scan tests green, 138/138 regression guards + 15 matrix
+  rows (§57–§142)
+- iter-116 work:
+  1. /v1/adapters home-dir path leak (§142) — **same class as
+     §141, different route**. GET /v1/adapters returned
+     `active.path` as the raw absolute filesystem path (e.g.
+     `/Users/eric/adapters/my-lora`). Admin auth via §103 only
+     gates destructive POST verbs (load/unload/fuse) — GET stays
+     open to any API-key-holding peer. LAN peers with bearer
+     token could poll the endpoint to enumerate home-dir naming
+     and adapter-directory layout. Fix: replace the home
+     directory prefix with `~/` in the wire response via a new
+     `redactHomeDir` helper. Also added a `name` field
+     (lastPathComponent) so UI clients have a clean display
+     name without having to parse paths. §142 pins marker +
+     helper definition + encode() call-site + name field.
+     Build clean, guard green.
 - iter-115 work:
   1. /api/show filesystem path leak (§141) — **real info-leak
      fix**. The Ollama `/api/show` response included
