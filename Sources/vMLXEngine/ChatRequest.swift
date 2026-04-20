@@ -27,39 +27,59 @@ public struct ChatRequest: Codable, Sendable {
     /// overrides merge on top of session + global. Non-OpenAI.
     public var chatId: String?
 
-    // MARK: - Decoded-but-unsupported OpenAI parameters
+    // MARK: - Decoded-but-partially-supported OpenAI parameters
     //
-    // These fields are accepted from the wire so the client's JSON
-    // decodes cleanly, but `validate()` rejects them with a
-    // structured 400 so the caller knows their request won't be
-    // honored instead of getting silently-dropped nonsense back.
+    // iter-101 §128: previously this block documented "reject with
+    // 400 until real support lands". The actual contract evolved
+    // (see the long comment at the top of `validate()`):
     //
-    // Remove a field from the reject list below AND extend
-    // `Engine.stream` to actually honor it when real support
-    // lands. Until then, failing loud beats failing silent.
+    //   - `n != 1` and `logprobs == true` still hard-reject with
+    //     400 — the semantic mismatch is severe enough that silently
+    //     producing one completion or omitting logprobs would break
+    //     the caller's downstream expectation.
+    //   - `frequency_penalty`, `presence_penalty`, `top_logprobs`
+    //     are RANGE-CHECKED but otherwise accepted silently. The
+    //     engine ignores them. Most OpenAI SDKs send defaults from
+    //     their own config (e.g., frequency_penalty=0); rejecting
+    //     those broke ~100% of vanilla-config callers without
+    //     warning.
+    //   - `logit_bias` + `response_format` are accepted as-is; the
+    //     engine ignores them. Listed in `validate()` as no-op-on-
+    //     present so the absent path doesn't break SDK round-trip.
+    //
+    // Remove a field from the accept-silent list below AND extend
+    // `Engine.stream` to actually honor it when real support lands.
 
     /// OpenAI `n` — number of completions to generate per request.
-    /// vMLX always generates one. `n > 1` is rejected with 400.
+    /// vMLX always generates one. `n > 1` is rejected with 400
+    /// because silently producing one when the caller asked for
+    /// five corrupts downstream code.
     public var n: Int?
 
     /// OpenAI `logprobs` — when true, include token logprobs in
-    /// the response. Not implemented; rejected with 400.
+    /// the response. Rejected with 400 when true (LangChain
+    /// logprob-classifier callers need to know we can't serve it).
     public var logprobs: Bool?
 
     /// OpenAI `top_logprobs` — how many logprobs to include per
-    /// position. Requires `logprobs == true`. Not implemented.
+    /// position. Range-checked ([0, 20]) but otherwise accepted
+    /// silently. Engine ignores the value; the response omits the
+    /// `logprobs` field.
     public var topLogprobs: Int?
 
     /// OpenAI `frequency_penalty` — distinct from
-    /// `repetition_penalty`. Not implemented; rejected with 400.
+    /// `repetition_penalty`. Range-checked ([-2, 2]) but otherwise
+    /// accepted silently. Engine ignores the value.
     public var frequencyPenalty: Double?
 
     /// OpenAI `presence_penalty` — distinct from
-    /// `repetition_penalty`. Not implemented; rejected with 400.
+    /// `repetition_penalty`. Range-checked ([-2, 2]) but otherwise
+    /// accepted silently. Engine ignores the value.
     public var presencePenalty: Double?
 
     /// OpenAI `logit_bias` — per-token sampling bias dictionary.
-    /// Not implemented; rejected with 400 when non-empty.
+    /// Accepted silently. Engine ignores; response omits the
+    /// corresponding fields.
     public var logitBias: [String: Double]?
 
     /// OpenAI `response_format` — JSON-object / JSON-schema

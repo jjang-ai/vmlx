@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 45
+iteration: 46
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 363/363 source-scan tests green, 123/123 regression guards + 15 matrix
-  rows (§57–§127)
+- 364/364 source-scan tests green, 124/124 regression guards + 15 matrix
+  rows (§57–§128)
+- iter-101 work:
+  1. ChatRequest unsupported-field doc drift (§128) — **docs-vs-
+     behavior mismatch audit**. The header block at the top of
+     `ChatRequest` claimed `n` / `logprobs` / `top_logprobs` /
+     `frequency_penalty` / `presence_penalty` / `logit_bias`
+     were all "rejected with 400 until real support lands". But
+     `validate()` had been relaxed (audit 2026-04-15 after
+     LangChain + OpenAI SDK v1 defaults broke ~100% of
+     vanilla-config callers) to accept frequency_penalty +
+     presence_penalty + top_logprobs + logit_bias silently
+     (range-checked only; engine ignores them). An auditor
+     reading the struct would think those four still 400'd. No
+     user-visible bug today but future contributors wanting to
+     understand the contract got misleading signals. Fix: rewrite
+     the doc header to reflect actual semantics — `n != 1` and
+     `logprobs == true` still hard-reject, the other four
+     range-checked + accepted silently. Per-field doc comments
+     also updated. §128 regression guard asserts the new header
+     phrasing ("partially-supported", "accepted silently") AND
+     that the dead "blanket 400" claim pattern is absent.
 - iter-100 work:
   1. Mid-load cancel race (§127) — **real UX bug**. `stop()`
      cancelled `currentLoadTask` and wiped `loaded` /
