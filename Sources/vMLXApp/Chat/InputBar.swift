@@ -17,6 +17,19 @@ struct InputBar: View {
     @State private var historyIndex: Int? = nil
     @State private var draftBeforeHistory: String = ""
 
+    /// iter-130 §156: `true` when the currently selected server session is
+    /// bound to a remote endpoint via `SessionSettings.remoteURL`. The
+    /// local engine state doesn't apply for these — ChatViewModel.send
+    /// dispatches via RemoteEngineClient instead. All state-dependent
+    /// InputBar computed properties (canSend / placeholder / helpText)
+    /// short-circuit to the `.running` branch when this is true, so the
+    /// send button, placeholder, and tooltip all reflect "ready to chat"
+    /// instead of "Load a model first".
+    private var isRemoteChat: Bool {
+        guard let sid = app.selectedServerSessionId else { return false }
+        return app.sessions.first(where: { $0.id == sid })?.isRemote ?? false
+    }
+
     /// True when the send button should actually send a request.
     /// Requires: engine running, input not empty, and we're not already
     /// generating. While generating, the button flips to "stop" which
@@ -26,6 +39,7 @@ struct InputBar: View {
             || !vm.pendingImages.isEmpty
             || !vm.pendingVideos.isEmpty
         guard hasText else { return false }
+        if isRemoteChat { return true }
         switch app.engineState {
         case .running, .standby:
             // Standby is OK — the JIT wake banner will fire as soon as
@@ -45,6 +59,7 @@ struct InputBar: View {
     /// Placeholder text adapts to the engine state so the user knows
     /// why the button is disabled without hovering.
     private var placeholderText: String {
+        if isRemoteChat { return "Send a message…" }
         switch app.engineState {
         case .running: return "Send a message…"
         case .loading: return "Loading model…"
@@ -60,6 +75,7 @@ struct InputBar: View {
     private var helpText: String {
         if vm.isGenerating { return "Stop (Esc)" }
         if canSend { return "Send (↵)" }
+        if isRemoteChat { return "Enter a message" }
         switch app.engineState {
         case .stopped: return "Load a model first"
         case .loading: return "Wait for the model to finish loading"
