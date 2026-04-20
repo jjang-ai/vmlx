@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 58
+iteration: 59
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,26 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 374/374 source-scan tests green, 134/134 regression guards + 15 matrix
-  rows (§57–§138)
+- 375/375 source-scan tests green, 135/135 regression guards + 15 matrix
+  rows (§57–§139)
+- iter-113 work:
+  1. recentlyClosed zombie-chat reopen (§139) — **real UX bug**.
+     Sequence: Cmd-W (close → pushes to recentlyClosed) →
+     right-click Delete (removes SQLite row + messages + §136
+     ChatSettings, but DIDN'T touch recentlyClosed) → Cmd-Shift-T
+     (reopen popLast → inserts stale snapshot into sessions,
+     selectSession). Result: zombie session row in sidebar, empty
+     messages, no way to fully recover since delete-undo already
+     missed. Fix: two-layer defense. (1) deleteSession strips
+     matching id via `recentlyClosed.removeAll { $0.id == id }`
+     so Cmd-Shift-T has nothing to pop for deleted sessions —
+     delete-undo (Cmd-Z / pushUndo closure) is the correct
+     restoration path. (2) reopenLastClosed defensive: pops until
+     finding a session whose id still exists in
+     Database.allSessions(), silently skipping zombies from
+     future code paths that might not clean up. §139 pins the
+     marker + the strip + the DB existence check. Build clean,
+     guard green.
 - iter-112 work:
   1. Zombie inputHistory Up-arrow path removed (§138) — **real
      dead-code + UX-divergence fix**. Chat surface had TWO parallel
