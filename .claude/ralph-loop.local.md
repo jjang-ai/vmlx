@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 42
+iteration: 43
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,23 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 360/360 source-scan tests green, 120/120 regression guards + 15 matrix
-  rows (§57–§124)
+- 361/361 source-scan tests green, 121/121 regression guards + 15 matrix
+  rows (§57–§125)
+- iter-98 work:
+  1. Tokenizer shadow-dir temp leak (§125) — **real resource leak**.
+     `TransformersTokenizerLoader.makeShadowWithPatchedTokenizerClass`
+     creates a UUID'd dir under the system temp with symlinks +
+     a patched `tokenizer_config.json`, returns the URL, and the
+     retry path at `loadTokenizer` passes it to
+     `AutoTokenizer.from(modelFolder:)` exactly once — but nothing
+     cleans it up. Every JANG model with a custom tokenizer class
+     name (TokenizersBackend, Qwen3Tokenizer, etc.) hit this path
+     and left an orphaned `/var/folders/.../T/vmlx-tokenizer-shadow-<UUID>/`
+     until the process exited or macOS periodic cleanup ran (days
+     to weeks later). Heavy-model-swap sessions accumulated
+     hundreds of these. Fix: defer-remove after the
+     `AutoTokenizer.from` call. Same pattern as §117 (WhisperAudio).
+     §125 regression guard pins the defer.
 - iter-97 work:
   1. RemoteEngineClient UTF-8 corruption (§124) — **real i18n
      data-corruption bug**. All three streaming parsers
