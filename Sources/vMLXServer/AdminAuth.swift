@@ -77,8 +77,14 @@ public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
         let bearer = request.headers[.authorization] ?? ""
         let xheader = request.headers[HTTPField.Name("X-Admin-Token")!] ?? ""
 
-        let bearerOK = bearer == "Bearer \(expected)"
-        let headerOK = xheader == expected
+        // iter-87 §115: admin-token comparison must be constant-time
+        // for the same reason as the BearerAuth API-key check — a LAN
+        // attacker on a 0.0.0.0-bound server could otherwise recover
+        // the admin token byte-by-byte via timing side-channel, and
+        // the admin token gates destructive endpoints (soft/deep
+        // sleep, cache flush, adapter fuse, on-disk model delete).
+        let bearerOK = BearerAuthMiddleware<Context>.constantTimeEquals(bearer, "Bearer \(expected)")
+        let headerOK = BearerAuthMiddleware<Context>.constantTimeEquals(xheader, expected)
 
         guard bearerOK || headerOK else {
             let body = #"{"error":{"message":"admin token required","type":"auth_error","path":"\#(path)"}}"#

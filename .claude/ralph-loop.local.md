@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 31
+iteration: 32
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,9 +285,27 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 350/350 source-scan tests green (MLX Metal-requiring suites skipped in this
-  harness — documented env limitation), 109/109 regression guards + 15 matrix
-  rows (§57–§114)
+- 351/351 source-scan tests green, 111/111 regression guards + 15 matrix
+  rows (§57–§115)
+- iter-87 work:
+  1. Auth timing-oracle fix (§115) — **SECURITY FIX**. Both the user
+     API-key check (BearerAuthMiddleware) and the admin-token check
+     (AdminAuthMiddleware) compared the header vs the expected token
+     with Swift's stdlib `==` operator on `String`. That implementation
+     is variable-time: it early-exits on the first mismatching byte.
+     On a vMLX server bound to 0.0.0.0 (the optional LAN toggle), any
+     LAN peer can send successive auth attempts varying one byte at a
+     time and recover the token byte-by-byte by measuring response
+     latency — classic timing-oracle attack. Admin token gates the
+     destructive surface (soft/deep sleep, cache flush, adapter fuse,
+     on-disk model delete) so recovering it is worst-case a full
+     engine compromise. Fix: added
+     `BearerAuthMiddleware.constantTimeEquals(_:_:)` — a UTF-8 byte
+     XOR-diff across the longer of the two inputs, iteration count
+     pinned to max-length so length mismatch doesn't leak via loop
+     count either. AdminAuth reuses the same helper. §115 regression
+     guard pins both middlewares' call sites + asserts the dangerous
+     `==` forms are absent.
 - iter-86 work:
   1. GatewayActor model-resolve tolerant-match bug (§114) — **real
      production bug**. The tolerant match previously accepted
