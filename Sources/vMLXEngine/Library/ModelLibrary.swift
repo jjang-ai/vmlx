@@ -333,12 +333,48 @@ public actor ModelLibrary {
         subscribers[id] = nil
     }
 
+    /// Register a new directory as a models root.
+    ///
+    /// Two iter-125 §151 side effects beyond the bare DB write:
+    /// 1. `pendingForcedRescan = true` so the very next `scan()` — even
+    ///    if callers pass `force: false` — walks disk. Previously the
+    ///    5-minute freshness window could hide models under the newly
+    ///    added dir until it elapsed, which made "I just added my
+    ///    custom dir, where are my models?" a reproducible UX bug
+    ///    (worked for manual UI paths that happened to call
+    ///    `scan(force: true)` right after, broke for anything else).
+    /// 2. Tear down + rebuild the FSEvents watcher so live
+    ///    auto-updates include the new path. The watcher snapshots its
+    ///    root list once at construction; without the rebuild, models
+    ///    dropped into the new dir after the app started wouldn't show
+    ///    up in the picker until the user clicked Refresh manually.
     public func addUserDir(_ url: URL) {
         database.addUserDir(url)
+        pendingForcedRescan = true
+        rebuildWatcher()
     }
 
+    /// Drop a user-dir registration.
+    ///
+    /// Same iter-125 §151 treatment as `addUserDir`: force a rescan so
+    /// the cache purges entries under the removed dir on the next
+    /// scan, and rebuild the watcher so FSEvents isn't still listening
+    /// on the dir we just dropped.
     public func removeUserDir(_ url: URL) {
         database.removeUserDir(url)
+        pendingForcedRescan = true
+        rebuildWatcher()
+    }
+
+    /// Tear down the existing FSEvents watcher (if any) so the next
+    /// `scan()` call spins one up with the fresh path set. iter-125
+    /// §151: invoked by `addUserDir` / `removeUserDir`.
+    private func rebuildWatcher() {
+        // Nil'ing drops the last strong ref → ARC → watcher.deinit →
+        // stop() tears down the FSEventStream cleanly. The next
+        // `startWatcherIfNeeded()` call re-reads `database.userDirs()`
+        // and spawns a fresh watcher.
+        watcher = nil
     }
 
     public func userDirs() -> [URL] {
