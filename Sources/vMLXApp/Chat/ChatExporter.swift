@@ -65,6 +65,22 @@ enum ChatExporter {
             s += "_(empty)_\n"
         }
 
+        // iter-95 §122: note attached media so the Markdown export
+        // isn't silently lossy for VL chats. We don't inline base64
+        // images here (Markdown exports are for paste-into-docs, not
+        // archival — inlining would blow up the file). The JSON
+        // exporter below does include the base64 payloads for
+        // faithful round-trip.
+        if !m.imageData.isEmpty {
+            s += "\n_\(m.imageData.count) image\(m.imageData.count == 1 ? "" : "s") attached (see JSON export for base64 payload)_\n"
+        }
+        if !m.videoPaths.isEmpty {
+            s += "\n_Videos attached:_\n"
+            for p in m.videoPaths {
+                s += "- `\(p)`\n"
+            }
+        }
+
         if let reasoning = m.reasoning, !reasoning.isEmpty {
             s += "\n### Reasoning (collapsed in chat)\n"
             s += "```\n"
@@ -113,10 +129,20 @@ enum ChatExporter {
     //         "content": "...",
     //         "reasoning": "..."?,       // optional
     //         "toolCallsJSON": "..."?,   // optional raw JSON blob
+    //         "imagesBase64": ["..."]?,  // iter-95: VL image payload
+    //         "videoPaths": ["..."]?,    // iter-95: file:// URLs
     //         "createdAt": "<ISO-8601>"
     //       }, ...
     //     ]
     //   }
+    //
+    // iter-95 §122: bumped to `version: 2` because the schema now
+    // carries `imagesBase64` and `videoPaths`. Consumers of v1
+    // should still decode cleanly (extra keys are tolerated by
+    // every JSON decoder); consumers that understand v2 can
+    // round-trip VL chats faithfully. Without this, exporting a
+    // chat with images to JSON was silently lossy — the user saw
+    // message text but no image data on re-inspection.
     static func exportToJSON(_ session: ChatSession,
                              messages: [ChatMessage]) -> String {
         struct ExportEnvelope: Encodable {
@@ -136,6 +162,8 @@ enum ChatExporter {
             let content: String
             let reasoning: String?
             let toolCallsJSON: String?
+            let imagesBase64: [String]?
+            let videoPaths: [String]?
             let createdAt: String
         }
 
@@ -150,7 +178,7 @@ enum ChatExporter {
         }()
 
         let envelope = ExportEnvelope(
-            version: 1,
+            version: 2,
             exportedAt: iso.string(from: Date()),
             session: .init(
                 id: session.id.uuidString,
@@ -172,6 +200,10 @@ enum ChatExporter {
                     reasoning: m.reasoning?.isEmpty == false ? m.reasoning : nil,
                     toolCallsJSON: m.toolCallsJSON?.isEmpty == false
                         ? m.toolCallsJSON : nil,
+                    imagesBase64: m.imageData.isEmpty
+                        ? nil
+                        : m.imageData.map { $0.base64EncodedString() },
+                    videoPaths: m.videoPaths.isEmpty ? nil : m.videoPaths,
                     createdAt: iso.string(from: m.createdAt)
                 )
             }

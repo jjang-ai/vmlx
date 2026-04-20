@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 39
+iteration: 40
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 357/357 source-scan tests green, 117/117 regression guards + 15 matrix
-  rows (§57–§121)
+- 358/358 source-scan tests green, 118/118 regression guards + 15 matrix
+  rows (§57–§122)
+- iter-95 work:
+  1. ChatExporter VL media data-loss (§122) — **real archival
+     bug**. `exportToJSON` at `version: 1` serialized only
+     role/content/reasoning/toolCallsJSON/createdAt, silently
+     dropping three ChatMessage fields:
+       - `imageData: [Data]` (inline VL image payloads)
+       - `videoPaths: [String]` (attached video URLs)
+       - `toolStatuses: [String: ToolCallStatus]` (tool-call phases)
+     A user exporting a VL chat with images to JSON got a text-
+     only archive. `exportToMarkdown` was worse — didn't even
+     mention that media was attached. Fix: JSON schema bumped to
+     `version: 2`, MessageBlock gained `imagesBase64: [String]?`
+     (base64-encoded payloads) and `videoPaths: [String]?`.
+     Markdown export now emits `_N image(s) attached_` and a
+     video path list. base64 only goes into JSON (archival);
+     Markdown stays small for paste-into-docs use. toolStatuses
+     kept out-of-scope — it's lifecycle metadata keyed by
+     transient tool_call ids that don't round-trip. §122
+     regression guard pins the new schema version + the two new
+     fields + the image-count banner in Markdown.
 - iter-94 work:
   1. DownloadManager cancel status-flip (§121) — **real UX bug**.
      `cancel(_:)` synchronously set job status to `.cancelled` AND
