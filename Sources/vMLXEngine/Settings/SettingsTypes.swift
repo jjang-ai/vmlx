@@ -280,12 +280,19 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // whether the server auto-parses tool calls from model output.
     // The Swift engine ALWAYS auto-parses when `request.tools` is
     // present — parser selection flows through `caps.toolParser ?? resolved.settings.defaultToolParser`
-    // in Stream.swift. The flag is kept for CLI compat with Python
-    // pipelines (so `--enable-auto-tool-choice` on the command line
-    // doesn't error out), persisted through the resolver, but has
-    // no runtime gate. Future work: either honor it (e.g. to hard-
-    // disable parsing for some scripted client) or drop it along
-    // with the resolver wire-through.
+    // in Stream.swift. The flag is persisted through the resolver
+    // but has no runtime gate.
+    //
+    // iter-102 note: the original note claimed "kept for CLI compat
+    // so `--enable-auto-tool-choice` on the command line doesn't
+    // error out" — but `vmlxctl` (ArgumentParser) doesn't actually
+    // define this flag, so passing it would error with "unexpected
+    // argument". The flag is inert: it's decoded from GlobalSettings
+    // JSON dumps + SessionSettings JSON overrides (so migrating
+    // Python users' configs doesn't need a schema change) but
+    // nothing reads it. Future work: either honor it (e.g. to
+    // hard-disable parsing for scripted clients) or drop it along
+    // with the resolver wire-through and migrate config consumers.
     public var enableAutoToolChoice: Bool = false // cli.py --enable-auto-tool-choice (dead gate — see audit note)
     public var defaultToolParser: String = ""      // cli.py --tool-call-parser default=None (auto-detected from model)
     public var defaultReasoningParser: String = "" // cli.py --reasoning-parser default=None (auto-detected from model)

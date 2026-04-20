@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 46
+iteration: 47
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,27 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 364/364 source-scan tests green, 124/124 regression guards + 15 matrix
-  rows (§57–§128)
+- 365/365 source-scan tests green, 125/125 regression guards + 15 matrix
+  rows (§57–§129)
+- iter-102 work:
+  1. enableAutoToolChoice audit-note accuracy (§129) — **docs-
+     vs-behavior drift**. Known Gap #3 has said "kept for CLI
+     compat — audit comment in SettingsTypes". The comment
+     existed (iter-50) and claimed the flag is retained "so
+     `--enable-auto-tool-choice` on the command line doesn't
+     error out". Audit: grep'd Sources/vMLXCLI for that flag
+     and found zero hits. `vmlxctl` uses ArgumentParser with
+     strict flag definitions, so passing `--enable-auto-tool-choice`
+     to vmlxctl actually DOES error with "unexpected argument".
+     The CLI-compat claim was wrong. The flag IS still useful
+     for JSON config migration (Python users' dumped
+     GlobalSettings carry the key, we decode it without
+     complaining) but the CLI angle is a myth. Fix: rewrote the
+     audit note to match reality — accurate description of
+     what the flag does (nothing) and why we keep it (JSON
+     schema forward-compat for migration). §129 regression
+     guard pins the corrected phrasing and asserts the stale
+     CLI claim is gone.
 - iter-101 work:
   1. ChatRequest unsupported-field doc drift (§128) — **docs-vs-
      behavior mismatch audit**. The header block at the top of
