@@ -412,6 +412,26 @@ public actor Engine {
         self.remoteClient = client
     }
 
+    /// iter-126 §152: release the remote client reference after its
+    /// stream completes. Callers pass the *specific* client they attached
+    /// — we only clear if the currently-stored reference is exactly that
+    /// object (identity match). This closes the "newer client came in
+    /// before the older one finished" race without needing actor
+    /// refcounting: the second attach overwrites, and a late detach from
+    /// the first stream finds a mismatch and silently no-ops.
+    ///
+    /// Fixes real resource leak: pre-iter-126, every remote-session
+    /// stream left `remoteClient` holding the `RemoteEngineClient` (with
+    /// its URLSession config + endpoint URL + API key string) for the
+    /// lifetime of the Engine actor. A power user cycling through
+    /// remote/local sends across dozens of sessions ended up with
+    /// hundreds of stale client refs pinned in memory.
+    public func detachRemoteClient(_ client: RemoteEngineClient) {
+        if remoteClient === client {
+            remoteClient = nil
+        }
+    }
+
     /// Public cancel hook — the ChatViewModel stop button calls this
     /// through a task hop so the actor can reach `currentStreamTask`
     /// directly. Safe to call when no stream is active (no-op).
@@ -1561,6 +1581,13 @@ public actor Engine {
         _dflashDrafterURL = nil
         _dflashDrafterConfig = nil
         _dflashTarget = nil
+        // iter-126 §152: drop the remote client ref so stop() fully
+        // tears down any lingering state from a remote-session chat.
+        // cancelStream() above already cancelled its stream if one was
+        // live; this clears the strong reference so the URLSession +
+        // API key are deallocated. Without this, stop() left remote
+        // state pinned even though the engine was ostensibly wiped.
+        remoteClient = nil
         idleWatcher?.cancel()
         idleWatcher = nil
         // iter-85 §113: Drop MLX's internal buffer cache so the RSS drop is
@@ -2089,6 +2116,11 @@ public actor Engine {
         loadedModelPath = nil
         loadedJangConfig = nil
         cacheCoordinator = nil
+        // iter-126 §152: clear remote-client ref on deep sleep too.
+        // cancelStream() above already cancelled any live remote stream;
+        // this releases the strong reference so the client's URLSession
+        // + API key are deallocated alongside the local weights.
+        remoteClient = nil
         // iter-85 §113: drop MLX's pooled Metal buffer cache so the RSS
         // reduction is visible to Activity Monitor. Without this call a
         // user who deep-sleeps a 30GB model still sees the process

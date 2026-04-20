@@ -973,6 +973,12 @@ final class ChatViewModel {
                 return await engine.settings.session(sid)
             }()
             let stream: AsyncThrowingStream<StreamChunk, Error>
+            // iter-126 §152: hold onto the attached client so we can
+            // detach it in the post-stream defer below. Without this,
+            // `engine.remoteClient` stayed pinned to the last remote
+            // send's client indefinitely — a URLSession + api-key leak
+            // that piled up over sessions.
+            var attachedRemote: RemoteEngineClient? = nil
             if let s = sessionForRemote, s.isRemote,
                let remoteURLString = s.remoteURL,
                let remoteURL = URL(string: remoteURLString)
@@ -989,9 +995,21 @@ final class ChatViewModel {
                 // Track on the engine so stop() can cancel through the
                 // existing cancellation pathway.
                 await engine.attachRemoteClient(client)
+                attachedRemote = client
                 stream = await client.stream(request: req)
             } else {
                 stream = await engine.stream(request: req)
+            }
+            // iter-126 §152: defer the detach so EVERY exit path (stream
+            // completes, throws EngineError, throws generic, task
+            // cancelled) releases the engine's remoteClient ref. Uses
+            // identity match inside detachRemoteClient so a newer attach
+            // arriving between attach and detach (same engine actor,
+            // different session) isn't accidentally wiped.
+            defer {
+                if let attached = attachedRemote {
+                    Task { await engine.detachRemoteClient(attached) }
+                }
             }
             do {
                 for try await chunk in stream {
