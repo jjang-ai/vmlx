@@ -7075,3 +7075,132 @@ class TestArchCorrectModelTypeRouting:
             assert caps.get("family") is not None, (
                 f"{m}: capabilities.family missing"
             )
+
+
+class TestMcpEndpoints:
+    """iter 18 — pins the MCP endpoint contract when no --mcp-config
+    flag was used at server start. Users must get clear behavior:
+    - /v1/mcp/tools returns empty list (not 500, not 404)
+    - /v1/mcp/servers returns empty list
+    - /v1/mcp/execute returns 503 with an actionable detail
+      pointing to --mcp-config
+    The endpoints must also route through auth + rate-limit
+    dependencies like every other /v1 endpoint."""
+
+    def test_mcp_endpoints_registered_in_app(self):
+        """The three /v1/mcp/* routes must be registered on the app."""
+        from vmlx_engine.server import app
+        paths = {r.path for r in app.routes}
+        for p in ("/v1/mcp/tools", "/v1/mcp/servers", "/v1/mcp/execute"):
+            assert p in paths, (
+                f"MCP route {p} missing from app — users depend on "
+                f"uniform /v1/mcp/* surface"
+            )
+
+    def test_mcp_execute_returns_503_when_unconfigured(self):
+        """Without --mcp-config, /v1/mcp/execute MUST return 503 with
+        the 'MCP not configured' detail. Returning 200/500/404 would
+        confuse operators or mask setup errors."""
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+        # Ensure _mcp_manager is None for this unit test
+        orig = srv._mcp_manager
+        srv._mcp_manager = None
+        try:
+            client = TestClient(srv.app)
+            r = client.post(
+                "/v1/mcp/execute",
+                json={"tool_name": "fake.tool", "arguments": {}},
+            )
+            assert r.status_code == 503, (
+                f"expected 503 without MCP config, got {r.status_code}: {r.text[:200]}"
+            )
+            detail = r.json().get("detail", "")
+            assert "mcp-config" in detail.lower() or "not configured" in detail.lower(), (
+                f"503 detail must point user to --mcp-config, got: {detail!r}"
+            )
+        finally:
+            srv._mcp_manager = orig
+
+    def test_mcp_tools_empty_when_unconfigured(self):
+        """/v1/mcp/tools must return empty list (200) when no config,
+        NOT 503 — it's a discovery endpoint, callers poll it."""
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+        orig = srv._mcp_manager
+        srv._mcp_manager = None
+        try:
+            client = TestClient(srv.app)
+            r = client.get("/v1/mcp/tools")
+            assert r.status_code == 200, (
+                f"expected 200 empty list, got {r.status_code}"
+            )
+            body = r.json()
+            assert body.get("tools") == [], f"expected empty tools list, got {body}"
+            assert body.get("count") == 0, f"expected count=0, got {body}"
+        finally:
+            srv._mcp_manager = orig
+
+    def test_mcp_servers_empty_when_unconfigured(self):
+        """/v1/mcp/servers must return empty list when no config."""
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+        orig = srv._mcp_manager
+        srv._mcp_manager = None
+        try:
+            client = TestClient(srv.app)
+            r = client.get("/v1/mcp/servers")
+            assert r.status_code == 200
+            assert r.json().get("servers") == []
+        finally:
+            srv._mcp_manager = orig
+
+    def test_mcp_execute_with_fake_mcp_config(self):
+        """With a fake MCP manager wired in, /v1/mcp/execute must
+        forward tool_name + arguments and return the manager's result
+        in the documented schema (tool_name + content + is_error +
+        error_message)."""
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server as srv
+
+        class _FakeResult:
+            tool_name = "fake.echo"
+            content = [{"type": "text", "text": "echoed: hello"}]
+            is_error = False
+            error_message = None
+
+        class _FakeMcpManager:
+            async def execute_tool(self, name, args):
+                # Prove arguments round-trip
+                assert name == "fake.echo"
+                assert args == {"input": "hello"}
+                return _FakeResult()
+
+            def get_all_tools(self):
+                return []
+
+            def get_server_status(self):
+                return []
+
+        orig = srv._mcp_manager
+        srv._mcp_manager = _FakeMcpManager()
+        try:
+            client = TestClient(srv.app)
+            r = client.post(
+                "/v1/mcp/execute",
+                json={"tool_name": "fake.echo", "arguments": {"input": "hello"}},
+            )
+            assert r.status_code == 200, (
+                f"expected 200 with fake manager, got {r.status_code}: {r.text[:200]}"
+            )
+            body = r.json()
+            # Schema pin — UI depends on these four fields
+            assert body.get("tool_name") == "fake.echo"
+            assert body.get("is_error") is False
+            assert body.get("error_message") is None
+            # content is list of parts
+            content = body.get("content")
+            assert isinstance(content, list) and len(content) == 1
+            assert content[0]["text"] == "echoed: hello"
+        finally:
+            srv._mcp_manager = orig
