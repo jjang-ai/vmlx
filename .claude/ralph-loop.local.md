@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 65
+iteration: 66
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,26 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 381/381 source-scan tests green, 141/141 regression guards + 15 matrix
-  rows (§57–§145)
+- 382/382 source-scan tests green, 142/142 regression guards + 15 matrix
+  rows (§57–§146)
+- iter-120 work:
+  1. TTS error HTTP-status mapping (§146) — **user-vs-server
+     error split**. EngineTTS mapped every TTSError case to
+     `EngineError.notImplemented` → HTTP 500. Bundled four very
+     different kinds of errors:
+     - `missingInput` (client sent `{}` no input field) — should
+       be 400
+     - `unsupportedFormat` (response_format="flac" on wav-only
+       backend) — should be 400
+     - `encoderUnavailable` (backend failure) — 500
+     - `modelNotPorted` (server-capability gap) — 500
+     All four came back as 500. SDK clients can't distinguish
+     "fix your request" from "server has a bug / feature gap"
+     → retries the same broken request indefinitely. Fix: split
+     the mapping. User errors → invalidRequest (400 via
+     mapEngineError), server errors stay notImplemented (500).
+     §146 pins marker + user-error branch + server-error branch.
+     Build clean, guard green.
 - iter-119 work:
   1. /v1/completions validate() parity (§145) — **last chat-
      shape route missing pre-flight validation**. /v1/chat/completions,

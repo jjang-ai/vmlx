@@ -17,10 +17,18 @@ extension Engine {
         do {
             return try TTSEngine().synthesize(request: request)
         } catch let e as TTSError {
+            // iter-120 §146: split TTSError into user-input errors (400
+            // via EngineError.invalidRequest) vs server-capability
+            // errors (500 via notImplemented). Previously both fell into
+            // the same .notImplemented bucket, so a client POSTing `{}`
+            // (missing `input`) or `{response_format: "flac"}` (valid
+            // format but unsupported on our backend) got a 500. OpenAI
+            // spec rejects both of those with 400, and SDK clients
+            // expect 400 to drive retry/fallback logic.
             switch e {
-            case .missingInput:
-                throw EngineError.notImplemented("speech: \(e.description)")
-            case .unsupportedFormat, .encoderUnavailable, .modelNotPorted:
+            case .missingInput, .unsupportedFormat:
+                throw EngineError.invalidRequest("speech: \(e.description)")
+            case .encoderUnavailable, .modelNotPorted:
                 throw EngineError.notImplemented("speech: \(e.description)")
             }
         }
