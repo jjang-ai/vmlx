@@ -733,10 +733,16 @@ def _serialize_block(
     else:
         dtype = "kv"
 
-    # Store metadata as a serialized JSON tensor
+    # Store metadata as a serialized JSON tensor.
+    # Use a non-reserved key — safetensors has a special "__metadata__"
+    # header that expects a string-to-string dict. Writing a uint8 tensor
+    # under that name triggers C++ JSON type_error.302 ("type must be
+    # string, but is array") on load → disk cache hits become silent
+    # misses because _deserialize_block returns [] and the block is
+    # treated as corrupt + cleanup-queued.
     if meta:
         meta_bytes = json.dumps(meta).encode("utf-8")
-        tensors["__metadata__"] = mx.array(
+        tensors["__vmlx_block_meta__"] = mx.array(
             list(meta_bytes), dtype=mx.uint8
         )
 
@@ -754,9 +760,14 @@ def _deserialize_block(
     Falls back to the dtype field for backward compatibility with blocks
     serialized before per-layer tags were added.
     """
-    # Extract metadata if present
+    # Extract metadata if present. Try the new key first; fall back to
+    # the legacy `__metadata__` key for blocks written by older builds
+    # (pre-fix, still readable because this loader does the read, not
+    # safetensors' reserved-name parser).
     meta: Dict[str, Any] = {}
-    meta_arr = data.get("__metadata__")
+    meta_arr = data.get("__vmlx_block_meta__")
+    if meta_arr is None:
+        meta_arr = data.get("__metadata__")
     if meta_arr is not None:
         try:
             meta_bytes = bytes(meta_arr.tolist())
@@ -764,6 +775,7 @@ def _deserialize_block(
         except Exception:
             pass
     # Remove from data dict so it's not picked up as a layer
+    data.pop("__vmlx_block_meta__", None)
     data.pop("__metadata__", None)
 
     # Per-layer type map (new format with __layer_types__)

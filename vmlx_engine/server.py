@@ -3394,7 +3394,17 @@ async def create_rerank(request: Request):
 
             if _reranker is not None:
                 _reranker.unload()
-            _reranker = Reranker(model)
+            try:
+                _reranker = Reranker(model)
+            except Exception as _load_err:
+                # Bad model path / HF repo / network issue → 400, not 500
+                # (the caller can fix their request). Log the full error
+                # server-side for diagnosis; return a concise message.
+                logger.error(f"Reranker load failed for '{model}': {_load_err}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to load reranker model '{model}': {_load_err}",
+                )
         # Capture local ref inside lock to prevent concurrent unload during rerank
         local_reranker = _reranker
 
@@ -3407,7 +3417,20 @@ async def create_rerank(request: Request):
         )
     except Exception as e:
         logger.error(f"Rerank failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Distinguish bad-model errors (→ 400) from genuine runtime
+        # errors (→ 500). Reranker load is lazy inside rerank(), so
+        # "Model not found" / "Could not load reranker" bubble up here
+        # and are really user-fixable input errors.
+        _msg = str(e)
+        _is_load_err = (
+            "Model not found" in _msg
+            or "Could not load reranker" in _msg
+            or "Repository not found" in _msg
+        )
+        raise HTTPException(
+            status_code=400 if _is_load_err else 500,
+            detail=_msg,
+        )
 
     return {
         "id": f"rerank-{uuid.uuid4().hex[:8]}",

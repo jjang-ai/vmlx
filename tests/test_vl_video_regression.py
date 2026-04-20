@@ -5521,3 +5521,87 @@ class TestOllamaFormatJsonTranslation:
             "format": "json",
         })
         assert req.get("response_format") == {"type": "json_object"}
+
+
+class TestBlockDiskStoreMetadataKeyCollision:
+    """Disk L2 cache blocks used the key `__metadata__` which collides
+    with safetensors' reserved header (expects a string→string dict; we
+    wrote a uint8 tensor). On load via mx.load, the C++ JSON parser
+    raised `type_error.302: type must be string, but is array`, the
+    loader treated the block as corrupt and queued it for cleanup.
+
+    Result: disk L2 cache silently failed across every server restart —
+    any request that should have hit disk fell through to full prefill.
+
+    Fix: rename the serialized metadata key to `__vmlx_block_meta__`
+    (non-reserved). Loader keeps backward-compat for old blocks by
+    checking BOTH keys.
+    """
+
+    def test_serializer_uses_non_reserved_key(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/block_disk_store.py"
+        ).read_text()
+        # Writer must use the renamed key
+        assert 'tensors["__vmlx_block_meta__"]' in src, (
+            "serializer must write metadata under __vmlx_block_meta__, "
+            "not __metadata__ (which collides with safetensors' reserved "
+            "header)"
+        )
+        # And document why
+        assert "safetensors has a special" in src or "reserved" in src.lower()
+
+    def test_deserializer_reads_new_and_legacy_keys(self):
+        """Back-compat — blocks written by old builds used __metadata__
+        and the loader must still read them until they age out of the
+        LRU (otherwise users would lose their entire L2 cache on
+        upgrade)."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/block_disk_store.py"
+        ).read_text()
+        assert 'data.get("__vmlx_block_meta__")' in src, (
+            "loader must prefer new key"
+        )
+        assert 'data.get("__metadata__")' in src, (
+            "loader must fall back to legacy key for old blocks"
+        )
+        # Both keys popped off the layer-scan dict
+        assert 'data.pop("__vmlx_block_meta__"' in src
+        assert 'data.pop("__metadata__"' in src
+
+    def test_round_trip_serialize_deserialize(self):
+        """Unit round-trip: serialize a fake block with mixed layer
+        types, persist to disk via mx.save, reload, check layers
+        restored."""
+        import tempfile, os
+        try:
+            import mlx.core as mx
+        except ImportError:
+            pytest.skip("mlx not installed")
+        from vmlx_engine.block_disk_store import _serialize_block, _deserialize_block
+
+        # Minimal fake block: 2 KV layers
+        keys0 = mx.zeros((2, 4, 8, 16), dtype=mx.float16)
+        values0 = mx.zeros((2, 4, 8, 16), dtype=mx.float16)
+        cache_data = [
+            ("kv", keys0, values0),
+            ("kv", keys0, values0),
+        ]
+        tensors, dtype, num_layers = _serialize_block(cache_data)
+        assert "__vmlx_block_meta__" in tensors, "meta must be written"
+        assert "__metadata__" not in tensors, (
+            "reserved key must NOT be used — avoids safetensors collision"
+        )
+        assert num_layers == 2
+
+        with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as f:
+            tmp = f.name
+        try:
+            mx.save_safetensors(tmp, tensors)
+            loaded = mx.load(tmp)
+            restored = _deserialize_block(loaded, dtype)
+            assert len(restored) == 2
+            for layer in restored:
+                assert layer[0] == "kv"
+        finally:
+            os.unlink(tmp)
