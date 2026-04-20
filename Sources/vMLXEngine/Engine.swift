@@ -853,6 +853,14 @@ public actor Engine {
                 // can reach the load task. Self-deregister on exit via
                 // the `defer` at the closure tail.
 
+                // iter-124 §150: tell the ModelLibrary we're reading shards
+                // from this path so a concurrent `deleteEntry(byId:)` call
+                // (from `/api/delete` or `DELETE /v1/admin/models/:id`)
+                // refuses instead of `rm -r`ing the dir out from under us
+                // mid-Phase-2. Every early-return / throw path below must
+                // balance this mark with `markLoadFinished`.
+                await self.modelLibrary.markLoadStarted(opts.modelPath)
+
                 // Emit + fail are declared as @Sendable closures instead
                 // of local `func` decls so they satisfy the @Sendable
                 // parameter contract on `runLoadProgressClock(emit:)`.
@@ -883,6 +891,12 @@ public actor Engine {
                     await self.setLoadedModelPath(nil)
                     await self.setLoadedJangConfig(nil)
                     await self.setLastLoadOptions(nil)
+                    // iter-124 §150: balance `markLoadStarted` from the
+                    // top of the load task on the failure path. Without
+                    // this, a failed load leaves the path pinned in
+                    // `activeLoadPaths` forever and legitimate delete
+                    // attempts get "currently loading" 400s.
+                    await self.modelLibrary.markLoadFinished(opts.modelPath)
                     await self.transition(.error(msg))
                     continuation.yield(.failed(msg))
                     continuation.finish()
@@ -1035,6 +1049,12 @@ public actor Engine {
                     if Task.isCancelled {
                         await self.logs.append(.info, category: "engine",
                             "Load cancelled mid-phase3; discarding loaded container")
+                        // iter-124 §150: balance `markLoadStarted` on the
+                        // cancellation checkpoint so Delete unblocks once
+                        // the user cancels an in-flight load. Fired BEFORE
+                        // clearCache/yield to preserve the adjacency the
+                        // §127 regression guard asserts.
+                        await self.modelLibrary.markLoadFinished(opts.modelPath)
                         MLX.Memory.clearCache()
                         continuation.yield(.failed("cancelled"))
                         continuation.finish()
@@ -1115,6 +1135,13 @@ public actor Engine {
                         label: "Ready"
                     ))
                     await self.transition(.running)
+                    // iter-124 §150: model is now loaded. Balance the
+                    // `markLoadStarted` from the top of the load task —
+                    // after this point deletion must instead check
+                    // `loadedModelPath` (a loaded-but-idle model can
+                    // survive mmap-unlink on APFS; the unsafe window is
+                    // only while Phase 2 is opening additional shards).
+                    await self.modelLibrary.markLoadFinished(opts.modelPath)
                     continuation.yield(.done)
                     continuation.finish()
                 } catch {

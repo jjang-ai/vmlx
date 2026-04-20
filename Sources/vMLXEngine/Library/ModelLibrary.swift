@@ -105,6 +105,23 @@ public actor ModelLibrary {
     /// torn down; the watcher's own deinit tears down the FSEventStream.
     private var watcher: ModelLibraryWatcher? = nil
 
+    /// iter-124 §150: paths with an in-flight `Engine.load(...)` reading
+    /// shards / tokenizer / config files from them. Keyed by standardized
+    /// URL, refcounted so multiple engines loading the same weights
+    /// (happens in the multi-session gateway when two chat sessions pick
+    /// the same model before either finishes loading) both bump/decrement
+    /// cleanly. `deleteEntry(byId:)` refuses any path whose refcount > 0.
+    ///
+    /// Why: `FileManager.removeItem` mid-load races the loader's
+    /// safetensors shard reads. On APFS, already-mmap'd pages survive
+    /// unlink, but the loader hasn't mmap'd every shard yet — Phase 2
+    /// opens them one at a time. A delete racing between shard-4 open
+    /// and shard-5 open produces a mid-load `ENOENT` crash that leaves
+    /// the engine in `.error("No such file")` instead of cleanly
+    /// refusing up front. Closing that window is the purpose of this
+    /// set.
+    private var activeLoadPaths: [URL: Int] = [:]
+
     // MARK: - Init
 
     /// Set by `addUserDir` to invalidate the next freshness check. When a
@@ -251,6 +268,16 @@ public actor ModelLibrary {
                 "refuse to delete \(target.path): not under a known model root")
         }
 
+        // iter-124 §150: refuse if any engine is mid-load on this path.
+        // See the `activeLoadPaths` doc comment for why. Surfaces as a
+        // 400 via the `/api/delete` + `/v1/admin/models/:id` routes so
+        // the caller sees "model is currently loading" instead of a
+        // half-deleted dir + a mid-load crash.
+        if (activeLoadPaths[target] ?? 0) > 0 {
+            throw EngineError.invalidRequest(
+                "model is currently loading — try again after the load finishes or is cancelled")
+        }
+
         guard fm.fileExists(atPath: target.path) else {
             // Already gone on disk — still drop the DB + cache entries.
             database.purge([id])
@@ -264,6 +291,31 @@ public actor ModelLibrary {
         cache.removeAll { $0.id == id }
         broadcast()
         return true
+    }
+
+    /// iter-124 §150: called by `Engine.load` before starting Phase 1
+    /// detection. Pairs with `markLoadFinished(_:)` in ALL load-task exit
+    /// paths (success, failure, cancellation checkpoint). Ref-counted so
+    /// two engines loading the same path concurrently both get clean
+    /// unmarks.
+    public func markLoadStarted(_ url: URL) {
+        let key = url.standardizedFileURL
+        activeLoadPaths[key, default: 0] += 1
+    }
+
+    public func markLoadFinished(_ url: URL) {
+        let key = url.standardizedFileURL
+        guard let count = activeLoadPaths[key] else { return }
+        if count <= 1 {
+            activeLoadPaths.removeValue(forKey: key)
+        } else {
+            activeLoadPaths[key] = count - 1
+        }
+    }
+
+    /// Test hook — peek at the in-flight set. Read-only, non-mutating.
+    internal func activeLoadPathCount(_ url: URL) -> Int {
+        activeLoadPaths[url.standardizedFileURL] ?? 0
     }
 
     public func subscribe() -> AsyncStream<[ModelEntry]> {
