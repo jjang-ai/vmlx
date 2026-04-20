@@ -1773,6 +1773,15 @@ public actor Engine {
             inputs = [s]
         } else if let arr = request["input"] as? [String] {
             inputs = arr
+        } else if request["input"] is [[Int]] || request["input"] is [Int] {
+            // iter-99 §177: OpenAI spec also accepts token-id arrays.
+            // FIXME(iter-99 §177): [[Int]] and [Int] token-id inputs
+            // are not yet wired through vMLXEmbedders (which takes
+            // `inputs: [String]`). Reject with a clear 400 so callers
+            // get a meaningful error instead of silently getting the
+            // empty-input branch below. Future iter must extend
+            // `generateEmbeddings` to accept pre-tokenized inputs.
+            throw EngineError.invalidRequest("embeddings: token-id array inputs ([[int]] / [int]) are not yet supported — send `input` as string or [string]")
         } else {
             throw EngineError.invalidRequest("embeddings: missing or invalid 'input' field — expected string or [string]")
         }
@@ -1783,7 +1792,25 @@ public actor Engine {
         guard !inputs.isEmpty else {
             throw EngineError.invalidRequest("embeddings: 'input' must contain at least one item")
         }
-        let vectors = try await generateEmbeddings(inputs: inputs)
+        var vectors = try await generateEmbeddings(inputs: inputs)
+        // iter-99 §177: OpenAI `dimensions` Matryoshka truncation.
+        // When the client asks for a shorter embedding (typically to
+        // fit a vector DB with a narrower index), truncate each row
+        // to the first N floats. Rejects values > native dim with a
+        // clean 400 instead of silently ignoring, and rejects <= 0
+        // for obvious nonsense. Renormalization is intentionally
+        // NOT applied — OpenAI's own API returns raw truncated
+        // vectors and leaves renormalization to the caller. Clients
+        // that need unit-norm-after-truncate handle it client-side.
+        if let requestedDims = request["dimensions"] as? Int {
+            guard requestedDims > 0 else {
+                throw EngineError.invalidRequest("embeddings: 'dimensions' must be a positive integer")
+            }
+            if let native = vectors.first?.count, requestedDims > native {
+                throw EngineError.invalidRequest("embeddings: 'dimensions' (\(requestedDims)) exceeds model's native embedding size (\(native))")
+            }
+            vectors = vectors.map { Array($0.prefix(requestedDims)) }
+        }
         let modelName = (request["model"] as? String)
             ?? self.embeddingModelPath?.lastPathComponent
             ?? "unknown"
