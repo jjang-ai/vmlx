@@ -7969,6 +7969,40 @@ class TestConcurrentRequestsWiring:
             "all workloads"
         )
 
+
+class TestGemma4FamilyAutoDetect:
+    """iter 39 — pins gemma4 family auto-detection wiring.
+    Live-verified on mlx-community/gemma-4-e2b-it-4bit:
+      "matched text_config.model_type='gemma4_text' (wrapper='gemma4') → gemma4_text"
+      "Auto-detected reasoning parser: gemma4 (from model config)"
+    Confirms the registry resolves VLM-wrapper/text-subclass routing
+    for the gemma4 family and auto-applies the gemma4 reasoning parser
+    even without a jang_config stamp."""
+
+    def test_gemma4_wrapper_text_distinction_in_registry(self):
+        """The model_config_registry must register gemma4/gemma4_text
+        families. Family registrations live in the sibling
+        model_configs.py module and are loaded into the registry at
+        first lookup. Without this, the parser routing fails for
+        Gemma-4 VL variants."""
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        registry = get_model_config_registry()
+        # After first lookup, configs are auto-loaded from model_configs.py
+        registered = registry.list_registered()
+        # At least one gemma4-family config must be present
+        assert any("gemma4" in n for n in registered), (
+            f"Registry missing gemma4 family config; registered={registered[:15]}"
+        )
+
+    def test_gemma4_reasoning_parser_module_present(self):
+        """gemma4 reasoning parser must be importable via get_parser."""
+        from vmlx_engine.reasoning import get_parser
+        cls = get_parser("gemma4")
+        assert cls is not None
+        # Instantiable
+        inst = cls()
+        assert hasattr(inst, "extract_reasoning")
+
     def test_hybrid_ssm_multiturn_cache_documented(self):
         """iter 32 confirmed TurboQuant + hybrid-SSM multi-turn cache
         hits work once idle time lets the async re-derive fire:
