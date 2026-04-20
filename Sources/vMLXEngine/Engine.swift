@@ -1445,6 +1445,15 @@ public actor Engine {
         _dflashTarget = nil
         idleWatcher?.cancel()
         idleWatcher = nil
+        // iter-85 §113: Drop MLX's internal buffer cache so the RSS drop is
+        // visible in Activity Monitor right after Stop. Without this call
+        // MLX retains its pooled Metal buffers after the model reference
+        // goes to nil — users who expected "Stop" to return a 30+GB model's
+        // RAM to the OS saw no change until the next load event pushed
+        // the allocator to flush. `Memory.clearCache()` only frees buffers
+        // that aren't currently referenced, so concurrent streams (already
+        // cancelled above) can't lose live state.
+        MLX.Memory.clearCache()
         transition(.stopped)
         // Flush any pending debounced settings writes so in-memory
         // edits from the last 500ms don't get dropped when the app is
@@ -1905,6 +1914,13 @@ public actor Engine {
         loadedModelPath = nil
         loadedJangConfig = nil
         cacheCoordinator = nil
+        // iter-85 §113: drop MLX's pooled Metal buffer cache so the RSS
+        // reduction is visible to Activity Monitor. Without this call a
+        // user who deep-sleeps a 30GB model still sees the process
+        // holding that memory until the next allocation forces MLX to
+        // flush. Safe because `loaded` + `cacheCoordinator` are nil at
+        // this point — no live buffers to touch.
+        MLX.Memory.clearCache()
         await logs.append(.info, category: "engine", "deep sleep — weights unloaded")
         transition(.standby(.deep))
     }
