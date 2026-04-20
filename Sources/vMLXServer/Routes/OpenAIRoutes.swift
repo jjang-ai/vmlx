@@ -1114,9 +1114,24 @@ public enum OpenAIRoutes {
             }
         }
 
-        // GET /v1/audio/voices — tts voice list; empty until TTS lands.
+        // GET /v1/audio/voices — TTS voice catalog (vMLX extension,
+        // not part of OpenAI's standard surface).
+        //
+        // FIXME(iter-102 §180): returns an empty `data` list with a
+        // `status: "placeholder-only"` indicator while vMLXTTS ships
+        // only the PlaceholderSynth backend. When the Kokoro port
+        // lands (see `Sources/vMLXTTS/Kokoro/KokoroBackend.swift`),
+        // wire `TTSEngine.availableVoices()` here and flip status
+        // to `"kokoro"` or similar. Clients doing voice pickers
+        // should read the status field to know whether to show a
+        // "voices will appear once a neural backend is ported" hint
+        // vs enumerating real names.
         router.get("/v1/audio/voices") { _, _ -> Response in
-            Self.json(["object": "list", "data": []])
+            Self.json([
+                "object": "list",
+                "data": [],
+                "status": "placeholder-only",
+            ])
         }
 
         // POST /v1/rerank — real rerank via embedding cosine similarity.
