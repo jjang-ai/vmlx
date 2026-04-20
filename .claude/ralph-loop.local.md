@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 64
+iteration: 65
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,23 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 380/380 source-scan tests green, 140/140 regression guards + 15 matrix
-  rows (§57–§144)
+- 381/381 source-scan tests green, 141/141 regression guards + 15 matrix
+  rows (§57–§145)
+- iter-119 work:
+  1. /v1/completions validate() parity (§145) — **last chat-
+     shape route missing pre-flight validation**. /v1/chat/completions,
+     /v1/responses (§96), Ollama /api/chat + /api/generate,
+     Anthropic /v1/messages, and Gateway all call
+     `chatReq.validate()` before invoking engine so bad
+     temperature / max_tokens / stop-sequences get clean 400 at
+     the HTTP boundary. Legacy /v1/completions (text-completion)
+     was the last route skipping it — wire-shape clients sending
+     bad top_p or negative max_tokens got a stream that errored
+     mid-decode instead of a clean 400. Fix: added validate()
+     block with ChatRequestValidationError mapped to 400 before
+     `engine.wakeFromStandby()`, matching sibling chat routes.
+     §145 pins marker + count of validate() call sites ≥ 3.
+     Build clean, guard green.
 - iter-118 work:
   1. Gateway /health unauth model-library enumeration (§144) —
      **real info-leak fix**. Gateway `/health` response included
