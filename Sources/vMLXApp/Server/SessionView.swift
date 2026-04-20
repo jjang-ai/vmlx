@@ -62,14 +62,23 @@ struct SessionView: View {
                     Badge(text: session.family.uppercased(), color: Theme.Colors.textMid)
                 }
                 HStack(spacing: Theme.Spacing.md) {
-                    metaItem("HOST", "\(session.host):\(session.port)")
-                    if let pid = session.pid {
-                        metaItem("PID", "\(pid)")
+                    // iter-132 §158: remote sessions store the endpoint
+                    // URL in `session.host` and `0` in `session.port` —
+                    // rendering "https://api.openai.com/v1:0" on the
+                    // detail view looked broken. Show as "ENDPOINT" +
+                    // URL for remote, "HOST" + host:port for local.
+                    if session.isRemote {
+                        metaItem("ENDPOINT", session.host)
+                    } else {
+                        metaItem("HOST", "\(session.host):\(session.port)")
+                        if let pid = session.pid {
+                            metaItem("PID", "\(pid)")
+                        }
                     }
                     if let ms = session.latencyMs {
                         metaItem("LATENCY", String(format: "%.0f ms", ms))
                     }
-                    if case .standby(let depth) = session.state {
+                    if !session.isRemote, case .standby(let depth) = session.state {
                         metaItem("STANDBY", depth == .deep ? "Deep sleep" : "Light sleep")
                     }
                 }
@@ -94,22 +103,39 @@ struct SessionView: View {
 
     private var actionButtons: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            switch session.state {
-            case .stopped:
-                buttonTile("Start", color: Theme.Colors.accent) { Task { await startSession() } }
-            case .loading:
-                Text("Starting…")
+            // iter-132 §158: remote sessions have no local lifecycle —
+            // the endpoint is either reachable or not, and we can't
+            // Start/Stop/Wake a server we don't own. Surface a quiet
+            // "Remote" label so the spot isn't empty; Chat-send still
+            // dispatches through RemoteEngineClient.
+            if session.isRemote {
+                Text("Remote")
                     .font(Theme.Typography.bodyHi)
-                    .foregroundStyle(Theme.Colors.textMid)
-                buttonTile("Cancel", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
-            case .running:
-                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
-            case .standby:
-                buttonTile("Wake", color: Theme.Colors.accent) { Task { await app.engine.wakeFromStandby() } }
-                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
-            case .error:
-                buttonTile("Reconnect", color: Theme.Colors.accent) { Task { await startSession() } }
-                buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                    .foregroundStyle(Theme.Colors.accent)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .stroke(Theme.Colors.accent, lineWidth: 1)
+                    )
+            } else {
+                switch session.state {
+                case .stopped:
+                    buttonTile("Start", color: Theme.Colors.accent) { Task { await startSession() } }
+                case .loading:
+                    Text("Starting…")
+                        .font(Theme.Typography.bodyHi)
+                        .foregroundStyle(Theme.Colors.textMid)
+                    buttonTile("Cancel", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                case .running:
+                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                case .standby:
+                    buttonTile("Wake", color: Theme.Colors.accent) { Task { await app.engine.wakeFromStandby() } }
+                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                case .error:
+                    buttonTile("Reconnect", color: Theme.Colors.accent) { Task { await startSession() } }
+                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                }
             }
         }
     }
