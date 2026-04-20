@@ -122,7 +122,7 @@ public enum OllamaRoutes {
             let caps = OllamaCapabilities.capabilities(family: e.family,
                                                        modality: e.modality)
             // iter-115 §141: the `modelfile` field previously emitted
-            // `# vMLX JANG: true\nPATH /Users/eric/.cache/huggingface/...`
+            // `# vMLX JANG: true\nPATH $HOME/.cache/huggingface/...`
             // which leaked the user's absolute filesystem path on disk.
             // Any API-key-holding client (including LAN peers when the
             // server is bound to 0.0.0.0) could learn home-dir naming,
