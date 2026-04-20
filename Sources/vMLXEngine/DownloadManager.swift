@@ -494,7 +494,12 @@ public actor DownloadManager {
                 }
 
                 Task { [jobId] in
-                    await self.registerDataTask(jobId: jobId, task: task)
+                    // iter-84: `Task { }` inside an actor method
+                    // inherits the actor's isolation, so
+                    // `self.registerDataTask` doesn't need an actor
+                    // hop. Drop the redundant await to silence
+                    // "no 'async' operations occur" warning.
+                    self.registerDataTask(jobId: jobId, task: task)
                 }
                 task.resume()
             }

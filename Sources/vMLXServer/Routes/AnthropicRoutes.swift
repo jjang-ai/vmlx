@@ -631,7 +631,7 @@ public enum AnthropicRoutes {
             switch tcType {
             case "auto": toolChoice = .auto
             case "any":  toolChoice = .required
-            case "none": toolChoice = .none
+            case "none": toolChoice = ChatRequest.ToolChoice.none
             case "tool":
                 if let name = tc["name"] as? String {
                     toolChoice = .function(name: name)
