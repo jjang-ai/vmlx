@@ -7204,3 +7204,140 @@ class TestMcpEndpoints:
             assert content[0]["text"] == "echoed: hello"
         finally:
             srv._mcp_manager = orig
+
+
+class TestSsmCompanionPersistsAcrossRestart:
+    """iter 19 — pins the hybrid-SSM companion-state survival path.
+    In-memory SSMCompanionCache is erased on restart, but the
+    block_disk_store L2 tier persists SSM state as ('cumulative',
+    state_list, meta, class_name) tuples. When a hybrid SSM model
+    (Nemotron, Qwen3.5-VL, Qwen3.6-JANGTQ2) re-prefills after
+    restart, it rehydrates from the L2 disk round-trip.
+
+    Without this guarantee, every server restart would force
+    hybrid-SSM models to re-run the full SSM state derivation over
+    the entire prompt, bloating TTFT."""
+
+    def test_cumulative_state_round_trips_across_restart(self):
+        """SSM cumulative state (list of MLX arrays + meta dict +
+        class_name) must survive shutdown/reopen with shape and
+        values intact."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store1 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                ssm_state = [
+                    mx.array([[1.0, 2.0, 3.0]]),
+                    mx.array([[4.0, 5.0, 6.0]]),
+                ]
+                cache_data = [
+                    ("kv", mx.ones((2, 4, 4)), mx.ones((2, 4, 4))),
+                    ("cumulative", ssm_state, {"dim": 3}, "MambaCache"),
+                ]
+                bh = hashlib.sha256(b"ssm_restart").digest()
+                store1.write_block_async(bh, cache_data, token_count=32)
+                time.sleep(2.0)
+            finally:
+                store1.shutdown()
+            # === simulated restart ===
+            store2 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                read = store2.read_block(bh)
+                assert read is not None
+                kinds = [layer[0] for layer in read]
+                assert kinds == ["kv", "cumulative"], (
+                    f"hybrid layer layout lost on restart: {kinds}"
+                )
+                ssm_layer = read[1]
+                # ('cumulative', state_list, meta, class_name)
+                assert ssm_layer[3] == "MambaCache", (
+                    f"cumulative class_name lost: {ssm_layer[3]}"
+                )
+                assert ssm_layer[2] == {"dim": 3}, (
+                    f"cumulative meta lost: {ssm_layer[2]}"
+                )
+                restored_states = ssm_layer[1]
+                assert len(restored_states) == 2, (
+                    f"state list length lost: {len(restored_states)}"
+                )
+                assert list(restored_states[0].shape) == [1, 3]
+                assert list(restored_states[1].shape) == [1, 3]
+                # Values round-trip correctly
+                vals = restored_states[0].tolist()
+                assert vals == [[1.0, 2.0, 3.0]], (
+                    f"cumulative state values corrupted: {vals}"
+                )
+            finally:
+                store2.shutdown()
+
+    def test_ssm_companion_cache_in_memory_semantics(self):
+        """SSMCompanionCache is L1 (in-memory). After a 'restart'
+        (new instance), it MUST be empty — restoration of SSM state
+        comes from the L2 disk store, not from this cache. Pinning
+        this prevents a confused refactor that tries to persist L1
+        to a file and collide with L2 semantics."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        c1 = SSMCompanionCache(max_entries=10, model_key="test")
+        c1.store([1, 2, 3], 3, ["dummy_state"], is_complete=True)
+        assert c1.size == 1
+        # "Restart" — drop reference, new instance
+        del c1
+        c2 = SSMCompanionCache(max_entries=10, model_key="test")
+        assert c2.size == 0, (
+            "SSMCompanionCache must NOT persist across instance "
+            "recreation — persistence is the L2 block_disk_store's job"
+        )
+        # After restart, fetch miss is correct — means the scheduler
+        # knows to consult L2 disk or re-derive.
+        e = c2.fetch([1, 2, 3], 3)
+        assert e is None, f"expected miss on fresh cache, got {e}"
+
+    def test_ssm_companion_longest_prefix(self):
+        """fetch_longest_prefix must return the longest stored prefix
+        matching the query. This is how multi-turn cache hits work
+        on hybrid models — T2 hits T1's stored state as a prefix."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        c = SSMCompanionCache(max_entries=10, model_key="test")
+        # Store T1 prefix
+        c.store([10, 20, 30, 40], 4, ["T1_state"], is_complete=True)
+        # Query with T1 + 3 extra tokens — must hit the stored prefix
+        result = c.fetch_longest_prefix([10, 20, 30, 40, 50, 60, 70], 7)
+        assert result is not None, "prefix match missing"
+        prefix_len, state, is_complete = result
+        assert prefix_len == 4, f"expected prefix_len=4, got {prefix_len}"
+        assert state == ["T1_state"], f"wrong state: {state}"
+        assert is_complete is True
+
+    def test_hybrid_block_order_kv_then_cumulative(self):
+        """When block_disk_store stores a hybrid block, the layer
+        order must be preserved exactly. A swap between attention KV
+        and SSM cumulative would corrupt the model state on reload."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store1 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                # 4 layers: attention, ssm, attention, ssm
+                cache_data = [
+                    ("kv", mx.zeros((1, 2, 2)), mx.zeros((1, 2, 2))),
+                    ("cumulative", [mx.zeros((1, 2))], {}, "MambaCache"),
+                    ("kv", mx.ones((1, 2, 2)), mx.ones((1, 2, 2))),
+                    ("cumulative", [mx.ones((1, 2))], {}, "MambaCache"),
+                ]
+                bh = hashlib.sha256(b"hybrid_order").digest()
+                store1.write_block_async(bh, cache_data, token_count=16)
+                time.sleep(2.0)
+            finally:
+                store1.shutdown()
+            store2 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                read = store2.read_block(bh)
+                kinds = [layer[0] for layer in read]
+                assert kinds == ["kv", "cumulative", "kv", "cumulative"], (
+                    f"Layer interleave lost on restart: {kinds}"
+                )
+            finally:
+                store2.shutdown()
