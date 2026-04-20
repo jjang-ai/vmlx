@@ -7866,6 +7866,19 @@ class TestVlTurboQuantDecodeSpeedBaseline:
             "ralph-loop state must record MiniMax-JANGTQ decode baseline"
         )
 
+    def test_nemotron_cascade_decode_speed_documented(self):
+        """Nemotron-Cascade-2-30B-A3B-JANG_2L-CRACK baseline
+        (130.5 tok/s on M4 Max 128GB, iter 35 delta method) beats
+        MEMORY.md's Swift reference of 98+ tok/s by +33%."""
+        import os
+        loop_md = "/Users/example/vmlx/.claude/ralph-loop.local.md"
+        if not os.path.isfile(loop_md):
+            pytest.skip("ralph-loop state file not present")
+        text = open(loop_md).read()
+        assert any(m in text for m in ("130.5", "Nemotron-Cascade", "130 tok/s")), (
+            "ralph-loop state must record Nemotron-Cascade-2 decode baseline"
+        )
+
     def test_hybrid_ssm_multiturn_cache_documented(self):
         """iter 32 confirmed TurboQuant + hybrid-SSM multi-turn cache
         hits work once idle time lets the async re-derive fire:
