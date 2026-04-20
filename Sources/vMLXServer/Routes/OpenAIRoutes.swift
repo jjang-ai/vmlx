@@ -409,11 +409,25 @@ public enum OpenAIRoutes {
                 ] as [String: Any]],
             ]
             if let u = usage {
-                obj2["usage"] = [
+                // iter-105 §183: hard rule #6 — every response body
+                // carries the four vMLX timing fields. Legacy
+                // /v1/completions was the last non-stream OpenAI-shape
+                // route dropping them (chat/completions wired in
+                // iter-64 §100, responses in iter-67 §96). Mirror the
+                // same shape here so latency dashboards + perf
+                // dashboards + vmlxctl --json all see the same
+                // envelope regardless of which route handled the call.
+                var usageObj: [String: Any] = [
                     "prompt_tokens": u.promptTokens,
                     "completion_tokens": u.completionTokens,
                     "total_tokens": u.promptTokens + u.completionTokens,
-                ] as [String: Any]
+                    "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
+                ]
+                if let tps = u.tokensPerSecond { usageObj["tokens_per_second"] = tps }
+                if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
+                if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
+                if let total = u.totalMs { usageObj["total_ms"] = total }
+                obj2["usage"] = usageObj
             }
             return Self.json(obj2)
         }
