@@ -8617,3 +8617,105 @@ class TestSsmCompanionLongestPrefixResume:
         assert 'environ.get(\n                                            "VMLX_ENABLE_SSM_PREFIX_RESUME"' not in src, (
             "stale VMLX_ENABLE_SSM_PREFIX_RESUME opt-in gate re-introduced"
         )
+
+
+class TestMlxStudio79ClaudeCodeCompat:
+    """v1.3.67 / mlxstudio#79 — @jjy1000 reported that Claude Code /
+    opencode / CCSwitch couldn't use vMLX ("model auto-stops after
+    load, gets `!` replies"). Root cause part of the story: when CC
+    sends model="claude-3-5-sonnet" but vMLX has MiniMax loaded,
+    the old code logged one INFO warning then silently demoted to
+    DEBUG for all subsequent mismatches — operators diagnosing why
+    their Claude Code integration misbehaved had zero log visibility
+    after the first request.
+
+    Fix: log INFO once per distinct (requested, served) pair. Never
+    silence. Include a hint pointing at the routing-tool scenario so
+    operators know this is expected behavior, not a bug.
+    """
+
+    def test_mismatch_tracker_is_set_keyed_by_pair(self):
+        """The module-level mismatch tracker must be a set of tuples
+        (requested_model, served_model) — not a bool flag — so
+        distinct mismatches each get one INFO log."""
+        from vmlx_engine import server as srv
+        assert hasattr(srv, "_model_name_mismatch_seen"), (
+            "server.py missing the v1.3.67 per-pair mismatch tracker; "
+            "fell back to the old bool silencer"
+        )
+        assert isinstance(srv._model_name_mismatch_seen, set), (
+            "_model_name_mismatch_seen must be a set of pairs"
+        )
+
+    def test_chat_completion_mismatch_logs_info_per_pair(self):
+        """Static source: create_chat_completion must add pair to the
+        set and log INFO when pair is new. Must NOT demote to DEBUG."""
+        import inspect
+        from vmlx_engine import server as srv
+        src = inspect.getsource(srv.create_chat_completion)
+        assert "_model_name_mismatch_seen" in src, (
+            "create_chat_completion must use the pair-set tracker"
+        )
+        assert "routing tools like Claude Code" in src, (
+            "log message must mention Claude Code / opencode / CCSwitch "
+            "so operators know the scenario — mlxstudio#79"
+        )
+        assert "log_fn = logger.debug" not in src, (
+            "old DEBUG-after-first silencer was re-introduced — "
+            "mismatch will disappear from logs after one request"
+        )
+
+    def test_responses_mismatch_logs_info_per_pair(self):
+        """Same check on create_response — mlxstudio#79 routing tools
+        hit /v1/responses too."""
+        import inspect
+        from vmlx_engine import server as srv
+        src = inspect.getsource(srv.create_response)
+        assert "_model_name_mismatch_seen" in src, (
+            "create_response must use the pair-set tracker"
+        )
+        assert "log_fn = logger.debug" not in src, (
+            "old DEBUG-after-first silencer re-introduced in create_response"
+        )
+
+    def test_distinct_pairs_each_log_once(self):
+        """Functional: 3 distinct pairs should log 3 INFO lines; a
+        4th request with one of the earlier pairs should NOT re-log.
+        Verifies the set semantics end-to-end."""
+        from vmlx_engine import server as srv
+        import logging
+        srv._model_name_mismatch_seen.clear()
+        records = []
+
+        class _Cap(logging.Handler):
+            def emit(self, r):
+                records.append(r.getMessage())
+
+        h = _Cap(level=logging.INFO)
+        srv.logger.addHandler(h)
+        _prior_level = srv.logger.level
+        srv.logger.setLevel(logging.INFO)
+        try:
+            def _log_once(requested, served):
+                pair = (requested, served)
+                if pair not in srv._model_name_mismatch_seen:
+                    srv._model_name_mismatch_seen.add(pair)
+                    srv.logger.info(
+                        f"Request model '{requested}' differs from served "
+                        f"model '{served}' — routing tools like Claude Code"
+                    )
+
+            _log_once("claude-3-5-sonnet", "MiniMax")
+            _log_once("claude-3-7-haiku", "MiniMax")
+            _log_once("gpt-4o", "MiniMax")
+            _log_once("claude-3-5-sonnet", "MiniMax")  # dup — must NOT log
+            _log_once("claude-3-5-sonnet", "MiniMax")  # dup — must NOT log
+        finally:
+            srv.logger.removeHandler(h)
+            srv.logger.setLevel(_prior_level)
+
+        mismatch_records = [r for r in records if "differs from served" in r]
+        assert len(mismatch_records) == 3, (
+            f"expected 3 INFO lines for 3 distinct pairs, got "
+            f"{len(mismatch_records)}: {mismatch_records}"
+        )

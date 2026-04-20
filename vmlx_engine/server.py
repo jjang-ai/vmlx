@@ -151,6 +151,12 @@ _max_prompt_tokens: int = 0  # Set at startup based on available memory (0 = no 
 _model_name_mismatch_warned: bool = (
     False  # Suppress repeated model name mismatch warnings
 )
+# v1.3.67 mlxstudio#79: track distinct (requested_model, served_model) pairs so we
+# log at INFO once per distinct pair instead of silently going DEBUG after the
+# first one. Claude Code / opencode / CCSwitch users were seeing their models
+# silently substituted with zero operator visibility when the requested name
+# didn't match the loaded model — lowered log level hid the bug.
+_model_name_mismatch_seen: set[tuple[str, str]] = set()
 
 
 def _estimate_max_prompt_tokens() -> int:
@@ -4928,13 +4934,21 @@ async def create_chat_completion(
         and request.model != resolved_name
         and request.model != _model_name
     ):
-        global _model_name_mismatch_warned
-        log_fn = logger.debug if _model_name_mismatch_warned else logger.info
-        log_fn(
-            f"Request model '{request.model}' differs from served model "
-            f"'{resolved_name}' — using loaded model (single-model server)"
-        )
-        _model_name_mismatch_warned = True
+        # v1.3.67 mlxstudio#79: log INFO once per distinct pair (not
+        # DEBUG-after-first). Claude Code sends model="claude-3-5-sonnet"
+        # or similar; operators need to see the substitution in logs to
+        # diagnose "why did my claude-3-5-sonnet request return MiniMax
+        # output". Silently demoting to DEBUG after one warning hid the
+        # bug from operators.
+        _pair = (str(request.model), str(resolved_name))
+        if _pair not in _model_name_mismatch_seen:
+            _model_name_mismatch_seen.add(_pair)
+            logger.info(
+                f"Request model '{request.model}' differs from served model "
+                f"'{resolved_name}' — using loaded model (single-model server). "
+                f"This is expected when routing tools like Claude Code, opencode, "
+                f"or CCSwitch at vMLX — they send their own model alias."
+            )
     # Normalize response model field to the resolved name
     request.model = resolved_name
 
@@ -5688,13 +5702,17 @@ async def create_response(
         and request.model != resolved_name
         and request.model != _model_name
     ):
-        global _model_name_mismatch_warned
-        log_fn = logger.debug if _model_name_mismatch_warned else logger.info
-        log_fn(
-            f"Request model '{request.model}' differs from served model "
-            f"'{resolved_name}' — using loaded model (single-model server)"
-        )
-        _model_name_mismatch_warned = True
+        # v1.3.67 mlxstudio#79: INFO log once per distinct pair (see
+        # create_chat_completion for full rationale).
+        _pair = (str(request.model), str(resolved_name))
+        if _pair not in _model_name_mismatch_seen:
+            _model_name_mismatch_seen.add(_pair)
+            logger.info(
+                f"Request model '{request.model}' differs from served model "
+                f"'{resolved_name}' — using loaded model (single-model server). "
+                f"This is expected when routing tools like Claude Code, opencode, "
+                f"or CCSwitch at vMLX — they send their own model alias."
+            )
     request.model = resolved_name
 
     # Warn about unsupported penalty parameters
