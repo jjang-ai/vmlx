@@ -200,7 +200,17 @@ public actor Engine {
     /// its own SQLite file at `~/Library/Application Support/vMLX/settings.sqlite3`.
     /// HTTP routes should call `settings.resolved(sessionId:chatId:request:)`
     /// before dispatching to `stream()` so per-request overrides win.
-    public let settings: SettingsStore
+    ///
+    /// **iter-84 (§112)**: `nonisolated` because `SettingsStore` is
+    /// itself an actor with its own thread safety — the Engine actor
+    /// doesn't need to serialize access to the REFERENCE. Without
+    /// this, UI code doing `app.engine.settings.session(id)` emits
+    /// Swift 6 warnings about actor-isolated property access from
+    /// outside the actor (slated to become an error in Swift 6
+    /// language mode). Every SettingsStore method is already async
+    /// and awaits through its own actor executor, so readers see
+    /// consistent state regardless of which thread they approach on.
+    public nonisolated let settings: SettingsStore
 
     /// MCP (Model Context Protocol) server manager. Owns the set of
     /// configured stdio MCP servers and lazily spawns them on first

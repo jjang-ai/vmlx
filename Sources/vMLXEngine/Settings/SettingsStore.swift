@@ -115,7 +115,12 @@ public actor SettingsStore {
                 try? await Task.sleep(nanoseconds: debounceNanos)
             }
             if Task.isCancelled { return }
-            await self.flushGlobal()
+            // `Task { }` inside an actor method inherits the
+            // enclosing actor's isolation, so `self.flushGlobal()`
+            // doesn't need an actor hop — the Swift 6 "no 'async'
+            // operations occur" warning (iter-84) nudged us to drop
+            // the redundant await.
+            self.flushGlobal()
         }
         broadcast(.global)
     }
@@ -128,7 +133,7 @@ public actor SettingsStore {
                 try? await Task.sleep(nanoseconds: debounceNanos)
             }
             if Task.isCancelled { return }
-            await self.flushSession(id)
+            self.flushSession(id)
         }
         broadcast(.session(id))
     }
@@ -141,7 +146,7 @@ public actor SettingsStore {
                 try? await Task.sleep(nanoseconds: debounceNanos)
             }
             if Task.isCancelled { return }
-            await self.flushChat(id)
+            self.flushChat(id)
         }
         broadcast(.chat(id))
     }
@@ -175,14 +180,23 @@ public actor SettingsStore {
     /// release. Snapshotting keys + looking up the task object via
     /// subscript per-iteration avoids both failure modes.
     public func flushPending() async {
-        if let t = globalSaveTask { t.cancel(); await flushGlobal() }
+        // `flushGlobal` / `flushSession` / `flushChat` are synchronous
+        // helpers on the actor; the outer `async` here is load-bearing
+        // because callers `await settings.flushPending()` from
+        // non-isolated contexts (VMLXAppDelegate.applicationWillTerminate
+        // hops onto the actor via the await). Inside the actor body,
+        // direct calls need no `await` — iter-84 strips the redundant
+        // `await` on each flush call to silence the Swift 6
+        // "no 'async' operations occur within 'await' expression"
+        // warnings while preserving the outer actor hop.
+        if let t = globalSaveTask { t.cancel(); flushGlobal() }
         for id in Array(sessionSaveTasks.keys) {
             sessionSaveTasks[id]?.cancel()
-            await flushSession(id)
+            flushSession(id)
         }
         for id in Array(chatSaveTasks.keys) {
             chatSaveTasks[id]?.cancel()
-            await flushChat(id)
+            flushChat(id)
         }
     }
 
