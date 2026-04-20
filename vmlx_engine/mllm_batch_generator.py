@@ -1665,23 +1665,22 @@ class MLLMBatchGenerator:
                                     else:
                                         ssm_states, _is_complete = _entry
                                     if ssm_states is None:
-                                        # vmlx#91: exact SSM state miss — try resuming from
-                                        # the longest stored checkpoint whose tokens are a
-                                        # strict prefix of the current query. Opt-in via
-                                        # VMLX_ENABLE_SSM_PREFIX_RESUME=1 until this has
-                                        # seen production mileage; default OFF preserves
-                                        # current full-prefill behavior exactly.
+                                        # vmlx#91: exact SSM state miss — resume from the
+                                        # longest stored checkpoint whose tokens are a strict
+                                        # prefix of the current query. Default ON in v1.3.66;
+                                        # set VMLX_DISABLE_SSM_PREFIX_RESUME=1 to force the
+                                        # legacy full-prefill path.
                                         import os as _os
                                         _enable_resume = _os.environ.get(
-                                            "VMLX_ENABLE_SSM_PREFIX_RESUME"
-                                        ) in ("1", "true", "True", "yes", "on")
+                                            "VMLX_DISABLE_SSM_PREFIX_RESUME"
+                                        ) not in ("1", "true", "True", "yes", "on")
                                         _missed_ck = None
                                         _fn = getattr(
                                             self._ssm_state_cache,
                                             "fetch_longest_prefix",
                                             None,
                                         )
-                                        if _fn is not None and _fetch_num > 0:
+                                        if _enable_resume and _fn is not None and _fetch_num > 0:
                                             try:
                                                 _missed_ck = _fn(token_list, _fetch_num)
                                             except Exception:
@@ -1722,11 +1721,9 @@ class MLLMBatchGenerator:
                                                 logger.info(
                                                     f"VLM prefix cache MISS for {req.request_id}: "
                                                     f"{block_table.num_tokens} KV blocks found but "
-                                                    f"no exact SSM companion; stored checkpoint at "
-                                                    f"{_ck_len} tokens is a valid prefix "
-                                                    f"(would save {_ck_len} tokens prefill — "
-                                                    f"set VMLX_ENABLE_SSM_PREFIX_RESUME=1 to "
-                                                    f"enable). Full prefill required."
+                                                    f"resume path disabled (VMLX_DISABLE_SSM_PREFIX_RESUME=1); "
+                                                    f"stored checkpoint at {_ck_len} tokens was available. "
+                                                    f"Full prefill required."
                                                 )
                                             else:
                                                 logger.info(

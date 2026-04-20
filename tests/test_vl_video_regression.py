@@ -1399,12 +1399,15 @@ class TestVmlx91InstrumentationWired:
 
 
 class TestVmlx91ResumeOptInEndToEnd:
-    """vmlx#91: end-to-end SSM prefix resume via
-    VMLX_ENABLE_SSM_PREFIX_RESUME=1 opt-in.
+    """vmlx#91: end-to-end SSM prefix resume.
 
-    The fetch_longest_prefix data structure (iter 17) and instrumentation
-    (iter 18) are now backed by trim_block_table + scheduler wiring (iter 19).
-    Default OFF preserves current behavior exactly.
+    History: originally shipped as VMLX_ENABLE_SSM_PREFIX_RESUME=1
+    opt-in (default OFF). In v1.3.66 (Ralph iter 1) the default flipped
+    to ON after @st-adam's production report showed the full-prefill
+    fallback was catastrophic on cross-session hits — 58K re-prefill per
+    request with 2816 KV blocks sitting cached. Escape hatch is now
+    VMLX_DISABLE_SSM_PREFIX_RESUME=1 for anyone who needs to pin the
+    legacy behavior.
     """
 
     def test_trim_block_table_method_exists(self):
@@ -1414,13 +1417,16 @@ class TestVmlx91ResumeOptInEndToEnd:
             "trim_block_table must exist for vmlx#91 resume to wire in"
         )
 
-    def test_mllm_batch_generator_wires_resume_opt_in(self):
-        """Hot path must gate on VMLX_ENABLE_SSM_PREFIX_RESUME."""
+    def test_mllm_batch_generator_wires_resume_default_on(self):
+        """v1.3.66: MLLM hot path must gate on VMLX_DISABLE flag (default
+        ON). The old ENABLE opt-in gate is gone — st-adam's report
+        proved default-off was the bug."""
         src = Path(
             "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
-        assert "VMLX_ENABLE_SSM_PREFIX_RESUME" in src, (
-            "Opt-in env var must gate the resume behavior"
+        assert "VMLX_DISABLE_SSM_PREFIX_RESUME" in src, (
+            "v1.3.66 default-on gate must be present — without the "
+            "DISABLE flag, we regress back to the vmlx#91 bug"
         )
         assert "trim_block_table" in src, (
             "hot path must call trim_block_table on resume"
@@ -1429,14 +1435,15 @@ class TestVmlx91ResumeOptInEndToEnd:
             "log anchor `vmlx#91 RESUME` must be present"
         )
 
-    def test_resume_defaults_off(self):
-        """Without the env var set, the old full-prefill path runs (safe)."""
+    def test_resume_fallback_path_preserved(self):
+        """Even with resume default-on, when no checkpoint is available
+        (first-ever request or cache fully evicted) the full-prefill
+        fallback must still fire — we never get stuck blocking."""
         src = Path(
             "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
-        # The full-prefill log still fires in the else branch
         assert "Full prefill required" in src, (
-            "Fallback full-prefill must remain when resume disabled"
+            "Fallback full-prefill must remain for the no-checkpoint case"
         )
 
     def test_trim_block_table_block_aligns_target(self):
@@ -8475,4 +8482,138 @@ class TestImageEndpointModelCategoryGuards:
         )
         assert "is not an editing" in src, (
             "error message must make the mismatch explicit"
+        )
+
+
+class TestSsmCompanionLongestPrefixResume:
+    """v1.3.66 / vmlx#91 — when exact SSM companion fetch misses but a
+    shorter stored checkpoint is a valid prefix of the current query,
+    the scheduler (LLM hybrid path) and MLLM batch generator (VL hybrid
+    path) MUST trim the KV block_table to the checkpoint and resume
+    from there — instead of discarding KV and full-prefilling the whole
+    ~58K prompt.
+
+    Reported by @st-adam on Qwen 3.5 27B hybrid — first client captured
+    SSM at 52811 / 55674 / 61074 / 66472 tokens, second client's
+    58389-token prefix landed between two checkpoints, engine dropped
+    2816 KV blocks and re-prefilled from scratch on 12 parallel
+    requests.
+
+    The fix is already infrastructure-complete (fetch_longest_prefix +
+    trim_block_table); this pins the default-on wiring on BOTH code
+    paths so a future refactor can't silently fall back to exact-only
+    lookup."""
+
+    def test_ssm_companion_cache_has_fetch_longest_prefix(self):
+        """The SSMCompanionCache must expose the longest-prefix scan
+        — not optional. LLM scheduler and MLLM generator both rely on
+        this method name."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+        assert hasattr(SSMCompanionCache, "fetch_longest_prefix"), (
+            "SSMCompanionCache.fetch_longest_prefix went missing — "
+            "resume paths rely on it; exact-only lookup re-introduces "
+            "vmlx#91 regression."
+        )
+
+    def test_fetch_longest_prefix_returns_checkpoint_below_max_len(self):
+        """Functional: store 3 checkpoints at 100/200/300 tokens. Query
+        at 250 (between 200 and 300) must return the 200 checkpoint.
+        Query at 150 (between 100 and 200) must return 100. Query at 50
+        (below all) returns None."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+
+        cache = SSMCompanionCache(max_entries=10)
+        # Build a long token sequence; store 3 checkpoints as prefixes.
+        tokens = list(range(500))
+        cache.store(tokens, 100, [{"mark": 100}])
+        cache.store(tokens, 200, [{"mark": 200}])
+        cache.store(tokens, 300, [{"mark": 300}])
+
+        # Query at 250 → expect 200 checkpoint back.
+        result = cache.fetch_longest_prefix(tokens, 250)
+        assert result is not None, "query at 250 must find the 200 checkpoint"
+        ck_len, states, _ = result
+        assert ck_len == 200, f"expected longest prefix ≤250 = 200, got {ck_len}"
+        assert states[0]["mark"] == 200, "states must be the 200-checkpoint payload"
+
+        # Query at 150 → expect 100 checkpoint back.
+        result = cache.fetch_longest_prefix(tokens, 150)
+        assert result is not None
+        ck_len, _, _ = result
+        assert ck_len == 100, f"expected longest prefix ≤150 = 100, got {ck_len}"
+
+        # Query at 50 → below all checkpoints → None.
+        result = cache.fetch_longest_prefix(tokens, 50)
+        assert result is None, "query below lowest checkpoint must return None"
+
+    def test_fetch_longest_prefix_rejects_divergent_prefix(self):
+        """Security guard: the returned checkpoint must be a strict
+        prefix of the query's first ck_len tokens. If a later request's
+        tokens diverge mid-prefix, fetch_longest_prefix must NOT return
+        an aliased checkpoint — SSM state is cumulative, using a state
+        from a different prefix would corrupt generation."""
+        from vmlx_engine.utils.ssm_companion_cache import SSMCompanionCache
+
+        cache = SSMCompanionCache(max_entries=10)
+        tokens_a = list(range(500))
+        tokens_b = list(range(500))
+        tokens_b[50] = 9999  # diverge at position 50
+        cache.store(tokens_a, 100, [{"mark": 100}])
+
+        # tokens_a prefix is intact → must return the stored checkpoint.
+        hit = cache.fetch_longest_prefix(tokens_a, 200)
+        assert hit is not None
+
+        # tokens_b diverged at 50 → prefix hash at 100 differs → None.
+        miss = cache.fetch_longest_prefix(tokens_b, 200)
+        assert miss is None, (
+            "divergent-prefix request must NOT receive a checkpoint — "
+            "SSM state would be corrupted."
+        )
+
+    def test_llm_scheduler_wires_resume_path(self):
+        """Static-source assertion: the LLM hybrid fast path in
+        scheduler.py (prefix cache + SSM companion) must call
+        fetch_longest_prefix and trim_block_table on exact-miss.
+        Without this, vmlx#91 regresses: 58K prefill on every cross-
+        session hit."""
+        import inspect
+        from vmlx_engine import scheduler as sched
+        # The resume logic is inside _schedule_prefill or similar — find
+        # the enclosing class & get full source.
+        src = inspect.getsource(sched)
+        assert "fetch_longest_prefix" in src, (
+            "scheduler.py must call fetch_longest_prefix on SSM miss"
+        )
+        assert "trim_block_table" in src, (
+            "scheduler.py must trim KV block_table to match SSM checkpoint"
+        )
+        assert "vmlx#91" in src, (
+            "scheduler.py resume block must be marked with vmlx#91 for "
+            "future readers"
+        )
+        # Negative: the old 'only exact fetch, release on miss' pattern
+        # must not be the sole behavior. Check that the release_cache
+        # call in the hybrid SSM miss block is GATED by the post-resume
+        # re-check, not the first exact-miss outcome.
+        assert "if not ssm_states:" in src, (
+            "the post-resume re-check must exist to gate release_cache"
+        )
+
+    def test_mllm_resume_default_on(self):
+        """MLLM batch generator must treat SSM prefix resume as
+        default-on. Previously gated by VMLX_ENABLE_SSM_PREFIX_RESUME=1
+        opt-in which is why st-adam hit the bug in production."""
+        import inspect
+        from vmlx_engine import mllm_batch_generator as mbg
+        src = inspect.getsource(mbg)
+        # Positive: the disable flag (default OFF) is the gate now.
+        assert "VMLX_DISABLE_SSM_PREFIX_RESUME" in src, (
+            "MLLM resume must be default-on, gated by the DISABLE flag"
+        )
+        # Negative: the old opt-in ENABLE flag must not be the gate.
+        # (Reference in comments is OK; an active `if _enable_resume`
+        # reading ENABLE is NOT.)
+        assert 'environ.get(\n                                            "VMLX_ENABLE_SSM_PREFIX_RESUME"' not in src, (
+            "stale VMLX_ENABLE_SSM_PREFIX_RESUME opt-in gate re-introduced"
         )

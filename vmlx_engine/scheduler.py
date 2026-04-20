@@ -2236,6 +2236,63 @@ class Scheduler:
                                     ssm_states = None
                                 else:
                                     ssm_states, _is_complete = _entry
+
+                                # vmlx#91 RESUME: exact SSM miss, but a stored
+                                # checkpoint at a shorter position may still be
+                                # a valid prefix. Trim KV block_table to match
+                                # the checkpoint and re-reconstruct — prefills
+                                # only the tail delta instead of full ~58K.
+                                # Infrastructure: SSMCompanionCache.fetch_longest_prefix
+                                # + BlockAwarePrefixCache.trim_block_table. Default ON;
+                                # set VMLX_DISABLE_SSM_PREFIX_RESUME=1 to force
+                                # legacy full-prefill fallback.
+                                if not ssm_states and self._ssm_state_cache is not None and _fetch_num > 0:
+                                    import os as _os
+                                    _resume_disabled = _os.environ.get(
+                                        "VMLX_DISABLE_SSM_PREFIX_RESUME"
+                                    ) in ("1", "true", "True", "yes", "on")
+                                    _fn_lp = getattr(
+                                        self._ssm_state_cache,
+                                        "fetch_longest_prefix",
+                                        None,
+                                    )
+                                    _missed_ck = None
+                                    if not _resume_disabled and _fn_lp is not None:
+                                        try:
+                                            _missed_ck = _fn_lp(_ssm_tokens, _fetch_num)
+                                        except Exception:
+                                            _missed_ck = None
+                                    if _missed_ck is not None:
+                                        _ck_len, _ck_states, _ = _missed_ck
+                                        _trimmed = self.block_aware_cache.trim_block_table(
+                                            request.request_id, _ck_len
+                                        )
+                                        if _trimmed is not None and _trimmed.num_tokens > 0:
+                                            _re_reconstructed = self.block_aware_cache.reconstruct_cache(
+                                                _trimmed
+                                            )
+                                            if _re_reconstructed is not None:
+                                                if getattr(self, "_kv_cache_bits", 0):
+                                                    _re_reconstructed = self._dequantize_cache_for_use(
+                                                        _re_reconstructed
+                                                    )
+                                            if _re_reconstructed is not None:
+                                                block_table = _trimmed
+                                                reconstructed = _re_reconstructed
+                                                ssm_states = _ck_states
+                                                remaining = list(
+                                                    request.prompt_token_ids[block_table.num_tokens:]
+                                                )
+                                                logger.info(
+                                                    f"Request {request.request_id}: "
+                                                    f"vmlx#91 RESUME — trimmed KV to "
+                                                    f"{block_table.num_tokens} tokens "
+                                                    f"(block-aligned from SSM "
+                                                    f"checkpoint at {_ck_len}), reusing "
+                                                    f"SSM companion state. Prefill tail: "
+                                                    f"{len(remaining)} tokens"
+                                                )
+
                                 if not ssm_states:
                                     # No SSM companion (None or empty) — release KV blocks, full prefill
                                     logger.info(
