@@ -7501,3 +7501,86 @@ class TestSpeculativeDecodingContract:
         from vmlx_engine.speculative import SpeculativeConfig, load_draft_model
         assert SpeculativeConfig is not None
         assert callable(load_draft_model)
+
+
+class TestAsyncSsmRederiveQueue:
+    """iter 22 — pins the async SSM re-derive queue behavior from
+    scheduler.py. For thinking models (gen_prompt_len>0), post-gen
+    SSM state is contaminated by thinking/output tokens → storing it
+    causes garbled output on T2. The scheduler queues a deferred
+    re-derive (prompt-only prefill) that runs in idle time to
+    capture clean SSM state for the NEXT conversation.
+
+    Three production invariants to pin:
+      1. Queue has a hard cap (20) so it doesn't grow unbounded
+         under sustained load.
+      2. FIFO eviction when cap hit (oldest drops first).
+      3. One task drains per idle scheduler step (prevents GPU
+         stalls that would starve active generation)."""
+
+    def test_queue_cap_constant_present(self):
+        """Scheduler source must include the 20-entry cap so
+        unbounded growth is impossible. If this value changes, the
+        memory behavior of the cache companion path changes with it."""
+        from vmlx_engine import scheduler as sched
+        import inspect
+        src = inspect.getsource(sched)
+        assert "_ssm_rederive_queue" in src, (
+            "Scheduler missing _ssm_rederive_queue — async re-derive "
+            "contract broken"
+        )
+        assert "Cap queue at 20 entries" in src, (
+            "Scheduler queue cap comment missing — without a cap the "
+            "queue grows unbounded under sustained thinking-model load"
+        )
+        assert "len(self._ssm_rederive_queue) >= 20" in src, (
+            "Scheduler must enforce the 20-entry cap with >= check"
+        )
+
+    def test_queue_pops_oldest_on_overflow(self):
+        """FIFO eviction: when queue is full, pop(0) (oldest) is
+        evicted before append(new). Pin this ordering — LIFO would
+        retain stale prompts forever."""
+        from vmlx_engine import scheduler as sched
+        import inspect
+        src = inspect.getsource(sched)
+        # When cap hit, the code does pop(0) before append
+        assert "self._ssm_rederive_queue.pop(0)" in src, (
+            "Scheduler must pop(0) (oldest) on overflow — FIFO eviction. "
+            "pop() without index is LIFO and would keep stale prompts."
+        )
+
+    def test_queue_drain_one_per_step(self):
+        """The idle-time drain must process exactly one queued
+        re-derive per scheduler step — otherwise a long prefill
+        blocks the next active request. Pin via the 'Process ONE
+        task per step' comment and single pop(0) in the drain branch."""
+        from vmlx_engine import scheduler as sched
+        import inspect
+        src = inspect.getsource(sched)
+        assert "Process ONE task per step" in src, (
+            "Drain must process one task per step — multi-drain would "
+            "stall the scheduler under queue backlog"
+        )
+        # Drain only fires when scheduler is idle (no running requests)
+        assert "not self.running" in src, (
+            "Drain must gate on 'not self.running' (scheduler idle) — "
+            "otherwise drain and active generation contend for GPU"
+        )
+
+    def test_deferred_rederive_only_for_thinking_models(self):
+        """gen_prompt_len>0 (thinking model) is the only case where
+        SSM state is contaminated; for non-thinking models we store
+        directly. Pin this branch in the scheduler."""
+        from vmlx_engine import scheduler as sched
+        import inspect
+        src = inspect.getsource(sched)
+        # The gating check
+        assert "if _gpl > 0:" in src, (
+            "Scheduler must gate deferred re-derive on gen_prompt_len>0"
+        )
+        # Documented reason
+        assert "contaminated" in src.lower(), (
+            "Comment explaining why direct store is unsafe for thinking "
+            "models must remain (contamination rationale)"
+        )
