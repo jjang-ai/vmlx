@@ -525,12 +525,41 @@ final class ChatViewModel {
             }
         }
 
+        // iter-108 §134: carry per-chat ChatSettings from source → fork.
+        // Without this the fork silently inherits session/global defaults
+        // for reasoning_effort / systemPrompt / tools / stopSequences /
+        // toolChoice / workingDirectory / hideToolStatus / etc. User
+        // complaint shape: "I branched my thinking chat and it stopped
+        // thinking", or "where did my tools go". Messages are copied
+        // (transaction above), but the settings row is keyed by chat
+        // UUID so the fresh UUID has no row until we explicitly seed
+        // it. `setChat` debounces → the fork's settings land on disk
+        // in the same quit-flush drain as normal setting writes.
+        if let engine = app?.engine {
+            let forkId = fork.id
+            let sourceIdCopy = sourceId
+            Task {
+                if let srcChat = await engine.settings.chat(sourceIdCopy) {
+                    await engine.settings.setChat(forkId, srcChat)
+                }
+            }
+        }
+
         // Open the fork so the user lands inside it immediately.
         sessions.insert(fork, at: 0)
         selectSession(fork.id)
         pushUndo("Branch \"\(fork.title)\"") { [weak self] in
             guard let self else { return }
             Database.shared.deleteSession(fork.id)
+            // iter-108 §134: drop the ChatSettings row we just seeded on
+            // the source-to-fork copy. Without this the undo would leave
+            // an orphan chat_overrides row that persists beyond the
+            // deleted session — cheap but accumulates for users who
+            // repeatedly branch+undo.
+            if let engine = self.app?.engine {
+                let forkId = fork.id
+                Task { await engine.settings.deleteChat(forkId) }
+            }
             self.sessions.removeAll(where: { $0.id == fork.id })
             if self.activeSessionId == fork.id {
                 self.activeSessionId = sourceId
