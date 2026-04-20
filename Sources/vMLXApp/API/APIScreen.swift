@@ -596,6 +596,19 @@ struct APIScreen: View {
                 g.apiKey = nil
             }
             await app.engine.applySettings(g)
+            // iter-136 §162: push the new enforcement key to every
+            // running HTTP server via the §161 AuthTokenBox path.
+            // Without this, toggling "Require bearer" ON wrote the
+            // key to SQLite + settings cache, but the running
+            // BearerAuthMiddleware kept its init-time value (nil)
+            // and continued accepting unauth'd requests until the
+            // next server restart — mirror of the revoke bug §123
+            // chased. Also covers the OFF→ON→OFF toggle race.
+            let adminFallback = g.adminToken
+            for (_, srv) in app.httpServers {
+                await srv.applyAuthCredentials(apiKey: g.apiKey,
+                                               adminToken: adminFallback)
+            }
         }
     }
 
