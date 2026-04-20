@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 54
+iteration: 55
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,24 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 370/370 source-scan tests green, 130/130 regression guards + 15 matrix
-  rows (§57–§134)
+- 371/371 source-scan tests green, 131/131 regression guards + 15 matrix
+  rows (§57–§135)
+- iter-109 work:
+  1. editMessage + regenerate VM-level guards (§135) —
+     **consistency + non-UI caller protection**. Both were missing
+     the `guard !isGenerating` check that branchSession carries
+     (§134). UI disables the pencil and arrow-clockwise buttons
+     while streaming, so the common case is safe — but non-UI
+     callers (future scripting, keyboard shortcut wired below UI
+     state, programmatic test) could race. regenerate's internal
+     `streamTask?.cancel()` handles the stream handle, but the
+     pre-cancel `removeSubrange` on `messages` can race the
+     token-append path's index lookup — classic use-after-drop
+     window. Added matching `flashBanner` guards. Doesn't change
+     behavior for UI users, closes the scripting-race door,
+     enforces contract across all three destructive chat-mutation
+     verbs. §135 regression guard pins both banner strings + the
+     iter marker. Build clean, guard green.
 - iter-108 work:
   1. Chat branch drops per-chat settings (§134) — **real UX bug**.
      `ChatViewModel.branchSession(from:)` copies every message

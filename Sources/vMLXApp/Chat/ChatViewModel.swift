@@ -449,6 +449,16 @@ final class ChatViewModel {
     }
 
     func editMessage(_ id: UUID, newContent: String) {
+        // iter-109 §135: VM-level guard. UI disables the pencil during
+        // streaming, but a non-UI caller (scripting, future keyboard
+        // shortcut, programmatic test harness) would otherwise mutate
+        // the in-flight assistant's prompt mid-stream. Mirrors the
+        // branchSession guard (§134) for consistency across
+        // destructive chat-mutation verbs.
+        guard !isGenerating else {
+            app?.flashBanner("Stop the current response before editing")
+            return
+        }
         guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
         messages[idx].content = newContent
         Database.shared.upsertMessage(messages[idx])
@@ -456,6 +466,17 @@ final class ChatViewModel {
 
     /// Regenerate: drop everything from `messageId` forward, resend the prior user turn.
     func regenerate(from messageId: UUID) {
+        // iter-109 §135: VM-level guard. Same reasoning as editMessage —
+        // UI disables while streaming but a non-UI caller could race the
+        // in-flight assistant placeholder that streaming is writing
+        // into. `send()` down the call chain does cancel `streamTask`
+        // anyway, but the pre-cancel `removeSubrange` can race with the
+        // token-append path observing stale indices. Reject early and
+        // flash for parity with branchSession.
+        guard !isGenerating else {
+            app?.flashBanner("Stop the current response before regenerating")
+            return
+        }
         guard let sessionId = activeSessionId else { return }
         guard let idx = messages.firstIndex(where: { $0.id == messageId }) else { return }
         let anchor = messages[idx]
