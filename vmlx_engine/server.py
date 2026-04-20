@@ -274,6 +274,27 @@ _THINK_STRIP_RE = re.compile(
 )
 
 
+def _strip_think_for_tool_parse(text: str) -> str:
+    """Strip residual think tags before tool call parsing.
+
+    Handles both <think>...</think> and [THINK]...[/THINK] forms, plus
+    the truncated case where the opening tag was consumed by streaming
+    but the closing tag remains (partition on </think> or [/THINK]).
+
+    Shared by every tool-call parse site so the behavior stays identical
+    across chat completions, Responses API, and their streaming paths.
+    """
+    if not text:
+        return ""
+    stripped = _THINK_STRIP_RE.sub("", text)
+    if stripped == text and ("</think>" in text or "[/THINK]" in text):
+        for end_tag in ("</think>", "[/THINK]"):
+            if end_tag in text:
+                _, _, stripped = text.partition(end_tag)
+                break
+    return stripped.strip()
+
+
 def _resolve_temperature(request_value: float | None) -> float:
     """Resolve temperature: request > CLI default > fallback."""
     if request_value is not None:
@@ -333,6 +354,77 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     if isinstance(salt, str) and salt:
         return True
     return False
+
+
+def _resolve_enable_thinking(
+    request_value: bool | None,
+    ct_kwargs: dict,
+    tools_present: bool,
+    model_key: str,
+    engine=None,
+    auto_detect: bool = False,
+) -> bool | None:
+    """Resolve enable_thinking using the shared precedence chain.
+
+    Precedence: per-request > chat_template_kwargs > server default >
+    (auto-detect if requested, else Gemma4+tools → False, else None).
+
+    The Gemma 4 + tools branch is mlxstudio#71: Gemma 4 natively emits a
+    <|channel>thought block before every tool call which truncates under
+    small max_tokens budgets. When tools are present and nothing upstream
+    set a preference, default thinking OFF for Gemma 4 specifically.
+
+    Returns None when no value should be passed to the engine (caller
+    omits enable_thinking from chat_kwargs — engine uses its own default).
+
+    auto_detect=True mirrors the OpenAI path which, after the three
+    upstream layers miss, inspects registry.think_in_template,
+    registry.reasoning_parser, and tokenizer.has_thinking to infer a
+    default. Anthropic/Ollama historically left this None.
+    """
+    if request_value is not None:
+        return request_value
+    if "enable_thinking" in ct_kwargs:
+        return bool(ct_kwargs["enable_thinking"])
+    if _default_enable_thinking is not None:
+        return _default_enable_thinking
+
+    if auto_detect:
+        try:
+            from .model_config_registry import get_model_config_registry
+            _mc = get_model_config_registry().lookup(model_key)
+        except Exception:
+            return None
+        _enable = bool(_mc.think_in_template)
+        if not _enable and _mc.reasoning_parser:
+            _enable = True
+        if not _enable and engine is not None:
+            try:
+                if getattr(engine.tokenizer, "has_thinking", False):
+                    _enable = True
+            except Exception:
+                pass
+        if _enable and tools_present and _mc.family_name in ("gemma4", "gemma4_text"):
+            logger.info(
+                f"Request {model_key}: tools present + Gemma 4 — "
+                f"defaulting enable_thinking=False for fast tool calling "
+                f"(mlxstudio#71). Set enable_thinking=true to force thinking."
+            )
+            _enable = False
+        return _enable
+
+    if tools_present:
+        try:
+            from .model_config_registry import get_model_config_registry
+            _mc = get_model_config_registry().lookup(model_key)
+            if _mc.family_name in ("gemma4", "gemma4_text"):
+                logger.info(
+                    f"Request {model_key}: tools + Gemma 4 → enable_thinking=False"
+                )
+                return False
+        except Exception:
+            pass
+    return None
 
 
 # Global MCP manager
@@ -2989,27 +3081,14 @@ async def create_anthropic_message(
 
     # Forward enable_thinking to engine — without this, the model always thinks
     # internally even when the client sends thinking: {type: "disabled"}
-    if chat_req.enable_thinking is not None:
-        _msg_kwargs["enable_thinking"] = chat_req.enable_thinking
-    elif "enable_thinking" in _ct_kwargs:
-        _msg_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
-    elif _default_enable_thinking is not None:
-        _msg_kwargs["enable_thinking"] = _default_enable_thinking
-    elif chat_req.tools:
-        # mlxstudio#71: Gemma 4 emits a <|channel>thought reasoning block
-        # before every tool call. With tools present and no explicit
-        # thinking preference, default OFF so the tool call emits
-        # immediately (~4x faster, no truncation).
-        try:
-            from .model_config_registry import get_model_config_registry as _gmcr
-            _mc_tools = _gmcr().lookup(_model_path or _model_name or chat_req.model)
-            if _mc_tools.family_name in ("gemma4", "gemma4_text"):
-                _msg_kwargs["enable_thinking"] = False
-                logger.info(
-                    f"Anthropic request: tools + Gemma 4 → enable_thinking=False"
-                )
-        except Exception:
-            pass
+    _et = _resolve_enable_thinking(
+        request_value=chat_req.enable_thinking,
+        ct_kwargs=_ct_kwargs,
+        tools_present=bool(chat_req.tools),
+        model_key=_model_path or _model_name or chat_req.model,
+    )
+    if _et is not None:
+        _msg_kwargs["enable_thinking"] = _et
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (same as OpenAI path)
     if (
@@ -3621,27 +3700,14 @@ async def ollama_chat(fastapi_request: Request):
     # Mirrors the OpenAI path at create_chat_completion so clients get identical
     # behavior whether they speak the OpenAI or Ollama wire format.
     _ollama_ct_kwargs = _merge_ct_kwargs(chat_req.chat_template_kwargs)
-    if chat_req.enable_thinking is not None:
-        chat_kwargs["enable_thinking"] = chat_req.enable_thinking
-    elif "enable_thinking" in _ollama_ct_kwargs:
-        chat_kwargs["enable_thinking"] = bool(_ollama_ct_kwargs["enable_thinking"])
-    elif _default_enable_thinking is not None:
-        chat_kwargs["enable_thinking"] = _default_enable_thinking
-    elif chat_req.tools:
-        # mlxstudio#71: Gemma 4 native tool-call flow uses a
-        # <|channel>thought reasoning block before the tool call,
-        # which can truncate under a small max_tokens budget. Default
-        # thinking OFF when tools are present on Gemma 4.
-        try:
-            from .model_config_registry import get_model_config_registry as _gmcr
-            _mc_tools = _gmcr().lookup(_model_path or _model_name or chat_req.model)
-            if _mc_tools.family_name in ("gemma4", "gemma4_text"):
-                chat_kwargs["enable_thinking"] = False
-                logger.info(
-                    f"Ollama request: tools + Gemma 4 → enable_thinking=False"
-                )
-        except Exception:
-            pass
+    _et = _resolve_enable_thinking(
+        request_value=chat_req.enable_thinking,
+        ct_kwargs=_ollama_ct_kwargs,
+        tools_present=bool(chat_req.tools),
+        model_key=_model_path or _model_name or chat_req.model,
+    )
+    if _et is not None:
+        chat_kwargs["enable_thinking"] = _et
 
     # Pass tools to engine so batched.py knows not to inject <think></think>
     # when tool calling is active (model needs to think to decide on tools)
@@ -4971,53 +5037,16 @@ async def create_chat_completion(
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
-    if request.enable_thinking is not None:
-        chat_kwargs["enable_thinking"] = request.enable_thinking
-    elif "enable_thinking" in _ct_kwargs:
-        chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
-    elif _default_enable_thinking is not None:
-        # Server-level default (--default-enable-thinking flag)
-        chat_kwargs["enable_thinking"] = _default_enable_thinking
-    else:
-        # Auto-detect from model config + tokenizer vocabulary.
-        from .model_config_registry import get_model_config_registry
-
-        _mc = get_model_config_registry().lookup(
-            _model_path or _model_name or request.model
-        )
-        _enable = _mc.think_in_template
-        if not _enable and _mc.reasoning_parser:
-            # Model has a reasoning parser — enable thinking by default.
-            # For <think>-based models, this makes the template inject thinking tags.
-            # For Harmony models (GPT-OSS), the template ignores it but the server
-            # uses it to trigger analysis prefix injection.
-            _enable = True
-        if not _enable:
-            try:
-                _tok = engine.tokenizer
-                if getattr(_tok, "has_thinking", False):
-                    _enable = True
-            except Exception:
-                pass
-        # mlxstudio#71: Gemma 4 natively emits a <|channel>thought block
-        # before every tool call — often 400+ chars of reasoning for a
-        # trivial selection — which blows past user-default max_tokens
-        # budgets and truncates the tool call mid-emit. When the request
-        # has tools AND the user didn't explicitly ask for thinking,
-        # default thinking OFF so Gemma 4 emits the tool call directly.
-        # The user can force thinking back on with explicit
-        # enable_thinking=true or chat_template_kwargs.enable_thinking=true.
-        # Regression report scannermobs on Gemma-4-26B-A4B-it-JANG_4M;
-        # live-verified thinking-OFF is 4x faster (1.0s vs 4.0s for 300
-        # tokens) and produces a complete tool call vs. a truncated one.
-        if _enable and request.tools and _mc.family_name in ("gemma4", "gemma4_text"):
-            logger.info(
-                f"Request {request.model}: tools present + Gemma 4 — "
-                f"defaulting enable_thinking=False for fast tool calling "
-                f"(mlxstudio#71). Set enable_thinking=true to force thinking."
-            )
-            _enable = False
-        chat_kwargs["enable_thinking"] = _enable
+    _et = _resolve_enable_thinking(
+        request_value=request.enable_thinking,
+        ct_kwargs=_ct_kwargs,
+        tools_present=bool(request.tools),
+        model_key=_model_path or _model_name or request.model,
+        engine=engine,
+        auto_detect=True,
+    )
+    if _et is not None:
+        chat_kwargs["enable_thinking"] = _et
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Also map to thinking_budget (Qwen3) and max_tokens ceiling when not explicitly set.
@@ -5274,16 +5303,7 @@ async def create_chat_completion(
                 content_for_parsing = reasoning_text
             reasoning_text = None
 
-    # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
-    _cc_parse_text = _THINK_STRIP_RE.sub("", content_for_parsing)
-    if _cc_parse_text == content_for_parsing and (
-        "</think>" in content_for_parsing or "[/THINK]" in content_for_parsing
-    ):
-        for _end_tag in ("</think>", "[/THINK]"):
-            if _end_tag in content_for_parsing:
-                _, _, _cc_parse_text = content_for_parsing.partition(_end_tag)
-                break
-    _cc_parse_text = _cc_parse_text.strip()
+    _cc_parse_text = _strip_think_for_tool_parse(content_for_parsing)
 
     # Parse tool calls from output using configured parser (skip when tool_choice="none")
     cleaned_text, tool_calls = (
@@ -5689,53 +5709,16 @@ async def create_response(
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
-    if request.enable_thinking is not None:
-        chat_kwargs["enable_thinking"] = request.enable_thinking
-    elif "enable_thinking" in _ct_kwargs:
-        chat_kwargs["enable_thinking"] = bool(_ct_kwargs["enable_thinking"])
-    elif _default_enable_thinking is not None:
-        # Server-level default (--default-enable-thinking flag)
-        chat_kwargs["enable_thinking"] = _default_enable_thinking
-    else:
-        # Auto-detect from model config + tokenizer vocabulary.
-        from .model_config_registry import get_model_config_registry
-
-        _mc = get_model_config_registry().lookup(
-            _model_path or _model_name or request.model
-        )
-        _enable = _mc.think_in_template
-        if not _enable and _mc.reasoning_parser:
-            # Model has a reasoning parser — enable thinking by default.
-            # For <think>-based models, this makes the template inject thinking tags.
-            # For Harmony models (GPT-OSS), the template ignores it but the server
-            # uses it to trigger analysis prefix injection.
-            _enable = True
-        if not _enable:
-            try:
-                _tok = engine.tokenizer
-                if getattr(_tok, "has_thinking", False):
-                    _enable = True
-            except Exception:
-                pass
-        # mlxstudio#71: Gemma 4 natively emits a <|channel>thought block
-        # before every tool call — often 400+ chars of reasoning for a
-        # trivial selection — which blows past user-default max_tokens
-        # budgets and truncates the tool call mid-emit. When the request
-        # has tools AND the user didn't explicitly ask for thinking,
-        # default thinking OFF so Gemma 4 emits the tool call directly.
-        # The user can force thinking back on with explicit
-        # enable_thinking=true or chat_template_kwargs.enable_thinking=true.
-        # Regression report scannermobs on Gemma-4-26B-A4B-it-JANG_4M;
-        # live-verified thinking-OFF is 4x faster (1.0s vs 4.0s for 300
-        # tokens) and produces a complete tool call vs. a truncated one.
-        if _enable and request.tools and _mc.family_name in ("gemma4", "gemma4_text"):
-            logger.info(
-                f"Request {request.model}: tools present + Gemma 4 — "
-                f"defaulting enable_thinking=False for fast tool calling "
-                f"(mlxstudio#71). Set enable_thinking=true to force thinking."
-            )
-            _enable = False
-        chat_kwargs["enable_thinking"] = _enable
+    _et = _resolve_enable_thinking(
+        request_value=request.enable_thinking,
+        ct_kwargs=_ct_kwargs,
+        tools_present=bool(request.tools),
+        model_key=_model_path or _model_name or request.model,
+        engine=engine,
+        auto_detect=True,
+    )
+    if _et is not None:
+        chat_kwargs["enable_thinking"] = _et
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Also map to thinking_budget (Qwen3) and max_output_tokens ceiling when not explicitly set.
@@ -5981,16 +5964,7 @@ async def create_response(
                 content_for_parsing = reasoning_text
             reasoning_text = None
 
-    # Strip any residual think tags before tool call parsing (both <think> and [THINK] formats)
-    parse_text = _THINK_STRIP_RE.sub("", content_for_parsing)
-    if parse_text == content_for_parsing and (
-        "</think>" in content_for_parsing or "[/THINK]" in content_for_parsing
-    ):
-        for _end_tag in ("</think>", "[/THINK]"):
-            if _end_tag in content_for_parsing:
-                _, _, parse_text = content_for_parsing.partition(_end_tag)
-                break
-    parse_text = parse_text.strip()
+    parse_text = _strip_think_for_tool_parse(content_for_parsing)
 
     # Parse tool calls (skip when tool_choice="none")
     cleaned_text, tool_calls = (
@@ -6307,15 +6281,15 @@ async def stream_chat_completion(
 
     # Resolve effective enable_thinking:
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
+    # (None = fall through to template/tokenizer auto-detect below — this site
+    # drives SSE parser behavior, not engine kwargs, so no Gemma4+tools override.)
     _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
-    if request.enable_thinking is not None:
-        _effective_thinking = request.enable_thinking
-    elif "enable_thinking" in _ct_kwargs:
-        _effective_thinking = bool(_ct_kwargs["enable_thinking"])
-    elif _default_enable_thinking is not None:
-        _effective_thinking = _default_enable_thinking
-    else:
-        _effective_thinking = None  # auto-detect below
+    _effective_thinking = _resolve_enable_thinking(
+        request_value=request.enable_thinking,
+        ct_kwargs=_ct_kwargs,
+        tools_present=False,
+        model_key=_model_path or _model_name or request.model,
+    )
 
     # Check if model's chat template injects <think> in the assistant prefix
     # Use _model_name (actual model path) not request.model (which may be "default")
@@ -6751,15 +6725,7 @@ async def stream_chat_completion(
             # Tool call markers were in reasoning — try parsing reasoning text
             parse_text = accumulated_reasoning.strip()
         else:
-            parse_text = _THINK_STRIP_RE.sub("", accumulated_text)
-            if parse_text == accumulated_text and (
-                "</think>" in parse_text or "[/THINK]" in parse_text
-            ):
-                for _end_tag in ("</think>", "[/THINK]"):
-                    if _end_tag in parse_text:
-                        _, _, parse_text = parse_text.partition(_end_tag)
-                        break
-            parse_text = parse_text.strip()
+            parse_text = _strip_think_for_tool_parse(accumulated_text)
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
             parse_text or accumulated_text, request
         )
@@ -7196,15 +7162,15 @@ async def stream_responses_api(
 
     # Resolve effective enable_thinking:
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
+    # (None = fall through to template/tokenizer auto-detect below — this site
+    # drives SSE parser behavior, not engine kwargs, so no Gemma4+tools override.)
     _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
-    if request.enable_thinking is not None:
-        _effective_thinking = request.enable_thinking
-    elif "enable_thinking" in _ct_kwargs:
-        _effective_thinking = bool(_ct_kwargs["enable_thinking"])
-    elif _default_enable_thinking is not None:
-        _effective_thinking = _default_enable_thinking
-    else:
-        _effective_thinking = None  # auto-detect below
+    _effective_thinking = _resolve_enable_thinking(
+        request_value=request.enable_thinking,
+        ct_kwargs=_ct_kwargs,
+        tools_present=False,
+        model_key=_model_path or _model_name or request.model,
+    )
 
     # Reasoning parser setup (mirrors stream_chat_completion)
     from .model_config_registry import get_model_config_registry
@@ -7552,15 +7518,7 @@ async def stream_responses_api(
         elif request_parser and accumulated_reasoning.strip():
             parse_text = accumulated_reasoning.strip()
         else:
-            parse_text = _THINK_STRIP_RE.sub("", full_text)
-            if parse_text == full_text and (
-                "</think>" in full_text or "[/THINK]" in full_text
-            ):
-                for _end_tag in ("</think>", "[/THINK]"):
-                    if _end_tag in full_text:
-                        _, _, parse_text = full_text.partition(_end_tag)
-                        break
-            parse_text = parse_text.strip()
+            parse_text = _strip_think_for_tool_parse(full_text)
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
             parse_text or full_text, request
         )
