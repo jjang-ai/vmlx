@@ -6953,3 +6953,125 @@ class TestTurboQuantDefaultOnContract:
         assert "capabilities" in src, (
             "jang_config.capabilities dict must be read by registry"
         )
+
+
+class TestArchCorrectModelTypeRouting:
+    """iter 17 — pins TOP-PRIORITY gate #8: model_type routing
+    (qwen3_5_moe_text vs qwen3_5_moe, mistral3 vs mistral4, etc.)
+    matches jang_config.capabilities.family across every real model
+    in ~/.mlxstudio/models/MLXModels/dealignai/.
+
+    Iter 17 live audit: 13/13 models in the dir match between
+    registry.family_name and jang_config.capabilities.family (or
+    match config.json.model_type for models without stamp)."""
+
+    _BASE = "/Users/eric/.mlxstudio/models/MLXModels/dealignai"
+
+    def _enumerate_models(self):
+        import os
+        if not os.path.isdir(self._BASE):
+            return []
+        return sorted(
+            d for d in os.listdir(self._BASE)
+            if "backup" not in d
+            and os.path.isfile(os.path.join(self._BASE, d, "config.json"))
+        )
+
+    @pytest.mark.parametrize("model_dir", [
+        "MiniMax-M2.7-JANGTQ-CRACK",
+        "Qwen3.6-35B-A3B-JANGTQ2-CRACK",
+        "Qwen3.6-35B-A3B-JANGTQ2-CRACK-v13",
+        "Qwen3.6-35B-A3B-JANGTQ4-CRACK",
+        "Qwen3.6-35B-A3B-JANGTQ4-CRACK-v13",
+        "Qwen3.5-VL-4B-JANG_4S-CRACK",
+        "Qwen3.5-VL-9B-JANG_4S-CRACK",
+        "Qwen3.5-VL-27B-JANG_4S-CRACK",
+        "Qwen3.5-VL-35B-A3B-JANG_4K-CRACK",
+        "Nemotron-3-Super-120B-A12B-JANG_2L-CRACK",
+        "Nemotron-Cascade-2-30B-A3B-JANG_2L-CRACK",
+    ])
+    def test_registry_family_matches_jang_stamp(self, model_dir):
+        """For each JANG/JANGTQ bundle, the registry's family_name
+        must equal jang_config.capabilities.family — the Tier-1
+        source of truth. If this drifts, models get the wrong
+        reasoning_parser/tool_parser at runtime, silently breaking
+        tool calls or reasoning content routing."""
+        import os, json
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        path = os.path.join(self._BASE, model_dir)
+        if not os.path.isdir(path):
+            pytest.skip(f"{model_dir} not present")
+        jcfg_p = os.path.join(path, "jang_config.json")
+        if not os.path.isfile(jcfg_p):
+            pytest.skip(f"{model_dir} lacks jang_config.json — not a stamped JANG bundle")
+        with open(jcfg_p) as f:
+            jcfg = json.load(f)
+        caps = jcfg.get("capabilities", {})
+        stamped_family = caps.get("family")
+        if not stamped_family:
+            pytest.skip(f"{model_dir} capabilities.family is unset")
+        reg = get_model_config_registry()
+        mc = reg.lookup(path)
+        assert mc.family_name == stamped_family, (
+            f"{model_dir}: registry.family_name={mc.family_name!r} != "
+            f"jang_config.capabilities.family={stamped_family!r} "
+            f"(routing drift — tool/reasoning parser will be wrong)"
+        )
+
+    def test_qwen3_5_moe_text_vs_moe_distinction(self):
+        """text_config.model_type=qwen3_5_moe_text and top-level
+        model_type=qwen3_5_moe must both route to the qwen3_5_moe
+        registry family (VLM wrapper distinction from plain text LLM).
+        This is the concrete example in gate #8 of the ralph-loop
+        header — drift here breaks Qwen3.6 VL routing."""
+        import os, json
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        path = os.path.join(self._BASE, "Qwen3.6-35B-A3B-JANGTQ2-CRACK-v13")
+        if not os.path.isdir(path):
+            pytest.skip("Qwen3.6-JANGTQ2-v13 not present")
+        with open(os.path.join(path, "config.json")) as f:
+            cfg = json.load(f)
+        # Top-level is the VLM wrapper
+        assert cfg.get("model_type") == "qwen3_5_moe", (
+            f"Qwen3.6 VLM top model_type changed: {cfg.get('model_type')}"
+        )
+        # text_config nested model_type is the VLM text model variant
+        assert cfg.get("text_config", {}).get("model_type") == "qwen3_5_moe_text", (
+            f"Qwen3.6 text_config.model_type changed: "
+            f"{cfg.get('text_config', {}).get('model_type')}"
+        )
+        # Both must resolve to the same registry family (the VLM
+        # wrapper does not create a separate text-only entry).
+        reg = get_model_config_registry()
+        mc = reg.lookup(path)
+        assert mc.family_name == "qwen3_5_moe", (
+            f"Qwen3.6 must route to qwen3_5_moe family, "
+            f"got {mc.family_name}"
+        )
+
+    def test_jang_capabilities_routes_parsers(self):
+        """Every JANGTQ bundle must have reasoning_parser and
+        tool_parser in jang_config.capabilities — the Tier-1 source
+        that the server uses to auto-detect without CLI flags.
+        Missing values would force operator CLI opt-in, contradicting
+        the auto-detect contract."""
+        import os, json
+        models = self._enumerate_models()
+        jangtq = [m for m in models if "JANGTQ" in m]
+        if not jangtq:
+            pytest.skip("No JANGTQ models in library to audit")
+        for m in jangtq:
+            path = os.path.join(self._BASE, m, "jang_config.json")
+            if not os.path.isfile(path):
+                continue
+            jcfg = json.load(open(path))
+            caps = jcfg.get("capabilities", {})
+            assert caps.get("reasoning_parser") is not None, (
+                f"{m}: capabilities.reasoning_parser missing"
+            )
+            assert caps.get("tool_parser") is not None, (
+                f"{m}: capabilities.tool_parser missing"
+            )
+            assert caps.get("family") is not None, (
+                f"{m}: capabilities.family missing"
+            )
