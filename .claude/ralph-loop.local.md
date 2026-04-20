@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 37
+iteration: 38
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 355/355 source-scan tests green, 115/115 regression guards + 15 matrix
-  rows (§57–§119)
+- 356/356 source-scan tests green, 116/116 regression guards + 15 matrix
+  rows (§57–§120)
+- iter-93 work:
+  1. MCP dead-subprocess teardown (§120) — **real lifecycle bug**.
+     `MCPStdioClient.handleEOF` correctly fails all pending
+     continuations + nils its own `process` when the child
+     subprocess exits. But `MCPServerManager.clients[name]` held
+     the zombie reference AND `statuses[name]` stayed at
+     `.connected`. Next `executeTool`/`rawCall` on that server
+     flowed through the client → stale stdin pipe → IO error.
+     User saw `/v1/mcp/servers` report healthy while every tool
+     call 500'd, and subsequent calls kept hitting the zombie
+     instead of lazy-restarting the subprocess. Fix: wrap both
+     `executeTool` and `rawCall` in a do-catch matching
+     `MCPError.processFailure`. On that error, `markServerDead`
+     drops the client from the registry, clears the tool cache,
+     and transitions status to `.error` with a descriptive
+     reason. The NEXT call sees `clients[name] == nil` and takes
+     the lazy-start branch — automatic self-heal. §120 regression
+     guard pins both call sites + the helper definition + the
+     `.processFailure`-specific match (don't teardown on any
+     generic error, only on actual subprocess death).
 - iter-92 work:
   1. Terminal cwd UI↔engine drift (§119) — **real UX bug**.
      `TerminalScreen` kept its own `@State cwd` separate from
