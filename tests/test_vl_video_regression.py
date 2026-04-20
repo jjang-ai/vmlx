@@ -7853,6 +7853,19 @@ class TestVlTurboQuantDecodeSpeedBaseline:
             "baseline for future regression comparison"
         )
 
+    def test_minimax_jangtq_decode_speed_documented(self):
+        """MiniMax-M2.7-JANGTQ-CRACK text decode baseline (44.1 tok/s
+        on M4 Max 128GB, iter 31 delta method) matches MEMORY.md's 44
+        baseline exactly. Pin so a speed regression leaves a trail."""
+        import os
+        loop_md = "/Users/example/vmlx/.claude/ralph-loop.local.md"
+        if not os.path.isfile(loop_md):
+            pytest.skip("ralph-loop state file not present")
+        text = open(loop_md).read()
+        assert any(m in text for m in ("44.1", "44 baseline", "MiniMax-JANGTQ")), (
+            "ralph-loop state must record MiniMax-JANGTQ decode baseline"
+        )
+
 
 class TestEmptyContentReturns400:
     """iter 26 — regression pin for the 500 → 400 fix caught live on
