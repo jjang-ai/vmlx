@@ -6854,3 +6854,102 @@ class TestL2DiskPersistenceAcrossRestart:
                     assert read is not None, f"Hash {bh.hex()[:8]} missing"
             finally:
                 store2.shutdown()
+
+
+class TestTurboQuantDefaultOnContract:
+    """iter 16 — pins the TurboQuant default-on contract from TOP
+    PRIORITY gate #1 of the iteration-loop header. TurboQuant must
+    auto-activate on JANG/JANGTQ models without any CLI flag, keyed
+    off jang_config.capabilities OR weight_format=mxtq detection.
+
+    Live-observed in iters 6/10/11/14 — these guards formally freeze
+    the contract against a future refactor that might silently require
+    an opt-in flag."""
+
+    def test_no_turboquant_cli_flag_required(self):
+        """vmlx-engine server must NOT expose any
+        --require-turboquant / --enable-turboquant / --no-turboquant
+        flags. Auto-activation is the production contract; opt-out
+        would require deeper per-model config, not a CLI flag."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        for flag in (
+            "--require-turboquant",
+            "--enable-turboquant",
+            "--no-turboquant",
+            "--disable-turboquant",
+        ):
+            assert flag not in src, (
+                f"CLI source mentions {flag!r} — TurboQuant must "
+                f"auto-activate without CLI flags per TOP PRIORITY gate #1."
+            )
+
+    def test_jang_loader_emits_auto_enable_log(self):
+        """The jang_loader source must contain the canonical
+        auto-enable log messages that users/support engineers grep
+        for when debugging 'is TurboQuant actually on?'."""
+        from vmlx_engine.utils import jang_loader
+        import inspect
+        src = inspect.getsource(jang_loader)
+        # Required log markers — removing any of these breaks operator
+        # visibility into whether TurboQuant activated on a given load.
+        for marker in (
+            "TurboQuant auto-enabled",
+            "MXTQ/JANGTQ VLM detected",
+            "native TurboQuant fast path",
+        ):
+            assert marker in src, (
+                f"jang_loader must emit {marker!r} log marker — "
+                f"operators depend on it to confirm TurboQuant activated."
+            )
+
+    def test_jang_loader_delegates_to_native_loaders(self):
+        """Fast-path activation must actually delegate to jang_tools
+        native loaders (load_jangtq / load_jangtq_vlm), not silently
+        fall back to the generic slow loader."""
+        from vmlx_engine.utils import jang_loader
+        import inspect
+        src = inspect.getsource(jang_loader)
+        # Both text and VLM native paths must be wired up
+        assert "load_jangtq_vlm" in src, (
+            "jang_loader must delegate VLM JANGTQ loads to "
+            "jang_tools.load_jangtq_vlm"
+        )
+        assert "load_jangtq" in src, (
+            "jang_loader must delegate text JANGTQ loads to "
+            "jang_tools.load_jangtq"
+        )
+
+    def test_mxtq_weight_format_triggers_fast_path(self):
+        """Detection key: weight_format == 'mxtq' in jang_config OR
+        tq_packed suffix in first-shard safetensors keys. Removing
+        either branch would leave some JANGTQ models on the slow
+        generic loader."""
+        from vmlx_engine.utils import jang_loader
+        import inspect
+        src = inspect.getsource(jang_loader)
+        assert 'weight_format") == "mxtq"' in src or 'weight_format"] == "mxtq"' in src, (
+            "jang_loader must trigger fast-path on weight_format==mxtq"
+        )
+        assert ".tq_packed" in src, (
+            "jang_loader must detect MXTQ via tq_packed key suffix fallback"
+        )
+
+    def test_jang_capability_stamp_detected(self):
+        """jang_config.capabilities block is the Tier-1 detection
+        source per MEMORY.md (project_jang_stamp_capabilities.md).
+        The model_config_registry must read it before falling back
+        to config.json model_type."""
+        from vmlx_engine import model_config_registry as mcr
+        import inspect
+        src = inspect.getsource(mcr)
+        # Tier-1 reader method must exist
+        assert "_try_jang_stamp" in src, (
+            "_try_jang_stamp method missing — Tier-1 capability stamp "
+            "detection is how JANGTQ reasoning/tool parsers are assigned"
+        )
+        # Must read the capabilities sub-dict
+        assert "capabilities" in src, (
+            "jang_config.capabilities dict must be read by registry"
+        )
