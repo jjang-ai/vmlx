@@ -68,18 +68,31 @@ public struct ChatRequest: Codable, Sendable {
     public var topLogprobs: Int?
 
     /// OpenAI `frequency_penalty` — distinct from
-    /// `repetition_penalty`. Range-checked ([-2, 2]) but otherwise
-    /// accepted silently. Engine ignores the value.
+    /// `repetition_penalty`. Range-checked ([-2, 2]). Wired to the
+    /// sampler as of iter-95 §173 — `Stream.buildGenerateParameters`
+    /// forwards non-zero values into `GenerateParameters.frequencyPenalty`
+    /// which the `FrequencyPenaltyContext` LogitProcessor applies
+    /// on every decode step.
     public var frequencyPenalty: Double?
 
     /// OpenAI `presence_penalty` — distinct from
-    /// `repetition_penalty`. Range-checked ([-2, 2]) but otherwise
-    /// accepted silently. Engine ignores the value.
+    /// `repetition_penalty`. Range-checked ([-2, 2]). Wired to the
+    /// sampler as of iter-95 §173 (see `frequencyPenalty` above).
     public var presencePenalty: Double?
 
     /// OpenAI `logit_bias` — per-token sampling bias dictionary.
-    /// Accepted silently. Engine ignores; response omits the
-    /// corresponding fields.
+    ///
+    /// FIXME(iter-96 §174): accepted-but-unwired. The sampler in
+    /// `Evaluate.swift` has no `LogitBiasContext` processor today,
+    /// so this field is decoded + Codable-mapped but never reaches
+    /// the sampler. Previously this was uncommented; now we label
+    /// it explicitly so the next iteration can implement
+    /// (a) a `LogitBiasContext: LogitProcessor` that adds the bias
+    /// dict to the logits at decode time, (b) a `params.logitBias`
+    /// field on `GenerateParameters`, and (c) the Stream.swift
+    /// wiring that forwards the map. The matching UI surface
+    /// should either disable the field or badge "not wired" until
+    /// the processor lands.
     public var logitBias: [String: Double]?
 
     /// OpenAI `response_format` — JSON-object / JSON-schema
@@ -636,9 +649,18 @@ public struct ChatRequest: Codable, Sendable {
         // Reject logprobs explicitly — silently dropping it broke LangChain
         // logprob-classifier callers (audit 2026-04-15). Until token-level
         // logprob collection is wired into Evaluate.swift, surface a clean
-        // 400 so callers know to fall back. logit_bias / response_format
-        // are still accepted as-is (engine ignores them and the response
-        // omits the corresponding fields).
+        // 400 so callers know to fall back.
+        //
+        // iter-96 §174 note: `logit_bias` / `response_format` remain
+        // accepted-but-unwired. Engine ignores the values (no
+        // `LogitBiasContext` processor exists today) and the response
+        // omits the corresponding fields. See the `logitBias` property
+        // doc above for the implementation plan. Callers that NEED
+        // bias semantics must either prompt-engineer the behavior or
+        // wait for the processor + wiring to land.
+        //
+        // `frequency_penalty` / `presence_penalty` WERE in this
+        // bucket pre-iter-95; they are now fully wired (§173).
         if logprobs == true {
             throw ChatRequestValidationError(
                 field: "logprobs",
