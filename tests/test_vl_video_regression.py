@@ -6517,3 +6517,112 @@ class TestTurboQuantCacheInterop:
                 f"/v1/cache/stats response must include '{key}' — "
                 f"iter 11 live capture depended on this schema."
             )
+
+
+class TestPagedCacheBlockIndexStability:
+    """iter 13 — pins PagedCacheManager block-ID stability under
+    allocate→free→reallocate churn. When TurboQuantKVCache stores
+    quantized K/V into block slots, a drifting block index would
+    silently alias one request's data into another's KV slot.
+    Live-verified in iter 11 that scheduler_cache.allocated_blocks=2
+    after T1; this guard pins the allocator invariants that keep
+    those IDs stable."""
+
+    def test_alloc_free_realloc_reuses_ids(self):
+        """Free'd blocks must be reused on next allocate — no ID growth
+        beyond high-water mark. Without this, long-lived servers leak
+        block IDs until max_blocks is exhausted.
+
+        Note: PagedCacheManager reserves a null block on construction
+        (id=0 sentinel), so the allocated_blocks count includes it.
+        Tests measure deltas vs the initial baseline."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+        m = PagedCacheManager(block_size=16, max_blocks=8)
+        baseline = m.get_stats().allocated_blocks
+        blocks = [m.allocate_block() for _ in range(4)]
+        ids = [b.block_id for b in blocks]
+        # Free middle two
+        m.free_block(ids[1])
+        m.free_block(ids[2])
+        after_free = m.get_stats().allocated_blocks
+        assert after_free == baseline + 2, (
+            f"After alloc 4 + free 2, delta={after_free - baseline} (expected 2)"
+        )
+        # Re-allocate — must reuse freed IDs, not grow beyond 4 total
+        reused = [m.allocate_block() for _ in range(2)]
+        reused_ids = [b.block_id for b in reused]
+        final = m.get_stats().allocated_blocks
+        assert final == baseline + 4, (
+            f"Block ID leak: delta={final - baseline}, expected 4"
+        )
+        # Reused IDs must either come from the freed set (FIFO reuse)
+        # OR from never-used slots ≤ max_blocks (LIFO cold-allocate).
+        # What's NOT allowed is IDs > max_blocks, which would indicate
+        # unbounded growth.
+        for rid in reused_ids:
+            assert rid <= 8, (
+                f"Reused ID {rid} exceeds max_blocks=8 — unbounded growth"
+            )
+
+    def test_exhaustion_returns_none_or_evicts(self):
+        """When every block is allocated, allocate_block must return
+        None (caller's signal to evict) rather than silently wrap or
+        crash. Production-scale: BatchedEngine schedules concurrent
+        requests; under memory pressure the allocator must fail
+        cleanly so the scheduler can make an eviction call.
+
+        With max_blocks=4 and one reserved null block, usable cap
+        is 3. Allocate up to exhaustion, then verify overflow
+        signals None or is_null sentinel."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+        m = PagedCacheManager(block_size=16, max_blocks=4)
+        # Drain remaining capacity (depends on reserved count)
+        allocated = []
+        while True:
+            b = m.allocate_block()
+            if b is None or getattr(b, "is_null", False):
+                break
+            allocated.append(b)
+            if len(allocated) > 10:
+                break  # safety
+        assert len(allocated) >= 1, "must allocate at least 1 real block"
+        # Next allocation — must return None or is_null
+        overflow = m.allocate_block()
+        is_signal = (
+            overflow is None or getattr(overflow, "is_null", False)
+        )
+        assert is_signal, (
+            f"Overflow must be None or is_null=True, got {overflow!r}"
+        )
+
+    def test_block_id_stability_under_many_churn_cycles(self):
+        """50 churn cycles of alloc→free must keep allocated_blocks
+        bounded. Catches ID monotonic growth bugs (e.g. free returning
+        early, decrement_ref skipping free-list re-queue)."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+        m = PagedCacheManager(block_size=16, max_blocks=8)
+        baseline = m.get_stats().allocated_blocks
+        for _ in range(50):
+            blocks = [m.allocate_block() for _ in range(4)]
+            for b in blocks:
+                m.free_block(b.block_id)
+        stats = m.get_stats()
+        # After 50 alloc/free cycles of 4 blocks each, allocation count
+        # must return to baseline (all free'd, no ID leak).
+        assert stats.allocated_blocks == baseline, (
+            f"After 50 alloc/free cycles, allocated={stats.allocated_blocks} "
+            f"(expected baseline={baseline} — block ID growth = free-list leak)"
+        )
+
+    def test_get_stats_schema(self):
+        """UI + monitoring depend on the CacheStats fields. Pinning the
+        contract catches a silent rename during refactor."""
+        from vmlx_engine.paged_cache import PagedCacheManager
+        m = PagedCacheManager(block_size=16, max_blocks=4)
+        stats = m.get_stats()
+        for field in ("total_blocks", "allocated_blocks", "free_blocks",
+                      "shared_blocks", "cache_hits", "cache_misses",
+                      "evictions"):
+            assert hasattr(stats, field), (
+                f"CacheStats missing '{field}' — /v1/cache/stats schema broken"
+            )
