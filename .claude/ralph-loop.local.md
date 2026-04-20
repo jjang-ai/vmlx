@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 34
+iteration: 36
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -287,6 +287,22 @@ Swift source explaining WHY it's not wired + a §N regression guard.
 ## Scoreboard
 - 354/354 source-scan tests green, 114/114 regression guards + 15 matrix
   rows (§57–§118)
+- iter-91 work (no-code audit):
+  1. **Cross-protocol error-path sweep.** After the §118 SSE fix,
+     verified the other three streaming encoders + all non-streaming
+     error paths are already correct:
+     - `JSONLEncoder.ollamaChatStream` / `ollamaGenerateStream`: on
+       error emit `{error, done: true}` object then `writer.finish`
+       + `return` — no success-shaped final chunk. Correct.
+     - Non-stream `/v1/chat/completions` (OpenAIRoutes.swift:136-149):
+       catches EngineError → `mapEngineError` (400/404/422/503/504);
+       generic → 500 via `errorJSON`. Correct.
+     - Non-stream `/v1/messages` (AnthropicRoutes.swift:72-84): same
+       mapping through `OpenAIRoutes.mapEngineError`. Correct.
+     - Ollama non-stream (OllamaRoutes.swift:302-508): all EngineError
+       catch sites route through `mapEngineError`. Correct.
+     No fix needed; logged as a clean audit so the next iteration
+     doesn't revisit.
 - iter-90 work:
   1. SSE encoder error-path truthfulness (§118) — **real wire-
      protocol bug**. All three SSE encoders
