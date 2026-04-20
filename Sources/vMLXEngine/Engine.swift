@@ -2005,11 +2005,20 @@ public actor Engine {
         // and disk tiers aren't actor-isolated against `.clear()` being
         // invoked while another thread is inside fetch/store, so this
         // preemptive cancel is the straightforward race guard.
-        if currentStreamTask != nil {
-            currentStreamTask?.cancel()
-            currentStreamTask = nil
+        //
+        // iter-122 §148: prior code only cancelled `currentStreamTask`
+        // (single most-recent handle) — it missed every stream tracked
+        // in `streamTasksByID`. For multi-stream gateway deployments
+        // the non-most-recent streams kept feeding the coordinator
+        // while `.clear()` blew it away — classic use-after-free on
+        // the paged-tier buffers. Route through `cancelStream()`
+        // which drains both the single-handle fallback AND the
+        // per-id registry (§116 fix).
+        let hadActiveStreams = currentStreamTask != nil || !streamTasksByID.isEmpty
+        if hadActiveStreams {
+            cancelStream()
             await logs.append(.info, category: "engine",
-                "soft sleep: cancelled in-flight stream to avoid cache race")
+                "soft sleep: cancelled all in-flight streams to avoid cache race")
         }
         // Clear the cache coordinator's in-memory tiers. Weights stay loaded.
         cacheCoordinator?.clear()
@@ -2031,6 +2040,23 @@ public actor Engine {
     /// The next request will trigger a full reload from disk. Python analog:
     /// `vmlx_engine/server.py:1927 admin_deep_sleep`.
     public func deepSleep() async throws {
+        // iter-122 §148: cancel in-flight streams BEFORE tearing down the
+        // coordinator. softSleep had a partial version of this guard
+        // (only the single-handle fallback was cancelled) but deepSleep
+        // had none — so a user triggering deep-sleep mid-generation
+        // would race `cacheCoordinator.clear()` and `loaded = nil`
+        // against any live generate-loop still writing to the cache
+        // or reading model weights. Worse than softSleep because
+        // deepSleep also nils the loaded container — the stream's
+        // strong reference keeps it alive briefly but downstream
+        // reads via `self.loaded` return nil, crashing on force-
+        // unwrap. Route through cancelStream() (handles both
+        // currentStreamTask + streamTasksByID per §116).
+        if currentStreamTask != nil || !streamTasksByID.isEmpty {
+            cancelStream()
+            await logs.append(.info, category: "engine",
+                "deep sleep: cancelled all in-flight streams before unload")
+        }
         cacheCoordinator?.clear()
         loaded = nil
         loadedModelPath = nil
