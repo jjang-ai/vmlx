@@ -1001,6 +1001,16 @@ extension Engine {
                 // Pre-fetch: tokenize is already done. Pull the int array out
                 // of the MLXArray and consult the coordinator. `asArray(Int.self)`
                 // copies eagerly so we can use it after the MLXArray drops.
+                //
+                // iter-86 §164: the base detail is just the winning tier
+                // label ("paged" / "memory" / "disk" / "miss"). That is
+                // factually incomplete for hybrid models — users want to
+                // know whether the SSM companion ALSO hit (otherwise a
+                // paged hit is followed by a full re-derive and the
+                // "cached_tokens" number overpromises). Enrich the detail
+                // string with an `+ssm(N)` suffix when the companion
+                // fetch populated non-nil states so the usage envelope
+                // reads honestly.
                 var preFetch = CachePreFetch(matched: 0, detail: "miss")
                 if let coord = coordinator {
                     let tokenIds = lmInput.text.tokens.asArray(Int.self)
@@ -1030,10 +1040,29 @@ extension Engine {
                         mediaSalt: preFetchSalt,
                         genPromptLen: genPromptLen
                     ) {
-                    case .hit(let matched, _, let tier, _, _, _):
+                    case .hit(let matched, _, let tier, _, let ssm, let disk):
+                        // iter-86 §164: compose a rich detail string.
+                        // Base tier is always present. Add `+ssm(count)`
+                        // when companion states came back non-nil — on a
+                        // hybrid model a paged hit WITHOUT SSM companion
+                        // is still a partial miss (SSM gets re-derived).
+                        // Add `+disk` if the primary hit came from paged
+                        // but the disk tier ALSO backfilled arrays. Add
+                        // `+gp(N)` for gen_prompt_len>0 requests so
+                        // thinking-model multi-turn hits are visible.
+                        var parts: [String] = [tier.rawValue]
+                        if let ssmStates = ssm, !ssmStates.isEmpty {
+                            parts.append("ssm(\(ssmStates.count))")
+                        }
+                        if tier != .disk, disk != nil {
+                            parts.append("disk-backfill")
+                        }
+                        if genPromptLen > 0 {
+                            parts.append("gp(\(genPromptLen))")
+                        }
                         preFetch = CachePreFetch(
                             matched: matched,
-                            detail: tier.rawValue
+                            detail: parts.joined(separator: "+")
                         )
                     case .miss:
                         preFetch = CachePreFetch(matched: 0, detail: "miss")
