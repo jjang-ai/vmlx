@@ -52,10 +52,25 @@ struct ChatScreen: View {
                         await loadChatModelInline(app: app, vm: vm)
                     }
                 } onRetry: {
-                    // Caller hint — ChatViewModel can re-send when the engine
-                    // state flips to .running. For now we just clear the error
-                    // banner; the user can hit send again.
+                    // iter-133 §159: the Retry button on the .error banner
+                    // used to just clear `vm.bannerMessage` — but the
+                    // banner renders from `app.engineState` (.error(msg)),
+                    // NOT from vm.bannerMessage. So clicking Retry
+                    // visually did nothing — the engine stayed stuck in
+                    // .error, the banner stayed on screen, and the user
+                    // had no way to recover except bouncing to Server tab
+                    // and hitting Start manually.
+                    //
+                    // Fix: Retry now attempts a re-load via the same path
+                    // the Load Model CTA uses. The new load() transitions
+                    // state out of .error through its normal .loading →
+                    // .running flow, so the banner flips live. Also clear
+                    // any stale vm.bannerMessage so unrelated banners
+                    // don't stick around.
                     vm.bannerMessage = nil
+                    Task { @MainActor in
+                        await loadChatModelInline(app: app, vm: vm)
+                    }
                 }
 
                 MessageList(vm: vm)
