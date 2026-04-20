@@ -6713,3 +6713,144 @@ class TestBlockDiskStoreLruEviction:
                     )
             finally:
                 store.shutdown()
+
+
+class TestL2DiskPersistenceAcrossRestart:
+    """iter 15 — pins the L2 disk cache TurboQuant-specific gate:
+    blocks persist across `store.shutdown()` + re-open of the same
+    cache_dir, with QuantizedKVCache metadata surviving round-trip.
+
+    Root cause context: commit 686aae56 fixed the safetensors
+    __metadata__ collision that was silently dropping TurboQuant
+    blocks on restart. This guard catches a regression of the
+    metadata key collision, a broken SQLite index reload, or a
+    tensor deserialization mismatch."""
+
+    def test_plain_kv_block_persists_across_restart(self):
+        """Write kv-type cache_data, shutdown, re-open, read back.
+        Shapes must match; tensors must be recoverable."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store1 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                cache_data = [
+                    ("kv", mx.array([[1.0, 2.0], [3.0, 4.0]]),
+                           mx.array([[5.0, 6.0], [7.0, 8.0]])),
+                    ("kv", mx.array([[9.0, 10.0], [11.0, 12.0]]),
+                           mx.array([[13.0, 14.0], [15.0, 16.0]])),
+                ]
+                bh = hashlib.sha256(b"persist_test_1").digest()
+                store1.write_block_async(bh, cache_data, token_count=32)
+                time.sleep(2.0)
+                s1 = store1.get_stats()
+                assert s1["blocks_on_disk"] == 1
+            finally:
+                store1.shutdown()
+            # === simulated restart ===
+            store2 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                s2 = store2.get_stats()
+                assert s2["blocks_on_disk"] == 1, (
+                    f"Block lost across restart: {s2['blocks_on_disk']}"
+                )
+                read = store2.read_block(bh)
+                assert read is not None, "read_block returned None after restart"
+                assert len(read) == 2, f"Expected 2 layers, got {len(read)}"
+                for layer in read:
+                    assert layer[0] == "kv", f"layer kind {layer[0]} != 'kv'"
+                    assert layer[1].shape == (2, 2)
+                    assert layer[2].shape == (2, 2)
+            finally:
+                store2.shutdown()
+
+    def test_turboquant_quantized_kv_persists_with_meta(self):
+        """The TurboQuant-specific quantized_kv tuple with
+        (packed, scales, biases) and a meta dict (bits, group_size)
+        must survive shutdown + reload without metadata loss.
+
+        Regression guard for 686aae56 — safetensors __metadata__
+        collision was silently dropping TQ blocks on restart."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store1 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                k_packed = mx.zeros((4, 8, 16), dtype=mx.uint32)
+                k_scales = mx.ones((4, 8, 1))
+                k_biases = mx.zeros((4, 8, 1))
+                v_packed = mx.zeros((4, 8, 16), dtype=mx.uint32)
+                v_scales = mx.ones((4, 8, 1))
+                v_biases = mx.zeros((4, 8, 1))
+                meta = {"bits": 3, "group_size": 64}
+                cache_data = [(
+                    "quantized_kv",
+                    (k_packed, k_scales, k_biases),
+                    (v_packed, v_scales, v_biases),
+                    meta,
+                )]
+                bh = hashlib.sha256(b"tq_persist").digest()
+                store1.write_block_async(bh, cache_data, token_count=32)
+                time.sleep(2.0)
+            finally:
+                store1.shutdown()
+            # === simulated restart ===
+            store2 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                read = store2.read_block(bh)
+                assert read is not None, (
+                    "TurboQuant block lost across restart — likely "
+                    "__metadata__ safetensors collision (686aae56)"
+                )
+                layer = read[0]
+                assert layer[0] == "quantized_kv", (
+                    f"Layer kind dropped: {layer[0]}"
+                )
+                # Meta dict must round-trip
+                returned_meta = layer[3]
+                assert returned_meta.get("bits") == 3, (
+                    f"bits dropped: {returned_meta}"
+                )
+                assert returned_meta.get("group_size") == 64, (
+                    f"group_size dropped: {returned_meta}"
+                )
+                # Keys tuple intact
+                assert len(layer[1]) == 3, "keys tuple length lost"
+                assert len(layer[2]) == 3, "values tuple length lost"
+            finally:
+                store2.shutdown()
+
+    def test_sqlite_index_rebuilt_on_reopen(self):
+        """SQLite block index must survive shutdown — without it, the
+        second boot would treat every block as a cache miss and re-prefill
+        every conversation, silently killing cache benefits."""
+        import tempfile, time, hashlib
+        import mlx.core as mx
+        from vmlx_engine.block_disk_store import BlockDiskStore
+        with tempfile.TemporaryDirectory() as d:
+            store1 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            hashes = []
+            try:
+                for i in range(5):
+                    k = mx.zeros((2, 4, 4))
+                    v = mx.zeros((2, 4, 4))
+                    bh = hashlib.sha256(f"idx_{i}".encode()).digest()
+                    store1.write_block_async(bh, [("kv", k, v)], token_count=8)
+                    hashes.append(bh)
+                time.sleep(2.0)
+            finally:
+                store1.shutdown()
+            store2 = BlockDiskStore(cache_dir=d, max_size_gb=1.0)
+            try:
+                s = store2.get_stats()
+                assert s["blocks_on_disk"] == 5, (
+                    f"Index lost {5 - s['blocks_on_disk']} blocks on reopen"
+                )
+                # Every hash must still resolve
+                for bh in hashes:
+                    read = store2.read_block(bh)
+                    assert read is not None, f"Hash {bh.hex()[:8]} missing"
+            finally:
+                store2.shutdown()
