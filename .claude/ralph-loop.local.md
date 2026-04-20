@@ -285,8 +285,36 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 353/353 source-scan tests green, 113/113 regression guards + 15 matrix
-  rows (§57–§117)
+- 354/354 source-scan tests green, 114/114 regression guards + 15 matrix
+  rows (§57–§118)
+- iter-90 work:
+  1. SSE encoder error-path truthfulness (§118) — **real wire-
+     protocol bug**. All three SSE encoders
+     (`chatCompletionStream`, `textCompletionStream`,
+     `responsesStream`) caught an upstream throw, emitted a proper
+     error event, AND THEN emitted a success-shaped final frame:
+     `finish_reason: "stop"` on chat/text, `response.completed`
+     with `status: "completed"` on responses. OpenAI SDK clients
+     treat those success frames as "clean completion" — they log
+     usage, close UI spinners, mark the response successful in
+     telemetry. An error event immediately followed by a stop
+     chunk gave inconsistent signals: the error gets logged, then
+     the success frame papers over it, and the client ends up in
+     an ambiguous state. Fix: track `hadError: Bool` across each
+     do-catch. On the error path, skip the final finish-reason
+     frame and the usage frame; for the Responses API additionally
+     switch `response.completed` → `response.failed` with
+     `status: "failed"` so SDK clients see the actual spec event.
+     Anthropic's `/v1/messages` stream already handled this
+     correctly (return early after the error event) — its pattern
+     was the model for this fix. §118 regression guard asserts
+     `hadError = true` appears in all three catch blocks, the
+     `response.failed` + `"failed"` strings are present for the
+     Responses path, and the `if !hadError` guard shows up at
+     final-frame sites. Also updated the §N guard for iter-88's
+     cancelStream fix that was matching the old mutation-during-
+     iteration pattern (accidental: the §116 fix changed the code
+     shape that an earlier §N regression guard pinned).
 - iter-89 work:
   1. WhisperAudio.decodeData temp-file leak (§117) — **real resource
      leak**. `decodeData(_:fileExtension:)` registered its cleanup
