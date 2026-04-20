@@ -57,8 +57,17 @@ public enum WhisperAudio {
     ) throws -> [Float] {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmlx-whisper-\(UUID().uuidString).\(fileExtension)")
-        try data.write(to: tmp)
+        // iter-89 §117: register the cleanup defer BEFORE the write
+        // that can throw. `Data.write(to:)` can fail mid-way with a
+        // partial file on disk (disk full, permission race, sandbox
+        // change). The previous ordering — write first, then defer —
+        // skipped the cleanup on that throw path and leaked
+        // `/tmp/vmlx-whisper-<UUID>.wav` files that accumulate
+        // indefinitely. Registering defer first guarantees the
+        // tmp-file is removed on every exit path (normal return,
+        // write failure, decode failure, cancellation).
         defer { try? FileManager.default.removeItem(at: tmp) }
+        try data.write(to: tmp)
         return try decodeFile(at: tmp)
     }
 
