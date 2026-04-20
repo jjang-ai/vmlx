@@ -6377,3 +6377,71 @@ class TestZombieCodeConsolidation:
             "Found copy-pasted think-tag strip in server.py — "
             "route it through _strip_think_for_tool_parse instead."
         )
+
+
+class TestJangTqEncodeDecodeCorrectness:
+    """iter 10 — pins encode/decode round-trip across the JANGTQ library.
+
+    Regression root cause was the Mistral-4 VLM bug where tokens decoded
+    to garbled bytes (0xFFFD replacement chars). This guard catches a
+    re-break across every JANGTQ bundle in the default model dir.
+
+    Unit-level only — loads tokenizer, not weights. Integration decode
+    was live-verified in iter 10 against:
+      - Qwen3.6-JANGTQ2-CRACK-v13: OK / こんにちは / def square(n): ...
+      - Qwen3.6-JANGTQ4-CRACK-v13: OK. / 안녕하세요 / print("hello world")
+      - MiniMax-M2.7-JANGTQ-CRACK (iter 7): 50.8 tok/s, coherent output
+    """
+
+    _BASE = "/Users/eric/.mlxstudio/models/MLXModels/dealignai"
+    _PROBES = [
+        "Hello world",
+        "The quick brown fox jumps over the lazy dog.",
+        "こんにちは世界",
+        "안녕하세요",
+        "<|im_start|>user\nOK<|im_end|>",
+        "def foo(x):\n    return x * 2",
+    ]
+
+    @pytest.mark.parametrize("model_dir", [
+        "MiniMax-M2.7-JANGTQ-CRACK",
+        "Qwen3.6-35B-A3B-JANGTQ2-CRACK",
+        "Qwen3.6-35B-A3B-JANGTQ2-CRACK-v13",
+        "Qwen3.6-35B-A3B-JANGTQ4-CRACK",
+        "Qwen3.6-35B-A3B-JANGTQ4-CRACK-v13",
+    ])
+    def test_tokenizer_roundtrip(self, model_dir):
+        """Every JANGTQ tokenizer must round-trip on ASCII, CJK, chat
+        markers, and code without producing 0xFFFD or byte-mangled text."""
+        import os
+        path = os.path.join(self._BASE, model_dir)
+        if not os.path.isdir(path):
+            pytest.skip(f"{model_dir} not present")
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        for probe in self._PROBES:
+            ids = tok.encode(probe, add_special_tokens=False)
+            back = tok.decode(ids, skip_special_tokens=False)
+            assert back.strip() == probe.strip(), (
+                f"{model_dir} round-trip FAIL on {probe!r} → {back!r}"
+            )
+            # No replacement char sneaked in
+            assert "\ufffd" not in back, (
+                f"{model_dir} decode produced U+FFFD replacement char on {probe!r}"
+            )
+
+    def test_jangtq_library_baseline_present(self):
+        """Guard against accidental library deletion — ensures at least
+        one JANGTQ bundle is present so the parametrized suite above
+        actually runs instead of silently skipping everything."""
+        import os
+        if not os.path.isdir(self._BASE):
+            pytest.skip(f"{self._BASE} not present")
+        jangtq_dirs = [
+            d for d in os.listdir(self._BASE)
+            if "JANGTQ" in d and "backup" not in d
+        ]
+        assert len(jangtq_dirs) >= 1, (
+            f"No JANGTQ models found in {self._BASE} — encode/decode "
+            f"correctness audit cannot run."
+        )
