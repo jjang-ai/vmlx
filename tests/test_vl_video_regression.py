@@ -8348,3 +8348,59 @@ class TestReasoningParserWiring:
         assert "call the calc tool" not in (content or ""), (
             f"Reasoning LEAKED into content on interleaved case: {content!r}"
         )
+
+
+class TestResponsesRequestNoResponseFormatAttr:
+    """v1.3.64 hotfix — server.py:5825 in create_response read
+    `request.response_format`, but ResponsesRequest has no such field
+    (Responses API uses `text.format` instead). Every POST /v1/responses
+    raised AttributeError → 500 Internal Server Error. Pins the fix
+    against a re-introduction. Copy-paste regression from
+    create_chat_completion where response_format IS valid."""
+
+    def test_responses_request_has_no_response_format_field(self):
+        """Document the underlying contract: ResponsesRequest (pydantic
+        model for /v1/responses) does NOT define response_format. Any
+        handler accessing it directly will raise AttributeError. If a
+        future refactor adds response_format to the model, update this
+        test — but keep the getattr fallback in server.py so the handler
+        stays crash-safe either way."""
+        from vmlx_engine.api.models import ResponsesRequest
+        fields = set(ResponsesRequest.model_fields.keys())
+        assert "response_format" not in fields, (
+            "ResponsesRequest gained a response_format field — re-check "
+            "server.py create_response tool-suppression branch."
+        )
+        # The Responses API ships the format signal on text.format instead.
+        assert "text" in fields, "Responses API text.format is the canonical path"
+
+    def test_getattr_safe_on_missing_response_format(self):
+        """Minimal ResponsesRequest with no text/format must not crash
+        when server.py probes response_format. This is the exact pattern
+        at server.py:5825 — getattr with default None lets the
+        tool-suppression branch fall through cleanly."""
+        from vmlx_engine.api.models import ResponsesRequest
+
+        req = ResponsesRequest(model="test-model", input="hello")
+        # Server pattern: fall back to text when response_format missing.
+        _rf = getattr(req, "response_format", None) or getattr(req, "text", None)
+        # With neither set, both getattrs return None → _rf is None. No crash.
+        assert _rf is None
+
+    def test_server_create_response_uses_safe_getattr(self):
+        """Verify the source uses getattr with a default so a missing
+        response_format field cannot raise AttributeError."""
+        import inspect
+        from vmlx_engine import server as srv
+        src = inspect.getsource(srv.create_response)
+        # Positive: the safe-access pattern must be present.
+        assert 'getattr(request, "response_format"' in src, (
+            "create_response must use getattr(request, 'response_format', ...) "
+            "— ResponsesRequest has no response_format field, direct access "
+            "raises AttributeError → 500. Fixed in v1.3.64."
+        )
+        # Negative: the raw attribute access must NOT be back.
+        assert "request.response_format" not in src, (
+            "raw request.response_format re-introduced in create_response — "
+            "will 500 on every /v1/responses call (1.3.63 regression)"
+        )

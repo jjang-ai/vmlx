@@ -5819,15 +5819,26 @@ async def create_response(
     # on any JSON-ish output and is happy to interpret `{"name":"alice",
     # "age":30}` as a tool call `alice()`. Suppress the tool parser when
     # the client asked for JSON output and didn't pass tools themselves.
-    # If both tools AND response_format are present, tool parsing still
-    # runs (structured tool-call arguments are allowed).
+    # Responses API exposes the format signal on request.text.format
+    # (ResponsesTextFormat); ResponsesRequest has no response_format field,
+    # so getattr avoids AttributeError. Accept either shape.
     if not request.tools and not _suppress_tools:
-        _rf = request.response_format
+        _rf = getattr(request, "response_format", None) or getattr(request, "text", None)
         _rf_type = None
         if isinstance(_rf, dict):
             _rf_type = _rf.get("type")
-        elif _rf is not None and hasattr(_rf, "type"):
+            if _rf_type is None:
+                _fmt = _rf.get("format")
+                if isinstance(_fmt, dict):
+                    _rf_type = _fmt.get("type")
+        elif _rf is not None:
             _rf_type = getattr(_rf, "type", None)
+            if _rf_type is None:
+                _fmt = getattr(_rf, "format", None)
+                if isinstance(_fmt, dict):
+                    _rf_type = _fmt.get("type")
+                elif _fmt is not None:
+                    _rf_type = getattr(_fmt, "type", None)
         if _rf_type in ("json_object", "json_schema"):
             _suppress_tools = True
 
