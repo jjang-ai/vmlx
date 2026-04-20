@@ -956,6 +956,127 @@ public enum OpenAIRoutes {
             }
         }
 
+        // POST /v1/audio/translations — OpenAI audio-translation endpoint.
+        //
+        // iter-101 §179: pre-fix, this route 404'd. The transcriptions
+        // handler above accepts a `task` field that lets callers opt
+        // into translation, but clients using the official OpenAI SDK
+        // hit the dedicated `/v1/audio/translations` path — and got a
+        // 404 even though the engine supports translation. Wire it by
+        // delegating to the same multipart/JSON parser with task
+        // hard-coded to "translate". Per OpenAI spec, translations
+        // always output English; we also drop any caller-supplied
+        // `language` field since it doesn't apply.
+        router.post("/v1/audio/translations") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 128 * 1024 * 1024)
+            let data = Data(buffer: body)
+            let contentType = req.headers[.contentType] ?? ""
+
+            var audioData: Data? = nil
+            var fileExt: String = "wav"
+            var modelName: String = ""
+            var responseFormat: String = "json"
+
+            if contentType.lowercased().hasPrefix("multipart/form-data") {
+                guard let boundary = MultipartFormParser.boundary(from: contentType)
+                else {
+                    return Self.errorJSON(.badRequest,
+                        "multipart/form-data body missing boundary")
+                }
+                let parts = MultipartFormParser.parse(body: data, boundary: boundary)
+                for part in parts {
+                    switch part.name {
+                    case "file":
+                        audioData = part.body
+                        if let fname = part.filename,
+                           let dot = fname.lastIndex(of: ".")
+                        {
+                            fileExt = sanitizeFileExt(
+                                String(fname[fname.index(after: dot)...])) ?? fileExt
+                        }
+                    case "model":
+                        modelName = String(data: part.body, encoding: .utf8) ?? ""
+                    case "response_format":
+                        responseFormat = String(data: part.body, encoding: .utf8) ?? "json"
+                    case "prompt", "temperature", "language", "task":
+                        // Translations per OpenAI spec always output English
+                        // and don't take a `language` hint; prompt /
+                        // temperature are parallel to transcriptions and
+                        // are accepted-ignored until the decoder supports
+                        // them. Any caller-supplied `task` is ignored —
+                        // this endpoint forces translate.
+                        break
+                    default:
+                        break
+                    }
+                }
+            } else {
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let b64 = obj["audio"] as? String,
+                       let decoded = Data(base64Encoded: b64) {
+                        audioData = decoded
+                    }
+                    if let e = obj["file_extension"] as? String,
+                       let clean = sanitizeFileExt(e)
+                    {
+                        fileExt = clean
+                    }
+                    if let m = obj["model"] as? String { modelName = m }
+                    if let r = obj["response_format"] as? String { responseFormat = r }
+                }
+            }
+
+            guard let audio = audioData, !audio.isEmpty else {
+                return Self.errorJSON(.badRequest,
+                    "translations: missing 'file' audio part")
+            }
+
+            var dict: [String: Any] = [
+                "file": audio,
+                "file_extension": fileExt,
+                "task": "translate",
+            ]
+            if !modelName.isEmpty { dict["model"] = modelName }
+
+            await engine.wakeFromStandby()
+            do {
+                let result = try await engine.transcribe(request: dict)
+                let text = (result["text"] as? String) ?? ""
+                switch responseFormat.lowercased() {
+                case "text":
+                    return Response(
+                        status: .ok,
+                        headers: [.contentType: "text/plain; charset=utf-8"],
+                        body: .init(byteBuffer: .init(string: text)))
+                case "srt":
+                    let dur = (result["duration"] as? Double) ?? 0
+                    let bodyStr = Self.singleCueSRT(text: text, duration: dur)
+                    return Response(
+                        status: .ok,
+                        headers: [.contentType: "application/x-subrip"],
+                        body: .init(byteBuffer: .init(string: bodyStr)))
+                case "vtt":
+                    let dur = (result["duration"] as? Double) ?? 0
+                    let bodyStr = Self.singleCueVTT(text: text, duration: dur)
+                    return Response(
+                        status: .ok,
+                        headers: [.contentType: "text/vtt"],
+                        body: .init(byteBuffer: .init(string: bodyStr)))
+                case "verbose_json":
+                    var verbose = result
+                    verbose["segments"] = [] as [Any]
+                    return Self.json(verbose)
+                default:
+                    return Self.json(["text": text])
+                }
+            } catch let err as EngineError {
+                return Self.mapEngineError(err)
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
         // POST /v1/audio/speech — TTS.
         //
         // OpenAI spec: { model, input, voice, response_format?, speed? }
