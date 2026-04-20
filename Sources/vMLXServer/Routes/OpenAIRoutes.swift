@@ -524,17 +524,44 @@ public enum OpenAIRoutes {
                 reasoningEffort = e
             }
 
-            let chatReq = ChatRequest(
+            // iter-97 §175: pre-fix, this ChatRequest init only
+            // forwarded model/messages/stream/maxTokens/temperature/
+            // topP/reasoningEffort/tools/toolChoice. Every other
+            // parameter a caller sent on `/v1/responses` (seed,
+            // stop, top_k, min_p, repetition_penalty, frequency_
+            // penalty, presence_penalty) was silently dropped —
+            // the engine happily produced output using defaults,
+            // the user saw "my penalty had no effect" with no 400
+            // and no log. The chat-completions route (line 93) has
+            // been wiring these since iter-95 §173; Responses was
+            // inheriting a stale build. Parse each optional field
+            // defensively + forward only when present so the
+            // zero-cost default path stays intact.
+            let stopList: [String]? = {
+                if let arr = obj["stop"] as? [String], !arr.isEmpty { return arr }
+                if let s = obj["stop"] as? String, !s.isEmpty { return [s] }
+                return nil
+            }()
+            var chatReq = ChatRequest(
                 model: model,
                 messages: messages,
                 stream: obj["stream"] as? Bool,
                 maxTokens: obj["max_output_tokens"] as? Int,
                 temperature: obj["temperature"] as? Double,
                 topP: obj["top_p"] as? Double,
+                topK: obj["top_k"] as? Int,
+                minP: obj["min_p"] as? Double,
+                repetitionPenalty: obj["repetition_penalty"] as? Double,
+                stop: stopList,
+                seed: obj["seed"] as? Int,
                 reasoningEffort: reasoningEffort,
                 tools: tools,
                 toolChoice: toolChoice
             )
+            // frequencyPenalty / presencePenalty are struct-var fields
+            // without init params — set them after construction.
+            chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
+            chatReq.presencePenalty = obj["presence_penalty"] as? Double
             // iter-67 (§96) — /v1/responses was the last chat-style route
             // skipping `chatReq.validate()`. Chat/completions (line 93) +
             // Anthropic /v1/messages (line 43) both call it; Responses
