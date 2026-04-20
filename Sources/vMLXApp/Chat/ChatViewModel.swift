@@ -55,11 +55,13 @@ final class ChatViewModel {
     /// deleted chat leaked its ChatSettings row forever.
     private var deletedChatSettings: [UUID: ChatSettings] = [:]
 
-    /// Per-session scrollback of user prompts for the Up-arrow input recall
-    /// shortcut. Only user messages go here; `historyCursor` tracks the
-    /// current recall index (nil = not recalling).
-    var inputHistory: [String] = []
-    var historyCursor: Int? = nil
+    // iter-112 §138: `inputHistory` + `historyCursor` +
+    // `recallPreviousInput()` REMOVED. They were a dead parallel
+    // Up-arrow history dict that polluted across sessions (unlike
+    // InputBar's `userHistory()` which derives per-chat from
+    // `messages.filter(.user)`). The screen-level ChatScreen handler
+    // that read them has also been removed — InputBar's TextField-
+    // focused handler is the sole Up-arrow recall path now.
 
     /// Stack of recently-closed session ids so Cmd-Shift-T can reopen the
     /// last-closed chat. We snapshot the full session row at close-time so
@@ -292,22 +294,8 @@ final class ChatViewModel {
         selectSession(s.id)
     }
 
-    /// Up-arrow input recall. Returns true if recall fired (so the caller
-    /// can mark the key event handled); false when there's no history or
-    /// the user has typed something.
-    @discardableResult
-    func recallPreviousInput() -> Bool {
-        guard inputText.isEmpty, !inputHistory.isEmpty else { return false }
-        let nextIdx: Int
-        if let cur = historyCursor {
-            nextIdx = max(0, cur - 1)
-        } else {
-            nextIdx = inputHistory.count - 1
-        }
-        historyCursor = nextIdx
-        inputText = inputHistory[nextIdx]
-        return true
-    }
+    // iter-112 §138: `recallPreviousInput()` deleted — see inputHistory
+    // comment above. InputBar owns Up-arrow recall via userHistory().
 
     func deleteSession(_ id: UUID) {
         // Snapshot BEFORE the delete so we can restore on undo. Messages
@@ -724,12 +712,11 @@ final class ChatViewModel {
             )
             messages.append(user)
             Database.shared.upsertMessage(user)
-            // Push onto input history for Up-arrow recall.
-            if inputHistory.last != trimmed {
-                inputHistory.append(trimmed)
-                if inputHistory.count > 100 { inputHistory.removeFirst() }
-            }
-            historyCursor = nil
+            // iter-112 §138: the send-time `inputHistory.append(trimmed)`
+            // + `historyCursor = nil` block was the only writer of the
+            // dead parallel history store that §138 removed. InputBar
+            // derives its history from `messages.filter(.user)` so the
+            // sent turn is already tracked there (line above).
             inputText = ""
             pendingImages = []
             pendingVideos = []

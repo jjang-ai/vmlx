@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 57
+iteration: 58
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,28 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 373/373 source-scan tests green, 133/133 regression guards + 15 matrix
-  rows (§57–§137)
+- 374/374 source-scan tests green, 134/134 regression guards + 15 matrix
+  rows (§57–§138)
+- iter-112 work:
+  1. Zombie inputHistory Up-arrow path removed (§138) — **real
+     dead-code + UX-divergence fix**. Chat surface had TWO parallel
+     Up-arrow recall paths. (1) InputBar's TextField-focused handler
+     — reads `messages.filter(.user).reversed()`, per-chat, cycles,
+     escapes to stashed draft. Correct production path. (2)
+     ChatScreen's screen-level handler — called
+     `vm.recallPreviousInput()` which read from `inputHistory`, a
+     separate in-memory dict maintained across the whole ViewModel
+     lifetime. ChatViewModel is a single instance → inputHistory
+     was cross-session-polluted (pressing Up in chat A while
+     TextField unfocused could recall a prompt from chat B). Plus
+     the handler only recalled ONCE — `!inputText.isEmpty` guard on
+     recallPreviousInput blocked the second press since the first
+     press filled inputText, so it never cycled. Cleanest fix:
+     delete path 2 entirely. Removed inputHistory + historyCursor +
+     recallPreviousInput + send-time append block + ChatScreen's
+     Up-arrow handler. InputBar's per-chat handler is the sole
+     recall path now — matches every terminal/chat app. §138 pins
+     absence of all four dead symbols. Build clean.
 - iter-111 work:
   1. deleteMessage stream-cycle waste (§137) — **small-impact cycle
      waste + cleanup bug**. Streaming token-append loop at

@@ -77,13 +77,19 @@ struct ChatScreen: View {
             }
             return .ignored
         }
-        // Up arrow in an empty input recalls the previous user message.
-        .onKeyPress(.upArrow) {
-            if vm.inputText.isEmpty && vm.recallPreviousInput() {
-                return .handled
-            }
-            return .ignored
-        }
+        // iter-112 §138: screen-level Up-arrow handler REMOVED.
+        // InputBar owns history recall when TextField is focused
+        // (per-chat `vm.messages`-derived, cycles, escapes to draft).
+        // The prior screen-level fallback pointed at a stale cross-
+        // session `inputHistory` dict, only recalled once (couldn't
+        // cycle — second press hit the `!inputText.isEmpty` guard),
+        // and caused messages from chat B to appear when pressing Up
+        // in chat A while the TextField wasn't first-responder.
+        // The fix is to own history recall exclusively in InputBar,
+        // so the two paths can't diverge. User impact: the user now
+        // has to click into the input field before Up-arrow recalls —
+        // a minor change that's already what every terminal/chat app
+        // requires (recall only fires in the actual input surface).
         .background(
             // Cmd-W close current chat. Attached here (not globally) so it
             // only fires while the Chat screen is mounted.
