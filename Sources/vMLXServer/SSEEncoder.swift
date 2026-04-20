@@ -3,6 +3,7 @@ import HTTPTypes
 import Hummingbird
 import NIOCore
 import vMLXEngine
+import vMLXLMCommon
 
 /// OpenAI-compatible Server-Sent Events encoder.
 ///
@@ -103,6 +104,34 @@ public enum SSEEncoder {
                         }
                         if let fr = chunk.finishReason { finishReason = fr }
                         if let u = chunk.usage { lastUsage = u }
+                        // Emit logprobs data when present.
+                        if let lps = chunk.logprobs, !lps.isEmpty {
+                            let contentArr: [[String: Any]] = lps.map { lp in
+                                var entry: [String: Any] = [
+                                    "token": lp.token,
+                                    "logprob": lp.logprob,
+                                ]
+                                if let bo = lp.byteOffset {
+                                    entry["bytes_offset"] = bo
+                                }
+                                if !lp.topLogprobs.isEmpty {
+                                    entry["top_logprobs"] = lp.topLogprobs.map { alt in
+                                        [
+                                            "token": alt.token,
+                                            "logprob": alt.logprob,
+                                        ] as [String: Any]
+                                    }
+                                }
+                                return entry
+                            }
+                            let logprobsDict: [String: Any] = ["content": contentArr]
+                            let j = Self.chunkJSON(
+                                id: id, model: model, created: created,
+                                delta: ["logprobs": logprobsDict],
+                                finishReason: nil
+                            )
+                            try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                        }
                     }
                 }
             } catch {
