@@ -1,4 +1,5 @@
 import Foundation
+import vMLXLMCommon
 
 /// Wire-compatible chat request. Mirrors the Python `ChatRequest` Pydantic model
 /// in vmlx_engine/server.py so the Swift HTTP server can decode the same payloads.
@@ -56,15 +57,14 @@ public struct ChatRequest: Codable, Sendable {
     /// five corrupts downstream code.
     public var n: Int?
 
-    /// OpenAI `logprobs` — when true, include token logprobs in
-    /// the response. Rejected with 400 when true (LangChain
-    /// logprob-classifier callers need to know we can't serve it).
+    /// OpenAI `logprobs` — when true, include per-token log probabilities
+    /// in the response. Collected by `LogprobsCollector` in Evaluate.swift
+    /// on post-penalty logits and emitted as `choices[0].logprobs.content`
+    /// in OpenAI wire format (with `bytes: [Int]` UTF-8 byte arrays).
     public var logprobs: Bool?
 
-    /// OpenAI `top_logprobs` — how many logprobs to include per
-    /// position. Range-checked ([0, 20]) but otherwise accepted
-    /// silently. Engine ignores the value; the response omits the
-    /// `logprobs` field.
+    /// OpenAI `top_logprobs` — how many top alternatives to include per
+    /// token position (0–20). Requires `logprobs == true`.
     public var topLogprobs: Int?
 
     /// OpenAI `frequency_penalty` — distinct from
@@ -633,17 +633,10 @@ public struct ChatRequest: Codable, Sendable {
                 field: "top_logprobs",
                 reason: "must be in [0, 20], got \(tlp)")
         }
-        // Reject logprobs explicitly — silently dropping it broke LangChain
-        // logprob-classifier callers (audit 2026-04-15). Until token-level
-        // logprob collection is wired into Evaluate.swift, surface a clean
-        // 400 so callers know to fall back. logit_bias / response_format
-        // are still accepted as-is (engine ignores them and the response
-        // omits the corresponding fields).
-        if logprobs == true {
-            throw ChatRequestValidationError(
-                field: "logprobs",
-                reason: "logprobs not yet supported by the vMLX Swift engine")
-        }
+        // logprobs is now supported — token-level logprob collection
+        // is wired through Evaluate.swift's LogprobsCollector.
+        // logit_bias / response_format are still accepted as-is
+        // (engine ignores them and the response omits the fields).
     }
 }
 
@@ -682,6 +675,9 @@ public struct StreamChunk: Sendable {
     public var toolStatus: ToolStatus?
     public var finishReason: String?
     public var usage: Usage?
+    /// Per-token log probability data. Non-nil when `logprobs: true`
+    /// was set on the request. Each entry corresponds to one generated token.
+    public var logprobs: [TokenLogprob]?
 
     public init(
         content: String? = nil,
@@ -690,7 +686,8 @@ public struct StreamChunk: Sendable {
         toolCallDelta: ToolCallDelta? = nil,
         toolStatus: ToolStatus? = nil,
         finishReason: String? = nil,
-        usage: Usage? = nil
+        usage: Usage? = nil,
+        logprobs: [TokenLogprob]? = nil
     ) {
         self.content = content
         self.reasoning = reasoning
@@ -699,6 +696,7 @@ public struct StreamChunk: Sendable {
         self.toolStatus = toolStatus
         self.finishReason = finishReason
         self.usage = usage
+        self.logprobs = logprobs
     }
 
     /// Per-message metrics surfaced under each assistant turn. Mirrors

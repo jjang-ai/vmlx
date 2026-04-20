@@ -1,4 +1,5 @@
 import Foundation
+import vMLXLMCommon
 import HTTPTypes
 import Hummingbird
 import NIOCore
@@ -139,6 +140,7 @@ public enum OpenAIRoutes {
             var toolCalls: [ChatRequest.ToolCall] = []
             var finishReason: String? = nil
             var usage: StreamChunk.Usage? = nil
+            var allLogprobs: [TokenLogprob] = []
             let stream = await engine.stream(request: chatReq, id: id)
             do {
                 for try await chunk in stream {
@@ -147,6 +149,7 @@ public enum OpenAIRoutes {
                     if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
                     if let fr = chunk.finishReason { finishReason = fr }
                     if let u = chunk.usage { usage = u }
+                    if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
@@ -199,6 +202,31 @@ public enum OpenAIRoutes {
                     "finish_reason": finishReason ?? "stop",
                 ] as [String: Any]],
             ]
+            // Add logprobs to choices if collected
+            if !allLogprobs.isEmpty {
+                if var choice = obj["choices"] as? [[String: Any]], !choice.isEmpty {
+                    let contentArr: [[String: Any]] = allLogprobs.map { lp in
+                        var entry: [String: Any] = [
+                            "token": lp.token,
+                            "logprob": lp.logprob,
+                        ]
+                        if let bo = lp.byteOffset {
+                            entry["bytes_offset"] = bo
+                        }
+                        if !lp.topLogprobs.isEmpty {
+                            entry["top_logprobs"] = lp.topLogprobs.map { alt in
+                                [
+                                    "token": alt.token,
+                                    "logprob": alt.logprob,
+                                ] as [String: Any]
+                            }
+                        }
+                        return entry
+                    }
+                    choice[0]["logprobs"] = ["content": contentArr]
+                    obj["choices"] = choice
+                }
+            }
             if let u = usage {
                 var usageObj: [String: Any] = [
                     "prompt_tokens": u.promptTokens,
@@ -347,12 +375,14 @@ public enum OpenAIRoutes {
             var content = ""
             var finishReason: String? = nil
             var usage: StreamChunk.Usage? = nil
+            var allLogprobs: [TokenLogprob] = []
             let stream = await engine.stream(request: chatReq, id: id)
             do {
                 for try await chunk in stream {
                     if let c = chunk.content { content += c }
                     if let fr = chunk.finishReason { finishReason = fr }
                     if let u = chunk.usage { usage = u }
+                    if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
@@ -572,6 +602,7 @@ public enum OpenAIRoutes {
             var reasoning = ""
             var toolCalls: [ChatRequest.ToolCall] = []
             var usage: StreamChunk.Usage? = nil
+            var allLogprobs: [TokenLogprob] = []
             let stream = await engine.stream(request: chatReq, id: id)
             do {
                 for try await chunk in stream {
@@ -579,6 +610,7 @@ public enum OpenAIRoutes {
                     if let r = chunk.reasoning { reasoning += r }
                     if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
                     if let u = chunk.usage { usage = u }
+                    if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.

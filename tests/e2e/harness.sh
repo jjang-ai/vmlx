@@ -18,7 +18,8 @@
 # so downstream reporters can diff across runs.
 
 set -u
-CLI="${CLI:-/Users/eric/vmlx/swift/.build/arm64-apple-macosx/release/vmlxctl}"
+REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+CLI="${CLI:-$REPO_ROOT/.build/arm64-apple-macosx/release/vmlxctl}"
 MODEL="${1:?model-path required}"
 PORT="${2:-8765}"
 SUITE="${3:-smoke}"
@@ -383,7 +384,7 @@ case_unsupported_params() {
     # ChatRequest.validate() has a nuanced policy per the doc:
     #  * n != 1 → HARD 400 (vMLX cannot produce multiple completions;
     #    silent one-when-five-asked would corrupt downstream code).
-    #  * logprobs=true → HARD 400 (not implemented, surfaced explicitly).
+    #  * logprobs=true → ACCEPT (implemented via LogprobsCollector in Evaluate.swift).
     #  * frequency_penalty / presence_penalty / top_logprobs / response_format
     #    within range → SILENT ACCEPT — every SDK (openai-python,
     #    openai-node, LangChain, Cline, Aider, Continue.dev, Open-WebUI,
@@ -405,13 +406,13 @@ base = {
 cases = [
     # Must 400 (hard reject)
     ("n_gt_1",                 {"n": 2},                       "reject"),
-    ("logprobs_true",          {"logprobs": True},             "reject"),
     ("frequency_penalty_range",{"frequency_penalty": 42},      "reject"),
     ("presence_penalty_range", {"presence_penalty": -99},      "reject"),
     # Must 200 (silent accept — SDK defaults)
     ("frequency_penalty_zero", {"frequency_penalty": 0},       "accept"),
     ("presence_penalty_zero",  {"presence_penalty": 0},        "accept"),
     ("logprobs_false",         {"logprobs": False},            "accept"),
+    ("logprobs_true",          {"logprobs": True},             "accept"),
 ]
 fails = []
 for name, extras, want in cases:
@@ -1459,8 +1460,8 @@ case_audio_transcription() {
     # Use the whisper model's own test wav if present; else skip.
     local wav=""
     for cand in \
-        /Users/eric/.cache/huggingface/hub/models--mlx-community--whisper-tiny-mlx/snapshots/*/test.wav \
-        /Users/eric/vmlx/swift/tests/e2e/fixtures/hello.wav; do
+        ~/.cache/huggingface/hub/models--mlx-community--whisper-tiny-mlx/snapshots/*/test.wav \
+        "$REPO_ROOT/tests/e2e/fixtures/hello.wav"; do
         eval "expanded=$cand" 2>/dev/null
         [ -f "$expanded" ] && wav="$expanded" && break
     done
@@ -1951,13 +1952,17 @@ PY
 }
 
 case_logprobs() {
-    # OpenAI `logprobs: true` + `top_logprobs: 3` should either:
-    #   a) return per-token logprobs (full support), OR
-    #   b) return a clean 400 "not yet supported" error (documented
-    #      unimplemented — the Swift engine currently does this).
-    # What we're catching: the 500/timeout/silent-empty-choices path
-    # (engine would say "no supported" but a regression could just
-    # hang or return an empty but 200 response).
+    # OpenAI `logprobs: true` + `top_logprobs: 3` must return per-token
+    # logprobs in the response. Full support is now implemented in the
+    # Swift engine (Evaluate.swift LogprobsCollector → SSEEncoder →
+    # OpenAIRoutes non-streaming path).
+    #
+    # Validates:
+    #  1. HTTP 200 (not a 400 rejection)
+    #  2. choices[0].logprobs.content is a non-empty array
+    #  3. Each entry has token (string), logprob (negative float),
+    #     and top_logprobs with ≤ top_logprobs entries
+    #  4. top_logprobs entries are sorted descending by logprob
     local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
     local resp_file=/tmp/vmlx-logprobs.json
     local code
@@ -1972,22 +1977,108 @@ try:
 except Exception as e:
     print(json.dumps({"name":"logprobs","ok":False,"notes":f"parse: {e}"}))
     raise SystemExit
+
+if code != "200":
+    err = r.get("error", {})
+    print(json.dumps({"name":"logprobs","ok":False,"notes":f"HTTP {code} err={(err.get('message') or '')[:80]}"}))
+    raise SystemExit
+
 choices = r.get("choices", [])
-err = r.get("error", {})
-if code == "200" and choices:
-    lp = choices[0].get("logprobs") or {}
-    content = lp.get("content") or []
-    first_lp = content[0].get("logprob") if content else None
-    if content and first_lp is not None:
-        print(json.dumps({"name":"logprobs","ok":True,"notes":f"ok tokens={len(content)} first={first_lp:.2f}"}))
-    else:
-        print(json.dumps({"name":"logprobs","ok":False,"notes":"200 but no content array"}))
-elif code.startswith("4") and "not yet supported" in (err.get("message") or ""):
-    # Documented-unimplemented: engine surfaces a clean 400 with
-    # explicit message. That's an acceptable pass for now.
-    print(json.dumps({"name":"logprobs","ok":True,"notes":f"HTTP {code} not-yet-supported (documented)"}))
+if not choices:
+    print(json.dumps({"name":"logprobs","ok":False,"notes":"200 but empty choices"}))
+    raise SystemExit
+
+lp = choices[0].get("logprobs")
+if lp is None:
+    print(json.dumps({"name":"logprobs","ok":False,"notes":"200 but choices[0] has no logprobs key"}))
+    raise SystemExit
+
+content = lp.get("content") or []
+if not content:
+    print(json.dumps({"name":"logprobs","ok":False,"notes":"200 but logprobs.content is empty"}))
+    raise SystemExit
+
+fails = []
+for i, entry in enumerate(content):
+    t = entry.get("token")
+    p = entry.get("logprob")
+    if t is None or not isinstance(t, str):
+        fails.append(f"entry[{i}]: token missing/not-string")
+    if p is None or not isinstance(p, (int, float)):
+        fails.append(f"entry[{i}]: logprob missing/not-number")
+    elif p > 0:
+        fails.append(f"entry[{i}]: logprob={p} > 0 (should be negative)")
+    alts = entry.get("top_logprobs") or []
+    if len(alts) > 3:
+        fails.append(f"entry[{i}]: {len(alts)} top_logprobs > requested 3")
+    for j, a in enumerate(alts):
+        if "token" not in a or "logprob" not in a:
+            fails.append(f"entry[{i}].top_logprobs[{j}]: missing token/logprob")
+    # Verify top_logprobs sorted descending
+    alt_probs = [a.get("logprob", 0) for a in alts]
+    if alt_probs and alt_probs != sorted(alt_probs, reverse=True):
+        fails.append(f"entry[{i}]: top_logprobs not sorted descending")
+
+if fails:
+    print(json.dumps({"name":"logprobs","ok":False,"notes":"; ".join(fails[:5])}))
 else:
-    print(json.dumps({"name":"logprobs","ok":False,"notes":f"HTTP {code} err={(err.get('message') or '')[:50]}"}))
+    first_lp = content[0].get("logprob", 0)
+    print(json.dumps({"name":"logprobs","ok":True,
+        "notes":f"ok tokens={len(content)} first={first_lp:.4f} top_alts={len(content[0].get('top_logprobs',[]))}"}))
+PY
+}
+
+case_logprobs_streaming() {
+    # Streaming logprobs: request with stream=true and logprobs=true.
+    # SSE chunks should contain logprobs data alongside content deltas.
+    # Validates that logprobs appear in streamed chunks (not just
+    # the final non-streaming response).
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local resp_file=/tmp/vmlx-logprobs-stream.txt
+    local code
+    code=$(curl -s --max-time 60 -o "$resp_file" -w "%{http_code}" -X POST "$BASE/v1/chat/completions" \
+        -H "content-type: application/json" \
+        -d "{\"model\":\"$model_id\",\"messages\":[{\"role\":\"user\",\"content\":\"Say yes\"}],\"max_tokens\":5,\"temperature\":0,\"logprobs\":true,\"top_logprobs\":2,\"stream\":true}")
+    F="$resp_file" HTTP="$code" python3 <<'PY'
+import json, os
+code = os.environ["HTTP"]
+if code != "200":
+    print(json.dumps({"name":"logprobs_streaming","ok":False,"notes":f"HTTP {code}"}))
+    raise SystemExit
+
+logprob_entries = 0
+content_chunks = 0
+errors = []
+for line in open(os.environ["F"]):
+    line = line.strip()
+    if not line.startswith("data: ") or line == "data: [DONE]":
+        continue
+    payload = line[6:]
+    try:
+        chunk = json.loads(payload)
+    except:
+        continue
+    choices = chunk.get("choices", [])
+    if not choices:
+        continue
+    delta = choices[0].get("delta", {})
+    # Check for logprobs in the chunk
+    lp = choices[0].get("logprobs") or delta.get("logprobs")
+    if lp:
+        content_arr = lp.get("content") or []
+        logprob_entries += len(content_arr)
+    # Count content chunks
+    if delta.get("content"):
+        content_chunks += 1
+
+if logprob_entries > 0:
+    print(json.dumps({"name":"logprobs_streaming","ok":True,
+        "notes":f"ok logprob_entries={logprob_entries} content_chunks={content_chunks}"}))
+elif content_chunks > 0:
+    print(json.dumps({"name":"logprobs_streaming","ok":False,
+        "notes":f"stream had {content_chunks} content chunks but 0 logprob entries"}))
+else:
+    print(json.dumps({"name":"logprobs_streaming","ok":False,"notes":"no content or logprobs in stream"}))
 PY
 }
 
@@ -2162,6 +2253,7 @@ suite_full() {
     case_stream_usage
     case_deterministic
     case_logprobs
+    case_logprobs_streaming
     case_input_validation
     case_sleep_wake_cycle
     case_reasoning_content
