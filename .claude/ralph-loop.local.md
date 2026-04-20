@@ -1,6 +1,6 @@
 ---
 active: true
-iteration: 59
+iteration: 60
 session_id: 
 max_iterations: 0
 completion_promise: null
@@ -285,8 +285,22 @@ Swift source explaining WHY it's not wired + a §N regression guard.
    sites delegate (no inline regressions).
 
 ## Scoreboard
-- 375/375 source-scan tests green, 135/135 regression guards + 15 matrix
-  rows (§57–§139)
+- 376/376 source-scan tests green, 136/136 regression guards + 15 matrix
+  rows (§57–§140)
+- iter-114 work:
+  1. ChatRequest rejects empty stop sequences (§140) — **API
+     truthfulness fix**. `validate()` counted stop sequences (up
+     to 16) but didn't check non-empty. Empty strings `""` in the
+     array were silently filtered at AhoCorasick init
+     (`where !p.isEmpty`) so the matcher never tried to match
+     them — but the API caller who sent `{"stop": [""]}`
+     expecting a real stop got silent no-op; generation ran to
+     max_tokens as though no stop was configured. OpenAI spec
+     rejects empty stops with 400; match that. Fix: per-entry
+     non-empty check inside the existing 16-count guard. Error
+     message names the offending index. §140 pins marker +
+     iteration + error reason + indexed field name. Build clean,
+     guard green.
 - iter-113 work:
   1. recentlyClosed zombie-chat reopen (§139) — **real UX bug**.
      Sequence: Cmd-W (close → pushes to recentlyClosed) →

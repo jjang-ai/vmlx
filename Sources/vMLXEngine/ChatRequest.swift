@@ -535,6 +535,20 @@ public struct ChatRequest: Codable, Sendable {
                 field: "stop",
                 reason: "at most 16 stop sequences supported, got \(s.count)")
         }
+        // iter-114 §140: empty stop-sequence string is silently filtered
+        // at AhoCorasick init (see `AhoCorasick.swift:58 where !p.isEmpty`)
+        // so it's not a crash risk, but the API caller who sent
+        // `stop: [""]` expecting a real match gets a silent no-op —
+        // generation ignores their stop and runs to max_tokens. Reject
+        // with a clean 400 so SDK clients see the actual contract.
+        // Per-entry check so the error message names the offending index.
+        if let s = stop {
+            for (i, entry) in s.enumerated() where entry.isEmpty {
+                throw ChatRequestValidationError(
+                    field: "stop[\(i)]",
+                    reason: "stop sequences must be non-empty strings")
+            }
+        }
 
         // MARK: Decoded-but-not-yet-fully-implemented OpenAI fields.
         //
