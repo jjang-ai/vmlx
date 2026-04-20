@@ -296,7 +296,24 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.badRequest, "missing 'prompt'")
             }
 
-            let chatReq = ChatRequest(
+            // iter-98 §176: two silent drops in the legacy route that
+            // matched iter-97's findings on /v1/responses.
+            //   (1) `stop` only decoded as `[String]`; OpenAI's legacy
+            //       spec ALSO accepts a single `string` (and commonly
+            //       sends one). Requests with `{"stop": "\n"}` had the
+            //       stop sequence silently dropped and the model kept
+            //       writing past it. Accept both shapes + wrap scalar
+            //       into a singleton list for the engine.
+            //   (2) `frequency_penalty` + `presence_penalty` had no
+            //       forwarding at all. Chat-completions fixed this in
+            //       iter-95; Responses in iter-97. Legacy was the last
+            //       route still dropping them.
+            let stopList: [String]? = {
+                if let arr = obj["stop"] as? [String], !arr.isEmpty { return arr }
+                if let s = obj["stop"] as? String, !s.isEmpty { return [s] }
+                return nil
+            }()
+            var chatReq = ChatRequest(
                 model: model,
                 messages: [.init(role: "user", content: .string(prompt))],
                 stream: obj["stream"] as? Bool,
@@ -306,9 +323,11 @@ public enum OpenAIRoutes {
                 topK: obj["top_k"] as? Int,
                 minP: obj["min_p"] as? Double,
                 repetitionPenalty: obj["repetition_penalty"] as? Double,
-                stop: obj["stop"] as? [String],
+                stop: stopList,
                 seed: obj["seed"] as? Int
             )
+            chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
+            chatReq.presencePenalty = obj["presence_penalty"] as? Double
             // iter-119 §145: pre-flight validation, same class as iter-67
             // §96 for /v1/responses. /v1/completions was the last chat-
             // shape route skipping validate() — bad temperature /
