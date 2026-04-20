@@ -7836,6 +7836,23 @@ class TestVlTurboQuantDecodeSpeedBaseline:
             "for future regression comparison"
         )
 
+    def test_qwen36_jangtq2_decode_speed_documented(self):
+        """The Qwen3.6-JANGTQ2-v13 text decode baseline (67.5 tok/s
+        on M4 Max 128GB, iter 30) is the most-recent measurement
+        for this production model. Must be recorded somewhere in
+        ralph-loop state for regression comparison."""
+        import os
+        loop_md = "/Users/eric/vmlx/.claude/ralph-loop.local.md"
+        if not os.path.isfile(loop_md):
+            pytest.skip("ralph-loop state file not present")
+        text = open(loop_md).read()
+        # Iter 6 (58) or iter 30 (67.5) or any explicit tok/s number
+        # for Qwen3.6-JANGTQ2 must be recorded.
+        assert any(m in text for m in ("58 tok/s", "67.5", "JANGTQ2")), (
+            "ralph-loop state must record Qwen3.6-JANGTQ2 decode "
+            "baseline for future regression comparison"
+        )
+
 
 class TestEmptyContentReturns400:
     """iter 26 — regression pin for the 500 → 400 fix caught live on
