@@ -51,8 +51,14 @@ public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
         let header = request.headers[.authorization] ?? ""
         let xApiKey = request.headers[HTTPField.Name("x-api-key")!] ?? ""
         let expectedBearer = "Bearer \(key)"
-        let bearerOK = header == expectedBearer
-        let xApiKeyOK = xApiKey == key
+        // iter-87 §115: use constant-time comparison so an attacker on
+        // LAN (when server binds 0.0.0.0) can't recover the API key
+        // byte-by-byte by measuring response-time differences between
+        // a one-byte-wrong header and a fully wrong header. Swift's
+        // stdlib `==` on `String` is variable-time (early-exit on
+        // first mismatch).
+        let bearerOK = Self.constantTimeEquals(header, expectedBearer)
+        let xApiKeyOK = Self.constantTimeEquals(xApiKey, key)
 
         guard bearerOK || xApiKeyOK else {
             let body = #"{"error":{"message":"unauthorized","type":"auth_error"}}"#
@@ -65,5 +71,29 @@ public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
             return resp
         }
         return try await next(request, context)
+    }
+
+    /// Constant-time string comparison for token / API-key checks.
+    ///
+    /// Mitigates timing-oracle attacks where an attacker on LAN
+    /// measures the round-trip time of auth attempts to recover the
+    /// expected key byte-by-byte. The loop always iterates over the
+    /// longer of the two UTF-8 byte sequences and XORs every byte, so
+    /// the elapsed time is independent of where the first mismatch
+    /// occurs. Length-mismatch also flips the accumulator so a short
+    /// prefix of a longer key doesn't return true.
+    static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
+        let ab = Array(a.utf8)
+        let bb = Array(b.utf8)
+        // Force the loop to a fixed count derived from max length so a
+        // length mismatch doesn't leak via loop-iteration count.
+        let n = max(ab.count, bb.count)
+        var diff: UInt8 = UInt8(ab.count ^ bb.count) & 0xFF
+        for i in 0..<n {
+            let x: UInt8 = i < ab.count ? ab[i] : 0
+            let y: UInt8 = i < bb.count ? bb[i] : 0
+            diff |= (x ^ y)
+        }
+        return diff == 0
     }
 }
