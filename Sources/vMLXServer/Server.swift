@@ -31,6 +31,11 @@ public struct Server {
     /// the actual request origin rather than a blanket `*`. A stricter
     /// allowlist is TODO for a follow-up middleware.
     public let allowedOrigins: [String]
+    /// iter-135 §161: mutable auth credentials the middleware reads
+    /// per-request. See `AuthTokenBox`. Callers swap values via
+    /// `applyAuthCredentials(apiKey:adminToken:)` without tearing down
+    /// the listener.
+    public let authTokens: AuthTokenBox
 
     public init(
         engine: Engine,
@@ -54,6 +59,15 @@ public struct Server {
         self.tlsCertPath = tlsCertPath
         self.rateLimitPerMinute = rateLimitPerMinute
         self.allowedOrigins = allowedOrigins
+        self.authTokens = AuthTokenBox(apiKey: apiKey, adminToken: adminToken)
+    }
+
+    /// iter-135 §161: swap the live credentials. Next incoming HTTP
+    /// request will authenticate against the new values — no server
+    /// restart needed. Used by `APIKeyManager.revoke` so the
+    /// iter-96 §123 "immediately lose access" promise becomes true.
+    public func applyAuthCredentials(apiKey: String?, adminToken: String?) {
+        authTokens.update(apiKey: apiKey, adminToken: adminToken)
     }
 
     /// Translate the user's `corsOrigins` list into Hummingbird's
@@ -104,10 +118,14 @@ public struct Server {
             ],
             allowMethods: [.get, .post, .put, .delete, .options, .head]
         ))
-        // Bearer auth (no-op if apiKey == nil)
-        router.add(middleware: BearerAuthMiddleware(apiKey: apiKey))
-        // Admin-token auth for /admin/* and /v1/cache/* (no-op if nil).
-        router.add(middleware: AdminAuthMiddleware(adminToken: adminToken))
+        // iter-135 §161: hand the middleware the shared AuthTokenBox
+        // instead of a literal so credential swaps propagate to the
+        // running server. Before §161 the literal was captured at init
+        // and stale until the next server restart, making the
+        // iter-96 §123 revoke-dialog "immediately lose access" promise
+        // a lie.
+        router.add(middleware: BearerAuthMiddleware(tokens: authTokens))
+        router.add(middleware: AdminAuthMiddleware(tokens: authTokens))
         // Per-IP rate limit (no-op if rateLimitPerMinute == 0).
         if rateLimitPerMinute > 0 {
             router.add(middleware: RateLimitMiddleware(

@@ -1,6 +1,46 @@
 import Foundation
 import HTTPTypes
 import Hummingbird
+import os
+
+/// iter-135 §161: thread-safe container for the live API key + admin
+/// token. `BearerAuthMiddleware` / `AdminAuthMiddleware` hold a
+/// reference and read on every request, so the HTTP server can
+/// swap credentials while running (revoke the active API key, or
+/// pick up a global-settings change) without tearing down and
+/// restarting the listener.
+///
+/// Before §161, the middleware captured `apiKey: String?` at init.
+/// `APIKeyManager.revoke` + `applySettings` updated SQLite but the
+/// running middleware kept using the old value — the iter-96 §123
+/// revoke-dialog promise ("any client using this key will
+/// immediately lose access") was a lie until the next server
+/// restart. AuthTokenBox fixes that by turning the token fields
+/// into a reference the middleware can re-read per request.
+public final class AuthTokenBox: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock()
+    private var _apiKey: String?
+    private var _adminToken: String?
+
+    public init(apiKey: String? = nil, adminToken: String? = nil) {
+        self._apiKey = apiKey
+        self._adminToken = adminToken
+    }
+
+    public var apiKey: String? { lock.withLock { _apiKey } }
+    public var adminToken: String? { lock.withLock { _adminToken } }
+
+    /// Atomically swap the stored credentials. Next incoming request
+    /// will read these values. In-flight requests already past the
+    /// middleware gate are not affected (acceptable — the outgoing
+    /// response goes out on the same socket they entered on).
+    public func update(apiKey: String?, adminToken: String?) {
+        lock.withLock {
+            self._apiKey = apiKey
+            self._adminToken = adminToken
+        }
+    }
+}
 
 /// Bearer-token authentication middleware.
 ///
@@ -28,9 +68,25 @@ import Hummingbird
 /// safe. Matches the standard "health endpoints are public"
 /// convention used by FastAPI, nginx, Kubernetes, etc.
 public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
-    let apiKey: String?
+    // iter-135 §161: optional box OR literal — box wins when both set.
+    // The literal init preserves back-compat with call-sites that haven't
+    // migrated; the box init lets callers swap credentials live.
+    let literal: String?
+    let tokens: AuthTokenBox?
 
-    public init(apiKey: String?) { self.apiKey = apiKey }
+    public init(apiKey: String?) {
+        self.literal = apiKey
+        self.tokens = nil
+    }
+
+    public init(tokens: AuthTokenBox) {
+        self.literal = nil
+        self.tokens = tokens
+    }
+
+    /// Effective key resolved per-request — reads from box when present,
+    /// literal when the back-compat init was used.
+    var apiKey: String? { tokens?.apiKey ?? literal }
 
     public func handle(
         _ request: Request,

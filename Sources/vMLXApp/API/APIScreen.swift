@@ -444,6 +444,19 @@ struct APIScreen: View {
             let remaining = APIKeyManager.shared.list()
             g.apiKey = remaining.first?.value
             await app.engine.applySettings(g)
+            // iter-135 §161: the iter-96 §123 revoke-dialog promises
+            // "any client using this key will immediately lose access",
+            // but before §161 the BearerAuthMiddleware captured its
+            // apiKey at Server init — writing to settings didn't
+            // actually update the live enforcement. Now push the new
+            // resolved value into every running HTTPServerActor's
+            // AuthTokenBox so the next incoming request authenticates
+            // against the new value. Stopped sessions silently no-op.
+            let adminFallback = g.adminToken
+            for (_, srv) in app.httpServers {
+                await srv.applyAuthCredentials(apiKey: g.apiKey,
+                                               adminToken: adminFallback)
+            }
         }
     }
 
