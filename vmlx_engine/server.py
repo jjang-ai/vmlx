@@ -2877,15 +2877,27 @@ async def cancel_completion(request_id: str):
 
 @app.get("/v1/models", dependencies=[Depends(verify_api_key)])
 async def list_models() -> ModelsResponse:
-    """List available models."""
+    """List available models — chat + embedding if both loaded."""
     models = []
+    seen: set[str] = set()
     resolved = _resolve_model_name()
     if resolved and resolved != "default":
         models.append(ModelInfo(id=resolved))
+        seen.add(resolved)
         # If served_model_name differs from actual, also list the actual name
         # so clients using either name can find the model
         if _served_model_name and _model_name and _served_model_name != _model_name:
-            models.append(ModelInfo(id=_model_name))
+            if _model_name not in seen:
+                models.append(ModelInfo(id=_model_name))
+                seen.add(_model_name)
+    # Advertise the loaded embedding model so clients probing /v1/models
+    # can discover it for /v1/embeddings without having to know the
+    # full path. Previously only the chat model appeared → embedding
+    # clients had to guess the model name.
+    if _embedding_engine is not None and _embedding_model_locked:
+        if _embedding_model_locked not in seen:
+            models.append(ModelInfo(id=_embedding_model_locked))
+            seen.add(_embedding_model_locked)
     return ModelsResponse(data=models)
 
 
@@ -3455,22 +3467,35 @@ async def create_rerank(request: Request):
 
 @app.get("/api/tags", dependencies=[Depends(verify_api_key)])
 async def ollama_tags():
-    """Ollama-compatible model list."""
+    """Ollama-compatible model list — advertises chat model + loaded
+    embedding model so Ollama clients can discover both."""
     from .api.ollama_adapter import build_tags_response
 
     name = _resolve_model_name()
-    return build_tags_response(name, _model_name or name)
+    extras: list[str] = []
+    if _embedding_engine is not None and _embedding_model_locked:
+        extras.append(_embedding_model_locked)
+    return build_tags_response(name, _model_name or name, extra_models=extras)
 
 
 @app.get("/api/ps", dependencies=[Depends(verify_api_key)])
 async def ollama_ps():
-    """Ollama-compatible running model list."""
+    """Ollama-compatible running model list. Advertises chat + embedding
+    models (both are 'running' in the sense that they're loaded in RAM)."""
     name = _resolve_model_name()
-    return {
-        "models": [
-            {"name": name, "model": _model_name or name, "size": 0, "digest": ""}
-        ]
-    }
+    entries = [
+        {"name": name, "model": _model_name or name, "size": 0, "digest": ""}
+    ]
+    seen = {name, _model_name or name}
+    if _embedding_engine is not None and _embedding_model_locked:
+        if _embedding_model_locked not in seen:
+            entries.append({
+                "name": _embedding_model_locked,
+                "model": _embedding_model_locked,
+                "size": 0,
+                "digest": "",
+            })
+    return {"models": entries}
 
 
 @app.get("/api/version", dependencies=[Depends(verify_api_key)])

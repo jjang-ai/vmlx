@@ -5656,3 +5656,191 @@ class TestRerankRequestErrorHandling:
         )
         assert "Model not found" in body
         assert "status_code=400" in body
+
+
+class TestVLAndToolUseCombined:
+    """VL + tool_choice=required path — verified live against Qwen3.5-VL-4B
+    in iter 1. Pin the internal contract: when a request has BOTH
+    images AND a tools list, the tool parser runs on the output AND
+    the VL pipeline decodes the image. Neither path short-circuits
+    the other.
+    """
+
+    def test_tool_parsing_not_suppressed_when_images_present(self):
+        """response_format json_* suppresses tool parser (commit 3f1ddf20)
+        but that suppression must NOT fire for requests with images and
+        tools. Check the guard is narrow — `not request.tools` is part
+        of the condition, so tools-present always lets the parser run."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Both non-stream + stream sites must guard on `not request.tools`
+        assert src.count("if not request.tools and not _suppress_tools:") >= 2, (
+            "JSON-mode tool-suppression must only fire when request.tools is None — "
+            "otherwise VL + tool_choice=required would lose tool parsing"
+        )
+
+    def test_multimodal_and_tools_both_wire_through(self):
+        """Content parts (image_url/video_url) + tools list both reach
+        the engine in the same ChatCompletionRequest."""
+        from vmlx_engine.api.models import ChatCompletionRequest, Message, ContentPart
+        # Construct a realistic VL+tools request object
+        msgs = [
+            Message(role="user", content=[
+                {"type": "text", "text": "Describe and call tool."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+            ])
+        ]
+        tools = [{
+            "type": "function",
+            "function": {
+                "name": "f",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        }]
+        req = ChatCompletionRequest(
+            model="vl",
+            messages=msgs,
+            tools=tools,
+            tool_choice="required",
+            max_tokens=50
+        )
+        assert req.tools and len(req.tools) == 1
+        assert req.tool_choice == "required"
+        # Message content must survive as a list of parts (not flattened to string)
+        assert isinstance(req.messages[0].content, list)
+
+    def test_tool_choice_required_not_auto_muted_by_image(self):
+        """No code path may silently downgrade tool_choice='required'
+        to 'auto' just because an image is in the request."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Search for any branch that reassigns tool_choice when image present
+        import re
+        matches = re.findall(
+            r'image.*tool_choice\s*=\s*["\']auto["\']|'
+            r'vl.*tool_choice\s*=\s*["\']auto["\']',
+            src, re.IGNORECASE
+        )
+        assert not matches, (
+            f"found branch that mutes tool_choice=required with VL: {matches}"
+        )
+
+    def test_anthropic_tools_on_vl_messages(self):
+        """Anthropic path same check — `tools` + content-list image
+        blocks must co-exist."""
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(
+            model="vl", max_tokens=50,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}
+            ]}],
+            tools=[{"name": "f", "description": "d", "input_schema": {"type": "object", "properties": {}}}],
+            tool_choice={"type": "any"}
+        )
+        cc = to_chat_completion(req)
+        assert cc.tools and len(cc.tools) == 1
+        # "any" maps to "required" in OpenAI schema
+        assert cc.tool_choice == "required"
+        # Image converts to image_url content part (not dropped).
+        # ContentPart is a pydantic model — use getattr not dict.get.
+        user_msg = cc.messages[0]
+        assert isinstance(user_msg.content, list), f"VL Anthropic → OAI image_url: {user_msg.content!r}"
+        has_image = any(
+            getattr(p, "type", None) == "image_url"
+            for p in user_msg.content
+        )
+        assert has_image, (
+            f"Anthropic image block must become OpenAI image_url; parts: "
+            f"{[getattr(p, 'type', None) for p in user_msg.content]}"
+        )
+
+
+class TestOllamaCRUDStubsNoOpContract:
+    """Ollama /api/pull, /api/delete, /api/copy, /api/create are
+    deliberate no-op stubs that return {"status": "success"} with 200.
+    Rationale: Ollama clients like Open WebUI chain `pull → chat` — if
+    these returned 501 Not Implemented, the chat step would never
+    fire. vMLX's actual model download/delete lives elsewhere (panel
+    IPC for UI users, manual HF CLI for server-only users).
+
+    This class pins the silent-success contract to catch regressions
+    like "someone changed /api/pull to 501 because the TODO caught
+    their eye".
+    """
+
+    def test_stubs_return_200_status_success(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # Each stub must exist and return {"status": "success"}
+        for endpoint in ["/api/pull", "/api/delete", "/api/copy", "/api/create"]:
+            # Find the decorator
+            idx = src.find(f'"{endpoint}"')
+            assert idx > 0, f"{endpoint} handler missing"
+            # Find the handler body start
+            handler_idx = src.find("async def ", idx)
+            assert handler_idx > 0
+            next_fn = src.find("\n\n", handler_idx + 10)
+            body = src[handler_idx:next_fn if next_fn > 0 else handler_idx + 400]
+            assert '{"status": "success"}' in body, (
+                f"{endpoint} must return silent success for Ollama-client "
+                f"compatibility (Open WebUI pull→chat chain)"
+            )
+
+    def test_stubs_behind_auth(self):
+        """Even no-ops must respect --api-key — otherwise an unauth'd
+        /api/pull would be a way to probe if auth is enabled."""
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        for endpoint in ["/api/pull", "/api/delete", "/api/copy", "/api/create"]:
+            idx = src.find(f'"{endpoint}"')
+            # Next 200 chars should include verify_api_key dep
+            assert "Depends(verify_api_key)" in src[idx:idx + 300], (
+                f"{endpoint} must be auth-gated"
+            )
+
+
+class TestRateLimit429WithRetryAfter:
+    """When rate-limit triggers a 429 response, the Retry-After header
+    must be populated with a meaningful second-count so well-behaved
+    clients (and automated retry libraries) back off the correct
+    amount instead of hammering immediately.
+
+    Live-verified 2026-04-20 with --rate-limit 3: requests 1-3 return
+    200, requests 4-6 return 429 with Retry-After=60.
+    """
+
+    def test_source_emits_retry_after(self):
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        # check_rate_limit dep must set Retry-After header. Slice wider
+        # so the HTTPException-raising block is included.
+        idx = src.find("async def check_rate_limit")
+        assert idx > 0
+        next_fn = src.find("\nasync def ", idx + 10)
+        if next_fn < 0:
+            next_fn = src.find("\ndef ", idx + 10)
+        body = src[idx:next_fn if next_fn > 0 else idx + 2500]
+        assert 'headers={"Retry-After"' in body, (
+            "rate-limit 429 must include Retry-After header for client backoff"
+        )
+        assert "status_code=429" in body
+
+    def test_retry_after_value_is_not_zero(self):
+        """Retry-After=0 would be useless — clients retry immediately.
+        Must be the rate-limiter's next-available window (>= 1s)."""
+        # Pin that the retry_after variable comes from the limiter, not hardcoded 0
+        src = Path(
+            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+        ).read_text()
+        assert 'retry_after = _rate_limiter.is_allowed(client_id)' in src or \
+               'allowed, retry_after = _rate_limiter.is_allowed(client_id)' in src, (
+            "Retry-After must come from the rate-limiter's is_allowed() "
+            "return value, not a hardcoded 0"
+        )

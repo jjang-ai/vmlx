@@ -339,12 +339,34 @@ def openai_completion_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str |
     return json.dumps(result) + "\n"
 
 
-def build_tags_response(model_name: str, model_path: str) -> dict:
-    """Build Ollama /api/tags response."""
-    return {
-        "models": [{
-            "name": model_name,
-            "model": model_path,
+def build_tags_response(model_name: str, model_path: str, extra_models: list[str] | None = None) -> dict:
+    """Build Ollama /api/tags response.
+
+    extra_models: optional additional model IDs to advertise (e.g. the
+    loaded embedding model). Clients probing /api/tags can discover
+    auxiliary models without having to know full paths.
+    """
+    entries = [{
+        "name": model_name,
+        "model": model_path,
+        "modified_at": _now_iso(),
+        "size": 0,
+        "digest": "",
+        "details": {
+            "format": "mlx",
+            "family": "",
+            "parameter_size": "",
+            "quantization_level": "",
+        },
+    }]
+    seen = {model_name, model_path}
+    for extra in extra_models or []:
+        if not extra or extra in seen:
+            continue
+        seen.add(extra)
+        entries.append({
+            "name": extra,
+            "model": extra,
             "modified_at": _now_iso(),
             "size": 0,
             "digest": "",
@@ -354,5 +376,5 @@ def build_tags_response(model_name: str, model_path: str) -> dict:
                 "parameter_size": "",
                 "quantization_level": "",
             },
-        }]
-    }
+        })
+    return {"models": entries}
