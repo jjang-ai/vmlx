@@ -568,6 +568,8 @@ let package = Package(
                 "BenchmarkSummaryTests.swift",
                 "CacheStatsTests.swift",
                 "DownloadManagerTests.swift",
+                "DownloadSidecarTests.swift",
+                "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",
                 "MetricsAccuracyTests.swift",
