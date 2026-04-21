@@ -1063,11 +1063,24 @@ extension Engine {
                     // guard: only drop when the last message actually
                     // matches (user-supplied prior-turn assistant messages
                     // must stay intact for multi-turn cache keys).
-                    let stubContent = "<think>\n</think>\n\n"
+                    //
+                    // iter-ralph §233 (M4): Nemotron-H / Nemotron-Cascade
+                    // stamp the stub as `<think></think>` (no inner
+                    // newlines) per their chat_template — different from
+                    // Qwen3.5's `<think>\n\n</think>\n\n`. Without the
+                    // Nemotron variant, multi-turn reasoning-off on
+                    // Nemotron missed the prefix cache (§226 B harness
+                    // live-confirmed). Recognize both shapes. Any future
+                    // family that adds another variant goes here.
+                    let stubContents: Set<String> = [
+                        "<think>\n</think>\n\n",  // Qwen3.5 family
+                        "<think></think>",        // Nemotron-H / Cascade
+                    ]
                     var rawMsgsClosed = rawMsgsFull
                     if let last = rawMsgsClosed.last,
                        (last["role"] as? String) == "assistant",
-                       (last["content"] as? String) == stubContent
+                       let lastContent = last["content"] as? String,
+                       stubContents.contains(lastContent)
                     {
                         rawMsgsClosed.removeLast()
                     }
