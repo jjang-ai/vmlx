@@ -2830,8 +2830,28 @@ public actor Engine {
 
     // MARK: - Benchmark suite implementations
 
-    private func currentBenchModelId() -> String {
-        loadedModelPath?.lastPathComponent ?? "unknown"
+    private func currentBenchModelId() async -> String {
+        // iter-129 §204: `lastPathComponent` returned the HuggingFace
+        // cache snapshot hash (`snapshots/<40-hex>/`) for any model
+        // loaded from the HF cache — benchmark reports reading hash
+        // vs. `org/repo` slug are useless for cross-run comparison.
+        // Same bug-shape as iter-70 §115 that fixed /api/ps; dedupe
+        // by resolving the loaded path against ModelLibrary and
+        // taking `displayName` when matched. Falls back to
+        // `lastPathComponent` when the path isn't in the library
+        // (fresh model loaded from CLI outside scan roots). Made
+        // async so the ModelLibrary actor `.entries()` call crosses
+        // the actor boundary safely — all eight callers are
+        // already in async context.
+        guard let path = loadedModelPath else { return "unknown" }
+        let canonical = path.resolvingSymlinksInPath().standardizedFileURL
+        let entries = await modelLibrary.entries()
+        if let match = entries.first(where: {
+            $0.canonicalPath.standardizedFileURL == canonical
+        }) {
+            return match.displayName
+        }
+        return path.lastPathComponent
     }
 
     /// Decode-speed benchmark. 10 warmup tokens (not timed) followed by a
@@ -2847,7 +2867,7 @@ public actor Engine {
 
         // Warmup — 10 tokens, discard timing.
         let warmup = ChatRequest(
-            model: currentBenchModelId(),
+            model: await currentBenchModelId(),
             messages: [.init(role: "user", content: .string(prompt))],
             stream: true,
             maxTokens: 10,
@@ -2859,7 +2879,7 @@ public actor Engine {
 
         // Real run — `maxTokens` decoded tokens, timed.
         let req = ChatRequest(
-            model: currentBenchModelId(),
+            model: await currentBenchModelId(),
             messages: [.init(role: "user", content: .string(prompt))],
             stream: true,
             maxTokens: maxTokens,
@@ -2908,7 +2928,7 @@ public actor Engine {
 
         return BenchReport(
             suite: suite,
-            modelId: currentBenchModelId(),
+            modelId: await currentBenchModelId(),
             tokensPerSec: tps,
             ttftMs: ttftMs,
             totalMs: totalSec * 1000,
@@ -2936,7 +2956,7 @@ public actor Engine {
         let sentence = "The quick brown fox jumps. "
         let prompt = String(repeating: sentence, count: 200)
         let req = ChatRequest(
-            model: currentBenchModelId(),
+            model: await currentBenchModelId(),
             messages: [.init(role: "user", content: .string(prompt))],
             stream: true,
             maxTokens: 8,
@@ -2975,7 +2995,7 @@ public actor Engine {
 
         return BenchReport(
             suite: suite,
-            modelId: currentBenchModelId(),
+            modelId: await currentBenchModelId(),
             tokensPerSec: prefillTps,
             ttftMs: ttftSec * 1000,
             totalMs: totalSec * 1000,
@@ -3019,7 +3039,7 @@ public actor Engine {
                 content: .string("Turn \(i + 1): repeat the word 'ack' exactly once.")
             ))
             let req = ChatRequest(
-                model: currentBenchModelId(),
+                model: await currentBenchModelId(),
                 messages: messages,
                 stream: true,
                 maxTokens: 16,
@@ -3052,7 +3072,7 @@ public actor Engine {
         let peakGB = currentPeakMLXMemoryGB()
         return BenchReport(
             suite: suite,
-            modelId: currentBenchModelId(),
+            modelId: await currentBenchModelId(),
             tokensPerSec: tps,
             ttftMs: ttftMs,
             totalMs: totalSec * 1000,
