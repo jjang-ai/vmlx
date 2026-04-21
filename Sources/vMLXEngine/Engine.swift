@@ -1894,6 +1894,15 @@ public actor Engine {
     /// request/response plumbing is now real so the day the DiT
     /// ports go in, the route works end-to-end with no further wiring.
     public func generateImage(request: [String: Any]) async throws -> [String: Any] {
+        // iter-133 §208: image generation can take 5-30s per sample on
+        // Flux/Z-Image — dashboards scraping for image-latency SLOs
+        // had no timing field at all. OpenAI's images API doesn't
+        // define a usage/timing field natively, but LangChain,
+        // LlamaIndex, and custom ops tooling all probe extension
+        // fields. Adding `timing.total_ms` + `timing.per_image_ms`
+        // (total / n) as extension keys on the response envelope.
+        // Clients that don't care ignore extras.
+        let requestStart = Date()
         guard let prompt = request["prompt"] as? String, !prompt.isEmpty else {
             throw EngineError.invalidRequest("generateImage: missing 'prompt' field")
         }
@@ -1968,9 +1977,15 @@ public actor Engine {
             entries.append(entry)
         }
         let created = Int(Date().timeIntervalSince1970)
+        let totalMs = Date().timeIntervalSince(requestStart) * 1000
+        var timing: [String: Any] = ["total_ms": totalMs]
+        if n > 0 {
+            timing["per_image_ms"] = totalMs / Double(n)
+        }
         return [
             "created": created,
             "data": entries,
+            "timing": timing,
         ]
     }
 
