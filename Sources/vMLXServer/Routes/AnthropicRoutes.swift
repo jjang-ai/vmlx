@@ -364,12 +364,42 @@ public enum AnthropicRoutes {
     /// Minimal Anthropic → ChatRequest. Full translation: server.py:2664 create_anthropic_message.
     static func anthropicToChatRequest(_ body: [String: Any]) -> ChatRequest {
         var messages: [ChatRequest.Message] = []
+        // iter-106 §184: Anthropic's Messages API accepts `system`
+        // in two shapes. (1) A bare string — the common case for
+        // hand-rolled curl + most SDK quickstarts. (2) An array of
+        // `{type: "text", text: "...", cache_control?}` blocks —
+        // this is the shape Anthropic's Python + TypeScript SDKs
+        // emit when prompt caching is enabled, and we were silently
+        // dropping it (the old `as? String` cast returned nil on
+        // arrays, no fallback, the system prompt evaporated).
+        // Accept both shapes; for the array form, concatenate text
+        // blocks in order and drop cache_control markers (vMLX's
+        // own prefix cache keys on prompt text, not Anthropic's
+        // cache_control contract, so the markers have nothing to
+        // bind to on our side).
         if let system = body["system"] as? String {
             messages.append(ChatRequest.Message(
                 role: "system",
                 content: .string(system),
                 name: nil, toolCalls: nil, toolCallId: nil
             ))
+        } else if let systemBlocks = body["system"] as? [[String: Any]] {
+            var flat = ""
+            for block in systemBlocks {
+                let type = (block["type"] as? String) ?? "text"
+                guard type == "text" else { continue }
+                if let text = block["text"] as? String, !text.isEmpty {
+                    if !flat.isEmpty { flat += "\n" }
+                    flat += text
+                }
+            }
+            if !flat.isEmpty {
+                messages.append(ChatRequest.Message(
+                    role: "system",
+                    content: .string(flat),
+                    name: nil, toolCalls: nil, toolCallId: nil
+                ))
+            }
         }
         if let raw = body["messages"] as? [[String: Any]] {
             for m in raw {
