@@ -382,7 +382,13 @@ public enum OllamaRoutes {
             }
             messages.append(.init(role: "user", content: .string(prompt)))
 
-            let chatReq = ChatRequest(
+            // iter-110 §188: parity warning with /api/chat. Previously
+            // /api/generate had NO unknown-option detection — users
+            // setting mirostat / num_ctx / repeat_last_n / tfs_z /
+            // typical_p got silent no-op. Route through the shared
+            // helper so both Ollama-shape routes emit identical logs.
+            Self.warnUnsupportedOllamaOptions(options, route: "/api/generate")
+            var chatReq = ChatRequest(
                 model: model,
                 messages: messages,
                 stream: isStream,
@@ -396,6 +402,13 @@ public enum OllamaRoutes {
                 seed: options["seed"] as? Int,
                 enableThinking: obj["think"] as? Bool
             )
+            // iter-110 §188: match /api/chat's post-init freq/presence
+            // assignment. Ollama's options panel in Open WebUI exposes
+            // both fields and the engine-side sampler wiring from
+            // iter-95 §173 honors them — but /api/generate was
+            // silently dropping both.
+            chatReq.frequencyPenalty = options["frequency_penalty"] as? Double
+            chatReq.presencePenalty = options["presence_penalty"] as? Double
             // 2026-04-18 validate parity — see /api/chat above.
             do {
                 try chatReq.validate()
@@ -706,27 +719,8 @@ public enum OllamaRoutes {
         }
 
         let opts = (body["options"] as? [String: Any]) ?? [:]
-        // P1-API-4: surface unknown Ollama options. Mirostat / num_ctx /
-        // repeat_last_n etc are accepted by the wire but vMLX has no
-        // direct mapping yet. Log them so the user knows they were
-        // received but ignored — beats silent drop.
-        let knownOptionKeys: Set<String> = [
-            "num_predict", "temperature", "top_p", "top_k", "min_p",
-            "repeat_penalty", "stop", "seed",
-        ]
-        // Iter-26: gate the unsupported-options warning on the same
-        // VL debug flag pattern. Ollama clients that send typo'd
-        // options (common in ops scripts) would blast stderr on every
-        // request. Warning still lands via `VMLX_OLLAMA_DEBUG=1`.
-        let unknownKeys = opts.keys.filter { !knownOptionKeys.contains($0) }
-        if !unknownKeys.isEmpty,
-           ProcessInfo.processInfo.environment["VMLX_OLLAMA_DEBUG"] == "1"
-        {
-            let names = unknownKeys.sorted().joined(separator: ", ")
-            FileHandle.standardError.write(Data(
-                "[ollama] /api/chat: ignored unsupported options: \(names)\n".utf8))
-        }
-        let req = ChatRequest(
+        warnUnsupportedOllamaOptions(opts, route: "/api/chat")
+        var req = ChatRequest(
             model: (body["model"] as? String) ?? "default",
             messages: messages,
             stream: body["stream"] as? Bool,
@@ -743,7 +737,47 @@ public enum OllamaRoutes {
             tools: tools,
             toolChoice: nil
         )
+        // iter-110 §188: Ollama options{} also carries OpenAI-style
+        // frequency_penalty + presence_penalty on some clients (Open
+        // WebUI options panel, Copilot). ChatRequest has these fields
+        // since iter-95 §173 and the sampler honors them — previously
+        // the Ollama translator wasn't forwarding them, so sliders
+        // users set in Open WebUI silently did nothing. Post-init
+        // assignment mirrors the /v1/completions + /v1/responses
+        // wiring from iter-97 + iter-98.
+        req.frequencyPenalty = opts["frequency_penalty"] as? Double
+        req.presencePenalty = opts["presence_penalty"] as? Double
         return req
+    }
+
+    /// iter-110 §188: shared warn helper for unsupported Ollama
+    /// options — used by both /api/chat (via `ollamaToChatRequest`)
+    /// and /api/generate (inline opts-to-ChatRequest mapping).
+    ///
+    /// Previously the warning logic was inlined inside
+    /// `ollamaToChatRequest` AND gated on `VMLX_OLLAMA_DEBUG=1` so
+    /// under default operation users setting num_ctx / mirostat /
+    /// repeat_last_n / tfs_z / typical_p had NO indication those
+    /// options were silently dropped. /api/generate had no warning
+    /// logic at all — strictly worse. Hard rule #1 of the
+    /// production-readiness loop: never silent no-op. Unify both
+    /// routes around this single helper, emit unconditionally to
+    /// stderr so the warning is visible in the server log.
+    static func warnUnsupportedOllamaOptions(
+        _ opts: [String: Any],
+        route: String
+    ) {
+        let knownOptionKeys: Set<String> = [
+            // Directly wired through to ChatRequest / GenerateParameters.
+            "num_predict", "temperature", "top_p", "top_k", "min_p",
+            "repeat_penalty", "stop", "seed",
+            "frequency_penalty", "presence_penalty",
+        ]
+        let unknownKeys = opts.keys.filter { !knownOptionKeys.contains($0) }
+        guard !unknownKeys.isEmpty else { return }
+        let names = unknownKeys.sorted().joined(separator: ", ")
+        FileHandle.standardError.write(Data(
+            "[ollama] \(route): ignored unsupported options: \(names) (not yet wired — mirostat / num_ctx / repeat_last_n / tfs_z / typical_p etc have no vMLX-side mapping)\n".utf8))
     }
 }
 
