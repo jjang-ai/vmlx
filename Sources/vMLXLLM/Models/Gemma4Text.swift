@@ -340,6 +340,23 @@ class Gemma4MLP: Module {
         super.init()
     }
 
+    // FIXME(iter-145 §215): dense Gemma-4-31B decode is ~10× slower
+    // than expected (live-measured 11 tok/s vs reference ~70-100 tok/s
+    // on identical M4 Max). Root cause per MEMORY.md "stale files in
+    // hot path" note: this file is a stale port vs reference
+    // vmlx-swift-lm — which ships fused gate+up (one matmul instead
+    // of two) + FP32 SDPA upcast + optimized safeGeluApproximate.
+    // Porting plan:
+    //   1. Wire fused-gate-up via `SwitchLayers.swift` (reference has
+    //      it) so decode sees N/2 kernel launches instead of N.
+    //   2. Verify FP32 SDPA upcast matches reference Gemma4.swift VLM.
+    //   3. Bench on Gemma-4-31B-JANG_4M: target ≥30 tok/s (theoretical
+    //      bandwidth cap for 15.5 GB/step). Current 11 tok/s has
+    //      3× headroom vs cap — the fused projection should close
+    //      most of that.
+    // Deferred from this iter — requires careful diff-and-verify
+    // against reference + targeted bench. Tracks task #23 (vmlx#83
+    // perf regression vs LM Studio).
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let g = safeGeluApproximate(gateProj(x))
         let u = upProj(x)
