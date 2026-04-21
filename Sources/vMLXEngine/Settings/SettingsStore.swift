@@ -388,6 +388,17 @@ public actor SettingsStore {
         if let v = s?.mcpConfigPath { out.mcpConfigPath = v; trace["mcpConfigPath"] = .session } else { trace["mcpConfigPath"] = .global }
         if let v = s?.mcpServers { out.mcpServers = v; trace["mcpServers"] = .session } else { trace["mcpServers"] = .global }
 
+        // iter-ralph §229 (H4): propagate ChatSettings.mcpEnabled into
+        // the resolved bundle so Stream can gate MCP tool merge per
+        // chat. Chat tier wins over session+global (mirrors
+        // enableThinking semantics).
+        if let v = c?.mcpEnabled {
+            out.mcpEnabledResolved = v
+            trace["mcpEnabledResolved"] = .chat
+        } else {
+            trace["mcpEnabledResolved"] = .global
+        }
+
         // Audit 2026-04-16 UX #3: synchronize `enableTurboQuant` and
         // `kvCacheQuantization`. The SessionConfigForm picker writes
         // `kvCacheQuantization` ("none"/"q4"/"q8"/"turboquant") while
