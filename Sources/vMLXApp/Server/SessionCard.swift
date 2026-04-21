@@ -20,6 +20,18 @@ struct SessionCard: View {
     @State private var loadingElapsed: Int = 0
     @State private var tickerTask: Task<Void, Never>? = nil
 
+    /// iter-ralph §236 (H7): remote-session reachability state.
+    /// Green = probe succeeded in last `reachabilityTTL` seconds.
+    /// Amber = probe pending OR last success > TTL/3 ago.
+    /// Red   = last probe failed (network, 5xx, timeout).
+    /// Gray  = never probed yet (initial state).
+    @State private var remoteReachable: RemoteReachability = .unknown
+    @State private var reachTask: Task<Void, Never>? = nil
+
+    enum RemoteReachability {
+        case unknown, probing, green, amber, red
+    }
+
     var body: some View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
@@ -59,8 +71,12 @@ struct SessionCard: View {
         }
         .onAppear {
             if case .loading = session.state { startTicker() }
+            startRemoteProbe()
         }
-        .onDisappear { stopTicker() }
+        .onDisappear {
+            stopTicker()
+            stopRemoteProbe()
+        }
         .onChange(of: session.state) { _, newState in
             if case .loading = newState { startTicker() } else { stopTicker() }
         }
@@ -117,8 +133,21 @@ struct SessionCard: View {
         // The local Engine stays `.stopped` forever (never loaded), so
         // rendering its state as the pill color would surface "Stopped"
         // on a session that's actually configured and ready to chat
-        // against an external endpoint. Override to a "connected" shade.
-        if session.isRemote { return Theme.Colors.accent }
+        // against an external endpoint.
+        //
+        // iter-ralph §236 (H7): remote pill now reflects the last
+        // /health probe outcome — green (reachable), amber (probing or
+        // stale), red (unreachable), gray (not yet probed). Before §236
+        // every remote card got the same flat accent color regardless
+        // of whether the endpoint was dead.
+        if session.isRemote {
+            switch remoteReachable {
+            case .green:   return Theme.Colors.success
+            case .amber, .probing: return Theme.Colors.warning
+            case .red:     return Theme.Colors.danger
+            case .unknown: return Theme.Colors.textLow
+            }
+        }
         switch session.state {
         case .stopped: return Theme.Colors.textLow
         case .loading: return Theme.Colors.accent
@@ -132,7 +161,16 @@ struct SessionCard: View {
         // iter-128 §154: see dotColor — remote sessions get their own
         // label so the card reflects the actual semantics instead of
         // mirroring the (always-stopped) local engine state.
-        if session.isRemote { return "Remote" }
+        // iter-ralph §236: append the probe status for clarity.
+        if session.isRemote {
+            switch remoteReachable {
+            case .green:   return "Remote · Online"
+            case .amber:   return "Remote · Stale"
+            case .probing: return "Remote · Probing"
+            case .red:     return "Remote · Unreachable"
+            case .unknown: return "Remote"
+            }
+        }
         switch session.state {
         case .stopped:        return "Stopped"
         case .loading:        return "Loading \(formatElapsed(loadingElapsed))"
@@ -140,6 +178,63 @@ struct SessionCard: View {
         case .standby(.soft): return "Light Sleep"
         case .standby(.deep): return "Deep Sleep"
         case .error:          return "Error"
+        }
+    }
+
+    /// iter-ralph §236 (H7): probe the remote endpoint's /health and
+    /// translate to a pill color. Runs on appear, then every 30s while
+    /// the card is visible. Probes are cancelled when the card leaves
+    /// the view tree (onDisappear → reachTask.cancel()).
+    private func startRemoteProbe() {
+        guard session.isRemote else { return }
+        reachTask?.cancel()
+        reachTask = Task { @MainActor in
+            while !Task.isCancelled {
+                remoteReachable = .probing
+                let reachable = await probeRemoteHealth()
+                if Task.isCancelled { return }
+                remoteReachable = reachable ? .green : .red
+                // 30s interval. Amber isn't surfaced by the probe
+                // itself — the parent view could flip .green → .amber
+                // after TTL if we wanted staleness, but for now the
+                // 30s cadence keeps green fresh enough that .amber is
+                // reserved for the in-flight transitional state.
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+            }
+        }
+    }
+
+    private func stopRemoteProbe() {
+        reachTask?.cancel()
+        reachTask = nil
+    }
+
+    private func probeRemoteHealth() async -> Bool {
+        // Session carries `host` + `port`; remote endpoints use http://
+        // by default. Normalize to `<host>:<port>/health` over HTTP
+        // (HTTPS remotes need the user-configured URL via SessionSettings
+        // — out of scope for this probe, they'll surface .red from the
+        // plain-HTTP attempt which is a reasonable "broken" signal).
+        let hostTrim = session.host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hostTrim.isEmpty else { return false }
+        let scheme = hostTrim.hasPrefix("http://") || hostTrim.hasPrefix("https://")
+            ? "" : "http://"
+        let urlString = "\(scheme)\(hostTrim):\(session.port)/health"
+        guard let url = URL(string: urlString) else { return false }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 5
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            if let http = resp as? HTTPURLResponse {
+                // Any 2xx/3xx = reachable. 401/403/5xx surfaced as red
+                // so users see the dot isn't green when the endpoint is
+                // mis-configured or sick.
+                return (200..<400).contains(http.statusCode)
+            }
+            return false
+        } catch {
+            return false
         }
     }
 
