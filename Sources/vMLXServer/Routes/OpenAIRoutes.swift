@@ -997,12 +997,13 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.serviceUnavailable, "no model loaded")
             }
             let tokenizer = await container.tokenizer
-            var info: [String: Any] = [
+            let chatTemplate: Any = await engine.currentCapabilities()?.chatTemplate ?? NSNull()
+            let info: [String: Any] = [
                 "eos_token": tokenizer.eosToken as Any,
                 "bos_token": tokenizer.bosToken as Any,
                 "pad_token": tokenizer.unknownToken as Any,
+                "chat_template": chatTemplate,
             ]
-            info["chat_template"] = nil
             return Self.json(info)
         }
 
