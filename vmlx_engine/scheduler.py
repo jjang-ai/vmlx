@@ -2251,6 +2251,17 @@ class Scheduler:
                                     ssm_states = None
                                 else:
                                     ssm_states, _is_complete = _entry
+                                    if not _is_complete:
+                                        # Captured post-gpl-prefill — state reflects
+                                        # more tokens than the stored key. Reuse would
+                                        # double-apply gen-prompt tokens on re-feed and
+                                        # cause <think></think> loops. Reject.
+                                        logger.info(
+                                            f"SSM companion for {request.request_id}: "
+                                            f"is_complete=False (gpl-contaminated), "
+                                            f"rejecting hit — full prefill"
+                                        )
+                                        ssm_states = None
 
                                 # vmlx#91 RESUME: exact SSM miss, but a stored
                                 # checkpoint at a shorter position may still be
@@ -2278,7 +2289,16 @@ class Scheduler:
                                         except Exception:
                                             _missed_ck = None
                                     if _missed_ck is not None:
-                                        _ck_len, _ck_states, _ = _missed_ck
+                                        _ck_len, _ck_states, _ck_complete = _missed_ck
+                                        if not _ck_complete:
+                                            logger.info(
+                                                f"Request {request.request_id}: vmlx#91 RESUME "
+                                                f"skipped — checkpoint at {_ck_len} has "
+                                                f"is_complete=False (gpl-contaminated), full prefill"
+                                            )
+                                            _missed_ck = None
+                                            _ck_states = None
+                                    if _missed_ck is not None:
                                         _trimmed = self.block_aware_cache.trim_block_table(
                                             request.request_id, _ck_len
                                         )

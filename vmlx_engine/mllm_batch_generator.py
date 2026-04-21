@@ -1692,6 +1692,22 @@ class MLLMBatchGenerator:
                                         ssm_states = None
                                     else:
                                         ssm_states, _is_complete = _entry
+                                        # is_complete=False means the stored SSM state
+                                        # was captured AFTER processing the full prompt
+                                        # including the gen_prompt_len (<think>\n) suffix.
+                                        # The state represents more tokens than the key
+                                        # claims — re-using it while re-feeding the gpl
+                                        # suffix double-applies those tokens and causes
+                                        # <think></think> generation loops. Reject the
+                                        # hit and fall back to full prefill until we have
+                                        # a proper pre-gpl capture path.
+                                        if not _is_complete:
+                                            logger.info(
+                                                f"SSM companion for {req.request_id}: "
+                                                f"is_complete=False (gpl-contaminated), "
+                                                f"rejecting hit — full prefill"
+                                            )
+                                            ssm_states = None
                                     if ssm_states is None:
                                         # vmlx#91: exact SSM state miss — resume from the
                                         # longest stored checkpoint whose tokens are a strict
@@ -1715,7 +1731,19 @@ class MLLMBatchGenerator:
                                                 _missed_ck = None
 
                                         if _enable_resume and _missed_ck is not None:
-                                            _ck_len, _ck_states, _ = _missed_ck
+                                            _ck_len, _ck_states, _ck_complete = _missed_ck
+                                            if not _ck_complete:
+                                                # Checkpoint was captured post-gpl-prefill
+                                                # — state reflects more tokens than the
+                                                # stored key. Reject to avoid the same
+                                                # <think></think> loop seen on direct hits.
+                                                logger.info(
+                                                    f"vmlx#91 RESUME skipped for {req.request_id}: "
+                                                    f"checkpoint at {_ck_len} has is_complete=False "
+                                                    f"(gpl-contaminated) — full prefill"
+                                                )
+                                                self.block_aware_cache.release_cache(req.request_id)
+                                                continue
                                             # Trim the block_table down to block-aligned
                                             # <= _ck_len so KV + SSM stay aligned.
                                             trimmed = self.block_aware_cache.trim_block_table(
