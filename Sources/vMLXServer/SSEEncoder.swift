@@ -19,6 +19,84 @@ import vMLXLMCommon
 /// Fields with nil values are omitted (OpenAI `exclude_none=True`).
 public enum SSEEncoder {
 
+    // MARK: - Legacy Logprobs Formatting
+
+    /// Build the legacy logprobs dictionary for OpenAI's `/v1/completions` response.
+    ///
+    /// Converts a `[TokenLogprob]` array into the legacy format expected by
+    /// lm-evaluation-harness's `parse_logprobs()`:
+    /// ```
+    /// {
+    ///   "tokens":        [String],
+    ///   "token_logprobs": [Float | null],
+    ///   "top_logprobs":   [{String: Float} | null],
+    ///   "text_offset":    [Int]
+    /// }
+    /// ```
+    ///
+    /// **Position 0 handling:** When a token's logprob is NaN (position 0 — no
+    /// prior context), both `token_logprobs[0]` and `top_logprobs[0]` are set to
+    /// JSON `null` (VAL-LEG-002, VAL-LEG-004).
+    ///
+    /// **`top_logprobs: 0` handling:** When the request had `top_logprobs: 0`,
+    /// `TokenLogprob.topLogprobs` is empty. Non-null positions produce a dict
+    /// containing only the chosen token: `{token: logprob}` (VAL-LEG-006).
+    ///
+    /// **`text_offset`:** Cumulative UTF-8 byte offsets starting at `startOffset`.
+    /// The first token always starts at `startOffset` (typically 0). Multi-byte
+    /// characters are counted correctly via `String.utf8.count` (VAL-LEG-005).
+    ///
+    /// - Parameters:
+    ///   - logprobs: Array of `TokenLogprob` to convert.
+    ///   - startOffset: Cumulative UTF-8 byte offset to begin counting from (0 for
+    ///     non-streaming; running cursor for streaming chunks).
+    /// - Returns: Tuple of `(legacyDict, endOffset)` where `endOffset` is the byte
+    ///   offset after the last token — useful for chaining across streaming chunks.
+    public static func buildLegacyLogprobs(
+        _ logprobs: [TokenLogprob],
+        startOffset: Int = 0
+    ) -> (dict: [String: Any], endOffset: Int) {
+        var tokens: [String] = []
+        var tokenLogprobs: [Any] = []
+        var topLogprobs: [Any] = []
+        var textOffset: [Int] = []
+        var offset = startOffset
+
+        for lp in logprobs {
+            tokens.append(lp.token)
+            textOffset.append(offset)
+            offset += lp.token.utf8.count
+
+            let isNull = lp.logprob.isNaN
+
+            // Position 0 (NaN) → null; otherwise the float logprob.
+            tokenLogprobs.append(isNull ? NSNull() : lp.logprob)
+
+            // Position 0 (NaN) → null (not an empty dict). Per VAL-LEG-004,
+            // lm-eval expects `null` for the first position in `top_logprobs`.
+            if isNull {
+                topLogprobs.append(NSNull())
+            } else {
+                // Include the chosen token first, then alternatives.
+                // When top_logprobs: 0, the alternatives array is empty,
+                // producing a dict with only the chosen token (VAL-LEG-006).
+                var dict: [String: Any] = [:]
+                dict[lp.token] = lp.logprob
+                for alt in lp.topLogprobs {
+                    dict[alt.token] = alt.logprob
+                }
+                topLogprobs.append(dict)
+            }
+        }
+
+        return ([
+            "tokens": tokens,
+            "token_logprobs": tokenLogprobs,
+            "top_logprobs": topLogprobs,
+            "text_offset": textOffset,
+        ], offset)
+    }
+
     /// Build the ResponseBody that streams an OpenAI chat.completion.chunk SSE.
     public static func chatCompletionStream(
         id: String,
@@ -227,11 +305,7 @@ public enum SSEEncoder {
                 let j = Self.asciiJSON(obj)
                 try? await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
             }
-            // Legacy logprobs format — accumulate across chunks for text_offset.
-            var allTokens: [String] = []
-            var allTokenLogprobs: [Any] = []
-            var allTopLogprobs: [[String: Any]] = []
-            var allTextOffset: [Int] = []
+            // Legacy logprobs format — track cumulative text_offset across chunks.
             var textOffsetCursor = 0
             let merged = sseMergeWithHeartbeat(
                 upstream: upstream, interval: sseHeartbeatInterval)
@@ -248,40 +322,13 @@ public enum SSEEncoder {
                             deltaText = content
                         }
                         // Emit logprobs deltas when present, even if text is empty.
-                        // Format: legacy completions shape with tokens, token_logprobs,
-                        // top_logprobs, text_offset arrays (not chat-completions content array).
+                        // Uses the shared buildLegacyLogprobs() helper to produce
+                        // the legacy completions shape (tokens, token_logprobs,
+                        // top_logprobs, text_offset arrays).
                         if let lps = chunk.logprobs, !lps.isEmpty {
-                            var chunkTokens: [String] = []
-                            var chunkTokenLogprobs: [Any] = []
-                            var chunkTopLogprobs: [[String: Any]] = []
-                            var chunkTextOffset: [Int] = []
-                            for lp in lps {
-                                chunkTextOffset.append(textOffsetCursor)
-                                chunkTokens.append(lp.token)
-                                // NaN logprobs (position 0) → JSON null.
-                                chunkTokenLogprobs.append(
-                                    lp.logprob.isNaN ? NSNull() : lp.logprob)
-                                var dict: [String: Any] = [:]
-                                if !lp.logprob.isNaN {
-                                    dict[lp.token] = lp.logprob
-                                }
-                                for alt in lp.topLogprobs {
-                                    dict[alt.token] = alt.logprob
-                                }
-                                chunkTopLogprobs.append(dict)
-                                textOffsetCursor += lp.token.utf8.count
-                            }
-                            let logprobsDict: [String: Any] = [
-                                "tokens": chunkTokens,
-                                "token_logprobs": chunkTokenLogprobs,
-                                "top_logprobs": chunkTopLogprobs,
-                                "text_offset": chunkTextOffset,
-                            ]
-                            // Accumulate for final logprobs object if needed later.
-                            allTokens.append(contentsOf: chunkTokens)
-                            allTokenLogprobs.append(contentsOf: chunkTokenLogprobs)
-                            allTopLogprobs.append(contentsOf: chunkTopLogprobs)
-                            allTextOffset.append(contentsOf: chunkTextOffset)
+                            let (logprobsDict, newOffset) = Self.buildLegacyLogprobs(
+                                lps, startOffset: textOffsetCursor)
+                            textOffsetCursor = newOffset
                             let obj: [String: Any] = [
                                 "id": id,
                                 "object": "text_completion.chunk",

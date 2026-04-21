@@ -394,37 +394,11 @@ public enum OpenAIRoutes {
                 "finish_reason": finishReason ?? "stop",
             ]
             // Include logprobs in legacy completions format when collected.
-            // When echo/prompt_logprobs is set, the first batch of logprobs
-            // are prompt tokens (with position 0 having NaN → null).
+            // Uses the shared buildLegacyLogprobs() helper to produce the
+            // exact shape lm-eval's parse_logprobs() expects.
             if !allLogprobs.isEmpty {
-                let tokens = allLogprobs.map { $0.token }
-                // NaN logprobs (position 0) → JSON null.
-                let tokenLogprobs: [Any] = allLogprobs.map { lp in
-                    lp.logprob.isNaN ? NSNull() as Any : lp.logprob as Any
-                }
-                let topLogprobs: [[String: Any]] = allLogprobs.map { lp in
-                    var dict: [String: Any] = [:]
-                    // Include the chosen token first, then alternatives.
-                    if !lp.logprob.isNaN {
-                        dict[lp.token] = lp.logprob
-                    }
-                    for alt in lp.topLogprobs {
-                        dict[alt.token] = alt.logprob
-                    }
-                    return dict
-                }
-                var textOffset: [Int] = []
-                var offset = 0
-                for lp in allLogprobs {
-                    textOffset.append(offset)
-                    offset += lp.token.utf8.count
-                }
-                choice["logprobs"] = [
-                    "tokens": tokens,
-                    "token_logprobs": tokenLogprobs,
-                    "top_logprobs": topLogprobs,
-                    "text_offset": textOffset,
-                ] as [String: Any]
+                let (logprobsDict, _) = SSEEncoder.buildLegacyLogprobs(allLogprobs)
+                choice["logprobs"] = logprobsDict
             }
             var obj2: [String: Any] = [
                 "id": id,
