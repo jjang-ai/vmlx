@@ -2182,13 +2182,28 @@ class Scheduler:
             )
             request.remaining_tokens = request.prompt_token_ids
 
-        # Check prefix cache for cached KV state
+        # Check prefix cache for cached KV state.
+        # Strip gen_prompt_len from fetch key to match store (which also strips).
+        # The suffix is re-attached to `remaining` so the model still sees the
+        # template trailer (e.g. `<|im_start|>assistant\n<think>\n`) during prefill.
+        _full_tokens_list = list(request.prompt_token_ids)
+        _gpl_fetch = getattr(request, "_gen_prompt_len", 0) or 0
+        if 0 < _gpl_fetch < len(_full_tokens_list):
+            _fetch_tokens = _full_tokens_list[:-_gpl_fetch]
+            _gpl_suffix_tokens = _full_tokens_list[-_gpl_fetch:]
+        else:
+            _fetch_tokens = _full_tokens_list
+            _gpl_suffix_tokens = []
+
         if self.block_aware_cache is not None and not _bypass:
             # Use paged cache
             block_table, remaining = self.block_aware_cache.fetch_cache(
                 request.request_id,
-                request.prompt_token_ids,
+                _fetch_tokens,
             )
+            # Re-append gpl suffix to remaining so model sees template trailer.
+            if _gpl_suffix_tokens:
+                remaining = list(remaining or []) + list(_gpl_suffix_tokens)
             if block_table and block_table.num_tokens > 0:
                 # Reconstruct actual KVCache objects from stored tensor data
                 reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
@@ -2402,8 +2417,10 @@ class Scheduler:
                     f"processing all {len(request.prompt_token_ids)} tokens"
                 )
         elif self.memory_aware_cache is not None and not _bypass:
-            # Use memory-aware prefix cache
-            cache, remaining = self.memory_aware_cache.fetch(request.prompt_token_ids)
+            # Use memory-aware prefix cache (gpl-stripped fetch; suffix re-attached)
+            cache, remaining = self.memory_aware_cache.fetch(_fetch_tokens)
+            if _gpl_suffix_tokens:
+                remaining = list(remaining or []) + list(_gpl_suffix_tokens)
             if cache:
                 # Dequantize for BatchGenerator compatibility
                 if getattr(self, "_kv_cache_bits", 0):
@@ -2434,8 +2451,10 @@ class Scheduler:
                     f"processing all {len(request.prompt_token_ids)} tokens"
                 )
         elif self.prefix_cache is not None and not _bypass:
-            # Use legacy prefix cache
-            cache, remaining = self.prefix_cache.fetch_cache(request.prompt_token_ids)
+            # Use legacy prefix cache (gpl-stripped fetch; suffix re-attached)
+            cache, remaining = self.prefix_cache.fetch_cache(_fetch_tokens)
+            if _gpl_suffix_tokens:
+                remaining = list(remaining or []) + list(_gpl_suffix_tokens)
             if cache:
                 # Dequantize for BatchGenerator compatibility
                 if getattr(self, "_kv_cache_bits", 0):
@@ -3618,6 +3637,13 @@ class Scheduler:
                     ):
                         try:
                             prompt_tokens = list(request.prompt_token_ids)
+                            # Strip gen_prompt_len from store key — symmetric with
+                            # the fetch path (which also strips). Thinking templates
+                            # append role trailer tokens that differ on every turn;
+                            # without this strip, fetches on later turns miss 100%.
+                            _gpl_store = getattr(request, "_gen_prompt_len", 0) or 0
+                            if 0 < _gpl_store < len(prompt_tokens):
+                                prompt_tokens = prompt_tokens[:-_gpl_store]
                             prompt_len = len(prompt_tokens)
                             cache_to_store = self._truncate_cache_to_prompt_length(
                                 request._extracted_cache, prompt_len
@@ -3672,6 +3698,10 @@ class Scheduler:
                     ):
                         try:
                             prompt_tokens = list(request.prompt_token_ids)
+                            # Strip gen_prompt_len from store key (symmetric with fetch).
+                            _gpl_store = getattr(request, "_gen_prompt_len", 0) or 0
+                            if 0 < _gpl_store < len(prompt_tokens):
+                                prompt_tokens = prompt_tokens[:-_gpl_store]
                             prompt_len = len(prompt_tokens)
                             cache_to_store = self._truncate_cache_to_prompt_length(
                                 request._extracted_cache, prompt_len

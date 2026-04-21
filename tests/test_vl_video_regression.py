@@ -371,13 +371,23 @@ class TestCv2ImportError:
 @pytest.mark.skipif(not HAS_JANGTQ, reason="model not present")
 class TestVlmLoadSmoke:
     def test_jangtq_load_and_processor_patched(self):
-        """After load, the Qwen3VLProcessor class has the fallback patched."""
+        """After load, either the fallback is patched OR the real
+        video_processor is present (and torchvision/PyAV provide decode).
+
+        In bundled Python (app ships), torchvision is absent so
+        video_processor is None and the fallback MUST be installed.
+        In the dev venv torchvision is present → video_processor is not
+        None and the fallback early-returns. Both cases are valid.
+        """
         from jang_tools.load_jangtq_vlm import load_jangtq_vlm_model
         _, processor = load_jangtq_vlm_model(str(MODEL_JANGTQ))
 
         cls = type(processor)
-        assert getattr(cls.__call__, "_jangtq_video_fallback", False), (
-            "video fallback not installed after load"
+        has_fallback = bool(getattr(cls.__call__, "_jangtq_video_fallback", False))
+        has_real_video = getattr(processor, "video_processor", None) is not None
+        assert has_fallback or has_real_video, (
+            "neither fallback installed nor real video_processor present — "
+            "video inputs would crash"
         )
 
     def test_jangtq_image_prefill_no_bloat(self):
@@ -419,12 +429,24 @@ class TestVlmLoadSmoke:
         )
 
     def test_jangtq_video_fallback_no_crash(self):
-        """4-frame video via fallback path does not crash and produces
-        video_grid_thw with temporal rollup."""
+        """4-frame video path does not crash and produces video_grid_thw.
+
+        In dev env torchvision is present and routes through real
+        video_processor which requires PyAV → skip in that case, since
+        the fallback path is the bundled-Python-specific code. The
+        unit-test class `TestInstallVideoFallback` above covers fallback
+        correctness without requiring the real model/decoder deps.
+        """
         from jang_tools.load_jangtq_vlm import load_jangtq_vlm_model
         from PIL import Image
 
         model, processor = load_jangtq_vlm_model(str(MODEL_JANGTQ))
+        if getattr(processor, "video_processor", None) is not None:
+            pytest.skip(
+                "dev venv has torchvision — fallback not active. "
+                "Bundled-python integration is exercised in TestInstallVideoFallback."
+            )
+
         frame_paths = []
         for i in range(4):
             p = f"/tmp/_regtest_vf{i}.png"

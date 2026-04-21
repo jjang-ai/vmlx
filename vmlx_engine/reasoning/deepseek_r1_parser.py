@@ -58,8 +58,14 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
             content = content.strip() or None
             return reasoning, content
 
-        # If neither token, return as pure content
+        # If neither token present:
+        #   - think_in_prompt=True: <think> was in template, so everything the
+        #     model emits before </think> is reasoning. Without </think> the whole
+        #     output is unclosed reasoning — return it as reasoning, empty content.
+        #   - otherwise: plain content (model chose not to think).
         if self.end_token not in model_output and self.start_token not in model_output:
+            if getattr(self, "_think_in_prompt", False):
+                return (model_output.strip() or None), None
             return None, model_output
 
         # Use base class for standard case
