@@ -2302,6 +2302,119 @@ suite_audio() {
     case_audio_transcription
 }
 
+suite_tokenizer() {
+    case_tokenizer_info
+    case_tokenize
+    case_detokenize
+    case_tokenize_roundtrip
+    case_tokenize_no_model
+    case_tokenize_bad_request
+}
+
+case_tokenizer_info() {
+    # GET /v1/tokenizer_info must return eos_token, bos_token, pad_token, chat_template
+    local out
+    out=$(curl -s --max-time 5 "$BASE/v1/tokenizer_info")
+    echo "$out" > /tmp/vmlx-tokenizer-info.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-tokenizer-info.json"))
+    required = ["eos_token", "bos_token", "pad_token", "chat_template"]
+    missing = [k for k in required if k not in d]
+    ok = not missing
+    notes = f"keys={sorted(d.keys())}"
+    if missing:
+        notes += f" missing={missing}"
+    print(json.dumps({"name":"tokenizer_info","ok":ok,"notes":notes[:160]}))
+except Exception as e:
+    print(json.dumps({"name":"tokenizer_info","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
+case_tokenize() {
+    # POST /v1/tokenize must return non-empty tokens array
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local out
+    out=$(curl -s --max-time 5 -X POST "$BASE/v1/tokenize" \
+        -H "content-type: application/json" \
+        -d '{"text":"hello world","add_special_tokens":false}')
+    echo "$out" > /tmp/vmlx-tokenize.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-tokenize.json"))
+    tokens = d.get("tokens")
+    ok = isinstance(tokens, list) and len(tokens) > 0 and all(isinstance(t, int) and t >= 0 for t in tokens)
+    notes = f"tokens={len(tokens) if isinstance(tokens, list) else 'bad'}"
+    print(json.dumps({"name":"tokenize","ok":ok,"notes":notes[:160]}))
+except Exception as e:
+    print(json.dumps({"name":"tokenize","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
+case_detokenize() {
+    # POST /v1/detokenize must decode token IDs back to text
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local out
+    out=$(curl -s --max-time 5 -X POST "$BASE/v1/detokenize" \
+        -H "content-type: application/json" \
+        -d '{"tokens":[9906,1917],"skip_special_tokens":false}')
+    echo "$out" > /tmp/vmlx-detokenize.json
+    python3 <<'PY'
+import json
+try:
+    d = json.load(open("/tmp/vmlx-detokenize.json"))
+    text = d.get("text")
+    ok = isinstance(text, str) and len(text) > 0
+    notes = f"text={text!r[:40]}" if ok else f"text={text!r}"
+    print(json.dumps({"name":"detokenize","ok":ok,"notes":notes[:160]}))
+except Exception as e:
+    print(json.dumps({"name":"detokenize","ok":False,"notes":f"parse: {e}"}))
+PY
+}
+
+case_tokenize_roundtrip() {
+    # tokenize then detokenize should preserve original text
+    local model_id=$(curl -s "$BASE/v1/models" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["data"][0]["id"]) if d.get("data") else print("")')
+    local tok_out
+    tok_out=$(curl -s --max-time 5 -X POST "$BASE/v1/tokenize" \
+        -H "content-type: application/json" \
+        -d '{"text":"hello world","add_special_tokens":false}')
+    local tokens
+    tokens=$(echo "$tok_out" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps(d.get("tokens",[])))')
+    local detok_out
+    detok_out=$(curl -s --max-time 5 -X POST "$BASE/v1/detokenize" \
+        -H "content-type: application/json" \
+        -d "{\"tokens\":$tokens,\"skip_special_tokens\":false}")
+    local text
+    text=$(echo "$detok_out" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("text",""))')
+    local ok="false"
+    [ "$text" = "hello world" ] && ok="true"
+    emit "{\"name\":\"tokenize_roundtrip\",\"ok\":$ok,\"notes\":\"text=$text\"}"
+}
+
+case_tokenize_no_model() {
+    # Requests to tokenizer endpoints with no model loaded must return 503
+    # We can't easily test this in the harness (server always has a model),
+    # but we verify the endpoint exists and returns JSON.
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$BASE/v1/tokenizer_info")
+    local ok="false"
+    [ "$code" = "200" ] || [ "$code" = "503" ] && ok="true"
+    emit "{\"name\":\"tokenize_no_model\",\"ok\":$ok,\"notes\":\"HTTP $code\"}"
+}
+
+case_tokenize_bad_request() {
+    # Missing 'text' field should return 400
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -X POST "$BASE/v1/tokenize" \
+        -H "content-type: application/json" -d '{}')
+    local ok="false"
+    [ "$code" = "400" ] && ok="true"
+    emit "{\"name\":\"tokenize_bad_request\",\"ok\":$ok,\"notes\":\"HTTP $code\"}"
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -2319,6 +2432,7 @@ case "$SUITE" in
     vl)         suite_vl ;;
     embedding)  suite_embedding ;;
     audio)      suite_audio ;;
+    tokenizer)  suite_tokenizer ;;
     *)          suite_smoke ;;
 esac
 

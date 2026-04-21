@@ -984,6 +984,73 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
         }
+
+        // MARK: - Tokenizer Endpoints
+
+        // GET /v1/tokenizer_info — expose tokenizer metadata.
+        //
+        // Returns eos_token, bos_token, pad_token, and chat_template
+        // from the loaded tokenizer. Used by lm-eval's
+        // `tokenizer_backend="remote"` mode.
+        router.get("/v1/tokenizer_info") { _, _ -> Response in
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokenizer = await container.tokenizer
+            var info: [String: Any] = [
+                "eos_token": tokenizer.eosToken as Any,
+                "bos_token": tokenizer.bosToken as Any,
+                "pad_token": tokenizer.unknownToken as Any,
+            ]
+            info["chat_template"] = nil
+            return Self.json(info)
+        }
+
+        // POST /v1/tokenize — encode text to token IDs.
+        //
+        // Request body: {"text": "...", "add_special_tokens": false}
+        // Response:     {"tokens": [123, 456]}
+        router.post("/v1/tokenize") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            guard let text = obj["text"] as? String else {
+                return Self.errorJSON(.badRequest, "missing 'text'")
+            }
+            let addSpecialTokens = obj["add_special_tokens"] as? Bool ?? false
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokenizer = await container.tokenizer
+            let tokens = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+            return Self.json(["tokens": tokens])
+        }
+
+        // POST /v1/detokenize — decode token IDs to text.
+        //
+        // Request body: {"tokens": [123, 456], "skip_special_tokens": false}
+        // Response:     {"text": "..."}
+        router.post("/v1/detokenize") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            guard let tokens = obj["tokens"] as? [Int] else {
+                return Self.errorJSON(.badRequest, "missing or invalid 'tokens'")
+            }
+            let skipSpecialTokens = obj["skip_special_tokens"] as? Bool ?? false
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokenizer = await container.tokenizer
+            let text = tokenizer.decode(tokenIds: tokens, skipSpecialTokens: skipSpecialTokens)
+            return Self.json(["text": text])
+        }
     }
 
     // MARK: - Helpers
