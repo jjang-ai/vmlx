@@ -807,6 +807,28 @@ extension Engine {
         var visibleAccumulator = ""    // running visible content for stop scanning
         var stopHit = false
 
+        // iter-152 §222: tool-call marker boundary holdback. When any tool
+        // parser or tools: array is attached, hold back the last
+        // `maxMarkerLenMinus1` bytes of visible content across deltas. A
+        // marker like `<tool_call>` that straddles two deltas (delta 1
+        // ends with "<", delta 2 starts with "tool_call>...") would
+        // otherwise leak its prefix — the single "<" isn't a marker on
+        // delta 1, so feed() doesn't flag buffered, and the "<" yields
+        // to the client before the marker is detected. Holdback ensures
+        // the client never sees bytes that could be the start of any
+        // known marker until enough bytes accrue to either confirm or
+        // refute the match.
+        //
+        // Tracked across the streaming loop: bytes of `streamingAcc.current`
+        // already yielded to the client. Held-back bytes sit in
+        // `streamingAcc.current[emittedContentBytes:]` and get flushed
+        // when the stream ends naturally (no marker, no stop).
+        var emittedContentBytes: Int = 0
+        let maxMarkerLenMinus1: Int = {
+            let m = (toolCallMarkers.map { $0.utf8.count }.max() ?? 1) - 1
+            return max(0, m)
+        }()
+
         // Anthropic-compat `thinking_budget`. Caps the cumulative chars
         // emitted as reasoning. When the cap is hit mid-block we force-close
         // the reasoning segment by injecting `</think>\n` to content and
@@ -1393,36 +1415,51 @@ extension Engine {
                 if haveToolsOrParser && !splitContent.isEmpty {
                     let wasBuffered = streamingAcc.buffered
                     _ = streamingAcc.feed(splitContent)
+                    // iter-152 §222: compute target-emit cap against the
+                    // entire accumulated buffer rather than the current
+                    // delta only. This closes the straddle-leak: bytes that
+                    // could be the start of a marker are held back until
+                    // the next delta proves (or disproves) the match.
+                    let combined = streamingAcc.current
+                    let combinedBytes = combined.utf8.count
+                    let targetCap: Int
                     if streamingAcc.buffered {
                         if wasBuffered {
-                            emittableContent = ""
+                            // Already past the marker boundary — emit
+                            // nothing; the buffer will be parsed as a
+                            // tool call at stream end.
+                            targetCap = emittedContentBytes
                         } else {
-                            // Marker landed inside this delta — find earliest
-                            // marker offset within the combined buffer so we
-                            // yield only what precedes it from this delta.
-                            let combined = streamingAcc.current
-                            var earliest = combined.utf8.count
+                            // Marker landed inside this delta — yield up
+                            // to the earliest marker offset.
+                            var earliest = combinedBytes
                             for marker in toolCallMarkers {
                                 if let r = combined.range(of: marker) {
                                     let off = combined.utf8.distance(
                                         from: combined.utf8.startIndex,
-                                        to: r.lowerBound.samePosition(in: combined.utf8) ?? combined.utf8.startIndex
+                                        to: r.lowerBound.samePosition(in: combined.utf8)
+                                            ?? combined.utf8.startIndex
                                     )
                                     if off < earliest { earliest = off }
                                 }
                             }
-                            let preLenBytes = combined.utf8.count - splitContent.utf8.count
-                            let keepBytes = max(0, earliest - preLenBytes)
-                            if keepBytes > 0 {
-                                let utf8 = Array(splitContent.utf8)
-                                emittableContent = String(
-                                    decoding: utf8.prefix(keepBytes),
-                                    as: UTF8.self
-                                )
-                            } else {
-                                emittableContent = ""
-                            }
+                            targetCap = earliest
                         }
+                    } else {
+                        // Not buffered — hold back the last `maxMarkerLenMinus1`
+                        // bytes in case the next delta completes a marker
+                        // that starts in the tail.
+                        targetCap = max(emittedContentBytes,
+                                        combinedBytes - maxMarkerLenMinus1)
+                    }
+                    let emitLen = max(0, targetCap - emittedContentBytes)
+                    if emitLen > 0 {
+                        let allUtf8 = Array(combined.utf8)
+                        let slice = allUtf8[emittedContentBytes..<(emittedContentBytes + emitLen)]
+                        emittableContent = String(decoding: slice, as: UTF8.self)
+                        emittedContentBytes += emitLen
+                    } else {
+                        emittableContent = ""
                     }
                 }
 
@@ -1600,17 +1637,71 @@ extension Engine {
                             ))
                         }
                         streamingAcc.reset()
+                        emittedContentBytes = 0
                     } else {
-                        // Give up on parsing — flush the raw buffered text so
-                        // the caller can at least see what the model emitted.
-                        continuation.yield(StreamChunk(content: streamingAcc.current))
+                        // Give up on parsing — flush the raw buffered text
+                        // from marker-start onward (pre-marker bytes were
+                        // already yielded). iter-152 §222: use
+                        // emittedContentBytes as the cut point so we don't
+                        // double-emit pre-marker content.
+                        let allUtf8 = Array(streamingAcc.current.utf8)
+                        let start = min(emittedContentBytes, allUtf8.count)
+                        if start < allUtf8.count {
+                            let tail = String(decoding: allUtf8[start...], as: UTF8.self)
+                            continuation.yield(StreamChunk(content: tail))
+                        }
                         streamingAcc.reset()
+                        emittedContentBytes = 0
                     }
                 } else if streamingAcc.buffered {
                     // Parser absent but buffered bytes accumulated via
-                    // user-supplied tools — no way to parse, flush as-is.
-                    continuation.yield(StreamChunk(content: streamingAcc.current))
+                    // user-supplied tools — no way to parse, flush from
+                    // marker-start onward (same reasoning as above).
+                    let allUtf8 = Array(streamingAcc.current.utf8)
+                    let start = min(emittedContentBytes, allUtf8.count)
+                    if start < allUtf8.count {
+                        let tail = String(decoding: allUtf8[start...], as: UTF8.self)
+                        continuation.yield(StreamChunk(content: tail))
+                    }
                     streamingAcc.reset()
+                    emittedContentBytes = 0
+                } else if (toolParser != nil || (mergedTools?.isEmpty == false)),
+                          emittedContentBytes < streamingAcc.current.utf8.count {
+                    // iter-152 §222: flush held-back (non-marker) tail.
+                    // When tools/parser are attached we hold back the last
+                    // maxMarkerLenMinus1 bytes of each delta; if the stream
+                    // ends cleanly with no marker ever landing, those bytes
+                    // must be released now.
+                    let allUtf8 = Array(streamingAcc.current.utf8)
+                    let tail = String(
+                        decoding: allUtf8[emittedContentBytes...],
+                        as: UTF8.self
+                    )
+                    if !tail.isEmpty {
+                        // Stop-matcher still applies at flush time.
+                        if !stopMatcher.isEmpty {
+                            let preLen = visibleAccumulator.utf8.count
+                            visibleAccumulator += tail
+                            if let m = stopMatcher.firstMatch(in: visibleAccumulator) {
+                                let pat = stopMatcher.patterns[m.patternIndex]
+                                let patBytes = pat.utf8.count
+                                let matchStartByte = m.endByteOffset + 1 - patBytes
+                                let keepBytes = max(0, matchStartByte - preLen)
+                                let tailUtf8 = Array(tail.utf8)
+                                if keepBytes > 0, keepBytes <= tailUtf8.count {
+                                    let keep = String(
+                                        decoding: tailUtf8.prefix(keepBytes),
+                                        as: UTF8.self)
+                                    continuation.yield(StreamChunk(content: keep))
+                                }
+                            } else {
+                                continuation.yield(StreamChunk(content: tail))
+                            }
+                        } else {
+                            continuation.yield(StreamChunk(content: tail))
+                        }
+                    }
+                    emittedContentBytes = streamingAcc.current.utf8.count
                 }
 
                 // Final metrics — populate Usage and emit the finish chunk.
