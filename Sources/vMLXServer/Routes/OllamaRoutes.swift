@@ -567,6 +567,60 @@ public enum OllamaRoutes {
                 .notImplemented,
                 "vMLX does not support Ollama Modelfile creation. Use vMLX's quantizer / converter tools and /api/pull instead.")
         }
+
+        // iter-109 §187: /api/push + /api/blobs were raw 404 before
+        // today — Ollama's registry-upload path that vMLX has no
+        // equivalent of. Label them 501 with Ollama-shape error
+        // bodies + FIXME anchors so SDK clients (ollama-js uploader,
+        // LangChain's export flow) can feature-detect the gap
+        // instead of seeing a network-layer 404 that looks like a
+        // broken proxy. Same pattern as /api/copy + /api/create
+        // (iter-83 labeled-stub convention).
+
+        // POST /api/push — Ollama push-to-registry. vMLX doesn't
+        // mirror Ollama's Modelfile registry and has no account
+        // tokens to push with. Label 501; clients using Ollama's
+        // built-in sharing workflow will see the explicit error
+        // rather than a mysterious 404.
+        //
+        // FIXME(iter-109 §187): if vMLX ever publishes to HF Hub
+        // as a user-initiated action, wire this through
+        // DownloadManager in reverse (uploadManager), using the
+        // HF token flow. For now the honest state is "we don't
+        // publish models from the engine".
+        router.post("/api/push") { _, _ -> Response in
+            return OpenAIRoutes.errorJSON(
+                .notImplemented,
+                "vMLX does not push to the Ollama registry — model publishing is not wired. Use vMLX's quantizer / converter + HuggingFace CLI externally if you want to share a model.")
+        }
+
+        // HEAD /api/blobs/:digest — Ollama uploader probe. Before a
+        // POST upload the Ollama client HEADs this endpoint to ask
+        // "is this blob already stored?" — a 200 means skip upload,
+        // a 404 means proceed. Since vMLX has no blob store, the
+        // safest wire-level response is 501 (not 404) so the client
+        // surfaces the capability gap rather than proceeding to POST.
+        //
+        // FIXME(iter-109 §187): if we grow a content-addressed
+        // weight store (e.g., for smelt-mode partial-expert caching),
+        // this is where the HEAD probe would hook in — return 200
+        // when `blobs[digest].exists`, 404 otherwise. For now the
+        // honest answer is 501 because there's no store to probe.
+        router.head("/api/blobs/:digest") { _, _ -> Response in
+            return OpenAIRoutes.errorJSON(
+                .notImplemented,
+                "vMLX has no Ollama-style content-addressed blob store.")
+        }
+
+        // POST /api/blobs/:digest — Ollama blob upload. Paired with
+        // the HEAD above; if the uploader sees 404 on HEAD it POSTs
+        // the actual bytes. vMLX has nowhere to put them so 501 is
+        // the honest response.
+        router.post("/api/blobs/:digest") { _, _ -> Response in
+            return OpenAIRoutes.errorJSON(
+                .notImplemented,
+                "vMLX has no Ollama-style content-addressed blob store — use /api/pull to fetch from HuggingFace Hub instead.")
+        }
     }
 
     /// Minimal Ollama → ChatRequest translation. Full logic: vmlx_engine/api/ollama_adapter.py.
