@@ -1070,33 +1070,47 @@ extension Engine {
                 }
                 // iter-121 §197: LIVE-VERIFIED multi-turn partial-prefix
                 // cache miss. Reproduction (gemma-4-e2b-it-4bit, 2026-04-20):
-                //   T1: "what is a river" → prompt=26, cached=0 (expected miss)
-                //   T2: identical prompt → prompt=26, cached=23 (memory hit)
+                //   T1: "what is a river" → prompt=26, cached=0 (miss, expected)
+                //   T2: identical prompt → prompt=26, cached=23 (memory hit ✓)
                 //   T3: T1 user + different assistant text + new user turn →
                 //       prompt=46, cached=0 (EXPECTED partial hit of ~19 tok,
                 //       actual MISS).
                 //
-                // Hypothesis: `vMLXLMCommon.generate(..., cacheCoordinator:)`
-                // may be calling `storeAfterGeneration` with the FULL
-                // prompt+generated token sequence (T1 prompt 23 + T1's
-                // 15 generated tokens = 38 stored tokens). T3's prompt
-                // includes the user-supplied assistant text "A flowing
-                // body of water" which diverges from T1's *generated*
-                // "A **river** is a large...", so the forward-prefix
-                // scan at MemoryAwarePrefixCache.swift:414-433 rejects
-                // the match after position 23 where the trajectories
-                // split.
+                // iter-122 trace update: the initial hypothesis (that
+                // `storeAfterGeneration` was keying on prompt+generated)
+                // is WRONG. Evaluate.swift:1816 passes `promptTokenIds`
+                // — which is `input.text.tokens` at generate-entry time
+                // (prompt-only, not prompt+generated). CacheCoordinator.
+                // swift:384-387 then strips genPromptLen on store, so
+                // T1's key is tokens[0..23]. MemoryAwarePrefixCache.fetch
+                // forward-prefix scan should find T1's 23-token entry
+                // as a prefix of T3's 43-token (post-strip) fetch key.
                 //
-                // FIXME(iter-121 §197): confirm storeAfterGeneration's
-                // key tokens. If it's prompt+generated, the fix is to
-                // store ONLY the prompt tokens (post-gen-prompt-strip)
-                // so multi-turn prefix matches work when the conversation
-                // replays the exact first user turn. This affects every
-                // multi-turn chat that continues an existing session,
-                // not just Gemma-4. High-value fix deferred until the
-                // store path can be verified; regression guard §197
-                // pins the CURRENT broken behavior so we know when it
-                // changes. Ref: CacheCoordinator.swift:376-410.
+                // FIXME(iter-121 §197): the miss root cause is NOT the
+                // store key. Three candidates remain:
+                //   (a) T1 and T3 tokenize the first user turn to
+                //       DIFFERENT token sequences — Gemma-4's chat
+                //       template may add/omit `<bos>` or whitespace
+                //       depending on message-list length. Needs runtime
+                //       tokenization diff.
+                //   (b) T2's store OVERWROTE T1's entry with a sequence
+                //       that's not a strict prefix of T3 (though T1 and
+                //       T2 have the same prompt... unless the store
+                //       captured post-continuation state through some
+                //       other path).
+                //   (c) MemoryCache budget is evicting between T2 and T3
+                //       (unlikely on a fresh process).
+                //
+                // Ship plan: instrument CacheCoordinator.storeAfterGeneration
+                // to log the stored-tokens hash + length, and instrument
+                // MemoryAwarePrefixCache.fetch to log best-forward scan
+                // misses. Gated behind `VMLX_CACHE_TRACE=1` env so
+                // production stays quiet. Re-run the T1/T2/T3 repro with
+                // the env var set and the logs will pinpoint which
+                // candidate is live. Ref: CacheCoordinator.swift:376-410,
+                // Evaluate.swift:714-720 (promptTokenIds capture),
+                // MemoryAwarePrefixCache.swift:417-425 (forward-prefix
+                // scan). §197 regression guard pins this FIXME in place.
                 let s = try vMLXLMCommon.generate(
                     input: lmInput,
                     parameters: params,
