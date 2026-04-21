@@ -78,6 +78,18 @@ let keywords: [String: TokenType] = [
     "true": .booleanLiteral,
     "false": .booleanLiteral,
     "none": .nullLiteral,
+    // Python Jinja accepts the Python-capitalized forms too (chat
+    // templates in the wild routinely use `None` / `True` / `False`).
+    // Nemotron-Cascade-2's template:
+    //   {% set reasoning_budget = reasoning_budget if ... else None %}
+    // Without these, `None` resolves as an undefined identifier and
+    // later `reasoning_budget is not none` evaluates True (because
+    // UndefinedValue is not NullValue), wrongly injecting a
+    // `{thinking token budget: }` line into the last-user message →
+    // caused the T1→T2 prefix-cache drift that broke hybrid-SSM PMC C5.
+    "True": .booleanLiteral,
+    "False": .booleanLiteral,
+    "None": .nullLiteral,
 ]
 
 func isWord(char: String) -> Bool {

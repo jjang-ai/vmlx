@@ -458,7 +458,10 @@ func parse(tokens: [Token]) throws -> Program {
             return StringLiteral(value: token.value)
         case .booleanLiteral:
             current += 1
-            return BoolLiteral(value: token.value == "true")
+            // Accept both Jinja lowercase (`true`/`false`) and Python
+            // capitalized (`True`/`False`) forms. The lexer registers both
+            // under `.booleanLiteral` so we normalize case here.
+            return BoolLiteral(value: token.value.lowercased() == "true")
         case .nullLiteral:
             current += 1
             return NullLiteral()
