@@ -1768,6 +1768,15 @@ public actor Engine {
     /// OpenAI-format embeddings response builder. Decodes the request dict,
     /// calls `generateEmbeddings`, and shapes the response.
     public func embeddings(request: [String: Any]) async throws -> [String: Any] {
+        // iter-131 §206: timing envelope on every response body (hard
+        // rule). Embedding requests were the last non-audio/non-chat
+        // surface still reporting only `prompt_tokens`/`total_tokens`.
+        // Dashboards scraping `/v1/embeddings` for latency SLOs had
+        // to back-derive total_ms from wall-clock HTTP RTT — which
+        // double-counts network + JSON-decode time. Capture a
+        // per-request wall-clock so `usage.total_ms` is honest
+        // (embedding forward + tokenizer pass only).
+        let requestStart = Date()
         let inputs: [String]
         if let s = request["input"] as? String {
             inputs = [s]
@@ -1839,14 +1848,28 @@ public actor Engine {
                 inputs.reduce(0) { $0 + tokenizer.encode(text: $1, addSpecialTokens: true).count }
             }
         }
+        // iter-131 §206: total_ms for embeddings timing SLOs.
+        // Includes tokenizer encode + MLX forward pass. Excludes
+        // HTTP frame time which clients can't measure anyway.
+        let totalMs = Date().timeIntervalSince(requestStart) * 1000
+        var usage: [String: Any] = [
+            "prompt_tokens": totalTokens,
+            "total_tokens": totalTokens,
+            "total_ms": totalMs,
+        ]
+        // prompt_tokens_per_second — semantically equivalent to
+        // the `promptTokensPerSecond` field the chat/SSE envelope
+        // carries. For embeddings this is the ONLY throughput we can
+        // report (no decode pass), so we emit only this one (not
+        // tokens_per_second which would be misleading).
+        if totalMs > 0 && totalTokens > 0 {
+            usage["prompt_tokens_per_second"] = Double(totalTokens) / (totalMs / 1000.0)
+        }
         return [
             "object": "list",
             "data": data,
             "model": modelName,
-            "usage": [
-                "prompt_tokens": totalTokens,
-                "total_tokens": totalTokens,
-            ] as [String: Any],
+            "usage": usage,
         ]
     }
 
