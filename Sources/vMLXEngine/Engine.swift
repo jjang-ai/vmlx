@@ -792,6 +792,24 @@ public actor Engine {
     }
 
     private func handleIdleEvent(_ event: IdleTimer.Event) async {
+        // A4 §256: sleep-during-download guard. If any DownloadManager
+        // job is actively fetching shards, deferring sleep by one tick
+        // avoids a standby→wake flap every time a user kicks off a
+        // background download and then steps away. The scheduler will
+        // fire again on the next interval; by then the download will
+        // either have finished (sleep proceeds normally) or still be
+        // running (we defer again — bounded by user-visible download
+        // duration, not an open loop). We also bump the idle timer so
+        // the clock effectively pauses while shards are streaming.
+        let active = await downloadManager.jobs().contains {
+            $0.status == .downloading || $0.status == .queued
+        }
+        if active {
+            await log(.info, "lifecycle",
+                      "idle timer tick deferred: active download(s) in flight")
+            await idleTimer.reset()
+            return
+        }
         switch event {
         case .softSleep:
             // Only transition from .running — if we're already in standby or
