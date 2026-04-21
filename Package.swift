@@ -589,6 +589,10 @@ let package = Package(
                 // swift-jinja against the GLM-5.1 glm_moe_dsa template
                 // (enable_thinking on/off + tools-mode markers).
                 "ChatTemplateReproTests.swift",
+                // Ralph-12 (S02 smoke test): glm_moe_dsa factory alias
+                // patches rope_parameters → rope_theta + routes to
+                // DeepseekV3Model. Also pins registry advertised set.
+                "ModelFactoryRegistrationTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,

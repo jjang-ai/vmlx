@@ -79,6 +79,37 @@ public enum LLMTypeRegistry {
             "deepseek_v2": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
             "deepseek_v32": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
             "kimi_k25": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            // GLM-5.1 smoke-test alias (Ralph iter 12, S02 quick-win).
+            // GLM-5.1 declares model_type=glm_moe_dsa with an MLA attention
+            // block (kv_lora_rank > 0) very close to DeepSeek V3 — the
+            // model structure is compatible, but the HF config uses the
+            // newer `rope_parameters: {rope_theta, rope_type}` unified
+            // field instead of the legacy `rope_theta` scalar expected
+            // by DeepseekV3Configuration. Patch the Data before decode
+            // so the factory doesn't throw. MoE-specific details (shared
+            // expert count, noaux_tc scoring, MTP layers) may diverge
+            // subtly from DeepSeek V3's — audit iter-12+ for drift.
+            // Full GlmMoeDsa.swift / GlmMoeDsaJANGTQ.swift ports are S03/S04.
+            "glm_moe_dsa": { data in
+                var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+                if dict["rope_theta"] == nil,
+                   let rp = dict["rope_parameters"] as? [String: Any],
+                   let rt = rp["rope_theta"] {
+                    dict["rope_theta"] = rt
+                }
+                let patched = try JSONSerialization.data(withJSONObject: dict)
+                // Affine GLM-5.1 path — JANGTQ sniff deferred to S04.
+                // When FormatSniff.isMXTQ returns true here a future
+                // commit must route to GlmMoeDsaJANGTQModel (not yet
+                // implemented); today the JANGTQ bundle still decodes as
+                // an affine DeepseekV3Model skeleton which the loader
+                // subsequently fails to weight-match — intentional: we
+                // want the failure to surface at weight-load time, not
+                // at factory dispatch.
+                let config = try JSONDecoder.json5().decode(
+                    DeepseekV3Configuration.self, from: patched)
+                return DeepseekV3Model(config)
+            },
             // MiniMax M2.5 shares M2's architecture — reuses same model class.
             "minimax_m2_5": create(MiniMaxConfiguration.self, MiniMaxModel.init),
             "granite": create(GraniteConfiguration.self, GraniteModel.init),
