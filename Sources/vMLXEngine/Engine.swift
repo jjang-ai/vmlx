@@ -1998,6 +1998,14 @@ public actor Engine {
     /// typed call for external HTTP clients once the server-side
     /// multipart parsing is hooked up.
     public func editImage(request: [String: Any]) async throws -> [String: Any] {
+        // iter-134 §209: mirror §208 — editImage is a per-sample
+        // Flux/Qwen-Image-Edit forward with strength + mask
+        // conditioning; takes the same 5-30s as generateImage on
+        // most hardware. Response shipped no timing. Extension
+        // key `timing.total_ms` matches the generateImage emit
+        // site 1:1 (per_image_ms omitted since editImage is
+        // always n=1 — adding it would be redundant).
+        let requestStart = Date()
         guard let prompt = request["prompt"] as? String, !prompt.isEmpty else {
             throw EngineError.invalidRequest("editImage: missing 'prompt' field")
         }
@@ -2033,9 +2041,11 @@ public actor Engine {
             strength: strength,
             settings: settings
         )
+        let totalMs = Date().timeIntervalSince(requestStart) * 1000
         return [
             "created": Int(Date().timeIntervalSince1970),
             "data": [["url": url.absoluteString]],
+            "timing": ["total_ms": totalMs],
         ]
     }
 
