@@ -176,23 +176,30 @@ else:
     passed += 1
 
 # C4: multi-turn recall (no thinking)
+# Some model families (MiniMax M2.7, Nemotron-H always-reasoning) ignore
+# enable_thinking=False and unconditionally emit <think> blocks, so we
+# budget 300 tokens (plenty for either a short non-reasoning answer or a
+# reasoning pass + answer) and check for recall in BOTH `content` AND
+# `reasoning_content` — the secret word might legitimately land in
+# either field depending on whether the model reasoned.
 total += 1
 post_empty("/admin/cache/clear")
 r1 = chat([{"role":"user","content":"Remember: the secret word is 'banana'."}],
-          enable_thinking=False, max_tokens=20)
+          enable_thinking=False, max_tokens=300)
 r2 = chat([
     {"role":"user","content":"Remember: the secret word is 'banana'."},
     {"role":"assistant","content":r1.get("content") or "OK."},
     {"role":"user","content":"What was the secret word? One word only."},
-], enable_thinking=False, max_tokens=20)
-ok_leak, bad = leak_check("C4", r2["content"])
-recalled = "banana" in r2["content"].lower()
+], enable_thinking=False, max_tokens=300)
+combined = (r2.get("content") or "") + " " + (r2.get("reasoning") or "")
+ok_leak, bad = leak_check("C4", r2.get("content") or "")
+recalled = "banana" in combined.lower()
 if r2.get("err"):
     fails.append(f"C4 server-error: {r2['err']}")
 elif not ok_leak:
     fails.append(f"C4 leak tokens: {bad}")
 elif not recalled:
-    fails.append(f"C4 didn't recall: {r2['content'][:120]!r}")
+    fails.append(f"C4 didn't recall: content={(r2.get('content') or '')[:80]!r} reasoning={(r2.get('reasoning') or '')[:80]!r}")
 else:
     passed += 1
 
@@ -212,11 +219,16 @@ if not hit:
 else:
     passed += 1
 
-# C6: tools attached, no marker leak, content or tool_calls populated
+# C6: tools attached, no marker leak, content or tool_calls populated.
+# max_tokens=300 for thinking-model parity — Gemma 4 always-reasons when
+# tools are attached and the template injects `<|channel>thought` even
+# under enable_thinking=False. Short budgets truncate mid-marker, which
+# causes the reasoning parser's partial-prefix emit to leak fragments
+# into content.
 total += 1
 post_empty("/admin/cache/clear")
 r = chat([{"role":"user","content":"Just say 'orange' and nothing else."}],
-         enable_thinking=False, max_tokens=20,
+         enable_thinking=False, max_tokens=300,
          tools=[{"type":"function","function":{"name":"noop","description":"unused","parameters":{"type":"object","properties":{}}}}])
 ok_leak, bad = leak_check("C6", r["content"])
 if r.get("err"):
