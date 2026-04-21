@@ -585,6 +585,10 @@ let package = Package(
                 "DDTreeBuilderTests.swift",
                 // Iter-40: SSM re-derive counter + stats wiring
                 "SSMStateCacheReDeriveTests.swift",
+                // Ralph-4 (GLM-5.1 template parity): repro tests for
+                // swift-jinja against the GLM-5.1 glm_moe_dsa template
+                // (enable_thinking on/off + tools-mode markers).
+                "ChatTemplateReproTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,
