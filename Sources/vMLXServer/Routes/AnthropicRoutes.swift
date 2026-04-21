@@ -32,6 +32,36 @@ public enum AnthropicRoutes {
             let model = (anthropicBody["model"] as? String) ?? "default"
             let isStream = (anthropicBody["stream"] as? Bool) ?? false
 
+            // iter-107 §185: Anthropic-specific pre-checks that the
+            // shared ChatRequest.validate() doesn't enforce.
+            //
+            //   (a) `max_tokens` is required per the Anthropic spec;
+            //       OpenAI treats it as optional and our validator
+            //       inherited the OpenAI semantics. A Cohere/Anthropic-
+            //       compatible client expected a 400 here and instead
+            //       got HTTP 200 with an engine-default cap.
+            //
+            //   (b) `temperature` is bounded 0.0-1.0 on Anthropic;
+            //       OpenAI allows up to 2.0 and validate() uses the
+            //       OpenAI range. temp=1.8 was sneaking past the
+            //       wrapper and producing Anthropic-noncompliant
+            //       sampler behavior.
+            //
+            // Both checks run BEFORE the generic validate() so the
+            // Anthropic-specific error message takes precedence.
+            if anthropicBody["max_tokens"] == nil {
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "missing required field `max_tokens` (Anthropic spec requires max_tokens on every /v1/messages call)")
+            }
+            if let rawTemp = anthropicBody["temperature"] as? Double,
+               rawTemp > 1.0
+            {
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "`temperature` (\(rawTemp)) exceeds Anthropic's 1.0 upper bound — use the OpenAI-compatible /v1/chat/completions route if you need 1.0-2.0 range")
+            }
+
             // Translate Anthropic → ChatRequest. Full logic: server.py:2664.
             let chatReq = Self.anthropicToChatRequest(anthropicBody)
             // 2026-04-18 validate-parity fix — OpenAI + gateway paths
