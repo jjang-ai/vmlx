@@ -440,6 +440,13 @@ class MLLMBatchResponse:
     prompt_cache: Optional[Callable[[], List[Any]]] = None  # Cache extraction function
     prompt_token_ids: Optional[List[int]] = None  # Original tokenized prompt for prefix key
     cached_tokens: int = 0  # Number of prompt tokens served from cache
+    # Generation-prefix tokens captured from the untruncated prompt tail
+    # (e.g. [<|im_start|>, assistant, \n, <think>, \n] for Qwen 3.6 thinking-on).
+    # Thinking models occasionally re-emit these as their first output tokens
+    # when prior assistant history lacks a reasoning_content wrapper; the
+    # scheduler uses this list to suppress the echoed prefix from the output
+    # stream. Empty when no gen-prefix was stripped.
+    gen_prefix_tokens: Optional[List[int]] = None
     # Optional human-readable error message attached when finish_reason="error".
     # Scheduler and server.py lift this into an HTTP error response so users
     # can see the actual mlx / mlx_vlm traceback instead of an empty 200.
@@ -1614,7 +1621,17 @@ class MLLMBatchGenerator:
             # before storing block hashes. The fetch key here MUST match.
             _gpl = getattr(req, '_gen_prompt_len', 0)
             if _gpl > 0 and _gpl < len(_all_tokens):
+                # Capture the gen-prefix tokens BEFORE trimming so the
+                # scheduler's output-side re-emit suppressor can compare
+                # against them. Without this, thinking models on dense
+                # multi-turn history (no reasoning_content wrapper in prior
+                # assistant messages) re-emit `<|im_start|>assistant\n<think>\n`
+                # as their first output tokens, corrupting the reasoning
+                # stream for the user.
+                req._gen_prefix_tokens = list(_all_tokens[-_gpl:])
                 _all_tokens = _all_tokens[:-_gpl]
+            else:
+                req._gen_prefix_tokens = []
             req._original_token_ids = _all_tokens
             # Track how many prompt tokens were served from cache (for usage reporting)
             req._cached_tokens = 0
@@ -2575,6 +2592,7 @@ class MLLMBatchGenerator:
                             else [])
                     ),
                     cached_tokens=getattr(req, '_cached_tokens', 0),
+                    gen_prefix_tokens=getattr(req, '_gen_prefix_tokens', None),
                 )
             )
 

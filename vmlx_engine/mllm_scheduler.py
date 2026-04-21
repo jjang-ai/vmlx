@@ -1624,6 +1624,51 @@ class MLLMScheduler:
             request.output_tokens.append(response.token)
             request.num_output_tokens = len(request.output_tokens)
 
+            # vmlx#reasoning-leak-2026-04-21: thinking-capable models
+            # (Qwen 3.6 / Gemma 4 / MiniMax / Nemotron Cascade) occasionally
+            # re-emit the generation prefix (<|im_start|>assistant\n<think>\n
+            # or equivalent) as their first output tokens on multi-turn when
+            # prior assistant history arrives without a reasoning_content
+            # wrapper. The model predicts position L+1..L+gpl as if it were
+            # starting a fresh turn from scratch.
+            #
+            # Detection: compare the first `gen_prompt_len` output tokens
+            # against the prompt's trailing `gen_prompt_len` tokens. When they
+            # match exactly, the model is echoing its own prompt suffix and we
+            # suppress those tokens from the output stream. Once a divergence
+            # or `gen_prompt_len` matches consume, pass-through resumes.
+            #
+            # Skip the check entirely when: no gen-prefix was captured, we've
+            # already passed the prefix window, or the request opted out of
+            # suppression (e.g. because divergence was detected mid-window).
+            # On the first response the gen-prefix arrives from the batch
+            # generator via `response.gen_prefix_tokens`; we snapshot it onto
+            # the SchedulerRequest so subsequent tokens can consult the same
+            # list without re-fetching from the response object.
+            if not hasattr(request, "_gen_prefix_tokens"):
+                request._gen_prefix_tokens = list(
+                    getattr(response, "gen_prefix_tokens", None) or []
+                )
+            _gen_prefix = request._gen_prefix_tokens
+            _skip_this_token = False
+            if _gen_prefix:
+                _out_idx = request.num_output_tokens - 1  # 0-based index of this token
+                if _out_idx < len(_gen_prefix):
+                    _expected = _gen_prefix[_out_idx]
+                    if response.token == _expected:
+                        # Re-emitted prefix — suppress
+                        _skip_this_token = True
+                        if _out_idx == 0:
+                            logger.info(
+                                f"Request {request_id}: suppressing re-emitted "
+                                f"gen-prefix ({len(_gen_prefix)} tokens, model "
+                                f"echoed prompt suffix on multi-turn)"
+                            )
+                    else:
+                        # Divergence inside the window — mark as non-echo so
+                        # subsequent tokens are treated normally.
+                        request._gen_prefix_tokens = []
+
             # Use streaming detokenizer for correct multi-byte char handling
             detok = self._get_detokenizer(request_id, tokenizer)
 
@@ -1632,7 +1677,10 @@ class MLLMScheduler:
             is_stop = response.finish_reason == "stop"
             string_stop_truncate = -1  # >=0 when string stop matched
 
-            if not is_stop:
+            if _skip_this_token:
+                # Token consumed by gen-prefix suppression; no delta to emit
+                new_text = ""
+            elif not is_stop:
                 detok.add_token(response.token)
                 new_text = detok.last_segment
 

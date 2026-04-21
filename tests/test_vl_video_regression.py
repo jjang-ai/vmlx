@@ -9379,3 +9379,70 @@ class TestAnthropicThinkingSpecDefault:
             "fix must be self-documenting so future reviewer knows WHY"
         )
         assert "enable_thinking = False  # Anthropic-spec default" in src
+
+
+class TestGenPrefixEchoSuppression:
+    """2026-04-21 real-UI repro showed Qwen 3.6 (and other thinking models on
+    dense multi-turn history without reasoning_content wrapper) RE-EMITTING
+    the generation prefix <|im_start|>assistant\\n<think>\\n as its first
+    output tokens. Streaming path relayed those tokens as reasoning content
+    to the client, which then rendered `<|im_start|>assistant\\n\\n` at the
+    top of the reasoning box.
+
+    Fix: scheduler now compares the first `gen_prompt_len` output tokens
+    against the prompt's trailing gen_prompt_len tokens. When they match
+    exactly, those tokens are suppressed from the output stream.
+
+    Architecture:
+        - Batch generator captures prompt[-gpl:] as _gen_prefix_tokens BEFORE
+          the fetch-key truncation.
+        - Response carries gen_prefix_tokens field on first reply.
+        - Scheduler snapshots it per-request on first response, then compares
+          subsequent output tokens against it until divergence or exhaustion.
+        - Any divergence clears the list so the window closes permanently.
+    """
+
+    BATCH_GEN = "/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
+    SCHED = "/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_scheduler.py"
+
+    def test_batch_generator_captures_gen_prefix_tokens(self):
+        src = Path(self.BATCH_GEN).read_text()
+        assert "_gen_prefix_tokens" in src
+        # Must capture BEFORE truncation — the code sets _gen_prefix_tokens
+        # from _all_tokens[-_gpl:] AND THEN truncates _all_tokens.
+        idx_capture = src.find("req._gen_prefix_tokens = list(_all_tokens[-_gpl:])")
+        idx_truncate = src.find("_all_tokens = _all_tokens[:-_gpl]", idx_capture)
+        assert idx_capture > 0
+        assert idx_truncate > idx_capture, (
+            "gen prefix must be captured BEFORE truncation — otherwise the "
+            "prefix tokens would already be gone when the scheduler needs them"
+        )
+
+    def test_response_carries_gen_prefix_tokens_field(self):
+        src = Path(self.BATCH_GEN).read_text()
+        assert "gen_prefix_tokens: Optional[List[int]] = None" in src
+        assert "gen_prefix_tokens=getattr(req, '_gen_prefix_tokens', None)" in src
+
+    def test_scheduler_suppresses_re_emitted_prefix(self):
+        src = Path(self.SCHED).read_text()
+        assert "_gen_prefix_tokens" in src
+        assert "suppressing re-emitted" in src and "gen-prefix" in src
+        # Divergence must clear the window permanently — otherwise a
+        # coincidental early echo followed by real output would keep
+        # dropping content tokens.
+        assert "request._gen_prefix_tokens = []" in src
+
+    def test_scheduler_snapshots_per_request(self):
+        """The SchedulerRequest's _gen_prefix_tokens must be populated from
+        the FIRST response's gen_prefix_tokens field, not a global."""
+        src = Path(self.SCHED).read_text()
+        assert 'getattr(response, "gen_prefix_tokens"' in src
+
+    def test_suppression_does_not_fire_without_gen_prefix(self):
+        """When no gen-prefix was captured (e.g. non-thinking model, no
+        template prefix), the suppressor must pass-through immediately."""
+        src = Path(self.SCHED).read_text()
+        # The _gen_prefix check must guard the whole block
+        assert "if _gen_prefix:" in src, (
+            "empty _gen_prefix must short-circuit the suppressor"
+        )
