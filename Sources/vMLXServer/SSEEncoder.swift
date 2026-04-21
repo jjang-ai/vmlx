@@ -208,6 +208,12 @@ public enum SSEEncoder {
             // final finish_reason=stop frame if an upstream throw
             // terminated the loop.
             var hadError = false
+            // Legacy logprobs format — accumulate across chunks for text_offset.
+            var allTokens: [String] = []
+            var allTokenLogprobs: [Any] = []
+            var allTopLogprobs: [[String: Any]] = []
+            var allTextOffset: [Int] = []
+            var textOffsetCursor = 0
             let merged = sseMergeWithHeartbeat(
                 upstream: upstream, interval: sseHeartbeatInterval)
             do {
@@ -223,23 +229,36 @@ public enum SSEEncoder {
                             deltaText = content
                         }
                         // Emit logprobs deltas when present, even if text is empty.
+                        // Format: legacy completions shape with tokens, token_logprobs,
+                        // top_logprobs, text_offset arrays (not chat-completions content array).
                         if let lps = chunk.logprobs, !lps.isEmpty {
-                            let contentArr: [[String: Any]] = lps.map { lp in
-                                var entry: [String: Any] = [
-                                    "token": lp.token,
-                                    "logprob": lp.logprob,
-                                ]
-                                if !lp.topLogprobs.isEmpty {
-                                    entry["top_logprobs"] = lp.topLogprobs.map { alt in
-                                        [
-                                            "token": alt.token,
-                                            "logprob": alt.logprob,
-                                        ] as [String: Any]
-                                    }
+                            var chunkTokens: [String] = []
+                            var chunkTokenLogprobs: [Any] = []
+                            var chunkTopLogprobs: [[String: Any]] = []
+                            var chunkTextOffset: [Int] = []
+                            for lp in lps {
+                                chunkTextOffset.append(textOffsetCursor)
+                                chunkTokens.append(lp.token)
+                                chunkTokenLogprobs.append(lp.logprob)
+                                var dict: [String: Any] = [:]
+                                dict[lp.token] = lp.logprob
+                                for alt in lp.topLogprobs {
+                                    dict[alt.token] = alt.logprob
                                 }
-                                return entry
+                                chunkTopLogprobs.append(dict)
+                                textOffsetCursor += lp.token.utf8.count
                             }
-                            let logprobsDict: [String: Any] = ["content": contentArr]
+                            let logprobsDict: [String: Any] = [
+                                "tokens": chunkTokens,
+                                "token_logprobs": chunkTokenLogprobs,
+                                "top_logprobs": chunkTopLogprobs,
+                                "text_offset": chunkTextOffset,
+                            ]
+                            // Accumulate for final logprobs object if needed later.
+                            allTokens.append(contentsOf: chunkTokens)
+                            allTokenLogprobs.append(contentsOf: chunkTokenLogprobs)
+                            allTopLogprobs.append(contentsOf: chunkTopLogprobs)
+                            allTextOffset.append(contentsOf: chunkTextOffset)
                             let obj: [String: Any] = [
                                 "id": id,
                                 "object": "text_completion.chunk",
