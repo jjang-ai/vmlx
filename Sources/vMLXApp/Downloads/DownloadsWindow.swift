@@ -7,27 +7,59 @@ import vMLXTheme
 struct DownloadsWindow: View {
     @Environment(AppState.self) private var state
 
+    /// §250: tab between active-downloads list and Hub model search.
+    /// Stored @State so each window instance keeps its own selection.
+    @State private var tab: Tab = .downloads
+    enum Tab: String, CaseIterable, Identifiable {
+        case downloads = "Downloads"
+        case search = "Search Hub"
+        var id: String { rawValue }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
+            tabBar
             Divider().background(Theme.Colors.border)
-            if sortedJobs.isEmpty {
-                emptyView
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: Theme.Spacing.sm) {
-                        ForEach(sortedJobs) { job in
-                            DownloadRow(job: job)
-                        }
-                    }
-                    .padding(Theme.Spacing.lg)
-                }
+            switch tab {
+            case .downloads: downloadsTab
+            case .search: ModelSearchPanel()
             }
-            Divider().background(Theme.Colors.border)
-            footer
         }
-        .frame(minWidth: 640, minHeight: 420)
+        .frame(minWidth: 720, minHeight: 480)
         .background(Theme.Colors.background)
+    }
+
+    private var tabBar: some View {
+        HStack {
+            Picker("", selection: $tab) {
+                ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 280)
+            Spacer()
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Theme.Colors.surface)
+    }
+
+    @ViewBuilder
+    private var downloadsTab: some View {
+        if sortedJobs.isEmpty {
+            emptyView
+        } else {
+            ScrollView {
+                LazyVStack(spacing: Theme.Spacing.sm) {
+                    ForEach(sortedJobs) { job in
+                        DownloadRow(job: job)
+                    }
+                }
+                .padding(Theme.Spacing.lg)
+            }
+        }
+        Divider().background(Theme.Colors.border)
+        footer
     }
 
     private var sortedJobs: [DownloadManager.Job] {
