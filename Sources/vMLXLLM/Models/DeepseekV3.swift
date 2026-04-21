@@ -216,11 +216,31 @@ class DeepseekV3Attention: Module {
     ) -> MLXArray {
         let (B, L, _) = (x.dim(0), x.dim(1), x.dim(2))
 
+        // Ralph iter-30: expose `qr` as a local so a later iter can feed
+        // it into the GLM-5.1 DSA Indexer (`self.indexer(x, qr: qr, ...)`).
+        // Behavior unchanged when `self.indexer == nil`. When non-nil,
+        // we perform a no-behavior-change indexer call site for
+        // structural prep; full sparse-gather wiring lands in iter-31+.
         var q: MLXArray
+        var qr: MLXArray? = nil
         if qLoraRank == nil {
             q = self.qProj!(x)
         } else {
-            q = self.qBProj!(self.qALayerNorm!(self.qAProj!(x)))
+            let qrLocal = self.qALayerNorm!(self.qAProj!(x))
+            qr = qrLocal
+            q = self.qBProj!(qrLocal)
+        }
+
+        // GLM-5.1 DSA Indexer call site (iter-30 structural prep).
+        // Computes top-k attention indices; not yet consumed by the
+        // attention forward. MLX lazy-evaluates the graph so an unused
+        // return is pruned — this is intentional pending iter-31's
+        // sparse-gather integration. Compiles + loads the indexer's
+        // weight tensors from the bundle so safetensors loading of a
+        // GLM-5.1 `self_attn.indexer.*` tensor set does not fail.
+        if let indexer = self.indexer, let qr = qr {
+            let offset = cache?.offset ?? 0
+            _ = indexer(x, qr: qr, mask: nil, offset: offset)
         }
 
         q = q.reshaped(B, L, self.numHeads, self.qHeadDim).transposed(0, 2, 1, 3)
