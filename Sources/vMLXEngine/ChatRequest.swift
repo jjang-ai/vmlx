@@ -176,7 +176,9 @@ public struct ChatRequest: Codable, Sendable {
         toolChoice: ToolChoice? = nil,
         includeReasoning: Bool? = nil,
         sessionId: String? = nil,
-        chatId: String? = nil
+        chatId: String? = nil,
+        logprobs: Bool? = nil,
+        topLogprobs: Int? = nil
     ) {
         self.model = model
         self.messages = messages
@@ -196,6 +198,8 @@ public struct ChatRequest: Codable, Sendable {
         self.includeReasoning = includeReasoning
         self.sessionId = sessionId
         self.chatId = chatId
+        self.logprobs = logprobs
+        self.topLogprobs = topLogprobs
     }
 
     /// Multimodal content: either a plain string OR an array of parts (text/image_url).

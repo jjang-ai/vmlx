@@ -218,7 +218,28 @@ public enum SSEEncoder {
                             allocator.buffer(string: ": keep-alive\n\n"))
                         continue
                     case .chunk(let chunk):
+                        var deltaText: String? = nil
                         if let content = chunk.content, !content.isEmpty {
+                            deltaText = content
+                        }
+                        // Emit logprobs deltas when present, even if text is empty.
+                        if let lps = chunk.logprobs, !lps.isEmpty {
+                            let contentArr: [[String: Any]] = lps.map { lp in
+                                var entry: [String: Any] = [
+                                    "token": lp.token,
+                                    "logprob": lp.logprob,
+                                ]
+                                if !lp.topLogprobs.isEmpty {
+                                    entry["top_logprobs"] = lp.topLogprobs.map { alt in
+                                        [
+                                            "token": alt.token,
+                                            "logprob": alt.logprob,
+                                        ] as [String: Any]
+                                    }
+                                }
+                                return entry
+                            }
+                            let logprobsDict: [String: Any] = ["content": contentArr]
                             let obj: [String: Any] = [
                                 "id": id,
                                 "object": "text_completion.chunk",
@@ -226,7 +247,22 @@ public enum SSEEncoder {
                                 "model": model,
                                 "choices": [[
                                     "index": 0,
-                                    "text": content,
+                                    "text": deltaText ?? "",
+                                    "finish_reason": NSNull(),
+                                    "logprobs": logprobsDict,
+                                ] as [String: Any]],
+                            ]
+                            let j = Self.asciiJSON(obj)
+                            try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                        } else if let text = deltaText {
+                            let obj: [String: Any] = [
+                                "id": id,
+                                "object": "text_completion.chunk",
+                                "created": created,
+                                "model": model,
+                                "choices": [[
+                                    "index": 0,
+                                    "text": text,
                                     "finish_reason": NSNull(),
                                 ] as [String: Any]],
                             ]

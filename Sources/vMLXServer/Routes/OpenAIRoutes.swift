@@ -314,6 +314,13 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.badRequest, "missing 'prompt'")
             }
 
+            // Handle `logprobs: 1` (integer) that lm-eval sends — treat as true.
+            let logprobsValue: Bool? = {
+                if let b = obj["logprobs"] as? Bool { return b }
+                if let i = obj["logprobs"] as? Int { return i != 0 }
+                if let d = obj["logprobs"] as? Double { return d != 0 }
+                return nil
+            }()
             let chatReq = ChatRequest(
                 model: model,
                 messages: [.init(role: "user", content: .string(prompt))],
@@ -325,7 +332,9 @@ public enum OpenAIRoutes {
                 minP: obj["min_p"] as? Double,
                 repetitionPenalty: obj["repetition_penalty"] as? Double,
                 stop: obj["stop"] as? [String],
-                seed: obj["seed"] as? Int
+                seed: obj["seed"] as? Int,
+                logprobs: logprobsValue,
+                topLogprobs: obj["top_logprobs"] as? Int
             )
             await engine.wakeFromStandby()
 
@@ -367,16 +376,43 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
 
+            var choice: [String: Any] = [
+                "text": content,
+                "index": 0,
+                "finish_reason": finishReason ?? "stop",
+            ]
+            // Include logprobs in legacy completions format when collected.
+            if !allLogprobs.isEmpty {
+                let tokens = allLogprobs.map { $0.token }
+                let tokenLogprobs: [Any] = allLogprobs.map { $0.logprob }
+                let topLogprobs: [[String: Any]] = allLogprobs.map { lp in
+                    var dict: [String: Any] = [:]
+                    // Include the chosen token first, then alternatives.
+                    dict[lp.token] = lp.logprob
+                    for alt in lp.topLogprobs {
+                        dict[alt.token] = alt.logprob
+                    }
+                    return dict
+                }
+                var textOffset: [Int] = []
+                var offset = 0
+                for lp in allLogprobs {
+                    textOffset.append(offset)
+                    offset += lp.token.utf8.count
+                }
+                choice["logprobs"] = [
+                    "tokens": tokens,
+                    "token_logprobs": tokenLogprobs,
+                    "top_logprobs": topLogprobs,
+                    "text_offset": textOffset,
+                ] as [String: Any]
+            }
             var obj2: [String: Any] = [
                 "id": id,
                 "object": "text_completion",
                 "created": created,
                 "model": model,
-                "choices": [[
-                    "text": content,
-                    "index": 0,
-                    "finish_reason": finishReason ?? "stop",
-                ] as [String: Any]],
+                "choices": [choice],
             ]
             if let u = usage {
                 obj2["usage"] = [
