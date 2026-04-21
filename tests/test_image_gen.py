@@ -198,6 +198,27 @@ class TestDefaultSteps:
 class TestFixQuantizedLayers:
     """Test _fix_quantized_layers with mock mlx modules."""
 
+    def _mlx_patch(self, mock_nn, mock_mx):
+        """Patch both sys.modules and the parent module attribute.
+
+        `import mlx.nn as nn` inside _fix_quantized_layers evaluates
+        `mlx.nn` as attribute access on the already-imported `mlx`
+        module. Patching only sys.modules is insufficient when any
+        earlier test has imported mlx. We patch both so the test is
+        order-independent in the full pytest run.
+        """
+        import contextlib
+        import mlx
+
+        @contextlib.contextmanager
+        def _cm():
+            with patch.dict(sys.modules, {"mlx.nn": mock_nn, "mlx.core": mock_mx}):
+                with patch.object(mlx, "nn", mock_nn, create=True), \
+                     patch.object(mlx, "core", mock_mx, create=True):
+                    yield
+
+        return _cm()
+
     def _make_mock_mlx(self):
         """Build mock mlx.nn and mlx.core for _fix_quantized_layers."""
         mock_nn = MagicMock()
@@ -236,7 +257,7 @@ class TestFixQuantizedLayers:
         model.named_modules.return_value = [("shared", qemb)]
 
         # isinstance checks need to work with our custom types
-        with patch.dict(sys.modules, {"mlx.nn": mock_nn, "mlx.core": mock_mx}):
+        with self._mlx_patch(mock_nn, mock_mx):
             from vmlx_engine.image_gen import _fix_quantized_layers
             fixed = _fix_quantized_layers(model)
 
@@ -259,7 +280,7 @@ class TestFixQuantizedLayers:
         model.layers = layers_list
         layers_list.__getitem__ = MagicMock(return_value=layers_0)
 
-        with patch.dict(sys.modules, {"mlx.nn": mock_nn, "mlx.core": mock_mx}):
+        with self._mlx_patch(mock_nn, mock_mx):
             from vmlx_engine.image_gen import _fix_quantized_layers
             fixed = _fix_quantized_layers(model)
 
@@ -277,7 +298,7 @@ class TestFixQuantizedLayers:
         model = MagicMock()
         model.named_modules.return_value = [("shared", qemb)]
 
-        with patch.dict(sys.modules, {"mlx.nn": mock_nn, "mlx.core": mock_mx}):
+        with self._mlx_patch(mock_nn, mock_mx):
             from vmlx_engine.image_gen import _fix_quantized_layers
             fixed = _fix_quantized_layers(model)
 
@@ -294,7 +315,7 @@ class TestFixQuantizedLayers:
         model = MagicMock()
         model.named_modules.return_value = [("layer", regular_module)]
 
-        with patch.dict(sys.modules, {"mlx.nn": mock_nn, "mlx.core": mock_mx}):
+        with self._mlx_patch(mock_nn, mock_mx):
             from vmlx_engine.image_gen import _fix_quantized_layers
             fixed = _fix_quantized_layers(model)
 
@@ -310,7 +331,7 @@ class TestFixQuantizedLayers:
         model = MagicMock()
         model.named_modules.return_value = [("proj", qlin)]
 
-        with patch.dict(sys.modules, {"mlx.nn": mock_nn, "mlx.core": mock_mx}):
+        with self._mlx_patch(mock_nn, mock_mx):
             from vmlx_engine.image_gen import _fix_quantized_layers
             fixed = _fix_quantized_layers(model)
 
@@ -627,14 +648,18 @@ class TestEditModelDispatch:
         assert call_kwargs["image_path"] == "/tmp/img.png"
         assert call_kwargs["masked_image_path"] == "/tmp/mask.png"
 
-    def test_unknown_edit_model_uses_generic_fallback(self):
-        """Unknown mflux class falls through to generic img2img branch."""
-        engine = self._setup_edit_engine("nonexistent-model")
-        result = engine.edit("test", image_path="/tmp/img.png", seed=42)
+    def test_unknown_edit_model_rejects(self):
+        """Unknown mflux class must raise, not silently fall through.
 
-        call_kwargs = engine._model.generate_image.call_args.kwargs
-        assert call_kwargs["image_path"] == "/tmp/img.png"
-        assert call_kwargs["prompt"] == "test"
+        Defense-in-depth: allowing an unknown edit class to fall through to
+        the generic img2img branch silently performed 'variations' on the
+        image instead of instruction-based editing — surprising and wrong.
+        image_gen.py:665 explicitly restricts to {QwenImageEdit,
+        Flux1Kontext, Flux1Fill, Flux2KleinEdit}.
+        """
+        engine = self._setup_edit_engine("nonexistent-model")
+        with pytest.raises(ValueError, match="is not an editing"):
+            engine.edit("test", image_path="/tmp/img.png", seed=42)
 
     def test_edit_raises_when_not_loaded(self):
         from vmlx_engine.image_gen import ImageGenEngine

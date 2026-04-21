@@ -1651,11 +1651,22 @@ class MLLMBatchGenerator:
             if self.block_aware_cache is not None and req.prompt_cache is None and not has_images and not _mllm_bypass:
                 if req.input_ids is not None:
                     try:
-                        token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        _full_token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
                         # Strip gen_prompt_len from fetch key to match store key.
+                        # CRITICAL: keep the stripped gpl suffix — after fetching we MUST
+                        # prepend it back to `remaining` so the model re-sees the
+                        # `<|im_start|>assistant\n<think>\n` template tokens on turn 2.
+                        # Without this the model's prefill skips the thinking marker and
+                        # jumps straight to content, producing "1 completion token → EOS"
+                        # symptoms on hybrid thinking models (Qwen 3.5/3.6 VL, Nemotron
+                        # Cascade, MiniMax). See bug trace 2026-04-21.
                         _gpl = getattr(req, '_gen_prompt_len', 0)
-                        if _gpl > 0 and _gpl < len(token_list):
-                            token_list = token_list[:-_gpl]
+                        if _gpl > 0 and _gpl < len(_full_token_list):
+                            token_list = _full_token_list[:-_gpl]
+                            _gpl_suffix = _full_token_list[-_gpl:]
+                        else:
+                            token_list = _full_token_list
+                            _gpl_suffix = []
                         block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
                         if block_table is not None:
                                 # Hybrid models (SSM + attention, e.g. Qwen3.5-VL):
@@ -1779,15 +1790,21 @@ class MLLMBatchGenerator:
                                     # TQ recompress safe: blocks now store original float16
                                     req.prompt_cache = full_cache
                                     req._cached_tokens = block_table.num_tokens
-                                    if remaining:
-                                        req.input_ids = mx.array([remaining])
+                                    # Re-attach the gen-prompt suffix: fetch key was
+                                    # gpl-stripped but the model MUST see the template
+                                    # suffix (<|im_start|>assistant\n<think>\n) to enter
+                                    # thinking mode on turn 2.
+                                    _full_remaining = (remaining or []) + list(_gpl_suffix)
+                                    if _full_remaining:
+                                        req.input_ids = mx.array([_full_remaining])
                                         req.pixel_values = None
                                         req.attention_mask = None
                                         req.image_grid_thw = None
                                         logger.info(
                                             f"VLM HYBRID cache HIT for {req.request_id}: "
                                             f"{block_table.num_tokens} cached (KV+SSM), "
-                                            f"{len(remaining)} remaining"
+                                            f"{len(_full_remaining)} remaining "
+                                            f"(incl. {len(_gpl_suffix)}-token gen-prompt suffix)"
                                         )
                                     else:
                                         req.input_ids = mx.array([token_list[-1:]])
@@ -1802,7 +1819,11 @@ class MLLMBatchGenerator:
                                     # Pure attention VLM: TQ recompress safe (original float16)
                                     req.prompt_cache = reconstructed
                                     req._cached_tokens = block_table.num_tokens
-                                    if remaining:
+                                    # Re-attach gen-prompt suffix (see hybrid branch above
+                                    # for full rationale — same correctness requirement
+                                    # for attention-only thinking VLMs).
+                                    _full_remaining = (remaining or []) + list(_gpl_suffix)
+                                    if _full_remaining:
                                         # Check if remaining tokens contain image placeholders.
                                         # If so, we'd need partial pixel_values which is complex —
                                         # fall back to full prefill instead.
@@ -1811,7 +1832,7 @@ class MLLMBatchGenerator:
                                             getattr(model_config, "image_token_index", None)
                                             if model_config else None
                                         )
-                                        has_images = img_token_id is not None and img_token_id in remaining
+                                        has_images = img_token_id is not None and img_token_id in _full_remaining
                                         if has_images:
                                             req.prompt_cache = None
                                             req._cached_tokens = 0  # reset — full prefill needed
@@ -1821,14 +1842,15 @@ class MLLMBatchGenerator:
                                                 f"remaining has images — full prefill"
                                             )
                                         else:
-                                            req.input_ids = mx.array([remaining])
+                                            req.input_ids = mx.array([_full_remaining])
                                             req.pixel_values = None
                                             req.attention_mask = None
                                             req.image_grid_thw = None
                                             logger.info(
                                                 f"VLM prefix cache HIT for {req.request_id}: "
                                                 f"{block_table.num_tokens} cached, "
-                                                f"{len(remaining)} remaining (text-only)"
+                                                f"{len(_full_remaining)} remaining "
+                                                f"(incl. {len(_gpl_suffix)}-token gen-prompt suffix)"
                                             )
                                     else:
                                         # All tokens cached. Need at least the last token
@@ -1848,11 +1870,17 @@ class MLLMBatchGenerator:
             elif (self.memory_aware_cache is not None or self.prefix_cache is not None) and req.prompt_cache is None and not _mllm_bypass:
                 if req.input_ids is not None:
                     try:
-                        token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
-                        # Strip gen_prompt_len from fetch key to match store key.
+                        _full_token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        # Strip gen_prompt_len from fetch key, keep suffix to re-attach
+                        # to `remaining` so the model re-sees the template suffix
+                        # (<|im_start|>assistant\n<think>\n). See paged-path comment.
                         _gpl = getattr(req, '_gen_prompt_len', 0)
-                        if _gpl > 0 and _gpl < len(token_list):
-                            token_list = token_list[:-_gpl]
+                        if _gpl > 0 and _gpl < len(_full_token_list):
+                            token_list = _full_token_list[:-_gpl]
+                            _gpl_suffix = _full_token_list[-_gpl:]
+                        else:
+                            token_list = _full_token_list
+                            _gpl_suffix = []
 
                         # Try memory-aware cache first, then legacy
                         cache_obj = self.memory_aware_cache or self.prefix_cache
@@ -1877,13 +1905,14 @@ class MLLMBatchGenerator:
                                 else:
                                     req.prompt_cache = cache
                                     num_cached = len(token_list) - len(remaining)
-                                    if remaining:
+                                    _full_remaining = (remaining or []) + list(_gpl_suffix)
+                                    if _full_remaining:
                                         model_config = getattr(self.model, "config", None)
                                         img_token_id = (
                                             getattr(model_config, "image_token_index", None)
                                             if model_config else None
                                         )
-                                        has_images = img_token_id is not None and img_token_id in remaining
+                                        has_images = img_token_id is not None and img_token_id in _full_remaining
                                         if has_images:
                                             req.prompt_cache = None
                                             logger.info(
@@ -1892,18 +1921,19 @@ class MLLMBatchGenerator:
                                             )
                                         else:
                                             req._cached_tokens = num_cached
-                                            req.input_ids = mx.array([remaining])
+                                            req.input_ids = mx.array([_full_remaining])
                                             req.pixel_values = None
                                             req.attention_mask = None
                                             req.image_grid_thw = None
                                             logger.info(
                                                 f"VLM cache HIT for {req.request_id}: "
                                                 f"{num_cached} cached, "
-                                                f"{len(remaining)} remaining"
+                                                f"{len(_full_remaining)} remaining "
+                                                f"(incl. {len(_gpl_suffix)}-token gen-prompt suffix)"
                                             )
                                     else:
                                         req._cached_tokens = len(token_list)
-                                        req.input_ids = mx.array([token_list[-1:]])
+                                        req.input_ids = mx.array([_full_token_list[-1:]])
                                         req.pixel_values = None
                                         req.attention_mask = None
                                         req.image_grid_thw = None
@@ -1920,11 +1950,15 @@ class MLLMBatchGenerator:
             if req.prompt_cache is None and self.disk_cache is not None and not _mllm_bypass:
                 if req.input_ids is not None:
                     try:
-                        token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
-                        # Strip gen_prompt_len from fetch key to match store key.
+                        _full_token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
+                        # Strip gen_prompt_len from fetch key, keep suffix to re-feed.
                         _gpl = getattr(req, '_gen_prompt_len', 0)
-                        if _gpl > 0 and _gpl < len(token_list):
-                            token_list = token_list[:-_gpl]
+                        if _gpl > 0 and _gpl < len(_full_token_list):
+                            token_list = _full_token_list[:-_gpl]
+                            _gpl_suffix = _full_token_list[-_gpl:]
+                        else:
+                            token_list = _full_token_list
+                            _gpl_suffix = []
                         disk_result = self.disk_cache.fetch(token_list)
                         if disk_result is not None:
                             if not self._is_hybrid:
@@ -1949,9 +1983,12 @@ class MLLMBatchGenerator:
                                     else:
                                         req.prompt_cache = disk_result
                                         req._cached_tokens = len(token_list)
-                                        # Disk cache is exact-match (hash-based), all tokens cached.
-                                        # Set input to last token only for decode phase.
-                                        req.input_ids = mx.array([token_list[-1:]])
+                                        # Disk cache is exact-match on the gpl-stripped
+                                        # prefix. Feed gpl suffix + last stripped token
+                                        # so the model sees <|im_start|>assistant\n<think>\n
+                                        # before sampling.
+                                        _tail = _full_token_list[-(1 + len(_gpl_suffix)):] if _gpl_suffix else _full_token_list[-1:]
+                                        req.input_ids = mx.array([_tail])
                                         req.pixel_values = None
                                         req.attention_mask = None
                                         req.image_grid_thw = None

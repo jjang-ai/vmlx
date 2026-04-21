@@ -150,17 +150,23 @@ class TestEnableThinkingTriState:
     """
 
     def test_enable_thinking_priority_chain_in_source(self):
-        """Verify server.py has correct priority chain for enable_thinking."""
-        import vmlx_engine.server as server_mod
-        source = inspect.getsource(server_mod.stream_chat_completion)
+        """Verify server.py enable_thinking priority chain exists.
 
-        # Priority 1: top-level enable_thinking field
-        assert "request.enable_thinking is not None" in source
-        # Priority 2: chat_template_kwargs
-        assert 'enable_thinking' in source
-        assert "_ct_kwargs" in source or "chat_template_kwargs" in source
-        # Priority 3: auto-detect (None)
-        assert "_effective_thinking = None" in source
+        The inline chain was refactored into _resolve_enable_thinking helper.
+        stream_chat_completion must call that helper and store result in
+        _effective_thinking; helper must implement the 3-layer precedence.
+        """
+        import vmlx_engine.server as server_mod
+        stream_source = inspect.getsource(server_mod.stream_chat_completion)
+        helper_source = inspect.getsource(server_mod._resolve_enable_thinking)
+
+        # stream_chat_completion delegates to helper and stores result
+        assert "_resolve_enable_thinking(" in stream_source
+        assert "_effective_thinking" in stream_source
+        # Helper implements all 3 priority layers
+        assert "request_value is not None" in helper_source  # Priority 1
+        assert "ct_kwargs" in helper_source and "enable_thinking" in helper_source  # Priority 2
+        assert "_default_enable_thinking" in helper_source  # Priority 3
 
     def test_suppress_reasoning_when_thinking_false(self):
         """When enable_thinking=False, suppress_reasoning should be True."""
@@ -1034,34 +1040,35 @@ class TestEnableThinkingAPIKwargs:
     """
 
     def test_chat_template_kwargs_path_in_source(self):
-        """Server must read enable_thinking from chat_template_kwargs."""
+        """Helper must read enable_thinking from chat_template_kwargs (priority 2)."""
         import vmlx_engine.server as server_mod
-        source = inspect.getsource(server_mod.stream_chat_completion)
+        helper_source = inspect.getsource(server_mod._resolve_enable_thinking)
 
-        # _ct_kwargs = request.chat_template_kwargs or {}
-        assert "chat_template_kwargs" in source
-        assert '"enable_thinking"' in source or "'enable_thinking'" in source
+        assert "ct_kwargs" in helper_source
+        assert '"enable_thinking"' in helper_source or "'enable_thinking'" in helper_source
 
     def test_top_level_takes_priority(self):
-        """request.enable_thinking must override chat_template_kwargs."""
+        """request.enable_thinking must override chat_template_kwargs.
+
+        In the helper, priority 1 (request_value) is checked BEFORE priority 2
+        (ct_kwargs). Verify the line-order reflects that precedence.
+        """
         import vmlx_engine.server as server_mod
-        source = inspect.getsource(server_mod.stream_chat_completion)
+        helper_source = inspect.getsource(server_mod._resolve_enable_thinking)
 
-        # The priority check: request.enable_thinking is not None checked FIRST
-        lines = source.split('\n')
-        top_level_idx = None
-        kwargs_idx = None
+        lines = helper_source.split('\n')
+        request_idx = None
+        ctkwargs_idx = None
         for i, line in enumerate(lines):
-            if "request.enable_thinking is not None" in line:
-                top_level_idx = i
-            if "_ct_kwargs" in line and "enable_thinking" in line and top_level_idx is not None:
-                if "elif" in line or "else" in line:
-                    kwargs_idx = i
-                    break
+            if request_idx is None and "request_value is not None" in line:
+                request_idx = i
+            if request_idx is not None and ctkwargs_idx is None and '"enable_thinking" in ct_kwargs' in line:
+                ctkwargs_idx = i
+                break
 
-        assert top_level_idx is not None, "Top-level enable_thinking check not found"
-        assert kwargs_idx is not None, "chat_template_kwargs fallback not found"
-        assert top_level_idx < kwargs_idx, "Top-level must come before kwargs fallback"
+        assert request_idx is not None, "Top-level enable_thinking check (request_value) not found"
+        assert ctkwargs_idx is not None, "chat_template_kwargs fallback not found"
+        assert request_idx < ctkwargs_idx, "request_value must be checked BEFORE ct_kwargs"
 
     def test_enable_thinking_field_on_request_model(self):
         """ChatCompletionRequest should have enable_thinking field."""

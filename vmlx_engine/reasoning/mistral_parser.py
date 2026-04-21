@@ -62,7 +62,10 @@ class MistralReasoningParser(BaseThinkingReasoningParser):
             if self.start_token in model_output:
                 # [THINK] present but no [/THINK] — reasoning was truncated
                 return super().extract_reasoning(model_output)
-            # No think tags at all — pure content
+            # No think tags at all: if [THINK] was in the prompt (think_in_prompt),
+            # the model is still mid-reasoning — route to reasoning field, not content.
+            if getattr(self, "_think_in_prompt", False):
+                return (model_output.strip() or None), None
             return None, model_output
 
         return super().extract_reasoning(model_output)
