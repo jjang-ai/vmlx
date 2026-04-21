@@ -1,0 +1,53 @@
+{
+  "groupId": "group-3-no-model",
+  "testedAt": "2026-04-21T14:10:00Z",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M (deep-sleep mode, model unloaded)",
+    "endpoints": ["/v1/tokenizer_info", "/v1/tokenize", "/v1/detokenize"]
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-TOK-005",
+      "title": "Error handling: no model loaded",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Server put in deep-sleep mode (POST /admin/deep-sleep)",
+          "expected": "Server unloads model, remains alive",
+          "observed": "Server state: deep_sleep, health endpoint returns ok"
+        },
+        {
+          "action": "GET /v1/tokenizer_info with no model",
+          "expected": "HTTP 503 with clear error message",
+          "observed": "HTTP 503: {\"error\":{\"message\":\"no model loaded\",\"code\":503,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/tokenize with no model",
+          "expected": "HTTP 503 with clear error message",
+          "observed": "HTTP 503: {\"error\":{\"message\":\"no model loaded\",\"code\":503,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/detokenize with no model",
+          "expected": "HTTP 503 with clear error message",
+          "observed": "HTTP 503: {\"error\":{\"message\":\"no model loaded\",\"code\":503,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "Verify server process still alive after requests",
+          "expected": "Server process not crashed",
+          "observed": "Server still running with 1 listener on port 8080, health endpoint responding"
+        }
+      ],
+      "evidence": {
+        "httpStatusCodes": [503, 503, 503],
+        "errorMessages": ["no model loaded", "no model loaded", "no model loaded"],
+        "serverAlive": true
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 1 assertion: VAL-TOK-005 PASSED. All three tokenizer endpoints correctly return HTTP 503 with 'no model loaded' error when model is unloaded via deep-sleep. Server remains stable after error requests."
+}

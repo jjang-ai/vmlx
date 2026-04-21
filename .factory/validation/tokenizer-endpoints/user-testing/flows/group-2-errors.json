@@ -1,0 +1,106 @@
+{
+  "groupId": "group-2-errors",
+  "testedAt": "2026-04-21T12:00:00Z",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M",
+    "endpoints": ["/v1/tokenize", "/v1/detokenize"]
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-TOK-006",
+      "title": "Error handling: bad request body",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /v1/tokenize with empty JSON {}",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing 'text'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/tokenize with wrong field name (tokens instead of text)",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing 'text'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/tokenize with invalid JSON body '{invalid json}'",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"invalid JSON body\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/tokenize with text as number (wrong type)",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing 'text'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/tokenize with text as array (wrong type)",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing 'text'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/detokenize with empty JSON {}",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing or invalid 'tokens'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/detokenize with tokens as string 'not-an-array'",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing or invalid 'tokens'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/detokenize with invalid JSON 'not json at all'",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"invalid JSON body\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/detokenize with tokens as number (wrong type)",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing or invalid 'tokens'\",\"code\":400,\"type\":\"api_error\"}}"
+        },
+        {
+          "action": "POST /v1/detokenize with tokens containing strings instead of ints",
+          "expected": "HTTP 400 with JSON error",
+          "observed": "HTTP 400: {\"error\":{\"message\":\"missing or invalid 'tokens'\",\"code\":400,\"type\":\"api_error\"}}"
+        }
+      ],
+      "evidence": {
+        "files": ["tokenizer-endpoints/group-2/VAL-TOK-006-error-responses.txt"],
+        "consoleErrors": "none",
+        "network": "10 requests, all returned HTTP 400"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-TOK-007",
+      "title": "/v1/tokenize default for add_special_tokens is false",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /v1/tokenize with text='Hello, world! This is a test.' and add_special_tokens: false",
+          "expected": "Returns token array",
+          "observed": "HTTP 200: {\"tokens\":[9259,236764,1902,236888,1174,563,496,1594,236761]}"
+        },
+        {
+          "action": "POST /v1/tokenize with same text and add_special_tokens OMITTED",
+          "expected": "Returns identical token array",
+          "observed": "HTTP 200: {\"tokens\":[9259,236764,1902,236888,1174,563,496,1594,236761]}"
+        },
+        {
+          "action": "Compare both token sequences",
+          "expected": "Identical sequences",
+          "observed": "IDENTICAL: [9259,236764,1902,236888,1174,563,496,1594,236761] == [9259,236764,1902,236888,1174,563,496,1594,236761]"
+        }
+      ],
+      "evidence": {
+        "files": ["tokenizer-endpoints/group-2/VAL-TOK-007-default-add-special-tokens.txt"],
+        "consoleErrors": "none",
+        "network": "3 requests: 2 returned HTTP 200, comparison confirmed identical"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 2 assertions: both passed. VAL-TOK-006: all 10 malformed request cases (5 per endpoint) correctly returned HTTP 400 with JSON error objects containing human-readable messages. VAL-TOK-007: default add_special_tokens is correctly false — identical token sequences with explicit false vs omitted field."
+}

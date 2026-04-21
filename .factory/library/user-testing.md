@@ -44,3 +44,17 @@
 - **Batching limitation:** `/v1/completions` joins `[String]` prompts with `\n`. Use `batch_size=1` in lm-eval for correct loglikelihood scoring.
 - **No unit tests on disk:** `swift test` currently fails (no test files). E2E harness is the primary validation tool.
 - **Build time:** `swift build --product vmlxctl` takes ~2-5 minutes on first build.
+- **Tokenizer endpoint paths:** All tokenizer endpoints are under `/v1/` prefix: `/v1/tokenizer_info`, `/v1/tokenize`, `/v1/detokenize` (not `/tokenizer_info` etc.).
+
+## Flow Validator Guidance: HTTP API
+
+**Surface:** HTTP API (curl-based)
+**Base URL:** `http://127.0.0.1:8080`
+**Isolation:** All validators share the same server instance and model. HTTP requests are stateless and idempotent for tokenizer endpoints, so multiple validators can run concurrently without interference.
+**Shared state:** The server's loaded model/tokenizer is shared and read-only for tokenizer tests. No mutations occur.
+**Constraints:**
+- Do NOT restart the server or change the loaded model.
+- Do NOT test "no model loaded" scenarios (that requires a dedicated server instance).
+- Rate-limit to avoid overwhelming the server (add small delays between requests if needed).
+- All responses are JSON; validate with `python3 -m json.tool` or `jq`.
+- The `/v1/tokenizer_info` response may not include `chat_template` (can be `null`).
