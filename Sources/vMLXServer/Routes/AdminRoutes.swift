@@ -104,6 +104,16 @@ public enum AdminRoutes {
                !modelPath.isEmpty
             {
                 let url = URL(fileURLWithPath: modelPath)
+                // iter-152 §220: fence against ModelLibrary knownRoots so an
+                // admin-token holder cannot hand in an arbitrary path
+                // (/etc/..., someone else's ~, a Cloudflare tunnel secret)
+                // and have the engine read it as a "model". Same shape as
+                // /admin/models/{id} delete fence.
+                guard await engine.modelLibrary.isPathUnderKnownRoots(url) else {
+                    return OpenAIRoutes.errorJSON(
+                        .badRequest,
+                        "model path must live under a configured model root")
+                }
                 override = Engine.LoadOptions(modelPath: url)
             }
             do {
@@ -154,8 +164,18 @@ public enum AdminRoutes {
             else {
                 return OpenAIRoutes.errorJSON(.badRequest, "missing `path` field")
             }
+            // iter-152 §220: same knownRoots fence as /admin/wake — without
+            // this an admin-token holder could point the DFlash drafter
+            // loader at an arbitrary file, and the mlx safetensors reader
+            // would happily start memory-mapping it.
+            let drafterURL = URL(fileURLWithPath: path)
+            guard await engine.modelLibrary.isPathUnderKnownRoots(drafterURL) else {
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "drafter path must live under a configured model root")
+            }
             do {
-                try await engine.loadDFlashDrafter(from: URL(fileURLWithPath: path))
+                try await engine.loadDFlashDrafter(from: drafterURL)
                 let ready = await engine.dflashIsReady()
                 return OpenAIRoutes.json([
                     "status": "loaded",
@@ -251,6 +271,25 @@ public enum AdminRoutes {
             }
             guard let prompts = obj["prompts"] as? [String], !prompts.isEmpty else {
                 return OpenAIRoutes.errorJSON(.badRequest, "missing or empty `prompts`")
+            }
+            // iter-152 §220: cap prompt count + per-prompt length so an
+            // admin-token holder can't schedule a 10k-prompt warmup run
+            // that ties up the scheduler and blows memory. 64 prompts ×
+            // 64KB each lines up with the 1MB body limit above and is
+            // well above any realistic warm-set.
+            let maxPromptCount = 64
+            let maxPromptBytes = 64 * 1024
+            guard prompts.count <= maxPromptCount else {
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "too many prompts (max \(maxPromptCount))")
+            }
+            if let oversize = prompts.first(where: {
+                $0.utf8.count > maxPromptBytes
+            }) {
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "prompt too long (max \(maxPromptBytes) bytes, got \(oversize.utf8.count))")
             }
             let model = (obj["model"] as? String) ?? ""
             do {
