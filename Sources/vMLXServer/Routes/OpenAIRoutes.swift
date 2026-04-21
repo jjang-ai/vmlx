@@ -1258,13 +1258,25 @@ public enum OpenAIRoutes {
             }
             // iter-60: JIT wake for TTS too.
             await engine.wakeFromStandby()
+            // iter-135 §210: the TTS response body is raw audio bytes —
+            // we can't put `total_ms` inside the body like the JSON
+            // routes do. The X-vMLX-TTS-* header family already
+            // carries backend / sample_rate / duration (audio clip
+            // length in seconds), but NO latency metric existed. A
+            // caller watching their TTS SLO had to fall back to HTTP
+            // RTT — which counts download of the WAV bytes, so a
+            // slow client upload conflates with slow synthesis. Add
+            // X-vMLX-TTS-TotalMs measured server-side.
+            let ttsStart = Date()
             do {
                 let result = try await engine.synthesizeSpeech(request: obj)
+                let totalMs = Date().timeIntervalSince(ttsStart) * 1000
                 var headers: HTTPFields = [:]
                 headers[.contentType] = result.contentType
                 headers[HTTPField.Name("X-vMLX-TTS-Backend")!] = result.backend
                 headers[HTTPField.Name("X-vMLX-TTS-SampleRate")!] = String(result.sampleRate)
                 headers[HTTPField.Name("X-vMLX-TTS-Duration")!] = String(format: "%.3f", result.durationSec)
+                headers[HTTPField.Name("X-vMLX-TTS-TotalMs")!] = String(format: "%.2f", totalMs)
                 var buf = ByteBuffer()
                 buf.writeBytes(result.audio)
                 return Response(status: .ok, headers: headers, body: .init(byteBuffer: buf))
