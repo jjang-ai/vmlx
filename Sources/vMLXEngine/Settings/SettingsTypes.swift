@@ -367,6 +367,13 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // MCP
     public var mcpConfigPath: String = ""            // cli.py --mcp-config
     public var mcpServers: [MCPServer] = []
+    // iter-ralph §229 (H4): resolved per-chat MCP merge gate. When false,
+    // Stream suppresses merging the connected MCP servers' tool catalog
+    // into request.tools. `nil` (default) keeps the legacy always-merge
+    // behavior so users who haven't touched the ChatSettings toggle see
+    // the same MCP visibility as before. The global default is nil; a
+    // per-chat ChatSettings.mcpEnabled=false overrides via the resolver.
+    public var mcpEnabledResolved: Bool? = nil
 
     // Misc vMLX.app UI defaults
     public var streamUsageInChunks: Bool = true

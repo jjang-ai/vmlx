@@ -654,7 +654,16 @@ extension Engine {
         // an empty list, they explicitly opted out of tool dispatch — do
         // not merge MCP tools on top, even if MCP servers are connected.
         let userExplicitlyDisabledTools = (request.tools?.isEmpty == true)
-        if !mcpMergeBlocked && !userExplicitlyDisabledTools {
+        // iter-ralph §229 (H4): wire the ChatSettings.mcpEnabled toggle.
+        // Before §229 the toggle was a pure UI draft-state zombie — it
+        // round-tripped to disk + back to the popover, but never reached
+        // Stream. Users who toggled "MCP: Off" still had every connected
+        // MCP server's tool catalog merged into the request. Explicit
+        // `false` now suppresses the merge; `nil` (default) keeps the
+        // previous always-merge behavior so zero-config users don't
+        // silently lose MCP.
+        let sessionMCPOff = (resolved.settings.mcpEnabledResolved == false)
+        if !mcpMergeBlocked && !userExplicitlyDisabledTools && !sessionMCPOff {
             let mcpTools = await self.mcp.listTools()
             if !mcpTools.isEmpty {
                 var merged = request.tools ?? []
