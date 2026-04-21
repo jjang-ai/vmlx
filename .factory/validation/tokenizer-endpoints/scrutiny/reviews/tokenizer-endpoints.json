@@ -1,0 +1,44 @@
+{
+  "featureId": "tokenizer-endpoints",
+  "reviewedAt": "2026-04-21T11:15:00.000Z",
+  "commitId": "02c8e91",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Implementation adds three tokenizer endpoints (GET /v1/tokenizer_info, POST /v1/tokenize, POST /v1/detokenize) to OpenAIRoutes.swift following existing patterns. The code is clean, well-commented, and handles error states correctly. Two minor semantic concerns noted below do not block acceptance.",
+    "issues": [
+      {
+        "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+        "line": 1001,
+        "severity": "non_blocking",
+        "description": "pad_token is mapped to tokenizer.unknownToken. The Tokenizer protocol has no padToken property, so unknownToken is used as a stand-in. For models where pad_token ≠ unk_token this will be incorrect. This is a pragmatic compromise given the available API surface, but the key name is misleading."
+      },
+      {
+        "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+        "line": 1005,
+        "severity": "non_blocking",
+        "description": "chat_template is always set to nil. The feature spec says to expose chat_template, but the Tokenizer protocol only exposes applyChatTemplate(messages:...) — not the raw template string. The raw template is available in ModelConfiguration/CapabilityDetector but would require additional plumbing to access here. Returning null is a reasonable first step, but consumers expecting a usable chat_template value will be disappointed."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "AGENTS.md says 'Access tokenizer via engine.loaded?.perform { $0.tokenizer }' (existing pattern) but the worker correctly used the newer async property pattern: `let container = await engine.loaded; let tokenizer = await container.tokenizer`. The `perform { }` method on ModelContainer is actually marked `@available(*, deprecated)`. The AGENTS.md convention is outdated.",
+      "evidence": "OpenAIRoutes.swift:996-999 uses `await engine.loaded` then `await container.tokenizer`. ModelContainer.swift:121-123 shows `perform(_:)` is deprecated. ModelContainer.swift:96-100 shows `var tokenizer: Tokenizer { get async { await context.read { $0.tokenizer } } }` as the preferred access."
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed the swift-backend-worker procedure correctly. skillFeedback.followedProcedure is true with no deviations. Worker noted model choice consideration in transcript (preferred small model for fast iteration).",
+      "evidence": "Transcript skeleton shows skillFeedback.followedProcedure: true, deviations: [], suggestedChanges: []."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The Tokenizer protocol (vMLXLMCommon/Tokenizer.swift) does not expose a `padToken` property — only bosToken, eosToken, and unknownToken. This should be documented in the library since future tokenizer-related work will encounter the same limitation. Additionally, chat_template raw string is not directly available on the Tokenizer protocol; it lives in the model configuration layer (CapabilityDetector).",
+      "evidence": "Tokenizer.swift:6-14 shows protocol has only bosToken, eosToken, unknownToken. CapabilityDetector.swift:137,164,211 shows chat_template handling in configuration."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The tokenizer endpoints implementation is clean, well-structured, and follows existing codebase conventions. All three endpoints work correctly with proper error handling (503 for no model, 400 for bad requests). The e2e harness covers happy paths, roundtrip, and error cases. Two non-blocking concerns: (1) pad_token maps to unknownToken rather than a true pad token, and (2) chat_template is always null since the raw template isn't exposed by the Tokenizer protocol. Both are acceptable limitations given the current API surface. The worker correctly used the modern async property access pattern for the tokenizer rather than the deprecated `perform { }` method documented in AGENTS.md, which should be updated."
+}

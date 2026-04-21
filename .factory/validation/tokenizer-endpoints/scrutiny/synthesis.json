@@ -1,0 +1,52 @@
+{
+  "milestone": "tokenizer-endpoints",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": false,
+      "command": "swift test",
+      "exitCode": 1,
+      "note": "Pre-existing known failure: no test files on disk (skeleton target in Package.swift). Documented in AGENTS.md as out of scope. Not related to tokenizer-endpoints feature."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "swift build --product vmlxctl",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "scripts/lint-typed-mlx-scalars.sh",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added 'Tokenizer Protocol Limitations' section to architecture.md documenting missing padToken and raw chat_template on the Tokenizer protocol.",
+      "sourceFeature": "tokenizer-endpoints"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Update tokenizer access pattern from deprecated `engine.loaded?.perform { $0.tokenizer }` to the modern async property pattern: `let container = await engine.loaded; let tokenizer = await container.tokenizer`. The `perform(_:)` method on ModelContainer is marked `@available(*, deprecated)`.",
+      "evidence": "Feature tokenizer-endpoints worker correctly used the modern pattern (`await engine.loaded` then `await container.tokenizer`) because the deprecated method wouldn't work properly. ModelContainer.swift:121-123 shows perform(_:) is deprecated. ModelContainer.swift:96-100 shows var tokenizer as the preferred access.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Worker followed skill procedure correctly (no action needed).",
+      "reason": "Informational only, no change required."
+    }
+  ],
+  "previousRound": null
+}

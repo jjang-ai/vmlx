@@ -63,6 +63,15 @@ Client → OpenAIRoutes → ChatRequest(maxTokens:1, echo:true, logprobs:1)
   → NO AsyncStream, NO StreamingDetokenizer, NO ToolCallProcessor
 ```
 
+## Tokenizer Protocol Limitations
+
+The `Tokenizer` protocol (vMLXLMCommon/Tokenizer.swift) has limited metadata surface:
+- **Available:** `bosToken`, `eosToken`, `unknownToken`
+- **Not available:** `padToken` — no property exists on the protocol. The tokenizer endpoints map `pad_token` to `unknownToken` as a pragmatic stand-in. For models where `pad_token ≠ unk_token`, this will be incorrect.
+- **Not available:** Raw `chat_template` string — only `applyChatTemplate(messages:...)` is exposed (a method, not the template itself). The raw template lives in the model configuration layer (`CapabilityDetector`), not on the Tokenizer protocol. The tokenizer endpoints return `chat_template: null`.
+
+Future work requiring these properties will need to either extend the Tokenizer protocol or access the model configuration layer directly.
+
 ## Key Invariants
 
 1. **Zero overhead for normal requests**: `logSoftmax` over full sequence is ONLY computed when `echo == true || promptLogprobs > 0`. Normal chat completions use the existing path unchanged.
