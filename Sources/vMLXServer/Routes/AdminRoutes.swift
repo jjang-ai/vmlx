@@ -166,7 +166,7 @@ public enum AdminRoutes {
             // Alias of /v1/cache/stats
             do {
                 let stats = try await engine.cacheStats()
-                return OpenAIRoutes.json(stats)
+                return OpenAIRoutes.json(Self.redactStats(stats))
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -205,7 +205,7 @@ public enum AdminRoutes {
         router.get("/v1/cache/stats") { _, _ -> Response in
             do {
                 let stats = try await engine.cacheStats()
-                return OpenAIRoutes.json(stats)
+                return OpenAIRoutes.json(Self.redactStats(stats))
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -219,7 +219,7 @@ public enum AdminRoutes {
         router.get("/v1/cache/entries") { _, _ -> Response in
             do {
                 let entries = try await engine.cacheEntries()
-                return OpenAIRoutes.json(entries)
+                return OpenAIRoutes.json(Self.redactStats(entries))
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -360,5 +360,36 @@ public enum AdminRoutes {
                 return OpenAIRoutes.errorJSON(.badRequest, "\(error)")
             }
         }
+    }
+
+    /// iter-127 §202: sanitize cache-stats payload before wire emission.
+    ///
+    /// `Engine.cacheStats()` returns `disk.directory` as a raw absolute
+    /// filesystem path (`disk.cacheDir.path` at Engine.swift:2443). That
+    /// leaks the user's home-dir layout — same class of disclosure that
+    /// iter-117 §143 closed for `/v1/models`, iter-115 §141 closed for
+    /// `/api/show`, iter-116 §142 closed for `/v1/adapters`. Clients
+    /// (Copilot, dashboards, LAN peers once `0.0.0.0` is bound) only
+    /// need to know that a disk tier exists, not where on disk it
+    /// lives. The in-app `CachePanel` reads stats directly from the
+    /// Engine actor so it still sees the real path — only the HTTP
+    /// surface is redacted, same layer-boundary pattern as the rest
+    /// of the §143-family fixes.
+    ///
+    /// Redaction walks `[String: Any]` recursively because `/v1/cache/
+    /// entries` wraps `stats` in an outer dict (`{stats: {...}, entries:
+    /// [...]}`) — a shallow dig would miss the nested `disk.directory`.
+    static func redactStats(_ obj: [String: Any]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        for (k, v) in obj {
+            if k == "directory", let s = v as? String {
+                out[k] = OpenAIRoutes.redactHomeDir(s)
+            } else if let nested = v as? [String: Any] {
+                out[k] = redactStats(nested)
+            } else {
+                out[k] = v
+            }
+        }
+        return out
     }
 }
