@@ -278,6 +278,10 @@ public enum OllamaRoutes {
             let model = (ollamaBody["model"] as? String) ?? "default"
             let isStream = (ollamaBody["stream"] as? Bool) ?? true
 
+            // iter-112 §190: warn-log inbound keep_alive (silent drop
+            // before today — see the helper for the full rationale).
+            Self.warnIfKeepAlivePresent(ollamaBody, route: "/api/chat")
+
             // Translate Ollama body → ChatRequest. Minimal mapping; full translation
             // lives in vmlx_engine/api/ollama_adapter.py (ollama_chat_to_openai).
             guard let chatReq = Self.ollamaToChatRequest(ollamaBody) else {
@@ -375,6 +379,12 @@ public enum OllamaRoutes {
             }
             let isStream = (obj["stream"] as? Bool) ?? true
             let options = (obj["options"] as? [String: Any]) ?? [:]
+
+            // iter-112 §190: warn-log inbound keep_alive (silent drop
+            // before today — see warnIfKeepAlivePresent for the full
+            // rationale). Shared helper with /api/chat so both routes
+            // emit identical logs.
+            Self.warnIfKeepAlivePresent(obj, route: "/api/generate")
 
             // iter-111 §189: Ollama's /api/generate accepts
             // `context: [int]` — the legacy stateless-continuation
@@ -801,6 +811,51 @@ public enum OllamaRoutes {
     /// production-readiness loop: never silent no-op. Unify both
     /// routes around this single helper, emit unconditionally to
     /// stderr so the warning is visible in the server log.
+    /// iter-112 §190: warn-log inbound Ollama `keep_alive` field.
+    ///
+    /// Ollama's /api/chat + /api/generate accept top-level
+    /// `keep_alive` to control how long the model stays loaded
+    /// after a request — five wire shapes: `"5m"` duration string,
+    /// `"300s"` seconds-with-unit string, bare `300` seconds, `0`
+    /// unload-immediately, `-1` keep-forever. Ollama clients
+    /// (Copilot, LangChain, ollama-js) rely on this to coordinate
+    /// memory with other workloads sharing the same machine.
+    ///
+    /// vMLX silently dropped it entirely before iter-112. Users
+    /// setting `keep_alive: 0` expecting the model to unload had
+    /// it stay resident indefinitely under vMLX's own idle timer;
+    /// users setting `-1` for a long-lived session got surprised
+    /// soft-sleeps when the idle timer fired. Classic silent-drop
+    /// that hard rule #1 forbids.
+    ///
+    /// FIXME(iter-112 §190): wire keep_alive to the per-session
+    /// idle-timer via `Engine.softSleep()` / `Engine.deepSleep()`
+    /// so clients can control the sleep schedule per-request:
+    ///   - `keep_alive == 0` → `softSleep()` immediately after
+    ///     response completes (equivalent to Ollama's "unload now")
+    ///   - `keep_alive > 0` → push the idle deadline out to
+    ///     `Date().addingTimeInterval(N)` before any already-
+    ///     scheduled deeper sleep
+    ///   - `keep_alive < 0` → disable idle sleep for this session
+    ///     until an explicit stop or another keep_alive request
+    /// The idle-timer runs in a separate actor task today — the
+    /// wire-through needs a per-session mutator on the scheduler
+    /// (doesn't exist yet) rather than each handler reaching into
+    /// the actor directly. Until then, surface the inbound value
+    /// so operators can see what clients were expecting.
+    static func warnIfKeepAlivePresent(
+        _ body: [String: Any],
+        route: String
+    ) {
+        guard let rawKeepAlive = body["keep_alive"] else { return }
+        // Stringify for the log regardless of wire shape (string /
+        // int / float). Accept everything so the operator sees
+        // exactly what the client sent.
+        let repr = "\(rawKeepAlive)"
+        FileHandle.standardError.write(Data(
+            "[ollama] \(route): ignored `keep_alive: \(repr)` — vMLX idle-timer / soft-sleep rules are not yet per-request configurable. See iter-112 §190 FIXME.\n".utf8))
+    }
+
     static func warnUnsupportedOllamaOptions(
         _ opts: [String: Any],
         route: String
