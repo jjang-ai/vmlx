@@ -757,6 +757,61 @@ public enum OpenAIRoutes {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return Self.errorJSON(.badRequest, "invalid JSON body")
             }
+            // iter-152 §221: cap input batch size. OpenAI's own documented
+            // embeddings API limits batches to 2048 entries and ~8192
+            // tokens per entry. Without these caps, a caller could hand
+            // us a `[String]` of 100k entries within the 16 MiB body and
+            // we'd happily tokenize each one, thrashing memory.
+            //
+            // `input` is four shapes:
+            //   String   — single string
+            //   [Int]    — single pre-tokenized sequence (cap by token count)
+            //   [String] — batch of strings       (cap by batch AND per-string len)
+            //   [[Int]]  — batch of token seqs    (cap by batch AND per-seq tokens)
+            let maxInputs = 2048
+            let maxStringBytes = 32 * 1024
+            let maxTokens = 8192
+            if let s = obj["input"] as? String {
+                guard s.utf8.count <= maxStringBytes else {
+                    return Self.errorJSON(
+                        .badRequest,
+                        "input string too long (max \(maxStringBytes) bytes, got \(s.utf8.count))")
+                }
+            } else if let flatTokens = obj["input"] as? [Int] {
+                // Single pre-tokenized sequence — cap by token count only.
+                guard flatTokens.count <= maxTokens else {
+                    return Self.errorJSON(
+                        .badRequest,
+                        "token array too long (max \(maxTokens), got \(flatTokens.count))")
+                }
+            } else if let strs = obj["input"] as? [String] {
+                guard strs.count <= maxInputs else {
+                    return Self.errorJSON(
+                        .badRequest,
+                        "`input` too large (max \(maxInputs) items, got \(strs.count))")
+                }
+                if let oversize = strs.first(where: { $0.utf8.count > maxStringBytes }) {
+                    return Self.errorJSON(
+                        .badRequest,
+                        "input string too long (max \(maxStringBytes) bytes, got \(oversize.utf8.count))")
+                }
+            } else if let tokBatches = obj["input"] as? [[Int]] {
+                guard tokBatches.count <= maxInputs else {
+                    return Self.errorJSON(
+                        .badRequest,
+                        "`input` too large (max \(maxInputs) items, got \(tokBatches.count))")
+                }
+                if let oversize = tokBatches.first(where: { $0.count > maxTokens }) {
+                    return Self.errorJSON(
+                        .badRequest,
+                        "token array too long (max \(maxTokens), got \(oversize.count))")
+                }
+            } else if let arr = obj["input"] as? [Any], arr.count > maxInputs {
+                // Fallback for mixed/unknown array content.
+                return Self.errorJSON(
+                    .badRequest,
+                    "`input` too large (max \(maxInputs) items, got \(arr.count))")
+            }
             // iter-60: JIT wake — previously only chat/completions/
             // responses routes pulled the engine out of standby. An
             // embeddings request against a soft-slept engine would
