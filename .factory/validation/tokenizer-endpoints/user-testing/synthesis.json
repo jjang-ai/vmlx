@@ -1,14 +1,15 @@
 {
   "milestone": "tokenizer-endpoints",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "assertionsSummary": {
     "total": 7,
-    "passed": 6,
-    "failed": 1,
+    "passed": 7,
+    "failed": 0,
     "blocked": 0
   },
   "passedAssertions": [
+    "VAL-TOK-001",
     "VAL-TOK-002",
     "VAL-TOK-003",
     "VAL-TOK-004",
@@ -16,19 +17,8 @@
     "VAL-TOK-006",
     "VAL-TOK-007"
   ],
-  "failedAssertions": [
-    {
-      "id": "VAL-TOK-001",
-      "reason": "chat_template key is missing from /v1/tokenizer_info response. The endpoint returns {eos_token, bos_token, pad_token} but chat_template is completely absent (not even null). Root cause: source code sets info[\"chat_template\"] = nil which causes JSONSerialization to drop the key entirely. Fix: use NSNull() or explicitly include chat_template with a string/null value that survives serialization."
-    }
-  ],
+  "failedAssertions": [],
   "blockedAssertions": [],
-  "appliedUpdates": [
-    {
-      "target": "user-testing.md",
-      "description": "Added Flow Validator Guidance for HTTP API surface, documented tokenizer endpoint paths under /v1/ prefix, and added gotcha about chat_template being absent.",
-      "source": "setup"
-    }
-  ],
-  "previousRound": null
+  "appliedUpdates": [],
+  "previousRound": ".factory/validation/tokenizer-endpoints/user-testing/synthesis.json (round 1)"
 }

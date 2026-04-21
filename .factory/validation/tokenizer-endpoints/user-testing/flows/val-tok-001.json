@@ -1,0 +1,61 @@
+{
+  "groupId": "val-tok-001",
+  "testedAt": "2026-04-21T12:14:08Z",
+  "isolation": {
+    "baseUrl": "http://127.0.0.1:8080",
+    "serverRunning": true,
+    "modelLoaded": true
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-TOK-001",
+      "title": "/tokenizer_info returns correct metadata",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "GET http://127.0.0.1:8080/v1/tokenizer_info",
+          "expected": "HTTP 200 with JSON body",
+          "observed": "HTTP 200 OK, Content-Type: application/json, Content-Length: 82"
+        },
+        {
+          "action": "Validate response body is valid JSON",
+          "expected": "Parseable JSON object",
+          "observed": "Valid JSON object parsed successfully via python3 -m json.tool"
+        },
+        {
+          "action": "Check all four required keys are present",
+          "expected": "eos_token, bos_token, pad_token, chat_template all present",
+          "observed": "All four keys present in response object"
+        },
+        {
+          "action": "Validate each value is string or null",
+          "expected": "Each value is either a non-empty string or null (not missing/absent)",
+          "observed": "eos_token='<eos>' (str), bos_token='<bos>' (str), pad_token='<unk>' (str), chat_template=null (NoneType)"
+        },
+        {
+          "action": "Verify chat_template key is present (critical fix from commit b33ac29)",
+          "expected": "chat_template key MUST be in response even if value is null",
+          "observed": "chat_template key is present with value null — fix confirmed working"
+        }
+      ],
+      "evidence": {
+        "rawResponse": "tokenizer-endpoints/val-tok-001/response-raw.txt",
+        "httpStatus": 200,
+        "contentType": "application/json",
+        "responseBody": {
+          "eos_token": "<eos>",
+          "bos_token": "<bos>",
+          "chat_template": null,
+          "pad_token": "<unk>"
+        },
+        "consoleErrors": "not applicable (API test)",
+        "network": "GET /v1/tokenizer_info -> 200 OK"
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 1 assertion: 1 passed. VAL-TOK-001 confirmed working — GET /v1/tokenizer_info returns HTTP 200 with valid JSON containing all four required keys (eos_token, bos_token, pad_token, chat_template). The critical fix from commit b33ac29 is validated: chat_template is present in the response with value null (not missing). All values are correctly typed as string or null."
+}
