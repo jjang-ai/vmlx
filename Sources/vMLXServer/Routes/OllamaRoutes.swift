@@ -550,15 +550,44 @@ public enum OllamaRoutes {
                 let vectors: [[Float]] = data.compactMap {
                     $0["embedding"] as? [Float]
                 }
+                // iter-113 §191: Ollama spec requires prompt_eval_count
+                // + total_duration + load_duration on every embed
+                // response. Prior adapter shipped bare {embedding(s),
+                // model} — RAG pipelines (LangChain OllamaEmbeddings,
+                // ollama-js embed client, Open WebUI RAG panel) saw
+                // zeros for every vMLX embedding even though the engine
+                // had real token counts available in its usage dict.
+                // Hard rule #6 parity with /api/chat + /api/generate
+                // (both emit via applyOllamaTimings since iter-64 §118).
+                //
+                // total_duration + load_duration aren't tracked
+                // independently on this path (no GenerateParameters
+                // instrumentation for pure-embed flow), so emit 0 —
+                // same approach applyOllamaTimings uses for
+                // load_duration in the gen path. Clients keying on
+                // the field's presence don't break; clients reading
+                // the value see the correct "not tracked" signal.
+                let promptEvalCount: Int = {
+                    if let usage = result["usage"] as? [String: Any],
+                       let tokens = usage["prompt_tokens"] as? Int
+                    { return tokens }
+                    return 0
+                }()
                 if vectors.count == 1 {
                     return OpenAIRoutes.json([
                         "embedding": vectors[0],
                         "model": result["model"] ?? "",
+                        "prompt_eval_count": promptEvalCount,
+                        "total_duration": 0,
+                        "load_duration": 0,
                     ])
                 }
                 return OpenAIRoutes.json([
                     "embeddings": vectors,
                     "model": result["model"] ?? "",
+                    "prompt_eval_count": promptEvalCount,
+                    "total_duration": 0,
+                    "load_duration": 0,
                 ])
             } catch let err as EngineError {
                 return OpenAIRoutes.mapEngineError(err)
