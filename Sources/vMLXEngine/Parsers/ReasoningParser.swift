@@ -383,27 +383,58 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         if afterSoc.hasPrefix("\n") { afterSoc.removeFirst() }
 
         if let eocRange = afterSoc.range(of: Self.eoc) {
-            let reasoning = String(afterSoc[..<eocRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            var reasoning = String(afterSoc[..<eocRange.lowerBound])
             var content = String(afterSoc[eocRange.upperBound...])
             while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
+            // §241b: models sometimes re-emit `<|channel>thought` inside
+            // the reasoning block (observed live on Gemma-4-31B-JANG_4M).
+            // Also strip stray `<|channel>` / `<channel|>` leftovers so
+            // nothing structural leaks into either side when the Stream
+            // reroutes reasoning → content under `!effectiveThinking`.
+            reasoning = stripResidualMarkers(reasoning)
+            content = stripResidualMarkers(content)
+            reasoning = reasoning.trimmingCharacters(in: .whitespacesAndNewlines)
             content = content.trimmingCharacters(in: .whitespacesAndNewlines)
             return (reasoning.isEmpty ? nil : reasoning, content.isEmpty ? nil : content)
         } else {
-            let partial = stripPartialEoc(afterSoc)
+            var partial = stripPartialEoc(afterSoc)
+            partial = stripResidualMarkers(partial)
                 .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             return (partial.isEmpty ? nil : partial, nil)
         }
     }
 
+    /// Remove stray `<|channel>thought`, `<|channel>`, and `<channel|>`
+    /// occurrences left behind when the model emits multiple reasoning
+    /// blocks or partial markers inside the reasoning text. Without this
+    /// the §15 reasoning-off re-route surfaces raw markers as visible
+    /// content (observed on M11 Gemma-4-31B-JANG_4M, C2/C6/C8 fail).
+    private func stripResidualMarkers(_ s: String) -> String {
+        var out = s
+        out = out.replacingOccurrences(of: Self.thoughtStart, with: "")
+        out = out.replacingOccurrences(of: Self.soc, with: "")
+        out = out.replacingOccurrences(of: Self.eoc, with: "")
+        return out
+    }
+
     private func stripPartialEoc(_ s: String) -> String {
-        let marker = Self.eoc
-        var len = marker.count - 1
-        while len > 0 {
-            let prefix = String(marker.prefix(len))
-            if s.hasSuffix(prefix) {
-                return String(s.dropLast(len))
+        // §241e: strip partial trailing occurrences of ANY of the Gemma 4
+        // markers, not just `<channel|>` (eoc). During token-by-token
+        // streaming the reassembly of `<|channel>thought` or `<|channel>`
+        // passes through every intermediate prefix (`<`, `<|`, `<|c`,
+        // `<|ch`...`<|channel`). The previous implementation only checked
+        // eoc, so prefixes like `<|channel` got emitted as reasoning →
+        // leaked as content under the §15 reasoning-off reroute.
+        let markers = [Self.thoughtStart, Self.soc, Self.eoc]
+        for marker in markers {
+            var len = marker.count - 1
+            while len > 0 {
+                let prefix = String(marker.prefix(len))
+                if s.hasSuffix(prefix) {
+                    return String(s.dropLast(len))
+                }
+                len -= 1
             }
-            len -= 1
         }
         return s
     }

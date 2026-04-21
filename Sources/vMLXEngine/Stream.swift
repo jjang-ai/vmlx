@@ -923,6 +923,11 @@ extension Engine {
         // reasoning parser on text-only non-thinking turns (per-token parser
         // scan was O(N²) across decode). See Stream.swift:~910.
         var seenReasoningMarker = false
+        // §241c small sliding window of recent cold-path deltas so the
+        // marker-scan can detect multi-token splits like `<`,`|`,`channel`,`>`
+        // that never surface as a single delta. Bounded (32 chars) so the
+        // cold-path stays O(1) per token.
+        var reasoningProbeBuffer = ""
 
         // Accumulator for tool calls emitted during this pass. We BUFFER
         // these instead of yielding them directly so the outer tool-loop
@@ -1343,17 +1348,41 @@ extension Engine {
                 // pay the substring scan once per token (constant work), not
                 // a full re-parse. Once latched, fall back to the full parser
                 // path for correctness on late-marker streams.
-                if !seenReasoningMarker && (
-                    text.contains("<think>")
-                    || text.contains("<|channel|>")   // GPT-OSS / Harmony
-                    || text.contains("<|channel>")    // Gemma 4 open
-                    || text.contains("<channel|>")    // Gemma 4 close
-                    || text.contains("[THINK]")
-                ) {
-                    seenReasoningMarker = true
+                // §241c: markers like `<|channel>` are emitted as 4 separate
+                // tokens (`<`, `|`, `channel`, `>`); the per-delta view
+                // never crosses the boundary so the latch never fired →
+                // Gemma 4 reasoning-off content leaked the literal markers.
+                // Track a bounded sliding window of recent deltas and scan
+                // over that instead of the raw per-delta chunk.
+                if !seenReasoningMarker {
+                    reasoningProbeBuffer += text
+                    if reasoningProbeBuffer.count > 32 {
+                        let keep = reasoningProbeBuffer.count - 32
+                        reasoningProbeBuffer.removeFirst(keep)
+                    }
+                    if reasoningProbeBuffer.contains("<think>")
+                        || reasoningProbeBuffer.contains("<|channel|>")   // GPT-OSS / Harmony
+                        || reasoningProbeBuffer.contains("<|channel>")    // Gemma 4 open
+                        || reasoningProbeBuffer.contains("<channel|>")    // Gemma 4 close
+                        || reasoningProbeBuffer.contains("[THINK]")
+                    {
+                        seenReasoningMarker = true
+                    }
                 }
+                // §241d: gemma4 / openai_gptoss emit structural channel
+                // markers (`<|channel>thought`, `<|channel|>analysis`,
+                // `<channel|>`) that tokenize as 4+ separate tokens. The
+                // cold-path optimization (skip parser when no marker yet
+                // seen) routes those fragment tokens straight to content
+                // BEFORE the sliding-window latch fires. By then the
+                // markers are already flushed to the client. For these
+                // two families we always use the full parser — the O(N²)
+                // scan cost is negligible next to the alternative of
+                // leaking the structural tokens as visible content.
+                let alwaysParse = (reasoningParserName == "gemma4"
+                    || reasoningParserName == "openai_gptoss")
                 let useFullParser = (reasoningParser != nil)
-                    && (effectiveThinking || seenReasoningMarker)
+                    && (effectiveThinking || seenReasoningMarker || alwaysParse)
                 if useFullParser, let parser = reasoningParser {
                     parserPrevious = parserCurrent
                     parserCurrent += text
