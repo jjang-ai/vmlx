@@ -1,7 +1,7 @@
 {
   "milestone": "completions-logprobs",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": false,
@@ -21,25 +21,25 @@
     }
   },
   "reviewsSummary": {
-    "total": 1,
-    "passed": 0,
+    "total": 2,
+    "passed": 1,
     "failed": 1,
-    "failedFeatures": ["completions-logprobs-forwarding"]
+    "failedFeatures": [],
+    "note": "Round 1 had 1 failure (completions-logprobs-forwarding). Round 2 reviewed fix-streaming-legacy-logprobs-format which resolved the blocking issue. Overall: all blocking issues resolved."
   },
-  "blockingIssues": [
-    {
-      "featureId": "completions-logprobs-forwarding",
-      "severity": "blocking",
-      "description": "Streaming logprobs format mismatch in SSEEncoder.textCompletionStream: uses chat completions format (logprobs.content array of {token, logprob, top_logprobs} objects) instead of legacy completions format (tokens, token_logprobs, top_logprobs, text_offset as separate arrays). The non-streaming path correctly uses the legacy format. This inconsistency breaks lm-eval's parse_logprobs() for streaming responses.",
-      "file": "Sources/vMLXServer/SSEEncoder.swift",
-      "line": 240
-    }
-  ],
+  "blockingIssues": [],
   "nonBlockingIssues": [
+    {
+      "featureId": "fix-streaming-legacy-logprobs-format",
+      "severity": "non_blocking",
+      "description": "Dead code in SSEEncoder.textCompletionStream: allTokens, allTokenLogprobs, allTopLogprobs, allTextOffset variables are accumulated but never read. Harmless but could confuse maintainers.",
+      "file": "Sources/vMLXServer/SSEEncoder.swift",
+      "line": 211
+    },
     {
       "featureId": "completions-logprobs-forwarding",
       "severity": "non_blocking",
-      "description": "text_offset uses lp.token.utf8.count (byte offsets) instead of character offsets. OpenAI spec describes text_offset as character offsets. For multi-byte Unicode the values would diverge, but ASCII-heavy lm-eval datasets make this low severity.",
+      "description": "text_offset uses UTF-8 byte count (lp.token.utf8.count) instead of character count. Consistent across both streaming and non-streaming paths, but technically non-compliant with OpenAI spec for multi-byte characters. Low severity since lm-eval datasets are primarily ASCII.",
       "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
       "line": 400
     }
@@ -48,17 +48,20 @@
   "suggestedGuidanceUpdates": [
     {
       "target": "AGENTS.md",
-      "suggestion": "Add explicit boundary: Both streaming and non-streaming /v1/completions logprobs responses MUST use the legacy format (tokens, token_logprobs, top_logprobs, text_offset). Do NOT use the chat completions logprobs.content format in the completions endpoint.",
-      "evidence": "Feature completions-logprobs-forwarding used chat format for streaming, creating inconsistency with non-streaming path. architecture.md invariant #6 'Legacy format exactness' only describes the shape but doesn't explicitly call out that streaming must also follow this format.",
+      "suggestion": "Add explicit boundary: Both streaming and non-streaming /v1/completions logprobs responses MUST use the legacy format (tokens, token_logprobs, top_logprobs, text_offset as separate arrays). Do NOT use the chat completions logprobs.content format in the completions endpoint.",
+      "evidence": "Feature completions-logprobs-forwarding used chat format for streaming, creating inconsistency with non-streaming path. The fix feature resolved this, but the root cause was that architecture invariants didn't explicitly state streaming must follow legacy format.",
       "isSystemic": true
-    },
-    {
-      "target": "library/architecture.md",
-      "suggestion": "Expand invariant #6 'Legacy format exactness' to explicitly state that BOTH streaming and non-streaming paths must use the legacy format, and that the chat completions logprobs.content format must NOT be used in the completions endpoint.",
-      "evidence": "The current invariant only describes the shape without specifying it applies to streaming too, which allowed the inconsistent implementation.",
-      "isSystemic": false
     }
   ],
-  "rejectedObservations": [],
-  "previousRound": null
+  "rejectedObservations": [
+    {
+      "observation": "Logprobs type coercion should be extracted into a shared utility for reuse by future endpoints.",
+      "reason": "Premature — only one usage exists. Extraction would add complexity without clear benefit until a second consumer appears."
+    },
+    {
+      "observation": "Dead accumulated state variables (allTokens, allTokenLogprobs, etc.) should be removed or commented.",
+      "reason": "Minor code style issue, not systemic. Individual feature workers can address this in follow-up if desired."
+    }
+  ],
+  "previousRound": ".factory/validation/completions-logprobs/scrutiny/synthesis.json (round 1)"
 }

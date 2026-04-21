@@ -1,0 +1,39 @@
+{
+  "featureId": "fix-streaming-legacy-logprobs-format",
+  "reviewedAt": "2026-04-21T17:50:00Z",
+  "commitId": "c19229497462206d001a8801fe2616e9653b535f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix correctly converts SSEEncoder.textCompletionStream from emitting logprobs in chat-completions format (logprobs.content array of {token, logprob, top_logprobs} objects) to the legacy completions format (tokens, token_logprobs, top_logprobs, text_offset as separate arrays). The streaming format now matches the non-streaming format in OpenAIRoutes.swift. The text_offset tracking uses a cumulative cursor across chunks with UTF-8 byte offsets, consistent with the non-streaming implementation. The accumulated state variables (allTokens, allTokenLogprobs, allTopLogprobs, allTextOffset) are declared but only written to, never read — they are harmless dead code but suggest unfinished work or premature optimization. The fix directly addresses the blocking issue from the prior review.",
+    "issues": [
+      {
+        "file": "Sources/vMLXServer/SSEEncoder.swift",
+        "line": 211,
+        "severity": "non_blocking",
+        "description": "Dead code: allTokens, allTokenLogprobs, allTopLogprobs, allTextOffset are accumulated across chunks (lines 260-263) but never consumed. These variables are only appended to, never read. They appear to be scaffolding for a possible future 'final logprobs summary' chunk or were left over from development. This is harmless — no runtime cost beyond trivial memory allocation — but it's dead code that could confuse future maintainers. Consider removing or adding a comment explaining the intent (e.g., '// Accumulated state reserved for final aggregated logprobs frame')."
+      },
+      {
+        "file": "Sources/vMLXServer/SSEEncoder.swift",
+        "line": 252,
+        "severity": "non_blocking",
+        "description": "The non-streaming path's text_offset uses the same utf8.count approach (OpenAIRoutes.swift ~line 409). This is consistent with the existing codebase but technically uses byte offsets rather than character offsets, as noted in the prior review. The fix preserves this pre-existing behavior rather than diverging, which is correct for consistency, but the byte-vs-character-offset discrepancy with the OpenAI spec remains unaddressed across both paths. Low severity since lm-eval datasets are primarily ASCII."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The streaming logprobs format in textCompletionStream emits per-chunk logprobs with CUMULATIVE text_offset values (each chunk's text_offset starts from where the previous chunk left off). This is consistent with how OpenAI's streaming completions API works — each SSE chunk contains the full logprobs state for tokens emitted in that chunk, with text_offset values that are absolute offsets into the generated text. This behavior was not explicitly documented in architecture.md or the validation contract. The prior review's shared state observation about the streaming format gap has been partially addressed by this fix, but architecture.md still does not explicitly state that streaming and non-streaming must use the same legacy format.",
+      "evidence": "SSEEncoder.swift lines 240-252: textOffsetCursor accumulates across chunks. architecture.md invariant #6 says 'Legacy format exactness: tokens, token_logprobs, top_logprobs, text_offset must match OpenAI legacy shape exactly' but does not specify this applies to BOTH streaming and non-streaming paths."
+    },
+    {
+      "area": "conventions",
+      "observation": "The fix introduces accumulated-but-unused state variables (allTokens, allTokenLogprobs, etc.) that may indicate the worker planned to emit a final aggregated logprobs chunk but didn't implement it. The transcript shows the worker followed the skill procedure without deviation. If a future worker sees these variables and assumes they're needed, they may spend time figuring out the intent. A brief comment would prevent this.",
+      "evidence": "SSEEncoder.swift lines 211-215 and lines 260-263. Transcript skeleton shows no discussion of this design decision — the variables appeared in the single edit."
+    }
+  ],
+  "addressesFailureFrom": ".factory/validation/completions-logprobs/scrutiny/reviews/completions-logprobs-forwarding.json",
+  "summary": "PASS — The fix directly and correctly addresses the blocking issue from the prior review: SSEEncoder.textCompletionStream now emits logprobs in the legacy completions format (tokens, token_logprobs, top_logprobs, text_offset as separate arrays) instead of the chat-completions content array format. The streaming format is now structurally identical to the non-streaming format in OpenAIRoutes.swift, satisfying the architecture invariant 'Legacy format exactness' for lm-eval parse_logprobs() compatibility. The text_offset tracking uses a cumulative UTF-8 byte offset cursor across chunks, consistent with the non-streaming path. Two non-blocking issues: (1) dead accumulated state variables (allTokens, etc.) that are written but never read, and (2) the byte-vs-character-offset discrepancy inherited from the non-streaming path remains unaddressed but is consistent. The worker followed the skill procedure correctly, the build succeeded, and the fix is minimal and focused (1 file, +33/-14 lines)."
+}
