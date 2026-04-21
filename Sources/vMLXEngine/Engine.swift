@@ -7,6 +7,7 @@ import vMLXVLM
 import vMLXLMCommon
 import vMLXEmbedders
 import MLX
+import MLXNN
 @preconcurrency import Tokenizers
 
 /// vMLX engine facade. Wraps vmlx-swift-lm's `LLMModelFactory` / `VLMModelFactory`
@@ -1551,6 +1552,243 @@ public actor Engine {
             }
             continuation.onTermination = { _ in pump.cancel() }
         }
+    }
+
+    // MARK: - Loglikelihood Fast-Path
+
+    /// Result of a loglikelihood fast-path request. Contains all data needed
+    /// to build a legacy `/v1/completions` response without going through
+    /// AsyncStream, StreamingDetokenizer, or ToolCallProcessor.
+    public struct LoglikelihoodResult: Sendable {
+        /// Prompt token logprobs (position 0 has NaN logprob → mapped to null).
+        public var promptLogprobs: [TokenLogprob]
+        /// The single generated token's logprob.
+        public var generatedLogprob: TokenLogprob
+        /// Generated token text.
+        public var generatedText: String
+        /// Total prompt token count.
+        public var promptTokenCount: Int
+    }
+
+    /// Dedicated synchronous fast-path for `max_tokens: 1` loglikelihood
+    /// requests. Bypasses AsyncStream, StreamingDetokenizer, and
+    /// ToolCallProcessor entirely. Calls `model.prepare()` directly,
+    /// computes batched `logSoftmax` over the full sequence, indexes actual
+    /// token IDs, and returns structured logprobs.
+    ///
+    /// **Performance target:** <150% of raw prefill latency.
+    ///
+    /// **No overhead for normal requests:** This method is only called when
+    /// `maxTokens == 1 && echo == true && logprobs != nil && !stream`.
+    ///
+    /// - Parameter request: The chat request (prompt wrapped as user message).
+    /// - Returns: Structured loglikelihood result with prompt + generated logprobs.
+    public func loglikelihood(request: ChatRequest) async throws -> LoglikelihoodResult {
+        guard let container = self.loaded else {
+            throw EngineError.notImplemented(
+                "Engine.loglikelihood — no model loaded (call Engine.load first)")
+        }
+
+        // Serialize with the generation lock — MLX's shared Metal command
+        // queue is NOT concurrency-safe (see streamReal for rationale).
+        await self.generationLock.acquire()
+
+        await self.idleTimer.reset()
+        await self.metrics.incrementActiveRequests()
+        let metricsRef = self.metrics
+
+        do {
+            let result = try await _performLoglikelihood(
+                request: request, container: container)
+            // Drain MLX async work before releasing the lock (matches
+            // streamReal's drain sequence).
+            MLX.eval(MLX.MLXArray(Int32(0)))
+            MLX.Stream.defaultStream(.gpu).synchronize()
+            MLX.Stream.defaultStream(.cpu).synchronize()
+            await self.generationLock.release()
+            Task { await metricsRef.decrementActiveRequests() }
+            return result
+        } catch {
+            // Drain + release on error path too.
+            MLX.eval(MLX.MLXArray(Int32(0)))
+            MLX.Stream.defaultStream(.gpu).synchronize()
+            MLX.Stream.defaultStream(.cpu).synchronize()
+            await self.generationLock.release()
+            Task { await metricsRef.decrementActiveRequests() }
+            throw error
+        }
+    }
+
+    /// Inner implementation factored out for clean error handling.
+    private func _performLoglikelihood(
+        request: ChatRequest,
+        container: vMLXLMCommon.ModelContainer
+    ) async throws -> LoglikelihoodResult {
+        // Resolve settings for temperature, top_p, etc.
+        let resolvedSessionId = request.sessionId.flatMap { UUID(uuidString: $0) }
+        let resolvedChatId = request.chatId.flatMap { UUID(uuidString: $0) }
+        let resolved = await self.settings.resolved(
+            sessionId: resolvedSessionId,
+            chatId: resolvedChatId,
+            request: RequestOverride.from(request))
+
+        // Build chat messages from request. For legacy completions, the
+        // prompt is wrapped as a single user message.
+        let caps = self.modelCapabilities
+        let effectiveThinking: Bool = request.enableThinking
+            ?? resolved.enableThinking
+            ?? false
+        let modelStampsThink = caps?.thinkInTemplate ?? false
+        let imageMarker = "<image>"
+
+        let chatMessages = await Engine.buildChatMessages(
+            from: request,
+            effectiveThinking: effectiveThinking,
+            modelStampsThink: modelStampsThink,
+            imageMarker: imageMarker)
+
+        let userInput = UserInput(chat: chatMessages)
+
+        // Determine topLogprobs for prompt logprobs. When prompt_logprobs
+        // is set, use it; otherwise fall back to top_logprobs.
+        let promptTopK = request.promptLogprobs ?? request.topLogprobs ?? 0
+        let genTopK = request.topLogprobs ?? 0
+
+        // Perform the fast-path computation inside the container's actor.
+        return try await container.perform { (ctx: ModelContext) in
+            // 1. Tokenize the prompt via the processor.
+            let lmInput = try await ctx.processor.prepare(input: userInput)
+            let inputTokenIds = lmInput.text.tokens.reshaped(-1).asArray(Int.self)
+            let seqLen = inputTokenIds.count
+
+            // 2. Call model directly to get full-sequence logits [1, seq_len, vocab].
+            //    We bypass model.prepare() because LLMModel.prepare() returns .tokens
+            //    (discarding intermediate logits), while we need the full logit tensor
+            //    for prompt logprob capture. For the short prompts typical in lm-eval
+            //    loglikelihood scoring, single-shot forward is optimal.
+            //    Create a fresh cache for this one-shot request.
+            let cache = ctx.model.newCache(parameters: nil)
+            // Add batch axis: [seq_len] → [1, seq_len]
+            let batchInput = lmInput.text[text: .newAxis]
+            let modelOutput = ctx.model(batchInput, cache: cache, state: nil)
+
+            // 3. Batched logSoftmax over full [1, seq_len, vocab].
+            var logits = modelOutput.logits
+            if logits.dtype == .bfloat16 {
+                logits = logits.asType(.float32)
+            }
+            let logProbs = logSoftmax(logits)
+
+            // 4. Index per-position logprobs for prompt tokens.
+            var promptLogprobs: [TokenLogprob] = []
+            promptLogprobs.reserveCapacity(seqLen)
+
+            for i in 0..<seqLen {
+                let tokenId = inputTokenIds[i]
+                let tokenStr = ctx.tokenizer.decode(tokenIds: [tokenId])
+
+                // Position 0 has no prior context → NaN (mapped to null).
+                if i == 0 {
+                    var topAlts: [TopTokenLogprob] = []
+                    if promptTopK > 0 {
+                        topAlts = Self._extractTopK(
+                            logProbs: logProbs, position: i,
+                            topK: promptTopK, tokenizer: ctx.tokenizer)
+                    }
+                    promptLogprobs.append(TokenLogprob(
+                        token: tokenStr, logprob: .nan,
+                        topLogprobs: topAlts))
+                    continue
+                }
+
+                let logProb = logProbs[0..., i, tokenId].item(Float.self)
+
+                var topAlts: [TopTokenLogprob] = []
+                if promptTopK > 0 {
+                    topAlts = Self._extractTopK(
+                        logProbs: logProbs, position: i,
+                        topK: promptTopK, tokenizer: ctx.tokenizer)
+                }
+                promptLogprobs.append(TokenLogprob(
+                    token: tokenStr, logprob: logProb,
+                    topLogprobs: topAlts))
+            }
+
+            // 5. Sample 1 token from the last position's logits.
+            //    Use argmax (temperature=0) for deterministic output.
+            let lastLogits = logits[0..., -1, 0...]
+            let sampledToken = ArgMaxSampler().sample(logits: lastLogits)
+            let sampledTokenId = sampledToken.item(Int.self)
+            let sampledTokenStr = ctx.tokenizer.decode(tokenIds: [sampledTokenId])
+
+            // 6. Capture the generated token's logprob.
+            let genLogProb = logProbs[0..., seqLen - 1, sampledTokenId].item(Float.self)
+
+            var genTopAlts: [TopTokenLogprob] = []
+            if genTopK > 0 {
+                // Use last position's logits for top-K alternatives.
+                let lastLogProbs = logProbs[0..., seqLen - 1, 0...].reshaped(-1)
+                let vocabSize = lastLogProbs.dim(0)
+                let k = min(genTopK, vocabSize)
+                let negated = -lastLogProbs
+                let partitioned = argPartition(negated, kth: k - 1)
+                let topIndices = partitioned[0..<k].asArray(Int.self)
+                let sortedIndices = topIndices.sorted { a, b in
+                    lastLogProbs[a].item(Float.self) > lastLogProbs[b].item(Float.self)
+                }
+                for idx in sortedIndices {
+                    let lpVal = lastLogProbs[idx].item(Float.self)
+                    let tokStr = ctx.tokenizer.decode(tokenIds: [idx])
+                    genTopAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+                }
+            }
+
+            let generatedLogprob = TokenLogprob(
+                token: sampledTokenStr,
+                logprob: genLogProb,
+                topLogprobs: genTopAlts)
+
+            // Eval to materialize tensors before returning.
+            MLX.eval(sampledToken)
+
+            return LoglikelihoodResult(
+                promptLogprobs: promptLogprobs,
+                generatedLogprob: generatedLogprob,
+                generatedText: sampledTokenStr,
+                promptTokenCount: seqLen)
+        }
+    }
+
+    /// Extract top-K logprobs at a given position using argPartition
+    /// (O(V)) instead of argSort (O(V log V)). Mirrors the same logic
+    /// in TokenIterator.extractTopK but is a static method on Engine
+    /// so it can be called from the fast-path without a TokenIterator.
+    private static func _extractTopK(
+        logProbs: MLXArray,
+        position: Int,
+        topK: Int,
+        tokenizer: vMLXLMCommon.Tokenizer
+    ) -> [TopTokenLogprob] {
+        let posLogProbs = logProbs[0..., position, 0...].reshaped(-1)
+        let vocabSize = posLogProbs.dim(0)
+        let k = Swift.min(topK, vocabSize)
+
+        let negated = -posLogProbs
+        let partitioned = argPartition(negated, kth: k - 1)
+        let topIndices = partitioned[0..<k].asArray(Int.self)
+
+        let sortedIndices = topIndices.sorted { a, b in
+            posLogProbs[a].item(Float.self) > posLogProbs[b].item(Float.self)
+        }
+
+        var result: [TopTokenLogprob] = []
+        result.reserveCapacity(k)
+        for idx in sortedIndices {
+            let lpVal = posLogProbs[idx].item(Float.self)
+            let tokStr = tokenizer.decode(tokenIds: [idx])
+            result.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+        }
+        return result
     }
 
     // MARK: - HTTP route entry points (stubs — wired but not implemented)

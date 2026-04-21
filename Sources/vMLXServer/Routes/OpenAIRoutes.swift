@@ -347,6 +347,52 @@ public enum OpenAIRoutes {
             let created = Int(Date().timeIntervalSince1970)
             let isStream = chatReq.stream ?? false
 
+            // ── Loglikelihood Fast-Path ──────────────────────────────
+            // When max_tokens:1 + echo:true + logprobs + non-streaming,
+            // skip the entire AsyncStream / StreamingDetokenizer /
+            // ToolCallProcessor pipeline and call model.prepare()
+            // directly. Target: <150% of raw prefill latency.
+            if !isStream,
+               chatReq.maxTokens == 1,
+               echoEnabled,
+               logprobsValue != nil || chatReq.promptLogprobs != nil {
+                do {
+                    let result = try await engine.loglikelihood(request: chatReq)
+                    // Build legacy logprobs: prompt tokens + generated token.
+                    var allLogprobs = result.promptLogprobs
+                    allLogprobs.append(result.generatedLogprob)
+                    let (logprobsDict, _) = SSEEncoder.buildLegacyLogprobs(
+                        allLogprobs)  // position 0 already NaN from fast-path
+
+                    let content = prompt + result.generatedText
+                    var choice: [String: Any] = [
+                        "text": content,
+                        "index": 0,
+                        "finish_reason": "length",
+                    ]
+                    choice["logprobs"] = logprobsDict
+                    var obj2: [String: Any] = [
+                        "id": id,
+                        "object": "text_completion",
+                        "created": created,
+                        "model": model,
+                        "choices": [choice],
+                    ]
+                    obj2["usage"] = [
+                        "prompt_tokens": result.promptTokenCount,
+                        "completion_tokens": 1,
+                        "total_tokens": result.promptTokenCount + 1,
+                    ] as [String: Any]
+                    return Self.json(obj2)
+                } catch let err as EngineError {
+                    return Self.mapEngineError(err)
+                } catch {
+                    // Fall through to normal path on fast-path error
+                    // (e.g. model returned .tokens instead of .logits).
+                }
+            }
+            // ── End Fast-Path ────────────────────────────────────────
+
             if isStream {
                 let stream = await engine.stream(request: chatReq, id: id)
                 var headers: HTTPFields = [:]
