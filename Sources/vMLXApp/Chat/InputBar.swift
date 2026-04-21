@@ -85,6 +85,10 @@ struct InputBar: View {
 
     /// Hover text for the send button — tells the user exactly why they
     /// can't send if disabled.
+    /// iter-ralph §237 (L3): include Esc hint in the error state so the
+    /// user learns they can dismiss the banner / clear history recall
+    /// with Escape. The tooltip was the only discoverability path for
+    /// Esc-in-error since no button on the card mentions it.
     private var helpText: String {
         if vm.isGenerating { return "Stop (Esc)" }
         if canSend { return "Send (↵)" }
@@ -92,7 +96,8 @@ struct InputBar: View {
         switch app.engineState {
         case .stopped: return "Load a model first"
         case .loading: return "Wait for the model to finish loading"
-        case .error(let msg): return "Engine error: \(msg)"
+        case .error(let msg):
+            return "Engine error: \(msg) — use the Server tab to restart (Esc to clear input)"
         default: return "Enter a message"
         }
     }
