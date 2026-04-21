@@ -1,0 +1,53 @@
+{
+  "milestone": "fast-path",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": false,
+      "command": "swift test",
+      "exitCode": 1,
+      "note": "Known pre-existing issue: no test files on disk (Tests/vMLXTests/ missing). Documented in AGENTS.md as out of scope. Not related to fast-path feature."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "swift build --product vmlxctl",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "scripts/lint-typed-mlx-scalars.sh",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Corrected fast-path data flow in architecture.md: model() is used instead of model.prepare() because prepare() returns .tokens discarding logits. Added explanation of why this distinction matters.",
+      "sourceFeature": "loglikelihood-fast-path"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add coding convention: when adding new Engine methods that need the generation lock, factor the inner implementation into a private `_performX` method to keep lock acquisition/release/drain logic clean in the outer method.",
+      "evidence": "Engine.loglikelihood() wraps _performLoglikelihood() — outer method handles generationLock.acquire/release, idleTimer, metrics, and MLX drain; inner method does the actual computation. This is a clean pattern worth documenting.",
+      "isSystemic": false
+    },
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Consider adding a note about the MLX drain sequence (MLX.eval + GPU stream sync + CPU stream sync) being a candidate for extraction into a shared helper to reduce duplication across Engine methods.",
+      "evidence": "The drain sequence appears identically in success and error paths of loglikelihood(), and in streaming code paths. Multiple locations could benefit from a shared drain helper.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

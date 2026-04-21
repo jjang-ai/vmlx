@@ -1,0 +1,50 @@
+{
+  "featureId": "loglikelihood-fast-path",
+  "reviewedAt": "2026-04-21T20:40:00Z",
+  "commitId": "fd4b76e7fb04d12e1548b2fc884519301ac42e97",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The loglikelihood fast-path is well-implemented, cleanly structured, and meets all stated requirements. The code bypasses AsyncStream/StreamingDetokenizer/ToolCallProcessor as specified, uses batched logSoftmax over the full sequence, employs argPartition for O(V) top-K extraction, and integrates correctly at the route handler level with proper fallback to the normal streaming path on non-EngineError exceptions. The generation lock, stream drain, and metrics management follow existing patterns from the streaming code paths.",
+    "issues": [
+      {
+        "file": "Sources/vMLXEngine/Engine.swift",
+        "line": 1670,
+        "severity": "non_blocking",
+        "description": "The for-loop over `0..<seqLen` (line ~1670) calls `ctx.tokenizer.decode(tokenIds: [tokenId])` per-token inside the loop. For very long prompts this could be slow since each decode call may involve tokenizer overhead. The existing TokenIterator in Evaluate.swift has the same pattern so this is consistent, but a future optimization could batch the decode. Not blocking since lm-eval uses batch_size=1 and prompt lengths are typically modest."
+      },
+      {
+        "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+        "line": 376,
+        "severity": "non_blocking",
+        "description": "The generic `catch` block on line ~376 silently swallows non-EngineError exceptions from the fast-path and falls through to the normal streaming pipeline. While this is intentional (comment explains: 'model returned .tokens instead of .logits'), the fallthrough will re-process the entire request via the streaming path, doubling latency for that request. Consider logging the error or incrementing a metric counter for observability. Not blocking since the fallback is correct behavior."
+      },
+      {
+        "file": "Sources/vMLXEngine/Engine.swift",
+        "line": 1574,
+        "severity": "non_blocking",
+        "description": "Doc comment says 'Calls model.prepare() directly' but the actual implementation calls ctx.model() (the LanguageModel callAsFunction) directly with a fresh cache, not model.prepare(). The code comment inside _performLoglikelihood (around line 1658) correctly explains the rationale: LLMModel.prepare() returns .tokens discarding logits, so model() is called instead. The public doc comment is slightly misleading but the code is correct."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The fast-path uses a pattern of factoring inner implementation into a private `_performX` method to keep the lock acquisition/release/drain logic clean in the outer method. This is a clean pattern that could be useful to document for future Engine methods that need the generation lock.",
+      "evidence": "Engine.loglikelihood() wraps _performLoglikelihood() — outer method handles generationLock.acquire/release, idleTimer, metrics, and MLX drain; inner method does the actual computation."
+    },
+    {
+      "area": "conventions",
+      "observation": "The drain sequence (MLX.eval + GPU stream sync + CPU stream sync) is duplicated between the success and error paths in loglikelihood(). This same pattern exists in the streaming code. A drain helper could reduce duplication.",
+      "evidence": "Engine.swift lines 1603-1607 and 1611-1615 are identical drain blocks."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The implementation discovered and documented that LLMModel.prepare() returns .tokens (discarding intermediate logits), so direct model() call with fresh cache is needed for full logit access. This is important knowledge for any future code that needs full-sequence logits.",
+      "evidence": "Code comment at ~line 1658 in Engine.swift: 'We bypass model.prepare() because LLMModel.prepare() returns .tokens (discarding intermediate logits), while we need the full logit tensor for prompt logprob capture.'"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The loglikelihood fast-path implementation is correct and complete. It (1) bypasses AsyncStream/StreamingDetokenizer/ToolCallProcessor as specified, (2) calls model() directly for full-sequence logits with a fresh KV cache, (3) uses batched logSoftmax over [1, seq_len, vocab], (4) uses argPartition for O(V) top-K extraction matching TokenIterator convention, (5) properly acquires the generation lock and drains MLX streams, (6) produces correct legacy logprobs format via shared buildLegacyLogprobs(), (7) integrates at the route level with proper guard conditions (maxTokens==1, echo, logprobs, non-streaming) and falls back gracefully on non-EngineError exceptions, and (8) does not affect normal chat completion paths. Build compiles without errors. Minor non-blocking observations about per-token decode loop overhead, silent catch fallthrough, and a slightly misleading doc comment."
+}

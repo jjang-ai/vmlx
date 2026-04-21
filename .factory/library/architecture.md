@@ -58,10 +58,13 @@ Client → OpenAIRoutes → ChatRequest(echo:true, logprobs:true) → Engine.str
 ```
 Client → OpenAIRoutes → ChatRequest(maxTokens:1, echo:true, logprobs:1)
   → Engine.loglikelihood(request:) [NEW fast-path entrypoint]
-  → model.prepare() directly → batched logSoftmax over full sequence
+  → ctx.model() directly (NOT model.prepare() — prepare() returns .tokens discarding logits)
+  → batched logSoftmax over full sequence
   → index actual token IDs → build legacy logprobs response
   → NO AsyncStream, NO StreamingDetokenizer, NO ToolCallProcessor
 ```
+
+**Why `model()` instead of `model.prepare()`**: `LLMModel.prepare()` returns `.tokens` (discarding intermediate logits), which makes it unsuitable when full-sequence logits are needed for logprob capture. The fast-path calls `ctx.model()` directly with a fresh KV cache to obtain the full logit tensor `[1, seq_len, vocab]`.
 
 ## Tokenizer Protocol Limitations
 
