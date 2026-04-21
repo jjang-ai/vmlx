@@ -238,6 +238,18 @@ class DeepseekV3Attention: Module {
         // sparse-gather integration. Compiles + loads the indexer's
         // weight tensors from the bundle so safetensors loading of a
         // GLM-5.1 `self_attn.indexer.*` tensor set does not fail.
+        //
+        // iter-37 note: full sparse-gather wiring requires refactoring
+        // the attention forward to use MLA "absorb" (Python deepseek_v32.py
+        // lines 188-264) pattern where pe_scores and nope_scores are
+        // computed separately and an MLXArray mask is materialized. Swift's
+        // `attentionWithCacheUpdate` takes `MLXFast.ScaledDotProductAttentionMaskMode`
+        // (an enum) not an MLXArray mask, so the sparse-mask path can't
+        // simply AND into the existing API. The required refactor is
+        // ~150 LOC — larger than a single Ralph iter. Tracked as S03b.
+        //
+        // Until then, keep the no-behavior-change call so indexer weights
+        // still load correctly from safetensors.
         if let indexer = self.indexer, let qr = qr {
             let offset = cache?.offset ?? 0
             _ = indexer(x, qr: qr, mask: nil, offset: offset)
