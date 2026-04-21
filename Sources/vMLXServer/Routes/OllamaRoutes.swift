@@ -376,6 +376,44 @@ public enum OllamaRoutes {
             let isStream = (obj["stream"] as? Bool) ?? true
             let options = (obj["options"] as? [String: Any]) ?? [:]
 
+            // iter-111 §189: Ollama's /api/generate accepts
+            // `context: [int]` — the legacy stateless-continuation
+            // contract where the client sends the previous turn's
+            // final token array and gets a continuation without
+            // resending the whole conversation. vMLX previously
+            // silently dropped inbound context[] (not read anywhere)
+            // AND silently omitted it from the response. Legacy
+            // Ollama clients (pre-v0.1.14) thought their conversation
+            // was continuing but were actually starting fresh every
+            // turn — a silent correctness bug that hurt output
+            // quality when users relied on the legacy pattern.
+            //
+            // FIXME(iter-111 §189): wiring the real behavior needs
+            // access to the loaded model's tokenizer through the
+            // Engine container (same blocker as /v1/messages/
+            // count_tokens iter-108 §186). When that Engine entry
+            // point lands we can:
+            //   (a) accept inbound context[] and decode → strip
+            //       from the prompt the model would naturally re-
+            //       prefill, OR more simply
+            //   (b) accept context[] as a pre-tokenized prefix and
+            //       feed directly into the paged cache.
+            // On the response side we'd emit the final token array
+            // so clients can round-trip.
+            //
+            // Until then, warn on detection and DO NOT emit a fake
+            // empty `context: []` in the response — absence is the
+            // honest signal that the server doesn't maintain the
+            // contract. Clients that depend on it can detect the
+            // gap cleanly instead of seeing a zero-length array
+            // they mistakenly think will continue the session.
+            if let inboundContext = obj["context"] as? [Int],
+               !inboundContext.isEmpty
+            {
+                FileHandle.standardError.write(Data(
+                    "[ollama] /api/generate: ignored inbound `context: [int]` (\(inboundContext.count) tokens) — vMLX does not yet support legacy stateless continuation, prompt will be re-prefilled from scratch. See iter-111 §189 FIXME.\n".utf8))
+            }
+
             var messages: [ChatRequest.Message] = []
             if let system = obj["system"] as? String, !system.isEmpty {
                 messages.append(.init(role: "system", content: .string(system)))
