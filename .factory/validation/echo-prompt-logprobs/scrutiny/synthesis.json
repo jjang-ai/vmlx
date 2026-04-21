@@ -1,0 +1,31 @@
+{
+  "milestone": "echo-prompt-logprobs",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "typecheck": { "passed": true, "command": "swift build --product vmlxctl", "exitCode": 0 },
+    "lint": { "passed": true, "command": "scripts/lint-typed-mlx-scalars.sh", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    { "target": "library", "description": "Added Key Invariant #7 to architecture.md documenting .tokens fallback limitation for prompt logprobs.", "sourceFeature": "echo-prompt-logprobs" }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "Force-cast pattern (as! guarded by type check) in generateLoopTask for Handler.Output conversions",
+      "reason": "consistent with existing codebase pattern, not a systemic issue, no documentation gap"
+    },
+    {
+      "observation": "Worker skipped TDD because swift test is broken",
+      "reason": "already documented in AGENTS.md known issues, no update needed"
+    }
+  ],
+  "previousRound": null
+}

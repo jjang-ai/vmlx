@@ -80,3 +80,4 @@ Future work requiring these properties will need to either extend the Tokenizer 
 4. **Raw prefill logits**: Prompt logprobs use pre-penalty logits from `model.prepare()`. Penalties are not applied to prompt positions.
 5. **Position 0 is null**: First token has no prior context → `token_logprobs[0] == null`.
 6. **Legacy format exactness**: `tokens`, `token_logprobs`, `top_logprobs`, `text_offset` must match OpenAI legacy shape exactly for lm-eval `parse_logprobs()`.
+7. **`.tokens` fallback limitation**: When `model.prepare()` returns `.tokens` (instead of `.logits`), prompt logprobs cannot be captured — `promptLogprobsResult` remains nil with no error. This affects only model types that return `.tokens` from `prepare()`; standard LLM models return `.logits`.

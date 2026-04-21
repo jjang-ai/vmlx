@@ -1,0 +1,50 @@
+{
+  "featureId": "echo-prompt-logprobs",
+  "reviewedAt": "2026-04-21T20:30:00Z",
+  "commitId": "562aa727a5ba551687921c6fbb071649ab2b9ae8",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Solid implementation of echo/prompt_logprobs for the legacy /v1/completions endpoint. The feature adds echo: Bool? and promptLogprobs: Int? to ChatRequest and GenerateParameters, implements batched prompt logprob capture in TokenIterator.prepare() with a single logSoftmax over the full [1, seq_len, vocab] tensor, uses argPartition (O(V)) for top-K extraction, and correctly gates all heavy computation behind needsPromptLogprobs for zero overhead on the normal path. The implementation handles NaN→NSNull conversion for position 0, max_tokens: 0 edge case via post-loop emission, and both streaming and non-streaming response formats. Build and lint pass cleanly.",
+    "issues": [
+      {
+        "file": "Sources/vMLXLMCommon/Evaluate.swift",
+        "line": 1116,
+        "severity": "non_blocking",
+        "description": "The prompt logprob capture loop iterates over every position in the sequence, calling extractTopK (which does argPartition + GPU→CPU transfers) for each position. For very long sequences (e.g., 4096 tokens) with high top-K, this creates many small GPU operations. A future optimization could batch the argPartition across positions. Not blocking because the feature spec requires O(V) per position (which is met) and the typical use case (loglikelihood with k≤5) is manageable."
+      },
+      {
+        "file": "Sources/vMLXLMCommon/Evaluate.swift",
+        "line": 1097,
+        "severity": "non_blocking",
+        "description": "When model.prepare() returns .tokens (instead of .logits), prompt logprobs are silently not captured — promptLogprobsResult remains nil. If a user explicitly requests prompt_logprobs but the model doesn't expose logits, they get no error and no logprobs. This only affects model types that return .tokens from prepare(), which appears to be rare for standard LLM models. Not blocking because this is an inherent limitation of the .tokens return path."
+      },
+      {
+        "file": "Sources/vMLXLMCommon/Evaluate.swift",
+        "line": 2456,
+        "severity": "non_blocking",
+        "description": "The force cast `Generation.logprob(lp) as! Handler.Output` is guarded by `Handler.Output.self == Generation.self` check, so it's safe. However, a conditional cast with `as?` would be more idiomatic Swift. This pattern is consistent with the existing logprob emission code at line 2485, so changing it would require updating both sites. Not blocking for consistency reasons."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The codebase uses `as!` force casts guarded by type checks for generic Handler.Output conversions in generateLoopTask. This pattern appears at multiple sites (prompt logprobs emission, completion logprobs emission). AGENTS.md doesn't document this pattern or whether a safer alternative is preferred.",
+      "evidence": "Evaluate.swift:2456 (`Generation.logprob(lp) as! Handler.Output` guarded by `Handler.Output.self == Generation.self`) and Evaluate.swift:2485 (same pattern for completion logprobs)"
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed the swift-backend-worker skill procedure. The only deviation was skipping TDD (swift test is broken — documented in AGENTS.md known issues). Worker validated via build + lint instead. The skill's suggestedChange notes this. No skill update needed.",
+      "evidence": "Transcript skeleton skillFeedback.followedProcedure: true, suggestedChanges: 'The skill says to write tests first (TDD) but swift test is broken'"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The .tokens vs .logits return from model.prepare() affects whether prompt logprobs can be captured. This architectural detail is documented in architecture.md (Key Invariant #4: 'Raw prefill logits: Prompt logprobs use pre-penalty logits from model.prepare()') but the .tokens fallback path isn't explicitly documented as a limitation.",
+      "evidence": "Evaluate.swift prepare() switch at ~line 1106 — .tokens case has no prompt logprob capture; architecture.md Key Invariant #4"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "The echo-prompt-logprobs feature is well-implemented and passes code review. The implementation correctly: (1) adds echo/promptLogprobs parameters with proper validation (range [0,20]), Codable keys, and documentation; (2) gates logSoftmax behind needsPromptLogprobs for zero-overhead normal path; (3) uses batched logSoftmax over the full [1, seq_len, vocab] tensor with O(V) argPartition for top-K; (4) handles position 0 as null (NaN→NSNull), max_tokens: 0 via post-loop emission, and both streaming/non-streaming formats; (5) wires parameters exclusively through the /v1/completions route (chat completions unaffected). Three non-blocking issues noted (per-position GPU operations for long sequences, silent no-logits fallback, and force-cast pattern). Build and lint pass."
+}
