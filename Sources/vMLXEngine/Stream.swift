@@ -1345,7 +1345,9 @@ extension Engine {
                 // path for correctness on late-marker streams.
                 if !seenReasoningMarker && (
                     text.contains("<think>")
-                    || text.contains("<|channel|>")
+                    || text.contains("<|channel|>")   // GPT-OSS / Harmony
+                    || text.contains("<|channel>")    // Gemma 4 open
+                    || text.contains("<channel|>")    // Gemma 4 close
                     || text.contains("[THINK]")
                 ) {
                     seenReasoningMarker = true
