@@ -99,21 +99,46 @@ public enum OllamaRoutes {
             _ = await engine.modelLibrary.scan(force: false)
             let entries = await engine.modelLibrary.entries()
             let canonical = path.resolvingSymlinksInPath().standardizedFileURL
-            let displayName = entries.first(where: {
+            let matched = entries.first(where: {
                 $0.canonicalPath.standardizedFileURL == canonical
-            })?.displayName ?? path.lastPathComponent
+            })
+            let displayName = matched?.displayName ?? path.lastPathComponent
             let iso = ISO8601DateFormatter().string(from: Date())
-            return OpenAIRoutes.json([
-                "models": [[
-                    "name": displayName,
-                    "model": displayName,
-                    "size": 0,
-                    "digest": "",
-                    "details": [:] as [String: Any],
-                    "expires_at": iso,
-                    "size_vram": 0,
-                ]]
-            ])
+            // iter-123 §198: was emitting `size:0, digest:"", details:{}`
+            // — Ollama CLI `ollama ps` displays these three as
+            // `0 B`, blank, and `Unknown` respectively, and Copilot /
+            // LangChain clients that probe `/api/ps` for a model's
+            // family/quantization to pick decode flags got nothing
+            // useful. Populate from the matched ModelLibrary entry
+            // when present (same shape as `/api/tags` and `/api/show`
+            // so clients don't have to learn per-route schemas).
+            // Falls back to the old zero/empty values when the library
+            // hasn't matched the loaded path (fresh model outside the
+            // scan root) — preserves the current "at least the name
+            // is right" behavior rather than throwing.
+            var model: [String: Any] = [
+                "name": displayName,
+                "model": displayName,
+                "expires_at": iso,
+                "size_vram": 0,
+            ]
+            if let e = matched {
+                model["size"] = e.totalSizeBytes
+                model["digest"] = e.id
+                model["details"] = [
+                    "parent_model": "",
+                    "format": e.isJANG ? "jang" : (e.isMXTQ ? "mxtq" : "mlx"),
+                    "family": e.family,
+                    "families": [e.family],
+                    "parameter_size": Self.humanParamSize(e.totalSizeBytes, quantBits: e.quantBits),
+                    "quantization_level": e.quantBits.map { "Q\($0)" } ?? "",
+                ] as [String: Any]
+            } else {
+                model["size"] = 0
+                model["digest"] = ""
+                model["details"] = [:] as [String: Any]
+            }
+            return OpenAIRoutes.json(["models": [model]])
         }
 
         // POST /api/show — return modelfile-style details for a named model.
