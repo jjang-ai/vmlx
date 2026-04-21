@@ -1,0 +1,15 @@
+commands:
+  build: swift build --product vmlxctl
+  build-release: swift build -c release --product vmlxctl
+  typecheck: swift build --product vmlxctl  # Swift build acts as typecheck
+  test: swift test  # Currently fails (no test files on disk)
+  lint: scripts/lint-typed-mlx-scalars.sh
+  stage-metallib: scripts/stage-metallib.sh release
+
+services:
+  vmlx-server:
+    start: .build/release/vmlxctl serve --model "{{MODEL_PATH}}" --host 127.0.0.1 --port 8080
+    stop: lsof -ti :8080 | xargs kill -9 2>/dev/null || true
+    healthcheck: curl -sf http://127.0.0.1:8080/v1/models
+    port: 8080
+    depends_on: []
