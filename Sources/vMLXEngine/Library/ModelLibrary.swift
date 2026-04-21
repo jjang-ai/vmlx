@@ -381,6 +381,32 @@ public actor ModelLibrary {
         database.userDirs()
     }
 
+    // iter-152 §220: shared knownRoots safety fence. Extracted from the
+    // `deleteEntry(byId:)` path so admin routes that accept caller-supplied
+    // filesystem paths (/admin/wake, /admin/dflash/load) can reject anything
+    // outside the model roots — otherwise an admin-token holder could load
+    // arbitrary files as a "model" or "drafter checkpoint" and trigger
+    // unexpected reads of user files. Returns `true` if `url` lives under
+    // ~/.cache/huggingface/hub, ~/.mlxstudio/models, or any configured
+    // user dir.
+    public func isPathUnderKnownRoots(_ url: URL) -> Bool {
+        let roots: [URL] = {
+            var r: [URL] = []
+            if let home = ProcessInfo.processInfo.environment["HOME"] {
+                r.append(URL(fileURLWithPath: home)
+                    .appendingPathComponent(".cache/huggingface/hub"))
+                r.append(URL(fileURLWithPath: home)
+                    .appendingPathComponent(".mlxstudio/models"))
+            }
+            r.append(contentsOf: database.userDirs())
+            return r.map { $0.standardizedFileURL }
+        }()
+        let target = url.standardizedFileURL
+        return roots.contains { root in
+            target.path.hasPrefix(root.path + "/") || target.path == root.path
+        }
+    }
+
     // MARK: - Freshness
 
     private func isFresh() -> Bool {
