@@ -273,6 +273,16 @@ public actor Engine {
     /// drops its iterator, the onTermination handler removes it.
     private var stateSubscribers: [UUID: AsyncStream<EngineState>.Continuation] = [:]
 
+    /// §253: single-flight wake guard. When N concurrent callers hit
+    /// `wakeFromStandby()` while the engine is in `.standby(.deep)`,
+    /// the underlying `wake()` suspends at `await load(opts)`. Without
+    /// this latch, re-entry fires N parallel `load(opts)` tasks — each
+    /// opens the safetensors files, allocates 20+ GB of weights, and
+    /// races for ModelContainer ownership. First one wins, the rest
+    /// OOM or corrupt state. Introduced after JIT-wake on embeddings
+    /// + chat + ollama/ps racing on a sleeping model.
+    private var inFlightWakeTask: Task<Void, Never>? = nil
+
     /// Idle lifecycle timer. On `.softSleep` we transition to
     /// `.standby(.soft)` and attempt the (currently stub) `softSleep()`; on
     /// `.deepSleep` we transition to `.standby(.deep)` and attempt
@@ -821,19 +831,45 @@ public actor Engine {
     }
 
     public func wakeFromStandby() async {
+        // §253: if a wake is already in progress, reuse it. The actor
+        // serializes method entries but `wake()` suspends at `await
+        // load(opts)`, which lets other callers re-enter the switch
+        // and re-trigger a full model load. Funnel everyone through
+        // the same Task so `N` concurrent HTTP requests on a deep-
+        // sleeping engine perform exactly ONE load.
+        if let existing = inFlightWakeTask {
+            await existing.value
+            return
+        }
         switch state {
         case .standby:
-            do {
-                try await wake()
-            } catch {
-                await log(.warn, "lifecycle",
-                          "wake stub threw: \(error) — transitioning state anyway")
+            let task = Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.wake()
+                } catch {
+                    await self.log(.warn, "lifecycle",
+                        "wake stub threw: \(error) — transitioning state anyway")
+                }
+                await self.finishWakeTransition()
             }
-            transition(.running)
-            await idleTimer.reset()
+            inFlightWakeTask = task
+            await task.value
+            // Clear so the next .standby entry (future sleep) can
+            // wake again. A nil check in the early-return above means
+            // this assignment only runs after the winning task drains.
+            inFlightWakeTask = nil
         default:
             break
         }
+    }
+
+    /// Finalize a wake — transition to .running, reset idle. Split out
+    /// so `wakeFromStandby` + `wake()` share the landing sequence and
+    /// §253's Task can call it uniformly.
+    private func finishWakeTransition() async {
+        transition(.running)
+        await idleTimer.reset()
     }
 
     /// Subscribe to engine lifecycle transitions. Hot stream — replays
