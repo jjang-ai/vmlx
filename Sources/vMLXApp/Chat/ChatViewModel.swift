@@ -192,6 +192,21 @@ final class ChatViewModel {
         } else if sessions.isEmpty {
             newSession()
         }
+        // §244 — seed the Chat-level reasoning toggle from the global
+        // default. After attach, the toggle is the source of truth for
+        // what lands in `ChatRequest.enableThinking`, so seeding here
+        // means a user who has `defaultEnableThinking=true` in settings
+        // starts new chats with the toggle already ON. A subsequent
+        // flip by the user beats the default (proper override
+        // semantics), matching how every other sticky setting works.
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            let resolved = await app.engine.settings.resolved(
+                sessionId: nil, chatId: self.activeSessionId, request: nil)
+            if let def = resolved.settings.defaultEnableThinking {
+                self.reasoningEnabled = def
+            }
+        }
     }
 
     var filteredSessions: [ChatSession] {
@@ -964,7 +979,17 @@ final class ChatViewModel {
                 repetitionPenalty: r.defaultRepetitionPenalty,
                 stop: stopSequencesOut,
                 seed: nil,
-                enableThinking: r.defaultEnableThinking ?? reasoning,
+                // §244: the Chat-level reasoning toggle (UI) is the source
+                // of truth for whether the upcoming request routes through
+                // `<think>`. Previously the request builder preferred
+                // `r.defaultEnableThinking` whenever it was non-nil, which
+                // meant any user who had ever touched the settings tristate
+                // had their chat-level toggle silently ignored — clicking
+                // it produced zero effect on the next turn. The settings
+                // default initializes the toggle on chat load (see `init`
+                // below), after which the toggle value alone drives the
+                // request. Explicit user action beats stale settings.
+                enableThinking: reasoning,
                 reasoningEffort: reasoningEffortOut,
                 tools: toolList,
                 toolChoice: toolChoiceValue

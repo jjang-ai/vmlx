@@ -469,6 +469,22 @@ private struct ChatModelPicker: View {
         }
     }
 
+    /// §245 — disambiguate when two discovered entries share a
+    /// `displayName`. Two copies of the same HF repo in different
+    /// org/ directories (common when users have both HF cache and a
+    /// mlxstudio custom dir) would render as identical rows in the
+    /// picker and the alias string (which is displayName) would pick
+    /// whichever sorted first. Append the parent-directory in
+    /// parentheses for the duplicate cohort so the user can tell
+    /// them apart; the alias persisted to DB uses this
+    /// disambiguated string too so selection is deterministic.
+    private func labelForEntry(_ e: ModelLibrary.ModelEntry) -> String {
+        let dupeCount = entries.filter { $0.displayName == e.displayName }.count
+        guard dupeCount > 1 else { return e.displayName }
+        let parent = e.canonicalPath.deletingLastPathComponent().lastPathComponent
+        return "\(e.displayName) (\(parent))"
+    }
+
     /// Repeated user ask: "there needs to be a way to directly easily
     /// start / stop models from the chat page and list without needing
     /// to go to the server page". Each menu row now carries a load-state
@@ -534,7 +550,7 @@ private struct ChatModelPicker: View {
                         ForEach(shown, id: \.id) { e in
                             Menu {
                                 Button("Select for this chat") {
-                                    Task { await select(e.displayName) }
+                                    Task { await select(labelForEntry(e)) }
                                 }
                                 let s = loadState(for: e)
                                 switch s {
@@ -559,9 +575,9 @@ private struct ChatModelPicker: View {
                                     Circle()
                                         .fill(stateColor(loadState(for: e)))
                                         .frame(width: 8, height: 8)
-                                    Text(e.displayName)
+                                    Text(labelForEntry(e))
                                     Spacer()
-                                    if e.displayName == currentAlias {
+                                    if labelForEntry(e) == currentAlias {
                                         Image(systemName: "checkmark")
                                     }
                                     Text(stateLabel(loadState(for: e)))
