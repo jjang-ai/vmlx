@@ -2060,6 +2060,15 @@ public actor Engine {
     /// support. A true cross-encoder port (BGE-reranker, Cohere, etc.)
     /// is deferred until we have a dedicated rerank loader.
     public func rerank(request: [String: Any]) async throws -> [String: Any] {
+        // iter-132 §207: timing-envelope parity. iter-131 §206 added
+        // `total_ms` + `prompt_tokens_per_second` to embeddings;
+        // rerank wraps embeddings + cosine-similarity scoring but
+        // only exposed `prompt_tokens` / `total_tokens`. The cosine
+        // loop is O(docs × embedding_dim) so on large doc sets the
+        // scoring phase can dominate the wall-clock — dashboards
+        // that split embedding vs rerank latency need the total_ms
+        // measured here, not reused from the embedding inner call.
+        let requestStart = Date()
         guard let query = request["query"] as? String, !query.isEmpty else {
             throw EngineError.invalidRequest("rerank: missing 'query' field")
         }
@@ -2186,6 +2195,10 @@ public actor Engine {
             if let p = embUsage["prompt_tokens"] as? Int { usage["prompt_tokens"] = p }
             if let t = embUsage["total_tokens"] as? Int { usage["total_tokens"] = t }
         }
+        // iter-132 §207: total_ms covers embedding + cosine scoring +
+        // top-N selection. Excludes HTTP frame time.
+        let totalMs = Date().timeIntervalSince(requestStart) * 1000
+        usage["total_ms"] = totalMs
         return [
             "object": "list",
             "model": request["model"] ?? "",
