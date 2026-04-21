@@ -1,0 +1,20 @@
+{
+  "milestone": "legacy-format",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "typecheck": { "passed": true, "command": "swift build --product vmlxctl", "exitCode": 0 },
+    "lint": { "passed": true, "command": "scripts/lint-typed-mlx-scalars.sh", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [],
+  "previousRound": null
+}

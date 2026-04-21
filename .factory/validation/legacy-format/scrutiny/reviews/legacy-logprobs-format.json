@@ -1,0 +1,15 @@
+{
+  "featureId": "legacy-logprobs-format",
+  "reviewedAt": "2026-04-21T19:30:00Z",
+  "commitId": "65bbe49",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Clean extraction of buildLegacyLogprobs() shared helper that converts TokenLogprob arrays to OpenAI legacy format. The refactor correctly deduplicates ~66 lines of inline formatting from both OpenAIRoutes.swift (non-streaming) and SSEEncoder.swift (streaming) into a single well-documented static method. The key bug fix addresses VAL-LEG-004: position 0 top_logprobs now correctly emits JSON null instead of empty dict {}. All VAL-LEG assertions (001-008) are properly handled. The implementation is correct, follows project conventions, and builds cleanly.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "PASS — The buildLegacyLogprobs() helper is correctly implemented with proper null handling for position 0 (VAL-LEG-002, VAL-LEG-004), cumulative UTF-8 byte offset computation via String.utf8.count (VAL-LEG-005), top_logprobs:0 minimal dict handling (VAL-LEG-006), and proper integration into both non-streaming and streaming completions paths. The refactor reduces 68 lines of duplicated logic to 89 lines of shared, well-documented code (net +21 lines, but -68 lines of duplication). No blocking or non-blocking issues found. Build succeeds with only pre-existing warnings."
+}
