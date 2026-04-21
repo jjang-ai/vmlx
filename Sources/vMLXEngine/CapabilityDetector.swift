@@ -478,6 +478,14 @@ public enum CapabilityDetector {
         let thinkUnconditional = hasUnconditionalThinkMarker(chatTemplate)
         let reasoningParser: String? = {
             if chatTemplate.contains("<|channel|>analysis") { return "openai_gptoss" }
+            // §247: Gemma 4 uses `<|channel>thought\n<channel|>` — note the
+            // asymmetric pipe (leading `<|…>` + trailing `<…|>`) unlike
+            // gpt_oss's `<|…|>…<|…|>`. Without this detection standard
+            // Gemma-4 checkpoints (non-JANG) fall through to nil reasoning
+            // parser, alwaysParse gate at Stream.swift:1382 goes false,
+            // and the word "thought" leaks into content on the first
+            // response. Repro: Gemma-4-26B-A4B-it-4bit MLX standard.
+            if chatTemplate.contains("<|channel>thought") { return "gemma4" }
             if chatTemplate.contains("<\u{FF5C}begin\u{2581}of\u{2581}reasoning\u{FF5C}>") {
                 return "deepseek_r1"
             }

@@ -434,6 +434,17 @@ struct Serve: AsyncParsableCommand {
             FileHandle.standardError.write(Data(
                 "[vmlx] server.run() threw: \(error) — attempting cleanup\n".utf8))
         }
+        // §246 parity: swap MLX abort-on-error handler for a
+        // swallow-to-stderr one before teardown. Late-arriving kernel
+        // dispatches on the now-stopping ThreadPool otherwise SIGTRAP
+        // via fatalError and produce a spurious crash report after a
+        // clean shutdown banner. Repro 2026-04-21 in per-model-pmc.sh
+        // teardown (segfault after 8/8 PASS).
+        MLX.setErrorHandler({ msg, _ in
+            if let m = msg.map({ String(cString: $0) }) {
+                FileHandle.standardError.write(Data("[vmlx-terminate] MLX: \(m)\n".utf8))
+            }
+        })
         // Post-shutdown cleanup — flush any pending debounced settings
         // writes to SQLite, then release the model. Bounded to 2s so a
         // wedged store can't block process exit forever.
