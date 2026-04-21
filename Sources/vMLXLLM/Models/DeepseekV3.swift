@@ -566,7 +566,36 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
     }
 
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
-        var newWeights = weights
+        // Ralph iter-33: strip multi-token-prediction (MTP) layer weights.
+        // GLM-5.1 (model_type=glm_moe_dsa) bundles include layer-N tensors
+        // (where N = num_hidden_layers) for speculative-decode MTP heads
+        // that the inference model doesn't implement. Mirrors the Python
+        // deepseek_v32.py:509-516 sanitize: drop any `model.layers.{k}.*`
+        // with k >= numHiddenLayers. Also drops ancillary MTP keys
+        // (`enorm`, `hnorm`, `eh_proj`, `shared_head`) that live under
+        // that layer index. Safe for plain deepseek_v3 / v2 bundles which
+        // have no such tensors — the filter simply matches none.
+        let mtpLayerIndex = args.numHiddenLayers
+        var filtered: [String: MLXArray] = [:]
+        filtered.reserveCapacity(weights.count)
+        var strippedCount = 0
+        for (key, value) in weights {
+            let parts = key.split(separator: ".")
+            if parts.count >= 3 && parts[1] == "layers",
+               let layerIdx = Int(parts[2]),
+               layerIdx >= mtpLayerIndex {
+                strippedCount += 1
+                continue
+            }
+            filtered[key] = value
+        }
+        if strippedCount > 0 {
+            // Lightweight observability — matches the loader log noise
+            // level elsewhere in this file.
+            print("DeepseekV3.sanitize: stripped \(strippedCount) MTP layer tensor(s) at index \(mtpLayerIndex)+ (ralph iter-33)")
+        }
+
+        var newWeights = filtered
 
         func dequant(weight: MLXArray, scaleInv: MLXArray) -> MLXArray {
             let bs = 128
@@ -580,10 +609,14 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
             return scaled.reshaped([m + padBottom, n + padSide])[0 ..< m, 0 ..< n]
         }
 
-        for (key, value) in weights {
+        // iter-33: iterate `filtered` (MTP-stripped) so the subsequent
+        // dequant + copy-through loop doesn't re-introduce MTP-layer
+        // tensors that we just filtered out. For non-GLM-5.1 configs
+        // `filtered == weights` so behavior is unchanged.
+        for (key, value) in filtered {
             if key.contains("weight_scale_inv") {
                 let weightKey = key.replacingOccurrences(of: "_scale_inv", with: "")
-                if let weight = weights[weightKey] {
+                if let weight = filtered[weightKey] {
                     let dequantized = dequant(weight: weight, scaleInv: value)
                     newWeights[weightKey] = dequantized
                 }
