@@ -106,6 +106,15 @@ public final class HuggingFaceAuth: ObservableObject {
 
     /// Forget the token. Clears the Keychain, unsets the username, pushes
     /// nil to all bound DownloadManagers.
+    /// Current token (if any). Used by consumers like the HF search
+    /// panel that need to attach the token to an API call without going
+    /// through the DownloadManager binding path. Returns nil when no
+    /// token is stored.
+    public func currentToken() -> String? {
+        let t = KeychainHelper.load(.hfToken)
+        return (t?.isEmpty ?? true) ? nil : t
+    }
+
     public func clear() {
         _ = KeychainHelper.delete(.hfToken)
         self.hasToken = false

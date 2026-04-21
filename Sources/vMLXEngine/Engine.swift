@@ -1966,7 +1966,11 @@ public actor Engine {
             let url = try await self.generateImage(
                 prompt: prompt, model: model, settings: perSettings
             )
-            var entry: [String: Any] = [:]
+            // §249: expose the per-image seed so clients can reproduce.
+            // OpenAI's wire spec doesn't define a seed field on the
+            // response, but this is a vMLX extension mirroring
+            // /v1/images/edits (§248) and Flux DALLE-2-compatible tooling.
+            var entry: [String: Any] = ["seed": perSettings.seed]
             if responseFormat == "b64_json" {
                 if let data = try? Data(contentsOf: url) {
                     entry["b64_json"] = data.base64EncodedString()
@@ -2020,32 +2024,69 @@ public actor Engine {
         }
         let strength = (request["strength"] as? Double) ?? 0.6
         let model = (request["model"] as? String) ?? ""
-        var settings = ImageGenSettings()
-        if let size = request["size"] as? String {
-            let parts = size.split(separator: "x")
-            if parts.count == 2,
-               let w = Int(parts[0]), let h = Int(parts[1])
-            {
-                settings.width = w
-                settings.height = h
-            }
+        // §248: /v1/images/edits now honors `n` (default 1, cap 10). Pre-
+        // fix, the route silently ignored `n>1` — callers requesting 4
+        // variants of an edit got one image with no error. OpenAI's SDK
+        // rejects n>10 with 400; mirror that to prevent slow jobs.
+        let n = (request["n"] as? Int) ?? 1
+        guard n >= 1 && n <= 10 else {
+            throw EngineError.invalidRequest(
+                "editImage: 'n' must be between 1 and 10 (got \(n))")
         }
-        if let seed = request["seed"] as? Int { settings.seed = seed }
+        let responseFormat = (request["response_format"] as? String) ?? "url"
+        var settings = ImageGenSettings()
+        if let size = request["size"] as? String, !size.isEmpty {
+            let parts = size.split(separator: "x")
+            guard parts.count == 2,
+                  let w = Int(parts[0]), let h = Int(parts[1]),
+                  w > 0, h > 0
+            else {
+                throw EngineError.invalidRequest(
+                    "editImage: invalid 'size' '\(size)' — expected WIDTHxHEIGHT")
+            }
+            settings.width = w
+            settings.height = h
+        }
+        let seed = (request["seed"] as? Int) ?? -1
         if let steps = request["steps"] as? Int { settings.steps = steps }
         if let g = request["guidance"] as? Double { settings.guidance = g }
-        let url = try await self.editImage(
-            prompt: prompt,
-            model: model,
-            source: source,
-            mask: mask,
-            strength: strength,
-            settings: settings
-        )
+
+        // §248: loop for n>1 with deterministic seed walk (seed+i) OR
+        // random re-seed per iteration, mirroring generateImage.
+        var entries: [[String: Any]] = []
+        entries.reserveCapacity(n)
+        for i in 0..<n {
+            var perSettings = settings
+            if seed >= 0 {
+                perSettings.seed = seed &+ i
+            } else {
+                perSettings.seed = Int.random(in: 0..<Int(Int32.max))
+            }
+            let url = try await self.editImage(
+                prompt: prompt,
+                model: model,
+                source: source,
+                mask: mask,
+                strength: strength,
+                settings: perSettings
+            )
+            var entry: [String: Any] = ["seed": perSettings.seed]
+            if responseFormat == "b64_json" {
+                if let data = try? Data(contentsOf: url) {
+                    entry["b64_json"] = data.base64EncodedString()
+                }
+            } else {
+                entry["url"] = url.absoluteString
+            }
+            entries.append(entry)
+        }
         let totalMs = Date().timeIntervalSince(requestStart) * 1000
+        var timing: [String: Any] = ["total_ms": totalMs]
+        if n > 0 { timing["per_image_ms"] = totalMs / Double(n) }
         return [
             "created": Int(Date().timeIntervalSince1970),
-            "data": [["url": url.absoluteString]],
-            "timing": ["total_ms": totalMs],
+            "data": entries,
+            "timing": timing,
         ]
     }
 

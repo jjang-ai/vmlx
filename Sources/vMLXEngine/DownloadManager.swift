@@ -226,6 +226,29 @@ public actor DownloadManager {
             _jobs[id] = job
             broadcast(.progress(job))
 
+            // §251: pre-flight disk-space check. If HF reported a total
+            // (sum of sibling `size` fields) and the destination volume
+            // has less free space than 1.15× that (15% slack for HF
+            // rounding + temp extraction + filesystem overhead), fail
+            // fast with an actionable error instead of OOMing the disk
+            // mid-download and leaving a half-complete snapshot.
+            if total > 0 {
+                let hubRoot = Self.huggingFaceHubRoot()
+                try? FileManager.default.createDirectory(
+                    at: hubRoot, withIntermediateDirectories: true)
+                if let free = Self.freeSpaceBytes(at: hubRoot) {
+                    let needed = Int64(Double(total) * 1.15)
+                    if free < needed {
+                        let needGB = Double(needed) / 1_073_741_824
+                        let freeGB = Double(free) / 1_073_741_824
+                        let msg = String(
+                            format: "Not enough disk space — need %.1f GB, have %.1f GB free",
+                            needGB, freeGB)
+                        throw DownloadError.diskFull(msg)
+                    }
+                }
+            }
+
             // 2. Prepare destination dir.
             let destDir = try cacheDir(for: job.repo)
             job.localPath = destDir
@@ -595,6 +618,36 @@ public actor DownloadManager {
     // which is simpler and survives restart without a sidecar token file.
     // NSURLSession-native resume data was never wired up, so the helper
     // was misleading dead code.
+
+    // MARK: - §251 disk-space helpers
+
+    /// Root directory where HuggingFace snapshots land. Used for the
+    /// pre-flight disk check so we probe the correct volume.
+    static func huggingFaceHubRoot() -> URL {
+        FileManager.default
+            .homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/huggingface/hub")
+    }
+
+    /// Available free bytes on the volume that hosts `url`. Returns nil
+    /// if the FS attributes call fails (e.g. volume unmounted).
+    nonisolated static func freeSpaceBytes(at url: URL) -> Int64? {
+        let values = try? url.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage
+    }
+}
+
+/// §251 — download-manager-level errors. Wrapped in a separate enum so
+/// callers can surface a disk-full banner vs. a generic "download
+/// failed" message.
+public enum DownloadError: Error, LocalizedError {
+    case diskFull(String)
+    public var errorDescription: String? {
+        switch self {
+        case .diskFull(let m): return m
+        }
+    }
 }
 
 /// Thread-safe running total for KVO progress observation.
