@@ -28,6 +28,18 @@ public enum OllamaRoutes {
             // Open WebUI feature-gate on >= 0.6.4 (NO-REGRESSION-CHECKLIST §8f);
             // the older "0.1.0-vmlx" silently disabled tool-call paths in
             // those clients. Mirrors Python server.py at v1.3.50.
+            //
+            // iter-114 §192: stamp the last human-review date so
+            // future audits can spot-check whether this pin still
+            // sits above every Ollama-SDK client's feature gate.
+            // Automatic fail-after-N-months would be brittle; a
+            // visible stamp + periodic audit is the sweet spot.
+            // Previous reviews:
+            //   - 2026-04-15 (iter-50): bumped from 0.6.2 to 0.12.6
+            //     to satisfy newer Copilot Chat gates
+            //   - last-reviewed: 2026-04-20 — still comfortably
+            //     above the observed >=0.6.4 minimum for Copilot
+            //     and Open WebUI. No change needed yet.
             OpenAIRoutes.json(["version": "0.12.6"])
         }
 
