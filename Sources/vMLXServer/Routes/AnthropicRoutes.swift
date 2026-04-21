@@ -149,6 +149,46 @@ public enum AnthropicRoutes {
             ]
             return OpenAIRoutes.json(obj)
         }
+
+        // POST /v1/messages/count_tokens — token-count preflight used
+        // by Anthropic SDKs for budget planning before a real send.
+        //
+        // iter-108 §186: returns a labeled 501 rather than a hand-
+        // rolled tokenizer count. The honest reason is that building
+        // a count that MATCHES the prompt_tokens from a subsequent
+        // /v1/messages call requires re-running the same chat-template
+        // + image-marker + tool-spec path that Engine.stream sets up
+        // inside its container actor. Exposing a public entry point
+        // that reaches the loaded tokenizer without breaking actor
+        // isolation needs a dedicated Engine method — not a shortcut
+        // here at the wrapper layer. A wrong count would silently
+        // poison every budget decision the client makes (they'd over-
+        // or under-cap max_tokens based on bad info), which is worse
+        // than an honest 501.
+        //
+        // FIXME(iter-108 §186): wire a real count via an Engine-
+        // public method that:
+        //   1. Acquires the llm container (same path as Stream.swift)
+        //   2. Applies the chat template through `tokenizer.applyChat
+        //      Template(messages:tools:additionalContext:)`
+        //   3. Returns token count (no generation).
+        // Until then, clients that call count_tokens should fall back
+        // to their own tiktoken-based estimate or just send the real
+        // /v1/messages call and read prompt_tokens from usage. The
+        // status:"not-implemented" field lets SDKs detect this.
+        router.post("/v1/messages/count_tokens") { _, _ -> Response in
+            return OpenAIRoutes.json(
+                [
+                    "type": "error",
+                    "status": "not-implemented",
+                    "error": [
+                        "type": "not_implemented_error",
+                        "message": "vMLX does not yet implement /v1/messages/count_tokens — wiring the real count through the loaded tokenizer + chat template is tracked by iter-108 §186 FIXME in AnthropicRoutes.swift. Send a real /v1/messages call and read usage.input_tokens from the response for an exact count, or use a tiktoken-based client-side estimate for planning.",
+                    ] as [String: Any],
+                ],
+                status: .notImplemented
+            )
+        }
     }
 
     static func streamingBody(
