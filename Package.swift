@@ -290,7 +290,12 @@ let package = Package(
         // Jinja template engine — pulled in transitively by swift-transformers
         // for chat-template rendering. Declared explicitly here so the vMLX
         // test target can import it directly for chat-template repro tests.
-        .package(url: "https://github.com/johnmai-dev/Jinja", exact: "1.3.0"),
+        // vMLX §225 (2026-04-21): vendored at Vendor/Jinja so we can ship
+        // the negative-step `slice()` Python-semantics fix without a
+        // manual fork round-trip. Upstream reference:
+        // https://github.com/johnmai-dev/Jinja @ 1.3.0. Patch details in
+        // Vendor/Jinja/Sources/Utilities.swift.
+        .package(path: "Vendor/Jinja"),
     ],
     targets: [
 
