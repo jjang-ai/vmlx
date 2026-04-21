@@ -874,6 +874,14 @@ public enum OpenAIRoutes {
             var language: String? = nil
             var responseFormat: String = "json"
             var task: String = "transcribe"
+            // iter-124 §199: track whether the caller sent Whisper fields
+            // that our greedy decoder doesn't honor today. Previously
+            // these were silently dropped — now we warn-log exactly once
+            // per request so LangChain-Whisper / OpenAI-SDK users who
+            // set temperature=0.5 for noisy-audio robustness can see the
+            // degradation in the server log rather than wonder why their
+            // noise-tolerance tuning had zero effect.
+            var unwiredFields: [String] = []
 
             if contentType.lowercased().hasPrefix("multipart/form-data") {
                 guard let boundary = MultipartFormParser.boundary(from: contentType)
@@ -914,12 +922,28 @@ public enum OpenAIRoutes {
                         responseFormat = String(data: part.body, encoding: .utf8) ?? "json"
                     case "task":
                         task = String(data: part.body, encoding: .utf8) ?? "transcribe"
-                    case "prompt", "temperature":
-                        // Accepted and ignored for now — greedy decoder
-                        // has no temperature fallback yet, and the
-                        // optional text prompt prefix is a deferred
-                        // feature.
-                        break
+                    case "prompt":
+                        // FIXME(iter-124 §199): `prompt` is an OpenAI
+                        // Whisper field that biases the decoder with
+                        // a text prefix (e.g., to normalize spelling
+                        // of domain-specific terms). Accepted but
+                        // not yet threaded through WhisperDecoder.
+                        // Warn-log when set so the degradation is
+                        // visible rather than silent.
+                        let text = String(data: part.body, encoding: .utf8) ?? ""
+                        if !text.isEmpty { unwiredFields.append("prompt") }
+                    case "temperature":
+                        // FIXME(iter-124 §199): OpenAI's Whisper API
+                        // uses `temperature` for the log-prob-fallback
+                        // schedule (temperatures [0, 0.2, 0.4, 0.6,
+                        // 0.8, 1.0] retried until log-prob clears
+                        // threshold). Our greedy decoder has no
+                        // fallback path — `temperature=0.5` is
+                        // equivalent to `temperature=0`. Warn so
+                        // noisy-audio-tuning callers see the gap.
+                        let text = String(data: part.body, encoding: .utf8) ?? ""
+                        let val = Double(text) ?? 0
+                        if val > 0 { unwiredFields.append("temperature=\(text)") }
                     default:
                         break
                     }
@@ -939,7 +963,30 @@ public enum OpenAIRoutes {
                     if let l = obj["language"] as? String { language = l }
                     if let r = obj["response_format"] as? String { responseFormat = r }
                     if let tk = obj["task"] as? String { task = tk }
+                    // iter-124 §199: JSON-body branch parity — same
+                    // unwired-field warning for callers that use the
+                    // vMLX base64-JSON shape instead of multipart.
+                    if let p = obj["prompt"] as? String, !p.isEmpty {
+                        unwiredFields.append("prompt")
+                    }
+                    if let t = obj["temperature"] as? Double, t > 0 {
+                        unwiredFields.append("temperature=\(t)")
+                    } else if let t = obj["temperature"] as? Int, t > 0 {
+                        unwiredFields.append("temperature=\(t)")
+                    }
                 }
+            }
+            if !unwiredFields.isEmpty {
+                // Match the unconditional-stderr pattern used by
+                // `OllamaRoutes.warnUnsupportedOllamaOptions` (iter-110
+                // §188). engine.log routes to the in-process LogStore
+                // which the GUI reads but doesn't mirror to the server
+                // stdout, so headless callers (CLI + pytest rigs + LAN
+                // hosts) don't see it. stderr is universal.
+                let msg = "[whisper] transcriptions: accepted but not yet wired — "
+                    + unwiredFields.joined(separator: ", ")
+                    + " (greedy decoder has no temperature fallback + no prompt-prefix path; results may differ from OpenAI's reference Whisper API — see §199 FIXMEs in OpenAIRoutes.swift)\n"
+                FileHandle.standardError.write(Data(msg.utf8))
             }
 
             guard let audio = audioData, !audio.isEmpty else {
@@ -981,8 +1028,33 @@ public enum OpenAIRoutes {
                         headers: [.contentType: "text/vtt"],
                         body: .init(byteBuffer: .init(string: body)))
                 case "verbose_json":
+                    // iter-124 §199: `segments` was hardcoded `[]` —
+                    // LangChain's Whisper loader interprets that as
+                    // "no speech detected" and discards the
+                    // transcription even though `text` has it.
+                    // WhisperDecoder runs a single-pass greedy decode
+                    // (no VAD / chunking), so synthesize ONE segment
+                    // spanning the whole clip with real start=0,
+                    // end=duration, and text=result.text. Passes the
+                    // "has speech" test; `id=0` signals single-segment.
+                    // Real per-segment data lands when the decoder
+                    // grows VAD-based chunking.
                     var verbose = result
-                    verbose["segments"] = [] as [Any]
+                    let text = (result["text"] as? String) ?? ""
+                    let dur = (result["duration"] as? Double) ?? 0
+                    let seg: [String: Any] = [
+                        "id": 0,
+                        "seek": 0,
+                        "start": 0.0,
+                        "end": dur,
+                        "text": text,
+                        "tokens": [] as [Int],
+                        "temperature": 0.0,
+                        "avg_logprob": 0.0,
+                        "compression_ratio": 0.0,
+                        "no_speech_prob": text.isEmpty ? 1.0 : 0.0,
+                    ]
+                    verbose["segments"] = text.isEmpty ? ([] as [Any]) : [seg]
                     return Self.json(verbose)
                 default:
                     return Self.json(["text": text])
@@ -1103,8 +1175,33 @@ public enum OpenAIRoutes {
                         headers: [.contentType: "text/vtt"],
                         body: .init(byteBuffer: .init(string: bodyStr)))
                 case "verbose_json":
+                    // iter-124 §199: `segments` was hardcoded `[]` —
+                    // LangChain's Whisper loader interprets that as
+                    // "no speech detected" and discards the
+                    // transcription even though `text` has it.
+                    // WhisperDecoder runs a single-pass greedy decode
+                    // (no VAD / chunking), so synthesize ONE segment
+                    // spanning the whole clip with real start=0,
+                    // end=duration, and text=result.text. Passes the
+                    // "has speech" test; `id=0` signals single-segment.
+                    // Real per-segment data lands when the decoder
+                    // grows VAD-based chunking.
                     var verbose = result
-                    verbose["segments"] = [] as [Any]
+                    let text = (result["text"] as? String) ?? ""
+                    let dur = (result["duration"] as? Double) ?? 0
+                    let seg: [String: Any] = [
+                        "id": 0,
+                        "seek": 0,
+                        "start": 0.0,
+                        "end": dur,
+                        "text": text,
+                        "tokens": [] as [Int],
+                        "temperature": 0.0,
+                        "avg_logprob": 0.0,
+                        "compression_ratio": 0.0,
+                        "no_speech_prob": text.isEmpty ? 1.0 : 0.0,
+                    ]
+                    verbose["segments"] = text.isEmpty ? ([] as [Any]) : [seg]
                     return Self.json(verbose)
                 default:
                     return Self.json(["text": text])
