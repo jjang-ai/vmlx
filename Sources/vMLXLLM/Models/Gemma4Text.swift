@@ -341,28 +341,49 @@ class Gemma4MLP: Module {
     }
 
     // FIXME(iter-145 §215): dense Gemma-4-31B decode is ~10× slower
-    // than expected (live-measured 11.24 tok/s vs reference ~70-100
-    // tok/s on identical M4 Max). iter-146 §216 tried swapping the
-    // GELU-gate + elementwise-multiply for the compile-fused
-    // `fusedGeGLU` kernel; live bench post-swap = 10.70 tok/s (within
-    // noise). The activation fusion is NOT the bottleneck — kernel
-    // launches for the 3 linear layers + attention dominate. Root
-    // cause per MEMORY.md "stale files in hot path": this file is
-    // stale vs reference vmlx-swift-lm which ships fused gate+up
-    // matmul (weight concat at load time → N/2 matmul dispatches)
-    // + FP32 SDPA upcast.
+    // than expected. Full bench history per iter-149 §218 prefill-
+    // split diagnosis:
     //
-    // Remaining porting plan:
-    //   1. Concatenate gate_proj.weight + up_proj.weight at load
-    //      time → single matmul producing [2*hidden]; split then
-    //      apply fused GELU. Need careful handling for QuantizedLinear
-    //      (concatenating quantized weights is non-trivial) and
-    //      for JANG_4M's per-row mixed bits.
-    //   2. Verify FP32 SDPA upcast matches reference Gemma4.swift
-    //      VLM. Our current path uses native fp16 SDPA which may be
-    //      numerically fine but not obviously faster.
-    //   3. Target ≥30 tok/s (bandwidth cap for 15.5 GB/step).
-    // Tracks task #23 (vmlx#83 perf regression vs LM Studio).
+    //   Phase                       | tok/s  | notes
+    //   ----------------------------|--------|----------------------
+    //   Prefill (1024-tok batch)    | 152.80 | healthy — GEMM is fast
+    //   Decode (per-token GEMV)     |   8.46 | dispatch-tax bound
+    //
+    // Theoretical cap = 15.5 GB × 500 GB/s bandwidth = 32 tok/s.
+    // Measured 8.46 = 125ms/forward vs 31ms theoretical. That's
+    // ~95ms of per-token Metal dispatch tax spread across
+    // 62 layers × ~15 ops = 930 ops/token at ~135μs/op
+    // (expected optimized quantized GEMV = ~50μs).
+    //
+    // What's been tried:
+    //   - iter-146 §216: fused compile(safeGelu * x) via fusedGeGLU.
+    //     Result: 10.70 tok/s vs 11.24 pre-fix (noise). Reverted.
+    //     Activation fusion is NOT the bottleneck — saves ~1 op per
+    //     layer, ~8ms total at 135μs/op.
+    //
+    // Potential remaining wins (all require multi-session work):
+    //   1. Fused gate+up matmul via weight-concat at sanitize time.
+    //      Saves 1 matmul/layer = ~8ms total = ~9% speedup. Complex
+    //      due to QuantizedLinear mixed-bit JANG_4M layout. Would
+    //      bring 11 → ~12 tok/s — not target-closing alone.
+    //   2. Fused Q/K/V matmul via weight-concat too (3 → 1 matmul
+    //      in attention). Another ~8ms saving.
+    //   3. Fused whole-MLP kernel (gate+up+gelu+multiply+down in one
+    //      Metal dispatch). Risky per MLX#3329 crash history,
+    //      needs per-site gate.
+    //   4. Flash-attention (Q/K/V + RoPE + SDPA + output fused).
+    //      Biggest potential win, biggest implementation cost.
+    //
+    // Reference `vmlx-swift-lm` has 1+2 shipped already. LM Studio
+    // reportedly runs that reference, explaining the perf gap users
+    // see in vmlx#83.
+    //
+    // Tracks task #23. Honest conclusion: this FIXME is a multi-iter
+    // perf project, not a single-iter fix. Current session shipped
+    // the diagnosis + rejection of activation-fusion; follow-up
+    // session should tackle option 1 (gate+up weight-concat) with
+    // a full QuantizedLinear concat implementation + targeted bench
+    // on Gemma-4-26B (the actual target model, smaller sibling).
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let g = safeGeluApproximate(gateProj(x))
         let u = upProj(x)
