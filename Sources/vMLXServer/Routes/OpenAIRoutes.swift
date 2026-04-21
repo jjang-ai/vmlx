@@ -233,6 +233,12 @@ public enum OpenAIRoutes {
                 if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
                 if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
                 if let total = u.totalMs { usageObj["total_ms"] = total }
+                // iter-120 §196: cache_detail was a silent drop on every
+                // HTTP response. Stream.swift populates it, MessageBubble
+                // reads it, but no wire route ever forwarded it. Hard
+                // rule #6 requires it on every response body. Live test
+                // 2026-04-20 on gemma-4-e2b-4bit came back null.
+                if let detail = u.cacheDetail { usageObj["cache_detail"] = detail }
                 obj["usage"] = usageObj
             }
             return Self.json(obj)
@@ -427,6 +433,8 @@ public enum OpenAIRoutes {
                 if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
                 if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
                 if let total = u.totalMs { usageObj["total_ms"] = total }
+                // iter-120 §196: cache_detail parity with chat/completions.
+                if let detail = u.cacheDetail { usageObj["cache_detail"] = detail }
                 obj2["usage"] = usageObj
             }
             return Self.json(obj2)
@@ -1316,6 +1324,8 @@ public enum OpenAIRoutes {
         if let ttft = u.ttftMs { r["ttft_ms"] = ttft }
         if let prefill = u.prefillMs { r["prefill_ms"] = prefill }
         if let total = u.totalMs { r["total_ms"] = total }
+        // iter-120 §196: cache_detail parity across all response bodies.
+        if let detail = u.cacheDetail { r["cache_detail"] = detail }
         return r
     }
 

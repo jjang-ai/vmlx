@@ -144,6 +144,8 @@ public enum SSEEncoder {
                 if let ttft = u.ttftMs { usageDict["ttft_ms"] = ttft }
                 if let pm = u.prefillMs { usageDict["prefill_ms"] = pm }
                 if let tm = u.totalMs { usageDict["total_ms"] = tm }
+                // iter-120 §196: cache_detail parity with non-stream.
+                if let detail = u.cacheDetail { usageDict["cache_detail"] = detail }
                 let usageObj: [String: Any] = [
                     "id": id,
                     "object": "chat.completion.chunk",

@@ -428,6 +428,8 @@ public enum AnthropicRoutes {
         if let ttft = u.ttftMs { out["ttft_ms"] = ttft }
         if let prefill = u.prefillMs { out["prefill_ms"] = prefill }
         if let total = u.totalMs { out["total_ms"] = total }
+        // iter-120 §196: cache_detail parity across all response bodies.
+        if let detail = u.cacheDetail { out["cache_detail"] = detail }
         return out
     }
 

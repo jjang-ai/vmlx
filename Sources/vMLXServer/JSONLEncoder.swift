@@ -219,6 +219,12 @@ public enum JSONLEncoder {
             }
         }
         obj["load_duration"] = 0
+        // iter-120 §196: cache_detail extension — Ollama spec doesn't
+        // carry it but our clients (Copilot, LangChain via vMLX-aware
+        // adapters) read it for cache-tier observability. Piggy-back
+        // on the Ollama timings helper so every Ollama-shape response
+        // gets it alongside the spec fields.
+        if let detail = u.cacheDetail { obj["cache_detail"] = detail }
     }
 
     static func parseJSONObject(_ s: String) -> [String: Any]? {
