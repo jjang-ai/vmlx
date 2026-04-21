@@ -115,14 +115,25 @@ public enum SSEEncoder {
                 ]
                 let j = Self.asciiJSON(errObj)
                 try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                // iter-ralph §228 (M1): emit a terminal chunk with
+                // `finish_reason: "error"` so OpenAI SDK clients see
+                // the stream close gracefully. Without this the SDK's
+                // message-assembler never fires its completion hook
+                // — UI spinners stay pinned even though [DONE] was
+                // sent. OpenAI's own streaming API emits this frame
+                // on error, and ours must match.
+                let errFinal = Self.chunkJSON(
+                    id: id, model: model, created: created,
+                    delta: [:],
+                    finishReason: "error"
+                )
+                try await writer.write(allocator.buffer(string: "data: \(errFinal)\n\n"))
             }
 
             // Final chunk: empty delta + finish_reason. Skipped on
-            // error path — emitting a `finish_reason: "stop"` frame
-            // after an error event signals "clean completion" to
-            // OpenAI SDK clients and triggers their post-completion
-            // hooks (log usage, close UI spinner, etc) as if the
-            // generation succeeded.
+            // error path — the error branch above already emitted a
+            // `finish_reason: "error"` terminator frame for SDK
+            // clients.
             if !hadError {
                 let finalChunk = Self.chunkJSON(
                     id: id, model: model, created: created,
@@ -219,6 +230,23 @@ public enum SSEEncoder {
                 ]
                 let j = Self.asciiJSON(errObj)
                 try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+                // iter-ralph §228 (M1): emit finish_reason="error"
+                // terminator so legacy /v1/completions SDK clients'
+                // stream parsers close cleanly. See chatCompletionStream
+                // for the full rationale.
+                let errFinal: [String: Any] = [
+                    "id": id,
+                    "object": "text_completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [[
+                        "index": 0,
+                        "text": "",
+                        "finish_reason": "error",
+                    ] as [String: Any]],
+                ]
+                try await writer.write(allocator.buffer(
+                    string: "data: \(Self.asciiJSON(errFinal))\n\n"))
             }
 
             if !hadError {
