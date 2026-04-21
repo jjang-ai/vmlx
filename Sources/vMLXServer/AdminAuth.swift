@@ -2,6 +2,52 @@ import Foundation
 import HTTPTypes
 import Hummingbird
 
+/// iter-ralph §232 (M3): per-IP failed-auth counter for admin token.
+/// Keeps a rolling window of recent auth misses keyed on peer IP.
+/// Purges entries older than `windowSeconds`; once a peer exceeds
+/// `maxFailures` inside the window, returns 429 until the window
+/// scrolls off. No allocations on the success path (success clears
+/// the peer's slot).
+actor AdminAuthRateLimiter {
+    static let shared = AdminAuthRateLimiter()
+
+    private let maxFailures = 5
+    private let windowSeconds: TimeInterval = 60
+
+    private var failures: [String: [Date]] = [:]
+
+    /// Returns `(shouldBlock, retryAfterSeconds)` — `shouldBlock` true
+    /// when the peer has already burned its budget. When true, the
+    /// caller should emit 429 WITHOUT running the token comparison so
+    /// we don't give timing-oracle feedback.
+    func shouldBlock(peer: String, now: Date = Date()) -> (Bool, Int) {
+        let cutoff = now.addingTimeInterval(-windowSeconds)
+        var window = failures[peer] ?? []
+        window = window.filter { $0 > cutoff }
+        failures[peer] = window
+        if window.count >= maxFailures {
+            let oldest = window.min() ?? now
+            let retryAfter = Int(ceil(windowSeconds - now.timeIntervalSince(oldest)))
+            return (true, max(1, retryAfter))
+        }
+        return (false, 0)
+    }
+
+    func recordFailure(peer: String, now: Date = Date()) {
+        var window = failures[peer] ?? []
+        window.append(now)
+        // Bound runaway growth even inside the window.
+        if window.count > maxFailures * 4 {
+            window.removeFirst(window.count - maxFailures * 4)
+        }
+        failures[peer] = window
+    }
+
+    func recordSuccess(peer: String) {
+        failures.removeValue(forKey: peer)
+    }
+}
+
 /// Admin / cache-control endpoint auth middleware.
 ///
 /// Gates the destructive side of the vMLX HTTP API — lifecycle, cache
@@ -92,6 +138,39 @@ public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
             return try await next(request, context)
         }
 
+        // iter-ralph §232 (M3): rate-limit admin-token brute-force.
+        // Peer key: X-Forwarded-For leftmost → request remote address
+        // → "default". Matches RateLimitMiddleware.peerKey logic.
+        let peer: String = {
+            if let xff = request.headers[.init("x-forwarded-for")!]?
+                .split(separator: ",").first {
+                return String(xff).trimmingCharacters(in: .whitespaces)
+            }
+            let mirror = Mirror(reflecting: context)
+            for child in mirror.children where child.label == "channel" {
+                let inner = Mirror(reflecting: child.value)
+                for c in inner.children where c.label == "remoteAddress" {
+                    if let addr = c.value as? CustomStringConvertible {
+                        return String(describing: addr)
+                    }
+                }
+            }
+            return "default"
+        }()
+
+        let (blocked, retryAfter) =
+            await AdminAuthRateLimiter.shared.shouldBlock(peer: peer)
+        if blocked {
+            let body = #"{"error":{"message":"too many admin auth attempts, slow down","type":"rate_limit_error","retry_after":\#(retryAfter)}}"#
+            var resp = Response(
+                status: .tooManyRequests,
+                headers: [.contentType: "application/json"],
+                body: .init(byteBuffer: .init(string: body))
+            )
+            resp.headers[HTTPField.Name("Retry-After")!] = String(retryAfter)
+            return resp
+        }
+
         // Accept Bearer or X-Admin-Token.
         let bearer = request.headers[.authorization] ?? ""
         let xheader = request.headers[HTTPField.Name("X-Admin-Token")!] ?? ""
@@ -106,6 +185,8 @@ public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
         let headerOK = BearerAuthMiddleware<Context>.constantTimeEquals(xheader, expected)
 
         guard bearerOK || headerOK else {
+            // iter-ralph §232 (M3): record the miss for per-IP bucket.
+            await AdminAuthRateLimiter.shared.recordFailure(peer: peer)
             let body = #"{"error":{"message":"admin token required","type":"auth_error","path":"\#(path)"}}"#
             var resp = Response(
                 status: .unauthorized,
@@ -115,6 +196,8 @@ public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
             resp.headers[.wwwAuthenticate] = "Bearer realm=\"admin\""
             return resp
         }
+        // Success — clear any prior-miss window for this peer.
+        await AdminAuthRateLimiter.shared.recordSuccess(peer: peer)
         return try await next(request, context)
     }
 }
