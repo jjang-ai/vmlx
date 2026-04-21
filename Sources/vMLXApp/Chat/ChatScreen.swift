@@ -269,12 +269,30 @@ struct ColoredBanner: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            HStack(spacing: Theme.Spacing.sm) {
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
                 Image(systemName: icon)
                     .foregroundStyle(tint)
+                    .padding(.top, 2)
+                // iter-138 §213: title was single-line-truncating long
+                // `.error(msg)` payloads like "Model directory not
+                // found at /very/long/path/... — re-download or point
+                // to a different model". HStack without a `maxWidth`
+                // constraint + the trailing CTA button squeezed the
+                // title to whatever fit on one line; the rest was
+                // dropped with no ellipsis (SwiftUI default clips
+                // silently when no lineLimit is set but layout is
+                // constrained). Fix: `.fixedSize(horizontal: false,
+                // vertical: true)` forces the Text to expand
+                // vertically rather than clip horizontally, so the
+                // banner grows to fit multi-line messages. Plus
+                // textSelection so users can copy the message into
+                // a support issue — same rationale as §212
+                // SessionView banner.
                 Text(title)
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.textHigh)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
                 if showSpinner {
                     ProgressView().controlSize(.mini)
                 }
