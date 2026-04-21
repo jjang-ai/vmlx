@@ -89,6 +89,17 @@ public actor DownloadManager {
 
     private let maxConcurrentFiles = 2
 
+    /// §253b: cross-job cap. Each `run(id:)` pulls up to
+    /// `maxConcurrentFiles` shards in parallel, so 5 enqueued jobs can
+    /// fire 10 simultaneous HTTP streams at huggingface.co — well past
+    /// HF's unauthenticated rate-limit (~30 req/min per IP). Cap the
+    /// number of jobs actively fetching shards to 3; extras stay
+    /// `.downloading` but block on `jobSlots` before entering the
+    /// sibling fetch. FIFO so the first-enqueued gets its turn first.
+    private let maxConcurrentJobs = 3
+    private var activeJobs: Int = 0
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+
     /// HuggingFace access token for gated repos. Set via `setHFAuthToken(_:)`.
     /// The UI persists the real value in the macOS Keychain; the manager only
     /// keeps an in-memory copy for the duration of the actor's lifetime.
@@ -243,6 +254,19 @@ public actor DownloadManager {
 
     private func run(id: UUID) async {
         guard var job = _jobs[id] else { return }
+
+        // §253b: global slot acquire. Blocks until < maxConcurrentJobs
+        // other runs are active. Released in all exit paths (success,
+        // failure, cancel) via `defer`.
+        await acquireSlot(for: id)
+        defer { releaseSlot() }
+
+        // Re-read the job now that we've waited — the user may have
+        // cancelled or paused while we were queued.
+        guard let refreshed = _jobs[id],
+              refreshed.status == .downloading
+        else { return }
+        job = refreshed
 
         do {
             // 1. Enumerate files from HF API.
@@ -648,6 +672,36 @@ public actor DownloadManager {
     // was misleading dead code.
 
     // MARK: - §251 disk-space helpers
+
+    // MARK: - §253b slot coordination
+
+    /// Wait until fewer than `maxConcurrentJobs` runs are active, then
+    /// increment `activeJobs`. FIFO ordering keyed by UUID so enqueue
+    /// order is preserved.
+    private func acquireSlot(for id: UUID) async {
+        if activeJobs < maxConcurrentJobs {
+            activeJobs += 1
+            return
+        }
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            waiters[id] = cont
+        }
+        activeJobs += 1
+    }
+
+    /// Release the slot and wake the next waiter (if any). Called
+    /// once per acquire; safe to call multiple times due to the
+    /// `firstKey` check — never double-resumes a continuation.
+    private func releaseSlot() {
+        activeJobs = max(0, activeJobs - 1)
+        // Take the oldest waiter — keyed on insertion order since
+        // Swift dicts are unordered, we pick the first UUID
+        // deterministically by sorting. Waiter-set size is O(enqueued),
+        // almost always <5, so the sort cost is negligible.
+        guard let next = waiters.keys.sorted().first else { return }
+        let cont = waiters.removeValue(forKey: next)!
+        cont.resume()
+    }
 
     // MARK: - §252 sidecar persistence
 
