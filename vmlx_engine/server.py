@@ -114,6 +114,7 @@ from .api.tool_calling import (
 )
 from .api.utils import (
     clean_output_text,
+    strip_marker_tokens_delta,
     extract_multimodal_content,
     is_mllm_model,  # noqa: F401
 )
@@ -6616,16 +6617,15 @@ async def stream_chat_completion(
                 # Post-parse cleaning for streaming deltas — strip any
                 # structural markers that survived the parser's split
                 # (e.g. a second `<channel|>` embedded in content when
-                # Gemma 4 emits nested channel frames, or `thought\n`
-                # degraded form when the tokenizer partially strips SOC).
-                # Without this the Anthropic `/v1/messages` aggregator
-                # and `/v1/responses` output blocks surface the marker
-                # tokens to API clients while OpenAI chat_completions
-                # (which post-cleans on the non-stream path) does not.
+                # Gemma 4 emits nested channel frames). Must use the
+                # DELTA-safe variant that preserves leading/trailing
+                # whitespace — otherwise single-space deltas (" the")
+                # lose their space, concatenating the entire stream into
+                # "Itlooksliketypo" visible garbage (bug 2026-04-21).
                 if delta_msg.content:
-                    delta_msg.content = clean_output_text(delta_msg.content)
+                    delta_msg.content = strip_marker_tokens_delta(delta_msg.content)
                 if delta_msg.reasoning:
-                    delta_msg.reasoning = clean_output_text(delta_msg.reasoning)
+                    delta_msg.reasoning = strip_marker_tokens_delta(delta_msg.reasoning)
 
                 # Debug: log parser output when suppress is active
                 if suppress_reasoning and (delta_msg.content or delta_msg.reasoning):
@@ -7451,11 +7451,15 @@ async def stream_responses_api(
                         # Post-parse cleaning — mirror the chat_completions
                         # streaming path so Responses API clients don't see
                         # residual `<channel|>` / `thought\n` / `<turn|>` etc.
-                        # that the parser's split leaves in content.
+                        # that the parser's split leaves in content. Use the
+                        # delta-safe stripper that preserves whitespace —
+                        # clean_output_text's trailing `.strip()` eats per-
+                        # delta leading spaces and concatenates the stream
+                        # into " Itlooksliketypo" garbage.
                         if delta_msg.content:
-                            delta_msg.content = clean_output_text(delta_msg.content)
+                            delta_msg.content = strip_marker_tokens_delta(delta_msg.content)
                         if delta_msg.reasoning:
-                            delta_msg.reasoning = clean_output_text(delta_msg.reasoning)
+                            delta_msg.reasoning = strip_marker_tokens_delta(delta_msg.reasoning)
                         # Accumulate for marker detection (before buffering check).
                         # §15: when suppress_reasoning redirects reasoning → content
                         # via emit below, mirror it here so accumulated_content

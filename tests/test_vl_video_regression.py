@@ -9567,3 +9567,85 @@ class TestResponsesNonStreamAppliesClean:
             f"expected post-parse clean comment in both chat_completions and "
             f"responses non-stream paths; found {hits}"
         )
+
+
+class TestStreamingWhitespacePreservation:
+    """2026-04-21 real-UI repro surfaced a regression caused by v1.3.73:
+    applying `clean_output_text` per streaming delta called `.strip()` on
+    every chunk, eating the leading/trailing spaces that tokenizers emit
+    between words. The aggregated client view became
+    `"Itseemslikeyoumightbetestingthesystem..."` — every space gone.
+
+    Fix: new `strip_marker_tokens_delta` helper — same SPECIAL_TOKENS regex,
+    NO `.strip()`. Used in both streaming post-parse sites. Non-stream
+    builders still use `clean_output_text` since they operate on the
+    complete output where `.strip()` on the whole blob is desirable.
+    """
+
+    UTILS = "/tmp/vmlx-1.3.66-build/vmlx_engine/api/utils.py"
+    SERVER = "/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
+
+    def test_strip_marker_tokens_delta_preserves_leading_space(self):
+        from vmlx_engine.api.utils import strip_marker_tokens_delta
+        # Typical per-token streaming delta with leading space
+        assert strip_marker_tokens_delta(" the") == " the"
+        assert strip_marker_tokens_delta(" world") == " world"
+        assert strip_marker_tokens_delta(" ") == " "  # just whitespace
+        # Must NOT strip trailing space either (some tokens have trailing)
+        assert strip_marker_tokens_delta("word ") == "word "
+
+    def test_strip_marker_tokens_delta_removes_markers(self):
+        from vmlx_engine.api.utils import strip_marker_tokens_delta
+        assert strip_marker_tokens_delta("<channel|>the answer") == "the answer"
+        assert strip_marker_tokens_delta("<|im_end|>") == ""
+        assert strip_marker_tokens_delta(" <|channel>analysis ") == " analysis "
+
+    def test_strip_marker_tokens_delta_passthrough_plain(self):
+        from vmlx_engine.api.utils import strip_marker_tokens_delta
+        assert strip_marker_tokens_delta("plain text") == "plain text"
+        assert strip_marker_tokens_delta("") == ""
+        assert strip_marker_tokens_delta(None) == None
+
+    def test_server_streaming_uses_delta_safe_cleaner(self):
+        src = Path(self.SERVER).read_text()
+        # Must use strip_marker_tokens_delta in streaming paths, NOT clean_output_text
+        assert "strip_marker_tokens_delta" in src
+        # Check both streaming sites reference it
+        assert src.count("delta_msg.content = strip_marker_tokens_delta") >= 2
+        assert src.count("delta_msg.reasoning = strip_marker_tokens_delta") >= 2
+
+    def test_server_non_stream_still_uses_clean_output_text(self):
+        """Non-stream builders operate on the complete output and SHOULD
+        use clean_output_text (which does .strip()). Verify the split."""
+        src = Path(self.SERVER).read_text()
+        # Both chat_completions and responses non-stream paths have post-parse clean
+        assert src.count("content_for_parsing = clean_output_text(content_for_parsing)") == 2
+
+    def test_clean_output_text_still_strips(self):
+        """The whole-output variant still does `.strip()` — important for
+        non-stream consumers that need leading/trailing whitespace trimmed
+        from the final blob for clean display."""
+        from vmlx_engine.api.utils import clean_output_text
+        # Still trims surrounding whitespace on whole output
+        assert clean_output_text("  hello  ") == "hello"
+
+    def test_delta_safe_helper_does_not_call_clean_output_text(self):
+        """Inspect function body without docstring — docstring references
+        clean_output_text for explanatory purposes so source text match
+        alone is too strict."""
+        import inspect, ast
+        from vmlx_engine.api import utils
+        src = inspect.getsource(utils.strip_marker_tokens_delta)
+        tree = ast.parse(src)
+        fn = tree.body[0]
+        if (fn.body and isinstance(fn.body[0], ast.Expr)
+                and isinstance(fn.body[0].value, ast.Constant)):
+            fn.body = fn.body[1:]
+        code_only = ast.unparse(fn)
+        assert "clean_output_text(" not in code_only, (
+            "strip_marker_tokens_delta must NOT delegate to clean_output_text"
+        )
+        assert ".strip()" not in code_only, (
+            "strip_marker_tokens_delta must NOT call .strip() — that eats "
+            "per-delta leading whitespace and concatenates the stream"
+        )

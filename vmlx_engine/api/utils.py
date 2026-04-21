@@ -27,6 +27,31 @@ SPECIAL_TOKENS_PATTERN = re.compile(
 )
 
 
+def strip_marker_tokens_delta(text: str) -> str:
+    """Streaming-delta-safe marker stripper.
+
+    Removes Gemma 4 channel / turn tokens, think tags, im_start/im_end etc.
+    from an INCREMENTAL streaming delta WITHOUT touching surrounding
+    whitespace. Unlike `clean_output_text` (which ends in `.strip()` and
+    is designed for a complete output blob), this is safe to apply per
+    delta — preserving leading/trailing spaces that tokenizers emit
+    between words.
+
+    Use this in streaming paths where multiple deltas are aggregated on
+    the client side. Using `clean_output_text` per-delta caused visible
+    concatenation (`"Itlooksliketypo"` instead of `"It looks like typo"`)
+    because every delta's leading space was stripped.
+    """
+    if not text:
+        return text
+    # Strip the full special-token regex (channel markers, im_start/end,
+    # think tags only in certain shapes per SPECIAL_TOKENS_PATTERN).
+    text = SPECIAL_TOKENS_PATTERN.sub("", text)
+    # Delta-safe: DO NOT `.strip()` — that eats single-space deltas like
+    # " the" which destroys the streaming word stream.
+    return text
+
+
 def clean_output_text(text: str) -> str:
     """
     Clean model output by removing special tokens.
