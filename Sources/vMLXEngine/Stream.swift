@@ -978,21 +978,55 @@ extension Engine {
                 // can reuse prior-turn prefill state. Mirrors Python
                 // `vmlx_engine/prefix_cache.py`. Falls back to 0 on any
                 // template error — safe no-op.
+                // iter-122 §197 ROOT CAUSE FIX: the `<think></think>`
+                // reasoning-off stub that `buildChatMessages:1930`
+                // appends as a trailing assistant message renders into
+                // ~13 extra tokens that sit BETWEEN the closed-turn
+                // prefix and the real `<|turn>model\n` generation prompt.
+                // With the old `withGP-withoutGP` differencing, only the
+                // final gp suffix was stripped — the stub tokens stayed
+                // inside the cache hash key, so T1's stub-decorated key
+                // was a sibling (not a prefix) of T3's, and the memory
+                // prefix cache always missed across turns. Fix: render
+                // the cache-stable length as messages-WITHOUT-stub and
+                // `add_generation_prompt=false`. `genPromptLen` then
+                // covers both the stub wrap AND the template's real gp.
+                // Live-repro: Gemma-4 T1/T3 both produced hashTokens that
+                // contained `<|turn>model\n<think>\n</think>\n\n<turn|>\n`
+                // for T1 but `...A1...<|turn>user\n...` for T3 — no
+                // overlapping prefix. After fix, both hashTokens strip
+                // back to the shared `<bos><|turn>user\nQ1<turn|>\n`.
                 var genPromptLen = 0
                 do {
-                    let rawMsgs = DefaultMessageGenerator().generate(from: userInput)
+                    let rawMsgsFull = DefaultMessageGenerator().generate(from: userInput)
                     let withGP = try ctx.tokenizer.applyChatTemplate(
-                        messages: rawMsgs,
+                        messages: rawMsgsFull,
                         tools: nil,
                         additionalContext: ["add_generation_prompt": true as any Sendable]
                     )
-                    let withoutGP = try ctx.tokenizer.applyChatTemplate(
-                        messages: rawMsgs,
+
+                    // Strip the trailing reasoning-off stub from the
+                    // cache-stable render. Detection mirrors the inject
+                    // site at `buildChatMessages:1930` — last message is
+                    // role=assistant with the exact stub literal. Safe
+                    // guard: only drop when the last message actually
+                    // matches (user-supplied prior-turn assistant messages
+                    // must stay intact for multi-turn cache keys).
+                    let stubContent = "<think>\n</think>\n\n"
+                    var rawMsgsClosed = rawMsgsFull
+                    if let last = rawMsgsClosed.last,
+                       (last["role"] as? String) == "assistant",
+                       (last["content"] as? String) == stubContent
+                    {
+                        rawMsgsClosed.removeLast()
+                    }
+                    let withoutGPClosed = try ctx.tokenizer.applyChatTemplate(
+                        messages: rawMsgsClosed,
                         tools: nil,
                         additionalContext: ["add_generation_prompt": false as any Sendable]
                     )
-                    if withGP.count > withoutGP.count {
-                        genPromptLen = withGP.count - withoutGP.count
+                    if withGP.count > withoutGPClosed.count {
+                        genPromptLen = withGP.count - withoutGPClosed.count
                     }
                 } catch {
                     genPromptLen = 0
@@ -1068,49 +1102,30 @@ extension Engine {
                         preFetch = CachePreFetch(matched: 0, detail: "miss")
                     }
                 }
-                // iter-121 §197: LIVE-VERIFIED multi-turn partial-prefix
-                // cache miss. Reproduction (gemma-4-e2b-it-4bit, 2026-04-20):
-                //   T1: "what is a river" → prompt=26, cached=0 (miss, expected)
-                //   T2: identical prompt → prompt=26, cached=23 (memory hit ✓)
-                //   T3: T1 user + different assistant text + new user turn →
-                //       prompt=46, cached=0 (EXPECTED partial hit of ~19 tok,
-                //       actual MISS).
-                //
-                // iter-122 trace update: the initial hypothesis (that
-                // `storeAfterGeneration` was keying on prompt+generated)
-                // is WRONG. Evaluate.swift:1816 passes `promptTokenIds`
-                // — which is `input.text.tokens` at generate-entry time
-                // (prompt-only, not prompt+generated). CacheCoordinator.
-                // swift:384-387 then strips genPromptLen on store, so
-                // T1's key is tokens[0..23]. MemoryAwarePrefixCache.fetch
-                // forward-prefix scan should find T1's 23-token entry
-                // as a prefix of T3's 43-token (post-strip) fetch key.
-                //
-                // FIXME(iter-121 §197): the miss root cause is NOT the
-                // store key. Three candidates remain:
-                //   (a) T1 and T3 tokenize the first user turn to
-                //       DIFFERENT token sequences — Gemma-4's chat
-                //       template may add/omit `<bos>` or whitespace
-                //       depending on message-list length. Needs runtime
-                //       tokenization diff.
-                //   (b) T2's store OVERWROTE T1's entry with a sequence
-                //       that's not a strict prefix of T3 (though T1 and
-                //       T2 have the same prompt... unless the store
-                //       captured post-continuation state through some
-                //       other path).
-                //   (c) MemoryCache budget is evicting between T2 and T3
-                //       (unlikely on a fresh process).
-                //
-                // Ship plan: instrument CacheCoordinator.storeAfterGeneration
-                // to log the stored-tokens hash + length, and instrument
-                // MemoryAwarePrefixCache.fetch to log best-forward scan
-                // misses. Gated behind `VMLX_CACHE_TRACE=1` env so
-                // production stays quiet. Re-run the T1/T2/T3 repro with
-                // the env var set and the logs will pinpoint which
-                // candidate is live. Ref: CacheCoordinator.swift:376-410,
-                // Evaluate.swift:714-720 (promptTokenIds capture),
-                // MemoryAwarePrefixCache.swift:417-425 (forward-prefix
-                // scan). §197 regression guard pins this FIXME in place.
+                // iter-122 §197 RESOLVED — multi-turn partial-prefix cache
+                // miss. Live trace (VMLX_CACHE_TRACE=1, Gemma-4-e2b-it-4bit)
+                // showed the T1 hashTokens diverged from T3's first-23
+                // prefix at position 13. Decoded:
+                //   T1 stored: `<bos><|turn>user\nQ1<turn|>\n<|turn>model\n
+                //               <think>\n</think>\n\n<turn|>\n`
+                //   T3 head32:  `<bos><|turn>user\nQ1<turn|>\n<|turn>model\n
+                //               A1<turn|>\n<|turn>user\nQ2...`
+                // The `<think>\n</think>\n\n` block — 10 intermediate
+                // tokens at positions 13-22 of T1's key — is the empty
+                // assistant stub that `buildChatMessages:1930` appends
+                // when `effectiveThinking=false && !hasTools && !stamps
+                // && !structured`. It was stuck IN the cache key because
+                // the old `genPromptLen = withGP - withoutGP` differencing
+                // saw the stub in BOTH renders, so only the trailing
+                // `<|turn>model\n` (3 tokens) got stripped. Fix: compute
+                // genPromptLen against messages-WITHOUT-stub render —
+                // stub+gp now strips as 16 tokens, T1's key collapses to
+                // the 10-token `<bos><|turn>user\nQ1<turn|>\n` prefix
+                // which IS a prefix of T3's 36-token key. Live post-fix:
+                //   T1 miss (first touch), T2 memory+disk-backfill+gp(16),
+                //   T3 memory+disk-backfill+gp(16) — multi-turn prefix
+                //   hit restored. See gen-prompt-length fix above in
+                //   this same function.
                 let s = try vMLXLMCommon.generate(
                     input: lmInput,
                     parameters: params,

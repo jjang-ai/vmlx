@@ -557,6 +557,14 @@ public final class MemoryAwarePrefixCache<Payload>: @unchecked Sendable {
         }
     }
 
+    /// iter-122 §197 diagnostic — CacheCoordinator's VMLX_CACHE_TRACE
+    /// path reads this to report how many entries are live in the L1.5
+    /// byte-budgeted tier at fetch time. If memEntries=0 on T3 but
+    /// T1/T2 clearly stored, the loop caught an eviction/TTL flush.
+    public var debugEntryCount: Int {
+        lock.withLock { entries.count }
+    }
+
     // MARK: - Private: LRU linked-list plumbing
 
     private func appendToTail(_ node: Node, bucket: MemoryCacheEntryType) {
