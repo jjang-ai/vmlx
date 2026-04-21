@@ -1030,28 +1030,45 @@ public enum OpenAIRoutes {
 
             // iter-60: JIT wake for audio transcription too.
             await engine.wakeFromStandby()
+            // iter-136 §211: TTS got X-vMLX-TTS-TotalMs via §210;
+            // transcriptions has the same wire-format split (text /
+            // srt / vtt binaries vs json / verbose_json JSON) so the
+            // same header approach extends to both binary and JSON
+            // returns. verbose_json also gains `total_ms` inside
+            // the JSON body for parity with /v1/embeddings (§206)
+            // — clients that prefer body-field over header keep the
+            // same field name across non-stream routes.
+            let sttStart = Date()
             do {
                 let result = try await engine.transcribe(request: dict)
+                let sttTotalMs = Date().timeIntervalSince(sttStart) * 1000
+                let totalMsHeader = String(format: "%.2f", sttTotalMs)
                 let text = (result["text"] as? String) ?? ""
                 switch responseFormat.lowercased() {
                 case "text":
+                    var headers: HTTPFields = [.contentType: "text/plain; charset=utf-8"]
+                    headers[HTTPField.Name("X-vMLX-Whisper-TotalMs")!] = totalMsHeader
                     return Response(
                         status: .ok,
-                        headers: [.contentType: "text/plain; charset=utf-8"],
+                        headers: headers,
                         body: .init(byteBuffer: .init(string: text)))
                 case "srt":
                     let dur = (result["duration"] as? Double) ?? 0
                     let body = Self.singleCueSRT(text: text, duration: dur)
+                    var headers: HTTPFields = [.contentType: "application/x-subrip"]
+                    headers[HTTPField.Name("X-vMLX-Whisper-TotalMs")!] = totalMsHeader
                     return Response(
                         status: .ok,
-                        headers: [.contentType: "application/x-subrip"],
+                        headers: headers,
                         body: .init(byteBuffer: .init(string: body)))
                 case "vtt":
                     let dur = (result["duration"] as? Double) ?? 0
                     let body = Self.singleCueVTT(text: text, duration: dur)
+                    var headers: HTTPFields = [.contentType: "text/vtt"]
+                    headers[HTTPField.Name("X-vMLX-Whisper-TotalMs")!] = totalMsHeader
                     return Response(
                         status: .ok,
-                        headers: [.contentType: "text/vtt"],
+                        headers: headers,
                         body: .init(byteBuffer: .init(string: body)))
                 case "verbose_json":
                     // iter-124 §199: `segments` was hardcoded `[]` —
@@ -1081,9 +1098,15 @@ public enum OpenAIRoutes {
                         "no_speech_prob": text.isEmpty ? 1.0 : 0.0,
                     ]
                     verbose["segments"] = text.isEmpty ? ([] as [Any]) : [seg]
+                    // iter-136 §211 — body field for JSON clients.
+                    verbose["total_ms"] = sttTotalMs
                     return Self.json(verbose)
                 default:
-                    return Self.json(["text": text])
+                    return Self.json([
+                        "text": text,
+                        // iter-136 §211 — body field parity.
+                        "total_ms": sttTotalMs,
+                    ])
                 }
             } catch let err as EngineError {
                 // invalidRequest → 400; everything else → 500.
@@ -1177,28 +1200,37 @@ public enum OpenAIRoutes {
             if !modelName.isEmpty { dict["model"] = modelName }
 
             await engine.wakeFromStandby()
+            let xlateStart = Date()
             do {
                 let result = try await engine.transcribe(request: dict)
+                let xlateTotalMs = Date().timeIntervalSince(xlateStart) * 1000
+                let xlateHeader = String(format: "%.2f", xlateTotalMs)
                 let text = (result["text"] as? String) ?? ""
                 switch responseFormat.lowercased() {
                 case "text":
+                    var headers: HTTPFields = [.contentType: "text/plain; charset=utf-8"]
+                    headers[HTTPField.Name("X-vMLX-Whisper-TotalMs")!] = xlateHeader
                     return Response(
                         status: .ok,
-                        headers: [.contentType: "text/plain; charset=utf-8"],
+                        headers: headers,
                         body: .init(byteBuffer: .init(string: text)))
                 case "srt":
                     let dur = (result["duration"] as? Double) ?? 0
                     let bodyStr = Self.singleCueSRT(text: text, duration: dur)
+                    var headers: HTTPFields = [.contentType: "application/x-subrip"]
+                    headers[HTTPField.Name("X-vMLX-Whisper-TotalMs")!] = xlateHeader
                     return Response(
                         status: .ok,
-                        headers: [.contentType: "application/x-subrip"],
+                        headers: headers,
                         body: .init(byteBuffer: .init(string: bodyStr)))
                 case "vtt":
                     let dur = (result["duration"] as? Double) ?? 0
                     let bodyStr = Self.singleCueVTT(text: text, duration: dur)
+                    var headers: HTTPFields = [.contentType: "text/vtt"]
+                    headers[HTTPField.Name("X-vMLX-Whisper-TotalMs")!] = xlateHeader
                     return Response(
                         status: .ok,
-                        headers: [.contentType: "text/vtt"],
+                        headers: headers,
                         body: .init(byteBuffer: .init(string: bodyStr)))
                 case "verbose_json":
                     // iter-124 §199: `segments` was hardcoded `[]` —
@@ -1228,9 +1260,14 @@ public enum OpenAIRoutes {
                         "no_speech_prob": text.isEmpty ? 1.0 : 0.0,
                     ]
                     verbose["segments"] = text.isEmpty ? ([] as [Any]) : [seg]
+                    // iter-136 §211: body total_ms parity with transcriptions.
+                    verbose["total_ms"] = xlateTotalMs
                     return Self.json(verbose)
                 default:
-                    return Self.json(["text": text])
+                    return Self.json([
+                        "text": text,
+                        "total_ms": xlateTotalMs,
+                    ])
                 }
             } catch let err as EngineError {
                 return Self.mapEngineError(err)
