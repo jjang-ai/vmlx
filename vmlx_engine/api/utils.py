@@ -52,10 +52,20 @@ def clean_output_text(text: str) -> str:
     # channel markers first, the degraded block has no delimiter and
     # we'd collapse reasoning into content.
     text = re.sub(r"^\s*thought\n.*?<channel\|>", "", text, flags=re.DOTALL).lstrip()
+
+    # Now strip special tokens (including `<|channel>` SOC that may still
+    # be there with the degraded form's `thought\n` visible right after).
+    text = SPECIAL_TOKENS_PATTERN.sub("", text)
+
+    # After SOC stripping, a bare `thought\n` prefix may now be at the
+    # start of the string (e.g. raw `<|channel>thought\n...` with no
+    # `<channel|>` endmarker loses only the SOC above; the `thought\n`
+    # prefix survives until this step). Strip it here so display output
+    # never shows the degraded-form lead. Run AFTER SPECIAL_TOKENS_PATTERN
+    # so `<|channel>thought\n...` flows correctly through both stages.
     if text.startswith("thought\n"):
         text = text[len("thought\n"):]
 
-    text = SPECIAL_TOKENS_PATTERN.sub("", text)
     text = text.strip()
 
     # Add opening <think> tag if response has closing but not opening

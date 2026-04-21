@@ -9446,3 +9446,124 @@ class TestGenPrefixEchoSuppression:
         assert "if _gen_prefix:" in src, (
             "empty _gen_prefix must short-circuit the suppressor"
         )
+
+
+class TestCleanOutputTextDegradedGemma4:
+    """2026-04-21 real-UI repro surfaced a second Gemma 4 leak path:
+    clean_output_text checked for `thought\\n` prefix BEFORE stripping
+    the `<|channel>` SOC token. When the tokenizer strips `<channel|>` (EOC)
+    but preserves `<|channel>`, the raw text looks like
+    `<|channel>thought\\nreasoning\\n...` — the startswith check fails
+    (starts with `<|channel>`, not `thought`), then SPECIAL_TOKENS_PATTERN
+    strips `<|channel>` leaving `thought\\n...` bare, which then leaks into
+    both `output.text` and (via non-stream `/v1/responses`) the client.
+
+    Fix: reorder clean_output_text to strip SPECIAL_TOKENS_PATTERN FIRST,
+    then re-check for `thought\\n` prefix. Degraded-form `thought\\n...
+    <channel|>` regex still runs first because it needs both SOC-stripped
+    AND EOC-present forms to match.
+    """
+
+    UTILS = "/tmp/vmlx-1.3.66-build/vmlx_engine/api/utils.py"
+
+    def test_clean_strips_thought_prefix_after_soc_strip(self):
+        from vmlx_engine.api.utils import clean_output_text
+        # Raw output when tokenizer kept SOC <|channel> but stripped EOC
+        # <channel|> (and sometimes the content has no EOC at all).
+        raw = "<|channel>thought\nThinking Process:\nstep 1\n12"
+        cleaned = clean_output_text(raw)
+        assert "<|channel>" not in cleaned
+        assert "thought\n" not in cleaned
+        assert cleaned.startswith("Thinking Process:")
+
+    def test_clean_strips_bare_thought_prefix(self):
+        from vmlx_engine.api.utils import clean_output_text
+        raw = "thought\nHow do I solve this"
+        assert clean_output_text(raw) == "How do I solve this"
+
+    def test_clean_preserves_full_degraded_form_split(self):
+        """When BOTH SOC stripped AND EOC present, the degraded-form regex
+        must still match and strip the whole thought block. This is the
+        case that existed before the new fix — don't regress it."""
+        from vmlx_engine.api.utils import clean_output_text
+        raw = "thought\nreasoning here\n<channel|>the answer"
+        cleaned = clean_output_text(raw)
+        assert cleaned == "the answer"
+
+    def test_clean_handles_no_thought_prefix_no_channel(self):
+        from vmlx_engine.api.utils import clean_output_text
+        assert clean_output_text("plain content") == "plain content"
+
+    def test_clean_order_documented_in_source(self):
+        src = Path(self.UTILS).read_text()
+        # Prose MUST mention why order matters
+        assert "Run AFTER SPECIAL_TOKENS_PATTERN" in src
+        # The startswith check must come AFTER SPECIAL_TOKENS_PATTERN
+        import re
+        _mspec = src.find("SPECIAL_TOKENS_PATTERN.sub")
+        _mstart = src.find('text.startswith("thought\\n")')
+        assert _mstart > _mspec, (
+            "thought-prefix strip must run AFTER SPECIAL_TOKENS_PATTERN — "
+            "otherwise `<|channel>thought\\n...` gets only partially cleaned"
+        )
+
+
+class TestBatchedEnginePopulatesRawText:
+    """v1.3.71 added `raw_text` to SimpleEngine return paths so the server's
+    non-stream reasoning extractor could see pre-clean special tokens.
+    2026-04-21 real-UI repro showed BatchedEngine MLLM + text paths STILL
+    dropped raw_text — empty for Gemma 4 / Qwen 3.6 / MiniMax etc. (all
+    MLLM-detected). Fix fills raw_text in both BatchedEngine return sites."""
+
+    BATCHED = "/tmp/vmlx-1.3.66-build/vmlx_engine/engine/batched.py"
+
+    def test_batched_mllm_path_has_raw_text(self):
+        src = Path(self.BATCHED).read_text()
+        # Must pass raw_text=output.output_text alongside text=clean_output_text(...)
+        assert "raw_text=output.output_text" in src, (
+            "BatchedEngine MLLM chat() must populate raw_text for Gemma 4 / "
+            "Qwen 3.6 / MiniMax etc. — server uses this for extract_reasoning"
+        )
+
+    def test_batched_text_path_has_raw_text(self):
+        src = Path(self.BATCHED).read_text()
+        # Text-only path: raw = output.output_text; text = clean_output_text(raw); GenerationOutput(text=text, raw_text=raw, ...)
+        assert "raw = output.output_text" in src
+        assert "raw_text=raw" in src
+
+
+class TestStreamingPostParseClean:
+    """Per-delta post-parse cleaning — strips residual `<channel|>`, `thought\\n`,
+    etc. from delta_msg.content/.reasoning before they enter aggregation
+    (Anthropic non-stream + Responses API paths aggregate deltas, so the
+    original OpenAI chat completions non-stream clean path didn't help them).
+    """
+
+    SERVER = "/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
+
+    def test_chat_completions_streaming_cleans_delta(self):
+        src = Path(self.SERVER).read_text()
+        # Look for the specific comment that marks the fix site
+        assert "Post-parse cleaning for streaming deltas" in src
+
+    def test_responses_streaming_cleans_delta(self):
+        src = Path(self.SERVER).read_text()
+        assert "mirror the chat_completions\n                        # streaming path" in src
+
+
+class TestResponsesNonStreamAppliesClean:
+    """The /v1/responses non-stream build must apply clean_output_text to
+    reasoning_text and content_for_parsing BEFORE assembling the output
+    message. Without this, Gemma 4's residual markers survive into the
+    Responses API output_text block while reasoning block stays clean."""
+
+    SERVER = "/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
+
+    def test_responses_nonstream_post_parse_clean(self):
+        src = Path(self.SERVER).read_text()
+        # Count both fix sites (chat_completions + responses)
+        hits = src.count("Post-parse cleaning")
+        assert hits >= 2, (
+            f"expected post-parse clean comment in both chat_completions and "
+            f"responses non-stream paths; found {hits}"
+        )

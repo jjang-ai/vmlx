@@ -743,8 +743,14 @@ class BatchedEngine(BaseEngine):
                 bypass_prefix_cache=bypass_prefix_cache,
             )
 
+            # Preserve raw (pre-clean) output so reasoning parsers on the
+            # non-stream path can still see Gemma 4 `<|channel>thought\n...
+            # <channel|>` markers + Qwen 3.6 `<think>` tokens that
+            # clean_output_text strips for display. Server chooses `raw_text
+            # or text` when calling extract_reasoning.
             return GenerationOutput(
                 text=clean_output_text(output.output_text),
+                raw_text=output.output_text,
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
                 cached_tokens=getattr(output, "cached_tokens", 0),
@@ -776,10 +782,12 @@ class BatchedEngine(BaseEngine):
             bypass_prefix_cache=bypass_prefix_cache,
         )
 
-        text = clean_output_text(output.output_text)
+        raw = output.output_text
+        text = clean_output_text(raw)
 
         return GenerationOutput(
             text=text,
+            raw_text=raw,
             prompt_tokens=output.prompt_tokens,
             completion_tokens=output.completion_tokens,
             cached_tokens=getattr(output, "cached_tokens", 0),

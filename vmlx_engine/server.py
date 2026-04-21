@@ -5415,6 +5415,18 @@ async def create_chat_completion(
                 content_for_parsing = reasoning_text
             reasoning_text = None
 
+        # Post-parse cleaning: the parser operates on raw_text which carries
+        # special markers (Gemma 4 `<|channel>`/`<channel|>`/`<turn|>`, Qwen
+        # `<|im_end|>`, etc.). Markers that survive the parser's split (e.g. a
+        # second `<channel|>` embedded in content, or `thought\n` degraded
+        # form) must not leak into the user-visible content field. Apply the
+        # same cleaner that the engine applies to `output.text` for display,
+        # but AFTER the parser has done its structural extraction.
+        if content_for_parsing:
+            content_for_parsing = clean_output_text(content_for_parsing)
+        if reasoning_text:
+            reasoning_text = clean_output_text(reasoning_text)
+
     _cc_parse_text = _strip_think_for_tool_parse(content_for_parsing)
 
     # Parse tool calls from output using configured parser (skip when tool_choice="none")
@@ -6095,6 +6107,16 @@ async def create_response(
                 content_for_parsing = reasoning_text
             reasoning_text = None
 
+        # Post-parse cleaning — matches the chat_completions path so content
+        # emitted by /v1/responses is stripped of residual `<channel|>`,
+        # `thought\n`, `<turn|>` etc. that survive the parser's structural
+        # split. Applied AFTER extract_reasoning so parser still sees the
+        # special tokens it needs for detection.
+        if content_for_parsing:
+            content_for_parsing = clean_output_text(content_for_parsing)
+        if reasoning_text:
+            reasoning_text = clean_output_text(reasoning_text)
+
     parse_text = _strip_think_for_tool_parse(content_for_parsing)
 
     # Parse tool calls (skip when tool_choice="none")
@@ -6590,6 +6612,20 @@ async def stream_chat_completion(
                             f"[reasoning-debug] parser returned None for delta={repr(delta_text[:50])}, suppress={suppress_reasoning}, think_in_prompt={effective_think_in_template}"
                         )
                     continue
+
+                # Post-parse cleaning for streaming deltas — strip any
+                # structural markers that survived the parser's split
+                # (e.g. a second `<channel|>` embedded in content when
+                # Gemma 4 emits nested channel frames, or `thought\n`
+                # degraded form when the tokenizer partially strips SOC).
+                # Without this the Anthropic `/v1/messages` aggregator
+                # and `/v1/responses` output blocks surface the marker
+                # tokens to API clients while OpenAI chat_completions
+                # (which post-cleans on the non-stream path) does not.
+                if delta_msg.content:
+                    delta_msg.content = clean_output_text(delta_msg.content)
+                if delta_msg.reasoning:
+                    delta_msg.reasoning = clean_output_text(delta_msg.reasoning)
 
                 # Debug: log parser output when suppress is active
                 if suppress_reasoning and (delta_msg.content or delta_msg.reasoning):
@@ -7412,6 +7448,14 @@ async def stream_responses_api(
                         # to token tracking and usage emission below.
                         continue
                     else:
+                        # Post-parse cleaning — mirror the chat_completions
+                        # streaming path so Responses API clients don't see
+                        # residual `<channel|>` / `thought\n` / `<turn|>` etc.
+                        # that the parser's split leaves in content.
+                        if delta_msg.content:
+                            delta_msg.content = clean_output_text(delta_msg.content)
+                        if delta_msg.reasoning:
+                            delta_msg.reasoning = clean_output_text(delta_msg.reasoning)
                         # Accumulate for marker detection (before buffering check).
                         # §15: when suppress_reasoning redirects reasoning → content
                         # via emit below, mirror it here so accumulated_content
