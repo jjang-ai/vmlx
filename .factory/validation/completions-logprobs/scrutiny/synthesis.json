@@ -1,0 +1,64 @@
+{
+  "milestone": "completions-logprobs",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": false,
+      "command": "swift test",
+      "exitCode": 1,
+      "note": "Known pre-existing issue: test target is a skeleton with no test files on disk. AGENTS.md documents this as out of scope. Not related to this milestone."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "swift build --product vmlxctl",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "scripts/lint-typed-mlx-scalars.sh",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "failedFeatures": ["completions-logprobs-forwarding"]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "completions-logprobs-forwarding",
+      "severity": "blocking",
+      "description": "Streaming logprobs format mismatch in SSEEncoder.textCompletionStream: uses chat completions format (logprobs.content array of {token, logprob, top_logprobs} objects) instead of legacy completions format (tokens, token_logprobs, top_logprobs, text_offset as separate arrays). The non-streaming path correctly uses the legacy format. This inconsistency breaks lm-eval's parse_logprobs() for streaming responses.",
+      "file": "Sources/vMLXServer/SSEEncoder.swift",
+      "line": 240
+    }
+  ],
+  "nonBlockingIssues": [
+    {
+      "featureId": "completions-logprobs-forwarding",
+      "severity": "non_blocking",
+      "description": "text_offset uses lp.token.utf8.count (byte offsets) instead of character offsets. OpenAI spec describes text_offset as character offsets. For multi-byte Unicode the values would diverge, but ASCII-heavy lm-eval datasets make this low severity.",
+      "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+      "line": 400
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add explicit boundary: Both streaming and non-streaming /v1/completions logprobs responses MUST use the legacy format (tokens, token_logprobs, top_logprobs, text_offset). Do NOT use the chat completions logprobs.content format in the completions endpoint.",
+      "evidence": "Feature completions-logprobs-forwarding used chat format for streaming, creating inconsistency with non-streaming path. architecture.md invariant #6 'Legacy format exactness' only describes the shape but doesn't explicitly call out that streaming must also follow this format.",
+      "isSystemic": true
+    },
+    {
+      "target": "library/architecture.md",
+      "suggestion": "Expand invariant #6 'Legacy format exactness' to explicitly state that BOTH streaming and non-streaming paths must use the legacy format, and that the chat completions logprobs.content format must NOT be used in the completions endpoint.",
+      "evidence": "The current invariant only describes the shape without specifying it applies to streaming too, which allowed the inconsistent implementation.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

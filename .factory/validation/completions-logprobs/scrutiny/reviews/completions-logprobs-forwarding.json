@@ -1,0 +1,39 @@
+{
+  "featureId": "completions-logprobs-forwarding",
+  "reviewedAt": "2026-04-21T16:30:00Z",
+  "commitId": "52c5a0e",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature wires logprobs into the legacy /v1/completions endpoint across three files. The non-streaming path correctly uses the OpenAI legacy completions logprobs format (tokens, token_logprobs, top_logprobs, text_offset). However, the streaming path in SSEEncoder.textCompletionStream uses the chat completions logprobs format (logprobs.content array of {token, logprob, top_logprobs} objects) instead of the legacy format, creating a structural inconsistency that will break clients expecting the legacy completions format. The logprobs type coercion (int/bool/double) for lm-eval compatibility is correct. Zero-overhead guarantee for normal (non-logprobs) completions is preserved.",
+    "issues": [
+      {
+        "file": "Sources/vMLXServer/SSEEncoder.swift",
+        "line": 240,
+        "severity": "blocking",
+        "description": "Streaming logprobs format mismatch: textCompletionStream uses the chat completions format with `logprobs.content` (array of {token, logprob, top_logprobs} objects) instead of the legacy completions format (tokens, token_logprobs, top_logprobs, text_offset as separate arrays). The non-streaming path in OpenAIRoutes.swift correctly uses the legacy format, creating an inconsistency. Per architecture.md invariants: 'Legacy format exactness: tokens, token_logprobs, top_logprobs, text_offset must match OpenAI legacy shape exactly for lm-eval parse_logprobs().' The streaming chunks should use the same nested array format as non-streaming, with per-chunk offsets. Example correct streaming format: {\"logprobs\": {\"tokens\": [\" t\"], \"token_logprobs\": [-2.1], \"top_logprobs\": [{\" t\": -2.1}], \"text_offset\": [0]}} instead of {\"logprobs\": {\"content\": [{\"token\": \" t\", \"logprob\": -2.1, \"top_logprobs\": [...]}]}}"
+      },
+      {
+        "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+        "line": 400,
+        "severity": "non_blocking",
+        "description": "text_offset uses lp.token.utf8.count (byte count) instead of character count. OpenAI's documentation describes text_offset as character offsets. For ASCII tokens this is equivalent, but for tokens containing multi-byte Unicode characters (CJK, emoji), byte offsets and character offsets diverge. Low severity because lm-eval evaluation datasets are primarily ASCII-focused, but technically non-compliant with the spec."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The streaming vs non-streaming logprobs format for the /v1/completions endpoint uses two different wire formats. The non-streaming path uses the legacy format (separate arrays for tokens, token_logprobs, top_logprobs, text_offset), while the streaming path uses the chat completions format (content array of per-token objects). AGENTS.md and architecture.md specify 'Legacy format exactness' but only document the non-streaming format, not the streaming format. This gap allowed the inconsistent streaming implementation to pass static analysis.",
+      "evidence": "architecture.md invariants section only describes the legacy format as 'tokens, token_logprobs, top_logprobs, text_offset' without specifying that BOTH streaming and non-streaming paths must use this format. SSEEncoder.swift line ~240 uses content array format for textCompletionStream."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The logprobs type coercion pattern (handling Bool, Int, Double for the logprobs field) is only implemented in the /v1/completions route handler. If future endpoints need the same coercion, this logic should be extracted into a shared utility.",
+      "evidence": "OpenAIRoutes.swift lines 317-323: inline closure for logprobsValue coercion. This is the only place that handles logprobs: 1 (integer) serde."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "FAIL — One blocking issue: the streaming SSE path in textCompletionStream uses the chat completions logprobs format (logprobs.content array) instead of the legacy completions format (separate tokens/token_logprobs/top_logprobs/text_offset arrays), creating a format inconsistency with the non-streaming path which correctly uses the legacy format. The feature's stated requirement is 'Emit logprobs in textCompletionStream SSE' and the architecture invariant states 'Legacy format exactness' for lm-eval compatibility. The streaming format must be converted to match the non-streaming legacy format. One non-blocking issue: text_offset uses UTF-8 byte count instead of character count. Positive findings: logprobs type coercion (int/bool/double) is correct, zero-overhead guarantee for normal completions is preserved, the non-streaming path format is correct, and ChatRequest parameter plumbing is clean."
+}
