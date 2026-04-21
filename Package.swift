@@ -570,6 +570,7 @@ let package = Package(
                 "DownloadManagerTests.swift",
                 "DownloadSidecarTests.swift",
                 "DownloadConcurrencyTests.swift",
+                "EngineMidLoadCancelTests.swift",
                 "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",
