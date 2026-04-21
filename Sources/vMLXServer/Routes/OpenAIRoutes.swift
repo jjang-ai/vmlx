@@ -1450,10 +1450,39 @@ public enum OpenAIRoutes {
     /// holding peers (a concern for LAN-bound vMLX servers). Extracted
     /// here from the §142 AdapterRoutes copy so /v1/models and future
     /// routes share the same canonical implementation.
+    ///
+    /// iter-ralph §235 (L5): close the previous leak-window. Pre-§235
+    /// only paths under `$HOME` were redacted; `/Users/<other>/...`
+    /// still leaked the full path if the running process happened to
+    /// read a model from another account's home dir (rare but possible
+    /// via symlinks, multi-user boxes, shared NFS mounts). Now any
+    /// `/Users/<name>/rest` is normalized to `/Users/<redacted>/rest`
+    /// when `<name>` isn't the current user. Also resolves symlinks
+    /// before matching so a link inside `$HOME` that points elsewhere
+    /// gets redacted to its real path first.
     static func redactHomeDir(_ path: String) -> String {
         let home = NSHomeDirectory()
         if path.hasPrefix(home) {
             return "~" + path.dropFirst(home.count)
+        }
+        // Normalize symlinks so a link that aliases into $HOME gets
+        // caught — cheap standardize, no I/O on missing files.
+        let std = (path as NSString).standardizingPath
+        if std != path, std.hasPrefix(home) {
+            return "~" + std.dropFirst(home.count)
+        }
+        // Redact sibling users' homes on multi-account Macs.
+        // Pattern: `/Users/<name>/...` where <name> ≠ currentUserName.
+        let usersPrefix = "/Users/"
+        if path.hasPrefix(usersPrefix) {
+            let tail = path.dropFirst(usersPrefix.count)
+            if let slash = tail.firstIndex(of: "/") {
+                let user = tail[..<slash]
+                let currentUser = NSUserName()
+                if user != currentUser && !user.isEmpty {
+                    return usersPrefix + "<redacted>" + tail[slash...]
+                }
+            }
         }
         return path
     }
