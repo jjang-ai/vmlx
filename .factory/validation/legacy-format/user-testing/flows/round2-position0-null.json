@@ -1,0 +1,39 @@
+{
+  "milestone": "legacy-format",
+  "round": 2,
+  "assertions": {
+    "VAL-LEG-002": {
+      "status": "pass",
+      "evidence": [
+        "Tested token_logprobs[0] across 7 distinct requests (5 non-streaming + 2 streaming) with varied prompts ('Hello world', 'The quick brown fox', 'What is 2+2?', 'Once upon a time in a far away land', 'Paris is the capital of', 'Hello world' streaming, 'The weather is' streaming)",
+        "All 7 requests returned token_logprobs[0] = null (JSON null)",
+        "Non-streaming requests used logprobs=1 with top_logprobs values of 3-5, max_tokens 5-20",
+        "Streaming requests correctly emitted token_logprobs[0]=null in the first chunk containing logprobs data",
+        "Evidence files: round2/req1_nonstreaming.json through req5_nonstreaming.json, round2/stream1_streaming.txt, round2/stream2_streaming.txt"
+      ],
+      "issues": []
+    },
+    "VAL-LEG-004": {
+      "status": "pass",
+      "evidence": [
+        "Tested top_logprobs format across 74 total positions from 7 distinct requests (5 non-streaming + 2 streaming)",
+        "Position 0 (top_logprobs[0]) is always JSON null - confirmed across all 7 requests",
+        "Positions 1+ are always JSON objects (dicts) with string keys (token strings) and numeric values (logprob floats)",
+        "Request 1 (11 positions): pos 0=null, pos 1-10=dicts with str keys and numeric values",
+        "Request 2 (4 positions): pos 0=null, pos 1-3=dicts with str keys and numeric values",
+        "Request 3 (12 positions, top_logprobs=3): pos 0=null, pos 1-11=dicts with str keys and numeric values",
+        "Request 4 (21 positions, max_tokens=20): pos 0=null, pos 1-20=dicts with str keys and numeric values",
+        "Request 5 (6 positions): pos 0=null, pos 1-5=dicts with str keys and numeric values",
+        "Stream 1 (11 positions): pos 0=null, pos 1-10=dicts with str keys and numeric values",
+        "Stream 2 (9 positions): pos 0=null, pos 1-8=dicts with str keys and numeric values",
+        "Note: Some numeric values are JSON integers (e.g. 0 instead of 0.0) which is valid JSON - Python parses these as int type but they are semantically equivalent float values",
+        "Evidence files: round2/req1_nonstreaming.json through req5_nonstreaming.json, round2/stream1_streaming.txt, round2/stream2_streaming.txt"
+      ],
+      "issues": []
+    }
+  },
+  "frictions": [],
+  "blockers": [],
+  "toolsUsed": ["curl"],
+  "summary": "Tested 2 assertions across 7 requests (5 non-streaming + 2 streaming) with 74 total top_logprobs positions: both PASS. VAL-LEG-002: token_logprobs[0] is null in all 7 requests. VAL-LEG-004: top_logprobs[0] is null in all 7 requests; positions 1+ are all dicts with string keys and numeric values."
+}

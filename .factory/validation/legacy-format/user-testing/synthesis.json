@@ -1,45 +1,42 @@
 {
   "milestone": "legacy-format",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "assertionsSummary": {
     "total": 10,
-    "passed": 8,
-    "failed": 2,
+    "passed": 10,
+    "failed": 0,
     "blocked": 0
   },
   "passedAssertions": [
     "VAL-COMP-008",
     "VAL-COMP-009",
     "VAL-LEG-001",
+    "VAL-LEG-002",
     "VAL-LEG-003",
+    "VAL-LEG-004",
     "VAL-LEG-005",
     "VAL-LEG-006",
     "VAL-LEG-007",
     "VAL-LEG-008"
   ],
-  "failedAssertions": [
-    {
-      "id": "VAL-LEG-002",
-      "reason": "token_logprobs[0] is a float in all 7 test requests instead of null. The server computes logprobs for the first generated token using prompt context (including chat template tokens), returning actual float values rather than null to indicate 'no prior context'."
-    },
-    {
-      "id": "VAL-LEG-004",
-      "reason": "top_logprobs[0] is a dict with token:logprob mappings in all 7 test requests instead of null. Same root cause as VAL-LEG-002: position 0 in the legacy logprobs arrays should be null but the server returns computed values."
-    }
-  ],
+  "failedAssertions": [],
   "blockedAssertions": [],
   "appliedUpdates": [],
-  "previousRound": null,
-  "flowReports": [
-    ".factory/validation/legacy-format/user-testing/flows/group1-nonstreaming-format.json",
-    ".factory/validation/legacy-format/user-testing/flows/group2-textoffset-streaming.json"
+  "previousRound": ".factory/validation/legacy-format/user-testing/synthesis.json (round 1)",
+  "reTestedFromRound1": [
+    "VAL-LEG-002",
+    "VAL-LEG-004"
   ],
-  "rootCauseAnalysis": "Both failures (VAL-LEG-002 and VAL-LEG-004) share the same root cause: the buildLegacyLogprobs() helper does not set position 0 to null for token_logprobs and top_logprobs. The legacy completions format requires null at position 0 because 'there is no prior context to condition on' for the first token. The implementation currently computes actual logprobs for all generated tokens including position 0. Fix: in buildLegacyLogprobs(), set token_logprobs[0] = nil and top_logprobs[0] = nil for the first generated token position.",
+  "fixFeature": "fix-legacy-position-0-null",
+  "fixCommit": "10f9794",
+  "flowReports": [
+    ".factory/validation/legacy-format/user-testing/flows/round2-position0-null.json"
+  ],
   "testingEnvironment": {
     "model": "Gemma-4-26B-A4B-it-JANG_4M",
     "serverUrl": "http://127.0.0.1:8080",
     "buildType": "release",
-    "concurrentValidators": 2
+    "concurrentValidators": 1
   }
 }
