@@ -27,6 +27,14 @@ Use this skill for features that modify:
 - Read the feature description in `features.json`
 - Read `AGENTS.md` for mission boundaries and conventions
 - Read `.factory/library/architecture.md` for system design context
+- **Use swiftlens MCP tools for ALL Swift symbol navigation.** Do NOT search blindly for symbols.
+  - `swiftlens___swift_get_symbol_definition` — find where a symbol is defined
+  - `swiftlens___swift_find_symbol_references_files` — find all references to a symbol
+  - `swiftlens___swift_get_hover_info` — get type/signature info at a position
+  - `swiftlens___swift_get_declaration_context` — get fully-qualified declaration contexts
+  - `swiftlens___swift_analyze_files` — analyze file symbol structures
+  - `swiftlens___swift_search_pattern` — regex search within a specific file
+- **After modifying Swift source files, refresh the index:** `swiftlens___swift_build_index`
 - Read relevant source files to understand current implementation
 
 ### 2. Write Tests First (TDD)
@@ -39,6 +47,8 @@ Use this skill for features that modify:
 ### 3. Implement the Feature
 - Make the smallest change that makes tests pass (green phase)
 - Follow existing code style and patterns in the codebase
+- **After modifying Swift source files, refresh the LSP index:** `swiftlens___swift_build_index`
+- **Continue using swiftlens MCP tools** when navigating modified code — do not guess symbol locations
 - For performance-critical code (logprobs, prefill):
   - Ensure normal-path (no logprobs/echo) is completely unchanged
   - Use batched tensor operations, not per-token loops
