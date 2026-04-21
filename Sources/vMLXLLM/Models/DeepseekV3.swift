@@ -284,6 +284,88 @@ class DeepseekV3Attention: Module {
 
         return self.oProj(output)
     }
+
+    /// Apply DSA sparse attention given a topk_indices tensor from the
+    /// GLM-5.1 Indexer.
+    ///
+    /// Ralph iter-35: pure-function port of the sparse-gather branch in
+    /// `mlx_lm/models/deepseek_v32.py:211-234`. This helper is not yet
+    /// called by `callAsFunction` — integration lands in a follow-up
+    /// E iter (iter-37 per the iter-34 plan). Keeping it as a standalone
+    /// method lets the sparse-path math be unit-tested independently of
+    /// the attention forward.
+    ///
+    /// - Parameters:
+    ///   - topkIndices: output of `GlmMoeDsaIndexer(x, qr:)`, shape
+    ///     `(batch, 1, seqLen, indexTopk)`, or nil when kv length was
+    ///     already ≤ indexTopk.
+    ///   - kvLatent: `(batch, 1, kvLen, kvLoraRank)`. Consumed and
+    ///     returned, possibly sliced to top-k along axis=2 for L==1.
+    ///   - kPe: `(batch, numHeads, kvLen, qkRopeHeadDim)`. Same.
+    ///   - mask: existing attention mask (or nil). Merged with the
+    ///     sparse mask for L>1. Forced to nil for L==1 (taken care of
+    ///     by the gather).
+    ///   - L: sequence length of the query (`x.shape[1]`). Determines
+    ///     whether to use the take-along-axis (L==1) or sparse-mask
+    ///     (L>1) branch.
+    ///
+    /// Returns the updated `(kvLatent, kPe, mask)` triple for the
+    /// caller to plug into the next steps of the attention forward.
+    func applyDsaSparseGather(
+        topkIndices: MLXArray?,
+        kvLatent: MLXArray,
+        kPe: MLXArray,
+        mask: MLXArray?,
+        L: Int
+    ) -> (kvLatent: MLXArray, kPe: MLXArray, mask: MLXArray?) {
+        guard let topkIndices = topkIndices else {
+            // Indexer returned nil (kv length already <= indexTopk) —
+            // attention proceeds dense.
+            return (kvLatent, kPe, mask)
+        }
+
+        if L == 1 {
+            // take_along_axis branch. Python (deepseek_v32.py:213-222):
+            //   idx = topk_indices[:, :, 0, :, None]
+            //   kv_latent = take_along_axis(kv_latent, broadcast_to(idx, …), axis=2)
+            //   k_pe = take_along_axis(k_pe, broadcast_to(idx, …), axis=2)
+            //   mask = None
+            let idx = expandedDimensions(topkIndices[0..., 0..., 0, 0...], axis: -1)
+            // idx shape: (batch, 1, indexTopk, 1)
+            let kvFeat = kvLatent.dim(-1)
+            let kPeFeat = kPe.dim(-1)
+            let idxBroadcastKv = broadcast(
+                idx, to: Array(idx.shape.dropLast()) + [kvFeat]
+            )
+            let idxBroadcastPe = broadcast(
+                idx, to: Array(idx.shape.dropLast()) + [kPeFeat]
+            )
+            let kvGathered = takeAlong(kvLatent, idxBroadcastKv, axis: 2)
+            let kPeGathered = takeAlong(kPe, idxBroadcastPe, axis: 2)
+            return (kvGathered, kPeGathered, nil)
+        }
+
+        // Prefill branch (L > 1). Python (deepseek_v32.py:224-233):
+        //   shape = list(topk_indices.shape); shape[-1] = kv_latent.shape[2]
+        //   sparse_mask = zeros(shape, dtype=bool_)
+        //   sparse_mask = put_along_axis(sparse_mask, topk_indices, True, axis=-1)
+        //   if mask is not None: sparse_mask = sparse_mask & mask
+        //   mask = sparse_mask
+        var sparseShape = topkIndices.shape
+        sparseShape[sparseShape.count - 1] = kvLatent.dim(2)
+        var sparseMask = MLXArray.zeros(sparseShape, dtype: .bool)
+        sparseMask = putAlong(
+            sparseMask, topkIndices,
+            values: MLXArray(true), axis: -1
+        )
+        let merged: MLXArray
+        if let m = mask {
+            merged = logicalAnd(sparseMask, m)
+        } else {
+            merged = sparseMask
+        }
+        return (kvLatent, kPe, merged)
+    }
 }
 
 class DeepseekV3MLP: Module, UnaryLayer {
