@@ -1,0 +1,98 @@
+{
+  "groupId": "group1-nonstreaming-format",
+  "testedAt": "2026-04-21T12:30:00Z",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M",
+    "sharedServer": true,
+    "statelessRequests": true
+  },
+  "toolsUsed": ["curl", "python3", "jq"],
+  "assertions": [
+    {
+      "id": "VAL-COMP-008",
+      "title": "Legacy /v1/completions response includes logprobs key when requested",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with logprobs: true, top_logprobs: 5, max_tokens: 10", "expected": "Response with choices[0].logprobs object containing all four legacy keys", "observed": "Response contains choices[0].logprobs object with tokens (11 entries), token_logprobs, top_logprobs, text_offset" },
+        { "action": "Validate response structure", "expected": "choices array exists, choices[0] has logprobs key, logprobs is non-null object", "observed": "All structural checks passed: choices array present, logprobs key present, logprobs is non-null dict" },
+        { "action": "Schema validation of logprobs keys", "expected": "All four keys present: tokens, token_logprobs, top_logprobs, text_offset", "observed": "All four keys present with correct types and no extra keys" }
+      ],
+      "evidence": {
+        "responseBody": "legacy-format/group1/VAL-COMP-008-response.json",
+        "schemaValidation": "All 5 structural checks PASS, all 14 key/type/length checks PASS"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-LEG-001",
+      "title": "Response has tokens, token_logprobs, top_logprobs, text_offset",
+      "status": "pass",
+      "steps": [
+        { "action": "Validate logprobs object keys", "expected": "Exactly four keys: tokens, token_logprobs, top_logprobs, text_offset", "observed": "Exactly four keys present, no extra keys" },
+        { "action": "Validate array types", "expected": "tokens: string[], token_logprobs: (float|null)[], top_logprobs: (dict|null)[], text_offset: int[]", "observed": "tokens: all strings, token_logprobs: all float (no nulls in this response), top_logprobs: all dict objects, text_offset: all integers" },
+        { "action": "Validate parallel array lengths", "expected": "All four arrays same length", "observed": "All arrays length 11 (matching completion_tokens)" }
+      ],
+      "evidence": {
+        "responseBody": "legacy-format/group1/VAL-COMP-008-response.json",
+        "schemaValidation": "19/19 checks PASS: all keys present, correct types, parallel lengths, no extra keys"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-LEG-002",
+      "title": "token_logprobs[0] is null",
+      "status": "fail",
+      "steps": [
+        { "action": "Request 1: 'The capital of France is'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -0.1418170928955078 (float, NOT null)" },
+        { "action": "Request 2: 'Once upon a time'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -0.0007648468017578125 (float, NOT null)" },
+        { "action": "Request 3: 'In the year 2025'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -0.000743865966796875 (float, NOT null)" },
+        { "action": "Request 4: 'Artificial intelligence is'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -3.4332275390625e-05 (float, NOT null)" },
+        { "action": "Request 5: 'The quick brown fox'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -0.001087188720703125 (float, NOT null)" },
+        { "action": "Request 6: 'Water boils at'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -0.0015697479248046875 (float, NOT null)" },
+        { "action": "Request 7: 'Python is a programming'", "expected": "token_logprobs[0] is null", "observed": "token_logprobs[0] = -0.000606536865234375 (float, NOT null)" }
+      ],
+      "evidence": {
+        "responseBody": "legacy-format/group1/VAL-LEG-002-responses.json",
+        "assertionResult": "0/7 requests had null at token_logprobs[0]. All 7 returned float values (negative or near-zero)."
+      },
+      "issues": "BUG: token_logprobs[0] is a float in all 7 tested requests instead of null. The first generated token's logprob appears to be computed from model context (including chat template tokens like <|channel>), not treated as having no prior context. The server may be computing logprobs for generated tokens starting from the first generated token, but since the model has seen the prompt context, it assigns a non-null logprob. This violates the legacy format contract which expects null for position 0."
+    },
+    {
+      "id": "VAL-LEG-003",
+      "title": "token_logprobs[-1] may be null (EOS)",
+      "status": "pass",
+      "steps": [
+        { "action": "Request with max_tokens=3, prompt='The capital of France is'", "expected": "finish_reason=length, token_logprobs[-1] is valid float", "observed": "finish_reason=length, token_logprobs[-1] = -0.0006847381591796875 (float)" },
+        { "action": "Request with max_tokens=3, prompt='2 + 2 ='", "expected": "finish_reason=length, token_logprobs[-1] is valid float", "observed": "finish_reason=length, token_logprobs[-1] = -0.030059814453125 (float)" },
+        { "action": "Request with max_tokens=3, prompt='Hello'", "expected": "finish_reason=length, token_logprobs[-1] is valid float", "observed": "finish_reason=length, token_logprobs[-1] = -3.814697265625e-06 (float)" },
+        { "action": "Request with max_tokens=50, prompt='What is 1+1? Answer briefly:'", "expected": "finish_reason=stop (EOS), token_logprobs[-1] may be null or float", "observed": "finish_reason=stop, token_logprobs[-1] = 0 (float)" },
+        { "action": "Request with max_tokens=50, prompt='Say yes or no: Is the sky blue?'", "expected": "finish_reason=stop (EOS), token_logprobs[-1] may be null or float", "observed": "finish_reason=stop, token_logprobs[-1] = -3.814697265625e-06 (float)" },
+        { "action": "Request with max_tokens=50, prompt='Complete: The answer is'", "expected": "Various finish_reason", "observed": "finish_reason=length, token_logprobs[-1] = -0.026302337646484375 (float)" }
+      ],
+      "evidence": {
+        "responseBody": "legacy-format/group1/VAL-LEG-003-responses.json",
+        "assertionResult": "Length finish (4 requests): all token_logprobs[-1] are valid floats. Stop/EOS finish (2 requests): all token_logprobs[-1] are valid floats (0 and -3.81e-06). Contract says EOS MAY produce null, so float is acceptable."
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-LEG-004",
+      "title": "top_logprobs entries are dictionaries {token: logprob}",
+      "status": "fail",
+      "steps": [
+        { "action": "Extract top_logprobs entries from 7 requests (67 total positions)", "expected": "Each entry is null (position 0) or dict{str: float} (other positions)", "observed": "All 67 entries are dicts with string keys and float values. Position 0 entries (7 total) are dicts, NOT null." },
+        { "action": "Validate dict structure for non-position-0 entries", "expected": "Keys are token strings, values are logprob floats", "observed": "All dict entries have string keys and numeric (float/int) values" },
+        { "action": "Validate position 0 entries are null", "expected": "Position 0 top_logprobs MUST be null", "observed": "All 7 position-0 entries are dicts with token:logprob mappings, NOT null" }
+      ],
+      "evidence": {
+        "responseBody": "legacy-format/group1/VAL-LEG-004-entries.json",
+        "assertionResult": "67 total entries across 7 requests: 0 null entries, 67 dict entries. Dict structure (string keys, float values) is correct for positions 1+, but position 0 (7 entries) should be null per contract."
+      },
+      "issues": "BUG: top_logprobs[0] (position 0) is a dict with actual token:logprob entries instead of null. The contract specifies position 0 MUST be null because there is no prior context. This is related to the same root cause as VAL-LEG-002 — the server computes logprobs for the first generated token as if it has full context from the prompt."
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 5 assertions: 3 passed, 2 failed. VAL-COMP-008 (logprobs key present) PASS, VAL-LEG-001 (four legacy keys with correct types) PASS, VAL-LEG-003 (last token_logprobs behavior) PASS. VAL-LEG-002 FAIL: token_logprobs[0] is a float in all 7 requests (expected null). VAL-LEG-004 FAIL: top_logprobs[0] is a dict in all 7 requests (expected null). Both failures appear to share a root cause: the server computes valid logprobs for the first generated token using prompt context, rather than returning null to indicate no prior context."
+}

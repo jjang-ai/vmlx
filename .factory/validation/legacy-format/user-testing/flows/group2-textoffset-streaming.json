@@ -1,0 +1,107 @@
+{
+  "groupId": "group2-textoffset-streaming",
+  "testedAt": "2026-04-21T12:00:00Z",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M",
+    "sharedServer": true,
+    "statelessRequests": true
+  },
+  "toolsUsed": ["curl", "python3"],
+  "assertions": [
+    {
+      "id": "VAL-LEG-005",
+      "title": "text_offset has correct byte offsets",
+      "status": "pass",
+      "steps": [
+        { "action": "Send /v1/completions with ASCII prompt 'Hello world', logprobs=true, top_logprobs=5", "expected": "text_offset matches cumulative UTF-8 byte lengths of tokens", "observed": "All 11 byte offsets match expected cumulative values" },
+        { "action": "Send /v1/completions with Japanese prompt 'こんにちは世界'", "expected": "Multi-byte characters counted correctly in byte offsets", "observed": "All 11 byte offsets match expected cumulative values (Japanese tokens counted correctly)" },
+        { "action": "Send /v1/completions with emoji prompt 'Hello 🌍🌎🌏'", "expected": "Emoji (4-byte UTF-8) counted correctly", "observed": "All 11 byte offsets match expected cumulative values (emoji counted as 4 bytes each)" },
+        { "action": "Send /v1/completions with Latin diacritics 'Café résumé naïve'", "expected": "Multi-byte Latin characters counted correctly", "observed": "All 11 byte offsets match expected cumulative values" },
+        { "action": "Send /v1/completions with Cyrillic prompt 'Привет мир'", "expected": "Cyrillic (2-byte UTF-8) counted correctly", "observed": "All 11 byte offsets match expected cumulative values" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200 (7 requests)",
+        "files": ["legacy-format/group2/VAL-LEG-005-007-text-offset.json"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-LEG-006",
+      "title": "top_logprobs: 0 produces valid but minimal dictionaries",
+      "status": "pass",
+      "steps": [
+        { "action": "Send /v1/completions with top_logprobs=0", "expected": "Each top_logprobs entry is null (position 0) or dict with 1 key", "observed": "Position 0 has dict with 1 key (acceptable per contract). All other positions have dict with exactly 1 key (chosen token only)" },
+        { "action": "Verify top_logprobs array is not omitted", "expected": "Array is present in response", "observed": "top_logprobs array present with 11 entries" },
+        { "action": "Verify each non-position-0 dict has exactly 1 key", "expected": "len(dict) == 1 for positions 1..N", "observed": "All 10 non-position-0 entries have exactly 1 key" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200",
+        "files": ["legacy-format/group2/VAL-LEG-006-top-logprobs-0.json"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-LEG-007",
+      "title": "text_offset is computed and populated",
+      "status": "pass",
+      "steps": [
+        { "action": "Send 7 diverse requests (ASCII, Japanese, emoji, Latin diacritics, Cyrillic, Korean, English)", "expected": "text_offset arrays populated and correct in all 7 responses", "observed": "All 7 requests returned correct text_offset arrays. Multi-byte UTF-8 characters (Japanese 3-byte, emoji 4-byte, Cyrillic 2-byte, Korean 3-byte) all computed correctly" },
+        { "action": "Verify first offset is always 0", "expected": "text_offset[0] == 0 for all requests", "observed": "text_offset[0] == 0 in all 7 requests" },
+        { "action": "Verify text_offset length matches tokens length", "expected": "len(text_offset) == len(tokens)", "observed": "Lengths match in all 7 requests" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200 (7 requests)",
+        "files": ["legacy-format/group2/VAL-LEG-005-007-text-offset.json"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-LEG-008",
+      "title": "Final token_logprobs entry is the last generated token's logprob",
+      "status": "pass",
+      "steps": [
+        { "action": "Send /v1/completions with max_tokens=5, verify token_logprobs length equals tokens length", "expected": "token_logprobs array length == tokens array length", "observed": "Length match confirmed (6 tokens, 6 logprobs). finish_reason=length" },
+        { "action": "Verify token_logprobs[-1] is a valid float (not null)", "expected": "Last entry is a float, not null", "observed": "token_logprobs[-1] = -9.35e-05 (valid float)" },
+        { "action": "Repeat with max_tokens=3, verify length match and valid last float", "expected": "token_logprobs length == tokens length, last is float", "observed": "4 tokens, 4 logprobs. Last = -6.85e-04 (valid float)" },
+        { "action": "Repeat with 3 more requests (max_tokens=5,7,10)", "expected": "All pass same checks", "observed": "All 5 requests: length match confirmed, last logprob is valid float. No trailing null appended." }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200 (5 requests)",
+        "files": ["legacy-format/group2/VAL-LEG-008-final-token-logprob.json"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-COMP-009",
+      "title": "Legacy streaming /v1/completions forwards logprobs in SSE chunks",
+      "status": "pass",
+      "steps": [
+        { "action": "Send streaming /v1/completions with stream=true, logprobs=true, top_logprobs=5", "expected": "SSE stream contains logprobs data in choices[0]", "observed": "22 SSE chunks parsed. 10 chunks contain logprobs data, 11 are text-only deltas, 1 is [DONE]" },
+        { "action": "Verify logprobs in chunks use legacy format keys", "expected": "logprobs objects contain tokens, token_logprobs, top_logprobs, text_offset", "observed": "All 10 logprobs chunks have all 4 legacy format keys" },
+        { "action": "Verify top_logprobs contains alternatives", "expected": "top_logprobs entries have multiple tokens", "observed": "Sample chunk has top_logprobs with 2 entries showing alternative tokens" }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200 (streaming SSE)",
+        "files": [
+          "legacy-format/group2/VAL-COMP-009-raw-sse.txt",
+          "legacy-format/group2/VAL-COMP-009-streaming-logprobs.json"
+        ]
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 5 assertions: all 5 passed (VAL-LEG-005, VAL-LEG-006, VAL-LEG-007, VAL-LEG-008, VAL-COMP-009). text_offset byte offsets are correctly computed for multi-byte UTF-8 characters (Japanese, emoji, Cyrillic, Korean, Latin diacritics). top_logprobs: 0 produces valid minimal single-key dictionaries. token_logprobs array length matches tokens length with no trailing null. Streaming SSE correctly forwards legacy logprobs format in chunks."
+}
