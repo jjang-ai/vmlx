@@ -225,6 +225,19 @@ public enum JSONLEncoder {
         // on the Ollama timings helper so every Ollama-shape response
         // gets it alongside the spec fields.
         if let detail = u.cacheDetail { obj["cache_detail"] = detail }
+        // iter-125 §200: timing-envelope hard rule parity. Ollama spec
+        // only carries nanosecond durations + raw counts — clients
+        // that want throughput or TTFT have to re-derive. SSE /
+        // /v1/chat/completions usage already emits these three
+        // (iter-105 §183); Ollama path was silently dropping them.
+        // Extra keys pass through Ollama-spec clients untouched
+        // (they only read the spec-listed fields) and unlock
+        // vMLX-aware clients (our in-app MessageBubble, ops dashboards
+        // that scrape /api/chat for latency SLOs) from having to
+        // convert `eval_count / (eval_duration / 1e9)` by hand.
+        if let tps = u.tokensPerSecond { obj["tokens_per_second"] = tps }
+        if let pps = u.promptTokensPerSecond { obj["prompt_tokens_per_second"] = pps }
+        if let ttft = u.ttftMs { obj["ttft_ms"] = ttft }
     }
 
     static func parseJSONObject(_ s: String) -> [String: Any]? {
