@@ -1,17 +1,19 @@
 {
   "milestone": "echo-prompt-logprobs",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "assertionsSummary": {
     "total": 11,
-    "passed": 9,
-    "failed": 2,
+    "passed": 11,
+    "failed": 0,
     "blocked": 0
   },
   "passedAssertions": [
     "VAL-ECHO-001",
+    "VAL-ECHO-002",
     "VAL-ECHO-003",
     "VAL-ECHO-004",
+    "VAL-ECHO-005",
     "VAL-ECHO-006",
     "VAL-ECHO-007",
     "VAL-ECHO-008",
@@ -19,24 +21,23 @@
     "VAL-ECHO-010",
     "VAL-ECHO-011"
   ],
-  "failedAssertions": [
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": ".factory/validation/echo-prompt-logprobs/user-testing/synthesis.json (round 1)",
+  "reTestedAssertions": [
     {
       "id": "VAL-ECHO-002",
-      "reason": "Prompt tokens missing from logprobs when KV cache is warm. When echo:true + logprobs:true, the logprobs array should include all prompt tokens but only contains template suffix tokens + generated tokens for cached prompts. Verified that fresh (uncached) prompts correctly include all prompt tokens in logprobs. Root cause: prefill is skipped on KV cache hits, so the batched logSoftmax computation for prompt logprobs is not performed."
+      "previousStatus": "failed",
+      "newStatus": "passed",
+      "reason": "Fix commit 473ec51 (skip KV cache fetch when prompt logprobs requested) resolves the issue. Prompt tokens now appear in logprobs for both fresh and cached prompts. Verified with 5 consecutive cache-hit requests — all returned 33 logprobs tokens (>= 27 prompt tokens) with prompt words ('The', ' capital', ' of', ' France', ' is') present in the first 27 entries."
     },
     {
       "id": "VAL-ECHO-005",
-      "reason": "Same root cause as VAL-ECHO-002: prompt+completion concatenation broken for cached prompts. The logprobs array has far fewer entries than expected (prompt_tokens + completion_tokens) when the prompt is in KV cache. Works correctly for fresh prompts where the full prompt logprob capture happens during prefill."
+      "previousStatus": "failed",
+      "newStatus": "passed",
+      "reason": "Same fix as VAL-ECHO-002. Prompt + completion logprobs are now correctly concatenated. The logprobs array contains all prompt tokens followed by generated tokens in order. Token count is 33 (prompt 27 + completion 5 + 1 template token variance). Prompt word 'The' appears at index 4, within the first 27 prompt token positions."
     }
   ],
-  "blockedAssertions": [],
-  "appliedUpdates": [
-    {
-      "target": "user-testing.md",
-      "description": "Added Flow Validator Guidance section for Echo + Prompt Logprobs surface with model info, isolation rules, and Gemma-specific token handling notes",
-      "source": "setup"
-    }
-  ],
-  "previousRound": null,
-  "notes": "The echo feature works correctly for fresh prompts. The KV cache hit path skips prompt logprob computation, causing failures for repeated identical prompts. This is a real implementation bug that needs fixing in TokenIterator.prepare() - the prompt logprob capture should be triggered regardless of KV cache state when echo or prompt_logprobs is requested."
+  "notes": "Round 2 re-tested only the 2 assertions that failed in round 1 (VAL-ECHO-002, VAL-ECHO-005). Both now pass after the KV cache fix (commit 473ec51). The fix skips KV cache lookup when echo or prompt_logprobs is requested, ensuring the full prefill path runs and prompt logprobs are captured. All 11 echo-prompt-logprobs assertions now pass."
 }
