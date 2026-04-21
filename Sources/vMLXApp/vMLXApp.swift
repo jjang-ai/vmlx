@@ -1,3 +1,4 @@
+import MLX
 import SwiftUI
 import vMLXEngine
 import vMLXTheme
@@ -54,6 +55,22 @@ final class VMLXAppDelegate: NSObject, NSApplicationDelegate {
     weak var appState: AppState?
 
     func applicationWillTerminate(_ notification: Notification) {
+        // §246: install a no-op MLX error handler BEFORE kicking off the
+        // async flush + stop. If a load or stream task is mid-eval when
+        // the main runloop tears down, MLX's `ThreadPool::enqueue` can
+        // fire `[Not allowed on stopped ThreadPool]` on its way out. The
+        // default handler calls `fatalError` → SIGTRAP → users see a
+        // "vMLX quit unexpectedly" dialog on clean quit. Swallowing to
+        // stderr during termination is the right behavior: we're exiting
+        // anyway, the load's partial state is irrelevant, and a crash
+        // report at quit-time spooks users. Reproduced 2026-04-21 on
+        // 2.0.0-beta.9 when osascript-quit was issued during warmup.
+        MLX.setErrorHandler({ msg, _ in
+            if let m = msg.map({ String(cString: $0) }) {
+                FileHandle.standardError.write(Data("MLX-terminate: \(m)\n".utf8))
+            }
+        })
+
         guard let app = appState else { return }
         let flushSem = DispatchSemaphore(value: 0)
         Task.detached {
