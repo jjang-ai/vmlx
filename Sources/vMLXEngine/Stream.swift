@@ -525,8 +525,28 @@ extension Engine {
         // (OpenAI clients that never send enable_thinking), reasoning must
         // route to content so `delta.content` is never empty.
         // Fixes vmlx #67 (streaming empty content) + #6 (think-seed missing).
+        //
+        // iter-152 §223: OpenAI clients that pass reasoning_effort ∈
+        // {"low","medium","high"} but omit enable_thinking get zero
+        // reasoning because enable_thinking defaults to false and the
+        // Qwen3.5 / MiniMax / Step chat template stamps an empty
+        // `<think></think>` block. Live-repro'd 2026-04-20 on
+        // Qwen3.5-35B-A3B-4bit: effort=low → reasoning channel empty,
+        // content answered directly. The caller clearly wanted reasoning
+        // (otherwise they wouldn't have sent effort=non-none). Mirror
+        // the Mistral 4 auto-map but model-wide: a non-"none" effort
+        // implies enable_thinking=true unless the caller explicitly
+        // overrides. Explicit enable_thinking (true or false) wins over
+        // the inferred value.
+        let effortImpliesThinking: Bool? = request.reasoningEffort.flatMap {
+            let v = $0.lowercased()
+            if v == "none" || v.isEmpty { return false }
+            if v == "low" || v == "medium" || v == "high" { return true }
+            return nil
+        }
         var effectiveThinking: Bool = request.enableThinking
             ?? resolved.enableThinking
+            ?? effortImpliesThinking
             ?? false
 
         // Parser auto-dispatch from the loaded model's capabilities.
