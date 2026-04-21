@@ -230,6 +230,19 @@ public enum OpenAIRoutes {
                 // a non-stream completion — they'd compute it from
                 // wall-clock which double-counts HTTP round-trip.
                 if let tps = u.tokensPerSecond { usageObj["tokens_per_second"] = tps }
+                // iter-126 §201: prompt_tokens_per_second — SSEEncoder
+                // already emits this (SSEEncoder.swift:143) and
+                // JSONLEncoder after iter-125 §200 too; the three
+                // non-stream OpenAI-shape handlers (chat, completions,
+                // responses) were the last surfaces still silently
+                // dropping prefill throughput. Clients that scrape
+                // wire JSON for SLOs (custom dashboards, benchmarks
+                // that compare vMLX vs LM-Studio vs Ollama) had to
+                // derive prefill-tps from `prompt_tokens *
+                // (1e9/prompt_eval_duration)` in the Ollama shape
+                // but couldn't back-solve it from the OpenAI shape
+                // at all (no prefill duration emitted there).
+                if let pps = u.promptTokensPerSecond { usageObj["prompt_tokens_per_second"] = pps }
                 if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
                 if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
                 if let total = u.totalMs { usageObj["total_ms"] = total }
@@ -430,6 +443,19 @@ public enum OpenAIRoutes {
                     "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
                 ]
                 if let tps = u.tokensPerSecond { usageObj["tokens_per_second"] = tps }
+                // iter-126 §201: prompt_tokens_per_second — SSEEncoder
+                // already emits this (SSEEncoder.swift:143) and
+                // JSONLEncoder after iter-125 §200 too; the three
+                // non-stream OpenAI-shape handlers (chat, completions,
+                // responses) were the last surfaces still silently
+                // dropping prefill throughput. Clients that scrape
+                // wire JSON for SLOs (custom dashboards, benchmarks
+                // that compare vMLX vs LM-Studio vs Ollama) had to
+                // derive prefill-tps from `prompt_tokens *
+                // (1e9/prompt_eval_duration)` in the Ollama shape
+                // but couldn't back-solve it from the OpenAI shape
+                // at all (no prefill duration emitted there).
+                if let pps = u.promptTokensPerSecond { usageObj["prompt_tokens_per_second"] = pps }
                 if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
                 if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
                 if let total = u.totalMs { usageObj["total_ms"] = total }
@@ -1418,6 +1444,10 @@ public enum OpenAIRoutes {
             "total_tokens": u.promptTokens + u.completionTokens,
         ]
         if let tps = u.tokensPerSecond { r["tokens_per_second"] = tps }
+        // iter-126 §201: prompt_tokens_per_second parity — see the
+        // same comment in the chat/completions non-stream handler
+        // above. responsesUsageEnvelope is the final hold-out.
+        if let pps = u.promptTokensPerSecond { r["prompt_tokens_per_second"] = pps }
         if let ttft = u.ttftMs { r["ttft_ms"] = ttft }
         if let prefill = u.prefillMs { r["prefill_ms"] = prefill }
         if let total = u.totalMs { r["total_ms"] = total }

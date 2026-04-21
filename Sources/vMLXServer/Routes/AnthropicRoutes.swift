@@ -425,6 +425,13 @@ public enum AnthropicRoutes {
         }
         guard let u = usage else { return out }
         if let tps = u.tokensPerSecond { out["tokens_per_second"] = tps }
+        // iter-126 §201: prompt_tokens_per_second — SSE + Ollama +
+        // OpenAI non-stream paths all now emit this (SSEEncoder.swift:
+        // 143, JSONLEncoder iter-125 §200, OpenAIRoutes iter-126 §201).
+        // Anthropic was the last hold-out. Matches the comment in
+        // OpenAIRoutes usage assembly: clients scraping SLOs had to
+        // derive prefill throughput by hand or not at all.
+        if let pps = u.promptTokensPerSecond { out["prompt_tokens_per_second"] = pps }
         if let ttft = u.ttftMs { out["ttft_ms"] = ttft }
         if let prefill = u.prefillMs { out["prefill_ms"] = prefill }
         if let total = u.totalMs { out["total_ms"] = total }
