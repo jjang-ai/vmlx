@@ -372,6 +372,19 @@ public final class VLMModelFactory: ModelFactory {
             if let merged = try? JSONSerialization.data(withJSONObject: configDict) {
                 configData = merged
             }
+            // iter-ralph §238 DIAG: log what landed in the merged config
+            // so we can confirm JANGTQ VLM bundles route to the TurboQuant
+            // class instead of silently falling through to affine.
+            if ProcessInfo.processInfo.environment["VMLX_JANG_TRACE"] == "1" {
+                let wf = (configDict["weight_format"] as? String) ?? "(none)"
+                let bits = (configDict["mxtq_bits"] as? Int) ?? -1
+                let seed = (configDict["mxtq_seed"] as? Int) ?? -1
+                FileHandle.standardError.write(Data(
+                    "[jang-merge VLM] weight_format=\(wf) mxtq_bits=\(bits) mxtq_seed=\(seed)\n".utf8))
+            }
+        } else if ProcessInfo.processInfo.environment["VMLX_JANG_TRACE"] == "1" {
+            FileHandle.standardError.write(Data(
+                "[jang-merge VLM] skipped — no jang_config.json or JSON parse failed\n".utf8))
         }
 
         let baseConfig: BaseConfiguration
