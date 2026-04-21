@@ -187,11 +187,20 @@ struct InputBar: View {
     }
     #endif
 
-    /// Pending-video thumbnails. Each chip shows a play-arrow badge
-    /// + the filename tail + an x-to-remove button. Keeps the chat
-    /// input bar a consistent media-attach surface. A background
-    /// task generates an AVAssetImageGenerator preview frame so users
-    /// see the first frame rather than a filmstrip placeholder.
+    /// Pending-video chips. Each chip shows a play-arrow badge + the
+    /// filename tail + an x-to-remove button. Keeps the chat input bar
+    /// a consistent media-attach surface.
+    ///
+    /// iter-139 §214: comment previously claimed "a background task
+    /// generates an AVAssetImageGenerator preview frame so users see
+    /// the first frame rather than a filmstrip placeholder" — but no
+    /// such task exists anywhere in the codebase. The chip is a text
+    /// badge, nothing more. Labeled-lie per hard rule #1. Text rewritten
+    /// to describe actual behavior. A real first-frame thumbnail would
+    /// need (a) async AVAssetImageGenerator call, (b) an observable
+    /// cache keyed by URL, (c) a fallback SF symbol during generation,
+    /// and (d) cleanup hook for the §iter-23 temp-file delete path.
+    /// Deferred as a genuine feature rather than kept as a false claim.
     @ViewBuilder
     private var attachedVideos: some View {
         if !vm.pendingVideos.isEmpty {
