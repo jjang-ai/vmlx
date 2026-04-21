@@ -165,8 +165,20 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
     #   1. req.enable_thinking (vMLX extension, explicit bool)
     #   2. req.thinking (Anthropic-native {type: enabled/disabled})
     #   3. req.chat_template_kwargs.enable_thinking (vMLX extension fallback)
-    enable_thinking = None
+    #
+    # Anthropic wire semantics: extended thinking is OPT-IN. When the client
+    # omits the `thinking` block AND sends no `enable_thinking`, Anthropic
+    # clients (and Claude Code / SDK) expect thinking OFF — i.e. the response
+    # should be a single text block with no `thinking` content. Without this
+    # explicit default-off, thinking-capable models like Qwen 3.6 / Gemma 4 /
+    # MiniMax emit a full reasoning block even for plain requests (observed
+    # 2026-04-21 leak audit — r=931/702/330/444 equal between thinking-on and
+    # thinking-absent across all 4 tested families). Default explicitly here
+    # instead of relying on the engine-wide default so we don't affect
+    # OpenAI /v1/chat/completions or Ollama /api/chat clients.
+    enable_thinking = False  # Anthropic-spec default when nothing specified
     chat_template_kwargs = None
+    _thinking_source_seen = False
     # Start with the client's chat_template_kwargs passthrough (lowest prio)
     if req.chat_template_kwargs:
         chat_template_kwargs = dict(req.chat_template_kwargs)
@@ -174,11 +186,13 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
             v = chat_template_kwargs.get("enable_thinking")
             if isinstance(v, bool):
                 enable_thinking = v
+                _thinking_source_seen = True
     # Anthropic-native thinking field (mid prio)
     if req.thinking:
         thinking = req.thinking if isinstance(req.thinking, dict) else req.thinking.model_dump()
         if thinking.get("type") == "enabled":
             enable_thinking = True
+            _thinking_source_seen = True
             # Forward budget_tokens as thinking_budget for Qwen3 models
             if thinking.get("budget_tokens"):
                 if chat_template_kwargs is None:
@@ -186,9 +200,14 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
                 chat_template_kwargs["thinking_budget"] = thinking["budget_tokens"]
         elif thinking.get("type") == "disabled":
             enable_thinking = False
+            _thinking_source_seen = True
     # Explicit enable_thinking (highest prio)
     if req.enable_thinking is not None:
         enable_thinking = req.enable_thinking
+        _thinking_source_seen = True
+    # If client asserted any thinking intent, honour it. Otherwise we stay at
+    # the Anthropic-spec default (False) set above.
+    _ = _thinking_source_seen  # (retained for debuggability / future logging)
 
     return ChatCompletionRequest(
         model=req.model,

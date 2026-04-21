@@ -5389,7 +5389,11 @@ async def create_chat_completion(
             think_in_prompt=_think_in_prompt_ns,
             harmony_active=_harmony_prefix_active,
         )
-        reasoning_text, remaining_text = request_parser.extract_reasoning(output.text)
+        # Prefer raw_text (pre-clean) when the engine tracked it — reasoning
+        # parsers (esp. Gemma 4 channel markers, Qwen 3.6 think tags) need the
+        # special tokens that clean_output_text strips for display.
+        _raw_for_parse = getattr(output, "raw_text", "") or output.text
+        reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:
@@ -6065,7 +6069,11 @@ async def create_response(
             think_in_prompt=_think_in_prompt_ns,
             harmony_active=_harmony_prefix_active,
         )
-        reasoning_text, remaining_text = request_parser.extract_reasoning(output.text)
+        # Prefer raw_text (pre-clean) when the engine tracked it — reasoning
+        # parsers (esp. Gemma 4 channel markers, Qwen 3.6 think tags) need the
+        # special tokens that clean_output_text strips for display.
+        _raw_for_parse = getattr(output, "raw_text", "") or output.text
+        reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:

@@ -163,11 +163,16 @@ class SimpleEngine(BaseEngine):
                 **kwargs,
             )
 
-            # Clean output text
-            text = clean_output_text(output.text)
+            # Clean output text. Preserve raw (pre-clean) so reasoning
+            # parsers can still see marker tokens like Gemma 4's
+            # `<|channel>thought\n...<channel|>` that clean_output_text
+            # strips for display.
+            raw_text = output.text
+            text = clean_output_text(raw_text)
 
             return GenerationOutput(
                 text=text,
+                raw_text=raw_text,
                 tokens=getattr(output, "tokens", []),
                 prompt_tokens=getattr(output, "prompt_tokens", 0),
                 completion_tokens=getattr(
@@ -368,9 +373,11 @@ class SimpleEngine(BaseEngine):
                     top_p=top_p,
                     **mllm_kwargs,
                 )
-                text = clean_output_text(output.text)
+                raw_text = output.text
+                text = clean_output_text(raw_text)
                 return GenerationOutput(
                     text=text,
+                    raw_text=raw_text,
                     prompt_tokens=output.prompt_tokens,
                     completion_tokens=output.completion_tokens,
                     finish_reason=output.finish_reason,
@@ -468,7 +475,8 @@ class SimpleEngine(BaseEngine):
                     top_p=top_p,
                     **kwargs,
                 )
-                text = clean_output_text(output.text)
+                raw_text = output.text
+                text = clean_output_text(raw_text)
                 _prompt_tokens = getattr(output, "prompt_tokens", 0)
                 # Concern #11 (audit 2026-04-08): non-streaming path was missing
                 # the prompt_tokens fallback that the streaming path has at
@@ -484,6 +492,7 @@ class SimpleEngine(BaseEngine):
                         _prompt_tokens = 0
                 return GenerationOutput(
                     text=text,
+                    raw_text=raw_text,
                     tokens=getattr(output, "tokens", []),
                     prompt_tokens=_prompt_tokens,
                     completion_tokens=getattr(

@@ -27,6 +27,12 @@ class GenerationOutput:
     # For streaming
     new_text: str = ""
     finished: bool = True
+    # Raw (pre-clean) decoded text — preserves reasoning markers like
+    # Gemma 4's `<|channel>thought\n...<channel|>` that `clean_output_text`
+    # strips before `text` is populated. Reasoning parsers need these
+    # markers; consumers that want display-ready text use `text`. Empty
+    # string when the engine didn't track raw separately.
+    raw_text: str = ""
 
 
 class BaseEngine(ABC):

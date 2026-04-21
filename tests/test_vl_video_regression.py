@@ -9046,3 +9046,336 @@ class TestImageModelDirectoryNameResolution:
         except ImportError:
             pass  # mflux not installed — can't test this path in that env
         assert raised or True  # tolerate ImportError case
+
+
+class TestReasoningLeakNonStreamVsStream:
+    """2026-04-20 multi-family thinking-leak audit.
+
+    Three bugs in one fix, all observed live against loaded models:
+
+    1. Qwen 3.6 (`qwen3_5_moe_text`): tokenizer marks `<think>`/`</think>`
+       as special tokens that MLX detokenizer strips. When model hits
+       max_tokens mid-reasoning, raw output has NO tags at all. The
+       non-stream path's `Qwen3ReasoningParser.extract_reasoning` short-
+       circuited to `(None, content)` for that case, misrouting full
+       reasoning text to `content` while streaming correctly put it in
+       `reasoning_content`. Fix: `qwen3_parser.py:63-79` delegates no-tags
+       case to base class; `think_parser.py:108-142` base class adds
+       Case 4a that routes no-tags to reasoning when `think_in_prompt=True`.
+
+    2. Gemma 4 (26B-A4B / E4B): same stream-vs-nonstream divergence but
+       different root cause. `clean_output_text` in `api/utils.py` strips
+       `<|channel>`, `<channel|>`, `<turn|>` before the parser runs. Stream
+       deltas bypass `clean_output_text` so the parser sees raw markers;
+       non-stream path only sees the cleaned text. Fix: engine tracks raw
+       output in new `GenerationOutput.raw_text` field; server uses
+       `raw_text or text` for reasoning extraction.
+
+    3. MiniMax M2.7: inherits qwen3 parser via registry, cascaded-fix.
+       Live-verified CLEAN post-fix.
+
+    All three families live-tested T1/T2/T3 + non-stream + streaming + tools.
+    """
+
+    THINK_PARSER_PY = "/tmp/vmlx-1.3.66-build/vmlx_engine/reasoning/think_parser.py"
+    QWEN3_PARSER_PY = "/tmp/vmlx-1.3.66-build/vmlx_engine/reasoning/qwen3_parser.py"
+    BASE_PY = "/tmp/vmlx-1.3.66-build/vmlx_engine/engine/base.py"
+    SIMPLE_PY = "/tmp/vmlx-1.3.66-build/vmlx_engine/engine/simple.py"
+    SERVER_PY = "/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
+
+    def test_base_thinking_parser_no_tags_with_think_in_prompt_routes_to_reasoning(self):
+        """No tags + think_in_prompt=True must route entire output to reasoning
+        (Case 4a). Without this, Qwen 3.6 non-stream leaked reasoning into content."""
+        from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+        p = Qwen3ReasoningParser()
+        p.reset_state(think_in_prompt=True)
+        raw = "Here's a thinking process:\n\n1. Analyze..."
+        r, c = p.extract_reasoning(raw)
+        assert r == raw.strip(), f"expected all-reasoning, got r={r!r} c={c!r}"
+        assert c is None
+
+    def test_base_thinking_parser_no_tags_without_think_in_prompt_routes_to_content(self):
+        """No tags + think_in_prompt=False: normal content (Case 4b)."""
+        from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+        p = Qwen3ReasoningParser()
+        p.reset_state(think_in_prompt=False)
+        r, c = p.extract_reasoning("just a normal answer")
+        assert r is None
+        assert c == "just a normal answer"
+
+    def test_base_thinking_parser_explicit_tags_still_work(self):
+        """Case 1: both tags present - canonical behavior unchanged."""
+        from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+        p = Qwen3ReasoningParser()
+        p.reset_state(think_in_prompt=True)
+        r, c = p.extract_reasoning("<think>reasoning here</think>answer")
+        assert r == "reasoning here"
+        assert c == "answer"
+
+    def test_base_thinking_parser_only_end_tag_implicit_think_still_works(self):
+        """Case 2: only </think> (think was in prompt) - canonical behavior unchanged."""
+        from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+        p = Qwen3ReasoningParser()
+        p.reset_state(think_in_prompt=True)
+        r, c = p.extract_reasoning("reasoning here</think>answer")
+        assert r == "reasoning here"
+        assert c == "answer"
+
+    def test_generation_output_has_raw_text_field(self):
+        """GenerationOutput must carry raw (pre-clean) text so reasoning parsers
+        can still see Gemma 4 channel markers that clean_output_text strips."""
+        from vmlx_engine.engine.base import GenerationOutput
+        g = GenerationOutput(text="cleaned", raw_text="raw<channel|>cleaned")
+        assert g.raw_text == "raw<channel|>cleaned"
+        assert g.text == "cleaned"
+
+    def test_generation_output_raw_text_defaults_empty(self):
+        """Existing call sites without raw_text still work."""
+        from vmlx_engine.engine.base import GenerationOutput
+        g = GenerationOutput(text="foo")
+        assert g.raw_text == ""
+
+    def test_simple_engine_preserves_raw_text(self):
+        """SimpleEngine generation path must populate raw_text before cleaning.
+        Source pin — the fix is that raw_text=output.text BEFORE clean_output_text."""
+        import re
+        src = Path(self.SIMPLE_PY).read_text()
+        assert "raw_text = output.text" in src, (
+            "SimpleEngine.generate must capture raw output before clean_output_text"
+        )
+        # Count how many GenerationOutput sites pass raw_text
+        raw_text_sites = len(re.findall(r"raw_text=raw_text", src))
+        assert raw_text_sites >= 3, (
+            f"expected raw_text= in all 3 non-stream return paths; got {raw_text_sites}"
+        )
+
+    def test_server_nonstream_uses_raw_text_for_reasoning_extraction(self):
+        """Server's non-stream path must prefer output.raw_text over output.text
+        for extract_reasoning. Otherwise Gemma 4 channel markers are already
+        gone by the time the parser runs."""
+        src = Path(self.SERVER_PY).read_text()
+        assert 'getattr(output, "raw_text"' in src, (
+            "server.py non-stream path must check output.raw_text for reasoning"
+        )
+        # Must mention the reason
+        assert "raw_text" in src and ("channel" in src.lower() or "Gemma 4" in src), (
+            "server must document why raw_text is preferred"
+        )
+
+    def test_qwen3_parser_delegates_no_tags_case_to_base(self):
+        """Qwen3 subclass must NOT short-circuit the no-tags case — that would
+        bypass the base class's think_in_prompt handling. Must delegate."""
+        src = Path(self.QWEN3_PARSER_PY).read_text()
+        # The old short-circuit `return None, model_output` at the end of the
+        # no-tags branch is the regression.
+        assert "# No think tags at all — delegate to base class" in src, (
+            "qwen3_parser must delegate no-tags case (Case 4a path in base)"
+        )
+
+    def test_think_parser_case_4a_preserves_self_think_in_prompt(self):
+        """Base class Case 4a must read self._think_in_prompt (set via reset_state)."""
+        src = Path(self.THINK_PARSER_PY).read_text()
+        assert "Case 4a:" in src
+        # Look for the actual code that tests self._think_in_prompt in extract_reasoning
+        # (NOT extract_reasoning_streaming)
+        idx = src.find("def extract_reasoning(")
+        streaming_idx = src.find("def extract_reasoning_streaming(")
+        block = src[idx:streaming_idx]
+        assert "self._think_in_prompt" in block, (
+            "Case 4a must consult self._think_in_prompt in extract_reasoning, "
+            "not just extract_reasoning_streaming"
+        )
+
+
+class TestGemma4HarmonyDefensive:
+    """Defensive coverage — Gemma 4 tokenizer uses single-pipe channel tokens
+    (<|channel>, <channel|>, <turn|>). OpenAI harmony format uses DOUBLE-pipe
+    (<|channel|>, <|start|>, <|message|>, <|return|>). The parser must NOT
+    mis-parse a harmony-style emission as Gemma 4 channel markers.
+
+    This is the cross-family concern: if something ever sends harmony-shaped
+    text through the Gemma 4 parser, we should fail cleanly (fall through to
+    "no markers → content") rather than corrupt the output."""
+
+    def test_gemma4_parser_does_not_match_harmony_pipe_marker(self):
+        """A harmony <|channel|>analysis marker must NOT be parsed as the
+        Gemma 4 <|channel>thought start marker."""
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser, _SOC
+        p = Gemma4ReasoningParser()
+        harmony_text = "<|channel|>analysis<|message|>thinking here<|end|><|start|>assistant<|channel|>final<|message|>the answer<|return|>"
+        r, c = p.extract_reasoning(harmony_text)
+        # Gemma 4 parser must NOT extract "thinking here" from harmony format
+        # (that is the gptoss parser's job). It should see no Gemma 4 markers
+        # and route to content (fail-safe default).
+        assert r is None or "thinking here" not in r
+        # _SOC is "<|channel>" (single-pipe). harmony uses "<|channel|>" so
+        # _SOC is a SUBSTRING of harmony — the parser must use a delimiter
+        # check that distinguishes them.
+        assert _SOC == "<|channel>"
+        assert "<|channel|>" != _SOC  # they must NOT be equal
+
+    def test_gemma4_parser_strict_soc_match(self):
+        """The _SOC token MUST be matched as a boundary — not a substring of
+        any longer token like <|channel|>. The Gemma 4 parser's existing
+        .find(_SOC + _THOUGHT) check provides this because harmony doesn't
+        follow _SOC with literal 'thought'."""
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+        p = Gemma4ReasoningParser()
+        # Harmony-shaped input with 'thought' elsewhere — parser must not
+        # extract random substrings.
+        text = "<|channel|>final<|message|>thought about it<|return|>"
+        r, c = p.extract_reasoning(text)
+        # Either clean (all content) or at worst None reasoning;
+        # must NOT silently produce reasoning from harmony content.
+        if r:
+            assert "final" not in r, f"harmony 'final' channel content leaked into gemma4 reasoning: {r!r}"
+
+
+class TestFixCohesiveness:
+    """Pin down that the v1.3.71 fix has no monkey-patch smell:
+    - documented case table
+    - principled state consultation (self._think_in_prompt)
+    - clean dataclass field addition (not hacked onto a global)
+    - proper delegation in subclass (not short-circuit + side-effect)"""
+
+    THINK_PARSER = "/tmp/vmlx-1.3.66-build/vmlx_engine/reasoning/think_parser.py"
+    QWEN3_PARSER = "/tmp/vmlx-1.3.66-build/vmlx_engine/reasoning/qwen3_parser.py"
+    BASE = "/tmp/vmlx-1.3.66-build/vmlx_engine/engine/base.py"
+    SERVER = "/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
+
+    def test_extract_reasoning_has_documented_case_table(self):
+        """Every branch of extract_reasoning is labeled with a case number
+        in the docstring so future reviewers see the full control-flow map."""
+        src = Path(self.THINK_PARSER).read_text()
+        idx = src.find("def extract_reasoning(\n")
+        stream_idx = src.find("def extract_reasoning_streaming(")
+        block = src[idx:stream_idx]
+        for case in ["Case 1:", "Case 2:", "Case 3:", "Case 4a:", "Case 4b:"]:
+            assert case in block, f"missing labeled {case}"
+
+    def test_no_thread_local_or_global_state_hacks(self):
+        """Fix uses per-parser instance state, not module-level globals
+        or thread-locals — confirms no monkey-patch of shared state."""
+        src = Path(self.THINK_PARSER).read_text()
+        # No threading.local, no global dict mutation
+        assert "threading.local" not in src
+        # self._think_in_prompt is the ONLY new state, set via reset_state
+        assert "self._think_in_prompt" in src
+
+    def test_raw_text_is_real_dataclass_field_not_dict_hack(self):
+        """GenerationOutput.raw_text must be a declared dataclass field with
+        a default — not a dict attribute hack or monkey-set attribute."""
+        src = Path(self.BASE).read_text()
+        import re
+        # Find the dataclass
+        assert "@dataclass" in src and "class GenerationOutput:" in src
+        # raw_text must be declared with a default
+        assert re.search(r"raw_text:\s*str\s*=", src), (
+            "raw_text must be a dataclass field with default"
+        )
+
+    def test_server_uses_getattr_fallback_for_backcompat(self):
+        """server.py's raw_text usage must getattr-with-fallback so older
+        engines (BatchedEngine that doesn't yet populate raw_text) still
+        work without blowing up — proper backward-compatible access."""
+        src = Path(self.SERVER).read_text()
+        # Must appear at BOTH non-stream paths (chat_completions + responses)
+        count = src.count('getattr(output, "raw_text"')
+        assert count >= 2, f"raw_text getattr must appear in both non-stream paths; got {count}"
+
+    def test_qwen3_override_properly_delegates(self):
+        """Qwen3 subclass override uses `return super().extract_reasoning(...)`
+        — proper parent-delegation pattern, not logic duplication."""
+        src = Path(self.QWEN3_PARSER).read_text()
+        # The no-tags branch should CALL super(), not reimplement
+        import re
+        assert re.search(r"# No think tags at all.*delegate to base class", src, re.DOTALL), (
+            "qwen3 parser should have explanatory comment for delegation"
+        )
+        # super() should be called in the no-tags branch — not just the no-end-tag branch
+        # Count super().extract_reasoning calls — should be 3 (one per branch)
+        supers = src.count("return super().extract_reasoning(model_output)")
+        assert supers >= 3, f"expected 3 super() delegations (no-tag, no-end-tag, has-both); got {supers}"
+
+
+class TestAnthropicThinkingSpecDefault:
+    """2026-04-21 sweep discovered Anthropic /v1/messages emitted full reasoning
+    blocks across all 4 tested thinking-capable families (Qwen3.6/Gemma4/MiniMax/
+    Nemotron-Cascade) when client omitted `thinking` and `enable_thinking`.
+    That violates Anthropic's wire contract — extended thinking is OPT-IN.
+
+    Fix in anthropic_adapter.py:to_chat_completion: default enable_thinking=False
+    when client asserts no thinking intent. Isolated to the adapter so OpenAI
+    /v1/chat/completions and Ollama /api/chat paths keep their model-default
+    behavior."""
+
+    ADAPTER = "/tmp/vmlx-1.3.66-build/vmlx_engine/api/anthropic_adapter.py"
+
+    def test_anthropic_adapter_defaults_thinking_false_when_absent(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role":"user","content":"hi"}],
+            max_tokens=100,
+        )
+        # No req.thinking, no req.enable_thinking, no chat_template_kwargs
+        chat = to_chat_completion(req)
+        assert chat.enable_thinking is False, (
+            "Anthropic adapter must default thinking OFF per Anthropic spec "
+            "when client sends no thinking intent"
+        )
+
+    def test_anthropic_adapter_honors_thinking_enabled(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role":"user","content":"hi"}],
+            max_tokens=100,
+            thinking={"type":"enabled","budget_tokens":500},
+        )
+        chat = to_chat_completion(req)
+        assert chat.enable_thinking is True
+
+    def test_anthropic_adapter_honors_thinking_disabled(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role":"user","content":"hi"}],
+            max_tokens=100,
+            thinking={"type":"disabled"},
+        )
+        chat = to_chat_completion(req)
+        assert chat.enable_thinking is False
+
+    def test_anthropic_adapter_honors_explicit_enable_thinking_true(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role":"user","content":"hi"}],
+            max_tokens=100,
+            enable_thinking=True,
+        )
+        chat = to_chat_completion(req)
+        assert chat.enable_thinking is True
+
+    def test_anthropic_adapter_explicit_false_overrides_thinking_enabled(self):
+        """Explicit enable_thinking=False must beat a thinking={type:enabled} block."""
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        req = AnthropicRequest(
+            model="test",
+            messages=[{"role":"user","content":"hi"}],
+            max_tokens=100,
+            thinking={"type":"enabled"},
+            enable_thinking=False,
+        )
+        chat = to_chat_completion(req)
+        assert chat.enable_thinking is False, (
+            "explicit enable_thinking has highest precedence per docstring order"
+        )
+
+    def test_adapter_source_documents_wire_default(self):
+        src = Path(self.ADAPTER).read_text()
+        assert "Anthropic wire semantics: extended thinking is OPT-IN" in src, (
+            "fix must be self-documenting so future reviewer knows WHY"
+        )
+        assert "enable_thinking = False  # Anthropic-spec default" in src

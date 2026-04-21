@@ -66,8 +66,15 @@ class Qwen3ReasoningParser(BaseThinkingReasoningParser):
                 # (e.g., max_tokens hit during thinking phase).
                 # Delegate to base class Case 3: returns (reasoning, None).
                 return super().extract_reasoning(model_output)
-            # No think tags at all — pure content
-            return None, model_output
+            # No think tags at all — delegate to base class so Case 4a
+            # (think_in_prompt=True + no tags = all reasoning) can fire.
+            # Qwen 3.6 marks <think>/</think> as special tokens that the
+            # detokenizer strips from decoded output, so with `<think>\n`
+            # in the chat template's assistant prefix, a truncated-mid-
+            # thought response has zero visible tags but is all reasoning.
+            # The base class handles this when think_in_prompt was set via
+            # reset_state() by the server's non-stream path.
+            return super().extract_reasoning(model_output)
 
         # Use base class implementation (handles both explicit and implicit)
         return super().extract_reasoning(model_output)

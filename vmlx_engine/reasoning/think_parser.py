@@ -91,11 +91,19 @@ class BaseThinkingReasoningParser(ReasoningParser):
         """
         Extract reasoning from complete output.
 
-        Handles four cases:
+        Handles five cases:
         1. Both tags present: <think>reasoning</think>content
         2. Only closing tag: reasoning</think>content (think in prompt)
         3. Only opening tag: <think>reasoning (truncated, max_tokens hit)
-        4. No tags: pure content
+        4a. No tags AND think_in_prompt=True: entire output IS reasoning
+            (tokenizer ate the start tag AND output was truncated before
+            </think> — common on Qwen 3.6 / MiniMax where <think> is a
+            special token the detokenizer drops). Without this path the
+            full reasoning prose spills into `content` on non-stream
+            responses while the streaming path routes it correctly,
+            producing divergent chat_vs_stream behaviour for the same
+            prompt. Mirrors `extract_reasoning_streaming`'s Case 3 fallback.
+        4b. No tags AND think_in_prompt=False: pure content
 
         Args:
             model_output: Complete model output text.
@@ -124,7 +132,12 @@ class BaseThinkingReasoningParser(ReasoningParser):
             _, _, reasoning = text.partition(self.start_token)
             return reasoning.strip() or None, None
 
-        # Case 4: No tags at all - pure content
+        # Case 4a: No tags but think_in_prompt (special-token-eaten path)
+        if self._think_in_prompt:
+            reasoning = text.strip()
+            return reasoning or None, None
+
+        # Case 4b: No tags at all - pure content
         return None, model_output
 
     def extract_reasoning_streaming(
