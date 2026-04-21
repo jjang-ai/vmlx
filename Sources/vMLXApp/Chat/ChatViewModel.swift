@@ -785,6 +785,27 @@ final class ChatViewModel {
             if let sid = serverSessionId { return app?.engine(for: sid) }
             return app?.engine
         }()
+
+        // iter-ralph §234 (H5): re-push the chat's workingDirectory to
+        // the engine's terminalCwd AT SEND TIME instead of relying on
+        // the activation-time async task in selectSession. Before §234,
+        // a user who sent a message <10ms after switching chats could
+        // win the race against the activation task — the engine's
+        // terminalCwd still held the PREVIOUS chat's cwd, so any tool
+        // call dispatched by this send would run in the wrong directory.
+        // Send-time push is a cheap idempotent write; even if the
+        // activation task already fired, we just write the same value
+        // again.
+        if let engineRef = engine {
+            let capturedSessionId = sessionId
+            Task.detached { [weak engineRef] in
+                guard let engineRef else { return }
+                let chat = await engineRef.settings.chat(capturedSessionId)
+                if let wd = chat?.workingDirectory, !wd.isEmpty {
+                    await engineRef.setTerminalCwd(URL(fileURLWithPath: wd))
+                }
+            }
+        }
         // Build request messages. If a user turn carries attached images
         // (`imageData`), wrap them as OpenAI-style `image_url` parts with
         // base64 data URLs so `Engine.stream` → `Stream.extractImages`
