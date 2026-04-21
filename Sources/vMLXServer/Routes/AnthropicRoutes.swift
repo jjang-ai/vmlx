@@ -362,6 +362,30 @@ public enum AnthropicRoutes {
                     if let fr = chunk.finishReason { finishReason = fr }
                     if let u = chunk.usage { usage = u }
                 }
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): surface EngineError with proper
+                // type labels so Anthropic SDK clients can distinguish
+                // overloaded_error (.notLoaded), not_found_error
+                // (.modelNotFound), rate_limit_error, etc. Before §230
+                // every mid-stream engine throw was emitted as the
+                // generic "api_error" type.
+                try await stopOpen()
+                let anthropicType: String = {
+                    switch err {
+                    case .notLoaded: return "overloaded_error"
+                    case .modelNotFound: return "not_found_error"
+                    case .promptTooLong: return "request_too_large"
+                    case .invalidRequest, .toolChoiceNotSatisfied: return "invalid_request_error"
+                    case .requestTimeout: return "timeout_error"
+                    default: return "api_error"
+                    }
+                }()
+                try await emit("error", [
+                    "type": "error",
+                    "error": ["type": anthropicType, "message": err.description] as [String: Any],
+                ])
+                try await writer.finish(nil)
+                return
             } catch {
                 try await stopOpen()
                 try await emit("error", [
