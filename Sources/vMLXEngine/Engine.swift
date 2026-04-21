@@ -992,7 +992,27 @@ public actor Engine {
                 // that behavior here. If a hung HF download or deadlocked
                 // Metal init is observed in practice, a proper fix lands
                 // upstream; until then no arbitrary 600s kill switch.
-                do {
+                //
+                // A2 §254: scope an MLX error handler across the entire
+                // load body. Without this, a user-initiated Stop during
+                // Phase 2 (shard mmap) or Phase 4 (Metal JIT warmup)
+                // can race with an MLX eval failure whose default
+                // handler is `fatalError` → SIGTRAP → crash report.
+                // We route mid-load MLX errors to the LogStore so the
+                // loader's own `catch` block sees a normal throw
+                // (via the outer `try` chain) and fail() is invoked
+                // cleanly. §246 installed this same pattern on
+                // application termination; A2 extends it to mid-load
+                // cancel. The handler is Task-local so streaming /
+                // generation paths keep the default abort behavior
+                // where hard failures are desirable.
+                do { try await MLX.withErrorHandler({ [weak self] msg in
+                    Task { [weak self] in
+                        await self?.logs.append(
+                            .warn, category: "engine",
+                            "load MLX warn (load-scoped): \(msg)")
+                    }
+                }) {
                     await self.logs.append(
                         .info, category: "engine",
                         "Loading model from \(opts.modelPath.lastPathComponent)")
@@ -1228,7 +1248,10 @@ public actor Engine {
                     await self.modelLibrary.markLoadFinished(opts.modelPath)
                     continuation.yield(.done)
                     continuation.finish()
-                } catch {
+                } } catch {
+                    // A2 §254: both the inner load body and the
+                    // MLX-scoped error handler wrapper funnel here on
+                    // throw. Swallow-to-log rather than SIGTRAP.
                     await fail("\(error)")
                 }
                 // Self-deregister: clear the engine's handle so subsequent
