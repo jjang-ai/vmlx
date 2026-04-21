@@ -301,19 +301,24 @@ public final class Gemma4ReasoningParser: ReasoningParser {
             if afterSoc.hasPrefix("\n") { afterSoc.removeFirst() }
 
             if let eocRange = afterSoc.range(of: Self.eoc) {
-                let reasoning = String(afterSoc[..<eocRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                var reasoning = String(afterSoc[..<eocRange.lowerBound])
                 var content = String(afterSoc[eocRange.upperBound...])
                 while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
-                content = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                reasoning = stripResidualMarkers(reasoning).trimmingCharacters(in: .whitespacesAndNewlines)
+                content = stripResidualMarkers(content).trimmingCharacters(in: .whitespacesAndNewlines)
                 return (reasoning.isEmpty ? nil : reasoning, content.isEmpty ? nil : content)
             } else {
-                let reasoning = afterSoc.trimmingCharacters(in: .whitespacesAndNewlines)
+                let reasoning = stripResidualMarkers(afterSoc).trimmingCharacters(in: .whitespacesAndNewlines)
                 return (reasoning.isEmpty ? nil : reasoning, nil)
             }
         }
 
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (nil, trimmed.isEmpty ? nil : trimmed)
+        // No thoughtStart found — could still contain stray `<|channel>` /
+        // `<channel|>` fragments from the model (we observe this on Gemma
+        // 4 31B JANG_4M). Strip before returning as plain content so the
+        // §15 reasoning-off reroute doesn't surface them.
+        let cleaned = stripResidualMarkers(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (nil, cleaned.isEmpty ? nil : cleaned)
     }
 
     public func extractReasoningStreaming(previous: String, current: String, delta: String) -> ReasoningDelta? {
@@ -326,15 +331,33 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         if thoughtInCurrent && !sawThought { sawThought = true }
         if eocInCurrent && sawThought && !sawEoc { sawEoc = true }
 
-        // No thought seen: buffer until we know it isn't a marker, then flush as content
+        // §241f: No `<|channel>thought` seen yet. Earlier we flushed the
+        // accumulated buffer as content once it crossed 18 chars, but that
+        // leaked partial marker fragments on models whose chat template
+        // emits the marker late (Gemma-4-31B-JANG_4M is the canonical
+        // offender — C2 content ended up `}hellonel>thought\n<|channel>...`
+        // because deltas 1-N contained `<`, `|`, `channel`, `>`, `thought`
+        // as separate tokens and the pre-sawThought branch emitted them
+        // raw). Hold back the LAST 18 chars (length of `<|channel>thought`)
+        // from emission: that suffix is always safe to park until either
+        // the marker completes (sawThought flips) or 18+ more bytes
+        // arrive that can't be a marker prefix.
         if !sawThought {
             if current.count < 18 { return nil }
-            let cleaned = current.replacingOccurrences(of: Self.eot, with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleaned.isEmpty && cleaned.count > emittedContent {
-                let startIdx = cleaned.index(cleaned.startIndex, offsetBy: emittedContent)
-                let new = String(cleaned[startIdx...])
-                emittedContent = cleaned.count
+            var cleaned = current.replacingOccurrences(of: Self.eot, with: "")
+            // Strip any FULLY-FORMED markers that already appeared
+            // (shouldn't happen in !sawThought, but defensive).
+            cleaned = stripResidualMarkers(cleaned)
+            cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Hold back the last 18 chars in case they're the start of a
+            // `<|channel>thought` marker still being streamed.
+            guard cleaned.count > 18 else { return nil }
+            let safeEnd = cleaned.index(cleaned.endIndex, offsetBy: -18)
+            let safe = String(cleaned[..<safeEnd])
+            if !safe.isEmpty && safe.count > emittedContent {
+                let startIdx = safe.index(safe.startIndex, offsetBy: emittedContent)
+                let new = String(safe[startIdx...])
+                emittedContent = safe.count
                 return new.isEmpty ? nil : ReasoningDelta(content: new)
             }
             return nil

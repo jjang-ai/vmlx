@@ -146,8 +146,14 @@ private let kFusedSwiGLUSource = """
             }
         }
 
-        #pragma unroll
-        for (uint k = 0; k < 16; k++) {
+        // §242: loop bound is `vals_per_u32`, NOT a hardcoded 16. For
+        // bits=2 that's 16, for bits=4 that's 8. The prior hardcoded-16
+        // loop generated garbage shifts (k*bits ≥ 32 is UB) + index
+        // overreads for 4-bit models (JANGTQ4), producing incoherent
+        // tokens. See research/JANGTQ-REFERENCE.md §1 — codebooks +
+        // packing are per-`(in_features, bits)`, and the matmul kernel
+        // must respect `vals_per_u32` exactly.
+        for (uint k = 0; k < vals_per_u32; k++) {
             uint i = i_base + k;
             if (i >= in_features) break;
             float xv = static_cast<float>(x_rot[x_off + i]);
@@ -223,8 +229,9 @@ private let kGatherTQSource = """
         for (uint o = 0; o < 20; o++) {
             pv[o] = (o < n_outs) ? packed[expert_base + (out_idx_0 + o) * packed_cols + pack_idx] : 0u;
         }
-        #pragma unroll
-        for (uint k = 0; k < 16; k++) {
+        // §242: see fused-gate-up kernel — loop bound is `vals_per_u32`,
+        // not hardcoded 16. Fixes JANGTQ4 (bits=4) where vals_per_u32=8.
+        for (uint k = 0; k < vals_per_u32; k++) {
             uint i = i_base + k;
             if (i >= in_features) break;
             float xv = static_cast<float>(x_rot[x_offset + i]);
