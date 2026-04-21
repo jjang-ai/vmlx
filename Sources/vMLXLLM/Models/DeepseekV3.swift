@@ -34,6 +34,14 @@ public struct DeepseekV3Configuration: Codable, Sendable {
     var ropeTheta: Float
     var ropeScaling: [String: StringOrNumber]?
     var attentionBias: Bool
+    // GLM-5.1 (model_type=glm_moe_dsa) adds a DeepSeek-Sparse-Attention
+    // indexer. These fields are absent in plain deepseek_v3/v2 configs,
+    // so they're optional — if any is nil the Indexer is not instantiated
+    // and the attention runs its standard dense path.
+    // Ralph iter-28: S03 chunk, indexer wiring prep.
+    var indexHeadDim: Int?
+    var indexNHeads: Int?
+    var indexTopk: Int?
 
     enum CodingKeys: String, CodingKey {
         case vocabSize = "vocab_size"
@@ -62,6 +70,10 @@ public struct DeepseekV3Configuration: Codable, Sendable {
         case ropeTheta = "rope_theta"
         case ropeScaling = "rope_scaling"
         case attentionBias = "attention_bias"
+        // GLM-5.1 DSA fields (all optional — plain deepseek_v3 omits them)
+        case indexHeadDim = "index_head_dim"
+        case indexNHeads = "index_n_heads"
+        case indexTopk = "index_topk"
     }
 }
 
@@ -113,6 +125,11 @@ class DeepseekV3Attention: Module {
     @ModuleInfo(key: "kv_a_proj_with_mqa") var kvAProjWithMqa: Linear
     @ModuleInfo(key: "kv_a_layernorm") var kvALayerNorm: RMSNorm
     @ModuleInfo(key: "kv_b_proj") var kvBProj: Linear
+    /// DSA Indexer (GLM-5.1 `model_type: "glm_moe_dsa"` only). Absent on
+    /// plain deepseek_v3/v2 configs. When present, its output feeds
+    /// sparse top-k attention selection. Ralph iter-28: field landed;
+    /// iter-29+ wires it into `callAsFunction`.
+    @ModuleInfo(key: "indexer") var indexer: GlmMoeDsaIndexer?
 
     init(config: DeepseekV3Configuration) {
         self.config = config
@@ -169,6 +186,29 @@ class DeepseekV3Attention: Module {
         self.rope = initializeRope(
             dims: qkRopeHeadDim, base: ropeTheta, traditional: true,
             scalingConfig: config.ropeScaling, maxPositionEmbeddings: maxPositionEmbeddings)
+
+        // GLM-5.1 DSA Indexer (Ralph iter-28). Instantiated only when
+        // the config advertises the three index_* fields. For plain
+        // deepseek_v3 / v2 / kimi_k25 the indexer stays nil and the
+        // attention runs its standard dense path. Wiring into
+        // `callAsFunction` lands in a follow-up iter (S03 remainder).
+        if let indexHeadDim = config.indexHeadDim,
+           let indexNHeads = config.indexNHeads,
+           let indexTopk = config.indexTopk {
+            // `config.qLoraRank` is required (non-optional) on the
+            // configuration; MLA-capable configs always provide it.
+            self._indexer.wrappedValue = GlmMoeDsaIndexer(
+                hiddenSize: hiddenSize,
+                indexNHeads: indexNHeads,
+                indexHeadDim: indexHeadDim,
+                qkRopeHeadDim: qkRopeHeadDim,
+                indexTopk: indexTopk,
+                qLoraRank: config.qLoraRank,
+                ropeTheta: ropeTheta,
+                maxPositionEmbeddings: maxPositionEmbeddings,
+                ropeScaling: config.ropeScaling
+            )
+        }
     }
 
     func callAsFunction(
