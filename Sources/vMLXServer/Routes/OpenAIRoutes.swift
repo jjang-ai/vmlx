@@ -397,7 +397,10 @@ public enum OpenAIRoutes {
             // Uses the shared buildLegacyLogprobs() helper to produce the
             // exact shape lm-eval's parse_logprobs() expects.
             if !allLogprobs.isEmpty {
-                let (logprobsDict, _) = SSEEncoder.buildLegacyLogprobs(allLogprobs)
+                // Generation-only (non-echo) completions: position 0 must be
+                // null per OpenAI legacy spec (VAL-LEG-002, VAL-LEG-004).
+                let (logprobsDict, _) = SSEEncoder.buildLegacyLogprobs(
+                    allLogprobs, forceFirstNull: !echoEnabled)
                 choice["logprobs"] = logprobsDict
             }
             var obj2: [String: Any] = [

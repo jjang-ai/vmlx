@@ -54,7 +54,8 @@ public enum SSEEncoder {
     ///   offset after the last token — useful for chaining across streaming chunks.
     public static func buildLegacyLogprobs(
         _ logprobs: [TokenLogprob],
-        startOffset: Int = 0
+        startOffset: Int = 0,
+        forceFirstNull: Bool = false
     ) -> (dict: [String: Any], endOffset: Int) {
         var tokens: [String] = []
         var tokenLogprobs: [Any] = []
@@ -62,12 +63,16 @@ public enum SSEEncoder {
         var textOffset: [Int] = []
         var offset = startOffset
 
-        for lp in logprobs {
+        for (idx, lp) in logprobs.enumerated() {
             tokens.append(lp.token)
             textOffset.append(offset)
             offset += lp.token.utf8.count
 
-            let isNull = lp.logprob.isNaN
+            // Position 0 is null when: (a) the logprob is NaN (no prior
+            // context, e.g. prompt position 0 in echo mode), OR (b)
+            // forceFirstNull is true and this is the first entry (generation-
+            // only completions where position 0 must be null per OpenAI spec).
+            let isNull = lp.logprob.isNaN || (forceFirstNull && idx == 0)
 
             // Position 0 (NaN) → null; otherwise the float logprob.
             tokenLogprobs.append(isNull ? NSNull() : lp.logprob)
@@ -307,6 +312,9 @@ public enum SSEEncoder {
             }
             // Legacy logprobs format — track cumulative text_offset across chunks.
             var textOffsetCursor = 0
+            // Track first logprobs chunk so we can force position 0 to null
+            // for generation-only (non-echo) completions (VAL-LEG-002/004).
+            var isFirstLogprobsChunk = true
             let merged = sseMergeWithHeartbeat(
                 upstream: upstream, interval: sseHeartbeatInterval)
             do {
@@ -326,8 +334,13 @@ public enum SSEEncoder {
                         // the legacy completions shape (tokens, token_logprobs,
                         // top_logprobs, text_offset arrays).
                         if let lps = chunk.logprobs, !lps.isEmpty {
+                            // Non-echo completions: force position 0 to null on
+                            // the first logprobs chunk (VAL-LEG-002, VAL-LEG-004).
+                            let forceNull = isFirstLogprobsChunk && echoPrompt == nil
+                            isFirstLogprobsChunk = false
                             let (logprobsDict, newOffset) = Self.buildLegacyLogprobs(
-                                lps, startOffset: textOffsetCursor)
+                                lps, startOffset: textOffsetCursor,
+                                forceFirstNull: forceNull)
                             textOffsetCursor = newOffset
                             let obj: [String: Any] = [
                                 "id": id,
