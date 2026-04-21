@@ -1592,9 +1592,16 @@ public enum OpenAIRoutes {
         case .toolChoiceNotSatisfied(let msg):
             return errorJSON(.unprocessableContent, msg)
         case .promptTooLong:
-            // Hummingbird's HTTPResponse.Status lacks 413 by a stable
-            // name; 400 with a descriptive message is the safe fallback.
-            return errorJSON(.badRequest, err.description)
+            // iter-ralph-3 §227: swift-http-types DOES expose
+            // `.contentTooLarge` (status 413). Prior comment claiming
+            // Hummingbird "lacks 413 by a stable name" was stale —
+            // HTTPResponse.Status.contentTooLarge is the standard
+            // entry in swift-http-types/HTTPResponse.swift:502.
+            // 413 is the semantically correct status for
+            // prompt-exceeds-context-window; OpenAI SDK clients treat
+            // it as "shrink the input" vs 400's "malformed request",
+            // which matters for client retry logic.
+            return errorJSON(.contentTooLarge, err.description)
         case .modelNotFound:
             return errorJSON(.notFound, err.description)
         case .notLoaded:
