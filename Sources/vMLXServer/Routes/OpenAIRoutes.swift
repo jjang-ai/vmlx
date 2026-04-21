@@ -321,7 +321,7 @@ public enum OpenAIRoutes {
                 if let d = obj["logprobs"] as? Double { return d != 0 }
                 return nil
             }()
-            let chatReq = ChatRequest(
+            var chatReq = ChatRequest(
                 model: model,
                 messages: [.init(role: "user", content: .string(prompt))],
                 stream: obj["stream"] as? Bool,
@@ -336,6 +336,11 @@ public enum OpenAIRoutes {
                 logprobs: logprobsValue,
                 topLogprobs: obj["top_logprobs"] as? Int
             )
+            // Echo and prompt_logprobs: legacy completions parameters.
+            // Set after init since ChatRequest uses Codable synthesis.
+            chatReq.echo = obj["echo"] as? Bool
+            chatReq.promptLogprobs = obj["prompt_logprobs"] as? Int
+            let echoEnabled = chatReq.echo ?? false
             await engine.wakeFromStandby()
 
             let id = "cmpl-\(UUID().uuidString.prefix(8).lowercased())"
@@ -352,7 +357,9 @@ public enum OpenAIRoutes {
                     status: .ok,
                     headers: headers,
                     body: SSEEncoder.textCompletionStream(
-                        id: id, model: model, created: created, upstream: stream
+                        id: id, model: model, created: created,
+                        upstream: stream,
+                        echoPrompt: echoEnabled ? prompt : nil
                     )
                 )
             }
@@ -376,19 +383,31 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
 
+            // Echo: prepend prompt text when echo == true.
+            if echoEnabled {
+                content = prompt + content
+            }
+
             var choice: [String: Any] = [
                 "text": content,
                 "index": 0,
                 "finish_reason": finishReason ?? "stop",
             ]
             // Include logprobs in legacy completions format when collected.
+            // When echo/prompt_logprobs is set, the first batch of logprobs
+            // are prompt tokens (with position 0 having NaN → null).
             if !allLogprobs.isEmpty {
                 let tokens = allLogprobs.map { $0.token }
-                let tokenLogprobs: [Any] = allLogprobs.map { $0.logprob }
+                // NaN logprobs (position 0) → JSON null.
+                let tokenLogprobs: [Any] = allLogprobs.map { lp in
+                    lp.logprob.isNaN ? NSNull() as Any : lp.logprob as Any
+                }
                 let topLogprobs: [[String: Any]] = allLogprobs.map { lp in
                     var dict: [String: Any] = [:]
                     // Include the chosen token first, then alternatives.
-                    dict[lp.token] = lp.logprob
+                    if !lp.logprob.isNaN {
+                        dict[lp.token] = lp.logprob
+                    }
                     for alt in lp.topLogprobs {
                         dict[alt.token] = alt.logprob
                     }

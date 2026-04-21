@@ -160,6 +160,20 @@ public struct GenerateParameters: Sendable {
     /// Only meaningful when `logprobs == true`. Range: 0–20.
     public var topLogprobs: Int = 0
 
+    /// When true, echo prompt text in the response and capture prompt
+    /// token logprobs (when combined with `logprobs`). This is the
+    /// legacy `/v1/completions` `echo` parameter. Normal chat
+    /// completions never set this, so there is zero overhead on the
+    /// standard path.
+    public var echo: Bool = false
+
+    /// Number of top prompt token logprobs to capture per position
+    /// during prefill. Works independently of `echo` — prompt logprobs
+    /// are captured even when `echo` is false. Range: 0–20.
+    /// Only meaningful for legacy `/v1/completions`. Normal chat
+    /// completions never set this, ensuring zero overhead.
+    public var promptLogprobs: Int = 0
+
     public init(
         maxTokens: Int? = nil,
         maxKVSize: Int? = nil,
@@ -715,6 +729,12 @@ protocol TokenIteratorProtocol: Sequence, IteratorProtocol where Element == Int 
     /// Empty when logprobs were not requested.
     var collectedLogprobs: [TokenLogprob] { get }
     mutating func popCollectedLogprobs() -> [TokenLogprob]
+    /// Prompt token logprobs captured during prefill when echo or
+    /// prompt_logprobs was requested. `nil` on the normal path.
+    var promptLogprobsResult: [TokenLogprob]? { get }
+    /// Pop and return prompt logprobs, clearing the stored value.
+    /// Returns nil if not applicable.
+    mutating func popPromptLogprobs() -> [TokenLogprob]?
 }
 
 /// Generator of tokens.
@@ -759,6 +779,21 @@ public struct TokenIterator: TokenIteratorProtocol {
     /// Tokenizer reference for logprob token decoding. Only set when
     /// `logprobsCollector` is active to avoid unnecessary retains.
     let logprobsTokenizer: Tokenizer?
+
+    /// Prompt token logprobs captured during prefill when `echo == true`
+    /// or `promptLogprobs > 0`. `nil` when neither is requested (zero
+    /// overhead on normal path). First entry has `logprob` set to
+    /// `.nan` to indicate null (no prior context for position 0).
+    var promptLogprobsResult: [TokenLogprob]?
+
+    /// Whether prompt logprob capture is needed. Computed once from
+    /// GenerateParameters at init time; gates the expensive logSoftmax
+    /// in prepare() to ensure zero overhead on the normal path.
+    let needsPromptLogprobs: Bool
+
+    /// Top-K for prompt logprobs (from GenerateParameters.promptLogprobs).
+    /// Only meaningful when `needsPromptLogprobs == true`.
+    let promptLogprobsTopK: Int
 
     var tokenCount = 0
     let maxTokens: Int?
@@ -814,6 +849,9 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.sampler = parameters.sampler()
         self.logprobsCollector = parameters.logprobsProcessor()
         self.logprobsTokenizer = nil
+        self.promptLogprobsResult = nil
+        self.needsPromptLogprobs = false
+        self.promptLogprobsTopK = 0
         self.maxTokens = parameters.maxTokens
 
         self.kvBits = parameters.kvBits
@@ -861,7 +899,29 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.processor = parameters.processor()
         self.sampler = parameters.sampler()
         self.logprobsCollector = parameters.logprobsProcessor()
-        self.logprobsTokenizer = self.logprobsCollector != nil ? tokenizer : nil
+        // Tokenizer is needed for both generation logprobs AND prompt
+        // logprobs — ensure it's retained when either is active.
+        let needsTokenizer = self.logprobsCollector != nil
+            || parameters.promptLogprobs > 0
+            || (parameters.echo && parameters.logprobs)
+        self.logprobsTokenizer = needsTokenizer ? tokenizer : nil
+
+        // Prompt logprob capture: gated behind explicit logprob requests
+        // to ensure zero overhead on the normal path. echo alone does
+        // NOT trigger logprob capture — it only echoes the prompt text.
+        // Prompt logprobs are captured when:
+        //   - promptLogprobs > 0 (standalone prompt logprob parameter)
+        //   - echo == true AND logprobs == true (combined echo+logprobs)
+        let wantsPromptLogprobs = parameters.promptLogprobs > 0
+            || (parameters.echo && parameters.logprobs)
+        self.needsPromptLogprobs = wantsPromptLogprobs
+        // When promptLogprobs is explicitly set, use it for top-K.
+        // Otherwise fall back to topLogprobs (used with echo+logprobs).
+        self.promptLogprobsTopK = parameters.promptLogprobs > 0
+            ? parameters.promptLogprobs
+            : parameters.topLogprobs
+        self.promptLogprobsResult = nil
+
         self.maxTokens = parameters.maxTokens
 
         self.kvBits = parameters.kvBits
@@ -1013,6 +1073,9 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.sampler = sampler
         self.logprobsCollector = nil
         self.logprobsTokenizer = nil
+        self.promptLogprobsResult = nil
+        self.needsPromptLogprobs = false
+        self.promptLogprobsTopK = 0
         self.maxTokens = maxTokens
 
         // No cache quantization for this direct initialization
@@ -1034,6 +1097,15 @@ public struct TokenIterator: TokenIteratorProtocol {
     mutating func prepare(input: LMInput, windowSize: Int? = nil) throws {
         processor?.prompt(input.text.tokens)
 
+        // Capture prompt token IDs for logprob indexing. Must be done
+        // BEFORE model.prepare() consumes the input.
+        let inputTokenIds: [Int]
+        if needsPromptLogprobs {
+            inputTokenIds = input.text.tokens.reshaped(-1).asArray(Int.self)
+        } else {
+            inputTokenIds = []
+        }
+
         switch try model.prepare(input, cache: cache, windowSize: windowSize) {
         case .tokens(let tokens):
             y = tokens
@@ -1044,11 +1116,110 @@ public struct TokenIterator: TokenIteratorProtocol {
             asyncEval(y.tokens)
 
         case .logits(let result):
+            // Capture prompt logprobs from the full prefill logits when
+            // echo or prompt_logprobs is requested. GATED behind
+            // needsPromptLogprobs to ensure ZERO overhead on normal path.
+            //
+            // The logits tensor is [1, seq_len, vocab]. We compute
+            // logSoftmax once over the entire tensor (batched), then
+            // index out per-position logprobs for the actual prompt
+            // tokens. This is O(seq_len * vocab) for logSoftmax +
+            // O(seq_len) for indexing — no per-token loops.
+            if needsPromptLogprobs && !inputTokenIds.isEmpty,
+               let tokenizer = logprobsTokenizer {
+                var logits = result.logits
+                if logits.dtype == .bfloat16 {
+                    logits = logits.asType(.float32)
+                }
+                let logProbs = logSoftmax(logits)
+
+                // logProbs shape: [1, seq_len, vocab]
+                let seqLen = inputTokenIds.count
+                var captured: [TokenLogprob] = []
+                captured.reserveCapacity(seqLen)
+
+                for i in 0..<seqLen {
+                    let tokenId = inputTokenIds[i]
+                    let tokenStr = tokenizer.decode(tokenIds: [tokenId])
+
+                    // Position 0 has no prior context → null logprob.
+                    // We use NaN as sentinel; the route handler maps it
+                    // to JSON null.
+                    if i == 0 {
+                        var topAlts: [TopTokenLogprob] = []
+                        if promptLogprobsTopK > 0 {
+                            topAlts = Self.extractTopK(
+                                logProbs: logProbs, position: i,
+                                topK: promptLogprobsTopK, tokenizer: tokenizer
+                            )
+                        }
+                        captured.append(TokenLogprob(
+                            token: tokenStr,
+                            logprob: .nan,
+                            topLogprobs: topAlts
+                        ))
+                        continue
+                    }
+
+                    let logProb = logProbs[0..., i, tokenId].item(Float.self)
+
+                    var topAlts: [TopTokenLogprob] = []
+                    if promptLogprobsTopK > 0 {
+                        topAlts = Self.extractTopK(
+                            logProbs: logProbs, position: i,
+                            topK: promptLogprobsTopK, tokenizer: tokenizer
+                        )
+                    }
+                    captured.append(TokenLogprob(
+                        token: tokenStr,
+                        logprob: logProb,
+                        topLogprobs: topAlts
+                    ))
+                }
+                self.promptLogprobsResult = captured
+            }
+
             y = .init(tokens: convertToToken(logits: result.logits))
             asyncEval(y.tokens)
         }
 
 
+    }
+
+    /// Extract top-K logprobs at a given position using argPartition
+    /// (O(V)) instead of argSort (O(V log V)). Returns entries sorted
+    /// by descending logprob.
+    private static func extractTopK(
+        logProbs: MLXArray,
+        position: Int,
+        topK: Int,
+        tokenizer: Tokenizer
+    ) -> [TopTokenLogprob] {
+        // Slice out [1, 1, vocab] → reshape to [vocab]
+        let posLogProbs = logProbs[0..., position, 0...].reshaped(-1)
+        let vocabSize = posLogProbs.dim(0)
+        let k = Swift.min(topK, vocabSize)
+
+        // argPartition gives us the k smallest values (we want largest).
+        // Use negated logProbs so argPartition(negated, kth) gives indices
+        // of the k largest logprobs.
+        let negated = -posLogProbs
+        let partitioned = argPartition(negated, kth: k - 1)
+        let topIndices = partitioned[0..<k].asArray(Int.self)
+
+        // Sort the k indices by descending logprob
+        let sortedIndices = topIndices.sorted { a, b in
+            posLogProbs[a].item(Float.self) > posLogProbs[b].item(Float.self)
+        }
+
+        var result: [TopTokenLogprob] = []
+        result.reserveCapacity(k)
+        for idx in sortedIndices {
+            let lpVal = posLogProbs[idx].item(Float.self)
+            let tokStr = tokenizer.decode(tokenIds: [idx])
+            result.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+        }
+        return result
     }
 
     mutating func convertToToken(logits: MLXArray) -> MLXArray {
@@ -1192,9 +1363,13 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.logprobsCollector = collector
         return result
     }
-}
 
-/// Generator of tokens using speculative decoding.
+    public mutating func popPromptLogprobs() -> [TokenLogprob]? {
+        let result = promptLogprobsResult
+        promptLogprobsResult = nil
+        return result
+    }
+}
 ///
 /// This is typically used via a call to ``generate(input:parameters:context:draftModel:draftCache:numDraftTokens:wiredMemoryTicket:)``
 /// returning `AsyncStream<Generation>`.
@@ -1451,9 +1626,12 @@ public struct SpeculativeTokenIterator: TokenIteratorProtocol {
     public var collectedLogprobs: [TokenLogprob] { [] }
 
     public mutating func popCollectedLogprobs() -> [TokenLogprob] { [] }
-}
 
-/// Result of a call to a deprecated callback-based generate function.
+    /// Prompt logprobs not supported for speculative decoding.
+    public var promptLogprobsResult: [TokenLogprob]? { nil }
+
+    public mutating func popPromptLogprobs() -> [TokenLogprob]? { nil }
+}
 public struct GenerateResult {
 
     /// Initializes a new `GenerateResult` instance.
@@ -2251,6 +2429,7 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
             )
 
             var iter = iterator
+            var didEmitPromptLogprobs = false
             while let token = iter.next() {
                 // Check for cancellation on every loop iteration.
                 if Task.isCancelled {
@@ -2262,6 +2441,23 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
                     let now = Date.timeIntervalSinceReferenceDate
                     promptTime = now - start
                     start = now
+                }
+
+                // Emit prompt logprobs once, right after the first next()
+                // call completes prefill. These are captured during
+                // TokenIterator.prepare() and stored on the iterator.
+                // Only Generation output supports logprobs.
+                if !didEmitPromptLogprobs && Handler.Output.self == Generation.self {
+                    didEmitPromptLogprobs = true
+                    if let promptLps = iter.popPromptLogprobs() {
+                        for lp in promptLps {
+                            if case .terminated = continuation.yield(Generation.logprob(lp) as! Handler.Output) {
+                                stopReason = .cancelled
+                                break
+                            }
+                        }
+                    }
+                    if stopReason == .cancelled { break }
                 }
 
                 // Check for end-of-sequence tokens
@@ -2316,6 +2512,18 @@ private func generateLoopTask<Handler: TokenLoopHandler>(
             }
 
             handler.onGenerationEnd(emit: continuation.yield)
+
+            // Emit any remaining prompt logprobs when the loop exited
+            // before they could be emitted (e.g. max_tokens: 0 with echo).
+            // Only applies to Generation output (not TokenGeneration).
+            if Handler.Output.self == Generation.self,
+               let promptLps = iter.popPromptLogprobs() {
+                for lp in promptLps {
+                    if case .terminated = continuation.yield(Generation.logprob(lp) as! Handler.Output) {
+                        break
+                    }
+                }
+            }
 
             // Multi-tier cache: store prompt state after generation completes.
             // SKIP the store on cancelled turns — a user-stop mid-generation

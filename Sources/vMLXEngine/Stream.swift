@@ -1108,7 +1108,12 @@ extension Engine {
         // Evaluate.swift token loop and are batched into StreamChunk.logprobs
         // alongside content/reasoning deltas.
         var pendingLogprobs: [TokenLogprob] = []
+        // Collect logprobs when explicitly requested OR when prompt
+        // logprobs are active (prompt_logprobs / echo+logprobs). Prompt
+        // logprobs arrive as Generation.logprob events from generateLoopTask.
         let shouldCollectLogprobs = (request.logprobs ?? false)
+            || (request.promptLogprobs ?? 0) > 0
+            || ((request.echo ?? false) && (request.logprobs ?? false))
         var lastChunkAt = prefillStart
         // Flush any accumulated logprob data alongside content. Called
         // before each content/reasoning yield to batch pending logprobs
@@ -2162,6 +2167,13 @@ extension Engine {
         // LogprobsCollector is activated inside the TokenIterator.
         params.logprobs = request.logprobs ?? false
         params.topLogprobs = request.topLogprobs ?? 0
+
+        // Echo + prompt logprobs: wire legacy completions parameters
+        // for prompt token logprob capture during prefill. These are
+        // only set by the /v1/completions route handler; normal chat
+        // completions leave them at their zero-overhead defaults.
+        params.echo = request.echo ?? false
+        params.promptLogprobs = request.promptLogprobs ?? 0
 
         // Whole-model compiled decode (perf audit 2026-04-16). Enabling
         // `enableCompiledDecode` wraps the entire model forward pass in

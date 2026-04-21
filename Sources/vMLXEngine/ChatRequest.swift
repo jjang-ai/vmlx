@@ -51,6 +51,19 @@ public struct ChatRequest: Codable, Sendable {
     /// position (0–20). Requires `logprobs == true`.
     public var topLogprobs: Int?
 
+    /// OpenAI (legacy completions) `echo` — when true, include prompt
+    /// text in the response and (when combined with `logprobs`) emit
+    /// prompt token logprobs. Matches the `/v1/completions` `echo`
+    /// parameter. Ignored for `/v1/chat/completions`.
+    public var echo: Bool?
+
+    /// OpenAI (legacy completions) `prompt_logprobs` — number of
+    /// top prompt token logprobs to include per position (0–20).
+    /// Works independently of `echo`: when set, prompt logprobs are
+    /// captured even without echoing the prompt text. Ignored for
+    /// `/v1/chat/completions`.
+    public var promptLogprobs: Int?
+
     /// OpenAI `frequency_penalty` — distinct from
     /// `repetition_penalty`. Not implemented; rejected with 400.
     public var frequencyPenalty: Double?
@@ -424,6 +437,8 @@ public struct ChatRequest: Codable, Sendable {
         case n
         case logprobs
         case topLogprobs = "top_logprobs"
+        case echo
+        case promptLogprobs = "prompt_logprobs"
         case frequencyPenalty = "frequency_penalty"
         case presencePenalty = "presence_penalty"
         case logitBias = "logit_bias"
@@ -563,8 +578,14 @@ public struct ChatRequest: Codable, Sendable {
                 field: "top_logprobs",
                 reason: "must be in [0, 20], got \(tlp)")
         }
+        if let plp = promptLogprobs, !(plp >= 0 && plp <= 20) {
+            throw ChatRequestValidationError(
+                field: "prompt_logprobs",
+                reason: "must be in [0, 20], got \(plp)")
+        }
         // logprobs is now supported — token-level logprob collection
         // is wired through Evaluate.swift's LogprobsCollector.
+        // echo and prompt_logprobs are supported for legacy completions.
         // logit_bias / response_format are still accepted as-is
         // (engine ignores them and the response omits the fields).
     }

@@ -199,7 +199,8 @@ public enum SSEEncoder {
         id: String,
         model: String,
         created: Int,
-        upstream: AsyncThrowingStream<StreamChunk, Error>
+        upstream: AsyncThrowingStream<StreamChunk, Error>,
+        echoPrompt: String? = nil
     ) -> ResponseBody {
         ResponseBody { writer in
             let allocator = ByteBufferAllocator()
@@ -208,6 +209,24 @@ public enum SSEEncoder {
             // final finish_reason=stop frame if an upstream throw
             // terminated the loop.
             var hadError = false
+            // Echo: emit prompt text as a single delta before the
+            // completion stream begins. The prompt text arrives as a
+            // single chunk; no token-by-token splitting needed.
+            if let prompt = echoPrompt {
+                let obj: [String: Any] = [
+                    "id": id,
+                    "object": "text_completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [[
+                        "index": 0,
+                        "text": prompt,
+                        "finish_reason": NSNull(),
+                    ] as [String: Any]],
+                ]
+                let j = Self.asciiJSON(obj)
+                try? await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
+            }
             // Legacy logprobs format — accumulate across chunks for text_offset.
             var allTokens: [String] = []
             var allTokenLogprobs: [Any] = []
@@ -239,9 +258,13 @@ public enum SSEEncoder {
                             for lp in lps {
                                 chunkTextOffset.append(textOffsetCursor)
                                 chunkTokens.append(lp.token)
-                                chunkTokenLogprobs.append(lp.logprob)
+                                // NaN logprobs (position 0) → JSON null.
+                                chunkTokenLogprobs.append(
+                                    lp.logprob.isNaN ? NSNull() : lp.logprob)
                                 var dict: [String: Any] = [:]
-                                dict[lp.token] = lp.logprob
+                                if !lp.logprob.isNaN {
+                                    dict[lp.token] = lp.logprob
+                                }
                                 for alt in lp.topLogprobs {
                                     dict[alt.token] = alt.logprob
                                 }
