@@ -957,7 +957,17 @@ public struct TokenIterator: TokenIteratorProtocol {
         // `.rotating` LayerKind, so sliding-window layers now participate
         // in the same fetch/restore path as standard KV. Reference
         // commit `bf942a8`.
-        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty {
+        //
+        // PROMPT-LOGPROBS: skip cache fetch when prompt logprobs are
+        // requested (echo+logprobs or prompt_logprobs > 0). On a cache
+        // hit, only the uncached remainder (or just the last token on
+        // full hit) is prefilled, so logits for cached prompt positions
+        // are never computed and prompt logprobs would be missing.
+        // Bypassing the cache ensures a full prefill with complete
+        // logits, at the cost of re-computing cached prefix KV state.
+        // This is acceptable because prompt-logprob requests already
+        // incur the expensive logSoftmax over [1, seq_len, vocab].
+        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty, !needsPromptLogprobs {
             let result = coordinator.fetch(
                 tokens: promptTokenIds, mediaSalt: mediaSalt,
                 genPromptLen: genPromptLen)
