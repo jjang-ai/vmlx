@@ -1117,7 +1117,30 @@ final class Environment: @unchecked Sendable {
             guard let arg = args.first else {
                 throw JinjaError.runtime("string filter expects one argument")
             }
-            // In Jinja2 in Python, the `string` filter calls Python's `str` function on dicts, which which uses single quotes for strings. Here we're using double quotes in `tojson`, which is probably better for LLMs anyway, but this will result in differences with output from Jinja2.
+            // Python Jinja's `| string` calls `str(value)`. For strings that
+            // returns the value verbatim (no surrounding quotes). The
+            // internal `stringify` helper wraps StringValue in double
+            // quotes (needed for tojson / repr paths) — using it here
+            // injected spurious quotes into chat-template renders like
+            // `{{ message.content | string }}` → `"Paris"` instead of
+            // `Paris`. That turned into turn-by-turn cache-key drift on
+            // hybrid-SSM Nemotron because the last-user branch of the
+            // template applied `| string` while earlier branches didn't,
+            // so T1's stored prefix ended `...."."<|im_end|>` but T2's
+            // fetch prefix ended `...."<|im_end|>` → 36-token prefix
+            // followed by full miss. Unwrap strings directly; only
+            // coerce numerics / bools / containers via stringify.
+            if let s = arg as? StringValue { return s }
+            if arg is UndefinedValue || arg is NullValue {
+                return StringValue(value: "")
+            }
+            if let n = arg as? NumericValue {
+                return StringValue(value: String(describing: n.value))
+            }
+            if let b = arg as? BooleanValue {
+                return StringValue(value: b.value ? "True" : "False")
+            }
+            // Containers fall back to tojson-style repr for visibility.
             return try StringValue(value: stringify(arg, whitespaceControl: true))
         },
         "striptags": { args, env in
@@ -1276,10 +1299,26 @@ final class Environment: @unchecked Sendable {
             return StringValue(value: result)
         },
         "trim": { args, env in
-            guard let stringValue = args[0] as? StringValue else {
-                throw JinjaError.runtime("trim filter requires a string")
+            // Python Jinja coerces non-string values through str() — mirror
+            // that by stringifying any non-string input rather than
+            // throwing. Nemotron / Gemma / Qwen multi-turn templates pass
+            // `message.content` (which can be a list of OpenAI content parts
+            // or UndefinedValue) through `| default('','true') | string |
+            // trim` chains where the earlier `| string` is expected to
+            // coerce — but some templates skip the explicit `| string` on
+            // branches where the value is known-string at author time yet
+            // swift-jinja's runtime type-check still fires. Rather than
+            // bailing out mid-render (which forces the Swift fallback into
+            // a DIFFERENT chat template family on later turns → cache-key
+            // divergence), stringify and proceed.
+            if let stringValue = args[0] as? StringValue {
+                return StringValue(value: stringValue.value.trimmingCharacters(in: .whitespacesAndNewlines))
             }
-            return StringValue(value: stringValue.value.trimmingCharacters(in: .whitespacesAndNewlines))
+            if args[0] is UndefinedValue || args[0] is NullValue {
+                return StringValue(value: "")
+            }
+            let coerced = try stringify(args[0], whitespaceControl: true)
+            return StringValue(value: coerced.trimmingCharacters(in: .whitespacesAndNewlines))
         },
         "truncate": { args, env in
             guard let stringValue = args[0] as? StringValue else {

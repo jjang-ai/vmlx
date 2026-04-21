@@ -26,6 +26,17 @@ public struct Template {
         for (key, value) in items {
             if let value {
                 try env.set(name: key, value: value)
+            } else {
+                // Previously nil values were silently skipped, which left
+                // the variable UndefinedValue. But Nemotron-family chat
+                // templates use `{% set X = X if X is defined else None %}`
+                // which — under swift-jinja's flaky undefined handling —
+                // ended up with X as StringValue("") in practice (root
+                // cause of hybrid-SSM cache-key drift per §240). Explicitly
+                // materialize `nil` as NullValue so `is none` tests return
+                // true and `is defined` returns true. Callers that want
+                // UndefinedValue can simply not include the key.
+                try env.set(name: key, value: NullValue())
             }
         }
 

@@ -217,6 +217,10 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
             // The rendered string is then encoded via the real tokenizer
             // (so BOS/EOS/special tokens are preserved), giving output
             // that is not ideal but is at least structurally valid.
+            if ProcessInfo.processInfo.environment["VMLX_TEMPLATE_TRACE"] == "1" {
+                FileHandle.standardError.write(Data(
+                    "[template-trace] fallback fired: \(error) (msgs=\(messages.count))\n".utf8))
+            }
             #if DEBUG
             print("[vMLX] applyChatTemplate fallback: upstream Jinja failed with \(error). Using built-in ChatML renderer.")
             #endif

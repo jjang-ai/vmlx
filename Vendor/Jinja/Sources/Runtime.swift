@@ -328,19 +328,34 @@ struct Interpreter {
         return NullValue()
     }
 
-    func evaluateIf(node: If, environment: Environment) throws -> StringValue {
-        // Special handling for direct variable checks
-        if let identifier = node.test as? Identifier {
-            // For cases like {% if thinking %}, get the variable directly
-            let value = environment.lookupVariable(name: identifier.value)
-            // Use the bool method which will return false for undefined values
-            let testResult = value.bool()
-            return try self.evaluateBlock(statements: testResult ? node.body : node.alternate, environment: environment)
+    func evaluateIf(node: If, environment: Environment) throws -> any RuntimeValue {
+        // Ternary expressions (`X if cond else Y`) round-trip the selected
+        // branch's runtime value — Python-Jinja returns whatever type Y is,
+        // including None. The previous implementation funneled the result
+        // through `evaluateBlock(...) -> StringValue` which coerced
+        // NullValue / UndefinedValue to an empty StringValue, so
+        // `{% set x = x if x is defined else None %}` silently assigned
+        // `x = ""` instead of `x = None`. That broke Nemotron's
+        // reasoning_budget guard (the template then appended a
+        // `{thinking token budget: }` line to the last user message on
+        // first-turn-only renders) and by extension the hybrid-SSM
+        // multi-turn prefix cache (§240, 2026-04-21). For single-statement
+        // branches we return the raw RuntimeValue; for block bodies
+        // (`{% if %}...{% endif %}` statement form) we still join to
+        // StringValue like before, matching the dual-duty shape of the
+        // AST `If` node.
+        func evalBranch(_ statements: [Statement]) throws -> any RuntimeValue {
+            if statements.count == 1 {
+                return try self.evaluate(statement: statements[0], environment: environment)
+            }
+            return try self.evaluateBlock(statements: statements, environment: environment)
         }
-
-        // For non-identifier checks, evaluate normally
+        if let identifier = node.test as? Identifier {
+            let value = environment.lookupVariable(name: identifier.value)
+            return try evalBranch(value.bool() ? node.body : node.alternate)
+        }
         let test = try self.evaluate(statement: node.test, environment: environment)
-        return try self.evaluateBlock(statements: test.bool() ? node.body : node.alternate, environment: environment)
+        return try evalBranch(test.bool() ? node.body : node.alternate)
     }
 
     func evaluateIdentifier(node: Identifier, environment: Environment) throws -> any RuntimeValue {

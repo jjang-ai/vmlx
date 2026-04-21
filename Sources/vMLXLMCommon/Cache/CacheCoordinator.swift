@@ -230,10 +230,10 @@ public final class CacheCoordinator: @unchecked Sendable {
         // prefix so a diff against the prior store trace pinpoints
         // where the two turns' tokenizations diverge.
         if ProcessInfo.processInfo.environment["VMLX_CACHE_TRACE"] == "1" {
-            let full = hashTokens.prefix(32).map { String($0) }.joined(separator: ",")
+            let full = hashTokens.prefix(64).map { String($0) }.joined(separator: ",")
             let memCount = memoryCache?.debugEntryCount ?? -1
             FileHandle.standardError.write(Data(
-                "[cache-trace] fetch len=\(hashTokens.count) full32=[\(full)] gp_strip=\(stripLen) isMLLM=\(isMLLM) hasMediaSalt=\(mediaSalt != nil) memEntries=\(memCount)\n".utf8))
+                "[cache-trace] fetch len=\(hashTokens.count) full64=[\(full)] gp_strip=\(stripLen) isMLLM=\(isMLLM) hasMediaSalt=\(mediaSalt != nil) memEntries=\(memCount) paged=\(pagedCache != nil) mem=\(memoryCache != nil) disk=\(diskCache != nil)\n".utf8))
         }
 
         // Tier 1: Paged cache (in-memory)
@@ -410,9 +410,9 @@ public final class CacheCoordinator: @unchecked Sendable {
         // against the next turn's fetch-lookup prefix to find where
         // they diverge. No-op in production (env unset).
         if ProcessInfo.processInfo.environment["VMLX_CACHE_TRACE"] == "1" {
-            let full = storeTokens.prefix(32).map { String($0) }.joined(separator: ",")
+            let full = storeTokens.prefix(64).map { String($0) }.joined(separator: ",")
             FileHandle.standardError.write(Data(
-                "[cache-trace] store len=\(storeTotal) full32=[\(full)] gp_strip=\(stripLen) hybrid=\(isHybrid) hasMediaSalt=\(mediaSalt != nil)\n".utf8))
+                "[cache-trace] store len=\(storeTotal) full64=[\(full)] gp_strip=\(stripLen) hybrid=\(isHybrid) hasMediaSalt=\(mediaSalt != nil)\n".utf8))
         }
 
         // vmlx #45 / MEMORY "Hybrid SSM + Thinking" mitigation:
