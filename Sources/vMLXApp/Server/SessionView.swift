@@ -30,6 +30,20 @@ struct SessionView: View {
             if case .loading = session.state {
                 SessionLoadBar(progress: session.loadProgress)
             }
+            // iter-137 §212: render the engine-state error MESSAGE.
+            // Prior behavior: the status pill said "Error", the
+            // action-button row showed "Reconnect" + "Stop", and
+            // startSession's flashBanner fired for ~3s — then the
+            // actual failure reason vanished. Users staring at a
+            // session card in error state had no way to see what
+            // broke without opening Logs (which may not have the
+            // friendly LoadOptions-level message — only the deeper
+            // loader trace). Surface the `.error(let msg)` payload
+            // right under the top bar so the reason is visible as
+            // long as the session stays in error state.
+            if case .error(let msg) = session.state {
+                errorBanner(message: msg)
+            }
             SessionConfigForm(sessionId: session.id)
                 .padding(Theme.Spacing.lg)
                 .background(
@@ -45,6 +59,34 @@ struct SessionView: View {
         .onChange(of: session.state) { _, new in
             if case .error = new { tab = .logs }
         }
+    }
+
+    private func errorBanner(message: String) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.Colors.danger)
+                .font(.system(size: 14))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Engine error")
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(Theme.Colors.danger)
+                Text(message)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(Theme.Colors.danger.opacity(0.08))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .stroke(Theme.Colors.danger.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
 
     // MARK: - Top bar
