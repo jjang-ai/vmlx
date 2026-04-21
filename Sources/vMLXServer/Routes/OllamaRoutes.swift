@@ -217,6 +217,30 @@ public enum OllamaRoutes {
             else {
                 return OpenAIRoutes.errorJSON(.badRequest, "missing 'name' or 'model'")
             }
+            // iter-ralph §231 (H9): validate repo name shape before handing
+            // to DownloadManager. Ollama's /api/pull accepts HuggingFace
+            // `org/model` ids (optionally with `:tag` suffix or `@rev`
+            // ref). Without validation a caller could pass
+            // `../../../etc/passwd` / `/tmp/evil` / a network-looking URL
+            // and — depending on what DownloadManager's hf-hub path
+            // resolver decides — read or write outside the model cache.
+            // HF repo ids match `^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}`
+            // with optional `:tag` or `@revision`. Reject path-like
+            // strings, absolute paths, URLs, and anything with shell
+            // metachars.
+            let repoPattern = #"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}(:[A-Za-z0-9._-]+|@[A-Za-z0-9._-]+)?$"#
+            let isValidRepoShape: Bool = {
+                if repo.hasPrefix("/") || repo.hasPrefix(".") { return false }
+                if repo.contains("://") || repo.contains("..") { return false }
+                let bad = CharacterSet(charactersIn: " \t\n\r<>|&;*?$`\"'\\")
+                if repo.rangeOfCharacter(from: bad) != nil { return false }
+                return repo.range(of: repoPattern, options: .regularExpression) != nil
+            }()
+            if !isValidRepoShape {
+                return OpenAIRoutes.errorJSON(
+                    .badRequest,
+                    "invalid repo name: expected `org/model[:tag]` HuggingFace id, got \(repo)")
+            }
             let isStream = (obj["stream"] as? Bool) ?? true
 
             // Kick off the download via the engine's DownloadManager.
