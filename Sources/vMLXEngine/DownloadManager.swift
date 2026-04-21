@@ -24,7 +24,7 @@ public actor DownloadManager {
 
     // MARK: - Public types
 
-    public struct Job: Sendable, Identifiable {
+    public struct Job: Sendable, Identifiable, Codable {
         public let id: UUID
         public var repo: String
         public var displayName: String
@@ -64,7 +64,7 @@ public actor DownloadManager {
         }
     }
 
-    public enum Status: String, Sendable {
+    public enum Status: String, Sendable, Codable {
         case queued, downloading, paused, completed, failed, cancelled
     }
 
@@ -98,7 +98,28 @@ public actor DownloadManager {
     /// can cancel the native task, not just the Swift Task wrapper.
     private var liveDataTasks: [UUID: URLSessionDownloadTask] = [:]
 
-    public init() {}
+    public init() {
+        // §252: load any previously-enqueued jobs from the on-disk
+        // sidecar so the user can see their downloads after app restart.
+        // Entries restored as `.paused` — the user clicks Resume to
+        // re-hydrate siblings from HF and continue via the existing
+        // Range-header path. Corrupt sidecar = silently start empty;
+        // we never want a bad persistence layer to break app launch.
+        Self.loadSidecar().forEach { persisted in
+            var job = persisted
+            // Completed/cancelled jobs survive for history; everything
+            // in-flight at the prior quit needs user confirmation
+            // before resuming, so present as paused.
+            if job.status == .downloading || job.status == .queued {
+                job.status = .paused
+                job.bytesPerSecond = 0
+                job.etaSeconds = nil
+            }
+            _jobs[job.id] = job
+            order.append(job.id)
+            speedSamples[job.id] = []
+        }
+    }
 
     // MARK: - Auth
 
@@ -158,6 +179,7 @@ public actor DownloadManager {
         started.status = .downloading
         _jobs[id] = started
         broadcast(.started(started))
+        persistSidecar()
 
         let task = Task { [weak self] in
             guard let self else { return }
@@ -175,6 +197,7 @@ public actor DownloadManager {
         job.status = .paused
         _jobs[id] = job
         broadcast(.paused(id))
+        persistSidecar()
     }
 
     public func resume(_ id: UUID) {
@@ -183,6 +206,7 @@ public actor DownloadManager {
         job.error = nil
         _jobs[id] = job
         broadcast(.resumed(id))
+        persistSidecar()
         let task = Task { [weak self] in
             guard let self else { return }
             await self.run(id: id)
@@ -199,6 +223,7 @@ public actor DownloadManager {
         job.status = .cancelled
         _jobs[id] = job
         broadcast(.cancelled(id))
+        persistSidecar()
     }
 
     public func clearCompleted() {
@@ -211,6 +236,7 @@ public actor DownloadManager {
             speedSamples.removeValue(forKey: id)
         }
         order = remaining
+        persistSidecar()
     }
 
     // MARK: - Worker
@@ -309,6 +335,7 @@ public actor DownloadManager {
                 done.bytesPerSecond = 0
                 _jobs[id] = done
                 broadcast(.completed(done))
+                persistSidecar()
             }
         } catch is CancellationError {
             // paused or cancelled — event already broadcast.
@@ -343,6 +370,7 @@ public actor DownloadManager {
                 j.error = "\(error)"
                 _jobs[id] = j
                 broadcast(.failed(id, j.error ?? "unknown error"))
+                persistSidecar()
             }
         }
     }
@@ -620,6 +648,72 @@ public actor DownloadManager {
     // was misleading dead code.
 
     // MARK: - §251 disk-space helpers
+
+    // MARK: - §252 sidecar persistence
+
+    /// Location of the jobs sidecar. Written next to SettingsStore so
+    /// cleanup (`rm -rf "~/Library/Application Support/vMLX"`) clears
+    /// both. Created lazily on first write.
+    private static func sidecarURL() -> URL {
+        // Test override: `VMLX_SIDECAR_DIR` lets tests point at a
+        // scratch dir without clobbering real user state. FileManager's
+        // `.applicationSupportDirectory` URL isn't redirected by $HOME
+        // on macOS, so env override is the cleanest seam.
+        if let override = ProcessInfo.processInfo.environment["VMLX_SIDECAR_DIR"],
+           !override.isEmpty
+        {
+            return URL(fileURLWithPath: override)
+                .appendingPathComponent("downloads.json")
+        }
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("vMLX/downloads.json")
+    }
+
+    /// Persist the full job list. Called after every status-changing
+    /// event — enqueue, pause, resume, cancel, complete, progress tick
+    /// (rate-limited by caller). JSON is small (<50KB for 100 jobs)
+    /// so atomic overwrite is fine; no WAL needed.
+    nonisolated private static func writeSidecar(_ jobs: [Job]) {
+        let url = sidecarURL()
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let payload = SidecarPayload(version: 1, jobs: jobs)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(payload) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Load jobs from disk. Returns empty on missing/corrupt file.
+    nonisolated private static func loadSidecar() -> [Job] {
+        let url = sidecarURL()
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let payload = try? decoder.decode(SidecarPayload.self, from: data)
+        else { return [] }
+        return payload.jobs
+    }
+
+    /// Trigger a sidecar write for the current state. Fire-and-forget;
+    /// the write itself is async off-actor to avoid blocking the
+    /// download hot path on disk IO.
+    private func persistSidecar() {
+        let snapshot = order.compactMap { _jobs[$0] }
+        Task.detached(priority: .utility) {
+            Self.writeSidecar(snapshot)
+        }
+    }
+
+    private struct SidecarPayload: Codable {
+        let version: Int
+        let jobs: [Job]
+    }
 
     /// Root directory where HuggingFace snapshots land. Used for the
     /// pre-flight disk check so we probe the correct volume.
