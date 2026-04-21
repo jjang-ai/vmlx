@@ -225,6 +225,17 @@ public final class CacheCoordinator: @unchecked Sendable {
             ? Array(tokens.prefix(tokens.count - stripLen))
             : tokens
 
+        // iter-122 §197 investigation trace (see storeAfterGeneration's
+        // matching trace). VMLX_CACHE_TRACE=1 surfaces the fetch-key
+        // prefix so a diff against the prior store trace pinpoints
+        // where the two turns' tokenizations diverge.
+        if ProcessInfo.processInfo.environment["VMLX_CACHE_TRACE"] == "1" {
+            let full = hashTokens.prefix(32).map { String($0) }.joined(separator: ",")
+            let memCount = memoryCache?.debugEntryCount ?? -1
+            FileHandle.standardError.write(Data(
+                "[cache-trace] fetch len=\(hashTokens.count) full32=[\(full)] gp_strip=\(stripLen) isMLLM=\(isMLLM) hasMediaSalt=\(mediaSalt != nil) memEntries=\(memCount)\n".utf8))
+        }
+
         // Tier 1: Paged cache (in-memory)
         if let pagedCache,
            let result = pagedCache.fetchPrefix(tokens: hashTokens, mediaSalt: mediaSalt)
@@ -391,6 +402,18 @@ public final class CacheCoordinator: @unchecked Sendable {
         // Nothing to cache if the stripped prefix is empty (would alias
         // every fresh request to the zero-length bucket).
         guard storeTotal > 0 else { return }
+
+        // iter-122 §197 investigation: gate-flagged diagnostic log so
+        // we can pin down the multi-turn partial-prefix miss from
+        // iter-121's live repro. Set VMLX_CACHE_TRACE=1 in the server
+        // env to get one line per store; diff the stored-token prefix
+        // against the next turn's fetch-lookup prefix to find where
+        // they diverge. No-op in production (env unset).
+        if ProcessInfo.processInfo.environment["VMLX_CACHE_TRACE"] == "1" {
+            let full = storeTokens.prefix(32).map { String($0) }.joined(separator: ",")
+            FileHandle.standardError.write(Data(
+                "[cache-trace] store len=\(storeTotal) full32=[\(full)] gp_strip=\(stripLen) hybrid=\(isHybrid) hasMediaSalt=\(mediaSalt != nil)\n".utf8))
+        }
 
         // vmlx #45 / MEMORY "Hybrid SSM + Thinking" mitigation:
         // post-generation SSM state from `extractSSMStates` reflects
