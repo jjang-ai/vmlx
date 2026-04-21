@@ -430,12 +430,31 @@ public struct GatewayServer {
             ] as [String: Any]],
         ]
         if let u = usage {
-            obj["usage"] = [
+            // iter-130 §205: gateway non-stream chat/completions was
+            // the last hold-out missing the timing-envelope hard rule.
+            // Direct per-engine /v1/chat/completions (OpenAIRoutes:232)
+            // has emitted tokens_per_second + ttft_ms + prefill_ms +
+            // total_ms + cache_detail since iter-64 §118; iter-126
+            // §201 added prompt_tokens_per_second. The multi-session
+            // gateway fan-out handler mirrors the same shape but kept
+            // emitting only the baseline token counts, so dashboards
+            // that scraped the gateway (for cross-engine SLO rollups)
+            // saw `tokens_per_second: undefined` while single-engine
+            // /v1/chat/completions had full timings. Mirror the
+            // OpenAIRoutes usage-envelope 1:1.
+            var usageObj: [String: Any] = [
                 "prompt_tokens": u.promptTokens,
                 "completion_tokens": u.completionTokens,
                 "total_tokens": u.promptTokens + u.completionTokens,
                 "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
-            ] as [String: Any]
+            ]
+            if let tps = u.tokensPerSecond { usageObj["tokens_per_second"] = tps }
+            if let pps = u.promptTokensPerSecond { usageObj["prompt_tokens_per_second"] = pps }
+            if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
+            if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
+            if let total = u.totalMs { usageObj["total_ms"] = total }
+            if let detail = u.cacheDetail { usageObj["cache_detail"] = detail }
+            obj["usage"] = usageObj
         }
         return json(obj)
     }
