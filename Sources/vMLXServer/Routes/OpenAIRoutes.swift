@@ -1639,6 +1639,15 @@ public enum OpenAIRoutes {
             return errorJSON(.gatewayTimeout, err.description)
         case .toolCallRepetition:
             return errorJSON(.unprocessableContent, err.description)
+        case .insufficientMemory:
+            // A3 §255: 507 Insufficient Storage is the closest HTTP
+            // status for "we physically can't hold this model." OpenAI
+            // clients don't retry on 507, which is correct — shrinking
+            // the model is the only remediation. swift-http-types
+            // doesn't expose a named constant for 507, so we build it
+            // from the raw code like the legacy promptTooLong path did
+            // before iter-ralph-3 §227.
+            return errorJSON(.init(code: 507), err.description)
         case .portInUse, .unsupportedModelType, .notImplemented,
              .adapterMissingFile, .adapterAlreadyFused, .adapterNotLoaded:
             return errorJSON(.internalServerError, err.description)

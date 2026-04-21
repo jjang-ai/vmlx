@@ -1070,6 +1070,24 @@ public actor Engine {
                     // duration based on file size. Real progress will plug
                     // in if mlx-swift ever exposes a delegate.
                     let estimatedBytes = estimateModelBytes(at: opts.modelPath)
+                    // A3 §255: concurrent-session OOM cap. JANG / MXTQ
+                    // repack can peak at 1.3× the on-disk weight bytes
+                    // during dequant; Metal Performance Shaders needs
+                    // another ~2 GB headroom for kernel JIT + KV cache.
+                    // If the estimate already blows past the machine's
+                    // memoryBudget ceiling we refuse the load up front
+                    // with a clean throw → the UI shows "Insufficient
+                    // memory" instead of Metal panicking mid-Phase-2
+                    // with a non-recoverable fatalError. Override via
+                    // `VMLX_MEMORY_BUDGET_OVERRIDE` (bytes) for tests
+                    // so the guard is exercisable without actually
+                    // running a 256 GB machine short.
+                    let a3Budget = Engine.memoryBudgetBytes()
+                    let a3PeakNeeded = Int64(Double(estimatedBytes) * 1.3) + Int64(2_000_000_000)
+                    if estimatedBytes > 0 && a3PeakNeeded > a3Budget {
+                        throw EngineError.insufficientMemory(
+                            needed: a3PeakNeeded, available: a3Budget)
+                    }
                     await self.setExpectedBytes(estimatedBytes)
                     // Audit 2026-04-16: release the prior model's container
                     // BEFORE the progress clock captures its baseline. If
@@ -1299,6 +1317,22 @@ public actor Engine {
     /// nil before the first successful load.
     public func currentCapabilities() -> ModelCapabilities? {
         modelCapabilities
+    }
+
+    /// A3 §255: hard ceiling for a single model load. Reads
+    /// `ProcessInfo.physicalMemory` and subtracts a fixed 4 GB
+    /// headroom for the OS + other processes. Respects
+    /// `VMLX_MEMORY_BUDGET_OVERRIDE` (bytes) so fixture tests can
+    /// exercise the guard deterministically without a real OOM.
+    internal static func memoryBudgetBytes() -> Int64 {
+        if let raw = ProcessInfo.processInfo.environment["VMLX_MEMORY_BUDGET_OVERRIDE"],
+           let v = Int64(raw), v > 0
+        {
+            return v
+        }
+        let phys = Int64(ProcessInfo.processInfo.physicalMemory)
+        let os: Int64 = 4_000_000_000
+        return max(phys - os, 1_000_000_000)
     }
 
     /// Estimate total byte count of safetensors + weight files in the
@@ -3470,6 +3504,11 @@ public enum EngineError: Error, CustomStringConvertible {
     /// fatalError doesn't crash the process. Set `maxPromptTokens: 0`
     /// to disable (not recommended in production).
     case promptTooLong(tokens: Int, limit: Int)
+    /// A3 §255: `load()` refused because the model's expected peak
+    /// memory footprint (1.3× on-disk bytes + 2 GB headroom) exceeds
+    /// `Engine.memoryBudgetBytes()`. Mapped to HTTP 507 by
+    /// OpenAIRoutes.mapEngineError.
+    case insufficientMemory(needed: Int64, available: Int64)
 
     public var description: String {
         switch self {
@@ -3495,6 +3534,10 @@ public enum EngineError: Error, CustomStringConvertible {
             return "tool_choice not satisfied: \(msg)"
         case .promptTooLong(let tokens, let limit):
             return "prompt too long: \(tokens) tokens exceeds the configured maxPromptTokens ceiling of \(limit). Shorten the prompt or raise `maxPromptTokens` in Server settings."
+        case .insufficientMemory(let needed, let available):
+            let gNeeded = Double(needed) / 1_000_000_000.0
+            let gAvail = Double(available) / 1_000_000_000.0
+            return String(format: "insufficient memory: model requires ≈%.1f GB peak but only %.1f GB available on this machine. Close other apps or pick a smaller quant.", gNeeded, gAvail)
         }
     }
 }
