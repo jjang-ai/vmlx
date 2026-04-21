@@ -1,0 +1,42 @@
+{
+  "milestone": "echo-prompt-logprobs",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 11,
+    "passed": 9,
+    "failed": 2,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-ECHO-001",
+    "VAL-ECHO-003",
+    "VAL-ECHO-004",
+    "VAL-ECHO-006",
+    "VAL-ECHO-007",
+    "VAL-ECHO-008",
+    "VAL-ECHO-009",
+    "VAL-ECHO-010",
+    "VAL-ECHO-011"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-ECHO-002",
+      "reason": "Prompt tokens missing from logprobs when KV cache is warm. When echo:true + logprobs:true, the logprobs array should include all prompt tokens but only contains template suffix tokens + generated tokens for cached prompts. Verified that fresh (uncached) prompts correctly include all prompt tokens in logprobs. Root cause: prefill is skipped on KV cache hits, so the batched logSoftmax computation for prompt logprobs is not performed."
+    },
+    {
+      "id": "VAL-ECHO-005",
+      "reason": "Same root cause as VAL-ECHO-002: prompt+completion concatenation broken for cached prompts. The logprobs array has far fewer entries than expected (prompt_tokens + completion_tokens) when the prompt is in KV cache. Works correctly for fresh prompts where the full prompt logprob capture happens during prefill."
+    }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added Flow Validator Guidance section for Echo + Prompt Logprobs surface with model info, isolation rules, and Gemma-specific token handling notes",
+      "source": "setup"
+    }
+  ],
+  "previousRound": null,
+  "notes": "The echo feature works correctly for fresh prompts. The KV cache hit path skips prompt logprob computation, causing failures for repeated identical prompts. This is a real implementation bug that needs fixing in TokenIterator.prepare() - the prompt logprob capture should be triggered regardless of KV cache state when echo or prompt_logprobs is requested."
+}

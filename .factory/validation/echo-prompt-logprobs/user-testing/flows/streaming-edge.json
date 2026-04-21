@@ -1,0 +1,64 @@
+{
+  "groupId": "streaming-edge",
+  "testedAt": "2026-04-21T12:17:00Z",
+  "isolation": {
+    "baseUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M",
+    "endpoint": "/v1/completions"
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-ECHO-006",
+      "title": "Standard completions without echo or prompt_logprobs are unaffected",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions without echo/logprobs params (request 1)", "expected": "No logprobs key, has id/object/created/model/choices/usage", "observed": "No logprobs key present, all required fields present: id=cmpl-b67cf3f0, object=text_completion, model=Gemma-4-26B-A4B-it-JANG_4M" },
+        { "action": "POST /v1/completions without echo/logprobs params (request 2)", "expected": "No logprobs key, has id/object/created/model/choices/usage", "observed": "No logprobs key present, all required fields present: id=cmpl-e58db864" },
+        { "action": "POST /v1/completions without echo/logprobs params (request 3)", "expected": "No logprobs key, has id/object/created/model/choices/usage", "observed": "No logprobs key present, all required fields present: id=cmpl-49471032" },
+        { "action": "POST /v1/completions without echo/logprobs params (request 4)", "expected": "No logprobs key, has id/object/created/model/choices/usage", "observed": "No logprobs key present, all required fields present: id=cmpl-acf09b32" },
+        { "action": "POST /v1/completions without echo/logprobs params (request 5)", "expected": "No logprobs key, has id/object/created/model/choices/usage", "observed": "No logprobs key present, all required fields present: id=cmpl-06bee3d6" }
+      ],
+      "evidence": {
+        "rawResponses": "echo-prompt-logprobs/streaming-edge/val-echo-006-normal-completions.txt",
+        "analysis": "All 5 responses confirmed: (1) no logprobs key present, (2) all standard fields present (id, object, created, model, choices, usage). Response shape is identical to pre-echo-feature behavior."
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-ECHO-009",
+      "title": "Streaming echo emits prompt tokens as deltas before completion",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with stream:true, echo:true, logprobs:1", "expected": "SSE stream with prompt deltas first, then completion deltas, then [DONE]", "observed": "24 SSE chunks received. Chunk 0: text='Hello world' (prompt echoed). Chunk 1: logprobs with 24 prompt template+text tokens. Chunks 2-21: completion deltas (<|channel>thought\\nHello! How can I help you). Chunk 22: finish_reason=length. Chunk 23: [DONE]." },
+        { "action": "Verify prompt text appears before completion text in deltas", "expected": "First delta contains prompt text, subsequent deltas contain completion", "observed": "First delta (chunk 0) text='Hello world' contains the full prompt. Completion deltas start from chunk 2 with '<|channel>' then 'thought' then '\\n' then 'Hello' then '!' etc." },
+        { "action": "Verify logprobs present in prompt-delta chunks", "expected": "logprobs field present in chunks containing prompt tokens", "observed": "Chunk 1 has logprobs with 24 tokens including template tokens (<bos>, <|turn>, user, \\n) and prompt tokens (Hello,  world). token_logprobs[0] is null as expected." },
+        { "action": "Verify [DONE] frame is last", "expected": "data: [DONE] is the final SSE frame", "observed": "data: [DONE] is chunk 23 (last chunk), confirming proper stream termination." }
+      ],
+      "evidence": {
+        "rawSSEStream": "echo-prompt-logprobs/streaming-edge/val-echo-009-sse-raw.txt",
+        "analysis": "SSE stream captured with 24 chunks. Prompt text 'Hello world' in first delta. First logprobs chunk contains 24 tokens (template + prompt). token_logprobs[0]=null. Completion tokens follow prompt tokens. [DONE] frame is final. All criteria met."
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-ECHO-011",
+      "title": "max_tokens: 0 with echo returns only prompt logprobs",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with max_tokens:0, echo:true, logprobs:true", "expected": "Response with only prompt token logprobs, no completion tokens", "observed": "Server returned 200 OK. usage.completion_tokens=0, usage.prompt_tokens=26, tokens array length=26, choice.text='The quick brown fox'" },
+        { "action": "Assert tokens length equals prompt_tokens from usage", "expected": "len(tokens) == usage.prompt_tokens", "observed": "tokens length (26) == prompt_tokens (26): True" },
+        { "action": "Assert token_logprobs[0] is null", "expected": "token_logprobs[0] == null", "observed": "token_logprobs[0] is None (null): True" },
+        { "action": "Assert no completion tokens present", "expected": "usage.completion_tokens == 0", "observed": "completion_tokens == 0: True" }
+      ],
+      "evidence": {
+        "responseBody": "echo-prompt-logprobs/streaming-edge/val-echo-011-zero-gen.json",
+        "analysis": "max_tokens:0 accepted without error. tokens array has 26 entries matching prompt_tokens=26. token_logprobs[0]=null. completion_tokens=0. choice.text contains only echoed prompt 'The quick brown fox'. All criteria met."
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 3 assertions: all 3 passed. VAL-ECHO-006: 5 normal completions confirmed no logprobs key and all standard fields present. VAL-ECHO-009: Streaming echo correctly emits prompt deltas before completion deltas with logprobs, and [DONE] is last. VAL-ECHO-011: max_tokens:0 with echo+logprobs returns only prompt tokens (26 tokens matching prompt_tokens count, token_logprobs[0]=null, 0 completion tokens)."
+}

@@ -58,3 +58,21 @@
 - Rate-limit to avoid overwhelming the server (add small delays between requests if needed).
 - All responses are JSON; validate with `python3 -m json.tool` or `jq`.
 - The `/v1/tokenizer_info` response may not include `chat_template` (can be `null`).
+
+## Flow Validator Guidance: Echo + Prompt Logprobs (HTTP API + SSE)
+
+**Surface:** HTTP API (curl-based) + SSE Streaming for `/v1/completions`
+**Base URL:** `http://127.0.0.1:8080`
+**Model:** `Gemma-4-26B-A4B-it-JANG_4M`
+**Isolation:** All validators share the same server instance. Completions requests are stateless — each request is independent. Multiple validators can run concurrently without interference since the server handles requests sequentially but statelessly.
+**Shared state:** The server's loaded model/tokenizer is read-only. No persistent state mutations between requests.
+**Constraints:**
+- Do NOT restart the server or change the loaded model.
+- Rate-limit to avoid overwhelming the server (add `sleep 0.5` between requests if needed).
+- All responses are JSON; validate with `python3 -m json.tool` or `jq`.
+- SSE streams should be captured with `curl -N --no-buffer` and parsed with Python.
+- Gemma models use chat templates that wrap the prompt — the echoed text will include template tokens (e.g., `<bos>`, `<|turn>`, etc.) before the actual prompt text.
+- `token_logprobs[0]` should be `null` (no prior context for first token).
+- For `max_tokens: 0` tests, some models may not support zero generation — if the server returns an error, document it.
+- When testing `echo: true` without `logprobs`, the prompt text MUST appear at the start of `choices[0].text`.
+- When testing `prompt_logprobs: N` without `echo`, the text MUST NOT include the prompt but logprobs MUST still be present.

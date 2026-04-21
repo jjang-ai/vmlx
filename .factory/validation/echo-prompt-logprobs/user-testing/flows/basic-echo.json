@@ -1,0 +1,190 @@
+{
+  "groupId": "basic-echo",
+  "testedAt": "2026-04-21T12:37:00Z",
+  "isolation": {
+    "baseUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M",
+    "endpoint": "/v1/completions"
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-ECHO-001",
+      "title": "/v1/completions accepts echo: true",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /v1/completions with echo:true, prompt 'The capital of France is', max_tokens:5",
+          "expected": "HTTP 200 with choices[0].text starting with the prompt",
+          "observed": "HTTP 200 returned. choices[0].text = 'The capital of France is<|channel>thought\\n<channel|>Paris'. Text starts with 'The capital of France is' — confirmed."
+        }
+      ],
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/v1/completions",
+          "body": {
+            "model": "Gemma-4-26B-A4B-it-JANG_4M",
+            "prompt": "The capital of France is",
+            "echo": true,
+            "max_tokens": 5
+          }
+        },
+        "response": {
+          "http_status": 200,
+          "choices_text": "The capital of France is<|channel>thought\n<channel|>Paris",
+          "usage": { "prompt_tokens": 27, "completion_tokens": 5, "total_tokens": 32 }
+        },
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200",
+        "files": ["echo-prompt-logprobs/basic-echo/VAL-ECHO-001-response.json"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-ECHO-002",
+      "title": "Prompt logprobs appear in response when echo: true",
+      "status": "fail",
+      "steps": [
+        {
+          "action": "POST /v1/completions with echo:true, logprobs:true, prompt 'The capital of France is', max_tokens:5",
+          "expected": "Logprobs array length >= prompt token count (27). Prompt tokens appear before completion tokens.",
+          "observed": "Logprobs array has only 9 tokens. usage.prompt_tokens=27 but logprobs.tokens has 9 entries. The prompt text 'The capital of France is' does NOT appear in any logprobs token. Tokens are: ['<|turn>', 'model', '\\n', '<|channel>', 'thought', '\\n', '<channel|>', 'Paris', '<turn|>'] — all are template suffix + generated tokens. No user prompt tokens present."
+        },
+        {
+          "action": "Repeated 5 times for consistency",
+          "expected": "Consistent behavior across requests",
+          "observed": "All 5 requests show identical pattern: 9 logprobs tokens, none containing the user prompt. Consistent failure."
+        }
+      ],
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/v1/completions",
+          "body": {
+            "model": "Gemma-4-26B-A4B-it-JANG_4M",
+            "prompt": "The capital of France is",
+            "echo": true,
+            "logprobs": true,
+            "max_tokens": 5
+          }
+        },
+        "response": {
+          "http_status": 200,
+          "logprobs_tokens": ["<|turn>", "model", "\n", "<|channel>", "thought", "\n", "<channel|>", "Paris", "<turn|>"],
+          "logprobs_token_logprobs": [null, -17.91, -29.95, -0.01, 0.0, -0.00005, -0.001, -0.0005, -0.008],
+          "logprobs_count": 9,
+          "prompt_tokens_usage": 27,
+          "completion_tokens_usage": 5,
+          "prompt_text_in_logprobs_tokens": false
+        },
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200",
+        "files": [
+          "echo-prompt-logprobs/basic-echo/VAL-ECHO-002-response.json",
+          "echo-prompt-logprobs/basic-echo/VAL-ECHO-004-005-responses.json"
+        ]
+      },
+      "issues": "Logprobs array only contains 9 tokens (template suffix + generated), missing all 27 prompt tokens. The echo parameter correctly affects choices[0].text (prompt text is prepended), but logprobs are not computed for the prompt portion. The logprobs tokens start from '<|turn>model\\n' (the model turn start) and include only generated content after that. No user prompt tokens ('The', ' capital', ' of', ' France', ' is') appear in the logprobs array."
+    },
+    {
+      "id": "VAL-ECHO-004",
+      "title": "Position 0 has null logprob",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /v1/completions with echo:true, logprobs:true, 5 separate requests",
+          "expected": "token_logprobs[0] is JSON null in all requests",
+          "observed": "token_logprobs[0] = null in all 5 requests. Token at position 0 is consistently '<|turn>' (Gemma template token)."
+        }
+      ],
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/v1/completions",
+          "body": {
+            "model": "Gemma-4-26B-A4B-it-JANG_4M",
+            "prompt": "The capital of France is",
+            "echo": true,
+            "logprobs": true,
+            "max_tokens": 5
+          }
+        },
+        "response": {
+          "position_0_logprobs_across_5_requests": [null, null, null, null, null],
+          "position_0_token": "<|turn>"
+        },
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200 (x5)",
+        "files": ["echo-prompt-logprobs/basic-echo/VAL-ECHO-004-005-responses.json"]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-ECHO-005",
+      "title": "Prompt + completion logprobs are concatenated correctly",
+      "status": "fail",
+      "steps": [
+        {
+          "action": "POST /v1/completions with echo:true, logprobs:true — check token counts",
+          "expected": "len(logprobs.tokens) == usage.prompt_tokens + usage.completion_tokens (27 + 5 = 32)",
+          "observed": "len(logprobs.tokens) = 9, expected = 32. Token count mismatch. The logprobs array does not include all prompt tokens."
+        },
+        {
+          "action": "Check prompt boundary in logprobs tokens",
+          "expected": "First N tokens = prompt tokens in order, remaining = generated tokens in order",
+          "observed": "Logprobs tokens: ['<|turn>', 'model', '\\n', '<|channel>', 'thought', '\\n', '<channel|>', 'Paris', '<turn|>']. None of these tokens correspond to the user prompt 'The capital of France is'. The first 3 tokens are Gemma template suffix tokens (model turn start), the remaining 6 are generated content (thinking channel + answer + turn end). No prompt boundary is identifiable."
+        },
+        {
+          "action": "Repeated 5 times for consistency",
+          "expected": "Consistent counts across requests",
+          "observed": "All 5 requests: logprobs_tokens=9, prompt_tokens=27, completion_tokens=5. Consistent mismatch."
+        }
+      ],
+      "evidence": {
+        "request": {
+          "method": "POST",
+          "url": "http://127.0.0.1:8080/v1/completions",
+          "body": {
+            "model": "Gemma-4-26B-A4B-it-JANG_4M",
+            "prompt": "The capital of France is",
+            "echo": true,
+            "logprobs": true,
+            "max_tokens": 5
+          }
+        },
+        "response": {
+          "logprobs_tokens_count": 9,
+          "prompt_tokens_count": 27,
+          "completion_tokens_count": 5,
+          "expected_total": 32,
+          "actual_total": 9,
+          "count_match": false,
+          "token_by_token": [
+            {"index": 0, "token": "<|turn>", "logprob": null, "category": "template"},
+            {"index": 1, "token": "model", "logprob": -17.91, "category": "template"},
+            {"index": 2, "token": "\n", "logprob": -29.95, "category": "template"},
+            {"index": 3, "token": "<|channel>", "logprob": -0.01, "category": "generated"},
+            {"index": 4, "token": "thought", "logprob": 0.0, "category": "generated"},
+            {"index": 5, "token": "\n", "logprob": -0.00005, "category": "generated"},
+            {"index": 6, "token": "<channel|>", "logprob": -0.001, "category": "generated"},
+            {"index": 7, "token": "Paris", "logprob": -0.0005, "category": "generated"},
+            {"index": 8, "token": "<turn|>", "logprob": -0.008, "category": "generated"}
+          ],
+          "prompt_boundary_identifiable": false
+        },
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/completions -> 200 (x5)",
+        "files": ["echo-prompt-logprobs/basic-echo/VAL-ECHO-004-005-responses.json"]
+      },
+      "issues": "The logprobs array does not include prompt tokens. Only 9 of the expected 32 tokens are present. The array contains only the model's turn start template tokens + generated tokens. The user prompt tokens are completely absent from the logprobs, making it impossible to verify correct concatenation of prompt + completion logprobs. This is the same root cause as VAL-ECHO-002: echo logprobs are not being computed for the prompt portion."
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 4 assertions: 2 passed, 2 failed. VAL-ECHO-001 (echo parameter accepted) and VAL-ECHO-004 (position 0 null logprob) pass. VAL-ECHO-002 (prompt logprobs with echo) and VAL-ECHO-005 (concatenation ordering) fail because the logprobs array only contains 9 tokens (template suffix + generated) instead of the expected 32 (27 prompt + 5 completion). The echo feature correctly prepends prompt text to choices[0].text, but prompt tokens are not included in the logprobs array."
+}
