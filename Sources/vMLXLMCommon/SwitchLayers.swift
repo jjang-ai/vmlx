@@ -52,6 +52,27 @@ private let compiledGeGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = {
     return body
 }()
 
+/// iter-146 §216: public accessor for the compile-fused GELU-gate
+/// activation used by Gemma-4 / Gemma-3 / Gemma-2 dense MLPs.
+///
+/// The private `compiledGeGLU` above is used internally by
+/// `SwitchGLU` (the MoE expert dispatcher). Gemma4MLP and its
+/// dense-family cousins re-implement the same `GELU(gate) * x`
+/// pattern inline as two separate Metal dispatches — one GELU,
+/// one element-wise multiply. This public wrapper lets those
+/// sites route through the same fused kernel, saving one Metal
+/// dispatch per decode token per layer. On a 62-layer dense
+/// model (e.g. Gemma-4-31B) that's 62 fewer kernel launches
+/// per token. Live-bench iter-144 showed Gemma-4-31B-JANG_4M
+/// at 11 tok/s vs theoretical bandwidth cap ~32 tok/s, so
+/// kernel-launch overhead is a plausible chunk of the gap.
+///
+/// Tracks §215 (stale-files Gemma4 hot-path port plan).
+@Sendable
+public func fusedGeGLU(_ gate: MLXArray, _ x: MLXArray) -> MLXArray {
+    compiledGeGLU(gate, x)
+}
+
 public func gatherSort(x: MLXArray, indices: MLXArray) -> (MLXArray, MLXArray, MLXArray) {
     let m = indices.dim(-1)
     let indices = indices.flattened()
