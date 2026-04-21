@@ -84,6 +84,12 @@ public enum MCPRoutes {
                     "content": result.content,
                     "is_error": result.isError,
                 ])
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through shared
+                // mapper (.notLoaded → 503, .modelNotFound → 404 etc.).
+                await engine.log(.error, "mcp",
+                    "HTTP execute ✗ \(name) \(err)")
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 await engine.log(.error, "mcp",
                     "HTTP execute ✗ \(name) \(error)")

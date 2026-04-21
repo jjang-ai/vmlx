@@ -75,6 +75,12 @@ public enum AdminRoutes {
             do {
                 try await engine.softSleep()
                 return OpenAIRoutes.json(["status": "sleeping"])
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through the
+                // shared mapper so .promptTooLong → 413, .modelNotFound
+                // → 404, .notLoaded → 503 get the right status codes
+                // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -84,6 +90,12 @@ public enum AdminRoutes {
             do {
                 try await engine.deepSleep()
                 return OpenAIRoutes.json(["status": "deep_sleeping"])
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through the
+                // shared mapper so .promptTooLong → 413, .modelNotFound
+                // → 404, .notLoaded → 503 get the right status codes
+                // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -119,6 +131,12 @@ public enum AdminRoutes {
             do {
                 try await engine.wake(override: override)
                 return OpenAIRoutes.json(["status": "awake"])
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through the
+                // shared mapper so .promptTooLong → 413, .modelNotFound
+                // → 404, .notLoaded → 503 get the right status codes
+                // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -182,6 +200,9 @@ public enum AdminRoutes {
                     "ready": ready,
                     "drafter_path": path,
                 ])
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): shared EngineError mapper.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -197,6 +218,12 @@ public enum AdminRoutes {
             do {
                 let stats = try await engine.cacheStats()
                 return OpenAIRoutes.json(Self.redactStats(stats))
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through the
+                // shared mapper so .promptTooLong → 413, .modelNotFound
+                // → 404, .notLoaded → 503 get the right status codes
+                // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -236,6 +263,12 @@ public enum AdminRoutes {
             do {
                 let stats = try await engine.cacheStats()
                 return OpenAIRoutes.json(Self.redactStats(stats))
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through the
+                // shared mapper so .promptTooLong → 413, .modelNotFound
+                // → 404, .notLoaded → 503 get the right status codes
+                // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -250,6 +283,12 @@ public enum AdminRoutes {
             do {
                 let entries = try await engine.cacheEntries()
                 return OpenAIRoutes.json(Self.redactStats(entries))
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): route EngineError through the
+                // shared mapper so .promptTooLong → 413, .modelNotFound
+                // → 404, .notLoaded → 503 get the right status codes
+                // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
             }
@@ -302,6 +341,9 @@ public enum AdminRoutes {
                 ]
                 resp["model"] = model
                 return OpenAIRoutes.json(resp)
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): shared EngineError mapper.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
@@ -381,6 +423,9 @@ public enum AdminRoutes {
                 }
                 return OpenAIRoutes.errorJSON(.internalServerError,
                     "benchmark stream ended without a terminal event")
+            } catch let err as EngineError {
+                // iter-ralph §230 (H3): shared EngineError mapper.
+                return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
             }
