@@ -121,12 +121,22 @@ public enum AdminRoutes {
         // speculative-decode admin routes (v1.3.x).
         router.get("/admin/dflash") { _, _ -> Response in
             let ready = await engine.dflashIsReady()
-            let path = await engine.dflashDrafterPath()?.path
+            // iter-128 §203: drafter_path was a home-dir path leak —
+            // stored drafter sits under ~/.mlxstudio/models/.../drafter
+            // by convention, so the raw path discloses the user's
+            // library layout to any admin-token holder. Same family
+            // as §141/§142/§143/§202. The other AdapterRoutes and
+            // OpenAIRoutes surfaces already redact; this was the
+            // remaining un-redacted spec-decoder path field. Echo
+            // sites (POST /admin/dflash/load) legitimately echo what
+            // the caller just sent so those keep the raw path.
+            let rawPath = await engine.dflashDrafterPath()?.path
+            let redacted = rawPath.map(OpenAIRoutes.redactHomeDir)
             let settings = await engine.settings.global()
             return OpenAIRoutes.json([
                 "enabled": settings.dflash,
                 "ready": ready,
-                "drafter_path": path as Any,
+                "drafter_path": redacted as Any,
                 "block_size": settings.dflashBlockSize,
                 "top_k": settings.dflashTopK,
                 "num_paths": settings.dflashNumPaths,
