@@ -1068,6 +1068,35 @@ extension Engine {
                         preFetch = CachePreFetch(matched: 0, detail: "miss")
                     }
                 }
+                // iter-121 §197: LIVE-VERIFIED multi-turn partial-prefix
+                // cache miss. Reproduction (gemma-4-e2b-it-4bit, 2026-04-20):
+                //   T1: "what is a river" → prompt=26, cached=0 (expected miss)
+                //   T2: identical prompt → prompt=26, cached=23 (memory hit)
+                //   T3: T1 user + different assistant text + new user turn →
+                //       prompt=46, cached=0 (EXPECTED partial hit of ~19 tok,
+                //       actual MISS).
+                //
+                // Hypothesis: `vMLXLMCommon.generate(..., cacheCoordinator:)`
+                // may be calling `storeAfterGeneration` with the FULL
+                // prompt+generated token sequence (T1 prompt 23 + T1's
+                // 15 generated tokens = 38 stored tokens). T3's prompt
+                // includes the user-supplied assistant text "A flowing
+                // body of water" which diverges from T1's *generated*
+                // "A **river** is a large...", so the forward-prefix
+                // scan at MemoryAwarePrefixCache.swift:414-433 rejects
+                // the match after position 23 where the trajectories
+                // split.
+                //
+                // FIXME(iter-121 §197): confirm storeAfterGeneration's
+                // key tokens. If it's prompt+generated, the fix is to
+                // store ONLY the prompt tokens (post-gen-prompt-strip)
+                // so multi-turn prefix matches work when the conversation
+                // replays the exact first user turn. This affects every
+                // multi-turn chat that continues an existing session,
+                // not just Gemma-4. High-value fix deferred until the
+                // store path can be verified; regression guard §197
+                // pins the CURRENT broken behavior so we know when it
+                // changes. Ref: CacheCoordinator.swift:376-410.
                 let s = try vMLXLMCommon.generate(
                     input: lmInput,
                     parameters: params,
