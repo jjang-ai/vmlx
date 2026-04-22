@@ -1,0 +1,66 @@
+{
+  "featureId": "lm-eval-integration",
+  "reviewedAt": "2026-04-22T12:55:00Z",
+  "commitId": "8cbe98a941b18ffae9daa497ec046350684bd7a2",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The implementation adds lm-evaluation-harness v0.4.11 compatibility through four focused changes: (1) tokenizer endpoint aliases without /v1/ prefix, (2) prompt-as-[Int] detokenization in completions, (3) rawPrompt flag to bypass chat template in loglikelihood fast-path, and (4) request/response key compatibility for tokenize/detokenize. The code follows existing patterns, is well-commented, and correctly addresses all stated requirements.",
+    "issues": [
+      {
+        "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+        "line": 322,
+        "severity": "non_blocking",
+        "description": "Significant code duplication between /v1/tokenize and /tokenize, /v1/detokenize and /detokenize, and /v1/tokenizer_info and /tokenizer_info handlers. Each alias is a full copy of the original handler. A shared helper function would reduce maintenance burden and risk of the aliases diverging over time."
+      },
+      {
+        "file": "Sources/vMLXEngine/Engine.swift",
+        "line": 1679,
+        "severity": "non_blocking",
+        "description": "rawPrompt path calls ctx.tokenizer.encode(text: rawText) with default addSpecialTokens=true (from the extension method). The original path goes through ctx.processor.prepare() which controls special token handling via the processor. For raw prompt mode in lm-eval loglikelihood scoring, lm-eval has already pre-tokenized the text and the roundtrip through detokenize→encode could theoretically add or lose special tokens. In practice this works because lm-eval's tokenized_requests path sends the same tokens, but it's worth noting this semantic difference. If exact token ID fidelity is ever needed, a future enhancement could accept token IDs directly in rawPrompt mode."
+      },
+      {
+        "file": "Sources/vMLXServer/Routes/OpenAIRoutes.swift",
+        "line": 330,
+        "severity": "non_blocking",
+        "description": "The [[Int]] batch path joins detokenized texts with \\n separator, which is documented as lossy. The comment and limitation doc are good, but the implementation still silently accepts and processes batched requests incorrectly rather than returning an error or processing them independently. Acceptable for now since batch_size=1 is documented as required."
+      },
+      {
+        "file": "Sources/vMLXEngine/ChatRequest.swift",
+        "line": 108,
+        "severity": "non_blocking",
+        "description": "rawPrompt is a public var on ChatRequest with a default of false. Since ChatRequest is Codable, this field is correctly excluded from CodingKeys (it's not in any CodingKeys enum). However, if a future CodingKeys enum is auto-generated or the struct is refactored, care must be taken to ensure rawPrompt stays out of CodingKeys. The comment 'NOT decoded from JSON (not in CodingKeys)' documents this intent well."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Route handler alias pattern: when an endpoint needs to be accessible both with and without the /v1/ prefix, the current approach is to duplicate the entire handler closure. This pattern is now used 3 times (tokenize, detokenize, tokenizer_info). AGENTS.md does not mention this pattern or provide guidance on handler deduplication.",
+      "evidence": "Sources/vMLXServer/Routes/OpenAIRoutes.swift — /v1/tokenize (line ~1119) and /tokenize (line ~1139) are near-identical closures. Same for /v1/detokenize (line ~1175) and /detokenize (line ~1190), and /v1/tokenizer_info (line ~1092) and /tokenizer_info (line ~1210)."
+    },
+    {
+      "area": "knowledge",
+      "observation": "lm-eval's local-completions backend strips /v1/completions from the base_url and calls tokenizer endpoints at the server root. This is a key compatibility quirk that was discovered during integration and is documented in .factory/library/lm-eval-integration.md but could be useful as a general note for anyone adding new endpoint aliases.",
+      "evidence": ".factory/library/lm-eval-integration.md section 3: 'lm-eval's RemoteTokenizer and check_remote_tokenizer_support() expect tokenizer endpoints at the server root (without /v1/ prefix).'"
+    },
+    {
+      "area": "knowledge",
+      "observation": "lm-eval sends 'prompt' key instead of 'text' in tokenize requests and reads 'prompt' from detokenize responses. This is the opposite of OpenAI's API which uses 'text'. The server now handles both keys, but this quirk should be known to anyone modifying tokenizer endpoints.",
+      "evidence": "Sources/vMLXServer/Routes/OpenAIRoutes.swift line ~1121: 'Accept both \"text\" and \"prompt\" keys for lm-eval compatibility.'"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The /tokenizer_info endpoint returns unknownToken as pad_token because the Tokenizer protocol does not expose padToken. This is a known inaccuracy for models where pad_token ≠ unk_token. This limitation is already documented in architecture.md and lm-eval-integration.md.",
+      "evidence": "architecture.md 'Tokenizer Protocol Limitations' section; lm-eval-integration.md limitation #7."
+    },
+    {
+      "area": "skills",
+      "observation": "Worker followed the swift-backend-worker skill procedure. The transcript skeleton shows skillFeedback.followedProcedure=true with no deviations. No skill gaps identified.",
+      "evidence": "Transcript skeleton: skillFeedback.followedProcedure = true, deviations = [], suggestedChanges = []"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The lm-eval-integration feature is well-implemented with clean, focused changes across 4 files. The implementation correctly handles all stated requirements: prompt-as-[Int] for loglikelihood, tokenizer endpoint aliases for lm-eval compatibility, rawPrompt mode to skip chat template in the fast-path, and key compatibility for tokenize/detokenize. Code follows existing patterns (JSONSerialization, ChatRequest Codable, engine.loaded access). The only notable concern is significant handler duplication for the /v1/ prefix aliases (~90 lines of duplicated code), which is non-blocking but increases maintenance risk. All limitations are properly documented. The feature is production-ready for the intended use case."
+}
