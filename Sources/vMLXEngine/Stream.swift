@@ -92,6 +92,23 @@ extension Engine {
                 // process. See `GenerationLock.swift`. FIFO — requests
                 // queue and drain in arrival order, so users see latency
                 // under load but never a server crash.
+                // B4 §262: opt-in 503 backpressure. When
+                // `VMLX_MAX_QUEUED_REQUESTS` is set, a burst past that
+                // threshold gets rejected with `EngineError.tooManyQueued`
+                // (→ HTTP 503 + Retry-After hint) instead of blocking
+                // indefinitely behind the FIFO lock. Default unbounded
+                // — load balancers upstream can still queue, and the
+                // serial-fifo scheduler already drains in order.
+                if let cap = Int(ProcessInfo.processInfo.environment["VMLX_MAX_QUEUED_REQUESTS"] ?? ""),
+                   cap > 0
+                {
+                    let queued = await self.generationLock.inflightOrQueued
+                    if queued >= cap {
+                        continuation.finish(throwing:
+                            EngineError.tooManyQueued(current: queued, limit: cap))
+                        return
+                    }
+                }
                 await self.generationLock.acquire()
                 var wasCancelled = false
                 do {
