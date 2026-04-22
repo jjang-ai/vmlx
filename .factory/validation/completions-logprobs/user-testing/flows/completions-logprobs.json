@@ -1,0 +1,148 @@
+{
+  "groupId": "completions-logprobs",
+  "testedAt": "2026-04-22T15:41:00Z",
+  "isolation": {
+    "baseUrl": "http://127.0.0.1:8080",
+    "modelId": "Gemma-4-26B-A4B-it-JANG_4M",
+    "port": 8080
+  },
+  "toolsUsed": ["curl", "python3"],
+  "assertions": [
+    {
+      "id": "VAL-COMP-001",
+      "title": "/v1/completions accepts logprobs: true",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with logprobs: true, top_logprobs: 1", "expected": "HTTP 200, logprobs in response", "observed": "HTTP 200, response contains choices[0].logprobs with tokens, token_logprobs, top_logprobs, text_offset" },
+        { "action": "Verify logprobs structure", "expected": "Legacy format with 4 array fields", "observed": "tokens=['L','yon','.','<|im_end|>'], token_logprobs=[null,-0.137,-0.010,-6.5e-05], top_logprobs=[null,{...},{...},{...}], text_offset=[0,1,4,5]" }
+      ],
+      "evidence": {
+        "responseFiles": ["completions-logprobs/VAL-COMP-001-logprobs-true.json"],
+        "httpStatus": 200,
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-COMP-002",
+      "title": "/v1/completions accepts logprobs: 1 (integer)",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with logprobs: 1 (integer), top_logprobs: 1", "expected": "HTTP 200, logprobs present, same behavior as logprobs: true", "observed": "HTTP 200, logprobs data present with identical structure to logprobs: true" },
+        { "action": "Compare with logprobs: true response", "expected": "Equivalent structure and data presence", "observed": "Both return legacy format with tokens, token_logprobs, top_logprobs, text_offset. Tokens=['L','yon','.','<|im_end|>'] in both cases (model chose same completion)" }
+      ],
+      "evidence": {
+        "responseFiles": ["completions-logprobs/VAL-COMP-002-logprobs-int1.json", "completions-logprobs/VAL-COMP-001-logprobs-true.json"],
+        "httpStatus": 200,
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-COMP-003",
+      "title": "top_logprobs parameter controls number of alternatives returned",
+      "status": "fail",
+      "steps": [
+        { "action": "POST with top_logprobs: 1", "expected": "Up to 1 entry per position in top_logprobs", "observed": "1 entry per position (except null for first token)" },
+        { "action": "POST with top_logprobs: 5", "expected": "Up to 5 entries per position", "observed": "Up to 5 entries per position (pos 1 had 5, pos 2 had 3)" },
+        { "action": "POST with top_logprobs: 0", "expected": "Only chosen token logprob present", "observed": "1 entry per position (chosen token only)" },
+        { "action": "POST with top_logprobs: -1", "expected": "HTTP 400 (negative value rejected)", "observed": "HTTP 200 with valid response — negative value NOT rejected" }
+      ],
+      "evidence": {
+        "responseFiles": [
+          "completions-logprobs/VAL-COMP-003-top_logprobs-1.json",
+          "completions-logprobs/VAL-COMP-003-top_logprobs-5.json",
+          "completions-logprobs/VAL-COMP-003-top_logprobs-0.json",
+          "completions-logprobs/VAL-COMP-003-top_logprobs-minus1.json"
+        ],
+        "consoleErrors": "none"
+      },
+      "issues": "top_logprobs: -1 returns HTTP 200 instead of expected HTTP 400. Server does not validate negative top_logprobs values. Positive values (0, 1, 5) work correctly."
+    },
+    {
+      "id": "VAL-COMP-004",
+      "title": "Non-streaming response includes logprobs in choices[0]",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with logprobs: true, stream: false, top_logprobs: 3", "expected": "HTTP 200, choices[0].logprobs is non-null object", "observed": "HTTP 200, choices[0].logprobs is dict with keys: tokens, token_logprobs, top_logprobs, text_offset" },
+        { "action": "Verify logprobs is not null or absent", "expected": "choices[0].logprobs != null and is present", "observed": "choices[0].logprobs is a populated dict — legacy format confirmed" }
+      ],
+      "evidence": {
+        "responseFiles": ["completions-logprobs/VAL-COMP-004-nonstreaming-logprobs.json"],
+        "httpStatus": 200,
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-COMP-005",
+      "title": "Streaming SSE includes logprobs deltas",
+      "status": "pass",
+      "steps": [
+        { "action": "POST /v1/completions with stream: true, logprobs: true, top_logprobs: 3", "expected": "SSE stream with logprobs in every non-terminal chunk", "observed": "SSE stream captured with 7 non-terminal chunks + [DONE]. Logprobs present in 3 chunks, absent in 4 text-only chunks. All token logprobs are present in the stream." },
+        { "action": "Verify logprobs content in chunks", "expected": "Token string, logprob, and top alternatives", "observed": "Each logprobs chunk contains tokens array, token_logprobs array, top_logprobs array with multiple entries" },
+        { "action": "Check for top_logprobs with multiple entries", "expected": "At least one chunk with >1 top_logprobs entry", "observed": "3 chunks have top_logprobs with multiple entries (3, 3, and 2 entries respectively)" }
+      ],
+      "evidence": {
+        "responseFiles": ["completions-logprobs/VAL-COMP-005-streaming-raw.txt"],
+        "consoleErrors": "none",
+        "note": "Logprobs are sent in dedicated interleaved chunks (separate from text chunks), not in every chunk. All token logprobs are present in the stream. Pattern: text chunk -> logprobs chunk -> text chunk -> logprobs chunk."
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-COMP-006",
+      "title": "Logprobs entries have token, logprob, top_logprobs fields",
+      "status": "pass",
+      "steps": [
+        { "action": "Generate 3 completions with max_tokens=30, logprobs=true, top_logprobs=5", "expected": "Sufficient logprobs entries for validation (20+)", "observed": "93 total positions across 3 requests (31+31+31 tokens)" },
+        { "action": "Validate each entry has required fields with correct types", "expected": "token: non-empty string, logprob: negative float or null, top_logprobs: dict with token->logprob", "observed": "All 93 positions have valid fields. All tokens are non-empty strings. All non-null logprobs are negative floats. All top_logprobs entries are dicts mapping string tokens to negative float logprobs." },
+        { "action": "Check logprob values are negative or zero", "expected": "No positive logprob values", "observed": "All non-null logprobs are negative floats. No positive values found." }
+      ],
+      "evidence": {
+        "responseFiles": [
+          "completions-logprobs/VAL-COMP-006-logprobs-entries-poem.json",
+          "completions-logprobs/VAL-COMP-006-logprobs-entries-fox.json",
+          "completions-logprobs/VAL-COMP-006-logprobs-entries-ai.json"
+        ],
+        "positionsExamined": 93,
+        "issues": 0,
+        "consoleErrors": "none"
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-COMP-007",
+      "title": "top_logprobs sorted descending by logprob",
+      "status": "fail",
+      "steps": [
+        { "action": "Extract top_logprobs arrays from 3 requests (93 total positions, 90 with multi-entry top_logprobs)", "expected": "Each top_logprobs array sorted in strictly descending order by logprob", "observed": "Only 1 out of 90 multi-entry positions is correctly sorted. 89 out of 90 are NOT in descending order." },
+        { "action": "Verify chosen token is first entry", "expected": "Chosen token appears as first entry in top_logprobs", "observed": "Chosen token is first in only 14 out of 90 positions. In 76 out of 90 positions, the chosen token is NOT the first entry." },
+        { "action": "Inspect sample entries", "expected": "e.g., [-0.1, -1.5, -3.0] descending", "observed": "e.g., [-2.48, -3.29, -3.23, -2.92, -1.10] — values are in arbitrary order, not sorted" }
+      ],
+      "evidence": {
+        "responseFiles": [
+          "completions-logprobs/VAL-COMP-007-sorting-analysis.json",
+          "completions-logprobs/VAL-COMP-006-logprobs-entries-poem.json",
+          "completions-logprobs/VAL-COMP-006-logprobs-entries-fox.json",
+          "completions-logprobs/VAL-COMP-006-logprobs-entries-ai.json"
+        ],
+        "positionsWithMultiEntry": 90,
+        "correctlySorted": 1,
+        "chosenTokenFirst": 14,
+        "consoleErrors": "none"
+      },
+      "issues": "top_logprobs entries are NOT sorted in descending order by logprob. The entries appear to be in arbitrary/random order. Additionally, the chosen token is NOT guaranteed to be the first entry. This violates OpenAI API compatibility where top_logprobs must be sorted highest-probability-first with the chosen token first."
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Streaming SSE sends logprobs in separate interleaved chunks rather than including logprobs in every data: line. A client that only checks the first chunk may miss logprobs. This is an implementation choice that deviates from the strict wording of the spec (\"each SSE data: line MUST contain a logprobs field\") but is functionally complete.",
+      "resolved": true,
+      "resolution": "All logprobs data is present in the stream — just in dedicated chunks rather than every chunk. A client that processes all chunks will have complete logprobs data.",
+      "affectedAssertions": ["VAL-COMP-005"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 7 assertions: 5 passed, 2 failed. VAL-COMP-003 fails because top_logprobs: -1 (negative) returns HTTP 200 instead of 400. VAL-COMP-007 fails because top_logprobs entries are not sorted in descending order by logprob (89/90 positions unsorted) and the chosen token is not guaranteed to be first (76/90 positions have chosen token not first)."
+}

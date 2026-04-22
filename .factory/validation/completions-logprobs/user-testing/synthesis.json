@@ -1,0 +1,31 @@
+{
+  "milestone": "completions-logprobs",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 7,
+    "passed": 5,
+    "failed": 2,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-COMP-001",
+    "VAL-COMP-002",
+    "VAL-COMP-004",
+    "VAL-COMP-005",
+    "VAL-COMP-006"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-COMP-003",
+      "reason": "top_logprobs: -1 (negative value) returns HTTP 200 instead of HTTP 400 — server does not validate negative top_logprobs values. Positive values (0, 1, 5) work correctly."
+    },
+    {
+      "id": "VAL-COMP-007",
+      "reason": "top_logprobs entries are NOT sorted in descending order by logprob (89/90 positions unsorted). Chosen token is NOT guaranteed to be first entry (76/90 positions). Entries appear in arbitrary/random order rather than highest-probability-first."
+    }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}

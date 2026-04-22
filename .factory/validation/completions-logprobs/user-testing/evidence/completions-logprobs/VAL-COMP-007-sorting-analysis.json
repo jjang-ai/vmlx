@@ -1,0 +1,1270 @@
+[
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 1,
+    "token": "ore",
+    "top_logprobs": {
+      "ore": -0.45609092712402344,
+      "all": -4.206090927124023,
+      "adows": -3.0810909271240234,
+      "ine": -3.8310909271240234,
+      "ells": -1.4560909271240234
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 2,
+    "token": "lines",
+    "top_logprobs": {
+      " whispers": -1.7933063507080078,
+      "lines": -1.2933063507080078,
+      "line": -2.605806350708008,
+      " by": -3.168306350708008,
+      " whispered": -3.105806350708008
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 3,
+    "token": " whisper",
+    "top_logprobs": {
+      " cr": -2.479442596435547,
+      " stretch": -3.291942596435547,
+      " hum": -3.229442596435547,
+      " bend": -2.916942596435547,
+      " whisper": -1.1044425964355469
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 4,
+    "token": " secrets",
+    "top_logprobs": {
+      " low": -2.1675872802734375,
+      " secrets": -1.6675872802734375,
+      " soft": -3.2300872802734375,
+      " deep": -2.8550872802734375,
+      " tales": -1.4175872802734375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 5,
+    "token": " of",
+    "top_logprobs": {
+      ",": -2.280172348022461,
+      " to": -1.655172348022461,
+      " in": -1.780172348022461,
+      " where": -2.530172348022461,
+      " deep": -1.530172348022461,
+      " of": -3.280172348022461
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 6,
+    "token": " the",
+    "top_logprobs": {
+      " the": -0.9896678924560547,
+      " deep": -2.6146678924560547,
+      " t": -2.4896678924560547,
+      " salt": -2.7396678924560547,
+      " waves": -2.4896678924560547
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 7,
+    "token": " deep",
+    "top_logprobs": {
+      " waves": -2.3176326751708984,
+      " deep": -0.44263267517089844,
+      " t": -2.3176326751708984,
+      " ocean": -3.3176326751708984,
+      " sea": -3.5676326751708984
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 8,
+    "token": ",",
+    "top_logprobs": {
+      "  \n": -4.900972366333008,
+      "\u2014": -5.525972366333008,
+      " where": -6.150972366333008,
+      " and": -5.650972366333008,
+      ",": -0.025972366333007812
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 9,
+    "token": "  \n",
+    "top_logprobs": {
+      " where": -8.759565353393555,
+      "  \n": -0.009565353393554688,
+      "<|im_end|>": -9.009565353393555,
+      " the": -9.072065353393555,
+      "  \n\n": -4.759565353393555
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 10,
+    "token": "Where",
+    "top_logprobs": {
+      "T": -3.7258453369140625,
+      "Under": -3.7258453369140625,
+      "The": -2.1008453369140625,
+      "Where": -0.4758453369140625,
+      "A": -2.7258453369140625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 11,
+    "token": " t",
+    "top_logprobs": {
+      " waves": -1.722137451171875,
+      " t": -0.472137451171875,
+      " dreams": -3.909637451171875,
+      " em": -4.034637451171875,
+      " foam": -3.659637451171875
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 12,
+    "token": "ides",
+    "top_logprobs": {
+      "amed": -15.062511444091797,
+      "errors": -14.687511444091797,
+      "ugs": -14.062511444091797,
+      "ide": -11.750011444091797,
+      "ides": -1.1444091796875e-05
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 13,
+    "token": " dance",
+    "top_logprobs": {
+      " dance": -0.9632415771484375,
+      " weave": -2.3382415771484375,
+      " carve": -2.7132415771484375,
+      " kiss": -3.0882415771484375,
+      " rise": -2.8382415771484375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 14,
+    "token": " and",
+    "top_logprobs": {
+      " like": -1.847238540649414,
+      " and": -1.097238540649414,
+      ",": -2.972238540649414,
+      " in": -1.722238540649414,
+      " with": -1.847238540649414
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 15,
+    "token": " waves",
+    "top_logprobs": {
+      " dreams": -1.6414299011230469,
+      " t": -2.891429901123047,
+      " storms": -2.891429901123047,
+      " the": -2.641429901123047,
+      " waves": -1.5164299011230469
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 16,
+    "token": " meet",
+    "top_logprobs": {
+      " rise": -2.5926971435546875,
+      " kiss": -2.0301971435546875,
+      " carry": -3.5301971435546875,
+      " embrace": -1.2801971435546875,
+      " meet": -3.3426971435546875
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 17,
+    "token": " the",
+    "top_logprobs": {
+      " in": -2.4094009399414062,
+      " their": -1.0344009399414062,
+      " the": -0.9094009399414062,
+      ".": -3.6594009399414062,
+      " with": -3.6594009399414062
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 18,
+    "token": " sky",
+    "top_logprobs": {
+      " sea": -3.344186782836914,
+      " eye": -3.219186782836914,
+      " night": -2.344186782836914,
+      " sky": -1.344186782836914,
+      " shore": -2.094186782836914
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 19,
+    "token": ".",
+    "top_logprobs": {
+      "\u2019s": -6.89427375793457,
+      ",": -4.89427375793457,
+      ".": -0.019273757934570312,
+      "\u2014": -4.64427375793457,
+      "'s": -7.64427375793457
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 20,
+    "token": "  \n",
+    "top_logprobs": {
+      "  \n": -0.002231597900390625,
+      "<|im_end|>": -10.50223159790039,
+      "   \n": -11.37723159790039,
+      "  \n  \n": -12.62723159790039,
+      "  \n\n": -6.127231597900391
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 21,
+    "token": "The",
+    "top_logprobs": {
+      "The": -0.3205718994140625,
+      "A": -4.0080718994140625,
+      "B": -3.3205718994140625,
+      "O": -3.9455718994140625,
+      "In": -4.1330718994140625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 22,
+    "token": " sea",
+    "top_logprobs": {
+      " salt": -4.421945571899414,
+      " waves": -4.046945571899414,
+      " horizon": -4.421945571899414,
+      " ocean": -0.9219455718994141,
+      " sea": -0.6719455718994141
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 23,
+    "token": ",",
+    "top_logprobs": {
+      ",": -1.7603912353515625,
+      " breath": -1.8853912353515625,
+      " is": -2.6353912353515625,
+      "'s": -2.8228912353515625,
+      "\u2019s": -1.3853912353515625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 24,
+    "token": " a",
+    "top_logprobs": {
+      " ever": -1.5281810760498047,
+      " a": -0.9031810760498047,
+      " both": -2.9031810760498047,
+      " vast": -2.5281810760498047,
+      " with": -3.5281810760498047
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 25,
+    "token": " lover",
+    "top_logprobs": {
+      " bound": -1.8660888671875,
+      " living": -3.1160888671875,
+      " painter": -2.7410888671875,
+      " lover": -3.6785888671875,
+      " vast": -1.4285888671875,
+      " breath": -3.1160888671875
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 26,
+    "token": ",",
+    "top_logprobs": {
+      "\u2019s": -2.1549949645996094,
+      " in": -3.5299949645996094,
+      ",": -0.4049949645996094,
+      " of": -2.4049949645996094,
+      " with": -3.5299949645996094
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 27,
+    "token": " sings",
+    "top_logprobs": {
+      " so": -3.3343505859375,
+      " sings": -2.7718505859375,
+      " holds": -2.3343505859375,
+      " calls": -2.6468505859375,
+      " bends": -2.7718505859375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 28,
+    "token": " in",
+    "top_logprobs": {
+      " soft": -2.6336803436279297,
+      " of": -1.8836803436279297,
+      " in": -1.1336803436279297,
+      " with": -2.2586803436279297,
+      " its": -2.7586803436279297
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 29,
+    "token": " soft",
+    "top_logprobs": {
+      " rhyme": -3.310659408569336,
+      " the": -0.8106594085693359,
+      " soft": -4.185659408569336,
+      " waves": -2.560659408569336,
+      " its": -2.185659408569336,
+      " every": -3.060659408569336
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-poem.json",
+    "position": 30,
+    "token": " rhyme",
+    "top_logprobs": {
+      " tones": -2.0602970123291016,
+      " waves": -2.5602970123291016,
+      " rhyme": -1.5602970123291016,
+      " light": -2.0602970123291016,
+      " grace": -2.9352970123291016
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 1,
+    "token": " sentence",
+    "top_logprobs": {
+      " phrase": -7.264171600341797,
+      " sentence": -0.014171600341796875,
+      " quick": -6.264171600341797,
+      " given": -4.764171600341797,
+      " provided": -6.514171600341797
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 2,
+    "token": " \"",
+    "top_logprobs": {
+      " **": -1.7879638671875,
+      " *\"": -1.5379638671875,
+      " \"": -0.5379638671875,
+      " you": -4.6629638671875,
+      " *": -4.0379638671875
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 3,
+    "token": "The",
+    "top_logprobs": {
+      " The": -14.625091552734375,
+      "There": -15.000091552734375,
+      "the": -12.000091552734375,
+      "The": -9.1552734375e-05,
+      "This": -9.375091552734375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 4,
+    "token": " quick",
+    "top_logprobs": {
+      " quickly": -16.25,
+      " fast": -13.875,
+      " quick": 0,
+      " Quick": -14.875,
+      " quicker": -15.875
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 5,
+    "token": " brown",
+    "top_logprobs": {
+      " brown": -1.52587890625e-05,
+      " brow": -12.375015258789062,
+      " green": -16.125015258789062,
+      "brown": -13.625015258789062,
+      " Brown": -11.625015258789062
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 6,
+    "token": " fox",
+    "top_logprobs": {
+      " FOX": -16.125003814697266,
+      " ox": -15.500003814697266,
+      "fox": -12.625003814697266,
+      " Fox": -13.875003814697266,
+      " fox": -3.814697265625e-06
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 7,
+    "token": " jumps",
+    "top_logprobs": {
+      " jumped": -8.375295639038086,
+      " runs": -12.500295639038086,
+      " jumps": -0.0002956390380859375,
+      " jokes": -10.750295639038086,
+      " jumping": -12.250295639038086
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 8,
+    "token": " over",
+    "top_logprobs": {
+      "\"": -15.875,
+      " across": -16.375,
+      " on": -17,
+      " \u00fcber": -15.875,
+      " over": 0
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 9,
+    "token": " the",
+    "top_logprobs": {
+      " a": -16.625,
+      " the": 0,
+      "\"": -16.25,
+      " The": -18.125,
+      "_the": -18.625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 10,
+    "token": " lazy",
+    "top_logprobs": {
+      "_lazy": -12.750024795532227,
+      "lazy": -12.750024795532227,
+      " lazy": -2.47955322265625e-05,
+      " quick": -12.500024795532227,
+      " loud": -12.500024795532227
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 11,
+    "token": " dog",
+    "top_logprobs": {
+      "**": -16.125,
+      "\"": -15.75,
+      " dogs": -14.625,
+      " frog": -16.125,
+      " dog": 0
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 12,
+    "token": "\"",
+    "top_logprobs": {
+      "\"": -0.399261474609375,
+      ",\"": -10.774261474609375,
+      ".\"": -1.149261474609375,
+      ".": -4.399261474609375,
+      ".\"\n": -13.274261474609375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 13,
+    "token": " is",
+    "top_logprobs": {
+      " describes": -7.009250640869141,
+      " is": -0.009250640869140625,
+      " can": -6.259250640869141,
+      " represents": -7.009250640869141,
+      " appears": -6.134250640869141
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 14,
+    "token": " a",
+    "top_logprobs": {
+      " part": -6.571826934814453,
+      " an": -2.946826934814453,
+      " the": -6.321826934814453,
+      " a": -0.07182693481445312,
+      " **": -5.196826934814453
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 15,
+    "token": " **",
+    "top_logprobs": {
+      " **": -1.0417766571044922,
+      " common": -3.291776657104492,
+      " classic": -1.0417766571044922,
+      " famous": -2.916776657104492,
+      " well": -2.041776657104492
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 16,
+    "token": "f",
+    "top_logprobs": {
+      "story": -3.023618698120117,
+      "po": -2.898618698120117,
+      "classic": -1.5236186981201172,
+      "standard": -3.148618698120117,
+      "common": -1.8986186981201172,
+      "f": -3.273618698120117
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 17,
+    "token": "amous",
+    "top_logprobs": {
+      "able": -1.940408706665039,
+      "amiliar": -4.190408706665039,
+      "amous": -0.31540870666503906,
+      "airy": -2.940408706665039,
+      "actual": -3.940408706665039
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 18,
+    "token": " r",
+    "top_logprobs": {
+      " line": -2.559661865234375,
+      " poem": -3.059661865234375,
+      " r": -1.434661865234375,
+      " literary": -2.934661865234375,
+      " joke": -2.747161865234375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 19,
+    "token": "iddle",
+    "top_logprobs": {
+      "amb": -10.68804931640625,
+      "iddles": -8.37554931640625,
+      "iddle": -0.00054931640625,
+      "acy": -12.12554931640625,
+      "ummy": -8.25054931640625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 20,
+    "token": "**",
+    "top_logprobs": {
+      " or": -2.9469146728515625,
+      "**,": -4.1969146728515625,
+      " (": -8.071914672851562,
+      "/": -7.9469146728515625,
+      "**": -0.0719146728515625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 21,
+    "token": " that",
+    "top_logprobs": {
+      " or": -0.9618740081787109,
+      " often": -2.836874008178711,
+      " and": -1.586874008178711,
+      " that": -2.836874008178711,
+      ".": -1.586874008178711
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 22,
+    "token": " has",
+    "top_logprobs": {
+      " is": -1.5264911651611328,
+      " appears": -3.526491165161133,
+      " refers": -3.401491165161133,
+      " has": -1.2764911651611328,
+      " plays": -1.9014911651611328
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 23,
+    "token": " been",
+    "top_logprobs": {
+      " puzzled": -4.041454315185547,
+      " been": -0.16645431518554688,
+      " become": -5.041454315185547,
+      " appeared": -3.666454315185547,
+      " a": -2.666454315185547
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 24,
+    "token": " solved",
+    "top_logprobs": {
+      " used": -2.6143798828125,
+      " solved": -3.1768798828125,
+      " commonly": -2.4893798828125,
+      " widely": -2.3643798828125,
+      " popular": -1.7393798828125,
+      " asked": -2.3643798828125
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 25,
+    "token": " in",
+    "top_logprobs": {
+      " by": -0.4674243927001953,
+      " with": -2.8424243927001953,
+      " through": -2.4674243927001953,
+      " over": -3.5924243927001953,
+      " in": -2.2174243927001953
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 26,
+    "token": " over",
+    "top_logprobs": {
+      " many": -1.6693897247314453,
+      " a": -1.4193897247314453,
+      " the": -2.5443897247314453,
+      " various": -2.5443897247314453,
+      " over": -2.9193897247314453,
+      " several": -2.6693897247314453
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 27,
+    "token": " a",
+    "top_logprobs": {
+      " ": -0.2736949920654297,
+      " a": -1.6486949920654297,
+      " **": -4.89869499206543,
+      " three": -6.02369499206543,
+      " two": -3.7736949920654297
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 28,
+    "token": " century",
+    "top_logprobs": {
+      " hundred": -3.2034072875976562,
+      " century": -0.07840728759765625,
+      " decade": -4.203407287597656,
+      " dozen": -5.453407287597656,
+      " thousand": -4.578407287597656
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 29,
+    "token": ".",
+    "top_logprobs": {
+      " by": -3.3157577514648438,
+      "!": -3.9407577514648438,
+      ",": -2.8157577514648438,
+      " and": -3.5657577514648438,
+      ".": -0.19075775146484375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-fox.json",
+    "position": 30,
+    "token": " The",
+    "top_logprobs": {
+      " Here": -3.3871631622314453,
+      " Its": -4.887163162231445,
+      " It": -1.1371631622314453,
+      " The": -0.5121631622314453,
+      " However": -4.762163162231445
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 1,
+    "token": " ",
+    "top_logprobs": {
+      " ": -0.34934425354003906,
+      " the": -1.224344253540039,
+      " January": -8.599344253540039,
+      " October": -8.974344253540039,
+      " February": -8.849344253540039
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 2,
+    "token": "2",
+    "top_logprobs": {
+      "3": -17.5625,
+      "0": -18.25,
+      "2": 0,
+      "1": -15.75,
+      "4": -16.125
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 3,
+    "token": "0",
+    "top_logprobs": {
+      "4": -16.5,
+      "2": -17.125,
+      "9": -17.625,
+      "0": 0,
+      "1": -17.625
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 4,
+    "token": "2",
+    "top_logprobs": {
+      "2": -3.814697265625e-06,
+      "1": -13.875003814697266,
+      "0": -14.500003814697266,
+      "4": -15.000003814697266,
+      "3": -15.375003814697266
+    },
+    "is_sorted_descending": true,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 5,
+    "token": "4",
+    "top_logprobs": {
+      "3": -9.875070571899414,
+      "2": -12.000070571899414,
+      "4": -7.05718994140625e-05,
+      "0": -13.625070571899414,
+      "5": -11.500070571899414
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 6,
+    "token": ",",
+    "top_logprobs": {
+      " and": -12.875059127807617,
+      " AI": -11.062559127807617,
+      " artificial": -12.937559127807617,
+      " (": -11.000059127807617,
+      ",": -5.91278076171875e-05
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 7,
+    "token": " artificial",
+    "top_logprobs": {
+      " Artificial": -5.2462158203125,
+      " AI": -3.4962158203125,
+      " the": -2.6212158203125,
+      " artificial": -0.1212158203125,
+      " as": -5.8712158203125
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 8,
+    "token": " intelligence",
+    "top_logprobs": {
+      "intelligence": -14.125150680541992,
+      " intelligence": -0.0001506805419921875,
+      " Intelligence": -8.875150680541992,
+      " intelligent": -11.875150680541992,
+      " intellig": -14.250150680541992
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 9,
+    "token": " has",
+    "top_logprobs": {
+      " (": -1.743255615234375,
+      " is": -0.868255615234375,
+      " will": -5.368255615234375,
+      " has": -0.993255615234375,
+      " continues": -3.868255615234375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 10,
+    "token": " had",
+    "top_logprobs": {
+      " seen": -2.475442886352539,
+      " already": -2.225442886352539,
+      " had": -4.850442886352539,
+      " been": -2.350442886352539,
+      " made": -1.100442886352539,
+      " become": -2.850442886352539
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 11,
+    "token": " significant",
+    "top_logprobs": {
+      " transformative": -3.960512161254883,
+      " significant": -1.8355121612548828,
+      " profound": -3.460512161254883,
+      " a": -0.3355121612548828,
+      " several": -3.460512161254883
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 12,
+    "token": " developments",
+    "top_logprobs": {
+      " advancements": -1.443563461303711,
+      " developments": -1.693563461303711,
+      " and": -3.068563461303711,
+      " impacts": -1.068563461303711,
+      " impact": -2.943563461303711
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 13,
+    "token": " in",
+    "top_logprobs": {
+      " across": -1.2764739990234375,
+      ".": -4.2764739990234375,
+      " and": -1.0264739990234375,
+      " in": -1.9014739990234375,
+      ",": -1.9014739990234375
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 14,
+    "token": " several",
+    "top_logprobs": {
+      " many": -3.289104461669922,
+      " several": -1.5391044616699219,
+      " multiple": -3.039104461669922,
+      " various": -0.5391044616699219,
+      " both": -3.914104461669922
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 15,
+    "token": " key",
+    "top_logprobs": {
+      " domains": -3.884021759033203,
+      " key": -1.1340217590332031,
+      " sectors": -4.759021759033203,
+      " areas": -0.6340217590332031,
+      " fields": -2.259021759033203
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 16,
+    "token": " areas",
+    "top_logprobs": {
+      " aspects": -7.151700973510742,
+      " domains": -4.401700973510742,
+      " areas": -0.026700973510742188,
+      " sectors": -5.526700973510742,
+      " fields": -4.776700973510742
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 17,
+    "token": ".",
+    "top_logprobs": {
+      ":": -3.178691864013672,
+      ":\n\n": -1.1786918640136719,
+      " across": -5.428691864013672,
+      ",": -0.8036918640136719,
+      ".": -1.6786918640136719
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 18,
+    "token": " Here",
+    "top_logprobs": {
+      " These": -1.93133544921875,
+      " For": -1.55633544921875,
+      " Here": -0.68133544921875,
+      " The": -3.43133544921875,
+      " One": -3.93133544921875
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 19,
+    "token": " are",
+    "top_logprobs": {
+      "\u2019s": -3.563711166381836,
+      " is": -5.688711166381836,
+      " are": -0.31371116638183594,
+      " some": -8.938711166381836,
+      "'s": -1.438711166381836
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 20,
+    "token": " some",
+    "top_logprobs": {
+      " some": -0.017698287963867188,
+      " the": -7.017698287963867,
+      " a": -4.142698287963867,
+      " highlights": -8.267698287963867,
+      " just": -9.142698287963867
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 21,
+    "token": " notable",
+    "top_logprobs": {
+      " highlights": -0.9064559936523438,
+      " major": -3.4064559936523438,
+      " of": -2.9064559936523438,
+      " notable": -1.2814559936523438,
+      " key": -1.9064559936523438
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 22,
+    "token": " trends",
+    "top_logprobs": {
+      " trends": -2.0225391387939453,
+      " points": -1.3975391387939453,
+      " advancements": -1.6475391387939453,
+      " aspects": -2.6475391387939453,
+      " highlights": -1.5225391387939453
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 23,
+    "token": " and",
+    "top_logprobs": {
+      ":\n\n": -2.354585647583008,
+      " and": -0.10458564758300781,
+      " in": -7.479585647583008,
+      ":": -7.354585647583008,
+      " from": -7.229585647583008
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 24,
+    "token": " advancements",
+    "top_logprobs": {
+      " outcomes": -2.7932395935058594,
+      " achievements": -2.5432395935058594,
+      " impacts": -2.5432395935058594,
+      " advancements": -0.5432395935058594,
+      " developments": -3.0432395935058594
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 25,
+    "token": ":\n\n",
+    "top_logprobs": {
+      " highlighted": -4.727834701538086,
+      " from": -3.727834701538086,
+      " that": -3.727834701538086,
+      ":\n\n": -0.10283470153808594,
+      " in": -4.602834701538086
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 26,
+    "token": "1",
+    "top_logprobs": {
+      "-": -6.892446517944336,
+      "---\n\n": -11.767446517944336,
+      "###": -4.142446517944336,
+      "1": -0.017446517944335938,
+      "**": -7.892446517944336
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 27,
+    "token": ".",
+    "top_logprobs": {
+      ".\n": -15.937501907348633,
+      "\ufe0f": -14.125001907348633,
+      "on": -16.125001907348633,
+      ".": -1.9073486328125e-06,
+      "  ": -16.562501907348633
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 28,
+    "token": " **",
+    "top_logprobs": {
+      " AI": -11.625038146972656,
+      " General": -12.250038146972656,
+      " Increased": -13.250038146972656,
+      " Healthcare": -13.250038146972656,
+      " **": -3.814697265625e-05
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 29,
+    "token": "Natural",
+    "top_logprobs": {
+      "Health": -0.7274284362792969,
+      "AI": -1.4774284362792969,
+      "Increased": -3.977428436279297,
+      "Natural": -5.227428436279297,
+      "Adv": -2.852428436279297,
+      "Advanced": -3.227428436279297
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": false
+  },
+  {
+    "file": "VAL-COMP-006-logprobs-entries-ai.json",
+    "position": 30,
+    "token": " Language",
+    "top_logprobs": {
+      " Language": -8.96453857421875e-05,
+      "\u8bed\u8a00": -12.375089645385742,
+      " Languages": -12.500089645385742,
+      " language": -12.000089645385742,
+      "-Language": -9.750089645385742
+    },
+    "is_sorted_descending": false,
+    "chosen_token_is_first": true
+  }
+]
