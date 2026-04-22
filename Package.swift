@@ -575,6 +575,8 @@ let package = Package(
                 "SleepDuringDownloadTests.swift",
                 "DeepSleepReclamationTests.swift",
                 "WakeRetryLoopEscapeTests.swift",
+                "IdleTimerDualCountdownTests.swift",
+                "StandbyUnloadRaceTests.swift",
                 "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",
