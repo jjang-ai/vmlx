@@ -996,6 +996,15 @@ class MLLMBatchGenerator:
         # skip the full prefix instead of wasting the KV cache hit.
         self._ssm_state_cache = HybridSSMStateCache(max_entries=ssm_state_cache_size)
 
+        # Async rederive queue for MLLM thinking models. When we capture SSM
+        # state post-full-prefill (is_complete=False, gpl-contaminated), we
+        # queue a deferred clean-prefill task that runs during idle cycles
+        # (no active requests). The clean prefill processes just prompt[:-gpl]
+        # tokens so the captured state matches its key — future fetches hit
+        # with is_complete=True. Capped at 20 entries.
+        self._ssm_rederive_queue: List[Tuple[List[int], int, str]] = []
+        self._ssm_rederive_queue_max = 20
+
         # Get language model for text generation
         self.language_model = getattr(model, "language_model", model)
 
@@ -2225,10 +2234,28 @@ class MLLMBatchGenerator:
                                 # differently-templated prefixes.
                                 _gpl_for_flag = getattr(req, '_gen_prompt_len', 0)
                                 _is_complete_flag = (_gpl_for_flag == 0)
-                                self._ssm_state_cache.store(
-                                    all_tokens, prompt_len, ssm_layers,
-                                    is_complete=_is_complete_flag,
-                                )
+                                if _is_complete_flag:
+                                    # gpl=0 path — post-prefill state matches
+                                    # its key, safe to store directly.
+                                    self._ssm_state_cache.store(
+                                        all_tokens, prompt_len, ssm_layers,
+                                        is_complete=True,
+                                    )
+                                else:
+                                    # gpl>0 (thinking models): post-full-prefill
+                                    # state includes gpl suffix tokens, so it
+                                    # doesn't match the gpl-stripped key. Queue
+                                    # a deferred clean re-prefill instead of
+                                    # storing contaminated state. Fetch paths
+                                    # reject is_complete=False entries anyway;
+                                    # the rederive path populates clean entries
+                                    # for subsequent turns to hit.
+                                    _rq = self._ssm_rederive_queue
+                                    if len(_rq) >= self._ssm_rederive_queue_max:
+                                        _rq.pop(0)
+                                    _rq.append(
+                                        (list(all_tokens), prompt_len, req.request_id)
+                                    )
                                 logger.info(
                                     f"Captured SSM state for "
                                     f"{req.request_id}: {len(ssm_layers)} layers, "
@@ -2705,3 +2732,98 @@ class MLLMBatchGenerator:
     def has_pending(self) -> bool:
         """Check if there are pending or active requests."""
         return bool(self.unprocessed_requests or self.active_batch)
+
+    def _prefill_for_clean_ssm(self, tokens: List[int]) -> Optional[List[Any]]:
+        """Run a clean prompt-only prefill to capture SSM state matching its key.
+
+        Mirrors Scheduler._prefill_for_prompt_only_cache for the MLLM path.
+        Returned cache covers exactly `tokens` worth of processing — no
+        gen_prompt_len suffix, no generation output. Safe to store with
+        is_complete=True.
+        """
+        if not tokens or self.language_model is None:
+            return None
+        try:
+            fresh_cache = (
+                self.language_model.make_cache()
+                if hasattr(self.language_model, "make_cache")
+                else None
+            )
+            if fresh_cache is None:
+                from mlx_lm.models.cache import KVCache
+                fresh_cache = [KVCache() for _ in range(len(self.language_model.layers))]
+            chunk_size = 2048
+            for start in range(0, len(tokens), chunk_size):
+                chunk = tokens[start : start + chunk_size]
+                input_ids = mx.array([chunk])
+                _ = self.language_model(input_ids, cache=fresh_cache)
+                materialize: List[Any] = []
+                for c in fresh_cache:
+                    if hasattr(c, "keys") and c.keys is not None:
+                        if isinstance(c.keys, tuple):
+                            materialize.extend(c.keys)
+                            materialize.extend(c.values)
+                        else:
+                            materialize.extend([c.keys, c.values])
+                    elif hasattr(c, "cache") and isinstance(c.cache, list):
+                        for arr in c.cache:
+                            if hasattr(arr, "shape"):
+                                materialize.append(arr)
+                if materialize:
+                    mx.eval(*materialize)
+            return fresh_cache
+        except Exception as ex:
+            logger.warning(f"MLLM clean SSM prefill failed: {ex}")
+            return None
+
+    def run_idle_rederive(self) -> bool:
+        """Process one SSM rederive task from the queue (scheduler idle tick).
+
+        Returns True if a task was processed, False if queue was empty.
+        Caps at one task per tick so decode latency is unaffected.
+        """
+        if not self._ssm_rederive_queue or self._ssm_state_cache is None:
+            return False
+        if not self._hybrid_kv_positions:
+            self._ssm_rederive_queue.clear()
+            return False
+        tokens, prompt_len, orig_rid = self._ssm_rederive_queue.pop(0)
+        logger.info(
+            f"MLLM SSM re-derive: clean prefill for {orig_rid} "
+            f"({prompt_len} prompt tokens, {len(self._ssm_rederive_queue)} remaining)"
+        )
+        try:
+            clean_cache = self._prefill_for_clean_ssm(list(tokens))
+            if clean_cache is None:
+                return True
+            kv_set = set(self._hybrid_kv_positions or [])
+            ssm_layers: List[Any] = []
+            for layer_idx, c in enumerate(clean_cache):
+                if layer_idx in kv_set:
+                    continue
+                if hasattr(c, "cache") and isinstance(c.cache, list):
+                    from copy import deepcopy
+                    cloned = deepcopy(c)
+                    cloned.cache = [
+                        mx.contiguous(mx.array(a)) if a is not None else None
+                        for a in c.cache
+                    ]
+                    ssm_layers.append(cloned)
+                else:
+                    ssm_layers.append(c)
+            if ssm_layers:
+                self._ssm_state_cache.store(
+                    tokens, prompt_len, ssm_layers, is_complete=True,
+                )
+                logger.info(
+                    f"MLLM SSM re-derive: stored clean companion for {orig_rid}: "
+                    f"{len(ssm_layers)} SSM layers, {prompt_len}-token key"
+                )
+            del clean_cache
+            try:
+                mx.clear_cache()
+            except Exception:
+                pass
+        except Exception as ex:
+            logger.warning(f"MLLM SSM re-derive failed for {orig_rid}: {ex}")
+        return True

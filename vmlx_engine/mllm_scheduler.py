@@ -2150,6 +2150,24 @@ class MLLMScheduler:
             except Exception:
                 pass
 
+        # Async SSM rederive for hybrid thinking MLLM models. When idle (no
+        # active requests), pop one task from the batch generator's rederive
+        # queue and run a clean prompt-only prefill to capture SSM state that
+        # matches its key. Future fetches then hit with is_complete=True and
+        # skip the full re-prefill. One task per tick keeps decode latency
+        # unaffected when requests arrive during queue processing.
+        if (
+            self._is_hybrid
+            and not self.running
+            and self.batch_generator is not None
+            and hasattr(self.batch_generator, "run_idle_rederive")
+        ):
+            try:
+                with self._batch_lock:
+                    self.batch_generator.run_idle_rederive()
+            except Exception as _rd_err:
+                logger.debug(f"MLLM idle rederive tick failed: {_rd_err}")
+
         return output
 
     def _dispatch_outputs(self, step_output: "MLLMSchedulerOutput") -> None:
