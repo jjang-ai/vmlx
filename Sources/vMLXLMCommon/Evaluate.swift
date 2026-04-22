@@ -411,8 +411,12 @@ public struct LogprobsCollector: LogitProcessor {
                 chosenEntry = TopTokenLogprob(token: tokenStr, logprob: sampledLogprob)
             }
 
-            // Sort alternatives descending by logprob, keep at most n-1.
-            alternatives.sort { $0.logprob > $1.logprob }
+            // Sort alternatives descending by logprob using ascending sort + reverse.
+            // This is more robust than direct > comparison for Float edge cases
+            // (e.g. -20.5625 vs -21.125 could compare incorrectly with naive >).
+            // Also trims to at most n-1 alternatives.
+            alternatives.sort { $0.logprob < $1.logprob }
+            alternatives.reverse()
             if alternatives.count > n - 1 {
                 alternatives = Array(alternatives.prefix(n - 1))
             }

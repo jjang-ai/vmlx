@@ -80,9 +80,12 @@ public enum SSEEncoder {
                 topLogprobs.append(NSNull())
             } else {
                 var dict: [String: Any] = [:]
-                dict[lp.token] = lp.logprob
-                for alt in lp.topLogprobs {
-                    dict[alt.token] = alt.logprob
+                if lp.topLogprobs.isEmpty {
+                    dict[lp.token] = lp.logprob
+                } else {
+                    for alt in lp.topLogprobs {
+                        dict[alt.token] = alt.logprob
+                    }
                 }
                 topLogprobs.append(dict)
             }
@@ -143,10 +146,17 @@ public enum SSEEncoder {
 
                 // Build ordered top_logprobs entry: chosen token first,
                 // then alternatives sorted descending by logprob.
+                // lp.topLogprobs already has chosen token as element 0
+                // (set by LogprobsCollector.capture), so we iterate it
+                // directly to avoid duplicate keys.
                 var entryParts: [String] = []
-                entryParts.append("\(jsonQuoteEscape(lp.token)):\(lp.logprob)")
-                for alt in lp.topLogprobs {
-                    entryParts.append("\(jsonQuoteEscape(alt.token)):\(alt.logprob)")
+                if lp.topLogprobs.isEmpty {
+                    // No top_logprobs requested; still include chosen token.
+                    entryParts.append("\(jsonQuoteEscape(lp.token)):\(lp.logprob)")
+                } else {
+                    for alt in lp.topLogprobs {
+                        entryParts.append("\(jsonQuoteEscape(alt.token)):\(alt.logprob)")
+                    }
                 }
                 topLogprobsParts.append("{\(entryParts.joined(separator: ","))}")
             }
