@@ -52,6 +52,11 @@ public enum SSEEncoder {
     ///     non-streaming; running cursor for streaming chunks).
     /// - Returns: Tuple of `(legacyDict, endOffset)` where `endOffset` is the byte
     ///   offset after the last token — useful for chaining across streaming chunks.
+    ///
+    /// **Note:** The returned `dict` uses `[String: Any]` for `top_logprobs` entries.
+    /// Because Swift Dictionary and JSONSerialization's `.sortedKeys` both destroy
+    /// insertion order, callers that need ordered JSON output should use
+    /// `buildLegacyLogprobsJSON()` + the sentinel-replacement pattern instead.
     public static func buildLegacyLogprobs(
         _ logprobs: [TokenLogprob],
         startOffset: Int = 0,
@@ -68,23 +73,12 @@ public enum SSEEncoder {
             textOffset.append(offset)
             offset += lp.token.utf8.count
 
-            // Position 0 is null when: (a) the logprob is NaN (no prior
-            // context, e.g. prompt position 0 in echo mode), OR (b)
-            // forceFirstNull is true and this is the first entry (generation-
-            // only completions where position 0 must be null per OpenAI spec).
             let isNull = lp.logprob.isNaN || (forceFirstNull && idx == 0)
-
-            // Position 0 (NaN) → null; otherwise the float logprob.
             tokenLogprobs.append(isNull ? NSNull() : lp.logprob)
 
-            // Position 0 (NaN) → null (not an empty dict). Per VAL-LEG-004,
-            // lm-eval expects `null` for the first position in `top_logprobs`.
             if isNull {
                 topLogprobs.append(NSNull())
             } else {
-                // Include the chosen token first, then alternatives.
-                // When top_logprobs: 0, the alternatives array is empty,
-                // producing a dict with only the chosen token (VAL-LEG-006).
                 var dict: [String: Any] = [:]
                 dict[lp.token] = lp.logprob
                 for alt in lp.topLogprobs {
@@ -100,6 +94,100 @@ public enum SSEEncoder {
             "top_logprobs": topLogprobs,
             "text_offset": textOffset,
         ], offset)
+    }
+
+    // ── Ordered Logprobs JSON ──────────────────────────────────────
+
+    /// Sentinel value stored as the `logprobs` key in response dicts.
+    /// After JSONSerialization converts the dict to a string, this
+    /// quoted sentinel `("VLPX_LOGPROBS_SENTINEL_9A3F")` is replaced
+    /// with the actual ordered logprobs JSON produced by
+    /// `buildLegacyLogprobsJSON()`.
+    ///
+    /// This two-step approach is necessary because:
+    /// 1. Swift `Dictionary` does not preserve insertion order.
+    /// 2. `JSONSerialization` with `.sortedKeys` sorts alphabetically.
+    /// Both scramble the "chosen token first, alternatives descending"
+    /// ordering that lm-eval's `parse_logprobs()` relies on.
+    public static let logprobsSentinel = "VLPX_LOGPROBS_SENTINEL_9A3F"
+
+    /// Build the complete JSON string for a legacy logprobs object, with
+    /// **preserved key ordering** in each `top_logprobs` entry: chosen
+    /// token first, then alternatives in descending logprob order.
+    ///
+    /// This bypasses `JSONSerialization` to ensure correct ordering.
+    /// Use together with `logprobsSentinel` and `asciiJSONReplacingLogprobs()`.
+    public static func buildLegacyLogprobsJSON(
+        _ logprobs: [TokenLogprob],
+        startOffset: Int = 0,
+        forceFirstNull: Bool = false
+    ) -> (json: String, endOffset: Int) {
+        var offset = startOffset
+        var tokensParts: [String] = []
+        var tokenLogprobsParts: [String] = []
+        var topLogprobsParts: [String] = []
+        var textOffsetParts: [String] = []
+
+        for (idx, lp) in logprobs.enumerated() {
+            tokensParts.append(jsonQuoteEscape(lp.token))
+            textOffsetParts.append("\(offset)")
+            offset += lp.token.utf8.count
+
+            let isNull = lp.logprob.isNaN || (forceFirstNull && idx == 0)
+
+            if isNull {
+                tokenLogprobsParts.append("null")
+                topLogprobsParts.append("null")
+            } else {
+                tokenLogprobsParts.append("\(lp.logprob)")
+
+                // Build ordered top_logprobs entry: chosen token first,
+                // then alternatives sorted descending by logprob.
+                var entryParts: [String] = []
+                entryParts.append("\(jsonQuoteEscape(lp.token)):\(lp.logprob)")
+                for alt in lp.topLogprobs {
+                    entryParts.append("\(jsonQuoteEscape(alt.token)):\(alt.logprob)")
+                }
+                topLogprobsParts.append("{\(entryParts.joined(separator: ","))}")
+            }
+        }
+
+        let json =
+            "{\"text_offset\":[" + textOffsetParts.joined(separator: ",") + "]," +
+            "\"token_logprobs\":[" + tokenLogprobsParts.joined(separator: ",") + "]," +
+            "\"tokens\":[" + tokensParts.joined(separator: ",") + "]," +
+            "\"top_logprobs\":[" + topLogprobsParts.joined(separator: ",") + "]}"
+        return (json, offset)
+    }
+
+    /// JSON-escape and quote a string value.
+    /// Produces a correctly-escaped JSON string literal including surrounding quotes.
+    /// Uses JSONSerialization on a single-element array to handle all edge cases
+    /// (Unicode, special characters, control characters).
+    private static func jsonQuoteEscape(_ s: String) -> String {
+        let data = (try? JSONSerialization.data(
+            withJSONObject: [s], options: [])) ?? Data("[\"\"]".utf8)
+        guard let str = String(data: data, encoding: .utf8),
+              str.count >= 2,
+              let first = str.firstIndex(of: "\""),
+              let last = str.lastIndex(of: "\"")
+        else { return "\"\"" }
+        return String(str[first...last])
+    }
+
+    /// Serialize `object` to ASCII JSON, then replace the logprobs sentinel
+    /// with the actual ordered logprobs JSON string.
+    ///
+    /// The `logprobsJSON` parameter should come from `buildLegacyLogprobsJSON()`.
+    static func asciiJSONReplacingLogprobs(
+        _ object: Any,
+        logprobsJSON: String
+    ) -> String {
+        var json = asciiJSON(object)
+        json = json.replacingOccurrences(
+            of: "\"\(logprobsSentinel)\"",
+            with: logprobsJSON)
+        return json
     }
 
     /// Build the ResponseBody that streams an OpenAI chat.completion.chunk SSE.
@@ -338,7 +426,7 @@ public enum SSEEncoder {
                             // the first logprobs chunk (VAL-LEG-002, VAL-LEG-004).
                             let forceNull = isFirstLogprobsChunk && echoPrompt == nil
                             isFirstLogprobsChunk = false
-                            let (logprobsDict, newOffset) = Self.buildLegacyLogprobs(
+                            let (logprobsJSON, newOffset) = Self.buildLegacyLogprobsJSON(
                                 lps, startOffset: textOffsetCursor,
                                 forceFirstNull: forceNull)
                             textOffsetCursor = newOffset
@@ -351,10 +439,11 @@ public enum SSEEncoder {
                                     "index": 0,
                                     "text": deltaText ?? "",
                                     "finish_reason": NSNull(),
-                                    "logprobs": logprobsDict,
+                                    "logprobs": Self.logprobsSentinel,
                                 ] as [String: Any]],
                             ]
-                            let j = Self.asciiJSON(obj)
+                            let j = Self.asciiJSONReplacingLogprobs(
+                                obj, logprobsJSON: logprobsJSON)
                             try await writer.write(allocator.buffer(string: "data: \(j)\n\n"))
                         } else if let text = deltaText {
                             let obj: [String: Any] = [

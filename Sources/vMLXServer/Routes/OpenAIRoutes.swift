@@ -386,7 +386,7 @@ public enum OpenAIRoutes {
                     // Build legacy logprobs: prompt tokens + generated token.
                     var allLogprobs = result.promptLogprobs
                     allLogprobs.append(result.generatedLogprob)
-                    let (logprobsDict, _) = SSEEncoder.buildLegacyLogprobs(
+                    let (logprobsJSON, _) = SSEEncoder.buildLegacyLogprobsJSON(
                         allLogprobs)  // position 0 already NaN from fast-path
 
                     let content = prompt + result.generatedText
@@ -395,7 +395,7 @@ public enum OpenAIRoutes {
                         "index": 0,
                         "finish_reason": "length",
                     ]
-                    choice["logprobs"] = logprobsDict
+                    choice["logprobs"] = SSEEncoder.logprobsSentinel
                     var obj2: [String: Any] = [
                         "id": id,
                         "object": "text_completion",
@@ -408,7 +408,7 @@ public enum OpenAIRoutes {
                         "completion_tokens": 1,
                         "total_tokens": result.promptTokenCount + 1,
                     ] as [String: Any]
-                    return Self.json(obj2)
+                    return Self.jsonReplacingLogprobs(obj2, logprobsJSON: logprobsJSON)
                 } catch let err as EngineError {
                     return Self.mapEngineError(err)
                 } catch {
@@ -465,14 +465,18 @@ public enum OpenAIRoutes {
                 "finish_reason": finishReason ?? "stop",
             ]
             // Include logprobs in legacy completions format when collected.
-            // Uses the shared buildLegacyLogprobs() helper to produce the
-            // exact shape lm-eval's parse_logprobs() expects.
+            // Uses the ordered JSON builder + sentinel replacement to produce
+            // the exact shape lm-eval's parse_logprobs() expects, with
+            // top_logprobs keys in the correct order (chosen first, alts
+            // descending).
+            var logprobsJSON: String? = nil
             if !allLogprobs.isEmpty {
                 // Generation-only (non-echo) completions: position 0 must be
                 // null per OpenAI legacy spec (VAL-LEG-002, VAL-LEG-004).
-                let (logprobsDict, _) = SSEEncoder.buildLegacyLogprobs(
+                let (json, _) = SSEEncoder.buildLegacyLogprobsJSON(
                     allLogprobs, forceFirstNull: !echoEnabled)
-                choice["logprobs"] = logprobsDict
+                logprobsJSON = json
+                choice["logprobs"] = SSEEncoder.logprobsSentinel
             }
             var obj2: [String: Any] = [
                 "id": id,
@@ -487,6 +491,9 @@ public enum OpenAIRoutes {
                     "completion_tokens": u.completionTokens,
                     "total_tokens": u.promptTokens + u.completionTokens,
                 ] as [String: Any]
+            }
+            if let lpJSON = logprobsJSON {
+                return Self.jsonReplacingLogprobs(obj2, logprobsJSON: lpJSON)
             }
             return Self.json(obj2)
         }
@@ -1244,6 +1251,28 @@ public enum OpenAIRoutes {
         let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         var buf = ByteBuffer()
         buf.writeBytes(data)
+        return Response(
+            status: status,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: buf)
+        )
+    }
+
+    /// Like `json()`, but replaces the logprobs sentinel with properly ordered
+    /// logprobs JSON. This ensures `top_logprobs` dict keys appear in the
+    /// correct order (chosen token first, alternatives descending).
+    static func jsonReplacingLogprobs(
+        _ obj: [String: Any],
+        logprobsJSON: String,
+        status: HTTPResponse.Status = .ok
+    ) -> Response {
+        let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+        var jsonStr = String(data: data, encoding: .utf8) ?? "{}"
+        jsonStr = jsonStr.replacingOccurrences(
+            of: "\"\(SSEEncoder.logprobsSentinel)\"",
+            with: logprobsJSON)
+        var buf = ByteBuffer()
+        buf.writeBytes(Data(jsonStr.utf8))
         return Response(
             status: status,
             headers: [.contentType: "application/json"],
