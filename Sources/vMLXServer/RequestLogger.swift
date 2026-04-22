@@ -65,9 +65,22 @@ public struct RequestLoggerMiddleware<Context: RequestContext>: RouterMiddleware
                 return .info
             }()
             if level >= minLevel {
+                // R1 §302: stamp trace id on the log line so the
+                // APIScreen request log + any downstream consumer can
+                // correlate a row with the client's response envelope.
+                // Populated by OpenAIRoutes Q1 — SSE + non-streaming
+                // chat/completions/responses set `x-vmlx-trace-id`.
+                let tidSuffix: String
+                if let hname = HTTPField.Name("x-vmlx-trace-id"),
+                   let tid = response.headers[hname], !tid.isEmpty
+                {
+                    tidSuffix = " [tid=\(tid)]"
+                } else {
+                    tidSuffix = ""
+                }
                 await engine.logs.append(
                     level, category: "server",
-                    "\(method) \(path) -> \(status) (\(Self.fmt(elapsedMs))ms)"
+                    "\(method) \(path) -> \(status) (\(Self.fmt(elapsedMs))ms)\(tidSuffix)"
                 )
             }
             return response
