@@ -77,6 +77,7 @@ struct APIScreen: View {
                     port: portBinding,
                     bearer: keys.first?.value,
                     admin: adminTokenForCurl)
+                AdvancedServerCard()
                 RequestLogPanel()
                 MCPPanel()
                 snippetsCard
