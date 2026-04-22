@@ -112,14 +112,33 @@ extension Engine {
                 await self.generationLock.acquire()
                 var wasCancelled = false
                 do {
-                    try await self.performStreamingGeneration(
-                        request: request,
-                        continuation: continuation
-                    )
+                    // Q3 §299: wrap decode in `MLX.withError` so MLX/Metal
+                    // fatal-error trampolines (command-buffer commit
+                    // failures, encoder-already-encoding, SIGTRAPs from
+                    // `mtl_throw_*`) surface as a Swift throw instead of
+                    // a process-wide crash. The block is evaluated
+                    // task-locally so other streams in flight keep the
+                    // default abort behavior.
+                    try await MLX.withError {
+                        try await self.performStreamingGeneration(
+                            request: request,
+                            continuation: continuation
+                        )
+                    }
                     continuation.finish()
                 } catch is CancellationError {
                     wasCancelled = true
                     continuation.finish()
+                } catch let mlxErr as MLX.MLXError {
+                    // Map caught MLX fatal-error to a clean Swift error
+                    // with the raw message, instead of letting it bubble
+                    // as a generic `.caught(...)`. HTTP maps this to 500.
+                    let msg: String = {
+                        if case .caught(let s) = mlxErr { return s }
+                        return "\(mlxErr)"
+                    }()
+                    await self.log(.error, "engine", "stream Metal commit failed: \(msg)")
+                    continuation.finish(throwing: EngineError.metalCommitFailed(msg))
                 } catch {
                     await self.log(.error, "engine", "stream failed: \(error)")
                     continuation.finish(throwing: error)

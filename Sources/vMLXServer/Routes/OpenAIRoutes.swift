@@ -1670,6 +1670,11 @@ public enum OpenAIRoutes {
             // from the raw code like the legacy promptTooLong path did
             // before iter-ralph-3 §227.
             return errorJSON(.init(code: 507), err.description)
+        case .metalCommitFailed:
+            // Q3 §299: MLX/Metal fatal error caught by the stream's
+            // `withError` scope. 500 — genuine server-side failure, but
+            // the process is alive and the next request can try again.
+            return errorJSON(.internalServerError, err.description)
         case .portInUse, .unsupportedModelType, .notImplemented,
              .adapterMissingFile, .adapterAlreadyFused, .adapterNotLoaded:
             return errorJSON(.internalServerError, err.description)

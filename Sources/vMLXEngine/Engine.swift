@@ -3553,6 +3553,14 @@ public enum EngineError: Error, CustomStringConvertible {
     /// streams with 503 Service Unavailable + Retry-After hint so
     /// clients back off instead of stalling behind the FIFO lock.
     case tooManyQueued(current: Int, limit: Int)
+    /// Q3 §299: MLX / Metal emitted a fatal error during stream decode
+    /// (command-buffer commit failure, encoder-already-encoding,
+    /// SIGTRAP from `mtl_throw_*`). The `MLX.withError` scope around
+    /// `performStreamingGeneration` caught it and converted it to a
+    /// Swift throw instead of a whole-app crash. Message is the raw
+    /// MLX error string. HTTP maps this to 500 with the message in
+    /// the body.
+    case metalCommitFailed(String)
 
     public var description: String {
         switch self {
@@ -3584,6 +3592,8 @@ public enum EngineError: Error, CustomStringConvertible {
             return String(format: "insufficient memory: model requires ≈%.1f GB peak but only %.1f GB available on this machine. Close other apps or pick a smaller quant.", gNeeded, gAvail)
         case .tooManyQueued(let current, let limit):
             return "too many queued requests: \(current) in flight or queued, VMLX_MAX_QUEUED_REQUESTS=\(limit). Retry after current load drains."
+        case .metalCommitFailed(let msg):
+            return "Metal commit failed during decode: \(msg)"
         }
     }
 }
