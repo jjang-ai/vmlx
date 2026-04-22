@@ -628,27 +628,43 @@ struct List: AsyncParsableCommand {
         // `_platform_strlen` SIGSEGV the first time `vmlxctl ls` finds
         // any models. `Double`-based `%.2f` / `%12s` still use printf
         // formatting via `formatBytes` but stay on numeric fast paths.
-        print(row("NAME", "FAMILY", "QUANT", "SIZE", "PATH"))
+        print(row("NAME", "FAMILY", "MODE", "QUANT", "SIZE", "PATH"))
         for e in entries {
             let quant = e.quantBits.map { "Q\($0)" } ?? "fp16"
             let size = formatBytes(e.totalSizeBytes)
-            print(row(e.displayName, e.family, quant, size, e.canonicalPath.path))
+            let mode = modeLabel(e.modality)
+            print(row(e.displayName, e.family, mode, quant, size, e.canonicalPath.path))
+        }
+    }
+
+    /// Translate Modality to a short tag shown under the MODE column so
+    /// operators can see at a glance which flag to load with
+    /// (`--model` for chat/vision, `--image-model` for image, etc).
+    private func modeLabel(_ m: ModelLibrary.Modality) -> String {
+        switch m {
+        case .text:      return "chat"
+        case .vision:    return "vision"
+        case .embedding: return "embed"
+        case .image:     return "[image]"
+        case .rerank:    return "rerank"
+        case .unknown:   return "?"
         }
     }
 
     /// Print one row with fixed-width columns. Native Swift padding —
     /// avoids the `%s` varargs bridge that SIGSEGVs on ARM64 macOS.
-    private func row(_ name: String, _ family: String, _ quant: String,
-                     _ size: String, _ path: String) -> String {
+    private func row(_ name: String, _ family: String, _ mode: String,
+                     _ quant: String, _ size: String, _ path: String) -> String {
         let nameCol   = name.padding(toLength: 50, withPad: " ", startingAt: 0)
         let familyCol = family.padding(toLength: 10, withPad: " ", startingAt: 0)
+        let modeCol   = mode.padding(toLength: 8,  withPad: " ", startingAt: 0)
         let quantCol  = quant.padding(toLength: 8,  withPad: " ", startingAt: 0)
         // Size right-aligned in 12 cols.
         let sizeCol: String = {
             if size.count >= 12 { return size }
             return String(repeating: " ", count: 12 - size.count) + size
         }()
-        return "\(nameCol) \(familyCol) \(quantCol) \(sizeCol)  \(path)"
+        return "\(nameCol) \(familyCol) \(modeCol) \(quantCol) \(sizeCol)  \(path)"
     }
 
     private func formatBytes(_ b: Int64) -> String {
