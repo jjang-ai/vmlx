@@ -863,13 +863,23 @@ public actor Engine {
         case .standby:
             let task = Task { [weak self] in
                 guard let self else { return }
+                var wakeOK = true
                 do {
                     try await self.wake()
                 } catch {
+                    // A6 §258: wake() already cleared lastLoadOptions and
+                    // transitioned to .stopped for the retry-loop escape
+                    // (deleted model / corrupted config). Don't clobber
+                    // that terminal state by calling finishWakeTransition
+                    // → .running on the failure path — the UI needs the
+                    // .stopped state to render the "pick a model" banner.
+                    wakeOK = false
                     await self.log(.warn, "lifecycle",
-                        "wake stub threw: \(error) — transitioning state anyway")
+                        "wake stub threw: \(error) — engine parked in terminal state")
                 }
-                await self.finishWakeTransition()
+                if wakeOK {
+                    await self.finishWakeTransition()
+                }
             }
             inFlightWakeTask = task
             await task.value
@@ -2479,8 +2489,20 @@ public actor Engine {
         // holding that memory until the next allocation forces MLX to
         // flush. Safe because `loaded` + `cacheCoordinator` are nil at
         // this point — no live buffers to touch.
+        // A5 §257: snapshot GPU active-memory before + after clearCache
+        // so operators can verify the drop landed. Goal is ≥90% of
+        // `expectedBytes` returning to the pool; when it doesn't, the
+        // log flags a retained reference somewhere (cache ring, SSM
+        // companion, or a closure that captured `loaded` mid-generate).
+        let before = MLX.Memory.snapshot().activeMemory
         MLX.Memory.clearCache()
-        await logs.append(.info, category: "engine", "deep sleep — weights unloaded")
+        let after = MLX.Memory.snapshot().activeMemory
+        let delta = Int64(before) - Int64(after)
+        let expected = self.expectedBytes
+        let pct: Double = expected > 0 ? Double(delta) / Double(expected) * 100.0 : 0
+        await logs.append(.info, category: "engine",
+            String(format: "deep sleep — weights unloaded (freed %.2f GB of %.2f GB expected = %.1f%%)",
+                Double(delta) / 1e9, Double(expected) / 1e9, pct))
         transition(.standby(.deep))
     }
 
