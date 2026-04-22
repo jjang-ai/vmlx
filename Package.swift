@@ -577,6 +577,7 @@ let package = Package(
                 "WakeRetryLoopEscapeTests.swift",
                 "IdleTimerDualCountdownTests.swift",
                 "StandbyUnloadRaceTests.swift",
+                "GenerationLockCancelTests.swift",
                 "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",

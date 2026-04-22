@@ -28,7 +28,10 @@ import Foundation
 public actor GenerationLock {
 
     private var held: Bool = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    // B2 §261: waiters now carry an id so cancellation can remove them
+    // by identity. The tuple order is (id, continuation); /health sees
+    // `waiters.count` which stays accurate under cancellation.
+    private var waiters: [(UUID, CheckedContinuation<Void, Never>)] = []
 
     public init() {}
 
@@ -49,16 +52,41 @@ public actor GenerationLock {
             held = true
             return
         }
-        await withCheckedContinuation { cont in
-            waiters.append(cont)
+        // B2 §261: cancel-aware wait. Without this, an outer Task that
+        // cancels mid-acquire leaks its continuation in `waiters` — the
+        // /health `waiting` counter inflates forever, and a subsequent
+        // release() hands the baton to a dead Task whose work never
+        // runs. `withTaskCancellationHandler` gives us an `onCancel`
+        // hook that wakes the waiter; we then drop it from the queue
+        // and return normally, letting the outer Task's next `try`
+        // observe the CancellationError.
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                waiters.append((id, cont))
+            }
+        } onCancel: { [weak self] in
+            Task { [weak self] in
+                await self?.dropWaiter(id: id)
+            }
         }
+    }
+
+    /// B2 §261: remove a cancelled waiter by id. If the waiter had
+    /// already been dequeued and resumed, this is a no-op. If it was
+    /// still pending, resume it so the outer Task completes and the
+    /// counter decrements.
+    private func dropWaiter(id: UUID) {
+        guard let idx = waiters.firstIndex(where: { $0.0 == id }) else { return }
+        let entry = waiters.remove(at: idx)
+        entry.1.resume()
     }
 
     public func release() {
         if let next = waiters.first {
             waiters.removeFirst()
             // `held` stays true — we just hand the baton to the next waiter.
-            next.resume()
+            next.1.resume()
         } else {
             held = false
         }
