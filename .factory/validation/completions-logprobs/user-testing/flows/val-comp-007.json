@@ -1,0 +1,32 @@
+{
+  "assertionId": "VAL-COMP-007",
+  "status": "fail",
+  "evidence": [
+    {
+      "test": "Non-streaming: top_logprobs dict entries sorted descending by logprob",
+      "result": "9/9 positions unsorted — dict entries appear in arbitrary order, not descending by logprob",
+      "pass": false
+    },
+    {
+      "test": "Non-streaming: chosen token appears as first dict entry",
+      "result": "Most positions have chosen token NOT first in dict (e.g., pos 1: chosen='capital' appears 3rd)",
+      "pass": false
+    },
+    {
+      "test": "Streaming: top_logprobs dict entries sorted descending by logprob",
+      "result": "10/10 positions unsorted",
+      "pass": false
+    },
+    {
+      "test": "Chat completions endpoint: top_logprobs sorted correctly",
+      "result": "9/9 sorted, 9/9 chosen first — chat completions format works correctly",
+      "pass": true,
+      "note": "The array-based format in /v1/chat/completions works correctly. Only the legacy dict format in /v1/completions is broken."
+    }
+  ],
+  "rootCauseAnalysis": "The fix (commit c0e33d8) correctly sorts TopTokenLogprob arrays in LogprobsCollector, TokenIterator, and Engine. However, buildLegacyLogprobs() in SSEEncoder.swift converts TopTokenLogprob arrays to [String: Any] dictionaries. Swift Dictionary does not preserve insertion order, so the sorted order is lost during dict construction and JSON serialization. The chosen token and alternatives are added in the correct order (line 88-92 of SSEEncoder.swift), but the Swift hash map scrambles the order.",
+  "suggestedFix": "In buildLegacyLogprobs(), replace the [String: Any] dict with an ordered JSON construction approach. Options: (1) Use JSONEncoder with ordered keys, (2) Build the JSON string manually, or (3) Use an ordered dictionary type. The dict construction at SSEEncoder.swift:88-92 needs to preserve the insertion order of chosen-token-first, then alternatives sorted descending.",
+  "frictions": [],
+  "blockers": [],
+  "toolsUsed": ["curl", "python3"]
+}

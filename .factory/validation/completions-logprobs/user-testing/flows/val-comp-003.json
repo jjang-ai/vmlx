@@ -1,0 +1,34 @@
+{
+  "assertionId": "VAL-COMP-003",
+  "status": "pass",
+  "evidence": [
+    {
+      "test": "top_logprobs: -1 returns HTTP 400",
+      "result": "HTTP 400",
+      "pass": true
+    },
+    {
+      "test": "top_logprobs: -5 returns HTTP 400",
+      "result": "HTTP 400",
+      "pass": true
+    },
+    {
+      "test": "top_logprobs: 0 returns HTTP 200",
+      "result": "HTTP 200",
+      "pass": true
+    },
+    {
+      "test": "top_logprobs: 5 returns HTTP 200 with alternatives",
+      "result": "HTTP 200, 5 alternatives in response",
+      "pass": true
+    },
+    {
+      "test": "Error message for negative value",
+      "result": "{\"error\":{\"message\":\"'top_logprobs' must be >= 0, got -1\",\"type\":\"api_error\",\"code\":400}}",
+      "pass": true
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "toolsUsed": ["curl"]
+}

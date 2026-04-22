@@ -1,31 +1,21 @@
 {
   "milestone": "completions-logprobs",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "assertionsSummary": {
-    "total": 7,
-    "passed": 5,
-    "failed": 2,
+    "total": 2,
+    "passed": 1,
+    "failed": 1,
     "blocked": 0
   },
-  "passedAssertions": [
-    "VAL-COMP-001",
-    "VAL-COMP-002",
-    "VAL-COMP-004",
-    "VAL-COMP-005",
-    "VAL-COMP-006"
-  ],
+  "passedAssertions": ["VAL-COMP-003"],
   "failedAssertions": [
     {
-      "id": "VAL-COMP-003",
-      "reason": "top_logprobs: -1 (negative value) returns HTTP 200 instead of HTTP 400 — server does not validate negative top_logprobs values. Positive values (0, 1, 5) work correctly."
-    },
-    {
       "id": "VAL-COMP-007",
-      "reason": "top_logprobs entries are NOT sorted in descending order by logprob (89/90 positions unsorted). Chosen token is NOT guaranteed to be first entry (76/90 positions). Entries appear in arbitrary/random order rather than highest-probability-first."
+      "reason": "top_logprobs dict entries NOT sorted in descending order by logprob in legacy /v1/completions format. 9/9 positions unsorted in non-streaming, 10/10 in streaming. Root cause: buildLegacyLogprobs() in SSEEncoder.swift uses Swift Dictionary ([String: Any]) which does not preserve insertion order. The fix (commit c0e33d8) correctly sorted the TopTokenLogprob arrays used by chat completions, but the legacy format conversion to dict loses ordering. Chat completions /v1/chat/completions works correctly (9/9 sorted, 9/9 chosen first)."
     }
   ],
   "blockedAssertions": [],
   "appliedUpdates": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/completions-logprobs/user-testing/synthesis.json"
 }
