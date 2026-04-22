@@ -330,11 +330,16 @@ struct Serve: AsyncParsableCommand {
         // `CacheCoordinatorConfig`. Default `LoadOptions(modelPath:)`
         // ignores GlobalSettings entirely, which is why the cache flag
         // was silently dropped before this change.
-        // Either --model or --embedding-model must be provided. Chat-only,
-        // embedding-only, and chat+embedding are all valid server topologies.
-        if model == nil && (embeddingModel == nil || embeddingModel!.isEmpty) {
+        // P1 §294 — `--image-model` is also a valid standalone startup:
+        // an image-only server serves /v1/images/{generations,edits}
+        // without needing a chat or embedding backend resident. Reject
+        // only when ALL THREE model flags are empty.
+        let hasModel = !(model?.isEmpty ?? true)
+        let hasEmbedding = !(embeddingModel?.isEmpty ?? true)
+        let hasImage = !(imageModel?.isEmpty ?? true)
+        if !hasModel && !hasEmbedding && !hasImage {
             FileHandle.standardError.write(Data(
-                "[cli] error: provide --model and/or --embedding-model\n".utf8))
+                "[cli] error: provide --model, --embedding-model, and/or --image-model\n".utf8))
             throw ExitCode.failure
         }
 

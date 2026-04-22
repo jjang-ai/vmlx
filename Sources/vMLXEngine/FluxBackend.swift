@@ -1,5 +1,6 @@
 import Foundation
 import vMLXFlux
+import vMLXFluxKit
 
 // MARK: - vMLX ↔ vmlx-flux bridge
 //
@@ -41,8 +42,14 @@ extension Engine {
     /// as it stays resident (see generateImage fallback below).
     public func preloadImageModel(at modelPath: URL) async throws {
         let flux = getOrCreateFluxBackend()
-        let name = modelPath.lastPathComponent.lowercased()
-        try await flux.load(name: name, modelPath: modelPath, quantize: nil)
+        // Resolve through fuzzy lookup so `z-image-turbo-8bit` (what
+        // the HF snapshot directory is named) resolves to the canonical
+        // registry entry `z-image-turbo`. Matches how the UI picks a
+        // backend from a local path.
+        let raw = modelPath.lastPathComponent
+        let resolved = vMLXFluxKit.ModelRegistry.lookupFuzzy(name: raw)?.name
+            ?? raw.lowercased()
+        try await flux.load(name: resolved, modelPath: modelPath, quantize: nil)
     }
 
     // MARK: - Typed image generation (called from ImageScreen)

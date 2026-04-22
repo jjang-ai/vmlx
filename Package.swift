@@ -479,6 +479,7 @@ let package = Package(
                 "vMLXEmbedders",
                 "vMLXWhisper",
                 "vMLXFlux",
+                "vMLXFluxKit",
                 "vMLXTTS",
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
