@@ -310,6 +310,24 @@ public enum OpenAIRoutes {
                 // spec returns N choices for N prompts; we'd need a
                 // parallel batch path to match that faithfully.
                 prompt = arr.joined(separator: "\n")
+            } else if let ids = obj["prompt"] as? [Int] {
+                // Prompt as token IDs (lm-eval loglikelihood with
+                // tokenized_requests=true). Detokenize back to text.
+                guard let container = await engine.loaded else {
+                    return Self.errorJSON(.serviceUnavailable, "no model loaded")
+                }
+                let tokenizer = await container.tokenizer
+                prompt = tokenizer.decode(tokenIds: ids, skipSpecialTokens: false)
+            } else if let batchIds = obj["prompt"] as? [[Int]] {
+                // Batched prompt as array of token-ID arrays.
+                // Flatten by detokenizing each batch then joining with \n.
+                // NOTE: This is lossy for independent loglikelihood scoring
+                // — use batch_size=1 to avoid incorrect results.
+                guard let container = await engine.loaded else {
+                    return Self.errorJSON(.serviceUnavailable, "no model loaded")
+                }
+                let tokenizer = await container.tokenizer
+                prompt = batchIds.map { tokenizer.decode(tokenIds: $0, skipSpecialTokens: false) }.joined(separator: "\n")
             } else {
                 return Self.errorJSON(.badRequest, "missing 'prompt'")
             }
@@ -340,6 +358,9 @@ public enum OpenAIRoutes {
             // Set after init since ChatRequest uses Codable synthesis.
             chatReq.echo = obj["echo"] as? Bool
             chatReq.promptLogprobs = obj["prompt_logprobs"] as? Int
+            // Mark as raw prompt to skip chat template — legacy completions
+            // pass raw text, not a chat conversation.
+            chatReq.rawPrompt = true
             let echoEnabled = chatReq.echo ?? false
             await engine.wakeFromStandby()
 
@@ -1088,6 +1109,8 @@ public enum OpenAIRoutes {
         // POST /v1/tokenize — encode text to token IDs.
         //
         // Request body: {"text": "...", "add_special_tokens": false}
+        //   — or — {"prompt": "...", "add_special_tokens": false}
+        //   (lm-eval sends `prompt` instead of `text`)
         // Response:     {"tokens": [123, 456]}
         router.post("/v1/tokenize") { req, _ -> Response in
             var req = req
@@ -1096,8 +1119,31 @@ public enum OpenAIRoutes {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return Self.errorJSON(.badRequest, "invalid JSON body")
             }
-            guard let text = obj["text"] as? String else {
-                return Self.errorJSON(.badRequest, "missing 'text'")
+            // Accept both "text" and "prompt" keys for lm-eval compatibility.
+            let text = obj["text"] as? String ?? obj["prompt"] as? String
+            guard let text else {
+                return Self.errorJSON(.badRequest, "missing 'text' or 'prompt'")
+            }
+            let addSpecialTokens = obj["add_special_tokens"] as? Bool ?? false
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokenizer = await container.tokenizer
+            let tokens = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+            return Self.json(["tokens": tokens])
+        }
+        // Alias without /v1/ prefix: lm-eval strips /v1/completions from
+        // base_url and calls /tokenize directly.
+        router.post("/tokenize") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            let text = obj["text"] as? String ?? obj["prompt"] as? String
+            guard let text else {
+                return Self.errorJSON(.badRequest, "missing 'text' or 'prompt'")
             }
             let addSpecialTokens = obj["add_special_tokens"] as? Bool ?? false
             guard let container = await engine.loaded else {
@@ -1111,7 +1157,8 @@ public enum OpenAIRoutes {
         // POST /v1/detokenize — decode token IDs to text.
         //
         // Request body: {"tokens": [123, 456], "skip_special_tokens": false}
-        // Response:     {"text": "..."}
+        // Response:     {"text": "...", "prompt": "..."}
+        //   (lm-eval reads `prompt` from response; OpenAI uses `text`)
         router.post("/v1/detokenize") { req, _ -> Response in
             var req = req
             let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
@@ -1128,7 +1175,46 @@ public enum OpenAIRoutes {
             }
             let tokenizer = await container.tokenizer
             let text = tokenizer.decode(tokenIds: tokens, skipSpecialTokens: skipSpecialTokens)
-            return Self.json(["text": text])
+            // Return both `text` and `prompt` keys for lm-eval compatibility.
+            // lm-eval's RemoteTokenizer reads `prompt` from the response.
+            return Self.json(["text": text, "prompt": text])
+        }
+        // Alias without /v1/ prefix.
+        router.post("/detokenize") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 16 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            guard let tokens = obj["tokens"] as? [Int] else {
+                return Self.errorJSON(.badRequest, "missing or invalid 'tokens'")
+            }
+            let skipSpecialTokens = obj["skip_special_tokens"] as? Bool ?? false
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokenizer = await container.tokenizer
+            let text = tokenizer.decode(tokenIds: tokens, skipSpecialTokens: skipSpecialTokens)
+            return Self.json(["text": text, "prompt": text])
+        }
+
+        // Alias: GET /tokenizer_info (without /v1/ prefix).
+        // lm-eval strips /v1/completions from base_url and calls
+        // /tokenizer_info directly.
+        router.get("/tokenizer_info") { _, _ -> Response in
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokenizer = await container.tokenizer
+            let chatTemplate: Any = await engine.currentCapabilities()?.chatTemplate ?? NSNull()
+            let info: [String: Any] = [
+                "eos_token": tokenizer.eosToken as Any,
+                "bos_token": tokenizer.bosToken as Any,
+                "pad_token": tokenizer.unknownToken as Any,
+                "chat_template": chatTemplate,
+            ]
+            return Self.json(info)
         }
     }
 

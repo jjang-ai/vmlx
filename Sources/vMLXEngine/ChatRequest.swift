@@ -101,6 +101,15 @@ public struct ChatRequest: Codable, Sendable {
     /// `assistant_prefix`) without a CLI rebuild.
     public var chatTemplateKwargs: [String: JSONValue]?
 
+    // MARK: - Non-wire fields (set programmatically)
+
+    /// When true, the engine should tokenize the raw prompt text directly
+    /// WITHOUT applying the chat template. Set by the `/v1/completions`
+    /// route for legacy completions where the prompt is a raw string or
+    /// pre-tokenized `[Int]` array — not a chat message.
+    /// NOT decoded from JSON (not in CodingKeys).
+    public var rawPrompt: Bool = false
+
     public struct ResponseFormat: Codable, Sendable {
         public var type: String?
         public var jsonSchema: JSONSchemaSpec?

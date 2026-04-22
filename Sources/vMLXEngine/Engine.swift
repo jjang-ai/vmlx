@@ -1656,9 +1656,31 @@ public actor Engine {
 
         // Perform the fast-path computation inside the container's actor.
         return try await container.perform { (ctx: ModelContext) in
-            // 1. Tokenize the prompt via the processor.
-            let lmInput = try await ctx.processor.prepare(input: userInput)
-            let inputTokenIds = lmInput.text.tokens.reshaped(-1).asArray(Int.self)
+            // 1. Tokenize the prompt.
+            //    For legacy completions (rawPrompt=true), tokenize the raw
+            //    text directly WITHOUT applying the chat template — the caller
+            //    sent a bare prompt string, not a chat conversation.
+            //    Otherwise, go through the processor which applies the template.
+            let inputTokenIds: [Int]
+            if request.rawPrompt {
+                // Raw text mode: extract prompt text from the first message
+                // and tokenize directly. The completions route wraps the prompt
+                // as a single user message, so we grab its content.
+                let rawText: String
+                if case .string(let s) = request.messages.first?.content {
+                    rawText = s
+                } else if case .parts(let parts) = request.messages.first?.content,
+                          let textPart = parts.first(where: { $0.type == "text" }),
+                          let t = textPart.text {
+                    rawText = t
+                } else {
+                    rawText = ""
+                }
+                inputTokenIds = ctx.tokenizer.encode(text: rawText)
+            } else {
+                let lmInput = try await ctx.processor.prepare(input: userInput)
+                inputTokenIds = lmInput.text.tokens.reshaped(-1).asArray(Int.self)
+            }
             let seqLen = inputTokenIds.count
 
             // 2. Call model directly to get full-sequence logits [1, seq_len, vocab].
@@ -1669,7 +1691,7 @@ public actor Engine {
             //    Create a fresh cache for this one-shot request.
             let cache = ctx.model.newCache(parameters: nil)
             // Add batch axis: [seq_len] → [1, seq_len]
-            let batchInput = lmInput.text[text: .newAxis]
+            let batchInput = LMInput.Text(tokens: MLXArray(inputTokenIds)[.newAxis, 0...])
             let modelOutput = ctx.model(batchInput, cache: cache, state: nil)
 
             // 3. Batched logSoftmax over full [1, seq_len, vocab].
