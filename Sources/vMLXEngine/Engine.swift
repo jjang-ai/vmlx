@@ -3549,6 +3549,10 @@ public enum EngineError: Error, CustomStringConvertible {
     /// `Engine.memoryBudgetBytes()`. Mapped to HTTP 507 by
     /// OpenAIRoutes.mapEngineError.
     case insufficientMemory(needed: Int64, available: Int64)
+    /// B4 §262: `VMLX_MAX_QUEUED_REQUESTS` cap reached — refuse further
+    /// streams with 503 Service Unavailable + Retry-After hint so
+    /// clients back off instead of stalling behind the FIFO lock.
+    case tooManyQueued(current: Int, limit: Int)
 
     public var description: String {
         switch self {
@@ -3578,6 +3582,8 @@ public enum EngineError: Error, CustomStringConvertible {
             let gNeeded = Double(needed) / 1_000_000_000.0
             let gAvail = Double(available) / 1_000_000_000.0
             return String(format: "insufficient memory: model requires ≈%.1f GB peak but only %.1f GB available on this machine. Close other apps or pick a smaller quant.", gNeeded, gAvail)
+        case .tooManyQueued(let current, let limit):
+            return "too many queued requests: \(current) in flight or queued, VMLX_MAX_QUEUED_REQUESTS=\(limit). Retry after current load drains."
         }
     }
 }

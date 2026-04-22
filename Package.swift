@@ -578,6 +578,7 @@ let package = Package(
                 "IdleTimerDualCountdownTests.swift",
                 "StandbyUnloadRaceTests.swift",
                 "GenerationLockCancelTests.swift",
+                "BackpressureTests.swift",
                 "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",

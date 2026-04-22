@@ -1639,6 +1639,10 @@ public enum OpenAIRoutes {
             return errorJSON(.gatewayTimeout, err.description)
         case .toolCallRepetition:
             return errorJSON(.unprocessableContent, err.description)
+        case .tooManyQueued:
+            // B4 §262: serial-fifo backpressure. 503 signals "try later"
+            // to clients without indicating a permanent failure.
+            return errorJSON(.serviceUnavailable, err.description)
         case .insufficientMemory:
             // A3 §255: 507 Insufficient Storage is the closest HTTP
             // status for "we physically can't hold this model." OpenAI
