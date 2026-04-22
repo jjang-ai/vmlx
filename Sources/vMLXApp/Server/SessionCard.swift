@@ -67,7 +67,18 @@ struct SessionCard: View {
             if case .error = session.state { Button("Reconnect", action: onReconnect) }
             Button("Open logs", action: onSelect)
             Divider()
+            // iter-124 §150 + §274: Delete refuses while the session is
+            // mid-load. Letting the user `rm -rf` the model dir while
+            // Phase 2 is still opening shards crashes the loader with
+            // a confusing SIGBUS ("Bus error: mmap() backing vanished").
+            // The engine already marks the path `activeLoadPaths`, but
+            // the context-menu Delete path bypassed that gate. Grey it
+            // out during `.loading` so the user sees why it's disabled.
             Button("Delete", role: .destructive, action: onDelete)
+                .disabled({
+                    if case .loading = session.state { return true }
+                    return false
+                }())
         }
         .onAppear {
             if case .loading = session.state { startTicker() }

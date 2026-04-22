@@ -263,6 +263,51 @@ final class AppState {
         // files degrade to "file not found" in the MessageBubble
         // chip — harmless. Cost: one FileManager scan on launch.
         Self.sweepStaleChatVideoStagings()
+
+        // H1 §271 — thermal throttle surface. Prime the level on launch
+        // and wire a NotificationCenter observer so the tray updates
+        // whenever the OS posts a thermal-state change. Weak closure
+        // capture is safe because AppState lives for the app's full
+        // lifetime. The observer token is kept so deinit could remove
+        // it; we let it leak with the app.
+        self.thermalLevel = ThermalMonitor.currentLevel()
+        NotificationCenter.default.addObserver(
+            forName: ThermalMonitor.didChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.thermalLevel = ThermalMonitor.currentLevel()
+            }
+        }
+
+        // H4 §273 — subscribe to the LogStore at `.error` so the tray
+        // can render a red-dot badge with an unacknowledged count. The
+        // `logs` property is actor-isolated on Engine, so we have to
+        // `await self.defaultEngine.logs` first to pull it off the
+        // actor, then call the nonisolated `subscribe(minLevel:)` from
+        // the detached Task. The inner for-await hops back to MainActor
+        // on every entry to bump the count safely.
+        let engineRef = self.defaultEngine
+        Task { [weak self] in
+            let store = await engineRef.logs
+            let stream = store.subscribe(minLevel: .error)
+            for await _ in stream {
+                await MainActor.run {
+                    self?.errorLogCount += 1
+                }
+            }
+        }
+    }
+
+    /// H4 §273 — user acknowledged the tray error-count badge.
+    /// Called when the user opens the LogsPanel OR hovers the tray dot.
+    /// Resets the count so the red dot disappears until a NEW error is
+    /// appended post-acknowledgement.
+    @MainActor
+    func acknowledgeErrors() {
+        self.errorLogCount = 0
+        self.lastErrorLogAcknowledged = Date()
     }
 
     /// Delete temp-staged chat video files older than 14 days.
@@ -542,6 +587,32 @@ final class AppState {
     var idleCountdownSeconds: TimeInterval? = nil
     var idleCountdownKindIsDeep: Bool = false
 
+    /// A7 §259 — dual-stage idle countdown. Both soft and deep remainders
+    /// are surfaced simultaneously so TrayItem can render
+    /// "soft 4:12 · deep 14:12" instead of flip-flopping between one or
+    /// the other. `nil` when the timer is disabled or that stage has
+    /// already fired. The legacy `idleCountdownSeconds` above is kept
+    /// so older surfaces (SessionCard, CLI status) don't need to be
+    /// touched all at once.
+    var idleCountdownSoftSeconds: TimeInterval? = nil
+    var idleCountdownDeepSeconds: TimeInterval? = nil
+
+    /// H1 §271 — thermal throttle surface. `ThermalMonitor.currentLevel()`
+    /// wraps ProcessInfo.thermalState; this field mirrors it so the
+    /// tray / chat banners can render a warning when the Mac is
+    /// throttling (decode tok/s drops ~40% on `.serious`). Updated on
+    /// app launch AND whenever the OS posts
+    /// `.thermalStateDidChangeNotification` — see `rebindEngineObserver`
+    /// for the NotificationCenter hook.
+    var thermalLevel: ThermalMonitor.Level = .nominal
+
+    /// Count of `.error`-level log entries since last acknowledgement.
+    /// Drives the tray red-dot badge so users notice silent errors
+    /// without opening the Logs panel. Reset via `acknowledgeErrors()`.
+    /// H4 §273.
+    var errorLogCount: Int = 0
+    var lastErrorLogAcknowledged: Date = .distantPast
+
     /// Server-screen session list. Mirrors the Electron `sessions` IPC feed
     /// (`SessionsContext.tsx`). Each entry is a running *or* inactive model
     /// session with its per-session settings blob (port, model path, etc).
@@ -744,6 +815,25 @@ final class AppState {
                         self.idleCountdownKindIsDeep = (next.kind == .deepSleep)
                     } else {
                         self.idleCountdownSeconds = nil
+                    }
+                    // A7 §259 — also poll the dual-stage remainders so
+                    // the tray can render both countdowns side-by-side.
+                    // Gated on `.running` / `.standby(.soft)` — deep
+                    // remainder is still meaningful once soft has fired.
+                    let softOrRunning: Bool = {
+                        switch current.state {
+                        case .running: return true
+                        case .standby(.soft): return true
+                        default: return false
+                        }
+                    }()
+                    if softOrRunning {
+                        let pair = await current.idleTimer.sleepCountdowns()
+                        self.idleCountdownSoftSeconds = pair.soft
+                        self.idleCountdownDeepSeconds = pair.deep
+                    } else {
+                        self.idleCountdownSoftSeconds = nil
+                        self.idleCountdownDeepSeconds = nil
                     }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }

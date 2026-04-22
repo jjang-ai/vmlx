@@ -98,16 +98,36 @@ struct TrayItem: View {
         .frame(maxHeight: 600)
         .task { await startMetricsPoll() }
         .onDisappear { metricsTask?.cancel(); metricsTask = nil }
-        .onAppear { Task { await loadDraftIfNeeded() } }
+        .onAppear {
+            Task { await loadDraftIfNeeded() }
+            // H4 §273 — opening the tray popover acknowledges the
+            // error-count badge. Mirrors the Logs panel behaviour:
+            // user saw there's been an issue, count clears until the
+            // next post-ack `.error` lands.
+            app.acknowledgeErrors()
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: Self.icon(for: app.engineState))
-                .foregroundColor(stateColor)
-                .font(.system(size: 18, weight: .semibold))
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: Self.icon(for: app.engineState))
+                    .foregroundColor(stateColor)
+                    .font(.system(size: 18, weight: .semibold))
+                // H4 §273 — red dot for unacknowledged .error log entries.
+                // Non-zero → dot is visible. Hover/click the tray clears
+                // it via `app.acknowledgeErrors()` (wired in onAppear).
+                if app.errorLogCount > 0 {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                        .overlay(Circle().stroke(Color.white, lineWidth: 1))
+                        .offset(x: 4, y: -4)
+                        .help("\(app.errorLogCount) unread error log entr\(app.errorLogCount == 1 ? "y" : "ies") — open Logs to clear")
+                }
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(stateLabel)
@@ -115,6 +135,13 @@ struct TrayItem: View {
                     if archFlags.hybrid { trayArchPill("hybrid", tint: .accentColor) }
                     if archFlags.swa    { trayArchPill("SWA",    tint: .green) }
                     if archFlags.tq     { trayArchPill("TQ",     tint: .accentColor) }
+                    // H1 §271 — thermal throttle pill.  Only shown when
+                    // the OS is actually pressuring.  `.fair` is mild;
+                    // `.serious`/`.critical` deserve a prominent warning
+                    // because decode tok/s will drop ~40% until the Mac
+                    // cools off. `thermalPill` is a ViewBuilder that
+                    // emits EmptyView on `.nominal`.
+                    thermalPill
                 }
                 Text(modelName)
                     .font(.system(size: 11))
@@ -880,20 +907,58 @@ struct TrayItem: View {
         case .stopped:        return "Stopped"
         case .loading:        return "Loading…"
         case .running:
-            // Repeated user ask: surface the idle-sleep countdown so it
-            // stops being invisible. When the engine is running AND
-            // there's a pending soft-sleep / deep-sleep event, append
-            // "· Sleeps in MM:SS" to the state label.
+            // A7 §259 — both soft and deep remainders shown
+            // simultaneously so the user doesn't wonder which clock is
+            // ticking. Falls through to the legacy single-kind label
+            // when the new dual fields aren't populated (gateway path
+            // before the poller has run its first tick).
+            let soft = app.idleCountdownSoftSeconds
+            let deep = app.idleCountdownDeepSeconds
+            if let s = soft, s > 0, let d = deep, d > 0 {
+                return String(format: "Running · soft %@ · deep %@", mmss(s), mmss(d))
+            }
+            if let d = deep, d > 0 {
+                return String(format: "Running · deep %@", mmss(d))
+            }
             if let s = app.idleCountdownSeconds, s > 0 {
-                let total = Int(s)
-                let m = total / 60, r = total % 60
                 let kind = app.idleCountdownKindIsDeep ? "Deep sleep" : "Sleeps"
-                return String(format: "Running · %@ in %d:%02d", kind, m, r)
+                return String(format: "Running · %@ in %@", kind, mmss(s))
             }
             return "Running"
-        case .standby(.soft): return "Light sleep"
+        case .standby(.soft):
+            // Deep countdown is still meaningful after soft has fired —
+            // users can see exactly when the model will be unloaded.
+            if let d = app.idleCountdownDeepSeconds, d > 0 {
+                return String(format: "Light sleep · deep %@", mmss(d))
+            }
+            return "Light sleep"
         case .standby(.deep): return "Deep sleep"
         case .error:          return "Error"
+        }
+    }
+
+    /// A7 §259 — format a TimeInterval as M:SS. Handles large sleep
+    /// windows (hours) by widening the minute field rather than
+    /// silently wrapping.
+    private func mmss(_ s: TimeInterval) -> String {
+        let total = Int(max(0, s))
+        let m = total / 60, r = total % 60
+        return String(format: "%d:%02d", m, r)
+    }
+
+    /// H1 §271 — thermal state pill. Returns nil for `.nominal` so the
+    /// header stays clean when the system isn't throttling.
+    @ViewBuilder
+    private var thermalPill: some View {
+        switch app.thermalLevel {
+        case .nominal:
+            EmptyView()
+        case .fair:
+            trayArchPill("THERMAL FAIR", tint: .yellow)
+        case .serious:
+            trayArchPill("THROTTLING", tint: .orange)
+        case .critical:
+            trayArchPill("CRITICAL TEMP", tint: .red)
         }
     }
 
