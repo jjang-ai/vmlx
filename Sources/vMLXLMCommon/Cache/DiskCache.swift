@@ -80,6 +80,14 @@ public final class DiskCache: @unchecked Sendable {
             """)
         // Migration for pre-existing DBs that lack the column.
         executeSQL("ALTER TABLE cache_entries ADD COLUMN last_accessed_at REAL DEFAULT (julianday('now'))")
+        // Q2 §298 — SHA-256 of the persisted safetensors file, used to
+        // catch silent-truncation / partial-flush corruption that the
+        // safetensors header parse doesn't detect. Column added for
+        // pre-existing DBs via ALTER; SQLite returns an error (not a
+        // throw) when the column already exists, which our
+        // `executeSQL` wrapper swallows. Entries written before Q2 will
+        // have NULL here and skip verification — safe fallback.
+        executeSQL("ALTER TABLE cache_entries ADD COLUMN file_sha256 TEXT")
     }
 
     deinit {
@@ -140,8 +148,15 @@ public final class DiskCache: @unchecked Sendable {
                 fileSize = 0
             }
 
+            // Q2 §298: hash the persisted bytes so fetch can later verify
+            // that the file wasn't silently truncated. Done outside the
+            // SQLite lock — hashing a multi-GB KV cache takes tens of ms
+            // and MUST NOT block other stores/fetches.
+            let sha = DiskCache.hashFile(url)
+
             lock.withLock {
-                insertEntry(hash: hash, tokenCount: tokenCount, fileSize: fileSize)
+                insertEntry(hash: hash, tokenCount: tokenCount, fileSize: fileSize,
+                            fileSha256: sha)
                 evictIfNeeded()
             }
         } catch {
@@ -166,6 +181,29 @@ public final class DiskCache: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else {
             lock.withLock { misses += 1 }
             return nil
+        }
+
+        // Q2 §298: verify the file's SHA-256 against the stored index
+        // BEFORE handing the bytes to the safetensors deserializer. A
+        // partial flush or silent truncation (header valid, data short)
+        // would otherwise yield wrong-KV-with-right-key — the worst
+        // class of cache bug. Pre-migration rows have NULL here and
+        // skip this check; once a row is re-stored it gains the column
+        // value and verification engages.
+        let storedSha = lock.withLock { storedFileSha256(hash: hash) }
+        if let expected = storedSha {
+            let actual = DiskCache.hashFile(url)
+            if actual != expected {
+                FileHandle.standardError.write(Data(
+                    "[vmlx][cache/disk] sha mismatch at \(url.lastPathComponent): expected \(expected.prefix(16))… got \(actual?.prefix(16) ?? "<nil>")… — evicting\n"
+                    .utf8))
+                try? FileManager.default.removeItem(at: url)
+                lock.withLock {
+                    misses += 1
+                    deleteRow(hash: hash)
+                }
+                return nil
+            }
         }
 
         do {
@@ -293,7 +331,8 @@ public final class DiskCache: @unchecked Sendable {
     }
 
     /// Insert or replace a cache entry in the SQLite index.
-    private func insertEntry(hash: String, tokenCount: Int, fileSize: Int) {
+    private func insertEntry(hash: String, tokenCount: Int, fileSize: Int,
+                             fileSha256: String? = nil) {
         guard let db else { return }
 
         // UPSERT: on conflict, preserve `created_at` (entry's first-seen
@@ -301,12 +340,15 @@ public final class DiskCache: @unchecked Sendable {
         // INSERT OR REPLACE would reset both columns via DEFAULT, making
         // the LRU-on-hit bump pointless because the next store overwrites
         // it. Audit 2026-04-16.
+        // Q2 §298: also persist file_sha256 so fetch can verify the file
+        // wasn't silently truncated / partially flushed across a crash.
         let sql = """
-            INSERT INTO cache_entries (hash, token_count, file_size)
-            VALUES (?, ?, ?)
+            INSERT INTO cache_entries (hash, token_count, file_size, file_sha256)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(hash) DO UPDATE SET
                 token_count = excluded.token_count,
                 file_size = excluded.file_size,
+                file_sha256 = excluded.file_sha256,
                 last_accessed_at = julianday('now')
             """
         var stmt: OpaquePointer?
@@ -316,9 +358,54 @@ public final class DiskCache: @unchecked Sendable {
             sqlite3_bind_text(stmt, 1, cStr, -1, nil)
             sqlite3_bind_int64(stmt, 2, Int64(tokenCount))
             sqlite3_bind_int64(stmt, 3, Int64(fileSize))
-            sqlite3_step(stmt)
+            if let sha = fileSha256 {
+                sha.withCString { sStr in
+                    sqlite3_bind_text(stmt, 4, sStr, -1, nil)
+                    sqlite3_step(stmt)
+                }
+            } else {
+                sqlite3_bind_null(stmt, 4)
+                sqlite3_step(stmt)
+            }
         }
         sqlite3_finalize(stmt)
+    }
+
+    /// Q2 §298 — look up the stored SHA-256 for a hash's safetensors file.
+    /// Returns nil if the row is missing the column (pre-migration) or no
+    /// row exists. Caller holds the shared lock.
+    private func storedFileSha256(hash: String) -> String? {
+        guard let db else { return nil }
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT file_sha256 FROM cache_entries WHERE hash = ?", -1, &stmt, nil) == SQLITE_OK else {
+            return nil
+        }
+        let res = hash.withCString { cStr -> String? in
+            sqlite3_bind_text(stmt, 1, cStr, -1, nil)
+            if sqlite3_step(stmt) == SQLITE_ROW,
+               let raw = sqlite3_column_text(stmt, 0)
+            {
+                return String(cString: raw)
+            }
+            return nil
+        }
+        return res
+    }
+
+    /// Q2 §298 — SHA-256 of the file at `url`. Returns lowercase hex.
+    /// Reads in 64 KB chunks so large KV caches don't load the whole
+    /// file into RAM just to hash it.
+    private static func hashFile(_ url: URL) -> String? {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = try? fh.read(upToCount: 64 * 1024)
+            guard let data = chunk, !data.isEmpty else { break }
+            hasher.update(data: data)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// iter-105 §131: drop a specific entry row. Called from `fetch`
