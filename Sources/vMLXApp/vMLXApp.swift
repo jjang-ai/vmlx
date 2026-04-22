@@ -1079,6 +1079,18 @@ final class AppState {
     }
 }
 
+/// O7 §293 — app-wide notifications used by the Downloads → HF token CTA.
+/// `vmlxOpenHuggingFaceTokenCard` flips the sidebar to .api; once the
+/// APIScreen is mounted it re-fires `vmlxFocusHuggingFaceTokenField`
+/// which HuggingFaceTokenCard subscribes to, focusing the TextField
+/// and scrolling the card into view.
+extension Notification.Name {
+    public static let vmlxOpenHuggingFaceTokenCard =
+        Notification.Name("vmlx.openHuggingFaceTokenCard")
+    public static let vmlxFocusHuggingFaceTokenField =
+        Notification.Name("vmlx.focusHuggingFaceTokenField")
+}
+
 struct RootView: View {
     @Environment(AppState.self) private var state
     @Environment(\.openWindow) private var openWindow
@@ -1125,6 +1137,21 @@ struct RootView: View {
         // it to the library.
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleModelDrop(providers, state: state)
+        }
+        // O7 §293 — DownloadsWindow posts this when a job surfaces a
+        // 401/403 from HuggingFace. Switch to the API tab so the user
+        // lands on the HuggingFaceTokenCard, then broadcast a second
+        // notification the card subscribes to so it can focus the
+        // text field and scroll itself into view.
+        .onReceive(NotificationCenter.default
+            .publisher(for: .vmlxOpenHuggingFaceTokenCard)
+        ) { _ in
+            state.mode = .api
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(
+                    name: .vmlxFocusHuggingFaceTokenField,
+                    object: nil)
+            }
         }
         .task { await state.observeEngine() }
         .task {

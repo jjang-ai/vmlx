@@ -36,6 +36,13 @@ public actor DownloadManager {
         public var error: String?
         public var startedAt: Date
         public var localPath: URL?
+        /// O7 §293 — set when the HF sibling-list fetch returns 401 or
+        /// 403 so the DownloadStatusBar can show a targeted CTA
+        /// ("Paste HF token in Settings → API") instead of just a
+        /// generic error message. DownloadManager marks this true on
+        /// 401/403 responses and clears it on any subsequent retry
+        /// that succeeds past the auth step.
+        public var requiresHFAuth: Bool
 
         public init(
             id: UUID,
@@ -48,7 +55,8 @@ public actor DownloadManager {
             status: Status = .queued,
             error: String? = nil,
             startedAt: Date = Date(),
-            localPath: URL? = nil
+            localPath: URL? = nil,
+            requiresHFAuth: Bool = false
         ) {
             self.id = id
             self.repo = repo
@@ -61,6 +69,7 @@ public actor DownloadManager {
             self.error = error
             self.startedAt = startedAt
             self.localPath = localPath
+            self.requiresHFAuth = requiresHFAuth
         }
     }
 
@@ -392,6 +401,22 @@ public actor DownloadManager {
             if var j = _jobs[id] {
                 j.status = .failed
                 j.error = "\(error)"
+                // O7 §293: detect HF auth failure and set the flag so
+                // the Downloads UI can CTA the user into the
+                // HuggingFaceTokenCard. Match NSError.code (which
+                // fetchSiblings + file-stream throw with the HTTP
+                // status on domain "vMLX.DownloadManager") OR the
+                // "requires authentication" / "is gated" hint strings
+                // embedded in those errors, so we catch both the
+                // initial sibling fetch and any per-file 401.
+                let err = error as NSError
+                let msg = (err.userInfo[NSLocalizedDescriptionKey] as? String) ?? "\(error)"
+                if err.code == 401 || err.code == 403
+                    || msg.contains("requires authentication")
+                    || msg.contains("is gated")
+                {
+                    j.requiresHFAuth = true
+                }
                 _jobs[id] = j
                 broadcast(.failed(id, j.error ?? "unknown error"))
                 persistSidecar()

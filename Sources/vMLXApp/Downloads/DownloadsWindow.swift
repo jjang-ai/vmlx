@@ -283,6 +283,30 @@ private struct DownloadRow: View {
                         .foregroundStyle(Theme.Colors.danger)
                         .lineLimit(2)
                 }
+                // O7 §293 — targeted HF auth CTA. When the sibling
+                // fetch returned 401/403, show a Fix button that
+                // switches to the API tab + scrolls the user to the
+                // HuggingFaceTokenCard. Much better UX than the
+                // generic error hint which users miss.
+                if job.requiresHFAuth {
+                    HStack(spacing: 6) {
+                        Image(systemName: "key.horizontal.fill")
+                            .foregroundStyle(Theme.Colors.warning)
+                        Text("Gated / private repo. Paste your HuggingFace token to unlock:")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.textMid)
+                        Spacer()
+                        Button("Open Settings →") {
+                            NotificationCenter.default.post(
+                                name: .vmlxOpenHuggingFaceTokenCard,
+                                object: nil)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.accent)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
         .padding(Theme.Spacing.md)
