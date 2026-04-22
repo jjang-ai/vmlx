@@ -138,6 +138,10 @@ public enum OpenAIRoutes {
                 headers[.contentType] = "text/event-stream; charset=utf-8"
                 headers[.cacheControl] = "no-cache"
                 headers[.connection] = "keep-alive"
+                // Q1 §297 — trace id header on SSE so log correlation works.
+                if let n = HTTPField.Name("x-vmlx-trace-id") {
+                    headers[n] = id
+                }
                 return Response(
                     status: .ok,
                     headers: headers,
@@ -254,7 +258,7 @@ public enum OpenAIRoutes {
                 if let detail = u.cacheDetail { usageObj["cache_detail"] = detail }
                 obj["usage"] = usageObj
             }
-            return Self.json(obj)
+            return Self.json(obj, traceId: id)
         }
 
         // POST /v1/chat/completions/{id}/cancel
@@ -390,6 +394,9 @@ public enum OpenAIRoutes {
                 headers[.contentType] = "text/event-stream; charset=utf-8"
                 headers[.cacheControl] = "no-cache"
                 headers[.connection] = "keep-alive"
+                if let n = HTTPField.Name("x-vmlx-trace-id") {
+                    headers[n] = id
+                }
                 return Response(
                     status: .ok,
                     headers: headers,
@@ -463,7 +470,7 @@ public enum OpenAIRoutes {
                 if let detail = u.cacheDetail { usageObj["cache_detail"] = detail }
                 obj2["usage"] = usageObj
             }
-            return Self.json(obj2)
+            return Self.json(obj2, traceId: id)
         }
 
         // POST /v1/responses — OpenAI "Responses" API.
@@ -670,6 +677,9 @@ public enum OpenAIRoutes {
                 headers[.contentType] = "text/event-stream; charset=utf-8"
                 headers[.cacheControl] = "no-cache"
                 headers[.connection] = "keep-alive"
+                if let n = HTTPField.Name("x-vmlx-trace-id") {
+                    headers[n] = id
+                }
                 return Response(
                     status: .ok,
                     headers: headers,
@@ -746,7 +756,7 @@ public enum OpenAIRoutes {
             if let u = usage {
                 out["usage"] = Self.responsesUsageEnvelope(u)
             }
-            return Self.json(out)
+            return Self.json(out, traceId: id)
         }
 
         // POST /v1/embeddings — real embeddings via vMLXEmbedders
@@ -1501,13 +1511,21 @@ public enum OpenAIRoutes {
         return "local"
     }
 
-    static func json(_ obj: [String: Any], status: HTTPResponse.Status = .ok) -> Response {
+    static func json(_ obj: [String: Any], status: HTTPResponse.Status = .ok,
+                     traceId: String? = nil) -> Response {
         let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         var buf = ByteBuffer()
         buf.writeBytes(data)
+        var headers: HTTPFields = [.contentType: "application/json"]
+        // Q1 §297 — expose the per-request trace id as a response header so
+        // clients + log correlation tooling can stitch multi-session traffic
+        // without parsing the JSON envelope.
+        if let tid = traceId, let name = HTTPField.Name("x-vmlx-trace-id") {
+            headers[name] = tid
+        }
         return Response(
             status: status,
-            headers: [.contentType: "application/json"],
+            headers: headers,
             body: .init(byteBuffer: buf)
         )
     }
