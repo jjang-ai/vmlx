@@ -409,6 +409,13 @@ struct InputBar: View {
                 historyIndex = nil
             }
         }
+        // P2-LIFE-3 §273 — every keystroke in the composer bumps the
+        // engine's idle timer so the model doesn't deep-sleep while
+        // the user is mid-thought. Debouncing lives inside the actor
+        // (IdleTimer.reset is a single ~microsecond write), so calling
+        // it on every change is cheap. Gated via `vm.bumpIdleTimer()`
+        // which hops to the Engine actor and calls `bumpIdleTimer()`.
+        vm.bumpIdleTimer()
     }
 
     private var inputRow: some View {

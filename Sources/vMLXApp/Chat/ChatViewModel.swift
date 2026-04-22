@@ -183,6 +183,15 @@ final class ChatViewModel {
         }
     }
 
+    /// P2-LIFE-3 §273 — forward composer activity to the currently-
+    /// selected engine's idle timer. Called from InputBar.onChange so
+    /// typing resets the soft/deep-sleep clock. No-op if the engine
+    /// isn't resolvable yet (pre-attach window on launch).
+    func bumpIdleTimer() {
+        guard let engine = self.app?.engine else { return }
+        Task { await engine.bumpIdleTimer() }
+    }
+
     func attach(_ app: AppState) {
         self.app = app
         reload()
