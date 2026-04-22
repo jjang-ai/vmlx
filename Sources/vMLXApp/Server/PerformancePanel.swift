@@ -17,6 +17,12 @@ struct PerformancePanel: View {
     @State private var snapshot: MetricsCollector.Snapshot?
     @State private var decodeHistory: [Double] = []
     @State private var prefillHistory: [Double] = []
+    /// R3 §304 — latest paged-cache hit rate (0..1) + hit/miss/evict
+    /// counts. Polled every 2s from `Engine.cacheStats()` alongside
+    /// the event-driven metrics stream.
+    @State private var cacheHitRate: Double? = nil
+    @State private var cacheHits: Int = 0
+    @State private var cacheMisses: Int = 0
     private let sparklineCapacity = 60
 
     var body: some View {
@@ -45,6 +51,27 @@ struct PerformancePanel: View {
                 self.snapshot = snap
                 append(&decodeHistory, snap.tokensPerSecondRolling)
                 append(&prefillHistory, snap.promptTokensPerSecondRolling)
+            }
+        }
+        // R3 §304 — cache-hit-rate poll (paged tier). 2s cadence so the
+        // gauge tracks multi-turn T1→T2 hit changes without thrashing
+        // the engine actor. Cancelled when the view is torn down.
+        .task(id: ObjectIdentifier(app.engine)) {
+            while !Task.isCancelled {
+                if let stats = try? await app.engine.cacheStats(),
+                   let paged = stats["paged"] as? [String: Any]
+                {
+                    let h = (paged["hits"] as? Int) ?? 0
+                    let m = (paged["misses"] as? Int) ?? 0
+                    let rate = (paged["hitRate"] as? Double)
+                        ?? (h + m > 0 ? Double(h) / Double(h + m) : 0)
+                    await MainActor.run {
+                        self.cacheHitRate = rate
+                        self.cacheHits = h
+                        self.cacheMisses = m
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
     }
@@ -123,11 +150,40 @@ struct PerformancePanel: View {
             GridItem(.flexible()),
             GridItem(.flexible()),
             GridItem(.flexible()),
+            GridItem(.flexible()),
         ], spacing: Theme.Spacing.sm) {
             gpuTile
             ramTile
             tokTile
             queueTile
+            cacheHitTile
+        }
+    }
+
+    /// R3 §304 — live paged-cache hit rate tile. Derived from
+    /// `cacheStats().paged.hitRate`. Shows "—" before the first poll
+    /// lands; fill-bar tracks the rate so users can see it climb on
+    /// multi-turn reuse.
+    private var cacheHitTile: some View {
+        let rate = cacheHitRate ?? 0
+        let totalReqs = cacheHits + cacheMisses
+        return Tile(
+            label: "Cache hit rate",
+            value: cacheHitRate == nil
+                ? "—"
+                : String(format: "%.0f%%", rate * 100),
+            valueFont: Theme.Typography.title,
+            numeric: true
+        ) {
+            if totalReqs > 0 {
+                Text("\(cacheHits)/\(totalReqs) turns hit")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+            } else {
+                Text("no cache activity yet")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+            }
         }
     }
 
