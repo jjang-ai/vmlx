@@ -10,6 +10,7 @@ import vMLXTheme
 ///   3. Done — "Finish" button calls `AppState.markFirstLaunchComplete()`
 struct SetupScreen: View {
     @Environment(AppState.self) private var app
+    @ObservedObject private var hfAuth = HuggingFaceAuth.shared
     @State private var step: Int = 0
     @State private var entries: [ModelLibrary.ModelEntry] = []
     @State private var loading: Bool = true
@@ -83,12 +84,15 @@ struct SetupScreen: View {
                     .foregroundStyle(Theme.Colors.textLow)
             }
         } else if entries.isEmpty {
-            EmptyStateView(
-                systemImage: "tray",
-                title: "No models found",
-                caption: "vMLX didn't find any models in your Hugging Face cache. We recommend downloading Qwen3-0.6B-8bit — a fast, capable starter model (~0.6GB).",
-                cta: ("Download Qwen3-0.6B", downloadStarter)
-            )
+            VStack(spacing: Theme.Spacing.md) {
+                EmptyStateView(
+                    systemImage: "tray",
+                    title: "No models found",
+                    caption: "vMLX didn't find any models in your Hugging Face cache. We recommend downloading Qwen3-0.6B-8bit — a fast, capable starter model (~0.6GB).",
+                    cta: ("Download Qwen3-0.6B", downloadStarter)
+                )
+                hfTokenBanner
+            }
         } else {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text("Pick a model to use for chat")
@@ -125,7 +129,53 @@ struct SetupScreen: View {
                     }
                 }
                 .frame(maxHeight: 280)
+                hfTokenBanner
             }
+        }
+    }
+
+    /// S1 §307 — gentle reminder about HF token state. If the user has
+    /// a token stored we show a tiny "✓ Hugging Face token stored"
+    /// footnote; if they don't we explain why they'd want one, with a
+    /// deep-link to the API tab's token card. Non-blocking — the
+    /// starter model (Qwen3-0.6B-8bit) is a public mlx-community repo
+    /// and doesn't need a token.
+    @ViewBuilder
+    private var hfTokenBanner: some View {
+        if hfAuth.hasToken {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(Theme.Colors.success)
+                Text("Hugging Face token stored — gated repos (Llama, Gemma, Mistral) are accessible.")
+                    .foregroundStyle(Theme.Colors.textLow)
+            }
+            .font(Theme.Typography.caption)
+        } else {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "key.horizontal")
+                    .foregroundStyle(Theme.Colors.warning)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("No Hugging Face token yet — the starter model above is public, but gated repos (Llama, Gemma, Mistral) need one.")
+                        .foregroundStyle(Theme.Colors.textMid)
+                    Button {
+                        app.mode = .api
+                        NotificationCenter.default.post(
+                            name: .vmlxOpenHuggingFaceTokenCard, object: nil)
+                    } label: {
+                        Text("Add a token →")
+                            .foregroundStyle(Theme.Colors.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .font(Theme.Typography.caption)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(Theme.Colors.warning.opacity(0.08))
+            )
         }
     }
 
