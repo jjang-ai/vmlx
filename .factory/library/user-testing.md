@@ -76,3 +76,34 @@
 - For `max_tokens: 0` tests, some models may not support zero generation — if the server returns an error, document it.
 - When testing `echo: true` without `logprobs`, the prompt text MUST appear at the start of `choices[0].text`.
 - When testing `prompt_logprobs: N` without `echo`, the text MUST NOT include the prompt but logprobs MUST still be present.
+
+## Flow Validator Guidance: lm-eval CLI Integration
+
+**Surface:** lm-eval CLI + vMLX HTTP API
+**Base URL:** `http://127.0.0.1:8080/v1/completions`
+**lm-eval binary:** `~/.local/pipx/venvs/lm-eval/bin/lm-eval`
+**Model:** Use whatever model the server has loaded (pass via `--model_args`)
+**Isolation:** Only ONE lm-eval validator can run at a time (the server is a singleton). lm-eval sends sequential HTTP requests to the server. Do NOT run concurrent lm-eval instances or concurrent heavy curl tests alongside lm-eval.
+**Shared state:** The server's model/tokenizer is read-only. No persistent state between requests.
+**Constraints:**
+- Do NOT restart the server or change the loaded model.
+- Always use `batch_size=1` for loglikelihood tasks.
+- Use `--limit 5` for quick validation (keeps runtime under ~2 minutes).
+- The model name in `--model_args` must match the model loaded by the server (e.g., check `/v1/models`).
+- For `local-completions` backend, `base_url` must point to `/v1/completions` (not just `/v1`).
+- lm-eval may timeout on first request if model is cold — use `--timeout 120` or similar.
+- Capture both stdout and stderr from lm-eval for evidence.
+- Verify exit code is 0 (success) and no traceback in stderr.
+
+## Flow Validator Guidance: Cross-Area API Consistency (curl)
+
+**Surface:** HTTP API (curl-based) — cross-endpoint consistency testing
+**Base URL:** `http://127.0.0.1:8080`
+**Isolation:** Can run concurrently with other lightweight curl validators against the same server. Must NOT run concurrently with lm-eval CLI tests (server contention).
+**Shared state:** Server model/tokenizer is read-only.
+**Constraints:**
+- Do NOT restart the server or change the loaded model.
+- Use Python for multi-step orchestration (tokenize → completions → detokenize roundtrip).
+- Validate JSON responses with `python3 -m json.tool` or `jq`.
+- Add small delays (`sleep 0.5`) between requests to avoid overwhelming the server.
+- For prompt-as-[Int] tests, first call `/v1/tokenize` to get token IDs, then use those IDs as the prompt array.

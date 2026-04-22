@@ -1,0 +1,131 @@
+[
+  {
+    "prompt": "Hello world",
+    "steps": {
+      "tokenize": {
+        "status": "ok",
+        "tokens": [
+          9707,
+          1879
+        ],
+        "count": 2
+      },
+      "detokenize": {
+        "status": "ok",
+        "original": "Hello world",
+        "recovered": "Hello world",
+        "match": true
+      },
+      "completions": {
+        "status": "ok",
+        "text": "Hello worldHello world! \ud83d\ude0a",
+        "logprob_tokens": [
+          "Hello",
+          " world",
+          "!",
+          " \ufffd",
+          "\ufffd",
+          "<|im_end|>"
+        ],
+        "token_logprobs_count": 6,
+        "usage": {
+          "completion_tokens": 5,
+          "prompt_tokens": 14,
+          "total_tokens": 19
+        },
+        "starts_with_prompt": true,
+        "prompt_tokens_count": 2
+      }
+    }
+  },
+  {
+    "prompt": "The quick brown fox jumps over the lazy dog",
+    "steps": {
+      "tokenize": {
+        "status": "ok",
+        "tokens": [
+          785,
+          3974,
+          13876,
+          38835,
+          34208,
+          916,
+          279,
+          15678,
+          5562
+        ],
+        "count": 9
+      },
+      "detokenize": {
+        "status": "ok",
+        "original": "The quick brown fox jumps over the lazy dog",
+        "recovered": "The quick brown fox jumps over the lazy dog",
+        "match": true
+      },
+      "completions": {
+        "status": "ok",
+        "text": "The quick brown fox jumps over the lazy dogThe phrase \"The quick",
+        "logprob_tokens": [
+          "The",
+          " phrase",
+          " \"",
+          "The",
+          " quick",
+          " brown"
+        ],
+        "token_logprobs_count": 6,
+        "usage": {
+          "total_tokens": 26,
+          "prompt_tokens": 21,
+          "completion_tokens": 5
+        },
+        "starts_with_prompt": true,
+        "prompt_tokens_count": 9
+      }
+    }
+  },
+  {
+    "prompt": "What is 2+2?",
+    "steps": {
+      "tokenize": {
+        "status": "ok",
+        "tokens": [
+          3838,
+          374,
+          220,
+          17,
+          10,
+          17,
+          30
+        ],
+        "count": 7
+      },
+      "detokenize": {
+        "status": "ok",
+        "original": "What is 2+2?",
+        "recovered": "What is 2+2?",
+        "match": true
+      },
+      "completions": {
+        "status": "ok",
+        "text": "What is 2+2?2 + 2 =",
+        "logprob_tokens": [
+          "2",
+          " +",
+          " ",
+          "2",
+          " =",
+          " "
+        ],
+        "token_logprobs_count": 6,
+        "usage": {
+          "total_tokens": 24,
+          "completion_tokens": 5,
+          "prompt_tokens": 19
+        },
+        "starts_with_prompt": true,
+        "prompt_tokens_count": 7
+      }
+    }
+  }
+]

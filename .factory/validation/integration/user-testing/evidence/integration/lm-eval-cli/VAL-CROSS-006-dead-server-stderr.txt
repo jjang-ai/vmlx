@@ -1,0 +1,63 @@
+2026-04-22:15:09:14 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-04-22:15:09:18 INFO     [_cli.run:376] Selected Tasks: ['hellaswag']
+2026-04-22:15:09:18 INFO     [evaluator:211] Setting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234 | Setting fewshot manual seed to 1234
+2026-04-22:15:09:18 INFO     [evaluator:236] Initializing local-completions model, with arguments: {'base_url': 'http://127.0.0.1:8080/v1/completions', 'tokenizer_backend': 'remote'}
+2026-04-22:15:09:18 INFO     [models.api_models:172] Using max length 2048 - 1
+2026-04-22:15:09:18 INFO     [models.api_models:175] Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1.
+2026-04-22:15:09:18 INFO     [models.api_models:193] Using tokenizer remote
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/bin/lm-eval"[0m, line [35m6[0m, in [35m<module>[0m
+    sys.exit([31mcli_evaluate[0m[1;31m()[0m)
+             [31m~~~~~~~~~~~~[0m[1;31m^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/__main__.py"[0m, line [35m10[0m, in [35mcli_evaluate[0m
+    [31mparser.execute[0m[1;31m(args)[0m
+    [31m~~~~~~~~~~~~~~[0m[1;31m^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/_cli/harness.py"[0m, line [35m60[0m, in [35mexecute[0m
+    [31margs.func[0m[1;31m(args)[0m
+    [31m~~~~~~~~~[0m[1;31m^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/_cli/run.py"[0m, line [35m379[0m, in [35m_execute[0m
+    results = simple_evaluate(
+        model=cfg.model,
+    ...<32 lines>...
+        metadata=cfg.metadata,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/utils.py"[0m, line [35m498[0m, in [35m_wrapper[0m
+    return fn(*args, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/evaluator.py"[0m, line [35m239[0m, in [35msimple_evaluate[0m
+    lm = lm_eval.api.registry.get_model(model).create_from_arg_obj(
+        model_args,
+    ...<4 lines>...
+        },
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/api/model.py"[0m, line [35m180[0m, in [35mcreate_from_arg_obj[0m
+    return cls(**arg_dict, **additional_config)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/models/openai_completions.py"[0m, line [35m52[0m, in [35m__init__[0m
+    [31msuper().__init__[0m[1;31m([0m
+    [31m~~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mbase_url=base_url,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^[0m
+    ...<4 lines>...
+        [1;31m**kwargs,[0m
+        [1;31m^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/models/api_models.py"[0m, line [35m232[0m, in [35m__init__[0m
+    self.tokenizer = [31mRemoteTokenizer[0m[1;31m([0m
+                     [31m~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mself.base_url,[0m
+        [1;31m^^^^^^^^^^^^^^[0m
+    ...<3 lines>...
+        [1;31mself.auth_token,[0m
+        [1;31m^^^^^^^^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/utils.py"[0m, line [35m712[0m, in [35m__init__[0m
+    [31mself._validate_server[0m[1;31m()[0m
+    [31m~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/utils.py"[0m, line [35m735[0m, in [35m_validate_server[0m
+    resp = self._request_with_retries("GET", url)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/utils.py"[0m, line [35m729[0m, in [35m_request_with_retries[0m
+    raise RuntimeError(
+        f"RemoteTokenizer: {method} {url} failed after {self.max_retries} attempts: {last_exc}"
+    )
+[1;35mRuntimeError[0m: [35mRemoteTokenizer: GET http://127.0.0.1:8080/tokenizer_info failed after 3 attempts: HTTPConnectionPool(host='127.0.0.1', port=8080): Max retries exceeded with url: /tokenizer_info (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=8080): Failed to establish a new connection: [Errno 61] Connection refused"))[0m

@@ -1,0 +1,21 @@
+2026-04-22:15:01:57 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-04-22:15:02:00 INFO     [_cli.run:376] Selected Tasks: ['hellaswag']
+2026-04-22:15:02:00 INFO     [evaluator:211] Setting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234 | Setting fewshot manual seed to 1234
+2026-04-22:15:02:00 INFO     [evaluator:236] Initializing local-completions model, with arguments: {'base_url': 'http://127.0.0.1:8080/v1/completions', 'tokenizer_backend': 'remote'}
+2026-04-22:15:02:00 INFO     [models.api_models:172] Using max length 2048 - 1
+2026-04-22:15:02:00 INFO     [models.api_models:175] Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1.
+2026-04-22:15:02:00 INFO     [models.api_models:193] Using tokenizer remote
+2026-04-22:15:02:00 INFO     [models.api_models:239] Using remote tokenizer from http://127.0.0.1:8080/v1/completions
+2026-04-22:15:02:03 INFO     [tasks:700] Selected tasks:
+2026-04-22:15:02:03 INFO     [tasks:691] Task: hellaswag (hellaswag/hellaswag.yaml)
+2026-04-22:15:02:03 INFO     [api.task:311] Building contexts for hellaswag on rank 0...
+  0%|          | 0/5 [00:00<?, ?it/s]100%|██████████| 5/5 [00:00<00:00, 4025.24it/s]
+2026-04-22:15:02:03 INFO     [evaluator:584] Running loglikelihood requests
+Requesting API:   0%|          | 0/20 [00:00<?, ?it/s]Requesting API:  25%|██▌       | 5/20 [00:00<00:00, 49.77it/s]Requesting API:  65%|██████▌   | 13/20 [00:00<00:00, 63.72it/s]Requesting API: 100%|██████████| 20/20 [00:00<00:00, 67.41it/s]
+2026-04-22:15:02:05 INFO     [loggers.evaluation_tracker:316] Output path not provided, skipping saving results aggregated
+local-completions ({'base_url': 'http://127.0.0.1:8080/v1/completions', 'tokenizer_backend': 'remote'}), gen_kwargs: ({}), limit: 5.0, num_fewshot: None, batch_size: 1
+|  Tasks  |Version|Filter|n-shot| Metric |   |Value|   |Stderr|
+|---------|------:|------|-----:|--------|---|----:|---|-----:|
+|hellaswag|      1|none  |     0|acc     |↑  |  0.4|±  |0.2449|
+|         |       |none  |     0|acc_norm|↑  |  0.4|±  |0.2449|
+

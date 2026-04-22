@@ -1,0 +1,109 @@
+[
+  {
+    "prompt": "The capital of France is",
+    "ctxlen": 5,
+    "token_logprobs": [
+      null,
+      -7.878263473510742,
+      -9.05085563659668,
+      -8.24583625793457,
+      -8.65201187133789,
+      -0.4645118713378906
+    ],
+    "tokens": [
+      "The",
+      " capital",
+      " of",
+      " France",
+      " is",
+      " Paris"
+    ],
+    "usage": {
+      "total_tokens": 6,
+      "prompt_tokens": 5,
+      "completion_tokens": 1
+    },
+    "expected_len": 6,
+    "actual_len": 6,
+    "length_match": true,
+    "slice": [],
+    "slice_has_one": false,
+    "text": "The capital of France is Paris"
+  },
+  {
+    "prompt": "In mathematics, a prime number is",
+    "ctxlen": 7,
+    "token_logprobs": [
+      null,
+      -10.677438735961914,
+      -12.990440368652344,
+      -8.431400299072266,
+      -10.247344970703125,
+      -13.329345703125,
+      -15.205095291137695,
+      -0.017595291137695312
+    ],
+    "tokens": [
+      "In",
+      " mathematics",
+      ",",
+      " a",
+      " prime",
+      " number",
+      " is",
+      " a"
+    ],
+    "usage": {
+      "total_tokens": 8,
+      "prompt_tokens": 7,
+      "completion_tokens": 1
+    },
+    "expected_len": 8,
+    "actual_len": 8,
+    "length_match": true,
+    "slice": [],
+    "slice_has_one": false,
+    "text": "In mathematics, a prime number is a"
+  },
+  {
+    "prompt": "The color of the sky on a clear day is",
+    "ctxlen": 10,
+    "token_logprobs": [
+      null,
+      -7.962987899780273,
+      -11.133312225341797,
+      -9.571891784667969,
+      -9.216419219970703,
+      -12.54102897644043,
+      -11.105621337890625,
+      -11.297027587890625,
+      -9.406442642211914,
+      -9.223287582397461,
+      -1.160787582397461
+    ],
+    "tokens": [
+      "The",
+      " color",
+      " of",
+      " the",
+      " sky",
+      " on",
+      " a",
+      " clear",
+      " day",
+      " is",
+      " usually"
+    ],
+    "usage": {
+      "total_tokens": 11,
+      "prompt_tokens": 10,
+      "completion_tokens": 1
+    },
+    "expected_len": 11,
+    "actual_len": 11,
+    "length_match": true,
+    "slice": [],
+    "slice_has_one": false,
+    "text": "The color of the sky on a clear day is usually"
+  }
+]

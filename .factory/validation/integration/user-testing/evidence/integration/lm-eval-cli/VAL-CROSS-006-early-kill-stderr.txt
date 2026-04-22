@@ -1,0 +1,226 @@
+2026-04-22:15:03:08 WARNING  [config.evaluate_config:281] --limit SHOULD ONLY BE USED FOR TESTING. REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT.
+2026-04-22:15:03:12 INFO     [_cli.run:376] Selected Tasks: ['hellaswag']
+2026-04-22:15:03:12 INFO     [evaluator:211] Setting random seed to 0 | Setting numpy seed to 1234 | Setting torch manual seed to 1234 | Setting fewshot manual seed to 1234
+2026-04-22:15:03:12 INFO     [evaluator:236] Initializing local-completions model, with arguments: {'base_url': 'http://127.0.0.1:8080/v1/completions'}
+2026-04-22:15:03:12 INFO     [models.openai_completions:42] Remote tokenizer not supported. Using huggingface tokenizer backend.
+2026-04-22:15:03:12 INFO     [models.api_models:172] Using max length 2048 - 1
+2026-04-22:15:03:12 INFO     [models.api_models:175] Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1.
+2026-04-22:15:03:12 INFO     [models.api_models:193] Using tokenizer huggingface
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_http.py"[0m, line [35m761[0m, in [35mhf_raise_for_status[0m
+    [31mresponse.raise_for_status[0m[1;31m()[0m
+    [31m~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/httpx/_models.py"[0m, line [35m829[0m, in [35mraise_for_status[0m
+    raise HTTPStatusError(message, request=request, response=self)
+[1;35mhttpx.HTTPStatusError[0m: [35mClient error '404 Not Found' for url 'https://huggingface.co/None/resolve/main/config.json'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404[0m
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/utils/hub.py"[0m, line [35m422[0m, in [35mcached_files[0m
+    [31mhf_hub_download[0m[1;31m([0m
+    [31m~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mpath_or_repo_id,[0m
+        [1;31m^^^^^^^^^^^^^^^^[0m
+    ...<10 lines>...
+        [1;31mtqdm_class=tqdm_class,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py"[0m, line [35m88[0m, in [35m_inner_fn[0m
+    return fn(*args, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m997[0m, in [35mhf_hub_download[0m
+    return _hf_hub_download_to_cache_dir(
+        # Destination
+    ...<15 lines>...
+        dry_run=dry_run,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1148[0m, in [35m_hf_hub_download_to_cache_dir[0m
+    [31m_raise_on_head_call_error[0m[1;31m(head_call_error, force_download, local_files_only)[0m
+    [31m~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1782[0m, in [35m_raise_on_head_call_error[0m
+    raise head_call_error
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1669[0m, in [35m_get_metadata_or_catch_error[0m
+    metadata = get_hf_file_metadata(
+        url=url,
+    ...<4 lines>...
+        retry_on_errors=retry_on_errors,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py"[0m, line [35m88[0m, in [35m_inner_fn[0m
+    return fn(*args, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1591[0m, in [35mget_hf_file_metadata[0m
+    response = _httpx_follow_relative_redirects_with_backoff(
+        method="HEAD", url=url, headers=hf_headers, timeout=timeout, retry_on_errors=retry_on_errors
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_http.py"[0m, line [35m692[0m, in [35m_httpx_follow_relative_redirects_with_backoff[0m
+    [31mhf_raise_for_status[0m[1;31m(response)[0m
+    [31m~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_http.py"[0m, line [35m835[0m, in [35mhf_raise_for_status[0m
+    raise _format(RepositoryNotFoundError, message, response, repo_type=repo_type, repo_id=repo_id) from e
+[1;35mhuggingface_hub.errors.RepositoryNotFoundError[0m: [35m404 Client Error. (Request ID: Root=1-69e8c716-39f10dfe4e690bda59dd7c7d;f48915fb-399a-4f84-b576-0e164601cc24)
+
+Repository Not Found for url: https://huggingface.co/None/resolve/main/config.json.
+Please make sure you specified the correct `repo_id` and `repo_type`.
+If you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.
+For more details, see https://huggingface.co/docs/huggingface_hub/authentication[0m
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/models/auto/tokenization_auto.py"[0m, line [35m684[0m, in [35mfrom_pretrained[0m
+    config = AutoConfig.from_pretrained(
+        pretrained_model_name_or_path, trust_remote_code=trust_remote_code, **kwargs
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/models/auto/configuration_auto.py"[0m, line [35m1483[0m, in [35mfrom_pretrained[0m
+    config_dict, unused_kwargs = [31mPreTrainedConfig.get_config_dict[0m[1;31m(pretrained_model_name_or_path, **kwargs)[0m
+                                 [31m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/configuration_utils.py"[0m, line [35m670[0m, in [35mget_config_dict[0m
+    config_dict, kwargs = [31mcls._get_config_dict[0m[1;31m(pretrained_model_name_or_path, **kwargs)[0m
+                          [31m~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/configuration_utils.py"[0m, line [35m725[0m, in [35m_get_config_dict[0m
+    resolved_config_file = cached_file(
+        pretrained_model_name_or_path,
+    ...<9 lines>...
+        _commit_hash=commit_hash,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/utils/hub.py"[0m, line [35m278[0m, in [35mcached_file[0m
+    file = cached_files(path_or_repo_id=path_or_repo_id, filenames=[filename], **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/utils/hub.py"[0m, line [35m454[0m, in [35mcached_files[0m
+    raise OSError(
+    ...<4 lines>...
+    ) from e
+[1;35mOSError[0m: [35mNone is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+If this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`[0m
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_http.py"[0m, line [35m761[0m, in [35mhf_raise_for_status[0m
+    [31mresponse.raise_for_status[0m[1;31m()[0m
+    [31m~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/httpx/_models.py"[0m, line [35m829[0m, in [35mraise_for_status[0m
+    raise HTTPStatusError(message, request=request, response=self)
+[1;35mhttpx.HTTPStatusError[0m: [35mClient error '404 Not Found' for url 'https://huggingface.co/None/resolve/main/config.json'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404[0m
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/utils/hub.py"[0m, line [35m422[0m, in [35mcached_files[0m
+    [31mhf_hub_download[0m[1;31m([0m
+    [31m~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mpath_or_repo_id,[0m
+        [1;31m^^^^^^^^^^^^^^^^[0m
+    ...<10 lines>...
+        [1;31mtqdm_class=tqdm_class,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py"[0m, line [35m88[0m, in [35m_inner_fn[0m
+    return fn(*args, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m997[0m, in [35mhf_hub_download[0m
+    return _hf_hub_download_to_cache_dir(
+        # Destination
+    ...<15 lines>...
+        dry_run=dry_run,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1148[0m, in [35m_hf_hub_download_to_cache_dir[0m
+    [31m_raise_on_head_call_error[0m[1;31m(head_call_error, force_download, local_files_only)[0m
+    [31m~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1782[0m, in [35m_raise_on_head_call_error[0m
+    raise head_call_error
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1669[0m, in [35m_get_metadata_or_catch_error[0m
+    metadata = get_hf_file_metadata(
+        url=url,
+    ...<4 lines>...
+        retry_on_errors=retry_on_errors,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_validators.py"[0m, line [35m88[0m, in [35m_inner_fn[0m
+    return fn(*args, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/file_download.py"[0m, line [35m1591[0m, in [35mget_hf_file_metadata[0m
+    response = _httpx_follow_relative_redirects_with_backoff(
+        method="HEAD", url=url, headers=hf_headers, timeout=timeout, retry_on_errors=retry_on_errors
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_http.py"[0m, line [35m692[0m, in [35m_httpx_follow_relative_redirects_with_backoff[0m
+    [31mhf_raise_for_status[0m[1;31m(response)[0m
+    [31m~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/huggingface_hub/utils/_http.py"[0m, line [35m835[0m, in [35mhf_raise_for_status[0m
+    raise _format(RepositoryNotFoundError, message, response, repo_type=repo_type, repo_id=repo_id) from e
+[1;35mhuggingface_hub.errors.RepositoryNotFoundError[0m: [35m404 Client Error. (Request ID: Root=1-69e8c716-238bca1f7e3497e24e44e716;9196c182-a902-4813-86b5-b9b7d2b9bcda)
+
+Repository Not Found for url: https://huggingface.co/None/resolve/main/config.json.
+Please make sure you specified the correct `repo_id` and `repo_type`.
+If you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.
+For more details, see https://huggingface.co/docs/huggingface_hub/authentication[0m
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/bin/lm-eval"[0m, line [35m6[0m, in [35m<module>[0m
+    sys.exit([31mcli_evaluate[0m[1;31m()[0m)
+             [31m~~~~~~~~~~~~[0m[1;31m^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/__main__.py"[0m, line [35m10[0m, in [35mcli_evaluate[0m
+    [31mparser.execute[0m[1;31m(args)[0m
+    [31m~~~~~~~~~~~~~~[0m[1;31m^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/_cli/harness.py"[0m, line [35m60[0m, in [35mexecute[0m
+    [31margs.func[0m[1;31m(args)[0m
+    [31m~~~~~~~~~[0m[1;31m^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/_cli/run.py"[0m, line [35m379[0m, in [35m_execute[0m
+    results = simple_evaluate(
+        model=cfg.model,
+    ...<32 lines>...
+        metadata=cfg.metadata,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/utils.py"[0m, line [35m498[0m, in [35m_wrapper[0m
+    return fn(*args, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/evaluator.py"[0m, line [35m239[0m, in [35msimple_evaluate[0m
+    lm = lm_eval.api.registry.get_model(model).create_from_arg_obj(
+        model_args,
+    ...<4 lines>...
+        },
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/api/model.py"[0m, line [35m180[0m, in [35mcreate_from_arg_obj[0m
+    return cls(**arg_dict, **additional_config)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/models/openai_completions.py"[0m, line [35m52[0m, in [35m__init__[0m
+    [31msuper().__init__[0m[1;31m([0m
+    [31m~~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mbase_url=base_url,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^[0m
+    ...<4 lines>...
+        [1;31m**kwargs,[0m
+        [1;31m^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/lm_eval/models/api_models.py"[0m, line [35m202[0m, in [35m__init__[0m
+    self.tokenizer = [31mtransformers.AutoTokenizer.from_pretrained[0m[1;31m([0m
+                     [31m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^[0m
+        [1;31mself.tokenizer if self.tokenizer else self.model,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    ...<2 lines>...
+        [1;31muse_fast=use_fast_tokenizer,[0m
+        [1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1;31m)[0m
+    [1;31m^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/models/auto/tokenization_auto.py"[0m, line [35m688[0m, in [35mfrom_pretrained[0m
+    config = PreTrainedConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/configuration_utils.py"[0m, line [35m629[0m, in [35mfrom_pretrained[0m
+    config_dict, kwargs = [31mcls.get_config_dict[0m[1;31m(pretrained_model_name_or_path, **kwargs)[0m
+                          [31m~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/configuration_utils.py"[0m, line [35m670[0m, in [35mget_config_dict[0m
+    config_dict, kwargs = [31mcls._get_config_dict[0m[1;31m(pretrained_model_name_or_path, **kwargs)[0m
+                          [31m~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/configuration_utils.py"[0m, line [35m725[0m, in [35m_get_config_dict[0m
+    resolved_config_file = cached_file(
+        pretrained_model_name_or_path,
+    ...<9 lines>...
+        _commit_hash=commit_hash,
+    )
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/utils/hub.py"[0m, line [35m278[0m, in [35mcached_file[0m
+    file = cached_files(path_or_repo_id=path_or_repo_id, filenames=[filename], **kwargs)
+  File [35m"/Users/draco/.local/pipx/venvs/lm-eval/lib/python3.14/site-packages/transformers/utils/hub.py"[0m, line [35m454[0m, in [35mcached_files[0m
+    raise OSError(
+    ...<4 lines>...
+    ) from e
+[1;35mOSError[0m: [35mNone is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+If this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`[0m

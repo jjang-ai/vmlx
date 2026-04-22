@@ -1,0 +1,31 @@
+{
+  "milestone": "integration",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 8,
+    "passed": 8,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-CROSS-001",
+    "VAL-CROSS-002",
+    "VAL-CROSS-003",
+    "VAL-CROSS-004",
+    "VAL-CROSS-005",
+    "VAL-CROSS-006",
+    "VAL-CROSS-007",
+    "VAL-CROSS-008"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added Flow Validator Guidance sections for lm-eval CLI Integration and Cross-Area API Consistency (curl)",
+      "source": "setup"
+    }
+  ],
+  "previousRound": null
+}
