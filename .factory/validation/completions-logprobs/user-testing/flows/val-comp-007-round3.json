@@ -1,0 +1,46 @@
+{
+  "assertions": ["VAL-COMP-007"],
+  "tool": "curl + python3",
+  "timestamp": "2026-04-22T18:25:00+02:00",
+  "results": {
+    "VAL-COMP-007": {
+      "status": "fail",
+      "evidence": {
+        "non_streaming": {
+          "short_prompt_5tok": { "positions": 5, "violations": 0, "status": "pass" },
+          "medium_prompts_20tok": { "positions": 40, "violations": 0, "status": "pass" },
+          "long_prompt_50tok": { "positions": 50, "violations": 1, "status": "fail", "reproducible": true, "runs": 3 },
+          "violation_detail": {
+            "position": 14,
+            "token": " jumps",
+            "top_logprobs": {" jumps": 0.0, "...\\\"": -21.125, " jams": -20.5625, " jump": -20.65625},
+            "expected_alternatives_order": [" jams (-20.5625)", " jump (-20.65625)", "...\\\" (-21.125)"],
+            "actual_alternatives_order": ["...\\\" (-21.125)", " jams (-20.5625)", " jump (-20.65625)"],
+            "raw_json_entry": "{\" jumps\":0.0,\" jumps\":0.0,\"...\\\"\":-21.125,\" jams\":-20.5625,\" jump\":-20.65625}",
+            "note": "Duplicate ' jumps' key (chosen token added twice) is deduplicated by JSON parser. The 3 alternatives after the chosen are NOT sorted descending."
+          }
+        },
+        "streaming": {
+          "short_prompt_10tok": { "positions": 5, "violations": 0, "status": "pass" }
+        },
+        "chosen_token_first": {
+          "verified": true,
+          "all_positions": "chosen token is always the first entry in top_logprobs dict"
+        },
+        "temperature_effect": {
+          "temp_0.0": "1 violation (alternatives unsorted) per 50 positions",
+          "temp_0.5": "1 violation per 30 positions",
+          "temp_1.0": "2 violations per 30 positions (includes chosen-vs-alt ordering conflict at non-zero temp)"
+        },
+        "total_positions_tested": 150,
+        "total_alternative_sort_violations": 1
+      },
+      "reason": "Deterministic alternative sort order violation at position 14 (token=' jumps') with temp=0.0. The 3 alternatives after the chosen token are NOT sorted descending: '...' (-21.125) appears before ' jams' (-20.5625). Reproducible across 3 consecutive runs. All other positions (149/150) have correctly sorted alternatives. Chosen token is always first. The buildLegacyLogprobsJSON() code path is used (confirmed via raw JSON showing ordered string builder + sentinel replacement). Root cause appears to be in LogprobsCollector.capture() where alternatives.sort() produces incorrect order for this specific set of token logprobs."
+    }
+  },
+  "frictions": [
+    "Duplicate chosen token in raw JSON (lp.token:lp.logprob + topLogprobs[0]) creates redundant key pairs that are deduplicated by JSON parsers. While harmless for output, it wastes bytes."
+  ],
+  "blockers": [],
+  "toolsUsed": ["curl", "python3"]
+}
