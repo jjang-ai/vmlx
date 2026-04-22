@@ -2242,19 +2242,22 @@ class MLLMBatchGenerator:
                                         is_complete=True,
                                     )
                                 else:
-                                    # gpl>0 (thinking models): post-full-prefill
-                                    # state includes gpl suffix tokens, so it
-                                    # doesn't match the gpl-stripped key. Queue
-                                    # a deferred clean re-prefill instead of
-                                    # storing contaminated state. Fetch paths
-                                    # reject is_complete=False entries anyway;
-                                    # the rederive path populates clean entries
-                                    # for subsequent turns to hit.
+                                    # gpl>0 (thinking models): queue deferred
+                                    # clean re-prefill. Queue the FIRST
+                                    # prompt_len tokens (not the full
+                                    # all_tokens list), so _prefill_for_clean_ssm
+                                    # produces state-at-prompt_len that matches
+                                    # the key exactly. Passing full all_tokens
+                                    # here produces state-at-N while the key is
+                                    # N-1 → T2 HIT re-feeds token N-1 + gpl on
+                                    # top of an already-advanced SSM state,
+                                    # causing infinite generation loops
+                                    # (v1.3.77 regression, v1.3.78 fix).
                                     _rq = self._ssm_rederive_queue
                                     if len(_rq) >= self._ssm_rederive_queue_max:
                                         _rq.pop(0)
                                     _rq.append(
-                                        (list(all_tokens), prompt_len, req.request_id)
+                                        (list(all_tokens[:prompt_len]), prompt_len, req.request_id)
                                     )
                                 logger.info(
                                     f"Captured SSM state for "
