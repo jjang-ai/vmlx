@@ -79,6 +79,33 @@ public enum AdminRoutes {
             return OpenAIRoutes.json(body)
         }
 
+        // R4 §305 / S3 §309 — live log-level swap. GET returns current
+        // level; POST body `{"level":"debug"}` (or trace/info/warn/error)
+        // flips the LogStore global minimum on the fly so operators can
+        // bump verbosity on a running server without a restart.
+        router.get("/admin/log-level") { _, _ -> Response in
+            let cur = await engine.logs.currentMinLevel()
+            return OpenAIRoutes.json(["level": cur.rawValue])
+        }
+        router.post("/admin/log-level") { req, _ -> Response in
+            var req = req
+            let body = try? await req.collectBody(upTo: 1024)
+            guard let data = body.map({ Data(buffer: $0) }),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let levelStr = (obj["level"] as? String)?.lowercased()
+            else {
+                return OpenAIRoutes.errorJSON(.badRequest, "expected {\"level\":\"debug|info|warn|error|trace\"}")
+            }
+            guard let lvl = LogStore.Level(rawValue: levelStr) else {
+                return OpenAIRoutes.errorJSON(.badRequest,
+                    "invalid level \"\(levelStr)\" — must be one of: trace, debug, info, warn, error")
+            }
+            await engine.logs.setMinLevel(lvl)
+            await engine.logs.append(.info, category: "admin",
+                "log level set to \(lvl.rawValue) via /admin/log-level")
+            return OpenAIRoutes.json(["level": lvl.rawValue, "status": "ok"])
+        }
+
         router.post("/admin/soft-sleep") { _, _ -> Response in
             do {
                 try await engine.softSleep()

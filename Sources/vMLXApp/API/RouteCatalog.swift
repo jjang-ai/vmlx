@@ -268,6 +268,16 @@ public enum RouteCatalog {
               family: .admin, brief: "Remove a model entry (guarded while loading)",
               auth: .admin, streams: false, modality: .any, sampleBody: "",
               docsAnchor: "admin-models-delete"),
+        // S3 §309 — live log-level swap (paired with R4).
+        .init(method: .get, path: "/admin/log-level",
+              family: .admin, brief: "Current LogStore global minimum level",
+              auth: .admin, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "admin-log-level-get"),
+        .init(method: .post, path: "/admin/log-level",
+              family: .admin, brief: "Change LogStore verbosity without restart",
+              auth: .admin, streams: false, modality: .any,
+              sampleBody: #"{"level":"debug"}"#,
+              docsAnchor: "admin-log-level-set"),
 
         // MARK: Cache (admin-gated)
         .init(method: .get, path: "/v1/cache/stats",
