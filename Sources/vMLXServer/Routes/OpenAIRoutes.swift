@@ -866,6 +866,9 @@ public enum OpenAIRoutes {
                 let isUserError = msg.contains("no model entry for")
                     || msg.contains("missing required")
                     || msg.contains("unknown model")
+                    || msg.contains("wrong model kind")
+                    || msg.contains("weights not found")
+                    || msg.contains("invalid 'size'")
                 return Self.errorJSON(
                     isUserError ? .badRequest : .internalServerError,
                     msg
@@ -939,7 +942,23 @@ public enum OpenAIRoutes {
                 // invalidRequest → 400; everything else → 500.
                 return Self.mapEngineError(err)
             } catch {
-                return Self.errorJSON(.internalServerError, "\(error)")
+                // I7 §312 — mirror the /v1/images/generations user-error
+                // classifier so wrong-model-kind / no-model-loaded /
+                // weights-not-found land as 400 instead of 500. The
+                // resident model being an image-gen-only model (e.g.
+                // ZImage) is a user-correctable config issue, not a
+                // server failure.
+                let msg = "\(error)"
+                let isUserError = msg.contains("wrong model kind")
+                    || msg.contains("no model entry for")
+                    || msg.contains("missing required")
+                    || msg.contains("unknown model")
+                    || msg.contains("weights not found")
+                    || msg.contains("notLoaded")
+                return Self.errorJSON(
+                    isUserError ? .badRequest : .internalServerError,
+                    msg
+                )
             }
         }
 
