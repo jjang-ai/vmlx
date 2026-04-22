@@ -331,31 +331,21 @@ struct ChatSettingsPopover: View {
         .tint(Theme.Colors.textMid)
     }
 
+    // I1 §274 — Built-in Tools section pruned to only the one
+    // toggle with a real consumer (shellEnabled, wired to BashTool
+    // schema injection in ChatViewModel.sendFlow:914). Eight truly-
+    // orphan toggles (webSearchEnabled, fetchUrlEnabled,
+    // fileToolsEnabled, searchToolsEnabled, gitEnabled,
+    // utilityToolsEnabled, braveSearchEnabled, toolResultMaxChars)
+    // were deleted from ChatSettings entirely.
     private var builtinToolsSection: some View {
         DisclosureGroup(isExpanded: $openBuiltinTools) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                // Iter-42: only `shellEnabled` (→ BashTool) is actually
-                // wired to ChatViewModel and routes through to an
-                // engine-side tool executor. The other toggles we used
-                // to surface here (Web Search / Fetch URL / File Tools
-                // / Search Tools / Git / Utility / Brave Search) had
-                // no corresponding tool implementation — flipping them
-                // wrote to SQLite with zero observable effect. Rather
-                // than leave traps in the UI, show only the working
-                // toggle plus a disabled "coming soon" row for each
-                // of the unwired ones. They keep their SQLite column
-                // for forward-compatibility so existing DB rows don't
-                // break, but the UI makes the status honest.
                 toggleRow("Shell (bash)", value: Binding(
                     get: { draft.shellEnabled },
                     set: { draft.shellEnabled = $0; writeBack() }
                 ), traceKey: "shellEnabled")
-                Text("Shell is the only Built-in Tool wired end-to-end today. It maps to BashTool via ChatViewModel → Stream.executeToolCall. Enable MCP in Server → Tools tab for extended capability (MCP tools register through `tools:` array).")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.textLow)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
-                Text("Coming soon: Web Search, Fetch URL, File Tools, Search Tools, Git, Utility Tools, Brave Search.")
+                Text("Shell maps to BashTool via ChatViewModel → Stream. Enable MCP in the API panel for additional tool providers.")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                     .fixedSize(horizontal: false, vertical: true)
