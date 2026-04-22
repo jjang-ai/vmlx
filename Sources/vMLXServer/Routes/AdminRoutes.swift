@@ -68,6 +68,14 @@ public enum AdminRoutes {
             ]
             if let model { body["model"] = model }
             if let detail { body["detail"] = detail }
+            // §283: expose the dual-stage idle remainders via /health so
+            // operators + UI surfaces can poll them without reaching
+            // into the engine actor directly. Null when timer disabled
+            // or that stage has already fired. Matches A7 §259 tray
+            // semantics so API + UI agree on the numbers.
+            let idle = await engine.idleTimer.sleepCountdowns()
+            if let soft = idle.soft { body["idle_soft_seconds"] = Int(soft) }
+            if let deep = idle.deep { body["idle_deep_seconds"] = Int(deep) }
             return OpenAIRoutes.json(body)
         }
 
