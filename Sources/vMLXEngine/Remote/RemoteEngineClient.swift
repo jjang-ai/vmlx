@@ -40,6 +40,14 @@ public actor RemoteEngineClient {
         }
     }
 
+    /// Q4 §300 — liveness state reported to callers (SessionConfigForm,
+    /// chat banner). Driven by the health-probe loop below.
+    public enum Connection: String, Sendable {
+        case connecting    // probe in-flight, no result yet
+        case connected     // last probe succeeded within the probe window
+        case unreachable   // last probe failed (network error or >=500 after retries)
+    }
+
     public enum RemoteError: Error, LocalizedError {
         case badURL
         case http(status: Int, body: String)
@@ -81,11 +89,122 @@ public actor RemoteEngineClient {
     /// cancel route had no such path.
     private var liveStreamTask: Task<Void, Error>?
 
+    /// Q4 §300 — current connection state + subscriber fan-out.
+    public private(set) var connection: Connection = .connecting
+    private var connectionSubscribers: [UUID: AsyncStream<Connection>.Continuation] = [:]
+    private var healthProbeTask: Task<Void, Never>?
+
     public init(endpoint: URL, kind: Kind, apiKey: String?, modelName: String) {
         self.endpoint = endpoint
         self.kind = kind
         self.apiKey = (apiKey?.isEmpty == true) ? nil : apiKey
         self.modelName = modelName
+    }
+
+    // MARK: - Q4 §300 health probe
+
+    /// Start the health-probe loop. Hits a protocol-appropriate liveness
+    /// endpoint every 30s while idle; on transport error OR HTTP >=500
+    /// immediately retries with exponential backoff (1s, 2s, 4s, 8s, cap
+    /// 30s), emitting `.unreachable` while the backoff climbs and
+    /// `.connected` once a probe returns <500. Idempotent — a second
+    /// call is a no-op.
+    public func startHealthProbe() {
+        guard healthProbeTask == nil else { return }
+        healthProbeTask = Task { [weak self] in
+            guard let self else { return }
+            // Initial probe on kickoff.
+            await self.setConnection(.connecting)
+            var backoff: UInt64 = 1  // seconds
+            while !Task.isCancelled {
+                let ok = await self.doHealthProbe()
+                if ok {
+                    await self.setConnection(.connected)
+                    backoff = 1
+                    try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
+                } else {
+                    await self.setConnection(.unreachable)
+                    try? await Task.sleep(nanoseconds: backoff * 1_000_000_000)
+                    backoff = min(backoff * 2, 30)
+                }
+            }
+        }
+    }
+
+    /// Stop the health-probe loop and complete any subscribers cleanly.
+    public func stopHealthProbe() {
+        healthProbeTask?.cancel()
+        healthProbeTask = nil
+        for (_, cont) in connectionSubscribers {
+            cont.finish()
+        }
+        connectionSubscribers.removeAll()
+    }
+
+    /// Subscribe to connection-state changes. Emits the current state
+    /// immediately then fires on every transition. Cancelling the
+    /// iterating Task removes the subscription.
+    public nonisolated func connectionStates() -> AsyncStream<Connection> {
+        AsyncStream { continuation in
+            Task { [weak self] in
+                guard let self else { continuation.finish(); return }
+                let id = UUID()
+                await self.registerSubscriber(id: id, cont: continuation)
+                continuation.onTermination = { _ in
+                    Task { [weak self] in
+                        await self?.removeSubscriber(id: id)
+                    }
+                }
+            }
+        }
+    }
+
+    private func registerSubscriber(id: UUID, cont: AsyncStream<Connection>.Continuation) {
+        cont.yield(connection)
+        connectionSubscribers[id] = cont
+    }
+
+    private func removeSubscriber(id: UUID) {
+        connectionSubscribers.removeValue(forKey: id)
+    }
+
+    private func setConnection(_ new: Connection) {
+        guard new != connection else { return }
+        connection = new
+        for (_, cont) in connectionSubscribers {
+            cont.yield(new)
+        }
+    }
+
+    /// Run a single health probe. Returns `true` on <500, `false` on
+    /// network error OR HTTP 500+. Protocol-specific liveness endpoint
+    /// (`/health` for vMLX/OpenAI, `/api/tags` for Ollama, `/v1/models`
+    /// for Anthropic — Anthropic has no public liveness, fall back to
+    /// the models endpoint which returns 401 without a key but that
+    /// still proves the host is alive).
+    private func doHealthProbe() async -> Bool {
+        let url: URL
+        switch kind {
+        case .openai:
+            // Try /health first; some upstreams only expose /v1/models.
+            url = endpoint.appendingPathComponent("health")
+        case .ollama:
+            url = endpoint.appendingPathComponent("api").appendingPathComponent("tags")
+        case .anthropic:
+            url = endpoint.appendingPathComponent("v1").appendingPathComponent("models")
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 5
+        applyAuth(to: &req)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+            // Anything below 500 means the host is up. 4xx (401/404) on
+            // the probe endpoint is still a live server.
+            return http.statusCode < 500
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Public API (mirrors Engine.stream)
