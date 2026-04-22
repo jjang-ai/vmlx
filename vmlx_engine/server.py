@@ -3109,6 +3109,8 @@ async def create_anthropic_message(
         ct_kwargs=_ct_kwargs,
         tools_present=bool(chat_req.tools),
         model_key=_model_path or _model_name or chat_req.model,
+        engine=engine,
+        auto_detect=True,
     )
     if _et is not None:
         _msg_kwargs["enable_thinking"] = _et
@@ -3728,6 +3730,8 @@ async def ollama_chat(fastapi_request: Request):
         ct_kwargs=_ollama_ct_kwargs,
         tools_present=bool(chat_req.tools),
         model_key=_model_path or _model_name or chat_req.model,
+        engine=engine,
+        auto_detect=True,
     )
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
@@ -6441,8 +6445,10 @@ async def stream_chat_completion(
     _effective_thinking = _resolve_enable_thinking(
         request_value=request.enable_thinking,
         ct_kwargs=_ct_kwargs,
-        tools_present=False,
+        tools_present=bool(getattr(request, "tools", None)),
         model_key=_model_path or _model_name or request.model,
+        engine=engine,
+        auto_detect=True,
     )
 
     # Check if model's chat template injects <think> in the assistant prefix
@@ -7335,8 +7341,10 @@ async def stream_responses_api(
     _effective_thinking = _resolve_enable_thinking(
         request_value=request.enable_thinking,
         ct_kwargs=_ct_kwargs,
-        tools_present=False,
+        tools_present=bool(getattr(request, "tools", None)),
         model_key=_model_path or _model_name or request.model,
+        engine=engine,
+        auto_detect=True,
     )
 
     # Reasoning parser setup (mirrors stream_chat_completion)
