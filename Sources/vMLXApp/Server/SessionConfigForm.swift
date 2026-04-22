@@ -781,28 +781,47 @@ struct SessionConfigForm: View {
         DisclosureGroup(isExpanded: isOn) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 if loadTimeOnly {
-                    // iter-44: load-time knobs (engine kind, cache
-                    // block count, TurboQuant bits, etc.) are baked
-                    // into the model container during
-                    // `setupCacheCoordinator` / `Engine.load`. Changing
-                    // them on a running session silently persists the
-                    // new value to SQLite but the running engine keeps
-                    // using the OLD one — user complaint trap. This
-                    // caption tells users they need a Stop + Start
-                    // (or Restart) cycle for the change to apply.
-                    Text("Changes apply on next session start — restart the session to pick up new values.")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.textLow)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 2)
+                    // R5 §306 — prominent yellow badge + caption so
+                    // users notice mid-session that fields under this
+                    // disclosure are baked into the model container at
+                    // load time (engine kind, cache block count,
+                    // TurboQuant bits, etc.). Changing them on a
+                    // running session silently persists the new value
+                    // but the engine keeps the OLD one until
+                    // Stop+Start — the yellow ⟳ is the universal
+                    // "restart required" signal.
+                    HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.warning)
+                        Text("Restart required — changes in this section apply only after the session is stopped and started again.")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .fill(Theme.Colors.warning.opacity(0.10))
+                    )
+                    .padding(.bottom, 2)
                 }
                 content()
             }
             .padding(.top, Theme.Spacing.sm)
         } label: {
-            Text(title.uppercased())
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.textLow)
+            HStack(spacing: 4) {
+                Text(title.uppercased())
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                if loadTimeOnly {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.warning)
+                        .help("Changes to fields under \(title) require a session restart to apply.")
+                }
+            }
         }
         .tint(Theme.Colors.textMid)
     }
