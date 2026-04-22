@@ -119,6 +119,22 @@ public actor IdleTimer {
         return nil
     }
 
+    /// A7 §259 — expose BOTH timer remainders simultaneously so the
+    /// tray / chat banner can render e.g. "soft 4:12 · deep 14:12"
+    /// instead of a single kind-switched value. Returns nil remainder
+    /// for an already-fired stage. Disabled timer → both nil.
+    public func sleepCountdowns() -> (soft: TimeInterval?, deep: TimeInterval?) {
+        guard config.enabled else { return (nil, nil) }
+        let elapsed = Date().timeIntervalSince(lastActivity)
+        let soft: TimeInterval? = softFired
+            ? nil
+            : max(0, config.softAfter - elapsed)
+        let deep: TimeInterval? = deepFired
+            ? nil
+            : max(0, config.deepAfter - elapsed)
+        return (soft, deep)
+    }
+
     public func subscribe() -> AsyncStream<Event> {
         AsyncStream { continuation in
             let id = UUID()
