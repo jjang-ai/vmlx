@@ -1,0 +1,127 @@
+{
+  "groupId": "val-fast-003-correctness",
+  "assertions": [
+    "VAL-FAST-003"
+  ],
+  "testedAt": "2026-04-22T12:58:20+0200",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M"
+  },
+  "toolsUsed": [
+    "curl",
+    "python3"
+  ],
+  "assertions_detail": [
+    {
+      "id": "VAL-FAST-003",
+      "title": "Fast-path produces numerically correct logprobs",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Send 3 prompts through fast-path (max_tokens=1, echo=true, logprobs=1)",
+          "expected": "Valid logprob arrays returned",
+          "observed": "Valid responses for 3 prompts"
+        },
+        {
+          "action": "Send same 3 prompts through normal echo-path (max_tokens=2)",
+          "expected": "Valid logprob arrays with same prompt tokens",
+          "observed": "Valid responses, prompt tokens match"
+        },
+        {
+          "action": "Compare prompt token logprobs across paths",
+          "expected": "All within tolerance (abs<1e-6, rel<1e-4)",
+          "observed": "All within tolerance: True"
+        },
+        {
+          "action": "Send same prompt 5 times through fast-path",
+          "expected": "Identical logprobs across all runs",
+          "observed": "All identical: True"
+        },
+        {
+          "action": "Sanity check: all logprobs negative and finite",
+          "expected": "All logprobs negative and finite",
+          "observed": "All pass: True"
+        }
+      ],
+      "evidence": {
+        "crossPathComparison": {
+          "prompt1": {
+            "prompt": "The capital of France is",
+            "fastPathTokenCount": 29,
+            "normalPathTokenCount": 30,
+            "promptTokenCount": 28,
+            "maxAbsDiff": 0.0,
+            "maxRelDiff": 0.0,
+            "maxAbsDiffPos": -1,
+            "maxRelDiffPos": -1,
+            "withinTolerance": true,
+            "mismatches": null
+          },
+          "prompt2": {
+            "prompt": "In a hole in the ground there lived a",
+            "fastPathTokenCount": 33,
+            "normalPathTokenCount": 34,
+            "promptTokenCount": 32,
+            "maxAbsDiff": 0.0,
+            "maxRelDiff": 0.0,
+            "maxAbsDiffPos": -1,
+            "maxRelDiffPos": -1,
+            "withinTolerance": true,
+            "mismatches": null
+          },
+          "prompt3": {
+            "prompt": "The quick brown fox jumps over the lazy",
+            "fastPathTokenCount": 32,
+            "normalPathTokenCount": 33,
+            "promptTokenCount": 31,
+            "maxAbsDiff": 0.0,
+            "maxRelDiff": 0.0,
+            "maxAbsDiffPos": -1,
+            "maxRelDiffPos": -1,
+            "withinTolerance": true,
+            "mismatches": null
+          }
+        },
+        "determinismCheck": {
+          "allIdentical": true,
+          "numRuns": 5,
+          "prompt": "The capital of France is"
+        },
+        "sanityChecks": {
+          "prompt1": {
+            "prompt": "The capital of France is",
+            "allNegative": true,
+            "allFinite": true,
+            "pos0Null": true,
+            "countsMatch": true,
+            "tokenCount": 29,
+            "logprobCount": 29
+          },
+          "prompt2": {
+            "prompt": "In a hole in the ground there lived a",
+            "allNegative": true,
+            "allFinite": true,
+            "pos0Null": true,
+            "countsMatch": true,
+            "tokenCount": 33,
+            "logprobCount": 33
+          },
+          "prompt3": {
+            "prompt": "The quick brown fox jumps over the lazy",
+            "allNegative": true,
+            "allFinite": true,
+            "pos0Null": true,
+            "countsMatch": true,
+            "tokenCount": 32,
+            "logprobCount": 32
+          }
+        }
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested VAL-FAST-003: cross-path comparison passed, determinism passed, sanity passed. Overall: PASS"
+}

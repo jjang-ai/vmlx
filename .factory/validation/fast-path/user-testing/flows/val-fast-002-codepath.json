@@ -1,0 +1,74 @@
+{
+  "groupId": "val-fast-002",
+  "testedAt": "2026-04-22T00:00:00Z",
+  "isolation": {
+    "method": "code-inspection",
+    "repoRoot": "/Users/draco/munka/codewizards/aiprj/vmlx",
+    "serverURL": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M"
+  },
+  "toolsUsed": ["rg", "sed", "curl"],
+  "assertions": [
+    {
+      "id": "VAL-FAST-002",
+      "title": "Fast-path does not create AsyncStream, StreamingDetokenizer, or ToolCallProcessor",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Find fast-path code entry point in OpenAIRoutes.swift",
+          "expected": "Guard condition checks: !isStream && maxTokens==1 && echo && logprobs",
+          "observed": "Guard condition at line ~352: `if !isStream, chatReq.maxTokens == 1, echoEnabled, logprobsValue != nil || chatReq.promptLogprobs != nil` — matches all four conditions"
+        },
+        {
+          "action": "Trace fast-path from route handler to Engine.loglikelihood()",
+          "expected": "Direct call to engine.loglikelihood() — no streaming objects",
+          "observed": "Route handler calls `engine.loglikelihood(request: chatReq)` directly (line 360). No AsyncStream, StreamingDetokenizer, or ToolCallProcessor referenced in the fast-path branch (lines 352-395)"
+        },
+        {
+          "action": "Trace Engine.loglikelihood() implementation",
+          "expected": "Calls model.prepare() or model() directly, computes logSoftmax, returns result",
+          "observed": "Engine.loglikelihood() (line 1586) acquires generation lock, calls _performLoglikelihood() (line 1660). _performLoglikelihood calls container.perform { ctx.model(batchInput, cache:cache, state:nil) } → logSoftmax → token indexing → returns LoglikelihoodResult struct"
+        },
+        {
+          "action": "Verify no AsyncStream in _performLoglikelihood",
+          "expected": "Zero references to AsyncStream",
+          "observed": "grep confirms 0 occurrences of AsyncStream in both loglikelihood() and _performLoglikelihood()"
+        },
+        {
+          "action": "Verify no StreamingDetokenizer in _performLoglikelihood",
+          "expected": "Zero references to StreamingDetokenizer",
+          "observed": "grep confirms 0 occurrences of StreamingDetokenizer in both loglikelihood() and _performLoglikelihood()"
+        },
+        {
+          "action": "Verify no ToolCallProcessor in _performLoglikelihood",
+          "expected": "Zero references to ToolCallProcessor",
+          "observed": "grep confirms 0 occurrences of ToolCallProcessor in both loglikelihood() and _performLoglikelihood()"
+        },
+        {
+          "action": "Negative test: send normal streaming request",
+          "expected": "Returns SSE chunks (proves streaming pipeline is used for normal requests)",
+          "observed": "curl with stream:true returns SSE data: lines with text_completion.chunk objects. Confirms normal path uses streaming (AsyncStream via engine.stream())"
+        }
+      ],
+      "evidence": {
+        "fastPathFile": "Sources/vMLXServer/Routes/OpenAIRoutes.swift (lines ~352-395)",
+        "engineMethodImpl": "Sources/vMLXEngine/Engine.swift (loglikelihood: line 1586, _performLoglikelihood: line 1660)",
+        "fastPathBranch": "Guard: !isStream && chatReq.maxTokens == 1 && echoEnabled && (logprobsValue != nil || chatReq.promptLogprobs != nil). When true, calls engine.loglikelihood() directly and returns serialized JSON response. Falls through to normal path on error.",
+        "codePathTrace": "1) Route handler checks guard conditions → 2) Calls engine.loglikelihood(request:) → 3) Acquires generationLock → 4) Calls _performLoglikelihood → 5) container.perform { ctx.model(batchInput, cache:cache, state:nil) } → 6) logSoftmax over full sequence → 7) Index per-position logprobs for prompt tokens → 8) ArgMaxSampler for single generated token → 9) Build LoglikelihoodResult struct → 10) Route handler builds JSON response with legacy logprobs format",
+        "noAsyncStream": true,
+        "noStreamingDetokenizer": true,
+        "noToolCallProcessor": true,
+        "negativeTestResult": "Streaming request (stream:true, max_tokens:5) returned SSE chunks with text_completion.chunk objects, confirming normal path uses AsyncStream via engine.stream()",
+        "keyCodeSnippets": [
+          "// Guard in OpenAIRoutes.swift:\nif !isStream,\n   chatReq.maxTokens == 1,\n   echoEnabled,\n   logprobsValue != nil || chatReq.promptLogprobs != nil {\n    let result = try await engine.loglikelihood(request: chatReq)\n    // ... build response directly, no streaming objects\n}",
+          "// Engine.loglikelihood doc comment:\n/// Dedicated synchronous fast-path for `max_tokens: 1` loglikelihood\n/// requests. Bypasses AsyncStream, StreamingDetokenizer, and\n/// ToolCallProcessor entirely. Calls `model.prepare()` directly,\n/// computes batched `logSoftmax` over the full sequence...",
+          "// _performLoglikelihood core:\nlet modelOutput = ctx.model(batchInput, cache: cache, state: nil)\nlet logProbs = logSoftmax(logits)\n// ... index logprobs, sample 1 token, return LoglikelihoodResult"
+        ]
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 1 assertion: VAL-FAST-002 PASSED. Fast-path code confirmed: guard conditions match spec (!isStream, maxTokens==1, echo==true, logprobs set), zero references to AsyncStream/StreamingDetokenizer/ToolCallProcessor in the fast-path methods, code goes directly from model() → logSoftmax → response serialization. Negative test confirmed normal streaming uses SSE pipeline."
+}
