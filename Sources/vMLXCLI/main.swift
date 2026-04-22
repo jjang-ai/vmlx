@@ -183,6 +183,17 @@ struct Serve: AsyncParsableCommand {
     @Flag(name: [.customLong("disable-ssm-re-derive")], help: "Disable post-generation SSM re-derive for hybrid+thinking models.")
     var disableSsmReDerive: Bool = false
 
+    // §282 Idle lifecycle. Previously only settable via SwiftUI +
+    // SQLite; operators / testing harnesses couldn't override. Flows
+    // through `engine.settings.setGlobal` so the existing IdleTimer
+    // subscription picks up the new config on next `load()`.
+    @Option(name: .long, help: "Seconds of idle before soft-sleep (caches clear, weights retained). 0 disables.")
+    var idleSoftSec: Double?
+    @Option(name: .long, help: "Seconds of idle before deep-sleep (weights unloaded). 0 disables. Must exceed --idle-soft-sec.")
+    var idleDeepSec: Double?
+    @Flag(name: [.customLong("disable-idle")], help: "Disable the idle timer entirely (never auto-sleep).")
+    var disableIdle: Bool = false
+
     func run() async throws {
         // Ignore SIGPIPE so mid-stream client disconnect (curl drop,
         // harness SIGTERM, websocket close) surfaces as EPIPE on the
@@ -277,6 +288,10 @@ struct Serve: AsyncParsableCommand {
                 if let m = smeltMode, !m.isEmpty { g.smeltMode = m }
             }
             if disableSsmReDerive { g.enableSSMReDerive = false; dirty = true }
+            // §282 idle lifecycle wiring.
+            if let s = idleSoftSec { g.idleSoftSec = s; dirty = true }
+            if let d = idleDeepSec { g.idleDeepSec = d; dirty = true }
+            if disableIdle { g.idleEnabled = false; dirty = true }
             if dirty { await engine.settings.setGlobal(g) }
         }
 
