@@ -22,6 +22,15 @@ public final class ZImage: ImageGenerator, @unchecked Sendable {
             defaultSteps: 4,
             defaultGuidance: 0.0,
             supportsLoRA: false,
+            // I1/I3 §311: the transformer velocity predictor (see
+            // file-level comment) is a placeholder returning a scaled
+            // noise field, so the PNGs we produce are visually noise
+            // rather than prompt-conditioned. Flagging this in the
+            // registry lets /v1/images/generations stamp a warning
+            // header + JSON field so callers don't mistake noise bytes
+            // for a generation failure. Drop `isPlaceholder: true` once
+            // the real DiT forward pass lands.
+            isPlaceholder: true,
             loader: { path, quant in
                 _ = ZImage._register
                 return try ZImage(modelPath: path, quantize: quant)

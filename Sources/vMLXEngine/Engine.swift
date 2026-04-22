@@ -6,6 +6,7 @@ import vMLXLLM
 import vMLXVLM
 import vMLXLMCommon
 import vMLXEmbedders
+import vMLXFlux
 import MLX
 @preconcurrency import Tokenizers
 
@@ -2107,11 +2108,26 @@ public actor Engine {
         if n > 0 {
             timing["per_image_ms"] = totalMs / Double(n)
         }
-        return [
+        var response: [String: Any] = [
             "created": created,
             "data": entries,
             "timing": timing,
         ]
+        // I1/I3 §311 — stamp a placeholder warning when the resident
+        // image backend is known to return noise (e.g. Z-Image Turbo
+        // pre-DiT-port). Clients that care look at
+        // `warnings[0].code == "placeholder_output"`; UIs can render
+        // a yellow banner; headless scripts can switch on it.
+        if let flux = fluxBackend as? FluxEngine,
+           await flux.loadedIsPlaceholder()
+        {
+            response["warnings"] = [[
+                "code": "placeholder_output",
+                "message": "The loaded image model's transformer is a placeholder — output bytes are noise, not prompt-conditioned. Track the real DiT port in the README.",
+                "model": model,
+            ]]
+        }
+        return response
     }
 
     /// Image edit via dict-form request. Python source:

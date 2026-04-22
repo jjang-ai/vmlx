@@ -54,9 +54,18 @@ public actor FluxEngine {
         self.loaded = LoadedModel(
             name: name,
             kind: entry.kind,
-            model: model
+            model: model,
+            isPlaceholder: entry.isPlaceholder
         )
         self.lastLoadedName = name
+    }
+
+    /// I1/I3 §311 — true when the currently-resident image model ships a
+    /// placeholder transformer (e.g. noise velocity predictor). Callers
+    /// stamp a warning on /v1/images/generations responses so users
+    /// don't mistake noise bytes for a real generation failure.
+    public func loadedIsPlaceholder() -> Bool {
+        loaded?.isPlaceholder ?? false
     }
 
     /// Unload the current model and release weights.
@@ -190,4 +199,15 @@ public struct LoadedModel: Sendable {
     public let name: String
     public let kind: ModelKind
     public let model: any FluxModel
+    /// I1/I3 §311 — mirrors ModelEntry.isPlaceholder so callers outside
+    /// the Flux package can check without re-looking-up the registry.
+    public let isPlaceholder: Bool
+
+    public init(name: String, kind: ModelKind, model: any FluxModel,
+                isPlaceholder: Bool = false) {
+        self.name = name
+        self.kind = kind
+        self.model = model
+        self.isPlaceholder = isPlaceholder
+    }
 }

@@ -16,6 +16,13 @@ public struct ModelEntry: Sendable {
     public let defaultSteps: Int
     public let defaultGuidance: Float
     public let supportsLoRA: Bool
+    /// I1/I3 §311 — true when the registered loader produces bytes but
+    /// the underlying transformer is a scaffold (e.g. noise velocity
+    /// predictor). Callers (FluxBackend, /v1/images/generations) check
+    /// this to emit a `warning` field + `x-vmlx-placeholder-output`
+    /// response header so users aren't misled into thinking noise PNGs
+    /// are a real generation failure mode.
+    public let isPlaceholder: Bool
     /// Loader — constructs the concrete model from a local weights dir +
     /// optional quantization bits. Called from inside `FluxEngine` actor.
     public let loader: @Sendable (URL, Int?) async throws -> any FluxModel
@@ -27,6 +34,7 @@ public struct ModelEntry: Sendable {
         defaultSteps: Int,
         defaultGuidance: Float,
         supportsLoRA: Bool = false,
+        isPlaceholder: Bool = false,
         loader: @Sendable @escaping (URL, Int?) async throws -> any FluxModel
     ) {
         self.name = name
@@ -35,6 +43,7 @@ public struct ModelEntry: Sendable {
         self.defaultSteps = defaultSteps
         self.defaultGuidance = defaultGuidance
         self.supportsLoRA = supportsLoRA
+        self.isPlaceholder = isPlaceholder
         self.loader = loader
     }
 }
