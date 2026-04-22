@@ -33,6 +33,18 @@ extension Engine {
         return e
     }
 
+    /// P1 §294 — pre-load an image-gen model at serve startup. Called
+    /// from `vmlxctl serve --image-model <path>`. The derived `name`
+    /// is the path's last component lowercased — this name is what
+    /// `lastLoadedName` will report; generateImage/editImage will
+    /// accept any `model` field and dispatch to this backend as long
+    /// as it stays resident (see generateImage fallback below).
+    public func preloadImageModel(at modelPath: URL) async throws {
+        let flux = getOrCreateFluxBackend()
+        let name = modelPath.lastPathComponent.lowercased()
+        try await flux.load(name: name, modelPath: modelPath, quantize: nil)
+    }
+
     // MARK: - Typed image generation (called from ImageScreen)
 
     /// Run a text-to-image generation end-to-end and return the final URL.
@@ -48,21 +60,36 @@ extension Engine {
 
         // Ensure the requested model is loaded. If a different model is
         // currently resident, swap. `lastLoadedName` is an actor accessor.
+        // P1 §294: when the request's `model` field doesn't match any
+        // library entry BUT a backend is already resident (via
+        // `vmlxctl serve --image-model <path>` preload), accept the
+        // request against that backend. This matches how serve mode
+        // is liberal with the chat `model` field — operators running
+        // single-model CLI shouldn't have to match the name exactly.
         let lastName = await flux.lastLoadedName
         if lastName != model {
-            guard let libraryEntry = await self.modelLibrary.entries().first(where: {
+            let libraryEntry = await self.modelLibrary.entries().first(where: {
                 $0.displayName == model || $0.id == model
-            }) else {
+            })
+            if let entry = libraryEntry {
+                try await flux.load(
+                    name: model.lowercased(),
+                    modelPath: entry.canonicalPath,
+                    quantize: nil
+                )
+            } else if lastName != nil {
+                // Preloaded backend is resident; reuse it regardless of
+                // the caller's `model` field.
+                await self.logs.append(
+                    .info, category: "flux",
+                    "image request model='\(model)' not in library; routing to preloaded backend '\(lastName ?? "?")'"
+                )
+            } else {
                 throw EngineError.notImplemented(
                     "FluxBackend — no model entry for '\(model)'. "
-                    + "Stage it via DownloadManager first."
+                    + "Stage it via DownloadManager first, or start with `vmlxctl serve --image-model <path>`."
                 )
             }
-            try await flux.load(
-                name: model.lowercased(),
-                modelPath: libraryEntry.canonicalPath,
-                quantize: nil
-            )
         }
 
         // vMLXEngine.ImageGenSettings has a flat Int seed (-1 = random) and

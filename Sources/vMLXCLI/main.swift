@@ -20,7 +20,7 @@ struct VMLX: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "vmlx",
         abstract: "vMLX — local LLM server (Swift)",
-        subcommands: [Serve.self, Chat.self, Pull.self, List.self, DFlashSmoke.self, BenchDirect.self],
+        subcommands: [Serve.self, Chat.self, Pull.self, List.self, DFlashSmoke.self, BenchDirect.self, Images.self],
         defaultSubcommand: Serve.self
     )
 }
@@ -32,6 +32,8 @@ struct Serve: AsyncParsableCommand {
     var model: String?
     @Option(name: .long, help: "Path to an embedding model. When set, `/v1/embeddings` becomes callable. Alongside --model; the chat model still serves /v1/chat/completions etc.")
     var embeddingModel: String?
+    @Option(name: .long, help: "P1 §294 — path to an image-generation model (Flux, Z-Image, Qwen-Image). When set, `/v1/images/generations` and `/v1/images/edits` route to this model. Independent of --model; both can coexist.")
+    var imageModel: String?
     @Option(name: .shortAndLong) var host: String = "127.0.0.1"
     @Option(name: .shortAndLong) var port: Int = 8000
     @Option(name: .long) var apiKey: String?
@@ -383,6 +385,26 @@ struct Serve: AsyncParsableCommand {
                 FileHandle.standardError.write(Data(
                     "[cli] embedding model load failed: \(error)\n".utf8))
                 // Not fatal — chat still works. Just log and continue.
+            }
+        }
+
+        // P1 §294 — image model side-load. `--image-model` lets
+        // /v1/images/generations and /v1/images/edits route to this
+        // model without needing ModelLibrary registration or the
+        // SwiftUI app. Pre-loads the FluxBackend so the first gen
+        // request has no cold-start. Name is derived from the path
+        // lastComponent; any request's `model` field is accepted as
+        // long as a backend is loaded (FluxBackend handles the
+        // fallback in preloadImageModel below).
+        if let img = imageModel, !img.isEmpty {
+            let url = URL(fileURLWithPath: img)
+            do {
+                try await engine.preloadImageModel(at: url)
+                FileHandle.standardError.write(Data(
+                    "[cli] image model ready: \(url.lastPathComponent)\n".utf8))
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "[cli] image model load failed: \(error)\n".utf8))
             }
         }
 
@@ -1255,5 +1277,115 @@ enum BenchDirectImpl {
             text: text, tokens: tokens, promptTokens: promptTokensCount,
             prefillSec: prefillDt, decodeSec: decodeDt
         )
+    }
+}
+
+// MARK: - Images
+
+/// P2 §294 — one-shot image generation from the CLI without booting a
+/// full HTTP server. Loads the model once, runs a single request,
+/// writes the PNG to disk, exits. Honest about which models actually
+/// reach pixel-level synthesis versus which are stubs — on a stub
+/// throw we exit non-zero with the error message so scripts know.
+struct Images: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "images",
+        abstract: "Generate an image from a prompt (one-shot, no server)"
+    )
+
+    @Option(name: .shortAndLong, help: "Path to the image-generation model directory.")
+    var model: String
+
+    @Option(name: .shortAndLong, help: "Prompt text.")
+    var prompt: String
+
+    @Option(name: .shortAndLong, help: "Output PNG path. If a directory, file is named by timestamp.")
+    var output: String = "./vmlx-gen.png"
+
+    @Option(name: .long, help: "Image width (must match model's native resolution).")
+    var width: Int = 1024
+
+    @Option(name: .long, help: "Image height.")
+    var height: Int = 1024
+
+    @Option(name: .long, help: "Sampling steps (0 = model default).")
+    var steps: Int = 0
+
+    @Option(name: .long, help: "CFG guidance scale (0 = model default).")
+    var guidance: Double = 0
+
+    @Option(name: .long, help: "Random seed (-1 = random).")
+    var seed: Int = -1
+
+    func run() async throws {
+        _ = signal(SIGPIPE, SIG_IGN)
+        let modelURL = URL(fileURLWithPath: model)
+        guard FileManager.default.fileExists(atPath: modelURL.path) else {
+            FileHandle.standardError.write(Data(
+                "error: model path does not exist: \(model)\n".utf8))
+            throw ExitCode.failure
+        }
+
+        let engine = Engine()
+        FileHandle.standardError.write(Data(
+            "[images] loading model: \(modelURL.lastPathComponent)\n".utf8))
+        do {
+            try await engine.preloadImageModel(at: modelURL)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[images] load failed: \(error)\n".utf8))
+            throw ExitCode.failure
+        }
+
+        var settings = ImageGenSettings()
+        settings.width = width
+        settings.height = height
+        settings.numImages = 1
+        if steps > 0 { settings.steps = steps }
+        if guidance > 0 { settings.guidance = guidance }
+        settings.seed = seed
+        let derivedName = modelURL.lastPathComponent.lowercased()
+
+        FileHandle.standardError.write(Data(
+            "[images] generating: \(width)x\(height) steps=\(steps > 0 ? "\(steps)" : "default") seed=\(seed)\n".utf8))
+        let srcURL: URL
+        do {
+            srcURL = try await engine.generateImage(
+                prompt: prompt,
+                model: derivedName,
+                settings: settings)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[images] generation failed: \(error)\n".utf8))
+            throw ExitCode.failure
+        }
+
+        // Resolve the destination. If --output points at a directory,
+        // generate a timestamped filename inside it; otherwise treat
+        // it as the final file path and create parent directories as
+        // needed.
+        let fm = FileManager.default
+        var destURL = URL(fileURLWithPath: output)
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: destURL.path, isDirectory: &isDir), isDir.boolValue {
+            let ts = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            destURL = destURL.appendingPathComponent("vmlx-\(ts).png")
+        }
+        try? fm.createDirectory(
+            at: destURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        do {
+            if fm.fileExists(atPath: destURL.path) {
+                try fm.removeItem(at: destURL)
+            }
+            try fm.copyItem(at: srcURL, to: destURL)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[images] failed to write output: \(error)\n".utf8))
+            throw ExitCode.failure
+        }
+
+        print(destURL.path)
     }
 }
