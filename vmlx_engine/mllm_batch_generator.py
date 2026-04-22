@@ -2199,6 +2199,14 @@ class MLLMBatchGenerator:
                 # so the next turn needs a fresh companion keyed on the longer
                 # token list.  (Fixes alternating miss/hit pattern — #45)
                 if self._is_hybrid:
+                    # Guard: skip SSM capture+rederive on tokens containing
+                    # image placeholder IDs. Rederive's text-only forward
+                    # pass would produce wrong state at vision positions,
+                    # corrupting text-only follow-up resume.
+                    _img_id = getattr(getattr(self.model, "config", None), "image_token_index", None)
+                    _tp = getattr(req, '_original_token_ids', None) or input_ids_list[i]
+                    if _img_id is not None and _img_id in _tp:
+                        continue
                     try:
                         kv_set = set(self._hybrid_kv_positions)
                         ssm_layers = []
