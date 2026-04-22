@@ -378,15 +378,20 @@ public struct LogprobsCollector: LogitProcessor {
         var topAlts: [TopTokenLogprob] = []
         if topLogprobs > 0 {
             let vocabSize = logProbs.dim(-1)
-            let flatLogProbs = logProbs.reshaped(-1)
-            // argSort returns ascending (smallest first). Take the last N
-            // (highest logprobs) and reverse to get descending order,
-            // matching the OpenAI wire format.
-            let sortedIndices = argSort(flatLogProbs, axis: -1)
             let n = min(topLogprobs, vocabSize)
-            let total = sortedIndices.dim(0)
-            let topIndices = sortedIndices[(total - n)..<total].asArray(Int.self).reversed()
-            for idx in topIndices {
+            // Use argPartition (O(V)) instead of argSort (O(V log V))
+            // to extract top-N alternatives. Negate logProbs so the
+            // k largest original values become the k smallest negated
+            // values, landing at positions [0, n) after partition.
+            // Then sort only those n entries descending by logprob.
+            let flatLogProbs = logProbs.reshaped(-1)
+            let negated = -flatLogProbs
+            let partIndices = argPartition(negated, kth: n - 1, axis: -1)
+            let topIdx = partIndices[0..<n].asArray(Int.self)
+            // Sort the n candidates by logprob descending (O(n log n),
+            // negligible since n << V).
+            let sorted = topIdx.sorted { flatLogProbs[$0].item(Float.self) > flatLogProbs[$1].item(Float.self) }
+            for idx in sorted {
                 let lpVal = flatLogProbs[idx].item(Float.self)
                 let tokStr = tokenizer.decode(tokenIds: [idx])
                 topAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal))

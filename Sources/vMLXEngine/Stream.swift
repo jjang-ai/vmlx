@@ -1440,6 +1440,12 @@ extension Engine {
                 }
 
             case .toolCall(let call):
+                // Flush any accumulated logprobs before emitting the tool
+                // call chunk. Without this, logprobs from the tokens leading
+                // up to the tool call would be delayed until the next content
+                // chunk or the .info handler, breaking the interleaving
+                // contract (VAL-CHAT-002).
+                flushLogprobs()
                 // vmlx-swift-lm already parsed a Harmony-style call.
                 // `call.function.arguments` is `[String: vMLXLMCommon.JSONValue]`
                 // — disambiguate from our own vMLXEngine.JSONValue.
