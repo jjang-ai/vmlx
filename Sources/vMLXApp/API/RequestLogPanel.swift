@@ -25,6 +25,8 @@ struct RequestLogPanel: View {
     @State private var viewportHeight: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
     @State private var streamTask: Task<Void, Never>? = nil
+    /// R1 §302: line currently inspected in the sheet. Nil = sheet closed.
+    @State private var inspected: LogStore.Line? = nil
 
     private let maxBuffer = 500
 
@@ -45,6 +47,9 @@ struct RequestLogPanel: View {
         .onDisappear {
             streamTask?.cancel()
             streamTask = nil
+        }
+        .sheet(item: $inspected) { line in
+            RequestInspectorSheet(line: line) { inspected = nil }
         }
     }
 
@@ -155,35 +160,52 @@ struct RequestLogPanel: View {
     @ViewBuilder
     private func row(_ line: LogStore.Line) -> some View {
         let parts = Self.parse(line.message)
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-            Text(Self.formatTime(line.timestamp))
-                .foregroundStyle(Theme.Colors.textLow)
-            Text(parts.method)
-                .foregroundStyle(methodColor(parts.method))
-                .frame(width: 60, alignment: .leading)
-            Text(parts.path)
-                .foregroundStyle(Theme.Colors.textHigh)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: Theme.Spacing.sm)
-            if let status = parts.status {
-                Text("\(status)")
-                    .foregroundStyle(statusColor(status))
-                    .font(Theme.Typography.caption)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(
-                        Capsule().fill(statusColor(status).opacity(0.15))
-                    )
+        Button { inspected = line } label: {
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Text(Self.formatTime(line.timestamp))
+                    .foregroundStyle(Theme.Colors.textLow)
+                Text(parts.method)
+                    .foregroundStyle(methodColor(parts.method))
+                    .frame(width: 60, alignment: .leading)
+                Text(parts.path)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: Theme.Spacing.sm)
+                if let tid = parts.traceId {
+                    // R1 §302: show first 8 of the trace id (full form
+                    // copied from the sheet). Mono + low-contrast so it
+                    // doesn't dominate the row.
+                    Text(String(tid.prefix(8)))
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textLow)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().fill(Theme.Colors.surfaceHi)
+                        )
+                }
+                if let status = parts.status {
+                    Text("\(status)")
+                        .foregroundStyle(statusColor(status))
+                        .font(Theme.Typography.caption)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule().fill(statusColor(status).opacity(0.15))
+                        )
+                }
+                if let ms = parts.ms {
+                    Text("\(Self.formatMs(ms))")
+                        .foregroundStyle(Theme.Colors.textMid)
+                        .frame(width: 60, alignment: .trailing)
+                }
             }
-            if let ms = parts.ms {
-                Text("\(Self.formatMs(ms))")
-                    .foregroundStyle(Theme.Colors.textMid)
-                    .frame(width: 60, alignment: .trailing)
-            }
+            .font(Theme.Typography.mono)
+            .contentShape(Rectangle())
         }
-        .font(Theme.Typography.mono)
-        .textSelection(.enabled)
+        .buttonStyle(.plain)
+        .help("Click to inspect this request")
     }
 
     private var footer: some View {
@@ -232,14 +254,24 @@ struct RequestLogPanel: View {
     // MARK: - Formatting
 
     /// Parse the RequestLoggerMiddleware format
-    /// "{METHOD} {path} -> {status} ({ms}ms)" into structured fields.
-    /// Falls back to raw text when the line doesn't match (e.g. server
-    /// lifecycle messages like "Starting HTTP server on ...").
-    private static func parse(_ message: String) -> (method: String, path: String, status: Int?, ms: Double?) {
-        // Split on " -> " then " ("
-        let parts = message.components(separatedBy: " -> ")
+    /// "{METHOD} {path} -> {status} ({ms}ms) [tid={traceId}]" into
+    /// structured fields. Falls back to raw text when the line doesn't
+    /// match (e.g. server lifecycle messages).
+    internal static func parse(_ message: String) -> (method: String, path: String, status: Int?, ms: Double?, traceId: String?) {
+        // R1 §302: extract optional [tid=...] suffix first so the path
+        // parse doesn't swallow it.
+        var core = message
+        var traceId: String? = nil
+        if let r = core.range(of: #" \[tid=[^\]]+\]$"#, options: .regularExpression) {
+            let raw = String(core[r])
+            let s = raw.replacingOccurrences(of: " [tid=", with: "")
+                       .replacingOccurrences(of: "]", with: "")
+            traceId = s.isEmpty ? nil : s
+            core.removeSubrange(r)
+        }
+        let parts = core.components(separatedBy: " -> ")
         guard parts.count == 2 else {
-            return (method: "", path: message, status: nil, ms: nil)
+            return (method: "", path: message, status: nil, ms: nil, traceId: traceId)
         }
         let methodPath = parts[0].components(separatedBy: " ")
         let method = methodPath.first ?? ""
@@ -253,7 +285,7 @@ struct RequestLogPanel: View {
                 .replacingOccurrences(of: ")", with: "")
             ms = Double(msStr)
         }
-        return (method, path, status, ms)
+        return (method, path, status, ms, traceId)
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -302,4 +334,94 @@ private struct ReqLogViewport: PreferenceKey {
 private struct ReqLogScrollOffset: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+// MARK: - R1 §302 — request inspector sheet
+//
+// Opens on row click. Shows the parsed envelope (method / path /
+// status / latency / trace id) plus the raw log line. The log line
+// is already the canonical record — no hidden RPC payload store —
+// so nothing PII-sensitive leaks into the UI.
+
+struct RequestInspectorSheet: View {
+    let line: LogStore.Line
+    let close: () -> Void
+
+    var body: some View {
+        let parts = RequestLogPanel.parse(line.message)
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            HStack {
+                Text("Request inspector")
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                Spacer()
+                Button("Close") { close() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            Divider()
+            grid(parts: parts)
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Raw log line")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                Text(line.message)
+                    .font(Theme.Typography.mono)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                    .textSelection(.enabled)
+                    .padding(Theme.Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.Colors.surfaceHi)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            }
+            if let tid = parts.traceId {
+                HStack {
+                    Spacer()
+                    Button {
+                        #if os(macOS)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(tid, forType: .string)
+                        #endif
+                    } label: {
+                        Label("Copy trace id", systemImage: "doc.on.doc")
+                    }
+                }
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(minWidth: 520, minHeight: 360)
+        .background(Theme.Colors.surface)
+    }
+
+    @ViewBuilder
+    private func grid(parts: (method: String, path: String, status: Int?, ms: Double?, traceId: String?)) -> some View {
+        let statusStr = parts.status.map(String.init) ?? "—"
+        let msStr: String = parts.ms.map { ms -> String in
+            if ms < 1 { return String(format: "%.2f ms", ms) }
+            if ms < 1000 { return String(format: "%.0f ms", ms) }
+            return String(format: "%.2f s", ms / 1000)
+        } ?? "—"
+        VStack(alignment: .leading, spacing: 6) {
+            labeled("Time", ISO8601DateFormatter().string(from: line.timestamp))
+            labeled("Method", parts.method.isEmpty ? "—" : parts.method)
+            labeled("Path", parts.path.isEmpty ? "—" : parts.path)
+            labeled("Status", statusStr)
+            labeled("Latency", msStr)
+            labeled("Trace ID", parts.traceId ?? "—")
+            labeled("Level", line.level.rawValue)
+        }
+        .font(Theme.Typography.mono)
+    }
+
+    private func labeled(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
+            Text(label)
+                .foregroundStyle(Theme.Colors.textLow)
+                .frame(width: 90, alignment: .leading)
+            Text(value)
+                .foregroundStyle(Theme.Colors.textHigh)
+                .textSelection(.enabled)
+                .lineLimit(3)
+        }
+    }
 }
