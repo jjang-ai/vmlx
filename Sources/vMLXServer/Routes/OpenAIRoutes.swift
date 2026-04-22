@@ -354,6 +354,10 @@ public enum OpenAIRoutes {
                 logprobs: logprobsValue,
                 topLogprobs: obj["top_logprobs"] as? Int
             )
+            // Validate top_logprobs — must be non-negative.
+            if let tl = chatReq.topLogprobs, tl < 0 {
+                return Self.errorJSON(.badRequest, "'top_logprobs' must be >= 0, got \(tl)")
+            }
             // Echo and prompt_logprobs: legacy completions parameters.
             // Set after init since ChatRequest uses Codable synthesis.
             chatReq.echo = obj["echo"] as? Bool
