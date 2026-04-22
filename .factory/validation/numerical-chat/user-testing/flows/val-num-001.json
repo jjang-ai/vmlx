@@ -1,0 +1,92 @@
+{
+  "groupId": "val-num-001",
+  "testedAt": "2026-04-22T12:00:00Z",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M",
+    "tool": "curl + code inspection"
+  },
+  "toolsUsed": ["curl", "code-inspection"],
+  "assertions": [
+    {
+      "id": "VAL-NUM-001",
+      "title": "Logprobs are computed in float32 regardless of model dtype",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "Code inspection: Search for logSoftmax, bfloat16 upcast patterns in Swift sources",
+          "expected": "All logprob computation paths upcast bfloat16 logits to float32 before logSoftmax",
+          "observed": "Found 4 separate code paths, all with identical bfloat16→float32 upcast guard before logSoftmax"
+        },
+        {
+          "action": "Verify model config dtype is bfloat16",
+          "expected": "Model config shows bfloat16 dtype with quantization",
+          "observed": "config.json has 'dtype': 'bfloat16', 'quantization': {'group_size': 64, 'bits': 4}"
+        },
+        {
+          "action": "Send chat completions request with logprobs=true, top_logprobs=5",
+          "expected": "All logprob values are negative, finite (not NaN, not -Inf, not +Inf)",
+          "observed": "6 token positions with 36 total logprob values checked: 0 NaN, 0 Inf, 0 positive values"
+        },
+        {
+          "action": "Softmax consistency check: sum(exp(top_logprobs)) at each position",
+          "expected": "Probability sums should be <= 1.0",
+          "observed": "All 6 positions have sum <= 1.0: [0.999994, 1.000000, 0.999686, 0.999999, 0.999921, 0.999999]"
+        }
+      ],
+      "evidence": {
+        "codePaths": {
+          "LogprobsCollector_capture": {
+            "file": "Sources/vMLXLMCommon/Evaluate.swift",
+            "lines": "369-371",
+            "code": "var lp = logits; if lp.dtype == .bfloat16 { lp = lp.asType(.float32) }; let logProbs = logSoftmax(lp)"
+          },
+          "TokenIterator_sample": {
+            "file": "Sources/vMLXLMCommon/Evaluate.swift",
+            "lines": "462-468",
+            "code": "if logits.dtype == .bfloat16 { logits = logits.asType(.float32) }; var logprobs = logSoftmax(logits)"
+          },
+          "Evaluate_prepare_prompt_logprobs": {
+            "file": "Sources/vMLXLMCommon/Evaluate.swift",
+            "lines": "1145-1149",
+            "code": "if logits.dtype == .bfloat16 { logits = logits.asType(.float32) }; let logProbs = logSoftmax(logits)"
+          },
+          "Engine_loglikelihoodFastPath": {
+            "file": "Sources/vMLXEngine/Engine.swift",
+            "lines": "1676-1680",
+            "code": "if logits.dtype == .bfloat16 { logits = logits.asType(.float32) }; let logProbs = logSoftmax(logits)"
+          }
+        },
+        "modelDtype": {
+          "configFile": "config.json",
+          "dtype": "bfloat16",
+          "quantization": "4-bit, group_size=64"
+        },
+        "logprobAnalysis": {
+          "totalValuesChecked": 36,
+          "nanCount": 0,
+          "infCount": 0,
+          "positiveCount": 0,
+          "allFinite": true,
+          "allNegativeOrZero": true,
+          "softmaxSums": [0.999994, 1.000000, 0.999686, 0.999999, 0.999921, 0.999999],
+          "sampleLogprobs": [
+            {"token": "<|channel>", "logprob": -1.0609626770019531e-05},
+            {"token": "thought", "logprob": 0},
+            {"token": " Hi", "logprob": -0.07594263553619385},
+            {"token": "!", "logprob": -0.00360107421875},
+            {"token": " How", "logprob": -0.0012073516845703125},
+            {"token": " can", "logprob": -1.9073486328125e-06}
+          ]
+        },
+        "files": [
+          "numerical-chat/val-num-001/chat-logprobs-response.json"
+        ]
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [],
+  "blockers": [],
+  "summary": "Tested 1 assertion: VAL-NUM-001 PASSED. Code inspection confirms all 4 logprob computation paths upcast bfloat16 logits to float32 before logSoftmax. Model is confirmed bfloat16+4bit quantized. Live API test shows 36 logprob values, all finite and non-positive, with softmax sums consistently ≤1.0."
+}

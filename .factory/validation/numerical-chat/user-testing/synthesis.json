@@ -1,0 +1,54 @@
+{
+  "milestone": "numerical-chat",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-NUM-001",
+    "VAL-CHAT-001",
+    "VAL-CHAT-002"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "details": {
+    "VAL-NUM-001": {
+      "title": "Logprobs are computed in float32 regardless of model dtype",
+      "result": "pass",
+      "evidence": {
+        "codeInspection": "4 separate code paths all guard with `if logits.dtype == .bfloat16 { logits = logits.asType(.float32) }` before logSoftmax: LogprobsCollector.capture(), TokenIterator.sample(), Evaluate.prepare() prompt logprobs, Engine.loglikelihoodFastPath()",
+        "modelDtype": "bfloat16 with 4-bit quantization (group_size=64)",
+        "numericalTest": "36 logprob values across 6 token positions: 0 NaN, 0 Inf, 0 positive values. Softmax sums at all positions ≤1.0 (range: 0.999686–1.000000)",
+        "flowReport": ".factory/validation/numerical-chat/user-testing/flows/val-num-001.json"
+      }
+    },
+    "VAL-CHAT-001": {
+      "title": "Chat completions logprobs shape is stable",
+      "result": "pass",
+      "evidence": {
+        "nonStreaming": "choices[0].logprobs.content is array of 6 objects with token (string), logprob (number), top_logprobs (array). No legacy flat-array fields present.",
+        "streaming": "12 SSE chunks with logprobs in content-array format, correctly interleaved with content deltas",
+        "flowReport": ".factory/validation/numerical-chat/user-testing/flows/val-chat-001-002.json"
+      }
+    },
+    "VAL-CHAT-002": {
+      "title": "Chat completions logprobs do not break tool-call streaming",
+      "result": "pass",
+      "evidence": {
+        "interleaving": "3 logprobs chunks interleaved with 2 tool_call deltas in SSE stream. finish_reason='tool_calls'.",
+        "toolCallIntegrity": "Tool call JSON args parse correctly — no corruption from logprob chunks",
+        "note": "Model required explicit system prompt to trigger tool calls; casual prompts resulted in text responses only",
+        "flowReport": ".factory/validation/numerical-chat/user-testing/flows/val-chat-001-002.json"
+      }
+    }
+  },
+  "model": "Gemma-4-26B-A4B-it-JANG_4M",
+  "serverUrl": "http://127.0.0.1:8080",
+  "hardware": "MacBook Pro (Mac16,5), Apple M4 Max, 128 GB RAM"
+}

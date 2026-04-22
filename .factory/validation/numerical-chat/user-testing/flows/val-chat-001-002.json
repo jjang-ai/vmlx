@@ -1,0 +1,92 @@
+{
+  "groupId": "val-chat-001-002",
+  "testedAt": "2026-04-22T12:00:00Z",
+  "isolation": {
+    "serverUrl": "http://127.0.0.1:8080",
+    "model": "Gemma-4-26B-A4B-it-JANG_4M (4-bit quantized)",
+    "tool": "curl via Python urllib"
+  },
+  "toolsUsed": ["curl"],
+  "assertions": [
+    {
+      "id": "VAL-CHAT-001",
+      "title": "Chat completions logprobs shape is stable",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /v1/chat/completions with logprobs:true, top_logprobs:3, max_tokens:10 (non-streaming)",
+          "expected": "choices[0].logprobs.content is an array of objects with token, logprob, top_logprobs",
+          "observed": "choices[0].logprobs.content is an array of 6 objects, each with token (string), logprob (number), and top_logprobs (array of {token, logprob}). No legacy fields (tokens, token_logprobs, text_offset) present."
+        },
+        {
+          "action": "POST /v1/chat/completions with logprobs:true, top_logprobs:2, stream:true, max_tokens:5 (streaming)",
+          "expected": "SSE chunks contain logprobs in content array format",
+          "observed": "12 SSE chunks total. 5 logprobs chunks and 5 content chunks interleaved. Each logprobs chunk has delta.logprobs.content as array of objects with token, logprob, top_logprobs."
+        },
+        {
+          "action": "Verify NOT legacy flat-array format",
+          "expected": "No tokens, token_logprobs, text_offset fields at logprobs top level",
+          "observed": "logprobs object only contains 'content' key. No legacy fields present."
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/chat/completions (non-streaming) -> 200 OK, 1676 bytes; POST /v1/chat/completions (streaming) -> 200 OK, 3098 bytes SSE",
+        "files": [
+          "numerical-chat/val-chat-001/non-streaming-response.json",
+          "numerical-chat/val-chat-001/streaming-response.txt"
+        ]
+      },
+      "issues": null
+    },
+    {
+      "id": "VAL-CHAT-002",
+      "title": "Chat completions logprobs do not break tool-call streaming",
+      "status": "pass",
+      "steps": [
+        {
+          "action": "POST /v1/chat/completions with logprobs:true, tools:[get_weather], stream:true (first attempt: casual prompt)",
+          "expected": "Tool calls emitted with logprobs interleaved",
+          "observed": "Model responded with text content instead of tool calls (102 chunks, no tool_calls). Logprobs were present throughout. No crash or error."
+        },
+        {
+          "action": "POST /v1/chat/completions with logprobs:true, tools:[get_weather], stream:true, tool_choice:auto (second attempt: explicit system prompt + user instruction)",
+          "expected": "Tool calls emitted with logprobs interleaved, JSON valid",
+          "observed": "23 SSE chunks. Model emitted 2 tool_call deltas (chunks 19, 21) with logprobs chunks interleaved (chunks 18, 20 near tool calls). finish_reason='tool_calls'. Tool call JSON args={\"location\": \" 'Paris'\"} is valid and parseable."
+        },
+        {
+          "action": "Validate logprobs and tool_calls interleaving integrity",
+          "expected": "Logprob chunks do not corrupt tool-call JSON",
+          "observed": "3 logprobs chunks in the tool call region (chunks 18, 20). 2 tool_call deltas (chunks 19, 21). Tool call JSON parses correctly. No corruption detected."
+        }
+      ],
+      "evidence": {
+        "screenshots": [],
+        "consoleErrors": "none",
+        "network": "POST /v1/chat/completions (attempt 1) -> 200 OK, 25792 bytes SSE; POST /v1/chat/completions (attempt 2) -> 200 OK, 7800 bytes SSE",
+        "files": [
+          "numerical-chat/val-chat-002/toolcall-stream-1.txt",
+          "numerical-chat/val-chat-002/toolcall-stream-2-explicit.txt"
+        ]
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Model (Gemma-4-26B-A4B-it-JANG_4M) does not reliably emit tool calls with casual prompts. Required explicit system prompt instructing tool use + explicit user instruction to trigger tool calls.",
+      "resolved": true,
+      "resolution": "Added system message instructing tool use and used 'Use the get_weather function to check the weather in Paris' as the user prompt with tool_choice:auto",
+      "affectedAssertions": ["VAL-CHAT-002"]
+    },
+    {
+      "description": "curl -s output appears truncated when piping (only 201 bytes captured for 1676-byte response). Response JSON contains control characters (newline in token strings like '<|channel>thought\\n') that may interfere with pipe-based processing.",
+      "resolved": true,
+      "resolution": "Switched to Python urllib.request for reliable full response capture and JSON parsing",
+      "affectedAssertions": ["VAL-CHAT-001"]
+    }
+  ],
+  "blockers": [],
+  "summary": "Tested 2 assertions: both passed. VAL-CHAT-001: chat completions logprobs use stable content-array format (not legacy flat-array) in both streaming and non-streaming modes. VAL-CHAT-002: logprobs and tool_calls are correctly interleaved in SSE streams without corrupting tool-call JSON parsing."
+}
