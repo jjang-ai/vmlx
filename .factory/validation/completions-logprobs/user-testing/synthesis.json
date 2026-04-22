@@ -1,23 +1,19 @@
 {
   "milestone": "completions-logprobs",
-  "round": 3,
-  "status": "fail",
+  "round": 4,
+  "status": "pass",
   "assertionsSummary": {
     "total": 1,
-    "passed": 0,
-    "failed": 1,
+    "passed": 1,
+    "failed": 0,
     "blocked": 0
   },
-  "passedAssertions": [],
-  "failedAssertions": [
-    {
-      "id": "VAL-COMP-007",
-      "reason": "Deterministic alternative sort order violation at position 14 (token=' jumps') in non-streaming /v1/completions with temp=0.0 and top_logprobs=5. The 3 alternatives after the chosen token are NOT sorted descending: '...' (-21.125) appears before ' jams' (-20.5625). Reproducible across 3 runs. 149/150 total positions tested have correct sort order. Chosen token IS always first. Root cause appears to be in LogprobsCollector.capture() where alternatives.sort { $0.logprob > $1.logprob } produces incorrect order for this specific set of Float logprobs. The fix from commit c77670c (round 2) dramatically improved from 9/9 unsorted to 1/150 unsorted, but one edge case remains."
-    }
-  ],
+  "passedAssertions": ["VAL-COMP-007"],
+  "failedAssertions": [],
   "blockedAssertions": [],
   "appliedUpdates": [],
   "previousRound": ".factory/validation/completions-logprobs/user-testing/synthesis.json",
-  "buildCommit": "c77670c",
-  "serverModel": "Gemma-4-26B-A4B-it-JANG_4M"
+  "buildCommit": "e20fefb",
+  "serverModel": "Gemma-4-26B-A4B-it-JANG_4M",
+  "details": "Round 4 re-test of VAL-COMP-007 after fix commit e20fefb (stable sort for top_logprobs alternatives + deduplicate chosen token in legacy JSON). Tested 263 total positions (132 non-streaming + 131 streaming) across 20 requests with diverse prompts, temperature=0.0, top_logprobs=5. Zero sort violations detected. Chosen token always appears first. The previous round 3 violation ('...' at -21.125 appearing before ' jams' at -20.5625 at position 14) is no longer reproducible. All 7 completions-logprobs assertions (VAL-COMP-001 through VAL-COMP-007) now pass."
 }
