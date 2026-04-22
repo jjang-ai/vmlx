@@ -67,11 +67,15 @@ public enum WeightLoader {
     /// Enumerate .safetensors files in the directory. Prefers the
     /// `model.safetensors.index.json` manifest when present (so we load
     /// shards in deterministic order), falling back to a sorted glob.
+    /// If neither is found at the top level, falls through to the
+    /// diffusion-layout subdirs (`transformer/`, `text_encoder/`, `vae/`)
+    /// — Z-Image / Flux snapshots ship weights per-component that way
+    /// and this loader needs to see all of them in one merge.
     private static func enumerateShards(in directory: URL) throws -> [URL] {
         let fm = FileManager.default
+        // Try top-level index first.
         let indexURL = directory.appendingPathComponent("model.safetensors.index.json")
         if fm.fileExists(atPath: indexURL.path) {
-            // Parse the index to get the unique set of shards.
             let data = try Data(contentsOf: indexURL)
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let weightMap = obj["weight_map"] as? [String: String] {
@@ -81,11 +85,45 @@ public enum WeightLoader {
                     .map { directory.appendingPathComponent($0) }
             }
         }
-        // Fallback: glob all .safetensors in the directory.
-        let entries = try fm.contentsOfDirectory(atPath: directory.path)
-        let shardNames = entries
+        // Top-level glob.
+        let topLevel = (try? fm.contentsOfDirectory(atPath: directory.path)) ?? []
+        let topShards = topLevel
             .filter { $0.hasSuffix(".safetensors") }
             .sorted()
-        return shardNames.map { directory.appendingPathComponent($0) }
+            .map { directory.appendingPathComponent($0) }
+        if !topShards.isEmpty {
+            return topShards
+        }
+        // Diffusion-layout subdir fallback. Z-Image / Flux variants store
+        // shards under `transformer/`, `text_encoder/`, and `vae/` —
+        // collect all three so the merged weight dict carries every
+        // component the model builder needs. Prefer each subdir's own
+        // `model.safetensors.index.json` when present for deterministic
+        // order, otherwise enumerate.
+        var collected: [URL] = []
+        for sub in ["transformer", "text_encoder", "text_encoder_2", "vae", "scheduler"] {
+            let subURL = directory.appendingPathComponent(sub)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: subURL.path, isDirectory: &isDir),
+                  isDir.boolValue
+            else { continue }
+            let subIndex = subURL.appendingPathComponent("model.safetensors.index.json")
+            if fm.fileExists(atPath: subIndex.path),
+               let data = try? Data(contentsOf: subIndex),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let weightMap = obj["weight_map"] as? [String: String]
+            {
+                let names = Set(weightMap.values).sorted()
+                collected.append(contentsOf: names.map { subURL.appendingPathComponent($0) })
+                continue
+            }
+            let entries = (try? fm.contentsOfDirectory(atPath: subURL.path)) ?? []
+            let shards = entries
+                .filter { $0.hasSuffix(".safetensors") }
+                .sorted()
+                .map { subURL.appendingPathComponent($0) }
+            collected.append(contentsOf: shards)
+        }
+        return collected
     }
 }
