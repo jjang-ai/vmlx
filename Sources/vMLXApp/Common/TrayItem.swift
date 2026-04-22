@@ -1029,6 +1029,24 @@ struct TrayItem: View {
             .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 0.5))
             .accessibilityLabel(text)
             .accessibilityHint("Active cache architecture flag")
+            // R2 §303 — plain-English tooltip on hover instead of the
+            // bare label. Longpress on trackpad also surfaces this.
+            .help(Self.archPillDescription(for: text))
+    }
+
+    /// R2 §303 — plain-English text for tray arch pill tooltip.
+    /// Keep lines short — macOS `.help(_:)` renders a narrow bubble.
+    fileprivate static func archPillDescription(for label: String) -> String {
+        switch label.lowercased() {
+        case "hybrid":
+            return "Hybrid SSM: this model alternates state-space (SSM) layers with attention layers. SSM state is rolled into a separate companion cache so prefix cache can still hit across turns."
+        case "swa":
+            return "Sliding-Window Attention: attention is bounded to a fixed window (e.g. 4096 tokens) so KV memory stays constant regardless of prompt length. Older tokens drop off once the window fills."
+        case "tq":
+            return "TurboQuant cache: keys/values are quantized on the fly (typically 2-4 bit with calibrated codebooks) so long-context KV fits in a fraction of the memory of fp16. Decode stays on the MXTQ fast path."
+        default:
+            return "Active cache architecture flag"
+        }
     }
 
     static func icon(for state: EngineState) -> String {
