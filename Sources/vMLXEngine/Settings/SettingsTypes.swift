@@ -542,20 +542,28 @@ public struct ChatSettings: Codable, Sendable {
     public var toolChoice: String? = nil            // "auto" | "none" | name
     public var tools: [ChatRequest.Tool]? = nil
     public var maxToolIterations: Int? = nil
-    public var builtinToolsEnabled: Bool? = nil
     public var hideToolStatus: Bool? = nil
     public var mcpEnabled: Bool? = nil
 
     public var workingDirectory: String? = nil
-    public var webSearchEnabled: Bool? = nil
-    public var fetchUrlEnabled: Bool? = nil
-    public var fileToolsEnabled: Bool? = nil
-    public var searchToolsEnabled: Bool? = nil
+
+    // I1 §274 — `shellEnabled` + `builtinToolsEnabled` are consumed by
+    // ChatViewModel.sendFlow at line 914-916: when shellEnabled=true,
+    // the BashTool OpenAI schema is appended to the request's `tools`
+    // array so the model can emit bash calls. builtinToolsEnabled is
+    // the umbrella flag that additionally pulls in future MCP/file/
+    // search tool schemas once those land. Both wires are live.
     public var shellEnabled: Bool? = nil
-    public var gitEnabled: Bool? = nil
-    public var utilityToolsEnabled: Bool? = nil
-    public var braveSearchEnabled: Bool? = nil
-    public var toolResultMaxChars: Int? = nil
+    public var builtinToolsEnabled: Bool? = nil
+
+    // I1/I8 §274 — eight orphan fields deleted 2026-04-21: none had
+    // a consumer anywhere in Sources/. Removed to eliminate silent-
+    // drop traps:
+    //   webSearchEnabled, fetchUrlEnabled, fileToolsEnabled,
+    //   searchToolsEnabled, gitEnabled, utilityToolsEnabled,
+    //   braveSearchEnabled, toolResultMaxChars
+    // Old persisted rows still decode cleanly — Swift JSONDecoder
+    // ignores extra keys — so no migration shim needed.
 
     public init() {}
 }
