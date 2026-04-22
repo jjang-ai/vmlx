@@ -15,6 +15,13 @@ struct HuggingFaceTokenCard: View {
     @State private var fieldValue: String = ""
     @State private var isRevealed: Bool = false
     @State private var saving: Bool = false
+    /// O7 §293 — focuses the text field when the Downloads CTA
+    /// posts `.vmlxFocusHuggingFaceTokenField`. SwiftUI's `@FocusState`
+    /// programmatic focus handles the keyboard landing; the
+    /// `highlightedAt` pulse briefly flashes the border so the user
+    /// can see where they've been brought.
+    @FocusState private var tokenFieldFocused: Bool
+    @State private var highlightedAt: Date? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -29,9 +36,25 @@ struct HuggingFaceTokenCard: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .stroke(Theme.Colors.border, lineWidth: 1)
+                .stroke(highlightTint, lineWidth: highlightedAt != nil ? 2 : 1)
         )
         .task { await initialLoad() }
+        .onReceive(NotificationCenter.default
+            .publisher(for: .vmlxFocusHuggingFaceTokenField)
+        ) { _ in
+            tokenFieldFocused = true
+            highlightedAt = Date()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                if let ts = highlightedAt, Date().timeIntervalSince(ts) >= 1.9 {
+                    highlightedAt = nil
+                }
+            }
+        }
+    }
+
+    /// Border tint when the CTA just landed us here — fades after 2s.
+    private var highlightTint: Color {
+        highlightedAt != nil ? Theme.Colors.accent : Theme.Colors.border
     }
 
     // MARK: - Rows
@@ -70,9 +93,11 @@ struct HuggingFaceTokenCard: View {
                 if isRevealed {
                     TextField("hf_...", text: $fieldValue)
                         .textFieldStyle(.plain)
+                        .focused($tokenFieldFocused)
                 } else {
                     SecureField("hf_...", text: $fieldValue)
                         .textFieldStyle(.plain)
+                        .focused($tokenFieldFocused)
                 }
             }
             .font(Theme.Typography.mono)
